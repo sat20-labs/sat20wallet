@@ -170,7 +170,7 @@ func newExpiredCancelFixture(t *testing.T, batchSize int) *expiredCancelFixture 
 				InputOutPoints:          []string{inputText}, OutputOutPoints: []string{fmt.Sprintf("%s:%d", witnessTxID, i+1)},
 				Expiry: expiry, RelayExpiry: expiry, ConsignmentHash: consignmentHash,
 				WitnessTxID: witnessTxID, AckStatus: "awaiting-persistence", Status: "prepared",
-				DeliveryRecordKey: relayKey, RelayRecordKey: relayKey, AckRecordKey: ackKey, RelayDurability: "LOCAL_ONLY",
+				DeliveryTemporary: true, RelayRecordKey: relayKey, AckRecordKey: ackKey, RelayDurability: "LOCAL_ONLY",
 			},
 			RecipientConsignment: append([]byte(nil), consignment...),
 			LocalConsignment:     append([]byte(nil), localConsignment...),
@@ -358,6 +358,86 @@ func TestCancelExpiredRGB11TransferRejectsUnsafeStateAndEvidence(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
+		{"delivery-record-key", func(t *testing.T, f *expiredCancelFixture) {
+			pending, err := f.manager.rgbManager.projectionStore.LoadPendingTransfer(f.transferIDs[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			pending.State.DeliveryRecordKey = pending.State.RelayRecordKey
+			if err := f.manager.rgbManager.projectionStore.SavePendingTransferState(pending); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"delivery-record-hash", func(t *testing.T, f *expiredCancelFixture) {
+			pending, err := f.manager.rgbManager.projectionStore.LoadPendingTransfer(f.transferIDs[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			pending.State.DeliveryRecordHash = chainhash.Hash{1}.String()
+			if err := f.manager.rgbManager.projectionStore.SavePendingTransferState(pending); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"delivery-mode", func(t *testing.T, f *expiredCancelFixture) {
+			pending, err := f.manager.rgbManager.projectionStore.LoadPendingTransfer(f.transferIDs[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			pending.State.DeliveryMode = "direct"
+			if err := f.manager.rgbManager.projectionStore.SavePendingTransferState(pending); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"delivery-object-id", func(t *testing.T, f *expiredCancelFixture) {
+			pending, err := f.manager.rgbManager.projectionStore.LoadPendingTransfer(f.transferIDs[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			pending.State.DeliveryObjectID = chainhash.Hash{1}.String()
+			if err := f.manager.rgbManager.projectionStore.SavePendingTransferState(pending); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"delivery-issue-height", func(t *testing.T, f *expiredCancelFixture) {
+			pending, err := f.manager.rgbManager.projectionStore.LoadPendingTransfer(f.transferIDs[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			pending.State.DeliveryIssueHeight = 1
+			if err := f.manager.rgbManager.projectionStore.SavePendingTransferState(pending); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"delivery-ttl", func(t *testing.T, f *expiredCancelFixture) {
+			pending, err := f.manager.rgbManager.projectionStore.LoadPendingTransfer(f.transferIDs[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			pending.State.DeliveryTTL = 1
+			if err := f.manager.rgbManager.projectionStore.SavePendingTransferState(pending); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"delivery-acknowledged", func(t *testing.T, f *expiredCancelFixture) {
+			pending, err := f.manager.rgbManager.projectionStore.LoadPendingTransfer(f.transferIDs[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			pending.State.DeliveryAcknowledged = true
+			if err := f.manager.rgbManager.projectionStore.SavePendingTransferState(pending); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"delivery-cache-compacted", func(t *testing.T, f *expiredCancelFixture) {
+			pending, err := f.manager.rgbManager.projectionStore.LoadPendingTransfer(f.transferIDs[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			pending.State.DeliveryCacheCompacted = true
+			if err := f.manager.rgbManager.projectionStore.SavePendingTransferState(pending); err != nil {
+				t.Fatal(err)
+			}
+		}},
 		{"mempool", func(_ *testing.T, f *expiredCancelFixture) {
 			f.evidence.status = &rgb11wallet.BitcoinTxStatus{TxID: f.witnessTxID, InMempool: true}
 		}},
@@ -386,6 +466,11 @@ func TestCancelExpiredRGB11TransferRejectsUnsafeStateAndEvidence(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newExpiredCancelFixture(t, 1)
 			test.mutate(t, fixture)
+			beforeLock := fixture.manager.utxoLockerL1.GetLockedUtxoList()[fixture.input]
+			if beforeLock == nil {
+				t.Fatal("unsafe-state fixture lost its input reservation before cancellation")
+			}
+			beforeReason, beforeOwner := beforeLock.Reason, beforeLock.ReservationID
 			cancelErr := fixture.manager.rgbManager.CancelExpiredRGB11Transfer(fixture.transferIDs[0])
 			if cancelErr == nil {
 				t.Fatal("unsafe cancellation succeeded")
@@ -399,6 +484,10 @@ func TestCancelExpiredRGB11TransferRejectsUnsafeStateAndEvidence(t *testing.T) {
 			}
 			if pending.State.Status != "prepared" {
 				t.Fatalf("failed cancellation changed state to %s", pending.State.Status)
+			}
+			afterLock := fixture.manager.utxoLockerL1.GetLockedUtxoList()[fixture.input]
+			if afterLock == nil || afterLock.Reason != beforeReason || afterLock.ReservationID != beforeOwner {
+				t.Fatal("failed cancellation changed the input reservation")
 			}
 		})
 	}

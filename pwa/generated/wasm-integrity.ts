@@ -19,8 +19,8 @@ export const WASM_INTEGRITY_MANIFEST = {
       "mimeTypes": [
         "application/wasm"
       ],
-      "size": 35240384,
-      "sha256": "5e640183d0d19c421bee40025c32c5ea3946a855b58172aecff97f6e1e24935c"
+      "size": 35240369,
+      "sha256": "f426d19676d7d532f87a628043517a831d064774db927637b204f5f41ab2bf29"
     }
   ]
 } as const

@@ -638,8 +638,9 @@ func (p *rgb11Manager) deliverRGB11AddressTransferStore(store *dkvsStore, transf
 	digest := sha256.Sum256(encoded)
 	pending.State.DeliveryMode = "direct"
 	pending.State.DeliveryObjectID = ""
+	// Bind the actual mailbox receipt without replacing the prepared
+	// application-ID relay identity.
 	pending.State.DeliveryRecordKey = actualKey
-	pending.State.RelayRecordKey = actualKey
 	pending.State.DeliveryRecordHash = hex.EncodeToString(digest[:])
 	pending.State.DeliveryTemporary = true
 	pending.State.DeliveryIssueHeight = 0
@@ -1916,8 +1917,11 @@ func (p *rgb11Manager) loadExpiredRGB11Batch(transferID string, now int64) (
 		if state.NetworkBackupRef != "" || state.DKVSOperationID != "" ||
 			state.SenderAccountID == "" || state.ReceiverAccountID == "" ||
 			state.AddressMessageID != messageID || messageErr != nil || relayErr != nil || ackErr != nil ||
-			state.RelayRecordKey != wantRelay || state.DeliveryRecordKey != wantRelay ||
-			state.AckRecordKey != wantAck || state.RelayRecordKey == state.AckRecordKey {
+			state.RelayRecordKey != wantRelay || state.AckRecordKey != wantAck ||
+			state.RelayRecordKey == state.AckRecordKey || state.DeliveryRecordKey != "" ||
+			state.DeliveryRecordHash != "" || state.DeliveryMode != "" || state.DeliveryObjectID != "" ||
+			state.DeliveryIssueHeight != 0 || state.DeliveryTTL != 0 ||
+			state.DeliveryAcknowledged || state.DeliveryCacheCompacted {
 			return nil, false, fmt.Errorf("%w: invalid local relay metadata", ErrRGB11Inconsistent)
 		}
 		if _, exists := seenRelayKeys[state.RelayRecordKey]; exists {

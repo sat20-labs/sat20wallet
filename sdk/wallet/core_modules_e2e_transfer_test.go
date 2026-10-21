@@ -519,6 +519,7 @@ func (h *coreRejectDirtyManagedCASHTTP) SendPostRequest(url *URL, body []byte) (
 
 func coreDirectTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 	sender, receiver *Manager, senderMaterial, receiverMaterial *coreRecoveryMaterial) {
+	originalSender := sender
 	issued, err := sender.IssueRGB11Asset(context.Background(), RGB11IssueRequest{
 		Schema: "NIA", Ticker: "E2ED", Name: "E2E direct asset", Amounts: []uint64{1200},
 	})
@@ -742,4 +743,21 @@ func coreDirectTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 		coreRequire(t, "replayed receiver mailbox", err)
 	}
 	coreAssert(t, chain.broadcastCount() == before+1, "mailbox replay rebroadcast the settled transaction")
+
+	// The parent still owns the prepared device. Its normal account sync must
+	// adopt the confirmed cold writer's complete recovery closure.
+	coreRequire(t, "verify cold sender confirmed closure before original-device sync",
+		sender.verifyCurrentRGB11RecoveryClosure())
+	originalPending, err := originalSender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
+	coreRequire(t, "read original prepared pending for recovery diagnosis", err)
+	selectedPending, err := sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
+	coreRequire(t, "read cold settled pending for recovery diagnosis", err)
+	coreAssert(t, originalPending != nil && selectedPending != nil,
+		"original/cold sender lost the shared Direct pending identity")
+	coreRequire(t, "synchronize original prepared sender after cold Direct settlement",
+		originalSender.SyncAccountManagementState(context.Background()))
+	coreAssertMapEqual(t, "original sender converged to confirmed Direct recovery closure",
+		coreLocalRGBBundleDigests(t, originalSender), coreRemoteStableRGB(t, sender, cfg))
+	coreAssert(t, chain.broadcastCount() == before+1,
+		"original-device synchronization rebroadcast the settled Direct transaction")
 }

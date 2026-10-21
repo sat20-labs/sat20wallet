@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
+import { cpus } from 'node:os'
 import { expect } from '@playwright/test'
 import { script as bitcoinScript } from 'bitcoinjs-lib'
 import * as secp256k1 from '@bitcoin-js/tiny-secp256k1-asmjs'
@@ -22,6 +23,7 @@ export const requiredPwaWalletBasicCases = [
   'Wallet PWA: configured inactivity locks signing until password authentication',
   'Wallet PWA: referrer registration without an owned name cannot broadcast',
   'Wallet PWA: referrer cancellation and unknown-name rejection preserve funds',
+  'Wallet PWA: late asset response cannot overwrite the selected account',
 ]
 
 const poll = { timeout: 120000, intervals: [250, 500, 1000] }
@@ -412,7 +414,226 @@ export async function runPwaWalletBasicCases(t, fixture) {
       assert.deepEqual(await walletCall(page, 'getAssetAmount_SatsNet', actor.address, '::'), before)
       assert.deepEqual(await identity(page), originalIdentity)
     })
+    await check(requiredPwaWalletBasicCases[14], () => runAssetContextStability(t, fixture, fresh, visit, identity, walletBalance))
   } finally {
     for (const context of contexts) await context.close()
+  }
+}
+
+
+// Hold a genuine A response until B has rendered. The observer delegates every
+// SDK call unchanged; it only provides a completion barrier after WASM returns.
+async function runAssetContextStability(t, fixture, fresh, visit, identity, walletBalance) {
+  const { walletCall } = t
+  const page = await fresh()
+  const endpoint = fixture.config.IndexerL1
+  const base = `${endpoint.Scheme}://${endpoint.Host}/${String(endpoint.Proxy || '').replace(/^\/+|\/+$/g, '')}`.replace(/\/$/, '')
+  const summaryURL = address => `${base}/v3/address/summary/${encodeURIComponent(address)}`
+  const keyOf = name => name.Protocol ? `${name.Protocol}:${name.Type}:${name.Ticker}` : '::'
+  const amountOf = asset => String(asset.Amount?.Value ?? asset.Amount ?? '0')
+  const metrics = []
+  const started = performance.now()
+  let releaseHeld, heldRequest, heldHits = 0, totalAHits = 0, heldReady = false, holdStarted, requestStarted, fetchedAt
+  let routeHandler
+  const released = new Promise(resolve => { releaseHeld = resolve })
+  const sample = (phase, start, extra = {}) => metrics.push({ phase, duration_ms: performance.now() - start, ...extra })
+  const snapshot = async () => {
+    const response = await fetch(new URL('/snapshot', fixture.control_url), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(30000),
+    })
+    assert.ok(response.ok, 'test control snapshot must succeed')
+    const result = await response.json()
+    assert.ok(!result.error, 'test control snapshot must not return an application error')
+    return result.l1.broadcast_count
+  }
+  const realSummary = async address => {
+    const response = await fetch(summaryURL(address), { signal: AbortSignal.timeout(30000) })
+    assert.ok(response.ok, 'real fixture summary must be available')
+    const result = await response.json()
+    assert.equal(result.code, 0)
+    assert.ok(Array.isArray(result.data))
+    return result.data
+  }
+  const readAssets = () => page.evaluate(async () => {
+    const store = (await import('/store/l1.ts')).useL1Store()
+    return { totalSats: store.totalSats, sat20Keys: store.sat20List.map(item => item.key).sort(),
+      rawKeys: store.assetList.map(item => item.Name.Protocol ? `${item.Name.Protocol}:${item.Name.Type}:${item.Name.Ticker}` : '::').sort() }
+  })
+  const completions = address => page.evaluate(address => window.__SAT20_ASSET_CONTEXT_PROBE__.completed.filter(item => item.address === address).length, address)
+  const waitCompleted = async (address, before, expectedError) => {
+    const handle = await page.waitForFunction(({ address, before }) => {
+      const completed = window.__SAT20_ASSET_CONTEXT_PROBE__.completed.filter(item => item.address === address)
+      return completed.length > before && completed.at(-1)
+    }, { address, before }, { timeout: poll.timeout })
+    const completion = await handle.jsonValue()
+    await handle.dispose()
+    if (expectedError) {
+      assert.equal(completion.ok, false, 'the held old-identity SDK call must be rejected')
+      assert.equal(completion.error_message, expectedError, 'only the exact stale-session rejection is expected')
+    } else {
+      assert.equal(completion.ok, true, 'the real SDK summary call must succeed')
+    }
+    return completion
+  }
+  const refresh = () => page.getByRole('button', { name: 'ORDX', exact: true }).locator('../..').getByRole('button').last().click()
+  const logs = () => page.evaluate(async () => {
+    const [error, result] = await (await import('/utils/operationLog.ts')).getOperationLogs()
+    if (error) throw error
+    return result
+  })
+  let outcome = 'fail'
+  try {
+    await page.evaluate(async () => {
+      const manager = (await import('/utils/sat20.ts')).default
+      const original = manager.getAssetSummary
+      const probe = window.__SAT20_ASSET_CONTEXT_PROBE__ = { completed: [], active: {}, restore: () => { manager.getAssetSummary = original } }
+      manager.getAssetSummary = async function(address) {
+        probe.active[address] = (probe.active[address] || 0) + 1
+        const started = performance.now()
+        try {
+          const result = await original.call(this, address)
+          probe.completed.push({ address, duration_ms: performance.now() - started, ok: !result[0],
+            error_message: result[0]?.message })
+          return result
+        } finally { probe.active[address]-- }
+      }
+    })
+    // Import through the real page/store. This actor owns the nonempty ORDX
+    // fixture; basicWallet is BTC-only and would make the stale-data check weak.
+    await visit(page, '/import')
+    await page.getByRole('textbox', { name: 'Recovery Phrase', exact: true }).fill(fixture.mnemonic)
+    await page.getByLabel('New Wallet Password', { exact: true }).fill(fixture.password)
+    await page.getByLabel('Confirm Password', { exact: true }).fill(fixture.password)
+    await page.getByRole('button', { name: 'Import Wallet', exact: true }).click()
+    await expect(page.getByRole('tab', { name: 'Bitcoin', exact: true })).toBeVisible({ timeout: poll.timeout })
+    assert.equal((await identity(page)).address, fixture.address)
+    await page.evaluate(async () => { await window.__SAT20_PWA_VERIFY__.useWalletStore().addAccount('Asset context B', 1) })
+    const b = await identity(page)
+    assert.equal(b.accountIndex, 1)
+    assert.notEqual(b.address, fixture.address)
+    assert.equal((await walletCall(page, 'getWalletAddress', 1)).address, b.address)
+    const assetsA = await realSummary(fixture.address)
+    const assetsB = await realSummary(b.address)
+    assert.ok(assetsA.some(asset => keyOf(asset.Name) === fixture.asset.key && BigInt(amountOf(asset)) > 0n), 'A must own the actual nonempty ORDX fixture')
+    assert.ok(!assetsB.some(asset => keyOf(asset.Name) === fixture.asset.key), 'B must not own A\'s ORDX fixture')
+    const totalB = assetsB.find(asset => asset.Name.Protocol === '' && asset.Name.Type === '*')
+    assert.ok(totalB, 'B summary must include its native total')
+    const expectedSatsB = Number(amountOf(totalB))
+    assert.ok(Number.isSafeInteger(expectedSatsB))
+    await page.evaluate(async () => { await window.__SAT20_PWA_VERIFY__.useWalletStore().switchToAccount(0) })
+    await page.getByRole('tab', { name: 'Bitcoin', exact: true }).click()
+    await page.getByRole('button', { name: 'ORDX', exact: true }).click()
+    const ticker = page.getByText(fixture.asset.ticker.toLocaleUpperCase(), { exact: true })
+    await expect(ticker).toBeVisible({ timeout: poll.timeout })
+    await expect.poll(() => page.evaluate(address => window.__SAT20_ASSET_CONTEXT_PROBE__.active[address] || 0, fixture.address), poll).toBe(0)
+    const beforeBroadcasts = await snapshot()
+    routeHandler = async route => {
+      totalAHits++
+      if (heldHits) return route.continue()
+      heldHits++
+      heldRequest = route.request()
+      requestStarted = performance.now()
+      const response = await route.fetch()
+      assert.ok(response.ok(), 'held A response must come from the real fixture')
+      const result = await response.json()
+      assert.equal(result.code, 0)
+      assert.ok(result.data.some(asset => keyOf(asset.Name) === fixture.asset.key && BigInt(amountOf(asset)) > 0n))
+      fetchedAt = performance.now()
+      holdStarted = fetchedAt
+      heldReady = true
+      await released
+      await route.fulfill({ response })
+    }
+    await page.route(summaryURL(fixture.address), routeHandler)
+    const triggerStarted = performance.now()
+    await refresh()
+    await expect.poll(() => heldReady, poll).toBe(true)
+    // Bind to the held request object. Invalidation may legitimately issue a
+    // second A request; its early response cannot satisfy this barrier.
+    const heldResponse = page.waitForResponse(response => response.request() === heldRequest, { timeout: poll.timeout })
+    heldResponse.catch(() => {})
+    metrics.push({ phase: 'refresh_trigger_to_request', duration_ms: requestStarted - triggerStarted })
+    metrics.push({ phase: 'real_A_request_to_response', duration_ms: fetchedAt - requestStarted })
+    const bResponse = page.waitForResponse(response => response.url() === summaryURL(b.address), { timeout: poll.timeout })
+    bResponse.catch(() => {})
+    const bCompleted = await completions(b.address)
+    await page.evaluate(async () => { await window.__SAT20_PWA_VERIFY__.useWalletStore().switchToAccount(1) })
+    assert.ok((await bResponse).ok())
+    await waitCompleted(b.address, bCompleted)
+    await expect.poll(() => identity(page), poll).toEqual(b)
+    const expectedKeysB = assetsB.map(asset => keyOf(asset.Name)).sort()
+    await expect.poll(readAssets, poll).toEqual({ totalSats: expectedSatsB, sat20Keys: [], rawKeys: expectedKeysB })
+    const unit = b.network === 'mainnet' ? 'BTC' : b.network === 'regtest' ? 'rBTC' : 'tBTC'
+    const expectedBalance = (expectedSatsB / 1e8).toFixed(8) + ` ${unit}`
+    await expect(walletBalance(page)).toHaveText(expectedBalance)
+    await expect(ticker).toHaveCount(0)
+    const bAssets = await readAssets()
+    // Switching accounts legitimately creates an operation log. Measure only
+    // late read completion and the following read-only refreshes from here.
+    const beforeLogs = await logs()
+    const releasedAt = performance.now()
+    const completedBeforeRelease = await completions(fixture.address)
+    metrics.push({ phase: 'injected_hold', duration_ms: releasedAt - holdStarted })
+    releaseHeld()
+    await (await heldResponse).finished()
+    await waitCompleted(fixture.address, completedBeforeRelease, 'Wallet session changed; request is no longer valid')
+    await page.waitForFunction(address => (window.__SAT20_ASSET_CONTEXT_PROBE__.active[address] || 0) === 0,
+      fixture.address, { timeout: poll.timeout })
+    // SDK completion is the data boundary; render turns let Vue apply the real
+    // query response before inspecting both Pinia and the displayed asset list.
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    assert.deepEqual(await identity(page), b)
+    assert.equal((await walletCall(page, 'getWalletAddress', 1)).address, b.address)
+    assert.deepEqual(await readAssets(), bAssets, 'late A data must not replace B assets or total')
+    await expect(walletBalance(page)).toHaveText(expectedBalance)
+    await expect(ticker).toHaveCount(0)
+    sample('release_to_B_render_verified', releasedAt, { counts: { held_hits: heldHits, A_summary_requests: totalAHits } })
+    assert.equal(heldHits, 1, 'exactly one genuine stale response must be released')
+    await page.unroute(summaryURL(fixture.address), routeHandler)
+    routeHandler = undefined
+    const warm = []
+    for (let index = 0; index < 10; index++) {
+      await page.waitForFunction(address => (window.__SAT20_ASSET_CONTEXT_PROBE__.active[address] || 0) === 0,
+        b.address, { timeout: poll.timeout })
+      const completed = await completions(b.address)
+      const started = performance.now()
+      await refresh()
+      await waitCompleted(b.address, completed)
+      await page.waitForFunction(address => (window.__SAT20_ASSET_CONTEXT_PROBE__.active[address] || 0) === 0,
+        b.address, { timeout: poll.timeout })
+      const calls = await page.evaluate(({ address, completed }) => window.__SAT20_ASSET_CONTEXT_PROBE__.completed
+        .filter(item => item.address === address).slice(completed), { address: b.address, completed })
+      assert.ok(calls.length > 0 && calls.every(call => call.ok), 'every call in this refresh must finish successfully')
+      const duration_ms = Math.max(...calls.map(call => call.duration_ms))
+      warm.push(duration_ms)
+      const observed = performance.now() - started
+      assert.deepEqual(await readAssets(), bAssets)
+      await expect(walletBalance(page)).toHaveText(expectedBalance)
+      await expect(ticker).toHaveCount(0)
+      metrics.push({ phase: 'warm_B_refresh_max_SDK_summary', temperature: 'warm', sample_index: index, duration_ms,
+        sdk_durations_ms: calls.map(call => call.duration_ms), counts: { summary_calls: calls.length },
+        trigger_to_sdk_observed_ms: observed, trigger_to_B_render_verified_ms: performance.now() - started })
+    }
+    assert.deepEqual(await snapshot(), beforeBroadcasts, 'refresh and account switching must not broadcast')
+    assert.deepEqual(await logs(), beforeLogs, 'late asset reads and refreshes must not create operation logs')
+    warm.sort((a, b) => a - b)
+    metrics.push({ phase: 'warm_B_refresh_SDK_summary', measurement: 'maximum SDK getAssetSummary duration per sequential refresh',
+      samples: 10, unit: 'ms', summary: { min: warm[0], median: (warm[4] + warm[5]) / 2, max: warm[9] },
+      counts: { held_hits: heldHits, A_summary_requests: totalAHits, l1_broadcast: 0 },
+      workload: { accounts: 2, nonempty_ordx_accounts: 1, sequential_refreshes: 10 } })
+    outcome = 'pass'
+    return { metrics }
+  } catch (error) {
+    error.metrics = metrics
+    throw error
+  } finally {
+    releaseHeld()
+    if (routeHandler) await page.unroute(summaryURL(fixture.address), routeHandler).catch(() => {})
+    await page.evaluate(() => window.__SAT20_ASSET_CONTEXT_PROBE__?.restore()).catch(() => {})
+    sample('case_including_wallet_setup', started)
+    const environment = { os: process.platform, arch: process.arch, cpu_count: cpus().length, node_version: process.version,
+      browser_version: page.context().browser().version(), network: fixture.config.Chain || 'testnet', isolated_fixture: true,
+      fixture_kind: 'temporary SatoshiNet and controlled Bitcoin evidence', workers: 1 }
+    for (const metric of metrics) { metric.status = outcome; metric.environment = environment }
   }
 }

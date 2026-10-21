@@ -228,6 +228,20 @@ export async function runPwaDappCases(t, fixture) {
   }
   const sats = async address => BigInt((await api(`/v3/address/summary/${address}`))
     .find(asset => asset.Name.Protocol === '' && asset.Name.Type === '*').Amount)
+  // Address totals include mempool outputs; check confirmation at the chain boundary.
+  const assertUnconfirmedPayment = async txid => {
+    const [status] = await api('/v3/bitcoin/tx/status/batch', { txids: [txid] })
+    assert.equal(status.txid, txid)
+    assert.equal(status.exists, true)
+    assert.equal(status.in_mempool, true)
+    assert.equal(status.confirmed, false)
+    const [output] = await api('/v3/bitcoin/utxos/status', { outpoints: [`${txid}:0`] })
+    assert.equal(output.outpoint, `${txid}:0`)
+    assert.equal(output.exists, true)
+    assert.equal(output.unspent, true)
+    assert.equal(output.value, 2000)
+    assert.equal(output.pk_script, recipient.pk_script)
+  }
   const begin = (action, params) => frame.evaluate(({ action, params }) =>
     window.pwaAcceptanceClient.begin(action, params), { action, params })
   const response = async request => {
@@ -466,7 +480,7 @@ export async function runPwaDappCases(t, fixture) {
         let [status] = await api('/v3/bitcoin/tx/status/batch', { txids: [txid] })
         assert.ok(status.exists)
         if (!status.confirmed) {
-          assert.equal(status.in_mempool, true)
+          await assertUnconfirmedPayment(txid)
           await control('confirm-l1')
           ;[status] = await api('/v3/bitcoin/tx/status/batch', { txids: [txid] })
         }
@@ -526,7 +540,7 @@ export async function runPwaDappCases(t, fixture) {
       const sent = (await control('snapshot')).l1
       assert.deepEqual(Object.keys(sent.broadcast_count).filter(id => !Object.hasOwn(before.broadcast_count, id)), [txid])
       assert.equal(sent.broadcast_count[txid], 1)
-      assert.equal(await sats(recipient.address), recipientBefore, 'pending payment was credited as confirmed')
+      await assertUnconfirmedPayment(txid)
       await control('confirm-l1')
       assert.equal(await sats(actor.address), sourceBefore - 2500n)
       assert.equal(await sats(recipient.address), recipientBefore + 2000n)

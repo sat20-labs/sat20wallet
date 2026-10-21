@@ -32,7 +32,7 @@ func (p *rgb11Manager) setRGB11AddressSendState(state *rgb11wallet.TransferState
 	if err != nil {
 		return err
 	}
-	deliveryKey, err := dkvsindexer.MailMsgKey(endpoint.AccountID, sender, messageID)
+	relayKey, err := dkvsindexer.MailMsgKey(endpoint.AccountID, sender, messageID)
 	if err != nil {
 		return err
 	}
@@ -42,10 +42,14 @@ func (p *rgb11Manager) setRGB11AddressSendState(state *rgb11wallet.TransferState
 	}
 	state.AddressMode, state.AddressMessageID = true, messageID
 	state.TransportMode = RGB11AddressTransport
+	state.DeliveryTemporary = true
 	state.SenderAccountID, state.ReceiverAccountID = sender, endpoint.AccountID
 	state.ReceiverAddress = endpoint.Address
 	state.ReceiveCapabilityKey, state.ReceiveCapabilityHash = endpoint.CapabilityRecordKey, endpoint.CapabilityRecordHash
-	state.DeliveryRecordKey, state.RelayRecordKey, state.AckRecordKey = deliveryKey, deliveryKey, ackKey
+	// These application-ID keys stay fixed for local operation correlation.
+	// MessageManager assigns the actual transport MessageID during delivery.
+	state.RelayRecordKey, state.AckRecordKey = relayKey, ackKey
+	state.DeliveryRecordKey = ""
 	state.RecipientID, state.Invoice = endpoint.AccountID, ""
 	state.SyntheticInvoiceRemoved = true
 	state.AckStatus = "awaiting-persistence"

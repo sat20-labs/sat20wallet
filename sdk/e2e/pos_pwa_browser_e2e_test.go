@@ -54,6 +54,10 @@ func TestSDKWalletPWAConnectedBrowser(t *testing.T) {
 	runSDKWalletPWABrowser(t)
 }
 
+func TestSDKWalletPWAAssetContextStability(t *testing.T) {
+	runSDKWalletPWABrowser(t, "Wallet PWA: late asset response cannot overwrite the selected account")
+}
+
 func runSDKWalletPWABrowser(t *testing.T, cases ...string) {
 	runSDKWalletBrowserMode(t, false, cases...)
 }

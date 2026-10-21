@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -66,6 +67,9 @@ func TestSDKAccountPWAPaidFundingWithChildSelected(t *testing.T) {
 	require.Equal(t, childID, f.manager.GetCurrentWalletId())
 	_, location := accountReviewConfig(t, network)
 	transport := &accountPreparedAckTransport{inner: wallet.NewHTTPClient()}
+	// Reproduce an old index projection using this run's real Result: chain
+	// inclusion and service readiness must not replace the exact receipt link.
+	transport.hideResultAssociation.Store(true)
 	f.manager.SetIndexerHttpClient_SatsNet(wallet.NewIndexerClient(location.Scheme, location.Host, location.Proxy, transport))
 
 	// The fixture's POS miner mines nonempty blocks. Submit one ordinary
@@ -87,6 +91,36 @@ func TestSDKAccountPWAPaidFundingWithChildSelected(t *testing.T) {
 	network.sendManyAndMine(t, []*wire.MsgTx{heartbeat}, 0)
 	funded := <-done
 	authorization, err := funded.authorization, funded.err
+	var missingAssociation *wallet.AccountAutopayPendingError
+	require.ErrorAs(t, err, &missingAssociation)
+	require.NotEmpty(t, missingAssociation.TransactionID)
+	t.Run("missing_result_linkage_keeps_original_payment_pending", func(t *testing.T) {
+		for attempt := 0; attempt < 2; attempt++ {
+			status, readErr := f.manager.GetAccountAutopayFundingStatus()
+			require.NoError(t, readErr)
+			require.True(t, status.Ready, "the real first payment must already be active")
+			require.True(t, status.FundingPending, "an unrelated or unlinked Result cannot finish the payment")
+			require.Equal(t, missingAssociation.TransactionID, status.FundingTransactionID)
+			require.Equal(t, childID, f.manager.GetCurrentWalletId())
+			require.Len(t, transport.bodies, 1, "status lookup must not submit another payment")
+		}
+		_, hidden := transport.hiddenAssociations.Load(missingAssociation.TransactionID)
+		require.True(t, hidden, "the real Result for this exact payment must have been observed")
+		logs, readErr := f.manager.GetOperationLogs()
+		require.NoError(t, readErr)
+		found := 0
+		for _, record := range logs {
+			if record.Action == "account_autopay_fund" {
+				found++
+				require.Equal(t, missingAssociation.TransactionID, record.TxID)
+				require.Equal(t, wallet.OperationLogPending, record.Status)
+			}
+		}
+		require.Equal(t, 1, found)
+	})
+	// Restore the node's actual history response. The existing continuation
+	// below must complete this same operation without another transaction.
+	transport.hideResultAssociation.Store(false)
 	var originalID string
 	if err != nil {
 		// A submitted transaction may precede the node's public receipt. Read
@@ -171,10 +205,12 @@ func (d *accountPreparedCrashDB) Write(key, value []byte) error {
 }
 
 type accountPreparedAckTransport struct {
-	inner   wallet.HttpClient
-	hide    bool
-	loseAck bool
-	bodies  [][]byte
+	inner                 wallet.HttpClient
+	hide                  bool
+	loseAck               bool
+	bodies                [][]byte
+	hideResultAssociation atomic.Bool
+	hiddenAssociations    sync.Map
 }
 
 func (h *accountPreparedAckTransport) SendGetRequest(u *wallet.URL) ([]byte, error) {
@@ -182,7 +218,56 @@ func (h *accountPreparedAckTransport) SendGetRequest(u *wallet.URL) ([]byte, err
 		(len(h.bodies) > 0 && strings.Contains(u.Path, "/btc/rawtx/"))) {
 		return nil, fmt.Errorf("account E2E: receipt temporarily unavailable")
 	}
-	return h.inner.SendGetRequest(u)
+	raw, err := h.inner.SendGetRequest(u)
+	if err != nil || !h.hideResultAssociation.Load() || !strings.HasSuffix(u.Path, "/history") {
+		return raw, err
+	}
+	// Preserve all original response fields and numeric bytes. Only remove the
+	// three association fields from actual Result records for this fault case.
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil, err
+	}
+	var records []map[string]json.RawMessage
+	if err := json.Unmarshal(envelope["data"], &records); err != nil {
+		return nil, err
+	}
+	for _, record := range records {
+		var kind string
+		if err := json.Unmarshal(record["kind"], &kind); err != nil {
+			return nil, err
+		}
+		if kind != "result" {
+			continue
+		}
+		var details map[string]json.RawMessage
+		if len(record["details"]) == 0 {
+			continue
+		}
+		if err := json.Unmarshal(record["details"], &details); err != nil {
+			return nil, err
+		}
+		var related string
+		if len(details["result_for_txid"]) == 0 {
+			continue
+		}
+		if err := json.Unmarshal(details["result_for_txid"], &related); err != nil {
+			return nil, err
+		}
+		h.hiddenAssociations.Store(related, struct{}{})
+		for _, key := range []string{"result_for_txid", "result_for_vout", "result_for_kind"} {
+			delete(details, key)
+		}
+		record["details"], err = json.Marshal(details)
+		if err != nil {
+			return nil, err
+		}
+	}
+	envelope["data"], err = json.Marshal(records)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(envelope)
 }
 func (h *accountPreparedAckTransport) SendPostRequest(u *wallet.URL, body []byte) ([]byte, error) {
 	if strings.HasSuffix(u.Path, "/btc/tx") {

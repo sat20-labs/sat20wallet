@@ -650,3 +650,54 @@ func TestRGB11DirectReservationResumesAfterSDKRestart(t *testing.T) {
 		t.Fatalf("Direct transfer broadcast count=%d bytes=%d", broadcastCount, len(broadcasted))
 	}
 }
+
+// A fresh Direct intent binds its known mailbox policy before publication.
+// An offline prepared device must retain the same immutable recovery identity.
+func TestRGB11DirectPreparedMailboxPolicyMatchesDelivery(t *testing.T) {
+	sender, recipient, imported, _, _ := newRGB11GenericSendFixture(t)
+	prepared, _, err := sender.PrepareConfiguredRGB11AddressTransfer(context.Background(), RGB11AddressSendRequest{
+		ReceiverAddress: recipient.wallet.GetAddress(), AssetName: imported.AssetName,
+		AmountRaw: "20000", FeeRate: 2, MinConfirmations: 1,
+	}, dkvsindexer.RecordVerificationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared == nil || prepared.State == nil {
+		t.Fatal("Direct preparation returned no state")
+	}
+	preparedPolicy := prepared.State.DeliveryTemporary
+	preparedRelay, preparedAck := prepared.State.RelayRecordKey, prepared.State.AckRecordKey
+	if preparedRelay == "" || preparedAck == "" || preparedRelay == preparedAck ||
+		prepared.State.DeliveryRecordKey != "" || prepared.State.DeliveryRecordHash != "" {
+		t.Fatal("Direct preparation claimed a transport receipt before delivery")
+	}
+	transferID, witness := prepared.State.TransferID, prepared.TxID
+	result, err := sender.DeliverAndBroadcastConfiguredRGB11AddressTransfer(transferID, RGB11AddressDeliveryOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil || !result.AwaitingACK || result.Broadcast {
+		t.Fatal("Direct delivery crossed the receiver ACK boundary")
+	}
+	root, err := sender.captureRGB11NetworkScope(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := root.rgbManager.projectionStore.LoadPendingTransfer(transferID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending.State.TransferID != transferID || pending.State.WitnessTxID != witness {
+		t.Fatal("Direct delivery changed the prepared transaction identity")
+	}
+	if pending.State.RelayRecordKey != preparedRelay || pending.State.AckRecordKey != preparedAck {
+		t.Fatal("Direct delivery changed the prepared application identity")
+	}
+	if result.RecordKey == "" || result.RecordHash == "" || pending.State.DeliveryMode != "direct" ||
+		pending.State.DeliveryRecordKey != result.RecordKey || pending.State.DeliveryRecordHash != result.RecordHash {
+		t.Fatal("Direct delivery did not bind its actual mailbox receipt")
+	}
+	if !preparedPolicy || !pending.State.DeliveryTemporary || preparedPolicy != pending.State.DeliveryTemporary {
+		t.Fatalf("Direct immutable mailbox policy differs across prepare/deliver: prepared=%t delivered=%t", preparedPolicy, pending.State.DeliveryTemporary)
+	}
+}

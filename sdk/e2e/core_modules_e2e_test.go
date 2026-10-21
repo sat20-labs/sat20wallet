@@ -136,6 +136,7 @@ func TestSDKCoreModulesE2E(t *testing.T) {
 	var verdicts []event
 	var failures []string
 	var browserVerdicts []map[string]any
+	var metrics []map[string]any
 	var browserOutput strings.Builder
 	scanner := bufio.NewScanner(bytes.NewReader(output))
 	scanner.Buffer(make([]byte, 65536), 4<<20)
@@ -158,20 +159,25 @@ func TestSDKCoreModulesE2E(t *testing.T) {
 	// Preserve only structured browser verdicts. Raw child diagnostics can
 	// contain synthetic secrets and must not be copied into shared evidence.
 	for _, line := range strings.Split(browserOutput.String(), "\n") {
-		if start := strings.Index(line, `{"case":`); start >= 0 {
-			var verdict map[string]any
-			if json.Unmarshal([]byte(strings.TrimSpace(line[start:])), &verdict) == nil {
-				browserVerdicts = append(browserVerdicts, verdict)
-				t.Logf("browser verdict: %s", strings.TrimSpace(line[start:]))
-			}
+		metric, verdict := parseCoreE2EStructuredLine(line)
+		if metric != nil {
+			metrics = append(metrics, metric)
+			start := strings.Index(line, "core-e2e-metric: ")
+			t.Logf("core metric: %s", strings.TrimSpace(line[start+len("core-e2e-metric: "):]))
+		}
+		if verdict != nil {
+			browserVerdicts = append(browserVerdicts, verdict)
+			start := strings.Index(line, `{"case":`)
+			t.Logf("browser verdict: %s", strings.TrimSpace(line[start:]))
 		}
 	}
 	report := map[string]any{
 		"started_by": "TestSDKCoreModulesE2E", "finished_at": time.Now().Format(time.RFC3339),
-		"child_run": childRun,
+		"child_run":           childRun,
 		"real_components":     []string{"SatoshiNet nodes", "AUTOPAY settlement", "bound CoreNode KV RPC", "current-state DKVS sync", "CoreNode message service", "RGB native validation/signing", "independent wallet databases"},
 		"controlled_boundary": "Bitcoin UTXO/transaction confirmation evidence; no public network transactions",
 		"browser_verdicts":    browserVerdicts,
+		"metrics":             metrics,
 		"passed":              runErr == nil, "timed_out": ctx.Err() != nil, "verdicts": verdicts, "failures": failures,
 	}
 	raw, err := json.MarshalIndent(report, "", "  ")
@@ -198,3 +204,17 @@ func TestSDKCoreModulesE2E(t *testing.T) {
 	}
 }
 
+func parseCoreE2EStructuredLine(line string) (metric, verdict map[string]any) {
+	if start := strings.Index(line, "core-e2e-metric: "); start >= 0 {
+		if json.Unmarshal([]byte(strings.TrimSpace(line[start+len("core-e2e-metric: "):])), &metric) != nil {
+			metric = nil
+		}
+		return metric, nil
+	}
+	if start := strings.Index(line, `{"case":`); start >= 0 {
+		if json.Unmarshal([]byte(strings.TrimSpace(line[start:])), &verdict) != nil {
+			verdict = nil
+		}
+	}
+	return metric, verdict
+}

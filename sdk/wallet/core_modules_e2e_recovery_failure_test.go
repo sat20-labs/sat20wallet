@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
+	indexerdb "github.com/sat20-labs/indexer/indexer/db"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -47,6 +49,151 @@ func coreRGBRecoveryFailuresE2E(t *testing.T, source *Manager, cfg coreE2EConfig
 	}
 	options := AccountManagementRestoreOptions{Location: material.auth.Location,
 		StorageMode: AccountStoragePaid, AutopayContract: material.auth.Autopay.PoolContract}
+	t.Run("RGB11ProviderFailureColdDatabaseRestartResumes", func(t *testing.T) {
+		var samples []map[string]any
+		coreLogE2EMetrics(t, "rgb_cold_database_recovery", &samples)
+		dir := t.TempDir()
+		db := indexerdb.NewKVDB(dir)
+		target := coreNewE2EManagerWithDB(t, cfg, chain, db, "")
+		t.Cleanup(func() { target.Close(); _ = db.Close() })
+		state, err := target.LoadAccountManagementStateForRecovery(material.auth.Location,
+			material.locator, source.accountSecret, coreE2ESenderMnemonic)
+		require.NoError(t, err)
+		rgbItems := 0
+		for _, item := range state.ManagedData.Items {
+			if item.Provider == rgb11AccountManagedProviderID && len(item.Payload) > 0 {
+				rgbItems++
+			}
+		}
+		require.GreaterOrEqual(t, rgbItems, 3, "must restore RGB recovery packages for root and child scopes")
+		failure := errors.New("core E2E: transient RGB import before physical DB restart")
+		target.managedDataMu.Lock()
+		provider := target.managedDataProviders[rgb11AccountManagedProviderID]
+		fault := &coreRGBImportFailureOnce{AccountManagedDataProvider: provider, failure: failure}
+		target.managedDataProviders[rgb11AccountManagedProviderID] = fault
+		target.managedDataMu.Unlock()
+		require.NotNil(t, provider)
+		broadcasts := chain.broadcastCount()
+		remoteBefore, _ := coreCommittedRecords(t, source, cfg)
+		closureBefore := coreRemoteStableRGB(t, source, cfg)
+		started := time.Now()
+		_, err = target.RestoreAccountManagementState(*state, source.accountSecret, coreE2EPassword, material.locator, options)
+		samples = append(samples, coreE2EDuration("interrupted_import", started))
+		require.ErrorIs(t, err, failure)
+		require.Equal(t, 1, fault.imports)
+		marker, err := target.readAccountManagedDataImportMarker()
+		require.NoError(t, err)
+		require.NotNil(t, marker)
+		restoredRootID := target.GetAccountManagementStatus().RootWalletID
+		require.NotZero(t, restoredRootID)
+		require.ErrorIs(t, target.UpdateWalletName(restoredRootID, "Must remain blocked"), ErrAccountManagedDataImportIncomplete)
+		require.ErrorIs(t, target.SyncAccountManagementState(context.Background()), ErrAccountManagedDataImportIncomplete)
+		require.Equal(t, broadcasts, chain.broadcastCount())
+		remoteFailed, _ := coreCommittedRecords(t, source, cfg)
+		require.Equal(t, remoteBefore, remoteFailed)
+		reopen := func(index int) {
+			started := time.Now()
+			target.Close()
+			require.NoError(t, db.Close())
+			db = indexerdb.NewKVDB(dir)
+			target = coreNewE2EManagerWithDB(t, cfg, chain, db, "")
+			sample := coreE2EDuration("physical_reopen_construct", started)
+			sample["sample_index"] = index
+			samples = append(samples, sample)
+		}
+		reopen(0)
+		marker, err = target.readAccountManagedDataImportMarker()
+		require.NoError(t, err)
+		require.NotNil(t, marker, "incomplete marker must survive physical reopen")
+		started = time.Now()
+		_, err = target.UnlockWallet(coreE2EPassword)
+		samples = append(samples, coreE2EDuration("unlock_with_import_marker", started))
+		require.ErrorIs(t, err, ErrAccountManagedDataImportIncomplete, "an interrupted restore must not open a wallet session")
+		markerAfterUnlock, err := target.readAccountManagedDataImportMarker()
+		require.NoError(t, err)
+		require.Equal(t, marker, markerAfterUnlock, "rejected unlock must retain the durable import marker")
+		require.ErrorIs(t, target.UpdateWalletName(restoredRootID, "Must remain blocked after reopen"), ErrAccountManagedDataImportIncomplete)
+		require.ErrorIs(t, target.SyncAccountManagementState(context.Background()), ErrAccountManagedDataImportIncomplete)
+		started = time.Now()
+		_, err = target.RestoreAccountManagementState(*state, source.accountSecret, coreE2EPassword, material.locator, options)
+		samples = append(samples, coreE2EDuration("resume_authenticated_import", started))
+		require.NoError(t, err)
+		marker, err = target.readAccountManagedDataImportMarker()
+		require.NoError(t, err)
+		require.Nil(t, marker)
+		coreSynchronizeRestoredAccount(t, target)
+		nonemptyScopes := 0
+		verify := func(cold bool) {
+			started := time.Now()
+			nonemptyScopes = 0
+			require.Equal(t, coreCanonicalCatalog(source), coreCanonicalCatalog(target))
+			coreAssertMapEqual(t, "local full RGB closure before fresh evidence", coreLocalRGBBundleDigests(t, target), closureBefore)
+			selectedWallet, selectedAccount := source.GetCurrentWalletId(), source.GetCurrentAccountId()
+			defer func() {
+				_ = source.SwitchWallet(selectedWallet, coreE2EPassword)
+				_ = source.SwitchAccount(selectedAccount)
+			}()
+			for _, entry := range source.GetWalletCatalog() {
+				var restoredID int64
+				for _, restored := range target.GetWalletCatalog() {
+					if restored.Fingerprint == entry.Fingerprint {
+						restoredID = restored.ID
+					}
+				}
+				require.NotZero(t, restoredID)
+				require.NoError(t, source.SwitchWallet(entry.ID, coreE2EPassword))
+				require.NoError(t, target.SwitchWallet(restoredID, coreE2EPassword))
+				for _, sub := range entry.Accounts {
+					require.NoError(t, source.SwitchAccount(sub.Index))
+					require.NoError(t, target.SwitchAccount(sub.Index))
+					sourceView, targetView := coreRGBSemantic(t, source), coreRGBSemantic(t, target)
+					if len(sourceView.Assets) > 0 {
+						nonemptyScopes++
+					}
+					if cold {
+						// Readiness is intentionally RAM-only. With automatic workers
+						// stopped, cold ownership must remain unspendable until the
+						// public refresh path has obtained fresh Bitcoin evidence.
+						require.False(t, target.rgbManager.rgb11ProjectionAvailable())
+						require.Empty(t, targetView.Available)
+						require.Equal(t, targetView.Assets, targetView.Pending)
+						require.Equal(t, sourceView.Assets, targetView.Assets)
+						require.Equal(t, sourceView.Outputs, targetView.Outputs)
+						require.Equal(t, sourceView.Proofs, targetView.Proofs)
+						require.Equal(t, sourceView.Tasks, targetView.Tasks)
+						require.Equal(t, sourceView.Invoices, targetView.Invoices)
+						require.Equal(t, sourceView.Locked, targetView.Locked)
+						refreshStarted := time.Now()
+						_, err := target.RefreshRGB11State(context.Background())
+						sample := coreE2EDuration("fresh_chain_reconciliation", refreshStarted)
+						sample["account_index"] = sub.Index
+						samples = append(samples, sample)
+						require.NoError(t, err)
+						targetView = coreRGBSemantic(t, target)
+					}
+					require.Equal(t, coreDigest(sourceView), coreDigest(targetView), "every scope's proofs, ownership, readiness and locks must survive restart and fresh verification")
+				}
+			}
+			require.GreaterOrEqual(t, nonemptyScopes, 3, "fixture must actually own RGB assets in at least three scopes")
+			require.Equal(t, closureBefore, coreRemoteStableRGB(t, target, cfg))
+			coreAssertMapEqual(t, "reopened local full RGB recovery closure", coreLocalRGBBundleDigests(t, target), closureBefore)
+			remoteAfter, _ := coreCommittedRecords(t, source, cfg)
+			require.Equal(t, remoteBefore, remoteAfter, "restore must not republish recovery records")
+			require.Equal(t, broadcasts, chain.broadcastCount())
+			samples = append(samples, coreE2EDuration("complete_closure_verification", started))
+		}
+		verify(false)
+		reopen(1)
+		marker, err = target.readAccountManagedDataImportMarker()
+		require.NoError(t, err)
+		require.Nil(t, marker, "marker cleanup must be durable")
+		started = time.Now()
+		_, err = target.UnlockWallet(coreE2EPassword)
+		samples = append(samples, coreE2EDuration("clean_cold_unlock", started))
+		require.NoError(t, err)
+		verify(true)
+		samples = append(samples, map[string]any{"phase": "scenario_counts", "counts": map[string]int{"broadcast": chain.broadcastCount() - broadcasts}, "workload": map[string]int{"wallets": len(source.GetWalletCatalog()), "rgb_scopes": rgbItems, "nonempty_rgb_scopes": nonemptyScopes, "physical_reopens": 2}})
+	})
 
 	for _, scenario := range []struct {
 		name   string

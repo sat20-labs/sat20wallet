@@ -70,7 +70,29 @@ func dkvsNoPluginBuildArtifacts(t *testing.T) satoshinetArtifacts {
 	output, err = cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
 
-	cmd = exec.Command("go", "build", "-buildmode=plugin", "-o", artifacts.corePlugin, "main.go")
+	// Keep plugin builds reproducible without modifying a sibling repository's
+	// module files or relying on a modfile left by an earlier test run.
+	transcendDir := filepath.Dir(transcendPluginDir)
+	transcendMod := filepath.Join(outputDir, "transcend.mod")
+	for _, name := range []string{"go.mod", "go.sum"} {
+		data, readErr := os.ReadFile(filepath.Join(transcendDir, name))
+		require.NoError(t, readErr)
+		target := transcendMod
+		if name == "go.sum" {
+			target = filepath.Join(outputDir, "transcend.sum")
+		}
+		require.NoError(t, os.WriteFile(target, data, 0600))
+	}
+	editArgs := []string{"mod", "edit", "-modfile=" + transcendMod}
+	for _, module := range []string{"satoshinet", "indexer", "sat20wallet/sdk", "rgb11"} {
+		editArgs = append(editArgs, "-replace=github.com/sat20-labs/"+module+"="+filepath.Join(workspace, module))
+	}
+	cmd = exec.Command("go", editArgs...)
+	cmd.Dir = transcendPluginDir
+	output, err = cmd.CombinedOutput()
+	require.NoError(t, err, string(output))
+
+	cmd = exec.Command("go", "build", "-mod=mod", "-modfile="+transcendMod, "-buildmode=plugin", "-o", artifacts.corePlugin, "main.go")
 	cmd.Dir = transcendPluginDir
 	output, err = cmd.CombinedOutput()
 	require.NoError(t, err, string(output))

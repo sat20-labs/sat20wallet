@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	indexercommon "github.com/sat20-labs/indexer/common"
 	indexerdb "github.com/sat20-labs/indexer/indexer/db"
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
@@ -74,6 +75,16 @@ func coreLoadE2EConfig(t *testing.T) coreE2EConfig {
 func coreNewE2EManager(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain, mnemonic string) *Manager {
 	t.Helper()
 	db := indexerdb.NewKVDB(t.TempDir())
+	manager := coreNewE2EManagerWithDB(t, cfg, chain, db, mnemonic)
+	t.Cleanup(manager.Close)
+	return manager
+}
+
+// The restart case owns the DB handle so it can close and reopen the same
+// directory. All other fixtures keep their existing independent databases.
+func coreNewE2EManagerWithDB(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
+	db indexercommon.KVDB, mnemonic string) *Manager {
+	t.Helper()
 	config := &sdkcommon.Config{Env: "test", Chain: "testnet",
 		IndexerL1: &sdkcommon.Indexer{Scheme: cfg.Core.Scheme, Host: cfg.Core.Host, Proxy: cfg.Core.Proxy},
 		IndexerL2: &sdkcommon.Indexer{Scheme: cfg.Core.Scheme, Host: cfg.Core.Host, Proxy: cfg.Core.Proxy},
@@ -81,10 +92,15 @@ func coreNewE2EManager(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain, mne
 	}
 	manager := NewManager(config, db)
 	coreAssert(t, manager != nil, "construct SDK manager")
+	constructed := false
+	defer func() {
+		if !constructed {
+			manager.Close()
+		}
+	}()
 	// No Start: one business writer per root. Explicit SDK operations establish
 	// checkpoint timing. Keep the scope registry needed by explicit Refresh,
 	// but stop only its automatic workers so observation cannot race settlement.
-	t.Cleanup(manager.Close)
 	manager.SetIndexerHttpClient(&coreE2EL1Indexer{chain: chain})
 	if manager.rgbManager.scopeStates != nil {
 		manager.rgbManager.scopeStates.stopReconciliations()
@@ -97,6 +113,7 @@ func coreNewE2EManager(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain, mne
 		_, err := manager.ImportWallet(mnemonic, coreE2EPassword)
 		coreRequire(t, "import isolated mnemonic", err)
 	}
+	constructed = true
 	return manager
 }
 

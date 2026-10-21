@@ -537,12 +537,14 @@ async function check(name, action) {
   const started_at = new Date(startedAt).toISOString()
   recordProgress(name, 'running', 0)
   console.log(JSON.stringify({ case: name, status: 'running', started_at, duration_ms: 0 }))
+  let metrics
   try {
-    await action()
+    metrics = (await action())?.metrics
   } catch (error) {
     completedCases.set(name, 'fail')
     recordProgress(name, 'fail', Date.now() - startedAt)
-    console.error(JSON.stringify({ case: name, status: 'fail', started_at, duration_ms: Date.now() - startedAt, message: error.message }))
+    console.error(JSON.stringify({ case: name, status: 'fail', started_at, duration_ms: Date.now() - startedAt, message: error.message,
+      ...(error.metrics ? { metrics: error.metrics } : {}) }))
     for (const context of browser.contexts()) {
       for (const page of context.pages()) {
         if (page.isClosed()) continue
@@ -573,7 +575,8 @@ async function check(name, action) {
   completedCases.set(name, 'pass')
   recordProgress(name, 'pass', Date.now() - startedAt)
   verdicts.push(name)
-  console.log(JSON.stringify({ case: name, status: 'pass', started_at, duration_ms: Date.now() - startedAt }))
+  console.log(JSON.stringify({ case: name, status: 'pass', started_at, duration_ms: Date.now() - startedAt,
+    ...(metrics ? { metrics } : {}) }))
 }
 async function ready(page) {
   await page.waitForFunction(() => Boolean(window.__SAT20_PWA_VERIFY__), undefined, { timeout: 90000 })

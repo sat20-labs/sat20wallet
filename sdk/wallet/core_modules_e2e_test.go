@@ -27,7 +27,7 @@ func TestSDKCoreModulesConnectedE2E(t *testing.T) {
 	chain.fund(t, receiver.GetWallet().GetAddress(), 6)
 
 	var childID int64
-	t.Run("backup_multiple_wallets_and_subaccounts_control", func(t *testing.T) {
+	if !t.Run("backup_multiple_wallets_and_subaccounts_control", func(t *testing.T) {
 		coreRequire(t, "create root subaccount", sender.EnsureAccount(rootID, 1, "Root savings", "did:root:1"))
 		var err error
 		childID, err = sender.ImportWallet(coreE2EChildMnemonic, coreE2EPassword)
@@ -37,7 +37,13 @@ func TestSDKCoreModulesConnectedE2E(t *testing.T) {
 		coreRequire(t, "sync complete catalog", sender.SyncAccountManagementState(context.Background()))
 		coreAssert(t, len(sender.GetWalletCatalog()) == 2, "multi-wallet fixture missing wallet")
 		coreCheckpoint(t, "catalog_before_RGB_control", sender, cfg, chain, senderMaterial)
-	})
+		t.Run("committed_batch_CAS_lost_ACK_converges_once", func(t *testing.T) {
+			coreCommittedCASLostACKE2E(t, sender, cfg, chain, senderMaterial)
+		})
+	}) {
+		// A failed publication fault test can leave this shared sender dirty.
+		return
+	}
 	coreRequire(t, "select sender root", sender.SwitchWallet(rootID, coreE2EPassword))
 	sender.SwitchAccount(0)
 
