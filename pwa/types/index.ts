@@ -21,6 +21,7 @@ export interface WalletAccount {
   address: string
   pubKey: string
   accountId?: string
+  spEnabled?: boolean
 }
 
 export interface WalletData {

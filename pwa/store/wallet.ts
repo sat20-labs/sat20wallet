@@ -161,6 +161,7 @@ export const useWalletStore = defineStore('wallet', () => {
         address: account.address,
         pubKey: account.pub_key,
         accountId: account.account_id,
+        spEnabled: Boolean(account.sp_enabled),
       })),
     }))
     return { catalog, walletId: result.current_wallet_id, accountIndex: result.current_account_index, rootAccountId: result.root_account_id }

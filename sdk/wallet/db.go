@@ -114,6 +114,9 @@ type WalletInDB struct {
 	Name         string
 	AccountNames map[uint32]string
 	AccountDIDs  map[uint32]string
+	// BIP352 is opt-in for each existing mnemonic subaccount. Once public,
+	// an SP address must remain discoverable after reload and device recovery.
+	SPEnabled map[uint32]bool
 }
 
 func getWalletDBKey(id int64) string {

@@ -141,6 +141,7 @@ class WalletManager {
           address: string
           pub_key: string
           account_id?: string
+          sp_enabled?: boolean
         }>
       }>
     } | undefined]
@@ -154,6 +155,26 @@ class WalletManager {
 
   async updateWalletName(id: string, name: string) {
     return this._handleRequest('updateWalletName', id, name)
+  }
+
+  async enableSilentPay(id: string, index: number): Promise<[Error | undefined, { enabled: boolean; address: string } | undefined]> {
+    return this._handleRequest('enableSilentPay', id, index)
+  }
+
+  async getSilentPayAccount(id: string, index: number): Promise<[Error | undefined, { enabled: boolean; address: string } | undefined]> {
+    return this._handleRequest('getSilentPayAccount', id, index)
+  }
+
+  async syncSilentPayLive(): Promise<[Error | undefined, { accounts: Array<{wallet_id: number; account_index: number; balance: number; complete: boolean}> } | undefined]> {
+    return this._handleRequest('syncSilentPayLive')
+  }
+
+  async getSilentPayBalance(id: string, index: number): Promise<[Error | undefined, { balance: {wallet_id: number; account_index: number; balance: number; complete: boolean} } | undefined]> {
+    return this._handleRequest('getSilentPayBalance', id, index)
+  }
+
+  async sendSilentPayment(address: string, amountSats: string | number, feeRate: string | number): Promise<[Error | undefined, { txId: string } | undefined]> {
+    return this._handleRequest('sendSilentPayment', address, String(amountSats), String(feeRate))
   }
 
   async ensureAccount(id: string, index: number, name: string, did = '') {

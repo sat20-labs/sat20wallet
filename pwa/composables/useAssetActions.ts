@@ -258,7 +258,16 @@ export function useAssetActions() {
   const l1Send = async ({ toAddress, asset_name, amt }: any) => {
     loading.value = true
     console.log('UseAssetAction l1Send:', toAddress, asset_name, amt,  btcFeeRate.value)
-    const [err] = await walletManager.sendAssets(toAddress, asset_name, amt, btcFeeRate.value)
+    let err: Error | undefined
+    if (/^(sp1|tsp1)/i.test(String(toAddress).trim())) {
+      if (asset_name !== '::') {
+        err = new Error('Silent Payments are available only for BTC')
+      } else {
+        [err] = await walletManager.sendSilentPayment(toAddress, amt, btcFeeRate.value)
+      }
+    } else {
+      [err] = await walletManager.sendAssets(toAddress, asset_name, amt, btcFeeRate.value)
+    }
     if (err) {
       handleError(err.message)
       loading.value = false
