@@ -1,5 +1,30 @@
 # PWA 钱包基本功能验收
 
+## SP 专项增量（2026-10-22）
+
+SP 专项复用本文件的浏览器 runner、真实 WASM 加载器、IndexedDB、Playwright 和已有 Bitcoin Core/BaseIndexer 测试 helper。仅使用临时目录和随机 loopback 端口，不连接共享测试网。
+
+| 组 | 自动入口 | 覆盖 |
+| --- | --- | --- |
+| SDK 真实收发 | `TestSPManagerBitcoinCoreSendReceiveE2E` | 正常 Manager、两输入与找零、Core 广播确认、生产 SP HTTP、准确收款、重复扫描不重复入账 |
+| SDK 生命周期 | `TestSilentPayProductionManagerLifecycleE2E` | 正常构造器、内置 Provider、磁盘 KVDB、密码认证、关闭重开、账户和网络隔离 |
+| PWA 入口与启用 | `TestSPSilentPayBrowserE2E` 中 2 个叶子 | 首页真实收款入口；页面启用、二维码、复制、未扫描状态和刷新页面恢复 |
+| PWA 收发 | 同入口中 1 个叶子 | 页面金额/地址确认、重复点击只广播一次、Core 确认、接收方手动刷新、精确余额 |
+| PWA 切换与迟到响应 | 同入口中 3 个叶子 | 真实 HTTP 响应延迟时切子账户、拒绝跨出隔离 regtest、锁定与重新认证 |
+| PWA 失败与重试 | 同入口中 3 个叶子 | 网络中断保留最近余额、重试、无效 SP 地址、取消不广播 |
+
+PWA 叶子定义及实现位于 `silentpay-e2e.mjs`，由现有 `account-management-e2e.mjs --wallet-cases` 选择执行。首页入口与直接进入 SP 页面后的功能是独立断言，入口失败不会使其余叶子直接跳过。测试不改生产功能，也不把隔离 regtest 的网络切换拒绝外推为主网/测试网切换已经验证。
+
+从 SDK 目录执行：
+
+```bash
+go test ./wallet -run '^TestSilentPayProductionManagerLifecycleE2E$' -count=1 -timeout=3m
+SAT20_E2E_REQUIRE_BITCOIND=1 go test ./e2e -run '^TestSPManagerBitcoinCoreSendReceiveE2E$' -count=1 -timeout=5m
+SAT20_E2E_REQUIRE_BITCOIND=1 go test ./e2e -run '^TestSPSilentPayBrowserE2E$' -count=1 -timeout=15m
+```
+
+需要 PATH 中的 Bitcoin Core、Node 及现有 PWA 浏览器依赖。可用 `SAT20_SP_EVIDENCE_DIR` 指定浏览器私密日志目录。SP workflow 已加入这些入口；实际结果和生产问题以 [本轮记录](../../../docs/sp-e2e-additions-2026-10-22.md) 为准，登记本身不表示通过。
+
 ## 当前代码清单（2026-10-09）
 
 钱包功能组现为 **90 项**（原 82 项加 Tools 2、真实 Mint/DID 3、Node 3）；独立强退/CSV 另有 **1 项**及两个既有前置，已接入 `verify:release-gate`。SDK 直接 WASM 为 **29 项**。编码结束时新增/增强代码全部未运行，历史记录保留原计数，不能外推为当前通过结果。用户随后授权仅运行新增例子，范围和结果见 [PWA cases](../../../docs/pwa-e2e-test-cases.md) 与 [SDK cases](../../../docs/sdk-e2e-test-cases.md)；编码阶段没有执行测试、编译、浏览器或服务。

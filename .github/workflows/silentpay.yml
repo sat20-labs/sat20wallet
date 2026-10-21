@@ -105,6 +105,22 @@ jobs:
           SAT20_E2E_REQUIRE_BITCOIND: '1'
           GOFLAGS: '-mod=mod'
         run: go test ./e2e -run '^TestSPBitcoinCoreRegtest' -v -count=1 -timeout=15m
+      - name: Real Manager SP send and receive
+        working-directory: sat20wallet/sdk
+        env:
+          SAT20_E2E_REQUIRE_BITCOIND: '1'
+        run: go test ./e2e -run '^TestSPManagerBitcoinCoreSendReceiveE2E$' -count=1 -timeout=5m
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install browser acceptance dependencies
+        working-directory: sat20wallet/pwa
+        run: npm ci --ignore-scripts --no-audit --no-fund && npx playwright install --with-deps chromium
+      - name: SP PWA actual browser and WASM cases
+        working-directory: sat20wallet/sdk
+        env:
+          SAT20_E2E_REQUIRE_BITCOIND: '1'
+        run: go test ./e2e -run '^TestSPSilentPayBrowserE2E$' -count=1 -timeout=15m
       - name: Compile real WASM exports
         working-directory: sat20wallet/sdk
         run: GOOS=js GOARCH=wasm go build -buildvcs=false -o /tmp/sat20-silentpay.wasm ./wasm
