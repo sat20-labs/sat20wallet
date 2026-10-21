@@ -57,7 +57,14 @@ func (p *rgb11Manager) rgb11ChannelInputWithinHeight(outpoint string) bool {
 	}
 	if p.channelSend.excludeRecentBlock {
 		output, err := p.l1IndexerClient.GetTxOutput(outpoint)
-		if err != nil || output == nil || p.IsRecentBlockUtxo(output.UtxoId) {
+		if err != nil || output == nil {
+			return false
+		}
+		owner := p.accountManagementOwner()
+		owner.mutex.RLock()
+		recent := owner.IsRecentBlockUtxo(output.UtxoId)
+		owner.mutex.RUnlock()
+		if recent {
 			return false
 		}
 	}
@@ -142,6 +149,7 @@ func (p *rgb11Manager) ownsRGB11ChannelScript(script []byte) bool {
 // boundary. The peer may broadcast as part of its existing signing handler,
 // therefore all receiver ACKs must already be durable before this call.
 func (p *rgb11Manager) signRGB11ChannelBatch(batch []*rgb11wallet.PendingTransfer) error {
+	baseline := cloneRGB11PendingBatch(batch)
 	first := batch[0]
 	data := first.ChannelSend
 	if data == nil || data.Signed {
@@ -226,6 +234,9 @@ func (p *rgb11Manager) signRGB11ChannelBatch(batch []*rgb11wallet.PendingTransfe
 	if err != nil {
 		return err
 	}
+	if err := p.checkRGB11OperationSource(); err != nil {
+		return err
+	}
 	peerSigs, err := owner.serverNode.client.SendSigReq(&req, sig)
 	if err != nil {
 		return err
@@ -250,7 +261,7 @@ func (p *rgb11Manager) signRGB11ChannelBatch(batch []*rgb11wallet.PendingTransfe
 		item.SignedTx = append([]byte(nil), signed.Bytes()...)
 		item.ChannelSend.Signed = true
 	}
-	return p.projectionStore.SavePendingTransferStates(batch)
+	return p.projectionStore.CompareAndSavePendingTransferStates(baseline, batch)
 }
 
 func sameRGB11ChannelSend(a, b *rgb11wallet.ChannelSendData) bool {
@@ -265,6 +276,7 @@ func sameRGB11ChannelSend(a, b *rgb11wallet.ChannelSendData) bool {
 // complete witness from Bitcoin using the already committed txid; never ask
 // for a different transaction or release the shared RGB carrier.
 func (p *rgb11Manager) recoverRGB11ChannelWitness(batch []*rgb11wallet.PendingTransfer) error {
+	baseline := cloneRGB11PendingBatch(batch)
 	first := batch[0]
 	if first.ChannelSend == nil || first.ChannelSend.Signed {
 		return nil
@@ -306,5 +318,5 @@ func (p *rgb11Manager) recoverRGB11ChannelWitness(batch []*rgb11wallet.PendingTr
 		item.SignedTx = append([]byte(nil), raw...)
 		item.ChannelSend.Signed = true
 	}
-	return p.projectionStore.SavePendingTransferStates(batch)
+	return p.projectionStore.CompareAndSavePendingTransferStates(baseline, batch)
 }

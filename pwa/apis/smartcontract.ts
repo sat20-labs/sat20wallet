@@ -1,9 +1,14 @@
 import { useGlobalStore } from '@/store/global'
+import { isRegtestBuild } from '@/utils/networkMode'
 
 class SmartContractApi {
   private generatePath(path: string, network: string) {
     const globalStore = useGlobalStore()
     const baseUrl = globalStore.config.satnetBaseUrl
+    if (isRegtestBuild) {
+      if (network !== 'regtest') throw new Error('The isolated regtest build cannot use a public SatoshiNet network')
+      return `${baseUrl}/regtest/v3/contracts${path}`
+    }
     return `${baseUrl}/satsnet${network === 'testnet' ? '/testnet' : '/mainnet'}/v3/contracts${path}`
   }
 

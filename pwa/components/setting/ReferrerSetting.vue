@@ -27,7 +27,7 @@
           <span class="text-sm">{{ boundReferrer }}</span>
           <!-- 如果有txId，显示mempool图标 -->
           <button
-            v-if="boundReferrerTxId"
+            v-if="boundReferrerTxId && network !== Network.REGTEST"
             @click="handleBoundReferrerMempoolClick()"
             class="ml-1 p-0.5 hover:bg-green-500/30 rounded transition-colors"
             :title="`查看绑定交易`"
@@ -61,7 +61,7 @@
       </div>
 
       <!-- 铸造域名链接 -->
-      <div class="flex justify-center mb-2">
+      <div v-if="network !== Network.REGTEST" class="flex justify-center mb-2">
         <a href="https://app.ordx.market/inscribe/" target="_blank" rel="noopener noreferrer"
           class="text-primary hover:text-primary/80 underline">
           {{ $t('referrerManagement.inscribeDomain') }}
@@ -177,7 +177,7 @@ async function loadBoundReferrer() {
     }
 
     // 如果本地没有有效绑定，则从服务器获取
-    const networkType = network.value === Network.MAINNET ? 'mainnet' : 'testnet'
+    const networkType = network.value
     console.log('获取绑定推荐人，地址:', address.value, '网络:', networkType)
 
     const response = await satnetApi.getReferrerByAddress({

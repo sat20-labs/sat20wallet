@@ -7,16 +7,20 @@ import (
 	"fmt"
 	"github.com/btcsuite/btcd/chaincfg"
 	indexer "github.com/sat20-labs/indexer/common"
+	corewallet "github.com/sat20-labs/rgb11/wallet"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	"strings"
 	"testing"
 	"time"
 )
 
+// These tests exercise local reservation transactions. Account synchronization
+// is covered by the public API gate tests; prepare through the existing local
+// manager so failures reach the reservation boundary being tested.
 func TestRGB11ReceiveReservationUsesExactRequestID(t *testing.T) {
 	w := NewInternalWalletWithMnemonic("comfort very add tuition senior run eight snap burst appear exile dutch", "", &chaincfg.TestNet4Params)
 	source := newRGB11FlowManager(t, w, &rgb11FlowIndexer{}, &rgb11FlowEvidence{}, 815)
-	req, err := source.CreateRGB11Invoice(RGB11InvoiceRequest{Mode: "witness", TransportMode: "out-of-band", AmountRaw: "2", Expiry: time.Now().Add(time.Hour).Unix()})
+	req, err := source.rgbManager.CreateRGB11Invoice(RGB11InvoiceRequest{Mode: "witness", TransportMode: "out-of-band", AmountRaw: "2", Expiry: time.Now().Add(time.Hour).Unix()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +55,7 @@ func TestRGB11ReceiveReservationUsesExactRequestID(t *testing.T) {
 func TestRGB11InvoiceUsesReservationFramework(t *testing.T) {
 	w := NewInternalWalletWithMnemonic("comfort very add tuition senior run eight snap burst appear exile dutch", "", &chaincfg.TestNet4Params)
 	mgr := newRGB11FlowManager(t, w, &rgb11FlowIndexer{}, &rgb11FlowEvidence{}, 810)
-	req, err := mgr.CreateRGB11Invoice(RGB11InvoiceRequest{Mode: "witness", TransportMode: "out-of-band", AmountRaw: "42", Expiry: time.Now().Add(time.Hour).Unix()})
+	req, err := mgr.rgbManager.CreateRGB11Invoice(RGB11InvoiceRequest{Mode: "witness", TransportMode: "out-of-band", AmountRaw: "42", Expiry: time.Now().Add(time.Hour).Unix()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +78,7 @@ func TestRGB11ReservationExpiryProtectsKnownTransfer(t *testing.T) {
 		t.Run(fmt.Sprint(used), func(t *testing.T) {
 			w := NewInternalWalletWithMnemonic("comfort very add tuition senior run eight snap burst appear exile dutch", "", &chaincfg.TestNet4Params)
 			mgr := newRGB11FlowManager(t, w, &rgb11FlowIndexer{}, &rgb11FlowEvidence{}, 811)
-			req, err := mgr.CreateRGB11Invoice(RGB11InvoiceRequest{Mode: "witness", TransportMode: "out-of-band", AmountRaw: "2", Expiry: time.Now().Add(time.Hour).Unix()})
+			req, err := mgr.rgbManager.CreateRGB11Invoice(RGB11InvoiceRequest{Mode: "witness", TransportMode: "out-of-band", AmountRaw: "2", Expiry: time.Now().Add(time.Hour).Unix()})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -106,6 +110,7 @@ func TestRGB11ReservationBatchFailureDoesNotPublishInvoice(t *testing.T) {
 	w := NewInternalWalletWithMnemonic("comfort very add tuition senior run eight snap burst appear exile dutch", "", &chaincfg.TestNet4Params)
 	mgr := newRGB11FlowManager(t, w, &rgb11FlowIndexer{}, &rgb11FlowEvidence{}, 812)
 	failed := &failNthFlushDB{KVDB: mgr.db, failAt: 1}
+	mgr.db = failed // Atomic publication uses the account owner DB.
 	replacement, err := newRGB11Manager(mgr, failed, mgr.utxoLockerL1, &rgb11FlowEvidence{})
 	if err != nil {
 		t.Fatal(err)
@@ -114,9 +119,12 @@ func TestRGB11ReservationBatchFailureDoesNotPublishInvoice(t *testing.T) {
 	if err := replacement.selectRGB11Scope(); err != nil {
 		t.Fatal(err)
 	}
-	req, err := mgr.CreateRGB11Invoice(RGB11InvoiceRequest{Mode: "witness", TransportMode: "out-of-band", AmountRaw: "2", Expiry: time.Now().Add(time.Hour).Unix()})
+	req, err := mgr.rgbManager.CreateRGB11Invoice(RGB11InvoiceRequest{Mode: "witness", TransportMode: "out-of-band", AmountRaw: "2", Expiry: time.Now().Add(time.Hour).Unix()})
 	if err == nil || req != nil {
 		t.Fatalf("failed batch published invoice: %+v %v", req, err)
+	}
+	if failed.count != 1 {
+		t.Fatalf("invoice did not reach the injected atomic flush: count=%d", failed.count)
 	}
 	records, err := replacement.engineStore.ExportSnapshot()
 	if err != nil {
@@ -198,7 +206,7 @@ func assertRGB11FrameworkRecovery(t *testing.T, managers ...*Manager) {
 func TestRGB11ReservationSnapshotFailureKeepsPreviousGeneration(t *testing.T) {
 	w := NewInternalWalletWithMnemonic("comfort very add tuition senior run eight snap burst appear exile dutch", "", &chaincfg.TestNet4Params)
 	mgr := newRGB11FlowManager(t, w, &rgb11FlowIndexer{}, &rgb11FlowEvidence{}, 813)
-	req, err := mgr.CreateRGB11Invoice(RGB11InvoiceRequest{Mode: "witness", TransportMode: "out-of-band", AmountRaw: "2", Expiry: time.Now().Add(time.Hour).Unix()})
+	req, err := mgr.rgbManager.CreateRGB11Invoice(RGB11InvoiceRequest{Mode: "witness", TransportMode: "out-of-band", AmountRaw: "2", Expiry: time.Now().Add(time.Hour).Unix()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +246,7 @@ func TestRGB11ReservationSnapshotFailureKeepsPreviousGeneration(t *testing.T) {
 func TestRGB11ReservationPublicViewIsReadOnlyAndRedacted(t *testing.T) {
 	w := NewInternalWalletWithMnemonic("comfort very add tuition senior run eight snap burst appear exile dutch", "", &chaincfg.TestNet4Params)
 	mgr := newRGB11FlowManager(t, w, &rgb11FlowIndexer{}, &rgb11FlowEvidence{}, 814)
-	req, err := mgr.CreateRGB11Invoice(RGB11InvoiceRequest{Mode: "witness", TransportMode: "out-of-band", AmountRaw: "2", Expiry: time.Now().Add(time.Hour).Unix()})
+	req, err := mgr.rgbManager.CreateRGB11Invoice(RGB11InvoiceRequest{Mode: "witness", TransportMode: "out-of-band", AmountRaw: "2", Expiry: time.Now().Add(time.Hour).Unix()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,8 +293,17 @@ func TestRGB11MissingFrameworkReservationFailsClosed(t *testing.T) {
 	// reservation transaction hook. There is no released legacy format to accept:
 	// once the normal hook is restored, the SDK must fail closed.
 	mgr.rgbManager.engineStore.SetReservationPersistence(nil)
-	req, err := mgr.CreateRGB11Invoice(RGB11InvoiceRequest{
-		Mode: "witness", TransportMode: "out-of-band", AmountRaw: "2",
+	witnessScript, err := AddrToPkScript(w.GetAddress(), GetChainParam())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var internalXOnly [32]byte
+	copy(internalXOnly[:], w.GetPubKey().SerializeCompressed()[1:])
+	amount := uint64(2)
+	req, err := mgr.rgbManager.engine.CreateReceive(corewallet.ReceiveParams{
+		Mode: corewallet.ReceiveWitness, Network: rgb11InvoiceNetwork(GetChainParam()),
+		RecipientID: "missing-framework-reservation", Amount: &amount, WitnessVout: 1,
+		WitnessScript: witnessScript, InternalXOnly: &internalXOnly,
 		Expiry: time.Now().Add(time.Hour).Unix(),
 	})
 	if err != nil {
@@ -301,10 +318,31 @@ func TestRGB11MissingFrameworkReservationFailsClosed(t *testing.T) {
 	}
 }
 
-type rgb11FailReceiveKeyDB struct{ indexer.KVDB }
+type rgb11FailReceiveKeyDB struct {
+	indexer.KVDB
+	rejected int
+}
+
+type rgb11FailReceiveKeyBatch struct {
+	indexer.WriteBatch
+	owner *rgb11FailReceiveKeyDB
+}
+
+func (d *rgb11FailReceiveKeyDB) NewWriteBatch() indexer.WriteBatch {
+	return &rgb11FailReceiveKeyBatch{WriteBatch: d.KVDB.NewWriteBatch(), owner: d}
+}
+
+func (b *rgb11FailReceiveKeyBatch) Put(key, value []byte) error {
+	if bytes.Contains(key, []byte("-receive-key-")) {
+		b.owner.rejected++
+		return errors.New("injected receive key write failure")
+	}
+	return b.WriteBatch.Put(key, value)
+}
 
 func (d *rgb11FailReceiveKeyDB) Write(key, value []byte) error {
 	if bytes.Contains(key, []byte("-receive-key-")) {
+		d.rejected++
 		return errors.New("injected receive key write failure")
 	}
 	return d.KVDB.Write(key, value)
@@ -323,9 +361,12 @@ func TestRGB11ReservationInvoicePostCreateFailureRollsBack(t *testing.T) {
 	if err := replacement.selectRGB11Scope(); err != nil {
 		t.Fatal(err)
 	}
-	req, err := mgr.CreateRGB11Invoice(RGB11InvoiceRequest{Mode: "witness", TransportMode: "out-of-band", AmountRaw: "2", Expiry: time.Now().Add(time.Hour).Unix()})
+	req, err := mgr.rgbManager.CreateRGB11Invoice(RGB11InvoiceRequest{Mode: "witness", TransportMode: RGB11ProxyTransport, TransportEndpoints: []string{testRGB11ProxyTransport}, AmountRaw: "2", Expiry: time.Now().Add(time.Hour).Unix()})
 	if err == nil || req != nil {
 		t.Fatalf("failed invoice was returned")
+	}
+	if failed.rejected != 1 {
+		t.Fatalf("invoice did not reach the injected receive-key write: count=%d", failed.rejected)
 	}
 	records, err := replacement.engineStore.ExportSnapshot()
 	if err != nil {
@@ -344,7 +385,7 @@ func TestRGB11FrameworkRejectsPartialStoreSnapshotImport(t *testing.T) {
 	w := NewInternalWalletWithMnemonic("comfort very add tuition senior run eight snap burst appear exile dutch", "", &chaincfg.TestNet4Params)
 	mgr := newRGB11FlowManager(t, w, &rgb11FlowIndexer{}, &rgb11FlowEvidence{}, 816)
 
-	req, err := mgr.CreateRGB11Invoice(RGB11InvoiceRequest{
+	req, err := mgr.rgbManager.CreateRGB11Invoice(RGB11InvoiceRequest{
 		Mode: "witness", TransportMode: "out-of-band", AmountRaw: "2",
 		Expiry: time.Now().Add(time.Hour).Unix(),
 	})
@@ -367,5 +408,97 @@ func TestRGB11FrameworkRejectsPartialStoreSnapshotImport(t *testing.T) {
 	}
 	if err := mgr.rgbManager.engineStore.ImportSnapshot(engine); !errors.Is(err, ErrRGB11Inconsistent) {
 		t.Fatalf("partial engine snapshot import bypassed common reservation: %v", err)
+	}
+}
+
+// An unused invoice expires normally; restoring its exact snapshot must keep
+// history readable without recreating an actionable receive reservation.
+func TestRGB11ExpiredUnusedInvoiceSnapshotReadback(t *testing.T) {
+	for _, expired := range []bool{false, true} {
+		t.Run(fmt.Sprintf("expired=%v", expired), func(t *testing.T) {
+			w := NewInternalWalletWithMnemonic("comfort very add tuition senior run eight snap burst appear exile dutch", "", &chaincfg.TestNet4Params)
+			mgr := newRGB11FlowManager(t, w, &rgb11FlowIndexer{}, &rgb11FlowEvidence{}, 861)
+			expiry := time.Now().Add(time.Hour).Unix()
+			if expired {
+				expiry = time.Now().Unix() + 3
+			}
+			req, err := mgr.rgbManager.CreateRGB11Invoice(RGB11InvoiceRequest{Mode: "witness", TransportMode: "out-of-band", AmountRaw: "2", Expiry: expiry})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := mgr.GetRGB11State(); err != nil {
+				t.Fatalf("new invoice readback: %v", err)
+			}
+			snapshot, _, err := mgr.rgbManager.exportRGB11WalletSnapshot("expiry-readback")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if expired {
+				for time.Now().Unix() <= expiry {
+					time.Sleep(10 * time.Millisecond)
+				}
+			}
+			if err := mgr.rgbManager.importRGB11WalletSnapshot(snapshot); err != nil {
+				t.Fatalf("restore exact snapshot: %v", err)
+			}
+			preserved, err := mgr.rgbManager.engine.LoadReceive(req.RequestID)
+			if err != nil || preserved.Invoice != req.Invoice || preserved.Expiry != expiry {
+				t.Fatalf("invoice history changed on restore: %v", err)
+			}
+			reservations, err := mgr.rgbManager.loadRGB11Reservations()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if expired && len(reservations) != 0 {
+				t.Fatalf("expired unused invoice recreated reservation: %d", len(reservations))
+			}
+			state, err := mgr.GetRGB11State()
+			if err != nil {
+				t.Fatalf("normal invoice expiry made wallet state unreadable: %v", err)
+			}
+			if expired && len(state.Reservations) != 0 {
+				t.Fatal("expired unused invoice exposed as actionable")
+			}
+			if !expired && len(state.Reservations) != 1 {
+				t.Fatal("active invoice lost reservation")
+			}
+		})
+	}
+}
+
+// This exception control guards the skip: a known receive must still fail
+// closed if its common reservation is missing, even after invoice expiry.
+func TestRGB11ExpiredUsedInvoiceMissingReservationFailsClosed(t *testing.T) {
+	w := NewInternalWalletWithMnemonic("comfort very add tuition senior run eight snap burst appear exile dutch", "", &chaincfg.TestNet4Params)
+	mgr := newRGB11FlowManager(t, w, &rgb11FlowIndexer{}, &rgb11FlowEvidence{}, 862)
+	expiry := time.Now().Unix() + 3
+	req, err := mgr.rgbManager.CreateRGB11Invoice(RGB11InvoiceRequest{Mode: "witness", TransportMode: "out-of-band", AmountRaw: "2", Expiry: expiry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.rgbManager.projectionStore.SaveTransferState(&rgb11wallet.TransferState{TransferID: "known-receive", Direction: "receive", Status: "awaiting_broadcast", AckStatus: "accepted", Invoice: req.Invoice, ReceiveRequestID: req.RequestID, WitnessTxID: strings.Repeat("cd", 32)}); err != nil {
+		t.Fatal(err)
+	}
+	reservations, err := mgr.rgbManager.loadRGB11Reservations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed := 0
+	for _, r := range reservations {
+		if r.RequestID == req.RequestID {
+			if err := mgr.db.Delete([]byte(GetResvKey(RESV_TYPE_RGB11, r.Id))); err != nil {
+				t.Fatal(err)
+			}
+			removed++
+		}
+	}
+	if removed == 0 {
+		t.Fatal("control did not remove matching reservation")
+	}
+	for time.Now().Unix() <= expiry {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := mgr.GetRGB11State(); !errors.Is(err, ErrRGB11Inconsistent) {
+		t.Fatalf("expired used receive without reservation was accepted: %v", err)
 	}
 }

@@ -42,6 +42,7 @@ export class BrowserUtil {
       network,
       path
     })
+    if (!url) return
 
     return BrowserUtil.openLink(url, options)
   }

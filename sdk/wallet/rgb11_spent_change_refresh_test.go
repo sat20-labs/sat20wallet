@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,11 +22,16 @@ import (
 func TestRGB11RefreshSpentChangeHistory(t *testing.T) {
 	for _, originalStatus := range []string{"settled", "pending"} {
 		t.Run(originalStatus, func(t *testing.T) {
-			sender, recipient, imported, evidence, rpc := newRGB11GenericSendFixture(t)
+			// Use a real seeded carrier with matching raw transaction and confirmed
+			// producer status. The generic NIA-vector fixture only stubs its source
+			// outpoint and cannot support whole-history chain reconciliation.
+			sender, recipient, imported, evidence, rpc := newRGB11ValidContractSpendFixture(t)
+			sender.rgbManager.scopeStates.stopReconciliations()
+			recipient.rgbManager.scopeStates.stopReconciliations()
 			ctx := context.Background()
 			makeConfirmed := func(amount string) *rgb11wallet.PendingTransfer {
 				t.Helper()
-				request, err := recipient.CreateRGB11Invoice(RGB11InvoiceRequest{
+				request, err := recipient.rgbManager.CreateRGB11Invoice(RGB11InvoiceRequest{
 					Mode: "witness", TransportMode: "out-of-band", ContractID: imported.ContractID,
 					AmountRaw: amount, WitnessVout: 1, Expiry: time.Now().Add(time.Hour).Unix(),
 				})
@@ -93,6 +99,7 @@ func TestRGB11RefreshSpentChangeHistory(t *testing.T) {
 			first := makeConfirmed("20000")
 			second := makeConfirmed("10000")
 			var spentChange string
+			var originalSpentProof *rgb11wallet.AllocationProof
 			knownProofs, err := sender.rgbManager.projectionStore.ListProofs()
 			if err != nil {
 				t.Fatal(err)
@@ -101,10 +108,11 @@ func TestRGB11RefreshSpentChangeHistory(t *testing.T) {
 				for _, proof := range knownProofs {
 					if input == proof.OutPoint && proof.WitnessTxID == first.State.WitnessTxID && proof.AssetName == imported.AssetName {
 						spentChange = input
+						originalSpentProof = proof
 					}
 				}
 			}
-			if spentChange == "" {
+			if spentChange == "" || originalSpentProof == nil {
 				t.Fatal("second transaction did not consume first change")
 			}
 			if evidence.spendingTx[spentChange] != second.State.WitnessTxID {
@@ -115,14 +123,12 @@ func TestRGB11RefreshSpentChangeHistory(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			// Existing corrupted historical pending records must require the separate
-			// targeted repair tool; production refresh must not silently repair them.
+			// Simulate a lost response after confirmation by restoring only the old
+			// mutable journal phase. The signed transaction and immutable recovery
+			// material remain intact, so refresh must re-derive the confirmed state.
 			first.State.Status = originalStatus
 			if err := sender.rgbManager.projectionStore.SavePendingTransferState(first); err != nil {
 				t.Fatal(err)
-			}
-			if originalStatus == "pending" {
-				assertRGB11HistoricalRepairDryRun(t, sender, first, second, spentChange)
 			}
 			spentLock := sender.utxoLockerL1.GetLockedUtxoList()[spentChange]
 			if originalStatus == "settled" {
@@ -140,10 +146,6 @@ func TestRGB11RefreshSpentChangeHistory(t *testing.T) {
 				}
 			} else if spentLock == nil || spentLock.ReservationID != second.ReservationID {
 				t.Fatalf("pending history lost successor ownership: %+v", spentLock)
-			}
-			wantOwner, wantReason := "", ""
-			if spentLock != nil {
-				wantOwner, wantReason = spentLock.ReservationID, spentLock.Reason
 			}
 			if originalStatus == "settled" {
 				t.Run("unknown_spender_with_confirmed_local_successor", func(t *testing.T) {
@@ -189,12 +191,12 @@ func TestRGB11RefreshSpentChangeHistory(t *testing.T) {
 							}
 						}
 						if err := manager.rgbManager.rebuildRGB11Locks(); err != nil {
-							t.Fatalf("rebuild attempt=%d err=%v consistency=%s", attempt, err, manager.rgbManager.consistencyStatus)
+							t.Fatalf("rebuild attempt=%d failed error_type=%T reservation_owner_mismatch=%t consistency=%s", attempt, err, strings.Contains(err.Error(), "UTXO reservation owner mismatch"), manager.rgbManager.consistencyStatus)
 						}
 						for _, id := range []string{first.State.TransferID, second.State.TransferID} {
 							stored, err := manager.rgbManager.projectionStore.LoadPendingTransfer(id)
 							if err != nil || stored.State.Status != "settled" {
-								t.Fatalf("restart changed settled history: attempt=%d id=%s err=%v", attempt, id, err)
+								t.Fatalf("restart changed settled history: attempt=%d load_error=%t settled=%t", attempt, err != nil, err == nil && stored.State.Status == "settled")
 							}
 						}
 						lock := manager.utxoLockerL1.GetLockedUtxoList()[spentChange]
@@ -342,18 +344,15 @@ func TestRGB11RefreshSpentChangeHistory(t *testing.T) {
 			t.Run("refresh_twice", func(t *testing.T) {
 				for attempt := 0; attempt < 2; attempt++ {
 					_, refreshErr := sender.rgbManager.RefreshRGB11State(ctx)
-					if originalStatus == "settled" && refreshErr != nil {
-						t.Fatalf("refresh: %v", refreshErr)
-					}
-					if originalStatus == "pending" && refreshErr == nil {
-						t.Fatal("corrupt historical pending record must expose its validation error")
+					if refreshErr != nil {
+						t.Fatalf("refresh attempt=%d: %v", attempt, refreshErr)
 					}
 					got, err := sender.rgbManager.projectionStore.LoadPendingTransfer(first.State.TransferID)
 					if err != nil {
 						t.Fatal(err)
 					}
-					if got.State.Status != originalStatus {
-						t.Errorf("historical %s became %s after spent change refresh", originalStatus, got.State.Status)
+					if got.State.Status != "settled" {
+						t.Errorf("historical %s was not re-derived to settled after spent change refresh: %s", originalStatus, got.State.Status)
 					}
 					gotSecond, err := sender.rgbManager.projectionStore.LoadPendingTransfer(second.State.TransferID)
 					if err != nil || gotSecond.State.Status != "settled" {
@@ -371,6 +370,9 @@ func TestRGB11RefreshSpentChangeHistory(t *testing.T) {
 					for _, proof := range proofs {
 						if proof.OutPoint == spentChange {
 							found = true
+							if !reflect.DeepEqual(originalSpentProof, proof) {
+								t.Error("refresh changed the original consumed proof")
+							}
 							if proof.Status != "spending" {
 								t.Errorf("spent carrier revived: %s", proof.Status)
 							}
@@ -380,12 +382,8 @@ func TestRGB11RefreshSpentChangeHistory(t *testing.T) {
 						t.Error("spent change history disappeared")
 					}
 					lock := sender.utxoLockerL1.GetLockedUtxoList()[spentChange]
-					if originalStatus == "settled" {
-						if lock != nil {
-							t.Fatalf("refresh revived settled successor input lock: %+v", lock)
-						}
-					} else if lock == nil || lock.ReservationID != wantOwner || lock.Reason != wantReason {
-						t.Fatalf("refresh changed pending successor ownership: before=%s/%s after=%+v", wantOwner, wantReason, lock)
+					if lock != nil {
+						t.Fatalf("refresh retained settled successor input lock: %+v", lock)
 					}
 					if len(evidence.broadcasted) != 0 {
 						t.Fatal("refresh broadcast a transaction")

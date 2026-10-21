@@ -23,6 +23,7 @@ import (
 	"github.com/sat20-labs/rgb11/consensus"
 	coreconsignment "github.com/sat20-labs/rgb11/consignment"
 	"github.com/sat20-labs/rgb11/invoicing"
+	corewallet "github.com/sat20-labs/rgb11/wallet"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 )
 
@@ -41,6 +42,52 @@ type rgb11ProxyTestServer struct {
 	ackGetHTTPStatus       int
 	ackPostCount           int
 	ackGetCount            int
+	ackHistory             []bool
+}
+
+type rgb11ProxyFaultEvidence struct {
+	rgb11wallet.BitcoinEvidenceProvider
+	mu        sync.Mutex
+	txid      string
+	raw       []byte
+	err       error
+	triggered bool
+}
+
+func (e *rgb11ProxyFaultEvidence) failNextRawTx(txid string, err error) {
+	e.mu.Lock()
+	e.txid, e.raw, e.err, e.triggered = txid, nil, err, false
+	e.mu.Unlock()
+}
+
+func (e *rgb11ProxyFaultEvidence) returnWrongRawTxOnce(txid string, raw []byte) {
+	e.mu.Lock()
+	e.txid, e.raw, e.err, e.triggered = txid, append([]byte(nil), raw...), nil, false
+	e.mu.Unlock()
+}
+
+func (e *rgb11ProxyFaultEvidence) rawTxFaultTriggered() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.triggered
+}
+
+func (e *rgb11ProxyFaultEvidence) GetRawTx(txid string) ([]byte, error) {
+	e.mu.Lock()
+	if e.err != nil && e.txid == txid {
+		err := e.err
+		e.txid, e.raw, e.err, e.triggered = "", nil, nil, true
+		e.mu.Unlock()
+		return nil, err
+	}
+	if e.raw != nil && e.txid == txid {
+		raw := append([]byte(nil), e.raw...)
+		e.txid, e.raw, e.err, e.triggered = "", nil, nil, true
+		e.mu.Unlock()
+		return raw, nil
+	}
+	e.mu.Unlock()
+	return e.BitcoinEvidenceProvider.GetRawTx(txid)
 }
 
 const testRGB11ProxyTransport = "rpcs://proxy.iriswallet.com/0.2/json-rpc"
@@ -84,6 +131,7 @@ func (s *rgb11ProxyTestServer) serveHTTP(w http.ResponseWriter, r *http.Request)
 		}
 		s.mu.Lock()
 		s.ackPostCount++
+		s.ackHistory = append(s.ackHistory, params.Ack)
 		status := s.ackPostHTTPStatus
 		failBeforeStore := s.ackPostFailBeforeStore
 		if failBeforeStore {
@@ -457,6 +505,9 @@ func TestRGB11ProxyInvoiceAcceptsBlindedBeneficiary(t *testing.T) {
 }
 
 func TestRGB11WitnessReceiveMatchesExpectedRecipientAfterChange(t *testing.T) {
+	oldChain := _chain
+	_chain = "testnet"
+	t.Cleanup(func() { _chain = oldChain })
 	recipientWallet := NewInternalWalletWithMnemonic(
 		"comfort very add tuition senior run eight snap burst appear exile dutch",
 		"", &chaincfg.TestNet4Params,
@@ -468,9 +519,17 @@ func TestRGB11WitnessReceiveMatchesExpectedRecipientAfterChange(t *testing.T) {
 		utxos: make(map[string]*rgb11wallet.BitcoinUTXO),
 		rawTx: make(map[string][]byte), spendingTx: make(map[string]string),
 	}
-	manager := newRGB11FlowManager(t, recipientWallet, &rgb11FlowIndexer{
+	rpc := &rgb11FlowIndexer{
 		outputs: make(map[string]*TxOutput),
-	}, evidence, 94)
+	}
+	remote := newRGB11MemoryDKVSHTTP()
+	client := newRGB11MessageNodeClient(remote)
+	manager := newRGB11ActivatedFlowAccount(t,
+		"comfort very add tuition senior run eight snap burst appear exile dutch",
+		remote, client, evidence, rpc)
+	if manager.wallet.GetAddress() != recipientWallet.GetAddress() {
+		t.Fatal("activated fixture changed the original recipient identity")
+	}
 	receive, err := manager.CreateRGB11Invoice(RGB11InvoiceRequest{
 		Mode: "witness", TransportMode: RGB11ProxyTransport,
 		TransportEndpoints: []string{testRGB11ProxyTransport},
@@ -520,7 +579,7 @@ func TestRGB11WitnessReceiveMatchesExpectedRecipientAfterChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	if matched.Allocation.OutPoint != recipientOutpoint || matched.Vout == nil ||
-		*matched.Vout != expectedVout || matched.SealCommitment != "" {
+		*matched.Vout != expectedVout {
 		t.Fatalf("unexpected witness allocation match: %+v", matched)
 	}
 	wrongVout := uint32(1)
@@ -720,6 +779,21 @@ func TestRGB11ProxyDeliveryWaitsForAckBeforeBroadcast(t *testing.T) {
 	nack.State.AckStatus = "awaiting"
 	nack.State.InputOutPoints = []string{nackInput}
 	nack.ReservationID = "proxy-nack-reservation"
+	// The rejected operation must own the inputs of its own immutable witness,
+	// rather than reusing a transaction which spends the preceding fixture.
+	nackTx := tx.Copy()
+	nackPoint, err := wire.NewOutPointFromString(nackInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nackTx.TxIn[0].PreviousOutPoint = *nackPoint
+	var nackRaw bytes.Buffer
+	if err := nackTx.Serialize(&nackRaw); err != nil {
+		t.Fatal(err)
+	}
+	nack.SignedTx = nackRaw.Bytes()
+	nack.State.WitnessTxID = nackTx.TxHash().String()
+	nack.State.OutputOutPoints = []string{nack.State.WitnessTxID + ":0"}
 	if err := manager.rgbManager.projectionStore.SavePendingTransfer(&nack); err != nil {
 		t.Fatal(err)
 	}
@@ -816,9 +890,20 @@ func TestRGB11ProxyBlindReceiveAcknowledgesBeforeBroadcast(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const sourceOutpoint = "14295d5bb1a191cdb6286dc0944df938421e3dfcbf0811353ccac4100c2068c5:1"
-	const feeOutpoint = "8181818181818181818181818181818181818181818181818181818181818181:0"
-	const receiveOutpoint = "8282828282828282828282828282828282828282828282828282828282828282:0"
+	seed := func(script []byte, value int64, marker byte) (string, []byte) {
+		t.Helper()
+		tx := wire.NewMsgTx(wire.TxVersion)
+		tx.AddTxIn(wire.NewTxIn(&wire.OutPoint{Index: wire.MaxPrevOutIndex}, []byte{1, marker}, nil))
+		tx.AddTxOut(wire.NewTxOut(value, append([]byte(nil), script...)))
+		var raw bytes.Buffer
+		if err := tx.Serialize(&raw); err != nil {
+			t.Fatal(err)
+		}
+		return tx.TxHash().String() + ":0", raw.Bytes()
+	}
+	sourceOutpoint, sourceRaw := seed(senderScript, 10_000, 1)
+	feeOutpoint, feeRaw := seed(senderScript, 100_000, 2)
+	receiveOutpoint, receiveRaw := seed(recipientScript, 100_000, 3)
 	evidence := &rgb11FlowEvidence{
 		utxos: map[string]*rgb11wallet.BitcoinUTXO{
 			sourceOutpoint: {
@@ -834,7 +919,22 @@ func TestRGB11ProxyBlindReceiveAcknowledgesBeforeBroadcast(t *testing.T) {
 				PkScript: append([]byte(nil), recipientScript...), Confirmations: 6,
 			},
 		},
-		rawTx: make(map[string][]byte), spendingTx: make(map[string]string),
+		rawTx: map[string][]byte{
+			strings.SplitN(sourceOutpoint, ":", 2)[0]:  sourceRaw,
+			strings.SplitN(feeOutpoint, ":", 2)[0]:     feeRaw,
+			strings.SplitN(receiveOutpoint, ":", 2)[0]: receiveRaw,
+		},
+		txStatuses: make(map[string]*rgb11wallet.BitcoinTxStatus),
+		spendingTx: make(map[string]string),
+	}
+	// Each fixture UTXO is backed by a matching raw transaction and an explicit
+	// confirmed status. The test issues its contract against this evidence
+	// instead of relying on the static vector's unrelated genesis outpoint.
+	for _, outpoint := range []string{sourceOutpoint, feeOutpoint, receiveOutpoint} {
+		txid := strings.SplitN(outpoint, ":", 2)[0]
+		evidence.txStatuses[txid] = &rgb11wallet.BitcoinTxStatus{
+			TxID: txid, Confirmed: true, BlockHeight: 1, BlockHash: "test-tip", Confirmations: 6,
+		}
 	}
 	rpc := &rgb11FlowIndexer{outputs: make(map[string]*TxOutput)}
 	for _, item := range []struct {
@@ -856,17 +956,21 @@ func TestRGB11ProxyBlindReceiveAcknowledgesBeforeBroadcast(t *testing.T) {
 		})
 	}
 	sender := newRGB11FlowManager(t, senderWallet, rpc, evidence, 92)
-	recipient := newRGB11FlowManager(t, recipientWallet, rpc, evidence, 93)
-	contract, err := os.ReadFile("../../../rgb11/testvectors/rc11/nia-example.rgba")
-	if err != nil {
-		t.Fatal(err)
-	}
-	imported, err := sender.ImportRGB11Contract(context.Background(), contract)
+	recipientEvidence := &rgb11ProxyFaultEvidence{BitcoinEvidenceProvider: evidence}
+	recipient := newRGB11FlowManager(t, recipientWallet, rpc, recipientEvidence, 93)
+	// This native fixture intentionally has no account-root identity. Exercise
+	// the RGB protocol/ACK state machine at its owning manager boundary; public
+	// SDK synchronization barriers are covered by the managed-gate and
+	// CoreModules account-recovery tests.
+	imported, err := sender.rgbManager.IssueRGB11Asset(context.Background(), RGB11IssueRequest{
+		Schema: "NIA", Ticker: "PROXY", Name: "Proxy transport test asset",
+		Precision: 0, Amounts: []uint64{20_000},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	endpoint := "rpc://" + strings.TrimPrefix(server.URL, "http://")
-	receive, err := recipient.CreateRGB11Invoice(RGB11InvoiceRequest{
+	receive, err := recipient.rgbManager.CreateRGB11Invoice(RGB11InvoiceRequest{
 		Mode: "blind", TransportMode: RGB11ProxyTransport,
 		TransportEndpoints: []string{endpoint}, ContractID: imported.ContractID,
 		AmountRaw: "20000", Expiry: time.Now().Add(time.Hour).Unix(),
@@ -877,7 +981,7 @@ func TestRGB11ProxyBlindReceiveAcknowledgesBeforeBroadcast(t *testing.T) {
 	if receive.Seal.TxID == nil {
 		t.Fatal("standard blind invoice did not use an absolute receiver UTXO seal")
 	}
-	prepared, err := sender.PrepareRGB11Transfer(context.Background(), RGB11SendRequest{
+	prepared, err := sender.rgbManager.PrepareRGB11Transfer(context.Background(), RGB11SendRequest{
 		Invoice: receive.Invoice, FeeRate: 2, MinConfirmations: 1,
 	})
 	if err != nil {
@@ -888,11 +992,21 @@ func TestRGB11ProxyBlindReceiveAcknowledgesBeforeBroadcast(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	received, err := recipient.ReceiveRGB11ProxyConsignment(
+	received, err := recipient.rgbManager.ReceiveRGB11ProxyConsignment(
 		context.Background(), receive.RequestID,
 	)
 	if err != nil {
-		t.Fatal(err)
+		requestAfter, requestErr := recipient.rgbManager.engine.LoadReceive(receive.RequestID)
+		requestStatus, transferSet, objectSet := corewallet.ReceiveStatus(""), false, false
+		if requestAfter != nil {
+			requestStatus, transferSet, objectSet = requestAfter.Status, requestAfter.TransferID != "", requestAfter.ObjectHash != ""
+		}
+		proxy.mu.Lock()
+		ackHistory := append([]bool(nil), proxy.ackHistory...)
+		proxy.mu.Unlock()
+		t.Fatalf("proxy receive failed before ACK assertions: err=%v request_error=%v status=%q transfer_set=%t object_set=%t fault_triggered=%t ack_history=%v",
+			err, requestErr, requestStatus, transferSet, objectSet,
+			recipientEvidence.rawTxFaultTriggered(), ackHistory)
 	}
 	if !received.AckPosted || !received.AwaitingBroadcast ||
 		received.TxID != prepared.State.WitnessTxID || received.Vout != nil {
@@ -905,12 +1019,317 @@ func TestRGB11ProxyBlindReceiveAcknowledgesBeforeBroadcast(t *testing.T) {
 	if len(proofs) != 0 {
 		t.Fatalf("prepared receive projected spendable RGB state: %+v", proofs)
 	}
+	state, err := recipient.GetRGB11State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if available := rgb11AssetAmount(state.AvailableAssets, imported.AssetName); available != 0 {
+		t.Fatalf("ACKed receive exposed RGB before the sender's transition was available: %d", available)
+	}
 	proxy.mu.Lock()
 	ack := proxy.ack
 	proxy.mu.Unlock()
 	if ack == nil || !*ack {
 		t.Fatalf("receiver did not ACK prepared consignment: %v", ack)
 	}
+	if !t.Run("transient_evidence_error_after_positive_ACK_preserves_receive_responsibility", func(t *testing.T) {
+		requestBefore, err := recipient.rgbManager.engine.LoadReceive(receive.RequestID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if requestBefore.Status != corewallet.ReceiveAcknowledged || requestBefore.TransferID == "" ||
+			requestBefore.ObjectHash == "" {
+			t.Fatalf("positive ACK did not persist the receive identity: status=%q transfer=%q object=%q",
+				requestBefore.Status, requestBefore.TransferID, requestBefore.ObjectHash)
+		}
+		stateBefore, err := recipient.rgbManager.projectionStore.LoadTransferState(requestBefore.TransferID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reservationBefore, err := recipient.rgbManager.projectionStore.LoadReceiveReservation(receive.RequestID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		preparedBefore, err := recipient.rgbManager.projectionStore.LoadPreparedReceive(requestBefore.TransferID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		objectBefore, err := recipient.rgbManager.projectionStore.LoadObject(requestBefore.ObjectHash)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lockBefore := recipient.utxoLockerL1.GetLockedUtxoList()[reservationBefore.OutPoint]
+		if lockBefore == nil || lockBefore.Reason != rgb11wallet.LockReasonPending ||
+			lockBefore.ReservationID != reservationBefore.ReservationID {
+			t.Fatalf("positive ACK receive carrier was not held by its reservation: present=%t reason_pending=%t reservation_match=%t",
+				lockBefore != nil, lockBefore != nil && lockBefore.Reason == rgb11wallet.LockReasonPending,
+				lockBefore != nil && lockBefore.ReservationID == reservationBefore.ReservationID)
+		}
+
+		transientErr := errors.New("temporary test witness evidence failure")
+		recipientEvidence.failNextRawTx(requestBefore.WitnessTxID, transientErr)
+		retried, retryErr := recipient.rgbManager.ReceiveRGB11ProxyConsignment(context.Background(), receive.RequestID)
+		if !recipientEvidence.rawTxFaultTriggered() {
+			t.Errorf("retry did not reach the injected nonterminal witness evidence failure: %v", retryErr)
+		}
+		if retryErr != nil || retried == nil || !retried.AckPosted || !retried.AwaitingBroadcast ||
+			retried.RequestID != requestBefore.RequestID || retried.TxID != requestBefore.WitnessTxID {
+			var resultID, resultTxID string
+			var ackPosted, awaiting bool
+			if retried != nil {
+				resultID, resultTxID = retried.RequestID, retried.TxID
+				ackPosted, awaiting = retried.AckPosted, retried.AwaitingBroadcast
+			}
+			t.Errorf("unavailable witness evidence did not preserve the ACKed receive: request_match=%t tx_match=%t ack_posted=%t awaiting=%t err=%v",
+				resultID == requestBefore.RequestID, resultTxID == requestBefore.WitnessTxID,
+				ackPosted, awaiting, retryErr)
+		}
+
+		requestAfter, requestErr := recipient.rgbManager.engine.LoadReceive(receive.RequestID)
+		if requestErr != nil {
+			t.Errorf("load ACKed request after transient error: %v", requestErr)
+		} else if requestAfter == nil || requestAfter.Status != corewallet.ReceiveAcknowledged ||
+			requestAfter.TransferID != requestBefore.TransferID ||
+			requestAfter.ObjectHash != requestBefore.ObjectHash ||
+			requestAfter.WitnessTxID != requestBefore.WitnessTxID {
+			t.Errorf("transient error changed ACKed request: status=%q transfer_match=%t object_match=%t witness_match=%t",
+				requestAfter.Status, requestAfter.TransferID == requestBefore.TransferID,
+				requestAfter.ObjectHash == requestBefore.ObjectHash,
+				requestAfter.WitnessTxID == requestBefore.WitnessTxID)
+		}
+		stateAfter, stateErr := recipient.rgbManager.projectionStore.LoadTransferState(requestBefore.TransferID)
+		if stateErr != nil {
+			t.Errorf("load prepared receive state after transient error: %v", stateErr)
+		} else if stateAfter.Status != stateBefore.Status || stateAfter.AckStatus != stateBefore.AckStatus ||
+			stateAfter.TransferID != stateBefore.TransferID || stateAfter.ConsignmentHash != stateBefore.ConsignmentHash ||
+			stateAfter.WitnessTxID != stateBefore.WitnessTxID || stateAfter.RejectReason != stateBefore.RejectReason {
+			t.Errorf("transient error changed prepared receive state: status=%q/%q ack=%q/%q transfer_match=%t object_match=%t witness_match=%t",
+				stateBefore.Status, stateAfter.Status, stateBefore.AckStatus, stateAfter.AckStatus,
+				stateAfter.TransferID == stateBefore.TransferID,
+				stateAfter.ConsignmentHash == stateBefore.ConsignmentHash,
+				stateAfter.WitnessTxID == stateBefore.WitnessTxID)
+		}
+		reservationAfter, reservationErr := recipient.rgbManager.projectionStore.LoadReceiveReservation(receive.RequestID)
+		if reservationErr != nil || reservationAfter == nil || *reservationAfter != *reservationBefore {
+			t.Errorf("transient error changed receive reservation: before=%+v after=%+v err=%v",
+				reservationBefore, reservationAfter, reservationErr)
+		}
+		preparedAfter, preparedErr := recipient.rgbManager.projectionStore.LoadPreparedReceive(requestBefore.TransferID)
+		if preparedErr != nil || preparedAfter != preparedBefore {
+			t.Errorf("transient error changed prepared-receive mapping: before=%q after=%q err=%v",
+				preparedBefore, preparedAfter, preparedErr)
+		}
+		objectAfter, objectErr := recipient.rgbManager.projectionStore.LoadObject(requestBefore.ObjectHash)
+		if objectErr != nil || !bytes.Equal(objectAfter, objectBefore) {
+			t.Errorf("transient error changed the immutable consignment object: before=%d bytes after=%d bytes err=%v",
+				len(objectBefore), len(objectAfter), objectErr)
+		}
+		lockAfter := recipient.utxoLockerL1.GetLockedUtxoList()[reservationBefore.OutPoint]
+		if lockAfter == nil || lockAfter.Reason != lockBefore.Reason ||
+			lockAfter.ReservationID != lockBefore.ReservationID {
+			t.Errorf("transient error released or changed the receive carrier lock: before_present=%t after_present=%t reason_match=%t reservation_match=%t",
+				lockBefore != nil, lockAfter != nil,
+				lockAfter != nil && lockBefore != nil && lockAfter.Reason == lockBefore.Reason,
+				lockAfter != nil && lockBefore != nil && lockAfter.ReservationID == lockBefore.ReservationID)
+		}
+		proxy.mu.Lock()
+		ackHistory := append([]bool(nil), proxy.ackHistory...)
+		ackAfter := proxy.ack
+		proxy.mu.Unlock()
+		if ackAfter == nil || !*ackAfter {
+			t.Errorf("transient error changed the proxy's positive ACK: %v", ackAfter)
+		}
+		if len(ackHistory) == 0 || !ackHistory[0] {
+			t.Errorf("proxy ACK history lost the original positive ACK: %v", ackHistory)
+		}
+		for _, posted := range ackHistory {
+			if !posted {
+				t.Errorf("receiver attempted a negative ACK after positive ACK: %v", ackHistory)
+				break
+			}
+		}
+		if t.Failed() {
+			return
+		}
+
+		// The injected lookup error is one-shot. A subsequent retry must still
+		// find the same accepted responsibility and remain resumable while the
+		// witness transaction is not yet visible.
+		retried, err = recipient.rgbManager.ReceiveRGB11ProxyConsignment(context.Background(), receive.RequestID)
+		if err != nil || retried == nil || !retried.AckPosted || !retried.AwaitingBroadcast ||
+			retried.RequestID != requestBefore.RequestID || retried.TxID != requestBefore.WitnessTxID {
+			var resultID, resultTxID string
+			var ackPosted, awaiting bool
+			if retried != nil {
+				resultID, resultTxID = retried.RequestID, retried.TxID
+				ackPosted, awaiting = retried.AckPosted, retried.AwaitingBroadcast
+			}
+			t.Fatalf("same ACKed receive was not resumable after transient failure: request_match=%t tx_match=%t ack_posted=%t awaiting=%t err=%v",
+				resultID == requestBefore.RequestID, resultTxID == requestBefore.WitnessTxID,
+				ackPosted, awaiting, err)
+		}
+		proxy.mu.Lock()
+		defer proxy.mu.Unlock()
+		for _, posted := range proxy.ackHistory {
+			if !posted {
+				t.Errorf("resuming ACKed receive wrote a negative ACK: %v", proxy.ackHistory)
+				break
+			}
+		}
+	}) {
+		return
+	}
+	if !t.Run("temporary_witness_mismatch_after_positive_ACK_preserves_receive_responsibility", func(t *testing.T) {
+		requestBefore, err := recipient.rgbManager.engine.LoadReceive(receive.RequestID)
+		if err != nil || requestBefore == nil || requestBefore.Status != corewallet.ReceiveAcknowledged {
+			t.Fatalf("receive is not still positively acknowledged: request=%+v err=%v", requestBefore, err)
+		}
+		stateBefore, err := recipient.rgbManager.projectionStore.LoadTransferState(requestBefore.TransferID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reservationBefore, err := recipient.rgbManager.projectionStore.LoadReceiveReservation(receive.RequestID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		preparedBefore, err := recipient.rgbManager.projectionStore.LoadPreparedReceive(requestBefore.TransferID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		objectBefore, err := recipient.rgbManager.projectionStore.LoadObject(requestBefore.ObjectHash)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lockBefore := recipient.utxoLockerL1.GetLockedUtxoList()[reservationBefore.OutPoint]
+		if lockBefore == nil || lockBefore.Reason != rgb11wallet.LockReasonPending ||
+			lockBefore.ReservationID != reservationBefore.ReservationID {
+			t.Fatalf("ACKed receive carrier is not held: present=%t pending=%t reservation_match=%t",
+				lockBefore != nil, lockBefore != nil && lockBefore.Reason == rgb11wallet.LockReasonPending,
+				lockBefore != nil && lockBefore.ReservationID == reservationBefore.ReservationID)
+		}
+
+		// A same-key, in-mempool but mismatching raw transaction is a temporary
+		// chain-evidence inconsistency. The core reports ErrWitnessMismatch,
+		// which is not one of the two explicitly resumable unknown-state errors.
+		evidence.mu.Lock()
+		evidence.txStatuses[requestBefore.WitnessTxID] = &rgb11wallet.BitcoinTxStatus{
+			TxID: requestBefore.WitnessTxID, InMempool: true,
+		}
+		evidence.mu.Unlock()
+		recipientEvidence.returnWrongRawTxOnce(requestBefore.WitnessTxID, feeRaw)
+		_, retryErr := recipient.rgbManager.ReceiveRGB11ProxyConsignment(context.Background(), receive.RequestID)
+		if !recipientEvidence.rawTxFaultTriggered() {
+			t.Errorf("retry did not reach the injected mismatching witness transaction: %v", retryErr)
+		}
+		if !errors.Is(retryErr, coreconsignment.ErrWitnessMismatch) {
+			t.Errorf("retry error = %v, want the core witness mismatch class", retryErr)
+		}
+
+		requestAfter, requestErr := recipient.rgbManager.engine.LoadReceive(receive.RequestID)
+		if requestErr != nil || requestAfter == nil || requestAfter.Status != corewallet.ReceiveAcknowledged ||
+			requestAfter.TransferID != requestBefore.TransferID || requestAfter.ObjectHash != requestBefore.ObjectHash ||
+			requestAfter.WitnessTxID != requestBefore.WitnessTxID {
+			var status corewallet.ReceiveStatus
+			if requestAfter != nil {
+				status = requestAfter.Status
+			}
+			t.Errorf("mismatching evidence changed ACKed request: status=%q identity_match=%t err=%v",
+				status, requestAfter != nil && requestAfter.TransferID == requestBefore.TransferID &&
+					requestAfter.ObjectHash == requestBefore.ObjectHash && requestAfter.WitnessTxID == requestBefore.WitnessTxID,
+				requestErr)
+		}
+		stateAfter, stateErr := recipient.rgbManager.projectionStore.LoadTransferState(requestBefore.TransferID)
+		if stateErr != nil || stateAfter == nil || stateAfter.Status != stateBefore.Status || stateAfter.AckStatus != stateBefore.AckStatus ||
+			stateAfter.TransferID != stateBefore.TransferID || stateAfter.ConsignmentHash != stateBefore.ConsignmentHash ||
+			stateAfter.WitnessTxID != stateBefore.WitnessTxID {
+			var afterStatus, afterAck string
+			if stateAfter != nil {
+				afterStatus, afterAck = stateAfter.Status, stateAfter.AckStatus
+			}
+			identityMatch := stateAfter != nil && stateAfter.TransferID == stateBefore.TransferID &&
+				stateAfter.ConsignmentHash == stateBefore.ConsignmentHash && stateAfter.WitnessTxID == stateBefore.WitnessTxID
+			t.Errorf("mismatching evidence changed receive state: status=%q/%q ack=%q/%q same_identity=%t err=%v",
+				stateBefore.Status, afterStatus, stateBefore.AckStatus, afterAck,
+				identityMatch, stateErr)
+		}
+		reservationAfter, reservationErr := recipient.rgbManager.projectionStore.LoadReceiveReservation(receive.RequestID)
+		if reservationErr != nil || reservationAfter == nil || *reservationAfter != *reservationBefore {
+			t.Errorf("mismatching evidence changed receive reservation: retained=%t err=%v",
+				reservationAfter != nil && reservationBefore != nil && *reservationAfter == *reservationBefore, reservationErr)
+		}
+		preparedAfter, preparedErr := recipient.rgbManager.projectionStore.LoadPreparedReceive(requestBefore.TransferID)
+		if preparedErr != nil || preparedAfter != preparedBefore {
+			t.Errorf("mismatching evidence changed prepared-receive mapping: retained=%t err=%v",
+				preparedAfter == preparedBefore, preparedErr)
+		}
+		objectAfter, objectErr := recipient.rgbManager.projectionStore.LoadObject(requestBefore.ObjectHash)
+		if objectErr != nil || !bytes.Equal(objectAfter, objectBefore) {
+			t.Errorf("mismatching evidence changed immutable consignment: retained=%t err=%v",
+				bytes.Equal(objectAfter, objectBefore), objectErr)
+		}
+		lockAfter := recipient.utxoLockerL1.GetLockedUtxoList()[reservationBefore.OutPoint]
+		if lockAfter == nil || lockAfter.Reason != lockBefore.Reason || lockAfter.ReservationID != lockBefore.ReservationID {
+			t.Errorf("mismatching evidence released receive carrier lock: retained=%t",
+				lockAfter != nil && lockAfter.Reason == lockBefore.Reason && lockAfter.ReservationID == lockBefore.ReservationID)
+		}
+		proxy.mu.Lock()
+		ackHistory := append([]bool(nil), proxy.ackHistory...)
+		ackAfter := proxy.ack
+		proxy.mu.Unlock()
+		if ackAfter == nil || !*ackAfter {
+			t.Errorf("mismatching evidence changed positive proxy ACK: %v", ackAfter)
+		}
+		for _, posted := range ackHistory {
+			if !posted {
+				t.Errorf("receiver attempted a negative ACK after positive ACK: %v", ackHistory)
+				break
+			}
+		}
+		if t.Failed() {
+			return
+		}
+		retried, err := recipient.rgbManager.ReceiveRGB11ProxyConsignment(context.Background(), receive.RequestID)
+		if err != nil || retried == nil || !retried.AckPosted || !retried.AwaitingBroadcast ||
+			retried.RequestID != requestBefore.RequestID || retried.TxID != requestBefore.WitnessTxID {
+			t.Fatalf("same ACKed receive did not resume after evidence mismatch: result=%+v err=%v", retried, err)
+		}
+	}) {
+		return
+	}
+	t.Run("expired_ACK_receive_reservation_stays_locked_after_cold_restore", func(t *testing.T) {
+		reservations, err := recipient.rgbManager.projectionStore.ListReceiveReservations()
+		if err != nil {
+			t.Fatal(err)
+		}
+		matched := false
+		for _, reservation := range reservations {
+			if reservation == nil || reservation.RequestID != receive.RequestID {
+				continue
+			}
+			reservation.Expiry = time.Now().Add(-time.Hour).Unix()
+			if err := recipient.rgbManager.projectionStore.SaveReceiveReservation(reservation); err != nil {
+				t.Fatal(err)
+			}
+			matched = true
+		}
+		if !matched {
+			t.Fatal("ACKed blind invoice has no persisted receive reservation")
+		}
+		cold := newRGB11FlowManager(t, recipientWallet.Clone(), rpc, evidence, 94)
+		importRGB11RecoveryForTest(t, cold, exportRGB11RecoveryForTest(t, recipient))
+		lock := cold.utxoLockerL1.GetLockedUtxoList()[receiveOutpoint]
+		if lock == nil || lock.Reason != rgb11wallet.LockReasonPending || lock.ReservationID == "" {
+			t.Fatalf("expired ACKed receive reservation was released during recovery: present=%t reason_pending=%t has_reservation=%t",
+				lock != nil, lock != nil && lock.Reason == rgb11wallet.LockReasonPending,
+				lock != nil && lock.ReservationID != "")
+		}
+		if !cold.isL1SendInputProtected(receiveOutpoint) {
+			t.Fatal("ordinary input selection does not protect the cold-recovered ACKed carrier")
+		}
+		if err := cold.utxoLockerL1.TryReserve([]string{receiveOutpoint}, "fee", "expired-ack-fee-selection"); !errors.Is(err, ErrUtxoReserved) {
+			t.Fatalf("ordinary fee selection reserved the ACKed receive carrier: %v", err)
+		}
+	})
 
 	pending, err := sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
 	if err != nil {
@@ -922,7 +1341,7 @@ func TestRGB11ProxyBlindReceiveAcknowledgesBeforeBroadcast(t *testing.T) {
 		evidence.spendingTx[outpoint] = pending.State.WitnessTxID
 	}
 	evidence.mu.Unlock()
-	received, err = recipient.ReceiveRGB11ProxyConsignment(
+	received, err = recipient.rgbManager.ReceiveRGB11ProxyConsignment(
 		context.Background(), receive.RequestID,
 	)
 	if err != nil {
@@ -932,24 +1351,67 @@ func TestRGB11ProxyBlindReceiveAcknowledgesBeforeBroadcast(t *testing.T) {
 		received.TxID != pending.State.WitnessTxID {
 		t.Fatalf("unexpected accepted receive result: %+v", received)
 	}
+	acceptedRequest, err := recipient.rgbManager.engine.LoadReceive(receive.RequestID)
+	if err != nil || acceptedRequest == nil || acceptedRequest.TransferID == "" {
+		t.Fatalf("accepted proxy receive lost its transfer identity: present=%t err=%v",
+			acceptedRequest != nil, err)
+	}
+	acceptedState, err := recipient.rgbManager.projectionStore.LoadTransferState(acceptedRequest.TransferID)
+	if err != nil || acceptedState == nil || acceptedState.RelayDurability != "STANDARD_PROXY" ||
+		acceptedState.AckStatus != "accepted" {
+		var durability string
+		var ackStatus string
+		if acceptedState != nil {
+			durability = acceptedState.RelayDurability
+			ackStatus = acceptedState.AckStatus
+		}
+		t.Fatalf("accepted proxy transfer lost lifecycle identity: durability=%q ack=%q err=%v",
+			durability, ackStatus, err)
+	}
 	proofs, err = recipient.rgbManager.projectionStore.ListProofs()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(proofs) != 1 || proofs[0].OutPoint != receiveOutpoint ||
-		proofs[0].WitnessTxID != pending.State.WitnessTxID ||
+		proofs[0].WitnessTxID != allocationOutpointTxID(receiveOutpoint) ||
 		proofs[0].Status != "valid" || proofs[0].SealCommitment == "" {
-		t.Fatalf("unexpected accepted blind allocation: %+v", proofs)
+		t.Fatalf("unexpected accepted blind allocation proof producer: %+v", proofs)
+	}
+	if _, err := recipient.RefreshRGB11State(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	state, err = recipient.GetRGB11State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if available := rgb11AssetAmount(state.AvailableAssets, imported.AssetName); available != 0 {
+		t.Fatalf("unconfirmed transition made blind allocation available: %d", available)
 	}
 	if lock := recipient.utxoLockerL1.GetLockedUtxoList()[receiveOutpoint]; lock == nil ||
 		lock.Reason != rgb11wallet.LockReasonPending {
 		t.Fatalf("accepted blind carrier lock=%+v", lock)
 	}
+	evidence.mu.Lock()
+	evidence.txStatuses[pending.State.WitnessTxID] = &rgb11wallet.BitcoinTxStatus{
+		TxID: pending.State.WitnessTxID, Confirmed: true, BlockHeight: 1,
+		BlockHash: "test-tip", Confirmations: 1,
+	}
+	evidence.mu.Unlock()
+	if _, err := recipient.RefreshRGB11State(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	state, err = recipient.GetRGB11State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if available := rgb11AssetAmount(state.AvailableAssets, imported.AssetName); available != 20_000 {
+		t.Fatalf("confirmed blind transition available amount=%d, want 20000", available)
+	}
 	balance, err := recipient.GetRGB11AssetBalance(&imported.AssetName)
 	if err != nil {
 		t.Fatal(err)
 	}
-	received, err = recipient.ReceiveRGB11ProxyConsignment(
+	received, err = recipient.rgbManager.ReceiveRGB11ProxyConsignment(
 		context.Background(), receive.RequestID,
 	)
 	if err != nil {

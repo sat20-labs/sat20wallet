@@ -16,16 +16,20 @@ import (
 
 type controlledRGB11BroadcastEvidence struct {
 	rgb11wallet.BitcoinEvidenceProvider
-	mu        sync.Mutex
-	txID      string
-	err       error
-	broadcast int
+	mu          sync.Mutex
+	txID        string
+	err         error
+	broadcast   int
+	onBroadcast func()
 }
 
 func (e *controlledRGB11BroadcastEvidence) Broadcast([]byte) (string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.broadcast++
+	if e.onBroadcast != nil {
+		e.onBroadcast()
+	}
 	return e.txID, e.err
 }
 
@@ -102,8 +106,44 @@ func TestRGB11BroadcastUnknownPersistsIrreversibleIntent(t *testing.T) {
 	if err != nil || !needsReconciliation {
 		t.Fatalf("broadcast intent was invisible to reconciliation: pending=%v err=%v", needsReconciliation, err)
 	}
-	if cancelErr := fixture.manager.CancelExpiredRGB11Transfer(fixture.transferIDs[0]); cancelErr == nil {
+	if cancelErr := fixture.manager.rgbManager.CancelExpiredRGB11Transfer(fixture.transferIDs[0]); cancelErr == nil {
 		t.Fatal("ambiguous broadcast intent remained cancellable")
+	}
+}
+
+func TestRGB11BroadcastEmptyBackendTxIDRemainsUnknown(t *testing.T) {
+	fixture := newExpiredCancelFixture(t, 1)
+	evidence := &controlledRGB11BroadcastEvidence{
+		BitcoinEvidenceProvider: fixture.evidence,
+		// A successful response without the expected txid is not proof that
+		// the backend accepted this signed transaction.
+		txID: "",
+	}
+	runtime := fixture.manager.rgbManager
+	runtime.evidence = evidence
+	runtime.scopeStates = nil
+	pending, err := runtime.projectionStore.LoadPendingTransfer(fixture.transferIDs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	txID, err := runtime.broadcastRGB11PendingBatch([]*rgb11wallet.PendingTransfer{pending}, nil)
+	if !errors.Is(err, ErrRGB11BroadcastResultUnknown) || txID != fixture.witnessTxID {
+		t.Fatalf("empty backend txid was treated as confirmed: txid=%s err=%v", txID, err)
+	}
+	if evidence.calls() != 1 {
+		t.Fatalf("broadcast calls=%d, want 1", evidence.calls())
+	}
+	stored, err := runtime.projectionStore.LoadPendingTransfer(fixture.transferIDs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State.Status != rgb11StatusBroadcastAttempted ||
+		!rgb11TransferKeepsInputsLocked(&stored.State) {
+		t.Fatalf("empty-txid response did not retain the unresolved intent and input locks: %+v", stored.State)
+	}
+	if cancelErr := fixture.manager.rgbManager.CancelExpiredRGB11Transfer(fixture.transferIDs[0]); cancelErr == nil {
+		t.Fatal("empty-txid response made the broadcast intent cancellable")
 	}
 }
 
@@ -225,5 +265,55 @@ func TestRGB11AddressBroadcastUsesDurableIntent(t *testing.T) {
 	}
 	if stored.State.Status != rgb11StatusBroadcastAttempted {
 		t.Fatalf("address broadcast status=%s", stored.State.Status)
+	}
+}
+
+func TestRGB11BroadcastResultPreservesNewerLocalState(t *testing.T) {
+	for _, progress := range []bool{false, true} {
+		name := "unchanged-control"
+		if progress {
+			name = "newer-settled-state"
+		}
+		t.Run(name, func(t *testing.T) {
+			fixture := newExpiredCancelFixture(t, 1)
+			manager := fixture.manager.rgbManager
+			evidence := &controlledRGB11BroadcastEvidence{BitcoinEvidenceProvider: fixture.evidence, txID: fixture.witnessTxID}
+			manager.evidence = evidence
+			manager.scopeStates = nil
+			pending, err := manager.projectionStore.LoadPendingTransfer(fixture.transferIDs[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			var progressErr error
+			if progress {
+				evidence.onBroadcast = func() {
+					current, err := manager.projectionStore.LoadPendingTransfer(fixture.transferIDs[0])
+					if err != nil {
+						progressErr = err
+						return
+					}
+					current.State.Status = "settled"
+					progressErr = manager.projectionStore.SavePendingTransferState(current)
+				}
+			}
+			txid, broadcastErr := manager.broadcastRGB11PendingBatch([]*rgb11wallet.PendingTransfer{pending}, nil)
+			if progressErr != nil {
+				t.Fatalf("setup concurrent local commit: %v", progressErr)
+			}
+			if evidence.calls() != 1 || txid != fixture.witnessTxID {
+				t.Fatalf("broadcast calls=%d txid=%s err=%v", evidence.calls(), txid, broadcastErr)
+			}
+			stored, err := manager.projectionStore.LoadPendingTransfer(fixture.transferIDs[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if progress {
+				if stored.State.Status != "settled" {
+					t.Errorf("late broadcast response overwrote newer state: %s", stored.State.Status)
+				}
+			} else if broadcastErr != nil || stored.State.Status != "broadcast" {
+				t.Errorf("unchanged intent not advanced: status=%s err=%v", stored.State.Status, broadcastErr)
+			}
+		})
 	}
 }

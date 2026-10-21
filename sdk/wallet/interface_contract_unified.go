@@ -13,7 +13,6 @@ import (
 	indexer "github.com/sat20-labs/indexer/common"
 	walletcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/satoshinet/btcutil"
-	"github.com/sat20-labs/satoshinet/chaincfg"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	stxscript "github.com/sat20-labs/satoshinet/txscript"
 	swire "github.com/sat20-labs/satoshinet/wire"
@@ -296,6 +295,8 @@ func templateInvokeParamTemplate(templateName, action string) (string, error) {
 		innerParam = map[string]interface{}{
 			"minOutA": "",
 		}
+	case contractcommon.TemplateInvokeAPIFunding:
+		innerParam = map[string]interface{}{"gasFundingAmount": ""}
 	case contractcommon.TemplateInvokeAPIConfig:
 		innerParam = map[string]interface{}{
 			"amountPerBlock": "", "blobKeyLimit": 0, "gasFundingAmount": "",
@@ -392,7 +393,7 @@ func convertTemplateInvokeParam(templateName, jsonInvokeParam string) (*InvokePa
 			return nil, err
 		}
 		innerParam, err = param.Encode()
-	case contractcommon.TemplateInvokeAPIConfig:
+	case contractcommon.TemplateInvokeAPIConfig, contractcommon.TemplateInvokeAPIFunding:
 		var param contractcommon.TemplateAutopayConfigInvokeParam
 		if err = json.Unmarshal([]byte(wrapperParam.Param), &param); err != nil {
 			return nil, err
@@ -2085,11 +2086,7 @@ func (p *Manager) evmCallerFromPreviousPkScript(pkScript []byte) (string, error)
 	if len(pkScript) == 0 {
 		return "", fmt.Errorf("missing EVM caller previous output script")
 	}
-	params := &chaincfg.MainNetParams
-	if IsTestNet() {
-		params = &chaincfg.TestNetParams
-	}
-	_, addresses, _, err := stxscript.ExtractPkScriptAddrs(pkScript, params)
+	_, addresses, _, err := stxscript.ExtractPkScriptAddrs(pkScript, GetChainParam_SatsNet())
 	if err != nil {
 		return "", err
 	}

@@ -1,9 +1,14 @@
 package wallet
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+
+	"github.com/sat20-labs/sat20wallet/sdk/account"
+	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
 var (
@@ -16,6 +21,10 @@ type rgb11ManagedOperationMode uint8
 const (
 	rgb11ManagedOperationNew rgb11ManagedOperationMode = iota
 	rgb11ManagedOperationContinue
+	// Refresh is the one public mutation mode allowed without an account
+	// recovery configuration: it reconciles local projections from current
+	// Bitcoin facts so the account can be brought back to a safe state.
+	rgb11ManagedOperationRefresh
 )
 
 func (p *Manager) beginRGB11ManagedOperationState() {
@@ -56,8 +65,14 @@ func (p *Manager) hasAccountManagedRGB11Transition() (bool, error) {
 	if p == nil {
 		return false, ErrDKVSPathNotSynced
 	}
-	provider, ok := p.accountManagedActiveDataProvider(rgb11AccountManagedProviderID).(*rgb11AccountManagedDataProvider)
-	if !ok || provider == nil {
+	var provider *rgb11AccountManagedDataProvider
+	for _, registered := range p.accountManagedDataProviders() {
+		if registered != nil && registered.ID() == rgb11AccountManagedProviderID {
+			provider, _ = registered.(*rgb11AccountManagedDataProvider)
+			break
+		}
+	}
+	if provider == nil {
 		return false, nil
 	}
 	catalog, err := p.accountManagedDataCatalog()
@@ -77,6 +92,170 @@ func (p *Manager) accountManagedRecoveryConfigured() bool {
 	return configured
 }
 
+// syncRGB11RecoveryBarrier confirms the complete current account bundle before
+// a caller returns a newly shareable invoice/preparation or performs an
+// external ACK, delivery, broadcast, or cancellation. The active mailbox is
+// optional cache; only the account state/blob CAS is authoritative.
+func (p *Manager) syncRGB11RecoveryBarrier(ctx context.Context) error {
+	if p == nil || !p.accountManagedRecoveryConfigured() {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	err := p.syncAccountManagementStateMode(ctx, 0, false, false)
+	if err == nil {
+		return nil
+	}
+	// Account sync performs optional registration/mailbox maintenance after a
+	// successful CAS. If that trailing cache work failed, verify both that this
+	// exact local recovery closure is clean and that the current bound CoreNode
+	// still stores the matching state/blob before treating the barrier as met.
+	if verifyErr := p.verifyCurrentRGB11RecoveryClosure(); verifyErr == nil {
+		return nil
+	} else {
+		return errors.Join(fmt.Errorf("sync complete RGB11 recovery before external action: %w", err),
+			fmt.Errorf("verify account-managed RGB11 recovery CAS: %w", verifyErr))
+	}
+}
+
+// checkRGB11OperationSource checks only local authorization/catalog state. A
+// selected-account change does not retarget the captured wallet; deleting or
+// replacing that wallet must prevent a new external action with its old keys.
+func (p *rgb11Manager) checkRGB11OperationSource() error {
+	if p == nil || p.wallet == nil || p.status == nil {
+		return ErrRGB11OperationScopeChanged
+	}
+	owner := p.accountManagementOwner()
+	owner.mutex.RLock()
+	defer owner.mutex.RUnlock()
+	info := owner.walletInfoMap[p.status.CurrentWallet]
+	if info == nil || info.Wallet == nil || max(info.Accounts, 1) <= int(p.status.CurrentAccount) ||
+		walletFingerprint(info.Wallet) != walletFingerprint(p.wallet) {
+		return ErrRGB11OperationScopeChanged
+	}
+	if err := owner.checkAccountManagedDataImport(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (p *rgb11Manager) syncRGB11OperationRecovery(ctx context.Context) error {
+	if err := p.checkRGB11OperationSource(); err != nil {
+		return err
+	}
+	if err := p.accountManagementOwner().syncRGB11RecoveryBarrier(ctx); err != nil {
+		return err
+	}
+	return p.checkRGB11OperationSource()
+}
+
+func (p *Manager) verifyCurrentRGB11RecoveryClosure() error {
+	if p == nil {
+		return ErrDKVSPathNotSynced
+	}
+	p.mutex.Lock()
+	snapshot, _, err := p.captureAccountManagementSyncSnapshotBaseLocked()
+	if err == nil && snapshot != nil {
+		snapshot.profile.StateEnvelope = append([]byte(nil), snapshot.profile.StateEnvelope...)
+		snapshot.profile.ManagedDataEnvelope = append([]byte(nil), snapshot.profile.ManagedDataEnvelope...)
+	}
+	p.mutex.Unlock()
+	if err != nil {
+		return err
+	}
+	if snapshot == nil {
+		return ErrDKVSPathNotSynced
+	}
+	defer zeroBytes(snapshot.secret)
+	profile := snapshot.profile
+	if profile.ManagedDataDirty || profile.ManagedDataRevision == 0 ||
+		len(profile.StateEnvelope) == 0 || len(profile.ManagedDataEnvelope) == 0 || len(snapshot.secret) == 0 {
+		return ErrDKVSPathNotSynced
+	}
+	state, err := account.OpenManagedState(snapshot.secret, profile.AccountID, profile.StateEnvelope)
+	if err != nil || state.RootFingerprint != profile.RootFingerprint ||
+		state.DataRevision != profile.ManagedDataRevision || state.DataHash != profile.ManagedDataHash {
+		return fmt.Errorf("local account state does not confirm RGB11 recovery data")
+	}
+	catalog, err := p.accountManagedDataCatalog()
+	if err != nil {
+		return err
+	}
+	bundle, hash, err := p.exportAccountManagedData(catalog, profile.ManagedDataRevision)
+	if err != nil {
+		return err
+	}
+	if bundle.Revision != profile.ManagedDataRevision || hash != profile.ManagedDataHash {
+		return fmt.Errorf("local RGB11 recovery closure differs from confirmed account data")
+	}
+	root, err := p.accountManagementRootWallet()
+	if err != nil {
+		return err
+	}
+	if walletFingerprint(root) != profile.RootFingerprint {
+		return ErrRGB11OperationScopeChanged
+	}
+	stateKey, err := p.accountManagedStateKey(root)
+	if err != nil {
+		return err
+	}
+	dataKey, err := p.accountManagedDataBlobKey(root)
+	if err != nil {
+		return err
+	}
+	store, err := p.accountDKVSStore()
+	if err != nil {
+		return err
+	}
+	coreNodeID, err := p.currentCoreNodeID()
+	if err != nil {
+		return err
+	}
+	config, err := store.client.GetDKVSClientConfig()
+	if err != nil {
+		return err
+	}
+	if config == nil || strings.TrimSpace(config.EndpointID) != coreNodeID {
+		return dkvsindexer.ErrEndpointMismatch
+	}
+	if err := p.verifyAccountManagedStorage(store, &profile, stateKey, dataKey,
+		profile.StateEnvelope, profile.ManagedDataEnvelope); err != nil {
+		return err
+	}
+	// The storage readback is a network operation. Do not accept it as a
+	// confirmation for a profile that was dirtied, rebound, or changed while
+	// that read was in flight.
+	p.mutex.RLock()
+	current := p.accountSyncSnapshotCurrentLocked(snapshot) && p.accountProfile != nil &&
+		!p.accountProfile.ManagedDataDirty &&
+		p.accountProfile.ManagedDataRevision == profile.ManagedDataRevision &&
+		p.accountProfile.ManagedDataHash == profile.ManagedDataHash &&
+		bytes.Equal(p.accountProfile.StateEnvelope, profile.StateEnvelope) &&
+		bytes.Equal(p.accountProfile.ManagedDataEnvelope, profile.ManagedDataEnvelope)
+	p.mutex.RUnlock()
+	if !current {
+		return errAccountSnapshotChanged
+	}
+	currentCoreNodeID, err := p.currentCoreNodeID()
+	if err != nil {
+		return err
+	}
+	currentStore, err := p.accountDKVSStore()
+	if err != nil {
+		return err
+	}
+	currentConfig, err := currentStore.client.GetDKVSClientConfig()
+	if err != nil {
+		return err
+	}
+	if currentConfig == nil || currentCoreNodeID != coreNodeID ||
+		strings.TrimSpace(currentConfig.EndpointID) != coreNodeID {
+		return dkvsindexer.ErrEndpointMismatch
+	}
+	return nil
+}
+
 // runRGB11ManagedOperation is the application transaction boundary for a
 // public RGB operation:
 //  1. confirm the stable account baseline before a new operation;
@@ -84,20 +263,22 @@ func (p *Manager) accountManagedRecoveryConfigured() bool {
 //  3. let broadcast/ACK paths synchronously persist active recovery data;
 //  4. publish one stable snapshot after the transition becomes stable.
 //
-// Managed RGB operations are serialized separately from the scope lock. A read
-// scope lease freezes wallet/account identity while allowing read-only RGB UI
-// calls to inspect durable progress during network waits. The manager data lock
-// is never held across the network calls made by account synchronization.
+// The existing account transaction coordinates CAS operations. Each callback
+// uses a captured wallet/account view, so UI selection can change during remote
+// work. Local publication checks its baseline under the short commit gate;
+// account synchronization never inherits an identity or scope mutex.
 func runRGB11ManagedOperation[T any](p *Manager, ctx context.Context,
 	mode rgb11ManagedOperationMode,
 	operation func(*rgb11Manager) (T, error)) (T, error) {
-	return runRGB11ManagedOperationWithManager(p, ctx, mode, p.synchronizedRGB11Manager, operation)
+	return runRGB11ManagedOperationWithManager(p, ctx, mode,
+		func() (*rgb11Manager, error) { return p.captureRGB11NetworkScope(false) }, operation)
 }
 
 func runRootRGB11ManagedOperation[T any](p *Manager, ctx context.Context,
 	mode rgb11ManagedOperationMode,
 	operation func(*rgb11Manager) (T, error)) (T, error) {
-	return runRGB11ManagedOperationWithManager(p, ctx, mode, p.rootRGB11Manager, operation)
+	return runRGB11ManagedOperationWithManager(p, ctx, mode,
+		func() (*rgb11Manager, error) { return p.captureRGB11NetworkScope(true) }, operation)
 }
 
 func runRGB11ManagedOperationWithManager[T any](p *Manager, ctx context.Context,
@@ -111,35 +292,33 @@ func runRGB11ManagedOperationWithManager[T any](p *Manager, ctx context.Context,
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	runOperation := func(manager *rgb11Manager) (T, error) {
-		unlock, err := manager.lockRGB11ChainRefresh(ctx)
-		if err != nil {
-			return zero, err
-		}
-		defer unlock()
+	runOperation := func(manager *rgb11Manager) (result T, operationErr error) {
+		defer manager.publishRGB11ConsistencyStatus()
+		// This Manager is a call-scoped view, so ownership/dirty bookkeeping cannot
+		// be borrowed by another scope while the network request is outstanding.
+		manager.Manager.beginRGB11ManagedOperationState()
+		defer func() {
+			if manager.Manager.endRGB11ManagedOperationState() {
+				p.scheduleAccountManagedStateSync()
+			}
+		}()
 		return operation(manager)
 	}
 	var result T
 	var stableConfirmed bool
 	err := p.runAccountOperation(ctx, func() error {
-		// Serialize managed RGB state machines without taking the exclusive RGB
-		// scope lock. The read side still freezes wallet/account scope changes,
-		// while read-only RGB UI calls can observe prepared/active progress during
-		// network waits instead of stalling behind an unrelated write lock.
-		p.rgbManagedExecutionMu.Lock()
-		defer p.rgbManagedExecutionMu.Unlock()
-		p.channelIdentityMu.RLock()
-		p.rgbOperationMu.RLock()
-		defer func() {
-			p.rgbOperationMu.RUnlock()
-			p.channelIdentityMu.RUnlock()
-		}()
+		// The existing account operation coordinates account CAS transactions.
+		// No identity, scope, execution, or chain-refresh mutex spans its remote
+		// phases. Selection is captured briefly by selectManager instead.
 
 		manager, err := selectManager()
 		if err != nil {
 			return err
 		}
 		if !p.accountManagedRecoveryConfigured() {
+			if mode != rgb11ManagedOperationRefresh {
+				return ErrDKVSPathNotSynced
+			}
 			result, err = runOperation(manager)
 			return err
 		}
@@ -149,85 +328,41 @@ func runRGB11ManagedOperationWithManager[T any](p *Manager, ctx context.Context,
 		requestedScope := manager.rgb11ScopeKey()
 		requestedFingerprint := walletFingerprint(manager.wallet)
 		requestedNetwork := _chain
-		activeBefore, err := p.hasAccountManagedRGB11Transition()
+		// Every operation starts from the account's current stable CAS baseline.
+		// The provider exports all recovery obligations, including pending ones;
+		// a mailbox active marker is only a cache and cannot make the whole
+		// account busy or override a newer account bundle.
+		if err := p.syncRGB11RecoveryBarrier(ctx); err != nil {
+			return fmt.Errorf("confirm RGB11 account-managed baseline: %w", err)
+		}
+		// Baseline synchronization can apply a remote catalog or stable recovery
+		// change. Re-select fixed-root callers too, without making account
+		// management depend on the UI's selected wallet.
+		manager, err = selectManager()
 		if err != nil {
 			return err
 		}
-		if activeBefore && mode == rgb11ManagedOperationNew {
-			return ErrRGB11ManagedOperationActive
-		}
-		if !activeBefore {
-			if err := p.syncAccountManagementState(ctx, 0, false); err != nil {
-				return fmt.Errorf("confirm RGB11 account-managed baseline: %w", err)
-			}
-			// Baseline synchronization can apply a remote catalog deletion or an
-			// active recovery journal. Neither the captured manager nor the old
-			// transition check remains a valid authorization to start business
-			// work. Re-select fixed-root callers too, without making account
-			// management depend on the UI's selected wallet.
-			manager, err = selectManager()
-			if err != nil {
-				return err
-			}
-			if manager == nil || manager.wallet == nil || _chain != requestedNetwork ||
-				manager.rgb11ScopeKey() != requestedScope ||
-				walletFingerprint(manager.wallet) != requestedFingerprint {
-				return ErrRGB11OperationScopeChanged
-			}
-			// A successful own-PUT returns before the ordinary sync path imports
-			// active mail. Confirm that recovery layer here as well: a stable PUT
-			// must not authorize new work over a remotely pending transition.
-			if err := p.importAccountManagedActiveDataForSync(true); err != nil {
-				return fmt.Errorf("confirm RGB11 active account recovery: %w", err)
-			}
-			active, err := p.hasAccountManagedRGB11Transition()
-			if err != nil {
-				return err
-			}
-			if active && mode == rgb11ManagedOperationNew {
-				return ErrRGB11ManagedOperationActive
-			}
+		if manager == nil || manager.wallet == nil || _chain != requestedNetwork ||
+			manager.rgb11ScopeKey() != requestedScope ||
+			walletFingerprint(manager.wallet) != requestedFingerprint {
+			return ErrRGB11OperationScopeChanged
 		}
 
-		unlock, err := manager.lockRGB11ChainRefresh(ctx)
-		if err != nil {
-			return err
-		}
 		var operationErr error
 		var dirty bool
 		func() {
-			defer unlock()
-			if mode == rgb11ManagedOperationNew {
-				active, activeErr := p.hasAccountManagedRGB11Transition()
-				if activeErr != nil {
-					operationErr = activeErr
-					return
-				}
-				if active {
-					operationErr = ErrRGB11ManagedOperationActive
-					return
-				}
-			}
-			p.beginRGB11ManagedOperationState()
-			defer func() { dirty = p.endRGB11ManagedOperationState() }()
+			defer manager.publishRGB11ConsistencyStatus()
+			manager.Manager.beginRGB11ManagedOperationState()
+			defer func() { dirty = manager.Manager.endRGB11ManagedOperationState() }()
 			result, operationErr = operation(manager)
 		}()
+
 		if !dirty {
 			return operationErr
 		}
-		activeAfter, inspectErr := p.hasAccountManagedRGB11Transition()
-		if inspectErr != nil {
-			return errors.Join(operationErr, inspectErr)
-		}
-		if activeAfter {
-			// The irreversible transport paths own the synchronous active-data
-			// barrier. Keep the local dirty marker until reconciliation reaches
-			// a stable state; ordinary account sync must not export this scope.
-			return operationErr
-		}
-		if syncErr := p.syncAccountManagementState(ctx, 0, false); syncErr != nil {
+		if syncErr := p.syncRGB11RecoveryBarrier(ctx); syncErr != nil {
 			return errors.Join(operationErr,
-				fmt.Errorf("publish stable RGB11 account-managed data: %w", syncErr))
+				fmt.Errorf("publish complete RGB11 account-managed recovery: %w", syncErr))
 		}
 		stableConfirmed = true
 		return operationErr
@@ -237,6 +372,14 @@ func runRGB11ManagedOperationWithManager[T any](p *Manager, ctx context.Context,
 		// gate. WaitAccountManagedDataReady can now observe the ACK-confirmed
 		// generation and cleanup never races the final export.
 		p.cleanupAccountManagedActiveDataAfterDurable(rgb11AccountManagedProviderID)
+	}
+	// A new invoice or prepared transfer can be shared by the caller as soon
+	// as this function returns. If the operation changed local RGB state but
+	// its stable account CAS was not confirmed, keep that local recovery work
+	// resumable while withholding the outward-facing result. Continuations
+	// intentionally retain their result (notably a broadcast txid) on error.
+	if mode == rgb11ManagedOperationNew && err != nil && !stableConfirmed {
+		result = zero
 	}
 	return result, err
 }

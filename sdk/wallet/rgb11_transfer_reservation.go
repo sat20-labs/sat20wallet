@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -104,6 +105,13 @@ func (p *rgb11Manager) stageRGB11Reservation(batch indexer.WriteBatch, scope str
 	default:
 		return nil, ErrRGB11Inconsistent
 	}
+	if request != nil && request.Status == corewallet.ReceivePrepared &&
+		request.TransferID == "" && request.WitnessTxID == "" &&
+		request.Expiry > 0 && request.Expiry <= time.Now().Unix() {
+		// Keep the expired request as history, but do not recreate its spent
+		// reservation when a candidate snapshot is atomically republished.
+		return func() {}, nil
+	}
 	if state != nil && state.Direction == "receive" {
 		if state.ReceiveRequestID != "" {
 			var candidate *corewallet.ReceiveRequest
@@ -182,7 +190,7 @@ func (p *rgb11Manager) stageRGB11Reservation(batch indexer.WriteBatch, scope str
 	}
 
 	id := rgb11TransferResvID(scope, identity)
-	if current := p.GetResv(id); current != nil && current.GetType() != RESV_TYPE_RGB11 {
+	if current := p.rgb11ReservationOwner().GetResv(id); current != nil && current.GetType() != RESV_TYPE_RGB11 {
 		return nil, ErrRGB11Inconsistent
 	}
 	var resv *RGB11TransferReservation
@@ -260,12 +268,13 @@ func (p *rgb11Manager) stageRGB11Reservation(batch indexer.WriteBatch, scope str
 		snapshot.records[id] = resv
 	}
 	return func() {
-		p.mutex.Lock()
-		defer p.mutex.Unlock()
-		if p.resvMap == nil {
-			p.resvMap = make(map[int64]Reservation)
+		owner := p.rgb11ReservationOwner()
+		owner.mutex.Lock()
+		defer owner.mutex.Unlock()
+		if owner.resvMap == nil {
+			owner.resvMap = make(map[int64]Reservation)
 		}
-		p.addResvLocked(resv)
+		owner.addResvLocked(resv)
 	}, nil
 }
 
@@ -343,6 +352,13 @@ func (p *rgb11Manager) rgb11ReservationViews() ([]*rgb11wallet.RGB11Reservation,
 	// creation, rollback and snapshot-import commits take the write side.
 	release := p.beginRGB11ReservationRead()
 	defer release()
+	return p.rgb11ReservationViewsUnlocked()
+}
+
+// rgb11ReservationViewsUnlocked reads a coherent reservation generation when
+// the caller already holds beginRGB11ReservationRead. Keeping the unlocked
+// form avoids recursively acquiring RWMutex.RLock while a writer is queued.
+func (p *rgb11Manager) rgb11ReservationViewsUnlocked() ([]*rgb11wallet.RGB11Reservation, error) {
 	reservations, err := p.loadRGB11Reservations()
 	if err != nil {
 		return nil, err
@@ -361,12 +377,33 @@ func (p *rgb11Manager) rgb11ReservationViews() ([]*rgb11wallet.RGB11Reservation,
 	if err != nil {
 		return nil, err
 	}
+	var usedRequestIDs map[string]bool
 	for _, record := range engineRecords {
 		request, err := corewallet.DecodeReceiveRequest(record.Value)
 		if err != nil {
 			return nil, err
 		}
 		if byRequest[request.RequestID] == nil {
+			if request.Status == corewallet.ReceivePrepared && request.TransferID == "" &&
+				request.WitnessTxID == "" && request.Expiry > 0 && request.Expiry <= time.Now().Unix() {
+				// Index existing receive references once; unused expired invoices
+				// remain non-actionable history after snapshot restore.
+				if usedRequestIDs == nil {
+					states, err := p.projectionStore.ListTransfers()
+					if err != nil {
+						return nil, err
+					}
+					usedRequestIDs = make(map[string]bool)
+					for _, state := range states {
+						if state.Direction == "receive" {
+							usedRequestIDs[state.ReceiveRequestID] = true
+						}
+					}
+				}
+				if !usedRequestIDs[request.RequestID] {
+					continue
+				}
+			}
 			return nil, ErrRGB11Inconsistent
 		}
 	}
@@ -440,7 +477,7 @@ func (p *rgb11Manager) discardUnpublishedRGB11Receive(requestID string) error {
 	if err := batch.Flush(); err != nil {
 		return err
 	}
-	p.DelResvWithId(rgb11TransferResvID(scope, "receive:"+requestID))
+	p.rgb11ReservationOwner().DelResvWithId(rgb11TransferResvID(scope, "receive:"+requestID))
 	return nil
 }
 
@@ -478,6 +515,34 @@ func (s *rgb11SnapshotReservations) StageReservation(batch indexer.WriteBatch, s
 	return s.manager.stageRGB11Reservation(batch, scope, value, s)
 }
 func (p *rgb11Manager) importRGB11ReservationSnapshot(snapshot *RGB11WalletSnapshot) error {
+	return p.importRGB11ReservationSnapshotWith(snapshot, nil, nil)
+}
+
+// importRGB11ReservationSnapshotWith replaces the local RGB11 stores, ticker
+// metadata, and carrier protections in one wallet-database commit. The stage
+// callback publishes derived in-memory state only after the flush succeeds.
+func (p *rgb11Manager) importRGB11ReservationSnapshotWith(snapshot *RGB11WalletSnapshot,
+	tickerInfos []*indexer.TickerInfo, lockReasons map[string]string) error {
+	return p.importRGB11ReservationSnapshotWithPlan(snapshot, tickerInfos, lockReasons, nil)
+}
+
+func (p *rgb11Manager) importRGB11ReservationSnapshotWithPlan(snapshot *RGB11WalletSnapshot,
+	tickerInfos []*indexer.TickerInfo, lockReasons map[string]string, lockPlan *rgb11LockPlan) error {
+	return p.importRGB11ReservationSnapshotWithPlanAndCheck(snapshot, tickerInfos, lockReasons, lockPlan, nil)
+}
+
+func (p *rgb11Manager) importRGB11ReservationSnapshotWithPlanAndCheck(snapshot *RGB11WalletSnapshot,
+	tickerInfos []*indexer.TickerInfo, lockReasons map[string]string, lockPlan *rgb11LockPlan,
+	checkEvidence func() error) error {
+	return p.importRGB11ReservationSnapshotWithBaseline(context.Background(), snapshot, tickerInfos, lockReasons, lockPlan, checkEvidence, nil)
+}
+
+func (p *rgb11Manager) importRGB11ReservationSnapshotWithBaseline(ctx context.Context, snapshot *RGB11WalletSnapshot,
+	tickerInfos []*indexer.TickerInfo, lockReasons map[string]string, lockPlan *rgb11LockPlan,
+	checkEvidence func() error, expected *RGB11WalletSnapshot) error {
+	if p == nil || snapshot == nil || p.db == nil || p.engineStore == nil || p.projectionStore == nil {
+		return ErrRGB11Inconsistent
+	}
 	stage := &rgb11SnapshotReservations{manager: p, records: make(map[int64]*RGB11TransferReservation)}
 	for _, record := range snapshot.EngineRecords {
 		request, err := corewallet.DecodeReceiveRequest(record.Value)
@@ -506,13 +571,95 @@ func (p *rgb11Manager) importRGB11ReservationSnapshot(snapshot *RGB11WalletSnaps
 	if err := p.projectionStore.StageSnapshotImport(batch, snapshot.ProjectionRecords); err != nil {
 		return err
 	}
-	if err := batch.Flush(); err != nil {
+	seenTickers := make(map[string]bool, len(tickerInfos))
+	for _, info := range tickerInfos {
+		if info == nil || validateRGB11TickerInfoName(info) != nil || seenTickers[info.AssetName.String()] {
+			return ErrRGB11Inconsistent
+		}
+		seenTickers[info.AssetName.String()] = true
+		encoded, err := EncodeToBytes(info)
+		if err != nil {
+			return err
+		}
+		if err := batch.Put([]byte(GetTickerInfoKey(info.AssetName.String())), encoded); err != nil {
+			return err
+		}
+	}
+	committer, ok := batch.(rgb11wallet.ReservationCommitBatch)
+	if !ok {
+		return fmt.Errorf("RGB11 wallet batch does not support atomic publication")
+	}
+	if (lockPlan != nil || len(lockReasons) != 0) && p.utxoLockerL1 == nil {
+		return fmt.Errorf("RGB11 carrier locker is unavailable")
+	}
+	// Recheck only the evidence this candidate used, after the full local batch
+	// has been staged and immediately before the atomic commit. The check stays
+	// outside the reservation commit gate so a slow Bitcoin RPC cannot block
+	// consistent wallet readers.
+	if checkEvidence != nil {
+		if err := checkEvidence(); err != nil {
+			return err
+		}
+	}
+	// Only the local compare-and-publish phase shares the engine's short
+	// read/modify/write gate. All remote evidence checks above are complete.
+	unlockLocal, err := p.lockRGB11ChainRefresh(ctx)
+	if err != nil {
 		return err
 	}
-	for _, r := range old {
-		if stage.records[r.Id] == nil {
-			p.DelResvWithId(r.Id)
+	defer unlockLocal()
+	if err := committer.FlushWith(func(batch indexer.WriteBatch) (func(bool), error) {
+		// Remote evidence was checked without a local lock. Reject an old
+		// candidate if another local commit completed while it was in flight.
+		// FlushWith owns the reservation gate until this batch is published.
+		if expected != nil {
+			actual, _, err := p.exportRGB11WalletSnapshotLocked(expected.WalletID)
+			if err != nil {
+				return nil, err
+			}
+			if rgb11SnapshotChanged(expected, actual) {
+				return nil, errAccountSnapshotChanged
+			}
 		}
+		var finishLocks func(bool)
+		if lockPlan != nil {
+			var err error
+			finishLocks, err = p.utxoLockerL1.stageRGB11LockPlan(batch, *lockPlan)
+			if err != nil {
+				return nil, err
+			}
+		} else if len(lockReasons) != 0 {
+			var err error
+			finishLocks, err = p.utxoLockerL1.stageRGB11LockReasons(batch, lockReasons)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return func(committed bool) {
+			if finishLocks != nil {
+				finishLocks(committed)
+			}
+			if !committed {
+				return
+			}
+			owner := p.rgb11ReservationOwner()
+			owner.mutex.Lock()
+			if owner.tickerInfoMap == nil {
+				owner.tickerInfoMap = make(map[string]*indexer.TickerInfo)
+			}
+			for _, info := range tickerInfos {
+				copy := *info
+				owner.tickerInfoMap[info.AssetName.String()] = &copy
+			}
+			owner.mutex.Unlock()
+			for _, oldReservation := range old {
+				if stage.records[oldReservation.Id] == nil {
+					owner.DelResvWithId(oldReservation.Id)
+				}
+			}
+		}, nil
+	}); err != nil {
+		return err
 	}
 	return nil
 }

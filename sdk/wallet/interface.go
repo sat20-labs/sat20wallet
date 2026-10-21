@@ -571,18 +571,26 @@ func (p *Manager) ChangePassword(oldPS, newPS string) error {
 }
 
 func (p *Manager) UnlockWallet(password string) (int64, error) {
-	p.channelIdentityMu.Lock()
-	defer p.channelIdentityMu.Unlock()
+	// Reauthentication changes no wallet scope. Serialize it with local data,
+	// while only cold initialization takes the identity lifecycle gate.
+	p.mutex.Lock()
+	if p.wallet == nil {
+		p.mutex.Unlock()
+		p.channelIdentityMu.Lock()
+		defer p.channelIdentityMu.Unlock()
+		p.mutex.Lock()
+	}
 	marker, err := p.readAccountManagedDataImportMarker()
 	if err != nil {
+		p.mutex.Unlock()
 		return -1, err
 	}
 	if marker != nil && marker.Origin != accountManagedImportOriginRemoteApply {
+		p.mutex.Unlock()
 		return -1, ErrAccountManagedDataImportIncomplete
 	}
 	// UI locking does not stop the runtime wallet. Re-authenticate without
 	// replacing keys, rebuilding reservations or disturbing background workers.
-	p.mutex.Lock()
 	if p.wallet != nil {
 		id := p.status.CurrentWallet
 		info := p.walletInfoMap[id]

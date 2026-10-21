@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -30,7 +32,7 @@ func addRGB11RecoveryReceive(t *testing.T, manager *Manager, account localRGB11A
 	}
 }
 
-func TestRGB11AccountManagedProviderExcludesLocalReceiveTasks(t *testing.T) {
+func TestRGB11AccountManagedProviderIncludesReceiveRequestsInStableRecovery(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
@@ -79,15 +81,30 @@ func TestRGB11AccountManagedProviderExcludesLocalReceiveTasks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(payloads) != 0 {
-		t.Fatalf("wallet-local receive tasks leaked into account recovery: %+v", payloads)
+	if len(payloads) != len(catalog.Scopes) {
+		t.Fatalf("stable recovery scopes=%d want=%d", len(payloads), len(catalog.Scopes))
 	}
 	if err := provider.Validate(catalog, payloads); err != nil {
 		t.Fatal(err)
 	}
+	byScope := make(map[string]rgb11wallet.RecoveryPackage, len(payloads))
+	for _, payload := range payloads {
+		packageValue, err := rgb11wallet.DecodeRecoveryPackage(payload.Payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		byScope[payload.Scope] = *packageValue
+	}
+	for _, scope := range selected {
+		packageValue, ok := byScope[scope.ID()]
+		if !ok || len(packageValue.EngineRecords) != 1 {
+			t.Fatalf("scope %s stable package lost receive request: ok=%t engine_records=%d",
+				scope.ID(), ok, len(packageValue.EngineRecords))
+		}
+	}
 }
 
-func TestRGB11AccountManagedProviderMissingPayloadPreservesWalletLocalScope(t *testing.T) {
+func TestRGB11AccountManagedProviderMissingScopeCannotDropRecoveryMaterial(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
@@ -104,6 +121,9 @@ func TestRGB11AccountManagedProviderMissingPayloadPreservesWalletLocalScope(t *t
 		t.Fatal(err)
 	}
 	provider := &rgb11AccountManagedDataProvider{owner: manager}
+	if err := provider.Import(catalog, nil); err != nil {
+		t.Fatalf("empty scope should accept an omitted package: %v", err)
+	}
 	accounts, err := provider.accountsByScope()
 	if err != nil {
 		t.Fatal(err)
@@ -112,11 +132,11 @@ func TestRGB11AccountManagedProviderMissingPayloadPreservesWalletLocalScope(t *t
 	accountValue := accounts[scope.ID()]
 	addRGB11RecoveryReceive(t, manager, accountValue, "stale-receive")
 	payloads, err := provider.Export(catalog)
-	if err != nil || len(payloads) != 0 {
+	if err != nil || len(payloads) != 1 {
 		t.Fatalf("initial payloads=%d err=%v", len(payloads), err)
 	}
-	if err := provider.Import(catalog, nil); err != nil {
-		t.Fatal(err)
+	if err := provider.Import(catalog, nil); err == nil {
+		t.Fatal("omitted full scope silently dropped a local receive request")
 	}
 	scoped, err := manager.newScopedRGB11Manager(accountValue)
 	if err != nil {
@@ -131,7 +151,7 @@ func TestRGB11AccountManagedProviderMissingPayloadPreservesWalletLocalScope(t *t
 		t.Fatal(err)
 	}
 	if len(full.EngineRecords) != 1 || len(full.ProjectionRecords) != 0 {
-		t.Fatalf("wallet-local scope was not preserved by empty durable import: %+v", full)
+		t.Fatalf("failed empty-scope import did not preserve local recovery material: %+v", full)
 	}
 }
 
@@ -211,7 +231,7 @@ func seedRGB11DurableAccountRecoveryState(t *testing.T, manager *rgb11Manager) (
 	return outpoint, assetName, contractID
 }
 
-func TestRGB11AccountManagedProviderRestoresDurableOwnershipWithoutLocalTasks(t *testing.T) {
+func TestRGB11AccountManagedProviderRejectsUnverifiableRecoveryClosure(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
@@ -250,7 +270,7 @@ func TestRGB11AccountManagedProviderRestoresDurableOwnershipWithoutLocalTasks(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(recovery.EngineRecords) != 0 || len(recovery.ProjectionRecords) == 0 {
+	if len(recovery.EngineRecords) != 1 || len(recovery.ProjectionRecords) == 0 {
 		t.Fatalf("recovery package engine=%d projection=%d", len(recovery.EngineRecords), len(recovery.ProjectionRecords))
 	}
 	seen := make(map[string]bool)
@@ -275,6 +295,8 @@ func TestRGB11AccountManagedProviderRestoresDurableOwnershipWithoutLocalTasks(t 
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Seed only the valid contract metadata: this synthetic unit fixture uses
+	// opaque consignment bytes, so it cannot exercise contract-container decode.
 	ext, err := json.Marshal(rgb11wallet.TickerExt{ContractID: contractID})
 	if err != nil {
 		t.Fatal(err)
@@ -291,40 +313,54 @@ func TestRGB11AccountManagedProviderRestoresDurableOwnershipWithoutLocalTasks(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	addRGB11RecoveryReceive(t, target, targetAccounts[targetCatalog.Scopes[0].ID()], "target-local-receive")
-	const localTransferID = "target-local-transfer"
-	if err := targetScoped.rgbManager.projectionStore.SaveTransferState(&rgb11wallet.TransferState{
-		TransferID: localTransferID, Direction: "receive", Status: "pending",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	// This unit test verifies import persistence only. Chain reconciliation is
-	// covered with an injected evidence provider in rgb11_chain_reconciliation_test.go.
-	target.rgbManager.scopeStates = nil
-	if err := targetProvider.Import(targetCatalog, payloads); err != nil {
-		t.Fatal(err)
-	}
-	proof, err := targetScoped.rgbManager.projectionStore.LoadProof(outpoint, assetName)
-	if err != nil || proof == nil || proof.Status != "settled" {
-		t.Fatalf("restored proof=%+v err=%v", proof, err)
-	}
-	output, err := targetScoped.rgbManager.projectionStore.LoadOutput(outpoint)
-	if err != nil || output.GetAsset(&assetName) == nil {
-		t.Fatalf("restored output=%+v err=%v", output, err)
-	}
-	walletID, err := targetScoped.RGB11WalletID()
+	// The fixture deliberately uses opaque bytes instead of a real RGB consignment.
+	// Complete provider import must revalidate the closure and fail before publishing
+	// any records or derived root caches when it cannot verify those bytes.
+	target.rgbManager.scopeStates.stopReconciliations()
+	beforeWalletID, err := targetScoped.RGB11WalletID()
 	if err != nil {
 		t.Fatal(err)
 	}
-	full, _, err := targetScoped.exportRGB11WalletSnapshot(walletID)
+	before, _, err := targetScoped.exportRGB11WalletSnapshot(beforeWalletID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(full.EngineRecords) != 1 {
-		t.Fatalf("wallet-local receive task was not preserved: %d records", len(full.EngineRecords))
+	beforeLocks := target.utxoLockerL1.GetLockedUtxoList()
+	seededTicker := &indexer.TickerInfo{AssetName: assetName, Content: append([]byte(nil), ext...)}
+	target.mutex.Lock()
+	target.tickerInfoMap[assetName.String()] = seededTicker
+	target.mutex.Unlock()
+	if err := targetProvider.Import(targetCatalog, payloads); !errors.Is(err, rgb11wallet.ErrRGB11Inconsistent) {
+		t.Fatalf("opaque recovery import error=%v, want fail-closed RGB11 inconsistency", err)
 	}
-	transfer, err := targetScoped.rgbManager.projectionStore.LoadTransferState(localTransferID)
-	if err != nil || transfer == nil || transfer.Status != "pending" {
-		t.Fatalf("wallet-local transfer lifecycle was not preserved: transfer=%+v err=%v", transfer, err)
+	after, _, err := targetScoped.exportRGB11WalletSnapshot(beforeWalletID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before.ProjectionRecords, after.ProjectionRecords) ||
+		!reflect.DeepEqual(before.EngineRecords, after.EngineRecords) {
+		t.Fatalf("failed recovery import changed local scope snapshot: before projection/engine=%d/%d after=%d/%d",
+			len(before.ProjectionRecords), len(before.EngineRecords),
+			len(after.ProjectionRecords), len(after.EngineRecords))
+	}
+	if afterLocks := target.utxoLockerL1.GetLockedUtxoList(); !reflect.DeepEqual(beforeLocks, afterLocks) {
+		t.Fatalf("failed recovery import changed root UTXO locks: before=%d after=%d",
+			len(beforeLocks), len(afterLocks))
+	}
+	target.mutex.RLock()
+	rootTicker := target.tickerInfoMap[assetName.String()]
+	target.mutex.RUnlock()
+	if rootTicker != seededTicker || string(rootTicker.Content) != string(ext) {
+		t.Fatalf("failed recovery import changed root ticker cache: %+v", rootTicker)
+	}
+	if proof, err := targetScoped.rgbManager.projectionStore.LoadProof(outpoint, assetName); err == nil && proof != nil {
+		t.Fatal("unverifiable recovery imported proof despite failing validation")
+	}
+}
+
+func TestRGB11AccountManagedProviderIsStableOnly(t *testing.T) {
+	provider := any(&rgb11AccountManagedDataProvider{})
+	if _, ok := provider.(AccountManagedActiveDataProvider); ok {
+		t.Fatal("RGB11 complete stable recovery should not register a second active mailbox authority")
 	}
 }

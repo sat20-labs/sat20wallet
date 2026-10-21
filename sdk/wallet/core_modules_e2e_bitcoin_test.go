@@ -45,11 +45,20 @@ func (c *coreE2EChain) fund(t *testing.T,address string,count int) {
   c.status[id]=rgb11wallet.BitcoinTxStatus{TxID:id,Confirmed:true,Confirmations:6}
  }
 }
-func (c *coreE2EChain) GetUTXO(point string)(*rgb11wallet.BitcoinUTXO,error) {
- c.mu.Lock(); defer c.mu.Unlock()
- output:=c.outputs[point]; if output==nil {return nil,fmt.Errorf("controlled UTXO not found")}
- id:=strings.Split(point,":")[0]
- return &rgb11wallet.BitcoinUTXO{OutPoint:point,Value:output.OutValue.Value,PkScript:append([]byte(nil),output.OutValue.PkScript...),Confirmations:c.status[id].Confirmations},nil
+func (c *coreE2EChain) GetUTXO(point string) (*rgb11wallet.BitcoinUTXO, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	id := strings.Split(point, ":")[0]
+	output := c.outputs[point]
+	if output == nil {
+		if status, known := c.status[id]; known && !status.Confirmed && !status.InMempool {
+			// The controlled reorg explicitly proved this witness/output absent.
+			// Other missing points remain unknown evidence, not known absence.
+			return nil, nil
+		}
+		return nil, fmt.Errorf("controlled UTXO not found")
+	}
+	return &rgb11wallet.BitcoinUTXO{OutPoint: point, Value: output.OutValue.Value, PkScript: append([]byte(nil), output.OutValue.PkScript...), Confirmations: c.status[id].Confirmations}, nil
 }
 func (c *coreE2EChain) GetRawTx(id string)([]byte,error) {
  c.mu.Lock(); defer c.mu.Unlock()

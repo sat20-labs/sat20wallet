@@ -19,7 +19,101 @@ import (
 	"time"
 )
 
+func newRGB11ActivatedFlowAccount(t *testing.T, mnemonic string, remote *rgb11MemoryDKVSHTTP,
+	client *rgb11MessageNodeClient, evidence rgb11wallet.BitcoinEvidenceProvider, rpc IndexerRPCClient) *Manager {
+	t.Helper()
+	manager := newAccountManagementAutoTestManager(t)
+	configureRGB11DKVSTestManager(manager, remote)
+	manager.serverNode = NewNode(client, "message.test", SERVER_NODE, client.CoreNodePubKey(), client.CoreNodePubKey())
+	manager.rgbManager.evidence = evidence
+	manager.l1IndexerClient = NewIndexerRPCClientMgr()
+	manager.l1IndexerClient.Set(rpc)
+	manager.utxoLockerL1.rpcClient = rpc
+	if _, err := manager.ImportWallet(mnemonic, "password"); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.InitializeAccountManagement("password"); err != nil {
+		t.Fatal(err)
+	}
+	pkg, authorization, secret := rereviewRecoveryPackage(t, manager)
+	if err := manager.ActivateAccountManagement(secret, "password", *authorization, pkg.Envelope.Locator, "account://"+pkg.Envelope.Locator.PackageID); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.SyncAccountManagementState(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return manager
+}
+
 func newRGB11GenericSendFixture(t *testing.T) (*Manager, *Manager, *RGB11ImportResult, *rgb11AddressEvidence, *rgb11FlowIndexer) {
+	return newRGB11GenericSendFixtureWithCarrier(t, 10_000)
+}
+
+// Public send cases use genuine account activation and stable synchronization.
+// The local-only maintenance fixture below remains independent of this setup.
+func newRGB11GenericSendFixtureWithCarrier(t *testing.T, carrierValue int64) (*Manager, *Manager, *RGB11ImportResult, *rgb11AddressEvidence, *rgb11FlowIndexer) {
+	t.Helper()
+	oldChain := _chain
+	_chain = "testnet"
+	t.Cleanup(func() { _chain = oldChain })
+	base := &rgb11FlowEvidence{utxos: make(map[string]*rgb11wallet.BitcoinUTXO), rawTx: make(map[string][]byte), spendingTx: make(map[string]string)}
+	evidence := &rgb11AddressEvidence{rgb11FlowEvidence: base, statuses: make(map[string]*rgb11wallet.BitcoinTxStatus)}
+	rpc := &rgb11FlowIndexer{outputs: make(map[string]*TxOutput)}
+	remote := newRGB11MemoryDKVSHTTP()
+	client := newRGB11MessageNodeClient(remote)
+
+	sender := newRGB11ActivatedFlowAccount(t, "inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", remote, client, evidence, rpc)
+	recipient := newRGB11ActivatedFlowAccount(t, "comfort very add tuition senior run eight snap burst appear exile dutch", remote, client, evidence, rpc)
+	script, err := AddrToPkScript(sender.wallet.GetAddress(), GetChainParam())
+	if err != nil {
+		t.Fatal(err)
+	}
+	addOutput := func(value int64, marker byte) string {
+		point := seedRGB11FlowEvidenceUTXO(t, base, script, value, marker)
+		output := indexer.NewTxOutput(value)
+		output.OutPointStr, output.OutValue.PkScript = point, append([]byte(nil), script...)
+		rpc.outputs[point] = output
+		rpc.plain = append(rpc.plain, &indexerwire.TxOutputInfo{OutPoint: point, Value: value, PkScript: append([]byte(nil), script...)})
+		return point
+	}
+	// Only the intended carrier is available at issuance; selection order
+	// cannot silently choose the later fee output instead.
+	source := addOutput(carrierValue, 91)
+	issued, err := sender.IssueRGB11Asset(context.Background(), RGB11IssueRequest{Schema: "NIA", Ticker: "SEND", Name: "Native public send fixture", Amounts: []uint64{50000}})
+	if err != nil || issued == nil || len(issued.OutPoints) != 1 || issued.OutPoints[0] != source {
+		t.Fatalf("issue exact controlled carrier: issued=%v err=%v", issued, err)
+	}
+	addOutput(100_000, 92)
+	endpoint, err := recipient.EnableConfiguredRGB11AddressReceive(RGB11ReceiveCapabilityOptions{RecordOptions: dkvsindexer.RecordOptions{TTL: testRGB11FreeLocalTTL}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := mailboxSubscriptionTarget(endpoint.AccountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recipient.SubscribeDKVSPrefix(target); err != nil {
+		t.Fatal(err)
+	}
+	return sender, recipient, &RGB11ImportResult{ContractID: issued.ContractID, AssetName: issued.AssetName}, evidence, rpc
+}
+
+func rgb11GenericFixtureSource(t *testing.T, sender *Manager, imported *RGB11ImportResult) string {
+	t.Helper()
+	proofs, err := sender.rgbManager.projectionStore.ListProofs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, proof := range proofs {
+		if proof.AssetName == imported.AssetName {
+			return proof.OutPoint
+		}
+	}
+	t.Fatal("fixture has no controlled RGB carrier")
+	return ""
+}
+
+func newRGB11SendFixture(t *testing.T, native bool) (*Manager, *Manager, *RGB11ImportResult, *rgb11AddressEvidence, *rgb11FlowIndexer) {
 	t.Helper()
 	senderWallet := NewInternalWalletWithMnemonic(
 		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", "", &chaincfg.TestNet4Params,
@@ -32,8 +126,8 @@ func newRGB11GenericSendFixture(t *testing.T) (*Manager, *Manager, *RGB11ImportR
 		t.Fatal(err)
 	}
 
-	const sourceOutpoint = "14295d5bb1a191cdb6286dc0944df938421e3dfcbf0811353ccac4100c2068c5:1"
-	const plainOutpoint = "3333333333333333333333333333333333333333333333333333333333333333:0"
+	sourceOutpoint := "14295d5bb1a191cdb6286dc0944df938421e3dfcbf0811353ccac4100c2068c5:1"
+	plainOutpoint := "3333333333333333333333333333333333333333333333333333333333333333:0"
 	baseEvidence := &rgb11FlowEvidence{
 		utxos: map[string]*rgb11wallet.BitcoinUTXO{
 			sourceOutpoint: {OutPoint: sourceOutpoint, Value: 10_000, PkScript: senderScript, Confirmations: 6},
@@ -42,6 +136,11 @@ func newRGB11GenericSendFixture(t *testing.T) (*Manager, *Manager, *RGB11ImportR
 		spendingTx: make(map[string]string),
 	}
 	evidence := &rgb11AddressEvidence{rgb11FlowEvidence: baseEvidence, statuses: make(map[string]*rgb11wallet.BitcoinTxStatus)}
+	if native {
+		baseEvidence.utxos = make(map[string]*rgb11wallet.BitcoinUTXO)
+		sourceOutpoint = seedRGB11FlowEvidenceUTXO(t, baseEvidence, senderScript, 10_000, 91)
+		plainOutpoint = seedRGB11FlowEvidenceUTXO(t, baseEvidence, senderScript, 100_000, 92)
+	}
 	rpc := &rgb11FlowIndexer{outputs: make(map[string]*TxOutput)}
 	sourceOutput := indexer.NewTxOutput(10_000)
 	sourceOutput.OutPointStr = sourceOutpoint
@@ -58,11 +157,22 @@ func newRGB11GenericSendFixture(t *testing.T) (*Manager, *Manager, *RGB11ImportR
 
 	sender := newRGB11FlowManager(t, senderWallet, rpc, evidence, 101)
 	recipient := newRGB11FlowManager(t, recipientWallet, rpc, evidence, 102)
-	contract, err := os.ReadFile("../../../rgb11/testvectors/rc11/nia-example.rgba")
-	if err != nil {
-		t.Fatal(err)
+	var imported *RGB11ImportResult
+	if native {
+		issued, issueErr := sender.rgbManager.IssueRGB11Asset(context.Background(), RGB11IssueRequest{
+			Schema: "NIA", Ticker: "MAINT", Name: "Native maintenance fixture", Amounts: []uint64{50000},
+		})
+		if issueErr != nil {
+			t.Fatal(issueErr)
+		}
+		imported = &RGB11ImportResult{ContractID: issued.ContractID, AssetName: issued.AssetName}
+	} else {
+		contract, readErr := os.ReadFile("../../../rgb11/testvectors/rc11/nia-example.rgba")
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		imported, err = sender.rgbManager.ImportRGB11Contract(context.Background(), contract)
 	}
-	imported, err := sender.ImportRGB11Contract(context.Background(), contract)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +192,7 @@ func newRGB11GenericSendFixture(t *testing.T) (*Manager, *Manager, *RGB11ImportR
 	configure(sender)
 	configure(recipient)
 
-	endpoint, err := recipient.EnableConfiguredRGB11AddressReceive(RGB11ReceiveCapabilityOptions{RecordOptions: dkvsindexer.RecordOptions{TTL: testRGB11FreeLocalTTL}})
+	endpoint, err := recipient.rgbManager.EnableConfiguredRGB11AddressReceive(RGB11ReceiveCapabilityOptions{RecordOptions: dkvsindexer.RecordOptions{TTL: testRGB11FreeLocalTTL}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +282,7 @@ func TestRGB11DirectBatchRequiresEveryOutputACK(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		syncResult, err := recipient.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+		syncResult, err := recipient.rgbManager.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
 		if err != nil || syncResult.Invalid != 0 || syncResult.Received != 1 {
 			transfers, transferErr := recipient.rgbManager.projectionStore.ListTransfers()
 			reservations, reservationErr := recipient.rgbManager.loadRGB11Reservations()
@@ -180,12 +290,12 @@ func TestRGB11DirectBatchRequiresEveryOutputACK(t *testing.T) {
 			t.Fatalf("output %d receive=%+v err=%v state=%+v transferErr=%v reservations=%+v reservationErr=%v engineRecords=%+v engineErr=%v preparedStates=%+v",
 				i, syncResult, err, transfers, transferErr, reservations, reservationErr, engineRecords, engineErr, prepared.States)
 		}
-		_, err = sender.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+		_, err = sender.rgbManager.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if i == 0 {
-			if _, err := sender.BroadcastRGB11AddressTransfer(state.TransferID); !errors.Is(err, ErrRGB11AddressDeliveryRequired) {
+			if _, err := sender.rgbManager.BroadcastRGB11AddressTransfer(state.TransferID); !errors.Is(err, ErrRGB11AddressDeliveryRequired) {
 				t.Fatalf("partial ACK allowed broadcast: %v", err)
 			}
 			evidence.mu.Lock()
@@ -302,7 +412,7 @@ func TestGenericBatchSendAssetsRGB11(t *testing.T) {
 		case <-deadline.C:
 			t.Fatal("generic RGB send did not finish")
 		case <-tick.C:
-			syncResult, err := recipient.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+			syncResult, err := recipient.rgbManager.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
 			if err != nil || syncResult.Invalid != 0 {
 				transfers, transferErr := recipient.rgbManager.projectionStore.ListTransfers()
 				reservations, reservationErr := recipient.rgbManager.loadRGB11Reservations()
@@ -318,10 +428,10 @@ func TestRGB11SendRejectsCarriersContainingOtherAssets(t *testing.T) {
 	for _, protocol := range []string{indexer.PROTOCOL_NAME_ORDX, indexer.PROTOCOL_NAME_RUNES, indexer.PROTOCOL_NAME_BRC20} {
 		t.Run(protocol, func(t *testing.T) {
 			sender, recipient, imported, evidence, rpc := newRGB11GenericSendFixture(t)
-			source := "14295d5bb1a191cdb6286dc0944df938421e3dfcbf0811353ccac4100c2068c5:1"
+			source := rgb11GenericFixtureSource(t, sender, imported)
 			rpc.outputs[source].Assets = indexer.TxAssets{{Name: indexer.AssetName{Protocol: protocol, Type: "f", Ticker: "OTHER"}, Amount: *indexer.NewDefaultDecimal(7)}}
 			request := RGB11AddressSendRequest{ReceiverAddress: recipient.wallet.GetAddress(), AssetName: imported.AssetName, AmountRaw: "20000", FeeRate: 2, MinConfirmations: 1}
-			_, _, err := sender.PrepareConfiguredRGB11AddressTransfer(context.Background(), request, dkvsindexer.RecordVerificationOptions{})
+			_, _, err := sender.rgbManager.PrepareConfiguredRGB11AddressTransfer(context.Background(), request, dkvsindexer.RecordVerificationOptions{})
 			if !errors.Is(err, ErrRGB11AssetPreservation) {
 				t.Fatalf("mixed carrier was not refused: %v", err)
 			}
@@ -340,13 +450,11 @@ func TestRGB11SendRejectsCarriersContainingOtherAssets(t *testing.T) {
 }
 
 func TestRGB11FeeSelectionRejectsStalePlainAssetView(t *testing.T) {
-	sender, recipient, imported, evidence, rpc := newRGB11GenericSendFixture(t)
-	source := "14295d5bb1a191cdb6286dc0944df938421e3dfcbf0811353ccac4100c2068c5:1"
-	unsafe := "3333333333333333333333333333333333333333333333333333333333333333:0"
-	plain := "4444444444444444444444444444444444444444444444444444444444444444:0"
+	sender, recipient, imported, evidence, rpc := newRGB11GenericSendFixtureWithCarrier(t, 330)
+	source := rgb11GenericFixtureSource(t, sender, imported)
+	unsafe := rpc.plain[len(rpc.plain)-1].OutPoint
+	plain := seedRGB11FlowEvidenceUTXO(t, evidence.rgb11FlowEvidence, rpc.outputs[source].OutValue.PkScript, 10_000, 93)
 	// Force an extra fee input. The plain-list cache is intentionally stale.
-	evidence.utxos[source].Value = 330
-	rpc.outputs[source].OutValue.Value = 330
 	rpc.outputs[unsafe].Assets = indexer.TxAssets{{Name: indexer.AssetName{Protocol: indexer.PROTOCOL_NAME_ORDX, Type: "f", Ticker: "OTHER"}, Amount: *indexer.NewDefaultDecimal(7)}}
 	plainOutput := indexer.NewTxOutput(10000)
 	plainOutput.OutPointStr = plain
@@ -354,7 +462,7 @@ func TestRGB11FeeSelectionRejectsStalePlainAssetView(t *testing.T) {
 	rpc.outputs[plain] = plainOutput
 	rpc.plain = append([]*indexerwire.TxOutputInfo{{OutPoint: plain, Value: 10000, PkScript: plainOutput.OutValue.PkScript}}, rpc.plain...)
 	request := RGB11AddressSendRequest{ReceiverAddress: recipient.wallet.GetAddress(), AssetName: imported.AssetName, AmountRaw: "20000", FeeRate: 2, MinConfirmations: 1}
-	prepared, _, err := sender.PrepareConfiguredRGB11AddressTransfer(context.Background(), request, dkvsindexer.RecordVerificationOptions{})
+	prepared, _, err := sender.rgbManager.PrepareConfiguredRGB11AddressTransfer(context.Background(), request, dkvsindexer.RecordVerificationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,10 +481,10 @@ func TestRGB11FeeSelectionRejectsStalePlainAssetView(t *testing.T) {
 }
 
 func TestRGB11SendDoesNotUseAnotherRGBAssetForFees(t *testing.T) {
-	sender, recipient, imported, evidence, rpc := newRGB11GenericSendFixture(t)
-	source := "14295d5bb1a191cdb6286dc0944df938421e3dfcbf0811353ccac4100c2068c5:1"
-	other := "3333333333333333333333333333333333333333333333333333333333333333:0"
-	plain := "5555555555555555555555555555555555555555555555555555555555555555:0"
+	sender, recipient, imported, evidence, rpc := newRGB11GenericSendFixtureWithCarrier(t, 330)
+	source := rgb11GenericFixtureSource(t, sender, imported)
+	other := rpc.plain[len(rpc.plain)-1].OutPoint
+	plain := seedRGB11FlowEvidenceUTXO(t, evidence.rgb11FlowEvidence, rpc.outputs[source].OutValue.PkScript, 10_000, 93)
 	evidence.utxos[other] = &rgb11wallet.BitcoinUTXO{OutPoint: other, Value: 100000, PkScript: rpc.outputs[other].OutValue.PkScript, Confirmations: 6}
 	issued, err := sender.IssueRGB11Asset(context.Background(), RGB11IssueRequest{Schema: "NIA", Ticker: "OTHER", Name: "Other RGB fee protection", Amounts: []uint64{50}})
 	if err != nil || len(issued.OutPoints) != 1 || issued.OutPoints[0] != other {
@@ -385,15 +493,13 @@ func TestRGB11SendDoesNotUseAnotherRGBAssetForFees(t *testing.T) {
 	if err := sender.utxoLockerL1.UnlockUtxo(other); err != nil {
 		t.Fatal(err)
 	}
-	evidence.utxos[source].Value = 330
-	rpc.outputs[source].OutValue.Value = 330
 	out := indexer.NewTxOutput(10000)
 	out.OutPointStr = plain
 	out.OutValue.PkScript = rpc.outputs[source].OutValue.PkScript
 	rpc.outputs[plain] = out
 	rpc.plain = append([]*indexerwire.TxOutputInfo{{OutPoint: plain, Value: 10000, PkScript: out.OutValue.PkScript}}, rpc.plain...)
 	request := RGB11AddressSendRequest{ReceiverAddress: recipient.wallet.GetAddress(), AssetName: imported.AssetName, AmountRaw: "20000", FeeRate: 2, MinConfirmations: 1}
-	prepared, _, err := sender.PrepareConfiguredRGB11AddressTransfer(context.Background(), request, dkvsindexer.RecordVerificationOptions{})
+	prepared, _, err := sender.rgbManager.PrepareConfiguredRGB11AddressTransfer(context.Background(), request, dkvsindexer.RecordVerificationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,7 +516,7 @@ func TestRGB11SendDoesNotUseAnotherRGBAssetForFees(t *testing.T) {
 
 func TestRGB11SendPreservesOtherContractOnSameCarrier(t *testing.T) {
 	sender, recipient, imported, evidence, _ := newRGB11GenericSendFixture(t)
-	const source = "14295d5bb1a191cdb6286dc0944df938421e3dfcbf0811353ccac4100c2068c5:1"
+	source := rgb11GenericFixtureSource(t, sender, imported)
 	allocations, err := rgb11IssueAllocations([]string{source}, []uint64{7})
 	if err != nil {
 		t.Fatal(err)
@@ -439,7 +545,7 @@ func TestRGB11SendPreservesOtherContractOnSameCarrier(t *testing.T) {
 		if err := sender.rgbManager.projectionStore.SaveProofState(proof); err != nil {
 			t.Fatal(err)
 		}
-		_, _, err = sender.PrepareConfiguredRGB11AddressTransfer(context.Background(), request, dkvsindexer.RecordVerificationOptions{})
+		_, _, err = sender.rgbManager.PrepareConfiguredRGB11AddressTransfer(context.Background(), request, dkvsindexer.RecordVerificationOptions{})
 		if !errors.Is(err, ErrRGB11HistoryMerge) && !errors.Is(err, ErrRGB11AssetPreservation) {
 			t.Fatalf("other contract status=%s did not prevent spending shared carrier: %v", status, err)
 		}
@@ -483,10 +589,11 @@ func TestRGB11DirectReservationResumesAfterSDKRestart(t *testing.T) {
 	if !delivery.AwaitingACK || delivery.Broadcast {
 		t.Fatalf("Direct transfer crossed broadcast boundary before ACK: %+v", delivery)
 	}
-	if _, err := recipient.SyncConfiguredRGB11AddressMailbox(
+	received, err := recipient.SyncConfiguredRGB11AddressMailbox(
 		context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{},
-	); err != nil {
-		t.Fatal(err)
+	)
+	if err != nil || received == nil || received.Received != 1 || received.Invalid != 0 {
+		t.Fatalf("recipient did not accept exactly the prepared transfer: result=%+v err=%v", received, err)
 	}
 
 	// Simulate the RGB SDK module being recreated while keeping only durable DB,
@@ -502,10 +609,11 @@ func TestRGB11DirectReservationResumesAfterSDKRestart(t *testing.T) {
 	if err := restarted.selectRGB11Scope(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := sender.SyncConfiguredRGB11AddressMailbox(
+	resumed, err := sender.SyncConfiguredRGB11AddressMailbox(
 		context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{},
-	); err != nil {
-		t.Fatal(err)
+	)
+	if err != nil || resumed == nil || resumed.ACKs != 1 || resumed.Invalid != 0 {
+		t.Fatalf("restarted module did not consume the original ACK: result=%+v err=%v", resumed, err)
 	}
 
 	pending, err := restarted.projectionStore.LoadPendingTransfer(prepared.State.TransferID)

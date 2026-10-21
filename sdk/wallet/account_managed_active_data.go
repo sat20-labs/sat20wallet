@@ -15,6 +15,22 @@ import (
 
 const accountManagedActiveEnvelopeVersion = uint32(1)
 
+func (p *Manager) accountManagedActiveProviderKinds() (map[string]struct{}, map[string]struct{}) {
+	active := make(map[string]struct{})
+	stableOnly := make(map[string]struct{})
+	for _, provider := range p.accountManagedDataProviders() {
+		if provider == nil {
+			continue
+		}
+		if _, ok := provider.(AccountManagedActiveDataProvider); ok {
+			active[provider.ID()] = struct{}{}
+		} else {
+			stableOnly[provider.ID()] = struct{}{}
+		}
+	}
+	return active, stableOnly
+}
+
 type accountManagedActiveEnvelope struct {
 	Version     uint32
 	Provider    string
@@ -383,6 +399,12 @@ func (p *Manager) importAccountManagedActiveDataForSync(applicationLocked bool) 
 
 func (p *Manager) prepareAccountManagedActiveDataImport(root common.Wallet,
 	catalog AccountManagedDataCatalog) (func() error, error) {
+	activeProviders, stableOnlyProviders := p.accountManagedActiveProviderKinds()
+	if len(activeProviders) == 0 {
+		// Stable-only providers have no mailbox recovery role. Avoid reading the
+		// self-addressed cache prefix when it cannot contribute an active import.
+		return func() error { return nil }, nil
+	}
 	messages, err := p.readWalletDirectMessages(root)
 	if err != nil {
 		return nil, err
@@ -402,7 +424,16 @@ func (p *Manager) prepareAccountManagedActiveDataImport(root common.Wallet,
 		}
 		envelope, err := decodeAccountManagedActiveEnvelope(item.Payload.Body)
 		if err != nil {
+			if isStableOnlyAccountManagedActiveCache(item.Payload.ApplicationID, stableOnlyProviders) {
+				continue
+			}
 			return nil, err
+		}
+		if _, active := activeProviders[envelope.Provider]; !active {
+			if _, stableOnly := stableOnlyProviders[envelope.Provider]; stableOnly {
+				continue
+			}
+			return nil, fmt.Errorf("account-managed active provider %q is unavailable", envelope.Provider)
 		}
 		if _, currentScope := allowed[strings.TrimSpace(envelope.Scope)]; !currentScope {
 			if item.Record != nil && strings.TrimSpace(item.Record.Key) != "" {
@@ -426,6 +457,9 @@ func (p *Manager) prepareAccountManagedActiveDataImport(root common.Wallet,
 		for providerID, payloads := range byProvider {
 			provider := p.accountManagedActiveDataProvider(providerID)
 			if provider == nil {
+				if _, stableOnly := stableOnlyProviders[providerID]; stableOnly {
+					continue
+				}
 				return fmt.Errorf("account-managed active provider %q is unavailable", providerID)
 			}
 			if err := provider.ValidateActive(catalog, payloads); err != nil {
@@ -442,6 +476,28 @@ func (p *Manager) prepareAccountManagedActiveDataImport(root common.Wallet,
 		p.pruneStaleAccountManagedActive(root, staleKeys)
 		return nil
 	}, nil
+}
+
+func isStableOnlyAccountManagedActiveCache(applicationID string,
+	stableOnlyProviders map[string]struct{}) bool {
+	for providerID := range stableOnlyProviders {
+		prefix := "ama-" + providerID + "-"
+		if !strings.HasPrefix(applicationID, prefix) {
+			continue
+		}
+		parts := strings.Split(strings.TrimPrefix(applicationID, prefix), "-")
+		if len(parts) != 2 || len(parts[0]) != 16 || len(parts[1]) != 24 {
+			continue
+		}
+		if _, err := hex.DecodeString(parts[0]); err != nil {
+			continue
+		}
+		if _, err := hex.DecodeString(parts[1]); err != nil {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func (p *Manager) pruneStaleAccountManagedActive(root common.Wallet, keys []string) {

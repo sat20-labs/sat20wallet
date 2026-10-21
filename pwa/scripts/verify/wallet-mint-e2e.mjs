@@ -2,9 +2,8 @@ import assert from 'node:assert/strict'
 import { expect } from '@playwright/test'
 import { Transaction } from 'bitcoinjs-lib'
 
-// L1 protocol issuance uses the shared local fake indexer. The successful
-// ORDX path below still creates and confirms real signed commit/reveal bytes;
-// its new ticker and balance are never injected to make assertions pass.
+// Reuse the configured L1 indexer. Regtest runs use actual Core-backed queries
+// and confirm the original signed commit/reveal package through the existing controller.
 export const requiredPwaMintCases = [
   'Mint PWA: ORDX deployment parameters reach review and cancellation preserves funds',
   'Mint PWA: BRC20 ticker length and self-mint parameters reach review without signing',
@@ -23,7 +22,10 @@ export async function runPwaMintCases(t, fixture) {
   const { check, device, ready, unlock, walletCall } = t
   const actor = fixture.basicWallet
   assert.ok(actor?.mnemonic && actor.password && actor.address)
-  assert.equal(fixture.config.Chain, 'testnet')
+  assert.ok(['testnet', 'regtest'].includes(fixture.config.Chain))
+  const bitcoinLabel = `Bitcoin ${fixture.config.Chain}`
+  const observedBroadcasts = Object.create(null)
+  const broadcastErrors = []
   const controller = new URL(fixture.control_url)
   assert.equal(controller.protocol, 'http:')
   assert.ok(['127.0.0.1', 'localhost'].includes(controller.hostname))
@@ -34,6 +36,10 @@ export async function runPwaMintCases(t, fixture) {
     })
     const result = await response.json()
     assert.ok(response.ok && !result.error, JSON.stringify(result))
+    if (fixture.realBitcoinControl) {
+      assert.deepEqual(broadcastErrors, [], 'actual L1 broadcast request observation failed')
+      result.l1.broadcast_count = { ...observedBroadcasts }
+    }
     return result
   }
   const confirmPendingL1 = async expectedTxIDs => {
@@ -70,6 +76,23 @@ export async function runPwaMintCases(t, fixture) {
     assert.equal(response.ok, true, `L1 indexer query ${path} failed with HTTP ${response.status}`)
     return response.json()
   }
+  const unusedMintName = async protocol => {
+    // An attached regtest retains earlier deployments. Find an unused fixture
+    // name without treating transport/indexer errors as proof of absence.
+    for (let serial = 0; serial < 100; serial++) {
+      const suffix = serial.toString(36).padStart(3, '0')
+      const name = protocol === 'did' ? `pwamint${suffix}.sats`
+        : protocol === 'brc20' ? `P${suffix.toUpperCase()}` : `PWAMINT${suffix.toUpperCase()}`
+      const key = protocol === 'did' ? name : `${protocol}:f:${name.toLowerCase()}`
+      const result = await indexerJSON(`${protocol === 'did' ? 'ns/name' : 'v3/tick/info'}/${key}`)
+      if (result.code === 0) continue
+      assert.equal(result.code, -1)
+      assert.equal(result.msg, `can't find ${protocol === 'did' ? 'name' : 'ticker'} ${key}`)
+      assert.equal(result.data, null)
+      return name
+    }
+    throw new Error(`No unused ${protocol} mint fixture name in the bounded test range`)
+  }
   const rawL1Transaction = async txid => {
     const result = await indexerJSON(`btc/rawtx/${txid}`)
     assert.equal(result.code, 0, result.msg)
@@ -94,6 +117,18 @@ export async function runPwaMintCases(t, fixture) {
     await expect.poll(() => new URL(page.url()).hash, poll).toBe(`#${path}`)
   }
   const openMint = async page => {
+    if (fixture.realBitcoinControl) page.context().on('request', request => {
+      const url = new URL(request.url())
+      if (request.method() !== 'POST' || !['btc/tx', 'btc/txs', 'v3/bitcoin/tx/broadcast'].some(path => url.href === indexerURL(path))) return
+      try {
+        const body = request.postDataJSON()
+        const raws = body.signedTxsHex ?? body.SignedTxsHex ?? [body.signedTxHex ?? body.SignedTxHex ?? body.raw_tx]
+        for (const raw of raws) {
+          const txid = Transaction.fromHex(raw).getId()
+          observedBroadcasts[txid] = (observedBroadcasts[txid] ?? 0) + 1
+        }
+      } catch (error) { broadcastErrors.push(error.message) }
+    })
     await visit(page, '/import')
     await page.getByRole('textbox', { name: 'Recovery Phrase', exact: true }).fill(actor.mnemonic)
     await page.getByLabel('New Wallet Password', { exact: true }).fill(actor.password)
@@ -135,7 +170,7 @@ export async function runPwaMintCases(t, fixture) {
     const after = await evidence(page)
     assert.deepEqual(after.l1.broadcast_count, before.l1.broadcast_count, 'a cancelled or invalid mint broadcast an L1 transaction')
     assert.deepEqual(after.l1.pending_txids, before.l1.pending_txids)
-    assert.deepEqual(after.l1.confirmed_txids, before.l1.confirmed_txids)
+    assert.deepEqual(after.l1.confirmed_txids.slice().sort(), before.l1.confirmed_txids.slice().sort())
     assert.deepEqual(after.amount, before.amount, 'review/cancellation reserved or spent wallet funds')
     assert.deepEqual(after.logs, before.logs, 'review/cancellation started a signing operation')
     await expect(page.getByRole('dialog', { name: 'Confirm Transaction', exact: true })).toBeHidden()
@@ -159,7 +194,7 @@ export async function runPwaMintCases(t, fixture) {
     for (const [label, value] of Object.entries({
       Purpose: purpose, To: actor.address, Asset: 'sats',
       Amount: 'Calculated when the wallet builds the transaction',
-      Network: 'Bitcoin testnet', 'Fee rate': '2', ...details,
+      Network: bitcoinLabel, 'Fee rate': '2', ...details,
     })) await assertRow(dialog, label, value)
     await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
     await expect(dialog).toBeHidden()
@@ -190,8 +225,16 @@ export async function runPwaMintCases(t, fixture) {
         await fn(page)
         await unchanged(page, before)
       })
-    } catch (error) { failures.push(error) }
-    finally { if (page) await page.context().close() }
+    } catch (error) {
+      failures.push(error)
+      if (t.selectedCases) throw error
+    }
+    finally {
+      if (page) {
+        await page.context().unrouteAll({ behavior: 'wait' })
+        await page.context().close()
+      }
+    }
   }
 
   await run(0, async page => {
@@ -267,7 +310,8 @@ export async function runPwaMintCases(t, fixture) {
       // Await removal of the previous error so the next toast cannot satisfy
       // this action's completion assertion before its indexer read finishes.
       const error = page.getByText('Ticker info was not found', { exact: true })
-      await expect(error).toBeHidden()
+      // Production toasts last 6s, longer than Playwright's default 5s.
+      await expect(error).toBeHidden({ timeout: poll.timeout })
       await mint.getByRole('button', { name: 'Check', exact: true }).click()
       await expect(error).toBeVisible()
       await expect(mint.getByRole('button', { name: 'Mint Asset', exact: true })).toBeDisabled()
@@ -327,43 +371,62 @@ export async function runPwaMintCases(t, fixture) {
   let successPage
   try {
     await check(requiredPwaMintCases[6], async () => {
-      const ticker = 'PWASUCCESS'
+      const ticker = fixture.realBitcoinControl && !fixture.resumeMintOrdxDeploy
+        ? await unusedMintName('ordx') : 'PWASUCCESS'
       const amount = '20'
       const asset = `ordx:f:${ticker}`
+      const canonicalAsset = `ordx:f:${ticker.toLowerCase()}`
       const page = successPage = await device()
       await openMint(page)
-      await assert.rejects(walletCall(page, 'getTickerInfo', asset), 'fresh ORDX ticker must not exist before deployment')
-      const beforeDeploy = await snapshot()
-      assert.deepEqual(beforeDeploy.l1.pending_txids, [], 'prior PWA group left L1 transactions pending')
+      let deployTx
+      if (fixture.resumeMintOrdxDeploy) {
+        deployTx = fixture.resumeMintOrdxDeploy
+        await assertSignedCommitReveal(deployTx)
+        const response = await fetch(indexerURL('v3/bitcoin/tx/status/batch'), {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ txids: [deployTx.commitTxId, deployTx.revealTxId] }),
+        })
+        assert.equal(response.ok, true)
+        const known = await response.json()
+        assert.equal(known.code, 0, known.msg)
+        assert.equal(known.data.length, 2)
+        assert.ok(known.data.every(tx => tx.exists && tx.confirmed && tx.confirmations >= 1))
+        assert.deepEqual((await snapshot()).l1.pending_txids, [], 'resume the original confirmed deployment without deploying again')
+      } else {
+        await assert.rejects(walletCall(page, 'getTickerInfo', asset), 'fresh ORDX ticker must not exist before deployment')
+        const beforeDeploy = await snapshot()
+        assert.deepEqual(beforeDeploy.l1.pending_txids, [], 'prior PWA group left L1 transactions pending')
 
-      const { deploy, button } = await prepareDeploy(page, 'ordx', ticker)
-      await select(page, field(deploy, 'Assets per sat').getByRole('combobox'), '1')
-      await observeInscribeCall(page, 'deployTickerOrdx')
-      await button.click()
-      const deployDialog = page.getByRole('dialog', { name: 'Confirm Transaction', exact: true })
-      await expect(deployDialog).toBeVisible()
-      await assertRow(deployDialog, 'Protocol', 'ordx')
-      await assertRow(deployDialog, 'Ticker', ticker)
-      await assertRow(deployDialog, 'Max supply', '12000')
-      await assertRow(deployDialog, 'Mint limit', '120')
-      await assertRow(deployDialog, 'Assets per sat', '1')
-      await deployDialog.getByRole('button', { name: 'Confirm', exact: true }).click()
-      await expect(deployDialog).toBeHidden()
-      await expect.poll(() => page.evaluate(() => window.__PWA_MINT_E2E_CALLS__?.deployTickerOrdx), poll).toBeTruthy()
-      const deployReceipt = await page.evaluate(() => window.__PWA_MINT_E2E_CALLS__?.deployTickerOrdx)
-      assert.equal(deployReceipt?.error, '')
-      const deployTx = deployReceipt?.result
-      assert.match(deployTx?.commitTxId || '', /^[0-9a-f]{64}$/)
-      assert.match(deployTx?.revealTxId || '', /^[0-9a-f]{64}$/)
-      assert.equal(deployTx.txId, deployTx.revealTxId)
-      await expect(deploy.getByText(/^txid: [0-9a-f]{64}$/)).toHaveText(`txid: ${deployTx.revealTxId}`)
-      await confirmPendingL1([deployTx.commitTxId, deployTx.revealTxId])
+        const { deploy, button } = await prepareDeploy(page, 'ordx', ticker)
+        await select(page, field(deploy, 'Assets per sat').getByRole('combobox'), '1')
+        await observeInscribeCall(page, 'deployTickerOrdx')
+        await button.click()
+        const deployDialog = page.getByRole('dialog', { name: 'Confirm Transaction', exact: true })
+        await expect(deployDialog).toBeVisible()
+        await assertRow(deployDialog, 'Protocol', 'ordx')
+        await assertRow(deployDialog, 'Ticker', ticker)
+        await assertRow(deployDialog, 'Max supply', '12000')
+        await assertRow(deployDialog, 'Mint limit', '120')
+        await assertRow(deployDialog, 'Assets per sat', '1')
+        await deployDialog.getByRole('button', { name: 'Confirm', exact: true }).click()
+        await expect(deployDialog).toBeHidden()
+        await expect.poll(() => page.evaluate(() => window.__PWA_MINT_E2E_CALLS__?.deployTickerOrdx), poll).toBeTruthy()
+        const deployReceipt = await page.evaluate(() => window.__PWA_MINT_E2E_CALLS__?.deployTickerOrdx)
+        assert.equal(deployReceipt?.error, '')
+        deployTx = deployReceipt?.result
+        assert.match(deployTx?.commitTxId || '', /^[0-9a-f]{64}$/)
+        assert.match(deployTx?.revealTxId || '', /^[0-9a-f]{64}$/)
+        assert.equal(deployTx.txId, deployTx.revealTxId)
+        await expect(deploy.getByText(/^txid: [0-9a-f]{64}$/)).toHaveText(`txid: ${deployTx.revealTxId}`)
+        await confirmPendingL1([deployTx.commitTxId, deployTx.revealTxId])
+      }
       await expect.poll(async () => {
         try { return await walletCall(page, 'getTickerInfo', asset) } catch { return null }
       }, poll).toBeTruthy()
       const indexedTicker = await walletCall(page, 'getTickerInfo', asset)
       const tickerInfo = JSON.parse(indexedTicker.ticker)
-      assert.equal(tickerInfo.name.Ticker, ticker)
+      assert.equal(tickerInfo.name.Ticker, ticker.toLowerCase())
+      if (fixture.resumeMintOrdxDeploy) assert.equal(tickerInfo.deployTx, deployTx.revealTxId)
       assert.equal(String(tickerInfo.maxSupply), '12000')
       assert.equal(String(tickerInfo.limit), '120')
       assert.equal(Number(tickerInfo.n), 1)
@@ -407,12 +470,14 @@ export async function runPwaMintCases(t, fixture) {
           assert.equal(tx.ins[0].index, 0)
         }
       }
-      assert.ok(afterMint.l1.confirmed_txids.includes(deployTx.commitTxId))
-      assert.ok(afterMint.l1.confirmed_txids.includes(deployTx.revealTxId))
+      if (!fixture.resumeMintOrdxDeploy) {
+        assert.ok(afterMint.l1.confirmed_txids.includes(deployTx.commitTxId))
+        assert.ok(afterMint.l1.confirmed_txids.includes(deployTx.revealTxId))
+      }
       assert.ok(afterMint.l1.confirmed_txids.includes(mintTx.commitTxId))
       assert.ok(afterMint.l1.confirmed_txids.includes(mintTx.revealTxId))
       const balance = async () => {
-        const value = await walletCall(page, 'getAssetAmount', actor.address, asset)
+        const value = await walletCall(page, 'getAssetAmount', actor.address, canonicalAsset)
         return BigInt(value.availableAmt) + BigInt(value.lockedAmt)
       }
       await expect.poll(balance, poll).toBe(BigInt(amount))
@@ -423,21 +488,25 @@ export async function runPwaMintCases(t, fixture) {
       await expect.poll(async () => (await walletCall(page, 'getWalletAddress', 0)).address, poll).toBe(actor.address)
       await expect.poll(balance, poll).toBe(BigInt(amount))
       const reloadedTicker = JSON.parse((await walletCall(page, 'getTickerInfo', asset)).ticker)
-      assert.equal(reloadedTicker.name.Ticker, ticker)
+      assert.equal(reloadedTicker.name.Ticker, ticker.toLowerCase())
       assert.equal(String(reloadedTicker.maxSupply), '12000')
       assert.equal(String(reloadedTicker.limit), '120')
       assert.equal(String(reloadedTicker.totalMinted), amount, 'confirmed minted supply must equal the real reveal amount')
     })
   } finally {
-    if (successPage) await successPage.context().close().catch(() => {})
+    if (successPage) {
+      await successPage.context().unrouteAll({ behavior: 'wait' })
+      await successPage.context().close().catch(() => {})
+    }
   }
 
   let brc20Page
   try {
     await check(requiredPwaMintCases[7], async () => {
-      const ticker = 'PWBX'
+      const ticker = fixture.realBitcoinControl ? await unusedMintName('brc20') : 'PWBX'
       const amount = '20'
       const asset = `brc20:f:${ticker}`
+      const canonicalAsset = `brc20:f:${ticker.toLowerCase()}`
       const page = brc20Page = await device()
       await openMint(page)
       await assert.rejects(walletCall(page, 'getTickerInfo', asset), /GetTickerInfo error/i,
@@ -473,7 +542,7 @@ export async function runPwaMintCases(t, fixture) {
       }, poll).toBeTruthy()
       const deployedTicker = await readTicker()
       assert.equal(deployedTicker.name.Protocol, 'brc20')
-      assert.equal(deployedTicker.name.Ticker, ticker)
+      assert.equal(deployedTicker.name.Ticker, ticker.toLowerCase())
       assert.equal(String(deployedTicker.maxSupply), '12000')
       assert.equal(String(deployedTicker.limit), '120')
       assert.equal(Number(deployedTicker.divisibility || 0), 0)
@@ -505,7 +574,7 @@ export async function runPwaMintCases(t, fixture) {
         // BRC20 mints credit the address ledger; transferable inscription
         // carriers are created only by a later transfer inscription.
         const value = await walletCall(page, 'getAssetSummary', actor.address)
-        return value.assets.filter(item => `${item.Name.Protocol}:${item.Name.Type}:${item.Name.Ticker}` === asset)
+        return value.assets.filter(item => `${item.Name.Protocol}:${item.Name.Type}:${item.Name.Ticker}` === canonicalAsset)
           .reduce((sum, item) => sum + BigInt(item.Amount), 0n)
       }
       await expect.poll(balance, poll).toBe(BigInt(amount))
@@ -521,58 +590,78 @@ export async function runPwaMintCases(t, fixture) {
       await expect.poll(async () => (await walletCall(page, 'getWalletAddress', 0)).address, poll).toBe(actor.address)
       await expect.poll(balance, poll).toBe(BigInt(amount))
       const reloadedTicker = await readTicker()
-      assert.equal(reloadedTicker.name.Ticker, ticker)
+      assert.equal(reloadedTicker.name.Ticker, ticker.toLowerCase())
       assert.equal(String(reloadedTicker.maxSupply), '12000')
       assert.equal(String(reloadedTicker.limit), '120')
       assert.equal(Number(reloadedTicker.divisibility || 0), 0)
       assert.equal(String(reloadedTicker.totalMinted), amount)
     })
   } finally {
-    if (brc20Page) await brc20Page.context().close().catch(() => {})
+    if (brc20Page) {
+      await brc20Page.context().unrouteAll({ behavior: 'wait' })
+      await brc20Page.context().close().catch(() => {})
+    }
   }
 
   let didPage
   try {
     await check(requiredPwaMintCases[8], async () => {
-      const nameValue = 'pwafresh.sats'
+      const nameValue = fixture.realBitcoinControl && !fixture.resumeMintDID
+        ? await unusedMintName('did') : 'pwafresh.sats'
       const namePath = `ns/name/${encodeURIComponent(nameValue)}`
       const page = didPage = await device()
       await openMint(page)
-      const absent = await indexerJSON(namePath)
-      assert.equal(absent.code, -1)
-      assert.equal(absent.msg, `can't find name ${nameValue}`)
-      assert.equal(absent.data, null)
-      const preexistingNames = await indexerJSON(`ns/address/${actor.address}?key=name`)
-      assert.equal(preexistingNames.code, 0, preexistingNames.msg)
-      assert.ok(Array.isArray(preexistingNames.data?.names))
-      assert.ok(!preexistingNames.data.names.some(item => item.name === nameValue), 'DID name already belongs to an address')
-      assert.deepEqual((await snapshot()).l1.pending_txids, [], 'prior PWA group left L1 transactions pending')
+      let didTx
+      if (fixture.resumeMintDID) {
+        didTx = fixture.resumeMintDID
+        await assertSignedCommitReveal(didTx)
+        const response = await fetch(indexerURL('v3/bitcoin/tx/status/batch'), {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ txids: [didTx.commitTxId, didTx.revealTxId] }),
+        })
+        assert.equal(response.ok, true)
+        const known = await response.json()
+        assert.equal(known.code, 0, known.msg)
+        assert.equal(known.data.length, 2)
+        assert.ok(known.data.every(tx => tx.exists && tx.confirmed && tx.confirmations >= 1))
+      } else {
+        const absent = await indexerJSON(namePath)
+        assert.equal(absent.code, -1)
+        assert.equal(absent.msg, `can't find name ${nameValue}`)
+        assert.equal(absent.data, null)
+        const preexistingNames = await indexerJSON(`ns/address/${actor.address}`)
+        assert.equal(preexistingNames.code, 0, preexistingNames.msg)
+        const ownerNames = preexistingNames.data?.names
+        assert.ok(ownerNames === null || Array.isArray(ownerNames))
+        assert.ok(!(ownerNames ?? []).some(item => item.name === nameValue), 'DID name already belongs to an address')
+        assert.deepEqual((await snapshot()).l1.pending_txids, [], 'prior PWA group left L1 transactions pending')
 
-      await input(card(page, 'Deploy ticker'), 'Fee rate').fill('2')
-      const did = card(page, 'Mint DID')
-      const name = did.getByPlaceholder('Enter name', { exact: true })
-      const button = did.getByRole('button', { name: 'Mint DID', exact: true })
-      await name.fill('PwaFresh.sats')
-      await did.getByRole('button', { name: 'Check', exact: true }).click()
-      await expect(button).toBeEnabled()
-      await observeInscribeCall(page, 'inscribeName')
-      await button.click()
-      const dialog = page.getByRole('dialog', { name: 'Confirm Transaction', exact: true })
-      await expect(dialog).toBeVisible()
-      for (const [label, value] of Object.entries({
-        Purpose: 'Mint DID', To: actor.address, Asset: 'sats',
-        Amount: 'Calculated when the wallet builds the transaction',
-        Network: 'Bitcoin testnet', 'Fee rate': '2', Name: nameValue,
-      })) await assertRow(dialog, label, value)
-      await dialog.getByRole('button', { name: 'Confirm', exact: true }).click()
-      await expect(dialog).toBeHidden()
-      await expect.poll(() => page.evaluate(() => window.__PWA_MINT_E2E_CALLS__?.inscribeName), poll).toBeTruthy()
-      const didTx = (await page.evaluate(() => window.__PWA_MINT_E2E_CALLS__?.inscribeName))?.result
-      await assertSignedCommitReveal(didTx)
-      await expect(did.getByText(/^txid: [0-9a-f]{64}$/)).toHaveText(`txid: ${didTx.revealTxId}`)
-      const confirmed = await confirmPendingL1([didTx.commitTxId, didTx.revealTxId])
-      assert.ok(confirmed.l1.confirmed_txids.includes(didTx.revealTxId))
+        await input(card(page, 'Deploy ticker'), 'Fee rate').fill('2')
+        const did = card(page, 'Mint DID')
+        const name = did.getByPlaceholder('Enter name', { exact: true })
+        const button = did.getByRole('button', { name: 'Mint DID', exact: true })
+        await name.fill(nameValue.toUpperCase())
+        await did.getByRole('button', { name: 'Check', exact: true }).click()
+        await expect(button).toBeEnabled()
+        await observeInscribeCall(page, 'inscribeName')
+        await button.click()
+        const dialog = page.getByRole('dialog', { name: 'Confirm Transaction', exact: true })
+        await expect(dialog).toBeVisible()
+        for (const [label, value] of Object.entries({
+          Purpose: 'Mint DID', To: actor.address, Asset: 'sats',
+          Amount: 'Calculated when the wallet builds the transaction',
+          Network: bitcoinLabel, 'Fee rate': '2', Name: nameValue,
+        })) await assertRow(dialog, label, value)
+        await dialog.getByRole('button', { name: 'Confirm', exact: true }).click()
+        await expect(dialog).toBeHidden()
+        await expect.poll(() => page.evaluate(() => window.__PWA_MINT_E2E_CALLS__?.inscribeName), poll).toBeTruthy()
+        didTx = (await page.evaluate(() => window.__PWA_MINT_E2E_CALLS__?.inscribeName))?.result
+        await assertSignedCommitReveal(didTx)
+        await expect(did.getByText(/^txid: [0-9a-f]{64}$/)).toHaveText(`txid: ${didTx.revealTxId}`)
+        const confirmed = await confirmPendingL1([didTx.commitTxId, didTx.revealTxId])
+        assert.ok(confirmed.l1.confirmed_txids.includes(didTx.revealTxId))
 
+      }
       await expect.poll(async () => {
         const response = await indexerJSON(namePath)
         return response.code === 0 ? response : null
@@ -586,7 +675,7 @@ export async function runPwaMintCases(t, fixture) {
       assert.equal(ownership.data.utxo, `${didTx.revealTxId}:0`)
       assert.ok(Number.isSafeInteger(Number(ownership.data.height)) && Number(ownership.data.height) > 0)
 
-      const addressNames = await indexerJSON(`ns/address/${actor.address}?key=name`)
+      const addressNames = await indexerJSON(`ns/address/${actor.address}`)
       assert.equal(addressNames.code, 0, addressNames.msg)
       assert.ok(addressNames.data.total >= 1)
       assert.ok(addressNames.data.names.some(item => item.name === nameValue
@@ -615,7 +704,10 @@ export async function runPwaMintCases(t, fixture) {
       await unchanged(page, afterConfirm)
     })
   } finally {
-    if (didPage) await didPage.context().close().catch(() => {})
+    if (didPage) {
+      await didPage.context().unrouteAll({ behavior: 'wait' })
+      await didPage.context().close().catch(() => {})
+    }
   }
 
   if (failures.length) throw new AggregateError(failures, 'PWA mint review/cancellation cases failed')

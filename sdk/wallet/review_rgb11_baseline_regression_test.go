@@ -68,7 +68,7 @@ func TestReviewRGB11BaselineRechecksOperationPreconditions(t *testing.T) {
 		}
 	})
 
-	t.Run("imported_active_transition_blocks_new_operation", func(t *testing.T) {
+	t.Run("baseline_imports_pending_before_new_operation", func(t *testing.T) {
 		local, other, remote := reviewAccountDevices(t)
 		reviewEnableRecovery(t, local)
 		reviewEnableRecovery(t, other)
@@ -82,31 +82,40 @@ func TestReviewRGB11BaselineRechecksOperationPreconditions(t *testing.T) {
 		if err := other.bindAccountToCurrentCoreNode(root); err != nil {
 			t.Fatal(err)
 		}
-		// This test checks the recovery barrier, not chain reconciliation.
-		local.rgbManager.scopeStates = nil
-		other.rgbManager.scopeStates = nil
+		// Preserve the registry needed by recovery while stopping background reconciliation.
+		for _, manager := range []*Manager{local, other} {
+			manager.rgbManager.scopeStates.stopReconciliations()
+			manager.rgbManager.evidence = newCoreE2EChain()
+		}
 		if err := other.rgbManager.projectionStore.SaveTransferState(&rgb11wallet.TransferState{
 			TransferID: "review-remote-active", Direction: "receive", Status: "pending", AddressMode: true,
 		}); err != nil {
 			t.Fatal(err)
 		}
-		if err := other.syncAccountManagedActiveData(rgb11AccountManagedProviderID); err != nil {
-			t.Fatalf("publish active recovery fixture: %v", err)
+		if err := other.SyncAccountManagementState(context.Background()); err != nil {
+			t.Fatalf("publish stable recovery fixture: %v", err)
 		}
 		if active, err := local.hasAccountManagedRGB11Transition(); err != nil || active {
 			t.Fatalf("local fixture must start without active state: active=%v err=%v", active, err)
 		}
 		called := false
 		_, err = runRGB11ManagedOperation(local, context.Background(), rgb11ManagedOperationNew,
-			func(*rgb11Manager) (struct{}, error) {
+			func(manager *rgb11Manager) (struct{}, error) {
 				called = true
+				state, readErr := manager.projectionStore.LoadTransferState("review-remote-active")
+				if readErr != nil {
+					return struct{}{}, readErr
+				}
+				if state == nil || state.Direction != "receive" || state.Status != "pending" {
+					return struct{}{}, errors.New("remote pending state was not imported before operation callback")
+				}
 				return struct{}{}, nil
 			})
 		if active, inspectErr := local.hasAccountManagedRGB11Transition(); inspectErr != nil || !active {
 			t.Fatalf("baseline did not import the remote active transition: active=%v err=%v operationErr=%v", active, inspectErr, err)
 		}
-		if called || !errors.Is(err, ErrRGB11ManagedOperationActive) {
-			t.Fatalf("new operation crossed the imported active-transition barrier: called=%v err=%v", called, err)
+		if !called || err != nil {
+			t.Fatalf("baseline did not restore remote pending before unrelated work: called=%v err=%v", called, err)
 		}
 	})
 }

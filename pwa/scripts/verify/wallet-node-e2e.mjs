@@ -16,6 +16,9 @@ export const requiredPwaNodeCases = [
 export async function runPwaNodeCases(t, fixture) {
   const { check, device, ready, unlock, walletCall } = t
   const poll = { timeout: 180000, intervals: [250, 500, 1000, 2000] }
+  const network = fixture.config.Chain ?? 'testnet'
+  assert.ok(['testnet', 'regtest'].includes(network))
+  const bitcoinNetwork = network === 'regtest' ? networks.regtest : networks.testnet
   const errors = []
   const control = async (action, body = {}) => {
     const response = await fetch(new URL(`/${action}`, fixture.control_url), {
@@ -27,10 +30,10 @@ export async function runPwaNodeCases(t, fixture) {
     assert.ok(!result.error, result.error)
     return result
   }
-  const readMiner = async (page, publicKey) => page.evaluate(async pubkey => {
+  const readMiner = async (page, publicKey) => page.evaluate(async ({ pubkey, network }) => {
     const api = (await import('/apis/satnet.ts')).default
-    return api.getMinerInfo({ pubkey, network: 'testnet' })
-  }, publicKey)
+    return api.getMinerInfo({ pubkey, network })
+  }, { pubkey: publicKey, network })
   const readLocalAction = async (page, reservationID) => page.evaluate(async id => {
     const [error, response] = await (await import('/utils/stp.ts')).default.allReservations()
     if (error) throw error
@@ -114,7 +117,7 @@ export async function runPwaNodeCases(t, fixture) {
         assert.equal((await walletCall(page, 'getWalletAddress', 0)).address, actor.address)
         const peer = fixture.config.Peers.find(value => value.startsWith(isCore ? 'b@' : 's@')).split('@')[1]
         const channel = (await walletCall(page, 'getChannelAddrByPeerPubkey', peer)).channelAddr
-        const script = bitcoinAddress.toOutputScript(channel, networks.testnet).toString('hex')
+        const script = bitcoinAddress.toOutputScript(channel, bitcoinNetwork).toString('hex')
         const before = await walletCall(page, 'getAssetAmount', actor.address, fixture.stake.asset)
         const beforeSnapshot = await control('snapshot')
         assert.equal(beforeSnapshot.l1.pending_txids.length, 0, 'previous groups left unconfirmed L1 operations')
@@ -209,7 +212,12 @@ export async function runPwaNodeCases(t, fixture) {
         await page.evaluate(() => { location.hash = '#/wallet/setting' })
         await page.getByRole('button', { name: /Node Settings/ }).click()
         await expect(page.getByRole('link', { name: channel, exact: true })).toBeVisible()
-        await expect(page.getByRole('button', { name: 'Select Node Type', exact: true })).toBeDisabled()
+        await expect(page.getByRole('button', { name: /^(Unstake|取消质押)$/, exact: true })).toBeEnabled()
+        await page.getByRole('button', { name: /^(Unstake|取消质押)$/, exact: true }).click()
+        await expect.poll(() => new URL(page.url()).hash, poll).toBe('#/wallet/setting/node')
+        await expect(page.getByRole('button', { name: /^(Unstake|取消质押)$/, exact: true })).toBeEnabled()
+        await expect(page.getByRole('button', { name: 'become Core Node', exact: true })).toHaveCount(0)
+        await expect(page.getByRole('button', { name: 'become Miner', exact: true })).toHaveCount(0)
         await expect.poll(readPending, poll).toBeNull()
         const after = await walletCall(page, 'getAssetAmount', actor.address, fixture.stake.asset)
         assert.equal(BigInt(before.availableAmt) + BigInt(before.lockedAmt) - BigInt(after.availableAmt) - BigInt(after.lockedAmt), BigInt(fixture.stake.amount))

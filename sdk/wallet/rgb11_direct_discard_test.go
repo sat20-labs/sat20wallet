@@ -6,10 +6,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	btcwire "github.com/btcsuite/btcd/wire"
+	indexer "github.com/sat20-labs/indexer/common"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	"github.com/sat20-labs/satoshinet/btcec"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
@@ -17,17 +19,14 @@ import (
 )
 
 func TestRGB11DiscardPlan(t *testing.T) {
-	sender, recipient, imported, _, _ := newRGB11GenericSendFixture(t)
+	sender, recipient, imported, _, _ := newRGB11SendFixture(t, true)
 	ctx := context.Background()
 	request := RGB11AddressSendRequest{
 		ReceiverAddress: recipient.wallet.GetAddress(), AssetName: imported.AssetName,
 		AmountRaw: "10000", FeeRate: 2, MinConfirmations: 1,
 	}
-	prepared, err := runRGB11ManagedOperation(sender, ctx, rgb11ManagedOperationNew,
-		func(m *rgb11Manager) (*RGB11PreparedTransfer, error) {
-			return m.prepareRGB11AddressBatch(ctx, []RGB11AddressSendRequest{request},
-				dkvsindexer.RecordVerificationOptions{})
-		})
+	prepared, err := sender.rgbManager.prepareRGB11AddressBatch(ctx, []RGB11AddressSendRequest{request},
+		dkvsindexer.RecordVerificationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,15 +107,12 @@ func TestRGB11DiscardPlan(t *testing.T) {
 }
 
 func TestRGB11DiscardSpendFallback(t *testing.T) {
-	sender, recipient, imported, _, _ := newRGB11GenericSendFixture(t)
+	sender, recipient, imported, _, _ := newRGB11SendFixture(t, true)
 	ctx := context.Background()
-	prepared, err := runRGB11ManagedOperation(sender, ctx, rgb11ManagedOperationNew,
-		func(m *rgb11Manager) (*RGB11PreparedTransfer, error) {
-			return m.prepareRGB11AddressBatch(ctx, []RGB11AddressSendRequest{{
-				ReceiverAddress: recipient.wallet.GetAddress(), AssetName: imported.AssetName,
-				AmountRaw: "10000", FeeRate: 2, MinConfirmations: 1,
-			}}, dkvsindexer.RecordVerificationOptions{})
-		})
+	prepared, err := sender.rgbManager.prepareRGB11AddressBatch(ctx, []RGB11AddressSendRequest{{
+		ReceiverAddress: recipient.wallet.GetAddress(), AssetName: imported.AssetName,
+		AmountRaw: "10000", FeeRate: 2, MinConfirmations: 1,
+	}}, dkvsindexer.RecordVerificationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,5 +321,128 @@ func TestRGB11DiscardRemoteAck(t *testing.T) {
 	state, err := transport.indexer.GetKeyState(key)
 	if err != nil || state.Status != dkvsindexer.KeyStateNeverSeen {
 		t.Fatalf("remote record survived: state=%+v err=%v", state, err)
+	}
+}
+
+func TestRGB11MaintenanceMutationsRequireRecoveryBaseline(t *testing.T) {
+	oldChain := _chain
+	_chain = "testnet"
+	defer func() { _chain = oldChain }()
+
+	operations := []struct {
+		name string
+		call func(*Manager) error
+	}{
+		{name: "direct-discard", call: func(manager *Manager) error {
+			return manager.ApplyRGB11Discard(RGB11DiscardPlan{Target: rgb11DiscardOnlyTarget})
+		}},
+		{name: "stale-owner", call: func(manager *Manager) error {
+			return manager.ApplyRGB11StaleOwner(RGB11StaleOwnerPlan{Target: rgb11StaleLockOnlyTarget})
+		}},
+		{name: "stale-lock", call: func(manager *Manager) error {
+			return manager.ApplyRGB11StaleLock(RGB11StaleLockPlan{Target: rgb11StaleLockOnlyTarget})
+		}},
+	}
+	for _, operation := range operations {
+		t.Run(operation.name+"/unconfigured", func(t *testing.T) {
+			manager := configuredRGB11ManagedOperationTestManager(t)
+			manager.mutex.Lock()
+			manager.accountProfile.RecoveryConfigured = false
+			if err := manager.saveAccountManagementProfileLocked(); err != nil {
+				manager.mutex.Unlock()
+				t.Fatal(err)
+			}
+			manager.mutex.Unlock()
+			remote, ok := manager.http.(*rgb11MemoryDKVSHTTP)
+			if !ok {
+				t.Fatal("managed RGB11 fixture does not use the in-memory account transport")
+			}
+			beforeRemote := snapshotRGB11MemoryRecords(remote)
+			beforeLocal := snapshotRGB11MaintenanceState(t, manager)
+			if err := operation.call(manager); !errors.Is(err, ErrDKVSPathNotSynced) {
+				t.Fatalf("unconfigured maintenance operation error=%v, want %v", err, ErrDKVSPathNotSynced)
+			}
+			if after := snapshotRGB11MemoryRecords(remote); !reflect.DeepEqual(beforeRemote, after) {
+				t.Fatal("unconfigured maintenance operation changed remote account/mailbox records")
+			}
+			assertRGB11MaintenanceStateUnchanged(t, beforeLocal, snapshotRGB11MaintenanceState(t, manager))
+		})
+		t.Run(operation.name+"/rejected-baseline-cas", func(t *testing.T) {
+			manager := configuredRGB11ManagedOperationTestManager(t)
+			remote, fault := installRGB11DirtyCASRejector(t, manager)
+			beforeRemote := snapshotRGB11MemoryRecords(remote)
+			beforeLocal := snapshotRGB11MaintenanceState(t, manager)
+			if err := operation.call(manager); err == nil {
+				t.Fatal("maintenance mutation crossed a rejected account baseline CAS")
+			}
+			fault.rejectMu.Lock()
+			rejected := fault.rejected
+			fault.rejectMu.Unlock()
+			if rejected == 0 {
+				t.Fatal("maintenance mutation did not reach the authoritative account CAS gate")
+			}
+			if after := snapshotRGB11MemoryRecords(remote); !reflect.DeepEqual(beforeRemote, after) {
+				t.Fatal("rejected maintenance operation deleted or changed a remote record")
+			}
+			assertRGB11MaintenanceStateUnchanged(t, beforeLocal, snapshotRGB11MaintenanceState(t, manager))
+		})
+	}
+}
+
+type rgb11MaintenanceStateSnapshot struct {
+	locks                map[string]*LockedUtxo
+	transfers            []*rgb11wallet.TransferState
+	proofs               []*rgb11wallet.AllocationProof
+	outputs              []*indexer.TxOutput
+	receives             []*rgb11wallet.ReceiveReservation
+	ownerPending         *rgb11wallet.PendingTransfer
+	ownerPendingPresent  bool
+	staleLock            *LockedUtxo
+	staleLockPresent     bool
+	processedMetadata    []byte
+	processedMetadataSet bool
+}
+
+func snapshotRGB11MaintenanceState(t *testing.T, manager *Manager) rgb11MaintenanceStateSnapshot {
+	t.Helper()
+	store := manager.rgbManager.projectionStore
+	snapshot := rgb11MaintenanceStateSnapshot{locks: manager.utxoLockerL1.GetLockedUtxoList()}
+	var err error
+	if snapshot.transfers, err = store.ListTransfers(); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.proofs, err = store.ListProofs(); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.outputs, err = store.ListOutputs(); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.receives, err = store.ListReceiveReservations(); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.ownerPending, err = store.LoadPendingTransfer(rgb11StaleLockOnlyTarget.TransferID); err == nil {
+		snapshot.ownerPendingPresent = true
+	} else if !errors.Is(err, indexer.ErrKeyNotFound) {
+		t.Fatal(err)
+	}
+	if snapshot.staleLock, err = loadRGB11RawLock(manager.db, rgb11StaleLockOnlyTarget.OutPoint); err == nil {
+		snapshot.staleLockPresent = true
+	} else if !errors.Is(err, errRGB11LockGone) {
+		t.Fatal(err)
+	}
+	if snapshot.processedMetadata, err = store.LoadLocalMetadata(
+		rgb11AddressProcessedMetadata("consignment", rgb11DiscardOnlyTarget.ApplicationID)); err == nil {
+		snapshot.processedMetadataSet = true
+	} else if !errors.Is(err, indexer.ErrKeyNotFound) {
+		t.Fatal(err)
+	}
+	return snapshot
+}
+
+func assertRGB11MaintenanceStateUnchanged(t *testing.T,
+	before, after rgb11MaintenanceStateSnapshot) {
+	t.Helper()
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("rejected maintenance operation changed local RGB ownership, reservations, locks, or processed metadata")
 	}
 }

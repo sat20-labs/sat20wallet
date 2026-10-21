@@ -3,6 +3,7 @@ package wallet
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -320,6 +321,14 @@ func TestImportAccountManagedActiveDataIgnoresAndPrunesDeletedScope(t *testing.T
 		},
 	}
 	configureRGB11DKVSTestManager(manager, remote)
+	// Exercise deletion for an active provider. RGB is stable-only and never
+	// reads or trusts its former active-mailbox cache.
+	const providerID = "deleted-scope-active"
+	if err := manager.RegisterAccountManagedDataProvider(&accountManagedActiveDataProviderStub{
+		accountManagedDataProviderStub: accountManagedDataProviderStub{id: providerID},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	messageClient := newRGB11MessageNodeClient(remote)
 	manager.serverNode = NewNode(messageClient, "message.test", SERVER_NODE,
 		messageClient.CoreNodePubKey(), messageClient.CoreNodePubKey())
@@ -332,14 +341,14 @@ func TestImportAccountManagedActiveDataIgnoresAndPrunesDeletedScope(t *testing.T
 		AccountIndex: 0, Network: _chain,
 	}.ID()
 	body, contentHash, err := encodeAccountManagedActiveEnvelope(
-		rgb11AccountManagedProviderID,
+		providerID,
 		AccountManagedDataPayload{Scope: staleScope, Payload: []byte("stale active transition")},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	applicationID := accountManagedActiveApplicationID(
-		rgb11AccountManagedProviderID, staleScope, contentHash)
+		providerID, staleScope, contentHash)
 	if _, err := manager.sendWalletDirectMessage(root, applicationID,
 		AccountMessageKindManagedActive, accountID, body); err != nil {
 		t.Fatal(err)
@@ -378,5 +387,133 @@ func TestImportAccountManagedActiveDataIgnoresAndPrunesDeletedScope(t *testing.T
 		return manager.importAccountManagedActiveData()
 	}); err != nil {
 		t.Fatalf("cached stale scope blocked a later recovery: %v", err)
+	}
+}
+
+type accountManagedActiveReadFailureHTTP struct {
+	HttpClient
+	err error
+}
+
+func (c accountManagedActiveReadFailureHTTP) SendGetRequest(*URL) ([]byte, error) {
+	return nil, c.err
+}
+
+func (c accountManagedActiveReadFailureHTTP) SendPostRequest(*URL, []byte) ([]byte, error) {
+	return nil, c.err
+}
+
+func TestStableOnlyActiveCacheIsOptionalAndOtherMailboxFailuresStayStrict(t *testing.T) {
+	t.Run("stable-only-cache-does-not-read-mailbox", func(t *testing.T) {
+		manager, _, _, _ := newManagedActiveFixture(t)
+		root, err := manager.accountManagementRootWallet()
+		if err != nil {
+			t.Fatal(err)
+		}
+		catalog, err := manager.accountManagedDataCatalog()
+		if err != nil {
+			t.Fatal(err)
+		}
+		stableOnly := &accountManagedDataProviderStub{id: "rgb11"}
+		manager.managedDataProviders = map[string]AccountManagedDataProvider{"rgb11": stableOnly}
+		// A corrupt old self-message is deliberately left unreadable. With no
+		// active provider the stable package is the only recovery source.
+		store, err := manager.accountDKVSStore()
+		if err != nil {
+			t.Fatal(err)
+		}
+		mailboxErr := errors.New("mailbox cache unavailable")
+		store.client.Http = accountManagedActiveReadFailureHTTP{HttpClient: store.client.Http, err: mailboxErr}
+		apply, err := manager.prepareAccountManagedActiveDataImport(root, catalog)
+		if err != nil {
+			t.Fatalf("stable-only RGB cache should not require mailbox availability: %v", err)
+		}
+		if err := apply(); err != nil {
+			t.Fatalf("stable-only cache no-op failed: %v", err)
+		}
+	})
+
+	t.Run("active-provider-mailbox-read-error-propagates", func(t *testing.T) {
+		manager, _, _, _ := newManagedActiveFixture(t)
+		root, err := manager.accountManagementRootWallet()
+		if err != nil {
+			t.Fatal(err)
+		}
+		catalog, err := manager.accountManagedDataCatalog()
+		if err != nil {
+			t.Fatal(err)
+		}
+		store, err := manager.accountDKVSStore()
+		if err != nil {
+			t.Fatal(err)
+		}
+		mailboxErr := errors.New("active mailbox read failed")
+		store.client.Http = accountManagedActiveReadFailureHTTP{HttpClient: store.client.Http, err: mailboxErr}
+		if _, err := manager.prepareAccountManagedActiveDataImport(root, catalog); !errors.Is(err, mailboxErr) {
+			t.Fatalf("active-provider mailbox failure=%v want=%v", err, mailboxErr)
+		}
+	})
+
+	t.Run("active-provider-malformed-cache-stays-fail-closed", func(t *testing.T) {
+		manager, provider, _, applicationIDs := newManagedActiveFixture(t)
+		root, err := manager.accountManagementRootWallet()
+		if err != nil {
+			t.Fatal(err)
+		}
+		catalog, err := manager.accountManagedDataCatalog()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := manager.sendWalletDirectMessage(root, applicationIDs[0],
+			AccountMessageKindManagedActive, catalog.AccountID, []byte("malformed RGB cache")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := manager.prepareAccountManagedActiveDataImport(root, catalog); err == nil {
+			t.Fatal("malformed cache owned by a registered active provider was ignored")
+		}
+		if provider == nil {
+			t.Fatal("active provider fixture is unavailable")
+		}
+	})
+
+	t.Run("unknown-provider-is-not-swallowed", func(t *testing.T) {
+		manager, _, _, _ := newManagedActiveFixture(t)
+		root, err := manager.accountManagementRootWallet()
+		if err != nil {
+			t.Fatal(err)
+		}
+		catalog, err := manager.accountManagedDataCatalog()
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, hash, err := encodeAccountManagedActiveEnvelope("unknown-active",
+			AccountManagedDataPayload{Scope: catalog.Scopes[0].ID(), Payload: []byte("unknown payload")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		applicationID := accountManagedActiveApplicationID("unknown-active", catalog.Scopes[0].ID(), hash)
+		if _, err := manager.sendWalletDirectMessage(root, applicationID,
+			AccountMessageKindManagedActive, catalog.AccountID, body); err != nil {
+			t.Fatal(err)
+		}
+		_, err = manager.prepareAccountManagedActiveDataImport(root, catalog)
+		if err == nil || !strings.Contains(err.Error(), `provider "unknown-active" is unavailable`) {
+			t.Fatalf("unknown provider error=%v", err)
+		}
+	})
+}
+
+func TestStableOnlyActiveCacheApplicationIDIsUnambiguous(t *testing.T) {
+	stableOnly := map[string]struct{}{"active-test": {}}
+	valid := accountManagedActiveApplicationID("active-test", "scope", strings.Repeat("a", 64))
+	if !isStableOnlyAccountManagedActiveCache(valid, stableOnly) {
+		t.Fatalf("valid stable-only application ID was not recognized: %s", valid)
+	}
+	prefixCollision := accountManagedActiveApplicationID("active-test-child", "scope", strings.Repeat("b", 64))
+	if isStableOnlyAccountManagedActiveCache(prefixCollision, stableOnly) {
+		t.Fatalf("stable-only provider prefix swallowed another provider: %s", prefixCollision)
+	}
+	if isStableOnlyAccountManagedActiveCache("ama-active-test-malformed-tail", stableOnly) {
+		t.Fatal("malformed application ID was attributed to a stable-only provider")
 	}
 }

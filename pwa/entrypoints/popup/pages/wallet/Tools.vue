@@ -28,7 +28,8 @@
             <CardContent class="space-y-3">
               <div class="space-y-1">
                 <Label>{{ t('tools.faucet.contractAddress') }}</Label>
-                <Input v-model="faucetAddress" />
+                <Input v-model="faucetAddress" :placeholder="t('tools.faucet.addressPlaceholder')" />
+                <p class="text-xs leading-5 text-muted-foreground">{{ t('tools.faucet.addressHint') }}</p>
               </div>
               <div class="space-y-1">
                 <Label>{{ t('tools.faucet.amount') }}</Label>
@@ -582,7 +583,7 @@
             </CardContent>
           </Card>
 
-          <Card>
+          <Card v-if="!isContractClosed">
             <CardHeader>
               <CardTitle class="text-base">{{ t('tools.contracts.invokeTitle') }}</CardTitle>
               <CardDescription>
@@ -990,7 +991,6 @@ import { useQueryClient } from '@tanstack/vue-query'
 
 const SMART_CONTRACT_DOC_URL_ZH = 'https://docs.sat20.org/protocol-xie-yi-yu-bai-pi-shu/smart-contracts'
 const SMART_CONTRACT_DOC_URL_EN = 'https://docs.sat20.org/english/protocols-and-whitepapers/smart-contracts'
-const TEMP_FAUCET_CONTRACT_ADDRESS = 'tb1qlfnhxpgf4p8qcr9vkm0fn6vvlxuge73zq4ursusjr8upe2huvnps0ttdv6'
 const SUPPORTED_CONTRACTS_CACHE_PREFIX = 'tools:supported_contracts'
 
 const { toast } = useToast()
@@ -1008,7 +1008,7 @@ const showRGB11Issue = ref(false)
 const contractToolPage = ref<'home' | 'deploy' | 'invoke'>('home')
 const invokeToolPage = ref<'list' | 'detail'>('list')
 
-const faucetAddress = ref(TEMP_FAUCET_CONTRACT_ADDRESS)
+const faucetAddress = ref('')
 const faucetAmount = ref('1000')
 const faucetResult = ref('')
 const isFaucetSending = ref(false)
@@ -1050,10 +1050,12 @@ const templateInvokeActionsBySubtype: Record<string, string[]> = {
   'swap.tc': ['default', 'swap', 'refund', 'close'],
   'amm.tc': ['default', 'swap', 'addliq', 'removeliq', 'close'],
   'exchange.tc': ['exchange', 'close'],
+  'autopay.tc': ['funding', 'default'],
 }
 const agentInvokeActions = ['default', 'ready', 'bet', 'confirm', 'reject']
 const evmInvokeActions = ['call', 'default', 'close']
 const invokeActionOptions = computed(() => {
+  if (isContractClosed.value) return []
   if (invokeContractType.value === 'evm') return evmInvokeActions
   if (invokeContractType.value === 'template') {
     if (contractUiSubtype.value === 'amm.tc' && isAmmLiquidityOpen.value) {
@@ -1593,16 +1595,18 @@ const sendFaucetSats = async () => {
   try {
     isFaucetSending.value = true
     faucetResult.value = ''
+    const destinationAddress = faucetAddress.value.trim()
+    if (!destinationAddress) throw new Error(t('tools.faucet.addressRequired'))
     const amount = String(parsePositiveInteger(faucetAmount.value, t('tools.faucet.amount')))
     const confirmed = await confirmToolTransaction({
       purpose: t('tools.txConfirm.purposes.faucetGas'),
-      to: faucetAddress.value.trim(),
+      to: destinationAddress,
       asset: displayAssetName('::'),
       amount,
       network: l2NetworkLabel(),
     })
     if (!confirmed) return
-    const [err, result] = await sat20.sendAssets_SatsNet(faucetAddress.value.trim(), '::', amount, '')
+    const [err, result] = await sat20.sendAssets_SatsNet(destinationAddress, '::', amount, '')
     if (err) throw err
     const txid = result?.txId || ''
     faucetResult.value = txid
@@ -1633,6 +1637,7 @@ const normalizeTemplateSubtype = (value: unknown) => {
   if (['limitorder.tc', 'swap.tc'].includes(text)) return 'limitorder.tc'
   if (text === 'amm.tc') return 'amm.tc'
   if (text === 'exchange.tc') return 'exchange.tc'
+  if (text === 'autopay.tc') return 'autopay.tc'
   return ''
 }
 
@@ -1942,6 +1947,11 @@ const contractTradingReady = computed(() => {
   if (!value) return undefined
   return value === 'true'
 })
+const isContractClosed = computed(() => (
+  invokeContractType.value === 'template'
+  && ['amm.tc', 'limitorder.tc', 'swap.tc'].includes(contractUiSubtype.value)
+  && findContractScalar(['closed', 'Closed']) === 'true'
+))
 const contractEnableBlock = computed(() => findContractScalar(['enableBlock', 'EnableBlock']) || '')
 const contractDeployerAddress = computed(() => findContractString(['deployer', 'Deployer', 'deployerAddress', 'DeployerAddress']) || '')
 const isContractDeployer = computed(() => {
@@ -1951,6 +1961,7 @@ const isContractDeployer = computed(() => {
 })
 const isAmmLiquidityOpen = computed(() => (
   contractUiSubtype.value === 'amm.tc'
+  && !isContractClosed.value
   && (
     !isPositiveDecimalValue(contractAssetAInPool.value)
     || !isPositiveDecimalValue(contractAssetBInPool.value)
@@ -1960,12 +1971,14 @@ const isAmmLiquidityOpen = computed(() => (
 ))
 const ammCanSwap = computed(() => (
   contractUiSubtype.value === 'amm.tc'
+  && !isContractClosed.value
   && isPositiveDecimalValue(contractAssetAAmount.value)
   && isPositiveDecimalValue(contractAssetBAmount.value)
   && contractTradingReady.value !== false
   && !isAmmLiquidityOpen.value
 ))
 const contractStatusLabel = computed(() => {
+  if (isContractClosed.value) return t('tools.contracts.closed')
   if (contractUiSubtype.value === 'amm.tc') {
     if (isAmmLiquidityOpen.value) return t('tools.contracts.liquidityOpen')
     return ammCanSwap.value ? t('tools.contracts.tradable') : t('tools.contracts.needLiquidity')
@@ -2088,9 +2101,9 @@ const contractSummaryRows = computed(() => {
   return rows
 })
 const isInvokeActionDisabled = (action: string) => (
-  contractUiSubtype.value === 'amm.tc'
-  && action === 'close'
-  && !isContractDeployer.value
+  isContractClosed.value || (((contractUiSubtype.value === 'amm.tc' && action === 'close')
+    || (contractUiSubtype.value === 'autopay.tc' && action === 'funding'))
+  && !isContractDeployer.value)
 )
 const contractActionChips = computed(() => invokeActionOptions.value.map((action) => ({
   value: action,
@@ -2861,6 +2874,9 @@ const localInvokeTemplate = () => {
   const assetA = contractAssetAName.value || ''
   if (action === 'default' || action === 'close' || action === 'ready') return []
   if (invokeContractType.value === 'template') {
+    if (contractUiSubtype.value === 'autopay.tc' && action === 'funding') {
+      return [invokeTextField('gasFundingAmount', t('tools.invoke.operatingGasAmount'), t('tools.invoke.operatingGasAmountHelp'), '', 'string', { balanceAsset: 'brc20:f:sgas' })]
+    }
     if (['limitorder.tc', 'swap.tc'].includes(contractUiSubtype.value)) {
       if (action === 'swap') {
         return [
@@ -3326,6 +3342,12 @@ const buildUnifiedInvokeRequest = (contract: string) => {
       }
       req.Action = invokeParamWrapperAction.value || action
       req.Param = Object.keys(submitParams).length ? JSON.stringify(submitParams) : ''
+      if (contractUiSubtype.value === 'autopay.tc' && action === 'funding') {
+        const amount = String(params.gasFundingAmount || '').trim()
+        if (!/^\d+$/.test(amount) || BigInt(amount) <= 0n) throw new Error(t('tools.invoke.invalidOperatingGasAmount'))
+        req.Param = JSON.stringify({ gasFundingAmount: amount })
+        req.Assets = [{ AssetName: 'brc20:f:sgas', Amount: amount }]
+      }
       if (action === 'swap') {
         if (orderType === 1) {
           req.Assets = [{ AssetName: String(params.assetName || '').trim(), Amount: String(params.amt || '').trim() }]
@@ -4270,6 +4292,7 @@ const invokeSmartContract = async () => {
     const revision = invokeReviewRevision
     const context = invokeReviewKey()
     const assertContext = () => {
+      if (isContractClosed.value) throw new Error(t('tools.errors.actionUnavailable'))
       if (compilerPageDisposed || revision !== invokeReviewRevision || context !== invokeReviewKey()) {
         throw new Error(t('tools.txConfirm.contextChanged'))
       }

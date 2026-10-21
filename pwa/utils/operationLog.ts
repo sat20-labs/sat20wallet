@@ -42,6 +42,33 @@ export interface OperationLogUpdateInput {
   txid?: string
 }
 
+// Display-only projection. Delivery/ACK alone never proves settlement.
+export function projectSettledRGB11OperationLogs(records: OperationLogRecord[], transfers: any[]): OperationLogRecord[] {
+  return records.map(record => {
+    if (record.action !== 'rgb11_send_address' || !['pending', 'running'].includes(record.status)) return record
+    const assetKey = record.parameters?.asset || ''
+    if (!/^rgb11:[^:]+:[0-9a-f]{64}$/.test(assetKey)) return record
+    const transferID = [...record.history].reverse().find(event => event.details?.transfer_id)?.details?.transfer_id
+    if (!transferID) return record
+    const matches = transfers.filter(transfer => {
+      const name = transfer?.asset?.Name
+      return transfer?.transfer_id === transferID && transfer.direction === 'send' &&
+        `${name?.Protocol}:${name?.Type}:${name?.Ticker}` === assetKey
+    })
+    if (matches.length !== 1) return record
+    const transfer = matches[0]
+    if (transfer.status !== 'settled' || !/^[0-9a-f]{64}$/.test(transfer.witness_txid || '')) return record
+    return {
+      ...record,
+      status: 'succeeded',
+      summary: 'RGB address transfer settled (from current RGB transfer state)',
+      txid: transfer.witness_txid,
+      result: { ...record.result, transfer_id: transferID, witness_txid: transfer.witness_txid,
+        status_source: 'Current RGB transfer state' },
+    }
+  })
+}
+
 type WasmResult = {
   code: number
   msg?: string

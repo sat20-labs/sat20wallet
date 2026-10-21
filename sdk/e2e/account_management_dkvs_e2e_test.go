@@ -13,6 +13,7 @@ import (
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet"
+	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	templateruntime "github.com/sat20-labs/satoshinet/contract/template"
@@ -281,10 +282,18 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, status.Required)
 		require.True(t, status.Ready)
-		funding, err := walletManager.FundAccountAutopay(*status)
-		require.NoError(t, err)
-		require.True(t, funding.Reused)
-		require.Empty(t, funding.TransactionID)
+		transport := &accountPreparedAckTransport{inner: wallet.NewHTTPClient()}
+		walletManager.SetIndexerHttpClient_SatsNet(wallet.NewIndexerClient(
+			coreLocation.Scheme, coreLocation.Host, coreLocation.Proxy, transport))
+		defer walletManager.SetIndexerHttpClient_SatsNet(wallet.NewIndexerClient(
+			coreLocation.Scheme, coreLocation.Host, coreLocation.Proxy, nil))
+		for attempt := 0; attempt < 2; attempt++ {
+			reused, err := walletManager.ConfirmAccountStorage(wallet.AccountStoragePaid, 100)
+			require.NoError(t, err)
+			require.Equal(t, wallet.AccountStoragePaid, reused.Mode)
+			require.Empty(t, reused.TransactionID)
+		}
+		require.Empty(t, transport.bodies, "reconfirming ready paid storage broadcast another payment")
 		options, err := walletManager.GetAccountStorageOptions()
 		require.NoError(t, err)
 		for _, option := range options {
@@ -316,14 +325,46 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	managedHash, err := account.ManagedDataBundleHash(managedBundle)
 	require.NoError(t, err)
 	require.Equal(t, managedState.DataHash, managedHash)
-	// RGB11 receive requests, pending transaction tasks and other engine state
-	// are intentionally wallet-local. This fixture has no durable RGB11
-	// allocation proof, so the built-in RGB11 provider contributes no item.
-	require.Len(t, managedBundle.Items, 1)
-	moduleItem := managedBundle.Items[0]
-	require.Equal(t, "e2e.module", moduleItem.Provider)
-	require.Equal(t, wallet.AccountManagedDataGlobalScope, moduleItem.Scope)
-	require.Equal(t, "e2e-module-required-data|"+accountID, string(moduleItem.Payload))
+	// The built-in provider exports one stable recovery package per catalog
+	// scope, including scopes with no RGB ownership. Check the exact set.
+	expectedScopes := make(map[string]uint32)
+	for _, entry := range walletManager.GetWalletCatalog() {
+		for _, subaccount := range entry.Accounts {
+			scope := wallet.AccountManagedDataScope{Network: "testnet",
+				WalletFingerprint: entry.Fingerprint, AccountIndex: subaccount.Index}
+			expectedScopes[scope.ID()] = subaccount.Index
+		}
+	}
+	require.NotEmpty(t, expectedScopes)
+	require.Len(t, managedBundle.Items, 1+len(expectedScopes))
+	moduleCount := 0
+	seenScopes := make(map[string]bool)
+	for _, item := range managedBundle.Items {
+		switch item.Provider {
+		case "e2e.module":
+			moduleCount++
+			require.Equal(t, wallet.AccountManagedDataGlobalScope, item.Scope)
+			require.Equal(t, "e2e-module-required-data|"+accountID, string(item.Payload))
+		case "rgb11":
+			index, exists := expectedScopes[item.Scope]
+			require.True(t, exists, "unexpected RGB recovery scope")
+			require.False(t, seenScopes[item.Scope], "duplicate RGB recovery scope")
+			seenScopes[item.Scope] = true
+			value, err := rgb11wallet.DecodeRecoveryPackage(item.Payload)
+			require.NoError(t, err)
+			require.NoError(t, rgb11wallet.ValidateRecoveryPackage(value))
+			require.NotEmpty(t, value.WalletID)
+			require.Equal(t, index, value.AccountIndex)
+			for _, record := range value.ProjectionRecords {
+				require.False(t, strings.HasPrefix(record.Key, "proof-"),
+					"empty RGB scope invented an allocation proof")
+			}
+		default:
+			t.Fatalf("unexpected account-managed provider %q", item.Provider)
+		}
+	}
+	require.Equal(t, 1, moduleCount)
+	require.Len(t, seenScopes, len(expectedScopes))
 	requireDKVSValue(t, fixture.Network.Core, stateKey, stateRecord.Value)
 	requireDKVSValue(t, fixture.Network.Core, managedDataKey, managedDataRecord.Value)
 	for index := range secret {

@@ -12,6 +12,7 @@ import (
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
+	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
 const (
@@ -356,7 +357,8 @@ func accountManagedDataMutation(profile *accountManagementProfile, root common.W
 
 	value, err := EncodeDKVSBlobValue(envelope, nil)
 	if err != nil {
-		return dkvsValueMutation{}, err
+		return dkvsValueMutation{}, fmt.Errorf("encode account-managed DKB1 blob: envelope=%d bytes; payload limit=%d bytes: %w",
+			len(envelope), swire.MaxDKVSBlobValueSize-8, err)
 	}
 	return accountStateMutation(profile, root, key, value)
 }

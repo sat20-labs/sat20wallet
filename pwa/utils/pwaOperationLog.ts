@@ -171,43 +171,43 @@ const operationSpecs: Record<string, OperationSpec> = {
     successMessage: 'L1 split transaction submitted',
   },
   createRGB11Invoice: {
-    category: 'rgb11', action: 'rgb11_create_invoice', title: 'Create RGB invoice', summary: 'Creating an RGB11 receive request',
+    category: 'rgb11', action: 'rgb11_create_invoice', title: 'Create RGB invoice', summary: 'Creating an RGB receive request',
     parameters: rgbInvoiceParameters,
   },
   importRGB11Contract: {
-    category: 'rgb11', action: 'rgb11_import_contract', title: 'Import RGB contract', summary: 'Importing an RGB11 contract',
+    category: 'rgb11', action: 'rgb11_import_contract', title: 'Import RGB contract', summary: 'Importing an RGB contract',
     parameters: () => ({ source: 'consignment' }),
   },
   importRGB11ContractFile: {
-    category: 'rgb11', action: 'rgb11_import_contract_file', title: 'Import RGB contract file', summary: 'Importing an RGB11 contract from a file',
+    category: 'rgb11', action: 'rgb11_import_contract_file', title: 'Import RGB contract file', summary: 'Importing an RGB contract from a file',
     parameters: () => ({ source: 'file' }),
   },
   issueRGB11Asset: {
-    category: 'rgb11', action: 'rgb11_issue_asset', title: 'Issue RGB asset', summary: 'Issuing a new RGB11 asset',
+    category: 'rgb11', action: 'rgb11_issue_asset', title: 'Issue RGB asset', summary: 'Issuing a new RGB asset',
     parameters: rgbIssueParameters,
   },
   resumeRGB11PreparedTransfer: {
-    category: 'rgb11', action: 'rgb11_resume_transfer', title: 'Resume RGB transfer', summary: 'Resuming a prepared RGB11 transfer',
+    category: 'rgb11', action: 'rgb11_resume_transfer', title: 'Resume RGB transfer', summary: 'Resuming a prepared RGB transfer',
     parameters: args => safeRecord({ transfer_id: args[0] }),
   },
   acceptRGB11Consignment: {
-    category: 'rgb11', action: 'rgb11_accept_consignment', title: 'Accept RGB transfer', summary: 'Accepting an RGB11 consignment',
+    category: 'rgb11', action: 'rgb11_accept_consignment', title: 'Accept RGB transfer', summary: 'Accepting an RGB consignment',
     parameters: args => safeRecord({ request_id: args[0] }),
   },
   prepareRGB11Consignment: {
-    category: 'rgb11', action: 'rgb11_prepare_consignment', title: 'Validate RGB transfer', summary: 'Preparing an incoming RGB11 consignment for acceptance',
+    category: 'rgb11', action: 'rgb11_prepare_consignment', title: 'Validate RGB transfer', summary: 'Preparing an incoming RGB consignment for acceptance',
     parameters: args => safeRecord({ request_id: args[0] }),
   },
   receiveRGB11ProxyConsignment: {
-    category: 'rgb11', action: 'rgb11_receive_proxy', title: 'Receive RGB proxy transfer', summary: 'Receiving an RGB11 consignment from proxy transport',
+    category: 'rgb11', action: 'rgb11_receive_proxy', title: 'Receive RGB proxy transfer', summary: 'Receiving an RGB consignment from proxy transport',
     parameters: args => safeRecord({ request_id: args[0] }),
   },
   cancelRGB11OutOfBandTransfer: {
-    category: 'rgb11', action: 'rgb11_cancel_transfer', title: 'Cancel RGB transfer', summary: 'Cancelling a prepared RGB11 transfer',
+    category: 'rgb11', action: 'rgb11_cancel_transfer', title: 'Cancel RGB transfer', summary: 'Cancelling a prepared RGB transfer',
     parameters: args => safeRecord({ transfer_id: args[0] }),
   },
   cancelExpiredRGB11Transfer: {
-    category: 'rgb11', action: 'rgb11_cancel_expired_transfer', title: 'Cancel expired RGB transfer', summary: 'Cancelling an expired RGB11 transfer',
+    category: 'rgb11', action: 'rgb11_cancel_expired_transfer', title: 'Cancel expired RGB transfer', summary: 'Cancelling an expired RGB transfer',
     parameters: args => safeRecord({ transfer_id: args[0] }),
   },
   startBTCLuckyMining: {
@@ -315,7 +315,7 @@ const operationSpecs: Record<string, OperationSpec> = {
     successMessage: 'Channel sweep operation completed',
   },
   enableRGB11AddressReceive: {
-    category: 'rgb11', action: 'rgb11_enable_address_receive', title: 'Enable RGB address receive', summary: 'Enabling RGB11 address-based receiving',
+    category: 'rgb11', action: 'rgb11_enable_address_receive', title: 'Enable RGB address receive', summary: 'Enabling RGB address-based receiving',
   },
   buildBatchSellOrder_SatsNet: {
     category: 'dex', action: 'build_sell_order_l2', title: 'Create L2 sell order', summary: 'Creating a SatoshiNet sell order',

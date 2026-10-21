@@ -14,7 +14,7 @@ import (
 // receipt-based lookup when a normal ownership allocation is present. Decode
 // genesis only when a control-only receipt cannot supply the primary type.
 func snapshotTickerRef(objects map[string][]byte, receipt *ValidationReceipt) (SnapshotTickerRef, error) {
-	if receipt == nil || len(receipt.Allocations) == 0 {
+	if receipt == nil {
 		return SnapshotTickerRef{}, ErrValidationReceipt
 	}
 	// An exported metadata helper must verify its referenced object even when

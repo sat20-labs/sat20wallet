@@ -251,40 +251,35 @@ func newInscriptionTxCtxData(network *chaincfg.Params, inscriptionRequest *Inscr
 
 	inscriptionBuilder := txscript.NewScriptBuilder().
 		AddData(schnorr.SerializePubKey(pubkey)).
-		AddOp(txscript.OP_CHECKSIG).
-		AddOp(txscript.OP_FALSE).
-		AddOp(txscript.OP_IF).
-		AddData([]byte(OrdPrefix)).
-		AddOp(txscript.OP_DATA_1)
+		AddOp(txscript.OP_CHECKSIG)
 
-	if inscriptionRequest.InscriptionData.ContentType != "" {
-		inscriptionBuilder.AddOp(indexer.FIELD_CONTENT_TYPE). // FIELD_CONTENT_TYPE
-									AddData([]byte(inscriptionRequest.InscriptionData.ContentType))
-	}
-
-	if len(inscriptionRequest.InscriptionData.RuneName) > 0 {
-		inscriptionBuilder.AddOp(indexer.FIELD_RUNE_NAME).
-			AddData([]byte(inscriptionRequest.InscriptionData.RuneName))
-	}
-
-	// body
-	inscriptionBuilder.AddOp(txscript.OP_0)
-	maxChunkSize := 520
-	// use taproot to skip txscript.MaxScriptSize 10000
-	bodySize := len(inscriptionRequest.InscriptionData.Body)
-	for i := 0; i < bodySize; i += maxChunkSize {
-		end := i + maxChunkSize
-		if end > bodySize {
-			end = bodySize
+	data := inscriptionRequest.InscriptionData
+	if len(data.RuneName) > 0 && data.ContentType == "" && len(data.Body) == 0 {
+		// An executed push/drop commits to the Rune without any Ordinal envelope.
+		inscriptionBuilder.AddFullData(data.RuneName).AddOp(txscript.OP_DROP)
+	} else {
+		inscriptionBuilder.AddOp(txscript.OP_FALSE).AddOp(txscript.OP_IF).
+			AddData([]byte(OrdPrefix)).AddOp(txscript.OP_DATA_1)
+		if data.ContentType != "" {
+			inscriptionBuilder.AddOp(indexer.FIELD_CONTENT_TYPE).AddData([]byte(data.ContentType))
 		}
-
-		inscriptionBuilder.AddFullData(inscriptionRequest.InscriptionData.Body[i:end])
+		if len(data.RuneName) > 0 {
+			inscriptionBuilder.AddOp(indexer.FIELD_RUNE_NAME).AddData(data.RuneName)
+		}
+		inscriptionBuilder.AddOp(txscript.OP_0)
+		for i := 0; i < len(data.Body); i += 520 {
+			end := i + 520
+			if end > len(data.Body) {
+				end = len(data.Body)
+			}
+			inscriptionBuilder.AddFullData(data.Body[i:end])
+		}
+		inscriptionBuilder.AddOp(txscript.OP_ENDIF)
 	}
 	inscriptionScript, err := inscriptionBuilder.Script()
 	if err != nil {
 		return nil, err
 	}
-	inscriptionScript = append(inscriptionScript, txscript.OP_ENDIF)
 
 	proof := &txscript.TapscriptProof{
 		TapLeaf:  txscript.NewBaseTapLeaf(schnorr.SerializePubKey(pubkey)),

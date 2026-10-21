@@ -3,6 +3,7 @@ package fakeindexer
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -68,6 +69,7 @@ type Network struct {
 	DkvsRecords     map[string]*swire.DKVSRecord
 	DkvsDeleted     map[string]dkvsindexer.DKVSKeyState
 	DkvsGenerations map[string]uint64
+	DkvsChangedAt   map[string]uint64
 }
 
 // 将预设的brc20资产都当作可以转移的
@@ -267,6 +269,10 @@ func (p *Network) Clone() *Network {
 	for k, v := range p.DkvsGenerations {
 		n.DkvsGenerations[k] = v
 	}
+	n.DkvsChangedAt = make(map[string]uint64)
+	for k, v := range p.DkvsChangedAt {
+		n.DkvsChangedAt[k] = v
+	}
 
 	return n
 }
@@ -305,6 +311,7 @@ func (p *Network) Set(another *Network) {
 	p.DkvsRecords = n.DkvsRecords
 	p.DkvsDeleted = n.DkvsDeleted
 	p.DkvsGenerations = n.DkvsGenerations
+	p.DkvsChangedAt = n.DkvsChangedAt
 }
 
 func (p *Network) IsBitcoinNet() bool {
@@ -1255,7 +1262,7 @@ func (p *Client) BroadCastTx(tx *wire.MsgTx) (string, error) {
 					assetName := indexer.AssetName{
 						Protocol: "ordx",
 						Type:     "f",
-						Ticker:   deployInfo.Ticker,
+						Ticker:   strings.ToLower(deployInfo.Ticker),
 					}
 					_, ok := p.Network.State.Tickers[assetName.String()]
 					if ok {
@@ -1272,6 +1279,7 @@ func (p *Client) BroadCastTx(tx *wire.MsgTx) (string, error) {
 					}
 					tickerInfo := indexer.TickerInfo{
 						AssetName:    assetName,
+						DisplayName:  deployInfo.Ticker,
 						Divisibility: 0,
 						N:            n,
 						Limit:        deployInfo.Lim,
@@ -1289,7 +1297,7 @@ func (p *Client) BroadCastTx(tx *wire.MsgTx) (string, error) {
 					assetName := indexer.AssetName{
 						Protocol: "ordx",
 						Type:     "f",
-						Ticker:   mintInfo.Ticker,
+						Ticker:   strings.ToLower(mintInfo.Ticker),
 					}
 					ticker, ok := p.Network.State.Tickers[assetName.String()]
 					if !ok {
@@ -1337,7 +1345,7 @@ func (p *Client) BroadCastTx(tx *wire.MsgTx) (string, error) {
 					assetName := indexer.AssetName{
 						Protocol: "brc20",
 						Type:     "f",
-						Ticker:   deployInfo.Ticker,
+						Ticker:   strings.ToLower(deployInfo.Ticker),
 					}
 
 					_, ok := p.Network.State.Tickers[assetName.String()]
@@ -1352,6 +1360,7 @@ func (p *Client) BroadCastTx(tx *wire.MsgTx) (string, error) {
 					}
 					tickerInfo := indexer.TickerInfo{
 						AssetName:    assetName,
+						DisplayName:  deployInfo.Ticker,
 						Divisibility: dec,
 						Limit:        deployInfo.Lim,
 						TotalMinted:  "0",
@@ -1368,7 +1377,7 @@ func (p *Client) BroadCastTx(tx *wire.MsgTx) (string, error) {
 					assetName := indexer.AssetName{
 						Protocol: "brc20",
 						Type:     "f",
-						Ticker:   mintInfo.Ticker,
+						Ticker:   strings.ToLower(mintInfo.Ticker),
 					}
 					ticker, ok := p.Network.State.Tickers[assetName.String()]
 					if !ok {
@@ -1406,7 +1415,7 @@ func (p *Client) BroadCastTx(tx *wire.MsgTx) (string, error) {
 					assetName := indexer.AssetName{
 						Protocol: "brc20",
 						Type:     "f",
-						Ticker:   transferInfo.Ticker,
+						Ticker:   strings.ToLower(transferInfo.Ticker),
 					}
 					ticker, ok := p.Network.State.Tickers[assetName.String()]
 					if !ok {
@@ -2080,7 +2089,11 @@ func (p *Client) GetTickInfo(assetName *swire.AssetName) *indexer.TickerInfo {
 	p.Network.Mutex.RLock()
 	defer p.Network.Mutex.RUnlock()
 
-	ticker, ok := p.Network.State.Tickers[assetName.String()]
+	name := *assetName
+	if name.Protocol == "ordx" || name.Protocol == "brc20" {
+		name.Ticker = strings.ToLower(name.Ticker)
+	}
+	ticker, ok := p.Network.State.Tickers[name.String()]
 	if !ok {
 		return nil
 	}
@@ -2170,7 +2183,8 @@ func cloneFakeKeyValue(value *indexerwire.KeyValue) *indexerwire.KeyValue {
 	return &cloned
 }
 
-const DKVSEndpointID = "transcend-fake-l2"
+// The fake L2 serves the same fixed CoreNode identity as its STP fixture.
+const DKVSEndpointID = "0367f26af23dc40fdad06752c38264fe621b7bbafb1d41ab436b87ded192f1336e"
 
 func cloneFakeDKVSRecord(record *swire.DKVSRecord) *swire.DKVSRecord {
 	if record == nil {
@@ -2221,6 +2235,9 @@ func (p *Client) DKVSClientConfig() (*dkvsindexer.ClientConfig, error) {
 }
 
 func (p *Client) SendGetRequest(url *wallet.URL) ([]byte, error) {
+	if p.Network.Name == "satoshinet" && strings.HasSuffix(url.Path, "/btc/block/bestblockheight") {
+		return fakeDKVSResponse(0, "ok", p.GetBestHeight())
+	}
 	return p.SendDKVSGet(url.Path, url.Query)
 }
 
@@ -2267,6 +2284,8 @@ func (p *Client) SendDKVSPost(path string, body []byte) ([]byte, error) {
 		return nil, fmt.Errorf("DKVS is only supported by the fake L2 indexer")
 	}
 	switch path {
+	case "/v3/dkvs/active/sync", "/v3/dkvs/active/watch":
+		return p.SendDKVSPostContext(context.Background(), path, body)
 	case "/v3/dkvs/records/batch-cas":
 		var req wallet.DKVSBatchCASRequest
 		if err := json.Unmarshal(body, &req); err != nil {
@@ -2302,6 +2321,9 @@ func (p *Client) fakeDKVSBatchCAS(req wallet.DKVSBatchCASRequest) ([]byte, error
 	if p.Network.DkvsGenerations == nil {
 		p.Network.DkvsGenerations = make(map[string]uint64)
 	}
+	if p.Network.DkvsChangedAt == nil {
+		p.Network.DkvsChangedAt = make(map[string]uint64)
+	}
 
 	result := &dkvsindexer.WriteResult{
 		Applied:      len(req.Mutations),
@@ -2312,6 +2334,7 @@ func (p *Client) fakeDKVSBatchCAS(req wallet.DKVSBatchCASRequest) ([]byte, error
 		EndpointID:   DKVSEndpointID,
 		RequestID:    req.RequestID,
 	}
+	prefixes := make(map[string]bool)
 	for _, mutation := range req.Mutations {
 		if mutation.Record == nil {
 			return fakeDKVSErrorResponse(dkvsindexer.ErrInvalidRecord)
@@ -2334,9 +2357,17 @@ func (p *Client) fakeDKVSBatchCAS(req wallet.DKVSBatchCASRequest) ([]byte, error
 		// This mirrors PathMeta.EndpointGeneration: every mutation visible on
 		// this endpoint advances the collection, including FREE_LOCAL writes.
 		p.Network.DkvsGenerations[path]++
+		p.Network.DkvsChangedAt[record.Key] = p.Network.DkvsGenerations[path]
+		prefixes[path] = true
 		result.Records = append(result.Records, cloneFakeDKVSRecord(record))
 		result.Hashes = append(result.Hashes, hash)
 	}
+	for prefix := range prefixes {
+		result.PrefixStates = append(result.PrefixStates, dkvsindexer.PrefixGeneration{
+			Prefix: prefix, Generation: p.Network.DkvsGenerations[prefix],
+		})
+	}
+	sort.Slice(result.PrefixStates, func(i, j int) bool { return result.PrefixStates[i].Prefix < result.PrefixStates[j].Prefix })
 	result.ViewHeight = p.Network.fakeDKVSViewHeightLocked()
 	for _, mutation := range req.Mutations {
 		if fakeDKVSRecordIsFreeLocal(mutation.Record) {

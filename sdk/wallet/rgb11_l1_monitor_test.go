@@ -3,6 +3,7 @@ package wallet
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -67,7 +68,7 @@ func (p *rgb11L1MonitorEvidence) GetOutspend(string) (*rgb11wallet.BitcoinOutspe
 }
 
 func (p *rgb11L1MonitorEvidence) GetTip() (*rgb11wallet.BitcoinTip, error) {
-	return &rgb11wallet.BitcoinTip{}, nil
+	return &rgb11wallet.BitcoinTip{Height: 1, BlockHash: "monitor-btc-tip"}, nil
 }
 
 func (p *rgb11L1MonitorEvidence) Broadcast([]byte) (string, error) {
@@ -117,7 +118,7 @@ func TestDetectRGB11L1ReorgUsesSixBlocksAndAnchor(t *testing.T) {
 	}
 }
 
-func TestRGB11L1MonitorReconcilesSettledReceiveOnReorg(t *testing.T) {
+func TestRGB11L1MonitorReconcilesOnHealthyTicksAndReorg(t *testing.T) {
 	privateKey, err := btcec.NewPrivateKey()
 	if err != nil {
 		t.Fatal(err)
@@ -146,23 +147,43 @@ func TestRGB11L1MonitorReconcilesSettledReceiveOnReorg(t *testing.T) {
 	if err := manager.handleRGB11L1MonitorTick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if evidence.statusCalls != 0 {
-		t.Fatalf("initial checkpoint unexpectedly refreshed RGB11 evidence %d times", evidence.statusCalls)
+	if evidence.statusCalls == 0 {
+		t.Fatal("first healthy monitor checkpoint did not refresh durable RGB11 material")
 	}
+	initialCalls := evidence.statusCalls
 	chain.height = 11
+	evidence.statuses[state.WitnessTxID] = &rgb11wallet.BitcoinTxStatus{
+		TxID: state.WitnessTxID, InMempool: true,
+	}
 	if err := manager.handleRGB11L1MonitorTick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if evidence.statusCalls != 0 {
-		t.Fatalf("normal tip extension unexpectedly refreshed RGB11 evidence %d times", evidence.statusCalls)
+	if evidence.statusCalls <= initialCalls {
+		t.Fatalf("normal tip extension did not refresh RGB11 evidence: before=%d after=%d", initialCalls, evidence.statusCalls)
 	}
 	stored, err := manager.rgbManager.projectionStore.LoadTransferState(state.TransferID)
+	if err != nil || stored.Status != "pending" {
+		t.Fatalf("normal extension did not reflect the current unconfirmed witness: state=%+v err=%v", stored, err)
+	}
+	unchangedTipCalls := evidence.statusCalls
+	evidence.statuses[state.WitnessTxID] = &rgb11wallet.BitcoinTxStatus{
+		TxID: state.WitnessTxID, Confirmed: true, Confirmations: 2,
+	}
+	if err := manager.handleRGB11L1MonitorTick(context.Background()); err != nil {
+		t.Fatalf("same-tip monitor refresh: %v", err)
+	}
+	if evidence.statusCalls <= unchangedTipCalls {
+		t.Fatalf("same-tip mempool/status change was not rechecked: before=%d after=%d", unchangedTipCalls, evidence.statusCalls)
+	}
+	stored, err = manager.rgbManager.projectionStore.LoadTransferState(state.TransferID)
 	if err != nil || stored.Status != "settled" {
-		t.Fatalf("normal extension changed transfer: state=%+v err=%v", stored, err)
+		t.Fatalf("same-tip refresh did not publish newly confirmed status: state=%+v err=%v", stored, err)
 	}
 
 	chain.hashes[11] = "fork-11"
-	evidence.statuses[state.WitnessTxID] = &rgb11wallet.BitcoinTxStatus{TxID: state.WitnessTxID}
+	evidence.statuses[state.WitnessTxID] = &rgb11wallet.BitcoinTxStatus{
+		TxID: state.WitnessTxID, InMempool: true,
+	}
 	if err := manager.handleRGB11L1MonitorTick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -240,8 +261,8 @@ func TestRGB11L1MonitorRetriesSameForkOnlyUntilRefreshSucceeds(t *testing.T) {
 	if err := manager.handleRGB11L1MonitorTick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if evidence.statusCalls != beforeCalls {
-		t.Fatalf("settled checkpoint retriggered Refresh: before=%d after=%d", beforeCalls, evidence.statusCalls)
+	if evidence.statusCalls <= beforeCalls {
+		t.Fatalf("same-tip healthy monitor did not recheck active chain material: before=%d after=%d", beforeCalls, evidence.statusCalls)
 	}
 }
 
@@ -325,5 +346,24 @@ func TestRGB11L1MonitorCoversEveryLocalAccountScope(t *testing.T) {
 			t.Fatalf("scope %d/%d checkpoint=%+v err=%v",
 				account.WalletID, account.AccountIndex, checkpoint, err)
 		}
+	}
+}
+
+// An initialized manager can start wallet services before L1 endpoints exist.
+// RGB startup reconciliation must not index the empty client list or publish
+// an unverified checkpoint in that state.
+func TestRGB11L1MonitorWithoutConfiguredIndexerKeepsLocalState(t *testing.T) {
+	key, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := newRGB11MultiDeviceManager(t, key, 990)
+	manager.l1IndexerClient = NewIndexerRPCClientMgr()
+	before := snapshotRGB11ProjectionDB(t, manager.db)
+	if err := manager.handleRGB11L1MonitorTick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, snapshotRGB11ProjectionDB(t, manager.db)) {
+		t.Fatal("unconfigured L1 monitor changed durable RGB state")
 	}
 }

@@ -15,11 +15,11 @@ import (
 // It never manufactures a half-written record or holds the DB's own read lock.
 type reviewReservationReadGateDB struct {
 	indexer.KVDB
-	armed atomic.Bool
-	scanned chan struct{}
-	release chan struct{}
+	armed         atomic.Bool
+	scanned       chan struct{}
+	release       chan struct{}
 	batchPrepared chan struct{}
-	preparedOnce sync.Once
+	preparedOnce  sync.Once
 }
 
 func (db *reviewReservationReadGateDB) BatchRead(prefix []byte, reverse bool, visit func([]byte, []byte) error) error {
@@ -72,10 +72,16 @@ func TestReviewRGB11ReadDoesNotMixAtomicInvoiceGenerations(t *testing.T) {
 	gate.armed.Store(true)
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(gate.release) }) }
-	defer release()
+	var workers sync.WaitGroup
+	defer func() {
+		release()
+		workers.Wait()
+	}()
 
 	readDone := make(chan error, 1)
+	workers.Add(1)
 	go func() {
+		defer workers.Done()
 		_, err := manager.GetRGB11State()
 		readDone <- err
 	}()
@@ -88,8 +94,12 @@ func TestReviewRGB11ReadDoesNotMixAtomicInvoiceGenerations(t *testing.T) {
 	}
 
 	writeDone := make(chan error, 1)
+	workers.Add(1)
 	go func() {
-		_, err := manager.CreateRGB11Invoice(RGB11InvoiceRequest{
+		defer workers.Done()
+		// Exercise the local atomic invoice commit, independently of the
+		// public account-synchronization gate covered by managed-operation tests.
+		_, err := manager.rgbManager.CreateRGB11Invoice(RGB11InvoiceRequest{
 			Mode: "witness", TransportMode: "out-of-band", AmountRaw: "2",
 			Expiry: time.Now().Add(time.Hour).Unix(),
 		})

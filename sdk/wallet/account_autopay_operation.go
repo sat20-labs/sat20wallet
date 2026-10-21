@@ -160,7 +160,7 @@ func (p *Manager) accountAutopayReceiptOutcome(record *OperationLogRecord) (conf
 	return true, false, "", nil
 }
 
-func (p *Manager) reconcileAccountAutopayReceipt(record *OperationLogRecord, ready bool) (bool, error) {
+func (p *Manager) reconcileAccountAutopayReceipt(record *OperationLogRecord) (bool, error) {
 	confirmed, executed, failure, queryErr := p.accountAutopayReceiptOutcome(record)
 	if queryErr != nil || !confirmed {
 		return true, nil
@@ -173,7 +173,7 @@ func (p *Manager) reconcileAccountAutopayReceipt(record *OperationLogRecord, rea
 		}
 		return false, fmt.Errorf("合约确认 AUTOPAY 充值失败：%s", failure)
 	}
-	if !executed && !ready {
+	if !executed {
 		return true, nil
 	}
 	_, err := p.UpdateOperationLog(record.ID, OperationLogUpdate{Status: OperationLogSucceeded,

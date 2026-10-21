@@ -244,7 +244,7 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
       ...(list.some((item) => item?.protocol === 'runes')
         ? [{ label: 'Runes', value: 'runes' }]
         : []),
-      ...(rgb11.length ? [{ label: 'RGB11', value: 'rgb11' }] : []),
+      ...(rgb11.length ? [{ label: 'RGB', value: 'rgb11' }] : []),
     ]
     assetsStore.setUniqueAssetList(uniqueTypes)
     assetsStore.setTotalSats(totalSats)

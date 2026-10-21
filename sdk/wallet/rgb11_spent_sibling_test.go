@@ -73,7 +73,7 @@ func TestRGB11SpentSibling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	feeOP := fmt.Sprintf("%064x:0", 9191)
+	feeOP := seedRGB11FlowEvidenceUTXO(t, evidence.rgb11FlowEvidence, script, 100_000, 98)
 	fee := indexer.NewTxOutput(100000)
 	fee.OutPointStr = feeOP
 	fee.OutValue.PkScript = script
@@ -271,7 +271,7 @@ func TestRGB11SiblingMultiTip(t *testing.T) {
 			t.Fatal(err)
 		}
 		feeSeq++
-		op := fmt.Sprintf("%064x:0", feeSeq)
+		op := seedRGB11FlowEvidenceUTXO(t, evidence.rgb11FlowEvidence, script, 100_000, byte(feeSeq))
 		output := indexer.NewTxOutput(100000)
 		output.OutPointStr, output.OutValue.PkScript = op, script
 		rpc.outputs[op] = output
@@ -330,9 +330,9 @@ func TestRGB11SiblingMultiTip(t *testing.T) {
 	second, _ := prepare(b, a, "10000")
 	confirm(b, second)
 	// A has not accepted second, so A's next send selects only its original
-	// 80000 change. B separately spends the second operation's 10000 change.
+	// 30000 change. B separately spends the second operation's 10000 change.
 	left, _ := prepare(b, a, "10000")
-	right, _ := prepare(a, b, "80000")
+	right, _ := prepare(a, b, "30000")
 	lc, err := coreconsignment.Decode([]byte(left.RecipientConsignment))
 	if err != nil {
 		t.Fatal(err)

@@ -1,5 +1,6 @@
 import { Network, Balance, Chain, WalletAccount, WalletData, Language } from '@/types'
 import { Storage } from './storage-adapter'
+import { defaultWalletEnv, defaultWalletNetwork, isRegtestBuild } from '@/utils/networkMode'
 
 export type AccountRecoveryState = Pick<RootAccountRecoveryResult, 'status' | 'code'> & {
   env?: 'dev' | 'test' | 'prd'
@@ -44,13 +45,13 @@ interface WalletStateSnapshot {
 }
 
 const defaultState: WalletState = {
-  env: 'prd',
+  env: defaultWalletEnv,
   language: 'en',
   locked: true,
   hasWallet: false,
   address: null,
   isConnected: false,
-  network: Network.MAINNET,
+  network: defaultWalletNetwork,
   chain: Chain.BTC,
   walletId: '',
   rootAccountId: '',
@@ -123,7 +124,12 @@ class WalletStorage {
       !Number.isSafeInteger(snapshot.revision) || snapshot.revision < 0 || snapshot.revision >= Number.MAX_SAFE_INTEGER) {
       throw new Error('Invalid wallet state snapshot')
     }
-    return { ...snapshot, state: { ...this.cloneState(defaultState), ...preferences(snapshot.state) } }
+    const state = { ...this.cloneState(defaultState), ...preferences(snapshot.state) }
+    if (isRegtestBuild) {
+      state.env = 'dev'
+      state.network = Network.REGTEST
+    }
+    return { ...snapshot, state }
   }
 
   private applySnapshot(snapshot: WalletStateSnapshot): void {
@@ -164,9 +170,12 @@ class WalletStorage {
   }
 
   public async batchUpdate(updates: BatchUpdateData): Promise<void> {
-    const durable = preferences(updates)
+    const safeUpdates = isRegtestBuild
+      ? { ...updates, env: 'dev', network: Network.REGTEST } as BatchUpdateData
+      : updates
+    const durable = preferences(safeUpdates)
     if (!Object.keys(durable).length) {
-      this.applyRuntimeUpdates(updates)
+      this.applyRuntimeUpdates(safeUpdates)
       return
     }
     const committed = await Storage.update({
@@ -184,7 +193,7 @@ class WalletStorage {
       },
     })
     this.applySnapshot(this.parseSnapshot(committed))
-    this.applyRuntimeUpdates(updates)
+    this.applyRuntimeUpdates(safeUpdates)
   }
 
   private applyRuntimeUpdates(updates: BatchUpdateData): void {

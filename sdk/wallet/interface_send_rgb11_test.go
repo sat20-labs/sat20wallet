@@ -2,7 +2,6 @@ package wallet
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	"github.com/btcsuite/btcd/chaincfg"
@@ -21,10 +20,10 @@ func TestSendSelectorsProtectIssuedRGBWithoutDerivedLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	carrier := fmt.Sprintf("%064x:0", 81001)
-	plain := fmt.Sprintf("%064x:0", 81002)
+	evidence := &rgb11FlowEvidence{utxos: map[string]*rgb11wallet.BitcoinUTXO{}, rawTx: map[string][]byte{}, spendingTx: map[string]string{}}
+	carrier := seedRGB11FlowEvidenceUTXO(t, evidence, script, 10000, 1)
+	plain := seedRGB11FlowEvidenceUTXO(t, evidence, script, 10000, 2)
 	rpc := &rgb11FlowIndexer{outputs: map[string]*TxOutput{}, plain: []*indexerwire.TxOutputInfo{{OutPoint: carrier, Value: 10000, PkScript: script}}}
-	evidence := &rgb11FlowEvidence{utxos: map[string]*rgb11wallet.BitcoinUTXO{carrier: {OutPoint: carrier, Value: 10000, PkScript: script, Confirmations: 6}}, rawTx: map[string][]byte{}, spendingTx: map[string]string{}}
 	for _, point := range []string{carrier, plain} {
 		out := indexer.NewTxOutput(10000)
 		out.OutPointStr = point
@@ -32,7 +31,7 @@ func TestSendSelectorsProtectIssuedRGBWithoutDerivedLock(t *testing.T) {
 		rpc.outputs[point] = out
 	}
 	manager := newRGB11FlowManager(t, local, rpc, evidence, 81001)
-	issued, err := manager.IssueRGB11Asset(context.Background(), RGB11IssueRequest{Schema: "NIA", Ticker: "SAFE", Name: "Send protection", Amounts: []uint64{100}})
+	issued, err := manager.rgbManager.IssueRGB11Asset(context.Background(), RGB11IssueRequest{Schema: "NIA", Ticker: "SAFE", Name: "Send protection", Amounts: []uint64{100}})
 	if err != nil {
 		t.Fatal(err)
 	}

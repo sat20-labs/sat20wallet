@@ -308,6 +308,9 @@ async function refreshNetworkStats(force = false) {
 }
 
 async function fetchNetworkStats() {
+  if (network.value === Network.REGTEST) {
+    throw new Error('Regtest has no configured public hashrate service')
+  }
   const errors: string[] = []
   const mempoolURL = network.value === Network.MAINNET
     ? 'https://mempool.space/api/v1/mining/hashrate/3d'

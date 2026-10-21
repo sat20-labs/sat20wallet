@@ -51,6 +51,8 @@
             <a :href="generateMempoolUrl({
               network: network,
               path: `tx/${displayMinerInfo.AnchorTxId}`,
+              chain: Chain.SATNET,
+              env: env,
             })" target="_blank" class="font-mono text-xs text-blue-400 hover:text-blue-300 underline break-all">
               {{ hideAddress(displayMinerInfo.AnchorTxId) }}
             </a>
@@ -93,9 +95,10 @@
           </div>
         </template>
       </div>
-      <Button variant="secondary" class="h-10 w-full" :disabled="displayMinerInfo.ServerNode || tempStakeData"
+      <Button :variant="displayMinerInfo.ServerNode ? 'destructive' : 'secondary'" class="h-10 w-full"
+        :disabled="!displayMinerInfo.ServerNode && !!tempStakeData"
         @click="router.push('/wallet/setting/node')">
-        {{ $t('nodeSetting.selectNodeType') }}
+        {{ displayMinerInfo.ServerNode ? $t('nodeSetting.unstake', '取消质押') : $t('nodeSetting.selectNodeType') }}
       </Button>
 
     </div>
@@ -108,6 +111,7 @@ import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { useQuery } from '@tanstack/vue-query'
 import { useWalletStore } from '@/store'
+import { useGlobalStore } from '@/store/global'
 import { Button } from '@/components/ui/button'
 import { Icon } from '@iconify/vue'
 import { satnetApi } from '@/apis'
@@ -120,6 +124,7 @@ const isExpanded = ref(false)
 const tempStakeData = ref<NodeStakeData | null>(null)
 
 const walletStore = useWalletStore()
+const { env } = storeToRefs(useGlobalStore())
 const { network, publicKey } = storeToRefs(walletStore)
 
 const { data: res, isLoading, isError, error, refetch } = useQuery({

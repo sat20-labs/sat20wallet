@@ -8,8 +8,8 @@ import (
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 )
 
-// A baseline PUT used to return before active-mailbox import. Rechecking only
-// local transition state is insufficient when that publication fast path runs.
+// A baseline publication must import the latest stable pending state before
+// executing new work. An unrelated receive without inputs is not a global lock.
 func TestReviewRGB11BaselineImportsActiveAfterLocalPublication(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
@@ -28,36 +28,51 @@ func TestReviewRGB11BaselineImportsActiveAfterLocalPublication(t *testing.T) {
 			other.serverNode = NewNode(client, "message.test", SERVER_NODE,
 				client.CoreNodePubKey(), client.CoreNodePubKey())
 			root, err := other.accountManagementRootWallet()
-			if err != nil { t.Fatal(err) }
-			if err := other.bindAccountToCurrentCoreNode(root); err != nil { t.Fatal(err) }
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := other.bindAccountToCurrentCoreNode(root); err != nil {
+				t.Fatal(err)
+			}
 			for _, manager := range []*Manager{local, other} {
 				if manager.rgbManager.scopeStates != nil {
 					manager.rgbManager.scopeStates.stopReconciliations()
 				}
-				manager.rgbManager.scopeStates = nil
+				manager.rgbManager.evidence = newCoreE2EChain()
 			}
 			if err := other.rgbManager.projectionStore.SaveTransferState(&rgb11wallet.TransferState{
 				TransferID: "review-active-before-local-put", Direction: "receive",
 				Status: "pending", AddressMode: true,
-			}); err != nil { t.Fatal(err) }
-			if err := other.syncAccountManagedActiveData(rgb11AccountManagedProviderID); err != nil {
-				t.Fatalf("publish remote active fixture: %v", err)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := other.SyncAccountManagementState(context.Background()); err != nil {
+				t.Fatalf("publish remote stable recovery fixture: %v", err)
 			}
 			if active, err := local.hasAccountManagedRGB11Transition(); err != nil || active {
 				t.Fatalf("local fixture unexpectedly active: %v %v", active, err)
 			}
 			if localEdit {
 				if err := local.UpdateWalletName(local.GetAccountManagementStatus().RootWalletID,
-					"Local edit requiring baseline PUT"); err != nil { t.Fatal(err) }
+					"Local edit requiring baseline PUT"); err != nil {
+					t.Fatal(err)
+				}
 			}
 			called := false
 			_, err = runRGB11ManagedOperation(local, context.Background(), rgb11ManagedOperationNew,
-				func(*rgb11Manager) (struct{}, error) {
+				func(manager *rgb11Manager) (struct{}, error) {
 					called = true
+					state, readErr := manager.projectionStore.LoadTransferState("review-active-before-local-put")
+					if readErr != nil {
+						return struct{}{}, readErr
+					}
+					if state == nil || state.Direction != "receive" || state.Status != "pending" {
+						return struct{}{}, errors.New("remote pending state was not imported before operation callback")
+					}
 					return struct{}{}, nil
 				})
-			if called || !errors.Is(err, ErrRGB11ManagedOperationActive) {
-				t.Errorf("baseline publication bypassed remote active recovery: called=%v err=%v", called, err)
+			if !called || err != nil {
+				t.Errorf("baseline did not restore remote pending before unrelated work: called=%v err=%v", called, err)
 			}
 			if active, err := local.hasAccountManagedRGB11Transition(); err != nil || !active {
 				t.Errorf("remote active recovery was not imported after baseline publication: active=%v err=%v", active, err)

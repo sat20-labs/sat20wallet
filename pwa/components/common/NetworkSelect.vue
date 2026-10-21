@@ -48,6 +48,7 @@ import { ref, computed, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
 import { restartApp } from '@/utils/app-restart'
 import { useToast } from '@/components/ui/toast-new'
+import { isRegtestBuild } from '@/utils/networkMode'
 
 interface NetworkItem {
   name: string
@@ -57,7 +58,7 @@ interface NetworkItem {
 }
 const walletStore = useWalletStore()
 const { network } = storeToRefs(walletStore)
-const networks: NetworkItem[] = [
+const publicNetworks: NetworkItem[] = [
   {
     name: 'Mainnet',
     icon: 'cryptocurrency:btc',
@@ -71,6 +72,14 @@ const networks: NetworkItem[] = [
     value: Network.TESTNET,
   },
 ]
+const networks: NetworkItem[] = isRegtestBuild ? [
+  {
+    name: 'Regtest',
+    icon: 'cryptocurrency:btc',
+    iconColor: 'text-amber-400',
+    value: Network.REGTEST,
+  },
+] : publicNetworks
 
 const isOpen = ref(false) // 默认不打开对话框
 const switching = ref(false)

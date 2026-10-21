@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -16,7 +17,7 @@ func TestRGB11ManagedBaselineNetworkWaitDoesNotBlockRGBState(t *testing.T) {
 	defer zeroBytes(secret)
 	remote := &blockedAccountConfigHTTP{
 		rgb11MemoryDKVSHTTP: newRGB11MemoryDKVSHTTP(),
-		started: make(chan struct{}), release: make(chan struct{}),
+		started:             make(chan struct{}), release: make(chan struct{}),
 	}
 	manager.http = remote
 	manager.dkvs.mu.Lock()
@@ -72,7 +73,7 @@ func TestRGB11ManagedOperationWaitDoesNotBlockRGBState(t *testing.T) {
 	var once sync.Once
 	done := make(chan error, 1)
 	go func() {
-		_, err := runRGB11ManagedOperation(manager, context.Background(), rgb11ManagedOperationNew,
+		_, err := runRGB11ManagedOperation(manager, context.Background(), rgb11ManagedOperationRefresh,
 			func(*rgb11Manager) (struct{}, error) {
 				once.Do(func() { close(started) })
 				<-release
@@ -114,21 +115,26 @@ func TestRGB11ManagedOperationWaitDoesNotBlockRGBState(t *testing.T) {
 	}
 }
 
-func TestRGB11ManagedOperationKeepsScopeChangeBlocked(t *testing.T) {
+func TestRGB11ManagedOperationKeepsCapturedScope(t *testing.T) {
 	manager, _, secret := buildRootWrapperSource(t)
 	defer zeroBytes(secret)
 	manager.accountProfile.RecoveryConfigured = false
-
+	originalAddress := manager.wallet.GetAddress()
 	started := make(chan struct{})
 	release := make(chan struct{})
 	done := make(chan error, 1)
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
 	go func() {
-		_, err := runRGB11ManagedOperation(manager, context.Background(), rgb11ManagedOperationNew,
-			func(*rgb11Manager) (struct{}, error) {
-				close(started)
-				<-release
-				return struct{}{}, nil
-			})
+		_, err := runRGB11ManagedOperation(manager, context.Background(), rgb11ManagedOperationRefresh, func(current *rgb11Manager) (struct{}, error) {
+			close(started)
+			<-release
+			if current.status.CurrentAccount != 0 || current.wallet.GetAddress() != originalAddress {
+				return struct{}{}, fmt.Errorf("captured RGB scope followed UI selection")
+			}
+			return struct{}{}, nil
+		})
 		done <- err
 	}()
 	select {
@@ -136,25 +142,41 @@ func TestRGB11ManagedOperationKeepsScopeChangeBlocked(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("managed operation did not start")
 	}
-
-	if manager.rgbOperationMu.TryLock() {
-		manager.rgbOperationMu.Unlock()
-		close(release)
-		<-done
-		t.Fatal("managed operation no longer freezes RGB scope changes")
+	switched := make(chan error, 1)
+	go func() { switched <- manager.SwitchAccount(1) }()
+	finished := false
+	select {
+	case err := <-switched:
+		if err != nil {
+			t.Errorf("selection: %v", err)
+		}
+		finished = true
+	case <-time.After(2 * time.Second):
+		t.Error("selection waited for managed remote phase")
 	}
-	if manager.channelIdentityMu.TryLock() {
-		manager.channelIdentityMu.Unlock()
-		close(release)
-		<-done
-		t.Fatal("managed operation no longer freezes wallet identity changes")
+	unblock()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Error(err)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("managed cleanup stalled")
 	}
-	close(release)
-	if err := <-done; err != nil {
-		t.Fatal(err)
+	if !finished {
+		select {
+		case err := <-switched:
+			if err != nil {
+				t.Error(err)
+			}
+		case <-time.After(4 * time.Second):
+			t.Fatal("selection cleanup stalled")
+		}
+	}
+	if manager.status.CurrentAccount != 1 {
+		t.Errorf("UI selection=%d", manager.status.CurrentAccount)
 	}
 }
-
 
 func TestRGB11ManagedOperationWaitDoesNotBlockReadOnlyAPIs(t *testing.T) {
 	manager, _, secret := buildRootWrapperSource(t)
@@ -165,7 +187,7 @@ func TestRGB11ManagedOperationWaitDoesNotBlockReadOnlyAPIs(t *testing.T) {
 	release := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
-		_, err := runRGB11ManagedOperation(manager, context.Background(), rgb11ManagedOperationNew,
+		_, err := runRGB11ManagedOperation(manager, context.Background(), rgb11ManagedOperationRefresh,
 			func(*rgb11Manager) (struct{}, error) {
 				close(started)
 				<-release

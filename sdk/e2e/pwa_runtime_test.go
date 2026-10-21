@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -27,12 +28,43 @@ func buildPWAWalletRuntime(t *testing.T, ctx context.Context, sdk string, posAct
 		// browser SDKs. Configure the same private-chain schedule at build time;
 		// no release source, loader, signing rule or production parameter changes.
 		source := filepath.Clean(filepath.Join(sdk, "..", "..", "satoshinet", "chaincfg", "pos.go"))
-		content, err := os.ReadFile(source)
-		require.NoError(t, err)
-		content = append(content, []byte(fmt.Sprintf("\nfunc init() { TestNetParams.POSV2Height = %d }\n", posActivation[0]))...)
+		replacements := make(map[string]string)
+		goFlags := strings.Fields(os.Getenv("GOFLAGS"))
+		for i := 0; i < len(goFlags); i++ {
+			flag := strings.Trim(goFlags[i], "\"'")
+			var base string
+			if flag == "-overlay" {
+				require.Less(t, i+1, len(goFlags), "GOFLAGS -overlay requires the frozen candidate path")
+				i++
+				base = strings.Trim(goFlags[i], "\"'")
+			} else if strings.HasPrefix(flag, "-overlay=") {
+				base = strings.TrimPrefix(flag, "-overlay=")
+			}
+			if base == "" {
+				continue
+			}
+			var inherited struct {
+				Replace map[string]string `json:"Replace"`
+			}
+			encoded, err := os.ReadFile(base)
+			require.NoError(t, err, "read inherited GOFLAGS overlay")
+			require.NoError(t, json.Unmarshal(encoded, &inherited), "decode inherited GOFLAGS overlay")
+			require.NotEmpty(t, inherited.Replace, "the inherited candidate overlay must contain source replacements")
+			for original, replacement := range inherited.Replace {
+				replacements[original] = replacement
+			}
+		}
+		contentSource := source
+		if inheritedSource := replacements[source]; inheritedSource != "" {
+			contentSource = inheritedSource
+		}
+		content, err := os.ReadFile(contentSource)
+		require.NoError(t, err, "read the effective frozen SatoshiNet POS source")
+		content = append(content, []byte(fmt.Sprintf("\nfunc init() { TestNetParams.POSV2Height = %d; RegressionNetParams.POSV2Height = %d }\n", posActivation[0], posActivation[0]))...)
 		overlaySource := filepath.Join(dir, "pos.go")
 		require.NoError(t, os.WriteFile(overlaySource, content, 0600))
-		mapping, err := json.Marshal(map[string]any{"Replace": map[string]string{source: overlaySource}})
+		replacements[source] = overlaySource
+		mapping, err := json.Marshal(map[string]any{"Replace": replacements})
 		require.NoError(t, err)
 		overlay := filepath.Join(dir, "network-overlay.json")
 		require.NoError(t, os.WriteFile(overlay, mapping, 0600))

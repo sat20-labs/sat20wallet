@@ -13,9 +13,15 @@ const prodConfig = {
   satnetBaseUrl: 'https://apiprd.ordx.market',
 }
 
+const regtestConfig = {
+  ordxBaseUrl: 'http://127.0.0.1:30143',
+  satnetBaseUrl: 'http://127.0.0.1:30262',
+}
+
 
 export const config: Record<string, any> = {
   dev: devConfig,
   test: testConfig,
   prd: prodConfig,
+  regtest: regtestConfig,
 }

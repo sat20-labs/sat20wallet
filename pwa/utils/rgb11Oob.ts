@@ -26,11 +26,11 @@ export const rgb11ConsignmentInput = (input: string): string => {
   if (input.trimStart().startsWith('{')) {
     const parsed = JSON.parse(input)
     if (parsed?.transport_mode !== 'out-of-band' || typeof parsed.consignment !== 'string') {
-      throw new Error('Invalid RGB11 transfer package')
+      throw new Error('Invalid RGB transfer package')
     }
     consignment = parsed.consignment
   }
-  if (!consignment.trim()) throw new Error('Invalid RGB11 transfer package')
+  if (!consignment.trim()) throw new Error('Invalid RGB transfer package')
   return consignment
 }
 

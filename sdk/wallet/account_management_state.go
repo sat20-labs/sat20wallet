@@ -69,25 +69,16 @@ func (p *Manager) runAccountOperation(ctx context.Context, operation func() erro
 	}
 }
 
-// runAccountApplicationSync serializes account synchronization/recovery with
-// every operation which can change the selected wallet/account identity or an
-// RGB11 scope. The outer locks are application-state gates: network I/O may
-// run while they are held, but the short manager data lock is never held
-// across that I/O.
+// runAccountApplicationSync coordinates the existing account transaction only.
+// Identity/catalog commits use their local gates; the durable import marker
+// prevents use of a partially restored account. Network validation must never
+// inherit a lifecycle mutex from this outer operation.
 func (p *Manager) runAccountApplicationSync(ctx context.Context, operation func() error) error {
-	return p.runAccountOperation(ctx, func() error {
-		p.channelIdentityMu.Lock()
-		releaseRGB11Scope := p.beginRGB11ScopeChange()
-		defer func() {
-			releaseRGB11Scope()
-			p.channelIdentityMu.Unlock()
-		}()
-		return operation()
-	})
+	return p.runAccountOperation(ctx, operation)
 }
 
 // withAccountLocalState protects only local snapshot/apply work. Background
-// transport must run outside this gate; managed RGB callers already own it.
+// transport and provider validation must run outside this gate.
 func (p *Manager) withAccountLocalState(alreadyLocked bool, operation func() error) error {
 	if alreadyLocked {
 		return operation()
@@ -935,7 +926,13 @@ func (p *Manager) restoreAccountManagementStateOperation(value RecoveredAccountM
 		return nil, err
 	}
 	value = validated
-	results, resuming, err := p.resumeAccountManagementRestore(value, secret, password, locator)
+	var results []RestoredWalletResult
+	var resuming bool
+	err = p.withAccountLocalState(false, func() error {
+		var resumeErr error
+		results, resuming, resumeErr = p.resumeAccountManagementRestore(value, secret, password, locator)
+		return resumeErr
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -974,25 +971,29 @@ func (p *Manager) restoreAccountManagementStateOperation(value RecoveredAccountM
 			ManagedDataEnvelope: append([]byte(nil), value.ManagedDataEnvelope...),
 			ManagedDataDirty:    false, RecoveryConfigured: true,
 		}
-		// The application sync gate remains active for the whole recovery. Only
-		// the short durable identity commit below takes the manager data lock.
-		p.mutex.Lock()
-		if p.accountGeneration != prepared.generation {
-			p.mutex.Unlock()
-			continue
-		}
-		if err := p.persistPreparedAccountRestoreLocked(prepared, profile); err != nil {
-			p.mutex.Unlock()
-			if errors.Is(err, errAccountSnapshotChanged) {
+		// Publish the prepared identity and durable import marker under a local
+		// lifecycle gate. Bitcoin/provider validation below does not own this gate.
+		commitErr := p.withAccountLocalState(false, func() error {
+			p.mutex.Lock()
+			defer p.mutex.Unlock()
+			if p.accountGeneration != prepared.generation {
+				return errAccountSnapshotChanged
+			}
+			if err := p.persistPreparedAccountRestoreLocked(prepared, profile); err != nil {
+				return err
+			}
+			zeroBytes(p.accountSecret)
+			p.accountSecret = append([]byte(nil), secret...)
+			p.accountPassword = password
+			results = append([]RestoredWalletResult(nil), prepared.results...)
+			return nil
+		})
+		if commitErr != nil {
+			if errors.Is(commitErr, errAccountSnapshotChanged) {
 				continue
 			}
-			return nil, err
+			return nil, commitErr
 		}
-		zeroBytes(p.accountSecret)
-		p.accountSecret = append([]byte(nil), secret...)
-		p.accountPassword = password
-		results = append([]RestoredWalletResult(nil), prepared.results...)
-		p.mutex.Unlock()
 		break
 	}
 	if len(results) == 0 {
@@ -1007,28 +1008,35 @@ func (p *Manager) restoreAccountManagementStateOperation(value RecoveredAccountM
 	}); err != nil {
 		return nil, err
 	}
-	// The restored catalog and Status now contain the real process-local wallet
-	// ID.  Bind the long-lived RGB11 manager before closing the crash boundary;
-	// otherwise later operations could keep using a pre-recovery placeholder.
-	if err := p.updateAccountManagedDataImportStage(accountManagedImportStageScopeRebuild); err != nil {
+	err = p.withAccountLocalState(false, func() error {
+		// The restored catalog and Status now contain the real process-local wallet
+		// ID.  Bind the long-lived RGB11 manager before closing the crash boundary;
+		// otherwise later operations could keep using a pre-recovery placeholder.
+		if err := p.updateAccountManagedDataImportStage(accountManagedImportStageScopeRebuild); err != nil {
+			return err
+		}
+		if err := p.rgbManager.selectRGB11Scope(); err != nil {
+			return fmt.Errorf("select restored RGB11 wallet scope: %w", err)
+		}
+		if err := p.rgbManager.rebuildRGB11Locks(); err != nil {
+			return fmt.Errorf("rebuild restored RGB11 locks: %w", err)
+		}
+		// The durable recovery transaction is complete once the core account state
+		// and every stable provider have been committed locally. Registration and
+		// mailbox refreshes are retryable network work and must not extend the crash
+		// boundary: a transient transport failure must never strand this marker.
+		if err := p.updateAccountManagedDataImportStage(accountManagedImportStageMarkerDelete); err != nil {
+			return err
+		}
+		if err := p.db.Delete(accountManagedDataImportKey()); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
-	if err := p.rgbManager.selectRGB11Scope(); err != nil {
-		return nil, fmt.Errorf("select restored RGB11 wallet scope: %w", err)
-	}
-	if err := p.rgbManager.rebuildRGB11Locks(); err != nil {
-		return nil, fmt.Errorf("rebuild restored RGB11 locks: %w", err)
-	}
-	// The durable recovery transaction is complete once the core account state
-	// and every stable provider have been committed locally. Registration and
-	// mailbox refreshes are retryable network work and must not extend the crash
-	// boundary: a transient transport failure must never strand this marker.
-	if err := p.updateAccountManagedDataImportStage(accountManagedImportStageMarkerDelete); err != nil {
-		return nil, err
-	}
-	if err := p.db.Delete(accountManagedDataImportKey()); err != nil {
-		return nil, err
-	}
+
 	return results, nil
 }
 
@@ -2231,7 +2239,7 @@ func (p *Manager) SyncAccountManagementState(ctx context.Context) error {
 
 func (p *Manager) syncAccountManagementState(ctx context.Context, attempt int,
 	authoritativeRebase bool) error {
-	return p.syncAccountManagementStateMode(ctx, attempt, authoritativeRebase, true)
+	return p.syncAccountManagementStateMode(ctx, attempt, authoritativeRebase, false)
 }
 
 func (p *Manager) syncAccountManagementStateMode(ctx context.Context, attempt int,
@@ -2246,23 +2254,10 @@ func (p *Manager) syncAccountManagementStateMode(ctx context.Context, attempt in
 	var snapshot *accountManagementSyncSnapshot
 	var walletInfos []*WalletInfo
 	var localBundle account.ManagedDataBundle
+	if err := p.resumeAccountManagedRemoteImport(); err != nil {
+		return err
+	}
 	err := p.withAccountLocalState(applicationLocked, func() error {
-		if err := p.resumeAccountManagedRemoteImport(); err != nil {
-			return err
-		}
-		if p.accountManagedRecoveryConfigured() {
-			activeRGB11, err := p.hasAccountManagedRGB11Transition()
-			if err != nil {
-				return err
-			}
-			if activeRGB11 {
-				// A partial stable export would either omit the scope or reuse its old
-				// payload and could then clear the local dirty generation without ever
-				// publishing the transition. Active recovery is authoritative until the
-				// business operation settles; ordinary account PUTs are blocked here.
-				return ErrRGB11ManagedOperationActive
-			}
-		}
 		var err error
 		p.mutex.Lock()
 		snapshot, walletInfos, err = p.captureAccountManagementSyncSnapshotBaseLocked()
@@ -2666,25 +2661,33 @@ func (p *Manager) syncAccountManagementStateMode(ctx context.Context, attempt in
 		commit, commitErr := p.prepareAccountManagedCommitForSync(
 			target, snapshot, finalStateEnvelope, finalManaged)
 		if commitErr == nil {
+			var pendingRemains, importManagedData bool
 			commitErr = p.withAccountLocalState(applicationLocked, func() error {
-				pendingRemains, importManagedData, err := p.applyAccountManagedCommitForSync(commit, snapshot)
+				var err error
+				pendingRemains, importManagedData, err = p.applyAccountManagedCommitForSync(commit, snapshot)
 				if err != nil {
 					return err
 				}
 				if importManagedData {
-					if err := p.updateAccountManagedDataImportStage(accountManagedImportStageProviderImport); err != nil {
-						return err
-					}
-					if err := p.importAccountManagedDataSnapshot(finalManaged); err != nil {
-						return err
-					}
+					return p.updateAccountManagedDataImportStage(accountManagedImportStageProviderImport)
 				}
-				if pendingRemains || !importManagedData {
-					p.markDKVSStateDirty()
-				}
-				return p.finishAccountManagedRemoteImport()
+				return nil
 			})
+			// The committed import marker excludes actual wallet operations while the
+			// provider verifies Bitcoin facts without holding an identity/scope lock.
+			if commitErr == nil && importManagedData {
+				commitErr = p.importAccountManagedDataSnapshot(finalManaged)
+			}
+			if commitErr == nil {
+				commitErr = p.withAccountLocalState(applicationLocked, func() error {
+					if pendingRemains || !importManagedData {
+						p.markDKVSStateDirty()
+					}
+					return p.finishAccountManagedRemoteImport()
+				})
+			}
 		}
+
 		if commitErr != nil {
 			if attempt < 2 && errors.Is(commitErr, errAccountSnapshotChanged) {
 				return p.syncAccountManagementStateMode(ctx, attempt+1, false, applicationLocked)

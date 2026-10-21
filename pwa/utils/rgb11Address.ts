@@ -1,6 +1,7 @@
 import { beginVersionDispatch } from '@/utils/pwaVersionPolicy'
 import { tryit } from 'radash'
 import { beginPwaWalletOperation, finishPwaOperation } from '@/utils/pwaOperationLog'
+import { walletRequestSessionGuard } from '@/lib/walletSession'
 
 type WasmResponse<T> = {
   code: number
@@ -9,36 +10,27 @@ type WasmResponse<T> = {
 }
 
 const invoke = async <T>(methodName: string, args: unknown[], recordOperation: boolean): Promise<[Error | undefined, T | undefined]> => {
-  const operation = recordOperation ? await beginPwaWalletOperation(methodName, args as any[]) : null
-  const method = (globalThis as any).sat20wallet_wasm?.[methodName]
-  if (typeof method !== 'function') {
-    const methodError = new Error(`RGB11 WASM method ${methodName} is unavailable`)
-    if (operation) await finishPwaOperation(operation, methodError)
-    return [methodError, undefined]
-  }
-  let finishVersion: (() => void) | undefined
-  try {
-  const [invokeError, raw] = await tryit(async () => {
-    finishVersion = beginVersionDispatch(methodName)
-    return method(...args)
+  return tryit(async () => {
+    const checkSession = walletRequestSessionGuard(methodName)
+    const operation = recordOperation ? await beginPwaWalletOperation(methodName, args as any[]) : null
+    let finishVersion: (() => void) | undefined
+    try {
+      checkSession()
+      const method = (globalThis as any).sat20wallet_wasm?.[methodName]
+      if (typeof method !== 'function') throw new Error(`RGB WASM method ${methodName} is unavailable`)
+      finishVersion = beginVersionDispatch(methodName)
+      const response = await method(...args) as WasmResponse<T> | undefined
+      checkSession()
+      if (response && response.code !== 0) throw new Error(response.msg)
+      if (operation) await finishPwaOperation(operation, null, response?.data)
+      checkSession()
+      return response?.data
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error(String(error))
+      if (operation) await finishPwaOperation(operation, failure)
+      throw failure
+    } finally { finishVersion?.() }
   })()
-  if (invokeError) {
-    if (operation) await finishPwaOperation(operation, invokeError)
-    return [invokeError, undefined]
-  }
-  const response = raw as WasmResponse<T> | undefined
-  if (!response) {
-    if (operation) await finishPwaOperation(operation)
-    return [undefined, undefined]
-  }
-  if (response.code !== 0) {
-    const responseError = new Error(response.msg)
-    if (operation) await finishPwaOperation(operation, responseError)
-    return [responseError, undefined]
-  }
-  if (operation) await finishPwaOperation(operation, null, response.data)
-  return [undefined, response.data]
-  } finally { finishVersion?.() }
 }
 
 const call = async <T>(methodName: string, ...args: unknown[]): Promise<[Error | undefined, T | undefined]> => (

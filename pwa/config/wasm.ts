@@ -17,10 +17,7 @@ interface NetworkConfig {
   Log: string
 }
 
-interface EnvConfig {
-  [Network.MAINNET]: NetworkConfig
-  [Network.TESTNET]: NetworkConfig
-}
+type EnvConfig = Partial<Record<Network, NetworkConfig>>
 
 interface Config {
   dev: EnvConfig
@@ -67,6 +64,26 @@ const config: Config = {
         Scheme: "https",
         Host: "apidev.ordx.market",
         Proxy: "satsnet/testnet"
+      },
+      Log: "debug"
+    },
+    [Network.REGTEST]: {
+      Env: "dev",
+      Chain: "regtest",
+      Mode: "light",
+      Peers: [
+        "b@025fb789035bc2f0c74384503401222e53f72eefdebf0886517ff26ac7985f52ad@http://127.0.0.1:30253/regtest",
+        "s@0367f26af23dc40fdad06752c38264fe621b7bbafb1d41ab436b87ded192f1336e@http://127.0.0.1:30263/regtest"
+      ],
+      IndexerL1: {
+        Scheme: "http",
+        Host: "127.0.0.1:30143",
+        Proxy: "btc/regtest"
+      },
+      IndexerL2: {
+        Scheme: "http",
+        Host: "127.0.0.1:30262",
+        Proxy: "regtest"
       },
       Log: "debug"
     }
@@ -158,7 +175,13 @@ const config: Config = {
 }
 
 export const logLevel = 2//0: Panic, 1: Fatal, 2: Error, 3: Warning, 4: Info, 5: Debug
-export const getConfig = (_env: string, network: Network): NetworkConfig => {
+export const getConfig = (env: string, network: Network): NetworkConfig => {
+  if (network === Network.REGTEST) {
+    if (env !== 'dev') throw new Error('Regtest is available only in the isolated dev build')
+    const networkConfig = config.dev[network]
+    if (!networkConfig) throw new Error(`Invalid network: ${network}`)
+    return networkConfig
+  }
   const networkConfig = config.prd[network]
   if (!networkConfig) {
     throw new Error(`Invalid network: ${network}`)

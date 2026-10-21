@@ -63,8 +63,19 @@
           <Button class="w-full" :disabled="busy" @click="cancelRecovery">完成演练并返回</Button>
         </template>
         <template v-else>
-          <Input v-model="password" type="password" placeholder="设置新的本地钱包密码" autocomplete="new-password" />
-          <Input v-model="confirmPassword" type="password" placeholder="再次输入密码" autocomplete="new-password" />
+          <p id="restore-password-help" class="text-sm text-muted-foreground">
+            用于在此设备解锁恢复的钱包，至少 6 个字符，两次输入须一致。如继续中断的恢复，请使用上次恢复时设置的密码。
+          </p>
+          <div class="space-y-2">
+            <label for="restore-local-password" class="block text-sm font-medium">新设备解锁密码</label>
+            <Input id="restore-local-password" v-model="password" type="password" placeholder="设置新的本地钱包密码"
+              autocomplete="new-password" aria-describedby="restore-password-help" />
+          </div>
+          <div class="space-y-2">
+            <label for="restore-confirm-password" class="block text-sm font-medium">再次输入解锁密码</label>
+            <Input id="restore-confirm-password" v-model="confirmPassword" type="password" placeholder="再次输入密码"
+              autocomplete="new-password" aria-describedby="restore-password-help" />
+          </div>
           <Button class="w-full" :disabled="busy" @click="commitRecovery">恢复全部钱包</Button>
         </template>
       </section>
@@ -126,8 +137,10 @@ const clearRecovery = () => {
   const id = sessionId.value
   step.value = 1
   loaded.value = null
+  preview.value = null
   answers.value = []
-  userShare.value = guardianResponse.value = password.value = confirmPassword.value = ''
+  userShare.value = guardianRequest.value = guardianResponse.value = password.value = confirmPassword.value = ''
+  knowledgeReady.value = userShareReady.value = guardianReady.value = false
   if (id) return accountSDK.abortSession(id).catch(() => undefined)
 }
 const cancelRecovery = async () => {
@@ -150,7 +163,14 @@ onMounted(async () => {
 const run = async (task: () => Promise<void>) => {
   busy.value = true
   error.value = ''
-  try { await task() } catch (e: any) { error.value = e?.message || '恢复失败' } finally { busy.value = false }
+  try { await task() } catch (e: any) {
+    if (e?.message === 'recovery session expired') {
+      await clearRecovery()
+      error.value = '恢复会话已失效，请重新加载账户备份并验证恢复材料。'
+    } else {
+      error.value = e?.message || '恢复失败'
+    }
+  } finally { busy.value = false }
 }
 
 const loadRecovery = () => run(async () => {

@@ -111,6 +111,121 @@ npm run verify:wallet-e2e:functional
 | BTC Lucky Mining | 配置、启动、实际 worker 求解、提交、停止、刷新 | 假 L1 独立重算 BTC header/hash/target 验证工作量；停止后不再请求 job | `wallet-mining-e2e.mjs` |
 | 推荐人 | 无 owned name 的注册保护、绑定取消、未知名字拒绝 | 不广播注册，不扣 L2 资金，不产生假绑定 | `wallet-basic-e2e.mjs` |
 
+## Regtest 配置与验收入口
+
+`--mode regtest` 是独立的本机验收构建：钱包网络固定为 `regtest`，页面只显示 Regtest，API、STP peers、DApp origin 和浏览器端口使用 loopback 配置；L1/L2 API 不得回退到公开 endpoint。通过 `npm run build:regtest` 生成独立的 `dist-regtest`，或通过 `npm run dev:regtest` 使用 `127.0.0.1:5179`。普通 `build`、`dev`、mainnet/testnet 网络配置和默认 profile 保持原有行为。
+
+现有 Playwright 入口通过 `--regtest-config` 读取公开端点，通过 `--regtest-fixture` 读取权限为 `0600` 的私有 fixture。原链 Core31 必须启用 `txindex=1`；L1 indexer 的历史 rawtx/simpleinfo 查询依赖它。准备入口为 SDK 的 `TestSDKPWARealRegtestWalletBasicAndBiometricBrowser`，只复用既有 H1/H2 链、普通钱包和资产，不再次入金。
+
+资金证据分开记录：L1 funding 的 outpoint/value/script/确认区块；H1 通道地址及 anchor；H2 从 anchor:0 双签转给普通钱包的真实交易、原始字节、金额和费用；普通钱包当前余额。runner 独立查询 L1 rawtx/simpleinfo/blockhash、L2 ascend/channel ledger、H2 rawtx/simpleinfo 及当前余额。不能把初始本金等同扣费后的现余额，也不能仅填写 txid 或余额冒充链上证据。
+
+wallet fixture 的 `basicWallet` 包含验收钱包助记词、地址和本地测试密码，WASM 文件路径单独给出；不要把私有 fixture 加入仓库或日志。每次只选择一个 case group；基本组除创建/导入外的用例必须同时选择 funded-import 前置，它会实际执行并计数。传入“Regtest 当前精确用例”表中的一个或多个精确 case 名：
+
+```bash
+cd /Users/yingfeng/github/sat20wallet/pwa
+chmod 600 /private/path/regtest-fixture.json
+npm run verify:wallet-regtest -- \
+  --regtest-config scripts/verify/regtest-endpoints.example.json \
+  --regtest-fixture /private/path/regtest-fixture.json \
+  --wallet-cases "Wallet PWA: import a funded test wallet through the page"
+```
+
+下面仅示意私有 fixture 字段结构，不是可运行 fixture；所有占位符必须替换为实际采集值，并将高度/vout 改成整数。不得用示例值预置余额。助记词、地址和密码只写入本机受限文件，不填写到公开 config：
+
+```json
+{
+  "anchorEvidence": {
+    "source": "bitcoin-l1",
+    "txid": "<confirmed Bitcoin funding txid>",
+    "confirmationHeight": "<actual integer height>",
+    "blockHash": "<Bitcoin block hash>",
+    "vout": "<actual integer vout>",
+    "valueSats": "<actual integer funding value>",
+    "scriptPubKey": "<actual funding script hex>",
+    "l2Credit": {
+      "fundingOutpoint": "<same Bitcoin txid>:<same vout>",
+      "anchorTxid": "<indexed SatoshiNet anchor txid>",
+      "anchorHeight": "<actual integer height>",
+      "anchorValueSats": "<same funding value, integer>",
+      "channelAddress": "<actual H1 P2WSH channel address>",
+      "h2Txid": "<confirmed double-sign spend txid>",
+      "h2Height": "<actual integer height>",
+      "h2InputOutpoint": "<same anchor txid>:0",
+      "h2RawHex": "<actual signed SatoshiNet transaction hex>",
+      "h2OutputSats": "<actual integer recipient output value>",
+      "h2FeeSats": "<actual integer fee>",
+      "address": "<ordinary wallet address>",
+      "recipientAddress": "<same ordinary wallet address>",
+      "assetKey": "::",
+      "currentBalance": "<current SDK balance string, separately read from the live chain>"
+    }
+  },
+  "basicWallet": {
+    "mnemonic": "<private wallet mnemonic>",
+    "address": "<same wallet address>",
+    "password": "<local test password>"
+  },
+  "wasmPath": "<built SDK wasm path>",
+  "wasmRuntimePath": "<SDK wasm runtime path>"
+}
+```
+
+本地 regtest 验收不挖空块，不用 L2 预置余额、假资产或原生奖励资金作为 fixture。若缺少真实 L1 funding/anchor、可核验的 L2 `ascend` 记录或对应余额变化，runner 应失败；不得用 route mock、控制器回包或 fixture 声明替代真实 L1/L2 查询。当前 regtest runner 尚未完成所有功能的后端接线；V4 已实际通过 14 个基础钱包和 4 个生物识别用例，其余功能不得计为通过。
+
+### Regtest 当前精确用例
+
+以下 18 个唯一用例已在 V4 真实 regtest 中通过。生物识别曾因多余 dispatch 执行两次，已移除重复分支，不重复计数或重跑已通过用例。
+
+| 精确 case | 现有脚本 | 状态 |
+| --- | --- | --- |
+| `Wallet PWA: create through the page and unlock the same identity after reload` | `wallet-basic-e2e.mjs` | V4 真实 regtest PASS |
+| `Wallet PWA: import a funded test wallet through the page` | `wallet-basic-e2e.mjs` | V4 真实 regtest PASS |
+| `Wallet PWA: receive address and clipboard match the active wallet` | `wallet-basic-e2e.mjs` | V4 真实 regtest PASS |
+| `Wallet PWA: public key and peer channel address match the SDK` | `wallet-basic-e2e.mjs` | V4 真实 regtest PASS |
+| `Wallet PWA: recovery phrase requires authentication and clears on navigation` | `wallet-basic-e2e.mjs` | V4 真实 regtest PASS |
+| `Wallet PWA: balance visibility and auto-lock preference survive reload` | `wallet-basic-e2e.mjs` | V4 真实 regtest PASS |
+| `Wallet PWA: language changes persist without changing wallet identity` | `wallet-basic-e2e.mjs` | V4 真实 regtest PASS |
+| `Wallet PWA: manually locked Bitcoin UTXO survives reload and can be unlocked` | `wallet-basic-e2e.mjs` | V4 真实 regtest PASS |
+| `Wallet PWA: signature review signs the displayed payload with the active key` | `wallet-basic-e2e.mjs` | V4 真实 regtest PASS |
+| `Wallet PWA: cancelling a node stake leaves funds and local stake state unchanged` | `wallet-basic-e2e.mjs` | V4 真实 regtest PASS |
+| `Wallet PWA: operation logs retain real results and can be cleared without deleting the wallet` | `wallet-basic-e2e.mjs` | V4 真实 regtest PASS |
+| `Wallet PWA: configured inactivity locks signing until password authentication` | `wallet-basic-e2e.mjs` | V4 真实 regtest PASS |
+| `Wallet PWA: referrer registration without an owned name cannot broadcast` | `wallet-basic-e2e.mjs` | V4 真实 regtest PASS |
+| `Wallet PWA: referrer cancellation and unknown-name rejection preserve funds` | `wallet-basic-e2e.mjs` | V4 真实 regtest PASS |
+| `WebAuthn PWA: real PRF credential creation persists an encrypted wallet binding` | `wallet-biometric-e2e.mjs` | V4 真实 regtest PASS |
+| `WebAuthn PWA: an actual authenticator assertion unlocks the same SDK wallet after reload` | `wallet-biometric-e2e.mjs` | V4 真实 regtest PASS |
+| `WebAuthn PWA: password change clears the old binding and permits enrollment with the new password` | `wallet-biometric-e2e.mjs` | V4 真实 regtest PASS |
+| `WebAuthn PWA: deleting the biometric binding persists and restores password-only unlock` | `wallet-biometric-e2e.mjs` | V4 真实 regtest PASS |
+
+## 完整功能覆盖矩阵
+
+“自动化”列登记现有 PWA 用例位置，不表示最新源码已执行或通过。Regtest 列表示当前 runner 是否准入；运行前仍需真实 anchor 和私有钱包 fixture。当前仓库没有把 AI 接入测试执行、断言或 verdict；AI 只可在人工提供的脱敏结果上辅助归类原因，不可把未运行、失败或缺后端的 case 判为通过。
+
+| 功能入口 | 现有自动化 / 验收方式 | Regtest 当前状态 | AI 辅助、人工或后端缺口 |
+| --- | --- | --- | --- |
+| 创建钱包、导入钱包、收款 QR、公钥、助记词、余额隐藏、自动锁定、语言、UTXO 锁、消息签名、操作日志、stake 取消、推荐人拒绝/取消 | `wallet-basic-e2e.mjs` 精确用例 | V4 真实 regtest PASS（14 基础 / 4 生物识别唯一用例） | 无运行时 AI；用例使用本地 SDK/WASM，不伪造余额 |
+| WebAuthn 生物识别创建、刷新解锁、改密后重绑、删除后密码回退 | `wallet-biometric-e2e.mjs` | V4 真实 regtest PASS（14 基础 / 4 生物识别唯一用例） | 使用真实浏览器虚拟认证器；当前没有硬件设备人工验收记录 |
+| 子钱包、账户目录、2-of-2/2-of-3、Guardian、恢复预览/提交/取消、密码修改、离线恢复 | `account-management-usage-e2e.mjs`、`account-management-e2e.mjs` | 未接入私有 regtest usage fixture；不计 regtest 可运行 | 需要按真实端点准备恢复服务和多设备数据；人工恢复流程仍需单列 |
+| 网络切换 | `account-management-usage-e2e.mjs` 中错误密码/取消用例 | regtest 构建只允许 regtest，成功切换公网被禁止 | 公网切换需另行隔离环境和人工批准；不能用 regtest 假装 mainnet |
+| Bitcoin BTC/ORDX 发送、BTC 高级多输出、手续费与确认 | `pos-pwa-e2e.mjs` | 未准入；旧测试控制器不能作为 regtest L1 | 需真实 Bitcoin Core/indexer 广播、确认及余额核对 |
+| BRC20 已有 transfer、创建 transfer 后发送、Runes 精度/找零发送 | `wallet-l1-assets-e2e.mjs` | 未准入 | 需真实 L1 铭文/Runestone 数据及索引；当前假 indexer 只保留旧回归用途 |
+| ORDX 高级拆分 | `pos-pwa-e2e.mjs` | 未准入 | 需真实交易广播与两个资产输出的 L1 证据 |
+| SatoshiNet BTC/ORDX 发送 | `pos-pwa-e2e.mjs` | 未准入 | 需真实 Core/Bootstrap、L1 anchor 输入和 L2 余额/交易核对 |
+| 私有通道开通、扩容、出金 | `pos-pwa-e2e.mjs` | 未准入 | 需真实 funding anchor、STP/Core 和真实退款链；不以 L2 余额预置替代 |
+| 公共通道入金、转换、出金 | `pos-pwa-e2e.mjs` | 未准入 | 需真实 Transcend 合约、L1 anchor 与 L2/L1 双侧证据 |
+| 通道安全、合作关闭、强退/CSV 回收 | `pos-pwa-e2e.mjs` 与独立 force-close 入口 | 未准入 | 强退最终回收需要单独链/时间推进验收；人工安全审查仍需保留 |
+| POS v2 激活、出块轮换、Miner 替补与恢复 | `pos-pwa-e2e.mjs` | 未准入 | 后端需使用真实 L1 anchor 驱动启动和验收；不允许空块、预置余额或原生奖励 fixture |
+| Core/Miner 质押 | `wallet-node-e2e.mjs`；取消分支另见 `wallet-basic-e2e.mjs` | 仅取消/拒绝分支在基本组；成功质押未准入 | 成功路径需要真实资产与合法 anchor，另需核对节点注册/索引 |
+| DApp 连接、签名、撤权、PSBT 预览/签名/广播 | `wallet-integrations-e2e.mjs` | 未准入 | DApp 页面现有自动化；regtest 禁止公网 fallback，需本地 DApp 和真实交易后端 |
+| RGB NIA/IFA/UDA 发行、合约文件导入导出、OOB 收发、取消、UDA 转移 | `wallet-rgb-e2e.mjs` | 当前被 runner 显式阻止 | 需真实 Bitcoin producer raw、L1 anchor 与 RGB transport/确认；不能沿用旧控制器资产 |
+| 模板合约、Faucet、EVM 合约、Agent 合约 | `wallet-tools-e2e.mjs` | 未准入 | 需真实本地 SatoshiNet 合约后端；Agent 模型/Oracle 成功路径仍未接入 |
+| ORDX/BRC20/Runes 部署和铸造、DID 铸造 | `wallet-mint-e2e.mjs` | 未准入 | 需真实协议索引和 L1 commit/reveal；资格预览不等于资产发行完成 |
+| BTC Lucky Mining | `wallet-mining-e2e.mjs` | 未准入；regtest 禁止公开算力 API | 需要本地真实 Bitcoin 工作量验证；不得把公开算力或低难度假收益当结果 |
+| 外部浏览器链接、生产 Service Worker、安装升级、离线冷启动 | 当前只有局部自动检查；完整安装流程尚无验收入口 | 未覆盖 | 需手工安装/升级矩阵；regtest 页面不应链接公开 explorer |
+| Market/DApp 自定义服务 | Market 只允许显式配置 loopback URL；DApp 现有自动化 | 未配置本地 Market 时明确显示缺少本地服务；无公网回退 | 本地 Market 服务未随本配置提供；由人工决定是否部署本地服务 |
+
+任何 case 的最终状态都必须来自实际 runner 的 `pass`/`fail`/`not-run` 记录；缺少后端、fixture 或执行记录时保留为未覆盖，不以 AI 摘要替代。
+
 ## 必须明确的覆盖边界
 
 以下不能从当前基本门禁的成功推断为已经完成验收，也不能用 `skip`、预期失败或假 SDK 回包变成绿色：

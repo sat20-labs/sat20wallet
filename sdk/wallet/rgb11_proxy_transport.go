@@ -326,6 +326,26 @@ func (p *rgb11Manager) publishRGB11ProxyConsignment(ctx context.Context,
 	if pending.State.Status == "relayed" || pending.State.Status == rgb11StatusBroadcastAttempted {
 		return endpoints[0].invoice, nil
 	}
+	if owner := p.accountManagementOwner(); owner != nil {
+		if err := p.syncRGB11OperationRecovery(ctx); err != nil {
+			return "", err
+		}
+	}
+	expected := pending
+	pending, err = p.rgbManager.projectionStore.LoadPendingTransfer(transferID)
+	if err != nil {
+		return "", err
+	}
+	if !sameRGB11BroadcastIntent(expected, pending) {
+		return "", ErrRGB11Inconsistent
+	}
+	if rgb11BroadcastCompleteStatus(pending.State.Status) ||
+		pending.State.Status == "relayed" || pending.State.Status == rgb11StatusBroadcastAttempted {
+		return endpoints[0].invoice, nil
+	}
+	if pending.State.Status != "prepared" {
+		return "", ErrRGB11Inconsistent
+	}
 	consignment, err := rgb11TransferFile(pending.RecipientConsignment)
 	if err != nil {
 		return "", err
@@ -335,6 +355,7 @@ func (p *rgb11Manager) publishRGB11ProxyConsignment(ctx context.Context,
 		value := pending.State.RecipientVout
 		vout = &value
 	}
+	baseline := cloneRGB11BroadcastIntent(pending)
 	var attempts []error
 	for _, endpoint := range endpoints {
 		err := rgb11ProxyPostConsignment(
@@ -346,12 +367,59 @@ func (p *rgb11Manager) publishRGB11ProxyConsignment(ctx context.Context,
 		}
 		pending.State.Status = "relayed"
 		pending.State.RelayDurability = "STANDARD_PROXY"
-		if err := p.rgbManager.projectionStore.SavePendingTransferState(pending); err != nil {
+		if err := p.rgbManager.projectionStore.CompareAndSavePendingTransferStates([]*rgb11wallet.PendingTransfer{baseline}, []*rgb11wallet.PendingTransfer{pending}); err != nil {
+			return "", err
+		}
+		if err := p.autoBackupRGB11AfterMutation(); err != nil {
 			return "", err
 		}
 		return endpoint.invoice, nil
 	}
 	return "", errors.Join(attempts...)
+}
+
+func (p *rgb11Manager) ensureRGB11ProxyPositiveAck(ctx context.Context,
+	endpoint, recipientID string, expected *corewallet.ReceiveRequest) error {
+	if owner := p.accountManagementOwner(); owner != nil {
+		if err := p.syncRGB11OperationRecovery(ctx); err != nil {
+			return err
+		}
+	}
+	if expected == nil || expected.RequestID == "" {
+		return ErrRGB11Inconsistent
+	}
+	current, err := p.rgbManager.engine.LoadReceive(expected.RequestID)
+	if err != nil {
+		return err
+	}
+	expectedSeal, err := expected.Seal.StrictBytes()
+	if err != nil {
+		return err
+	}
+	currentSeal, err := current.Seal.StrictBytes()
+	if err != nil {
+		return err
+	}
+	if current.RequestID != expected.RequestID || current.Mode != expected.Mode ||
+		current.RecipientID != expected.RecipientID || current.Invoice != expected.Invoice ||
+		current.Expiry != expected.Expiry || !bytes.Equal(current.WitnessScript, expected.WitnessScript) ||
+		!bytes.Equal(currentSeal, expectedSeal) ||
+		(current.Status != corewallet.ReceiveAcknowledged && current.Status != corewallet.ReceiveAccepted) ||
+		current.TransferID == "" || current.ObjectHash == "" {
+		return ErrRGB11Inconsistent
+	}
+	state, err := p.rgbManager.projectionStore.LoadTransferState(current.TransferID)
+	if err != nil {
+		return err
+	}
+	if state.Direction != "receive" || state.ReceiveRequestID != current.RequestID ||
+		state.ConsignmentHash != current.ObjectHash ||
+		current.WitnessTxID != "" && state.WitnessTxID != current.WitnessTxID ||
+		(state.Status != "awaiting_broadcast" && state.Status != "pending" &&
+			state.Status != "settled" && state.Status != "orphaned") {
+		return ErrRGB11Inconsistent
+	}
+	return rgb11ProxyEnsureAck(ctx, endpoint, recipientID, true)
 }
 
 func (p *rgb11Manager) ReceiveRGB11ProxyConsignment(ctx context.Context,
@@ -374,7 +442,7 @@ func (p *rgb11Manager) ReceiveRGB11ProxyConsignment(ctx context.Context,
 			txID = state.WitnessTxID
 		}
 		for _, endpoint := range endpoints {
-			if err := rgb11ProxyEnsureAck(ctx, endpoint.url, recipientID, true); err == nil {
+			if err := p.ensureRGB11ProxyPositiveAck(ctx, endpoint.url, recipientID, request); err == nil {
 				return &RGB11ProxyReceiveResult{
 					RequestID: requestID, Endpoint: endpoint.invoice, TxID: txID, AckPosted: true,
 				}, nil
@@ -391,13 +459,14 @@ func (p *rgb11Manager) ReceiveRGB11ProxyConsignment(ctx context.Context,
 		if acceptErr != nil {
 			if !errors.Is(acceptErr, coreconsignment.ErrWitnessUnresolved) &&
 				!errors.Is(acceptErr, coreconsignment.ErrOutpointUnknown) {
-				for _, endpoint := range endpoints {
-					rgb11ProxyPostNackIfTerminal(ctx, endpoint.url, recipientID, acceptErr)
-				}
-				return nil, p.finishRGB11ProxyTerminal(requestID, raw, acceptErr)
+				// The request is already locally ACKed, and the remote ACK may have
+				// been accepted even if its response was lost. A later chain-evidence
+				// mismatch cannot revoke that external commitment or release its
+				// recovery material; surface the error and let the same request retry.
+				return nil, acceptErr
 			}
 			for _, endpoint := range endpoints {
-				if err := rgb11ProxyEnsureAck(ctx, endpoint.url, recipientID, true); err == nil {
+				if err := p.ensureRGB11ProxyPositiveAck(ctx, endpoint.url, recipientID, request); err == nil {
 					state, _ := p.rgbManager.projectionStore.LoadTransferState(request.TransferID)
 					var vout *uint32
 					if state != nil && len(state.OutputOutPoints) > 0 {
@@ -417,7 +486,7 @@ func (p *rgb11Manager) ReceiveRGB11ProxyConsignment(ctx context.Context,
 		}
 		actualTxID := request.WitnessTxID
 		var actualVout *uint32
-		if state, loadErr := p.rgbManager.projectionStore.LoadTransferState(receipt.TransferID); loadErr == nil {
+		if state, loadErr := p.rgbManager.projectionStore.LoadTransferState(request.TransferID); loadErr == nil {
 			actualTxID = state.WitnessTxID
 			if len(state.OutputOutPoints) == 1 {
 				if value, ok := outpointVout(state.OutputOutPoints[0]); ok &&
@@ -427,7 +496,7 @@ func (p *rgb11Manager) ReceiveRGB11ProxyConsignment(ctx context.Context,
 			}
 		}
 		for _, endpoint := range endpoints {
-			if err := rgb11ProxyEnsureAck(ctx, endpoint.url, recipientID, true); err == nil {
+			if err := p.ensureRGB11ProxyPositiveAck(ctx, endpoint.url, recipientID, request); err == nil {
 				return &RGB11ProxyReceiveResult{
 					RequestID: requestID, Endpoint: endpoint.invoice, TxID: actualTxID,
 					Vout: actualVout, Receipt: receipt, AckPosted: true,
@@ -466,7 +535,7 @@ func (p *rgb11Manager) ReceiveRGB11ProxyConsignment(ctx context.Context,
 					rgb11ProxyPostNackIfTerminal(ctx, endpoint.url, recipientID, preparedErr)
 					return nil, p.finishRGB11ProxyTerminal(requestID, raw, preparedErr)
 				}
-				if err := rgb11ProxyEnsureAck(ctx, endpoint.url, recipientID, true); err != nil {
+				if err := p.ensureRGB11ProxyPositiveAck(ctx, endpoint.url, recipientID, request); err != nil {
 					return nil, err
 				}
 				return &RGB11ProxyReceiveResult{
@@ -504,7 +573,7 @@ func (p *rgb11Manager) ReceiveRGB11ProxyConsignment(ctx context.Context,
 			rgb11ProxyPostNackIfTerminal(ctx, endpoint.url, recipientID, err)
 			return nil, p.finishRGB11ProxyTerminal(requestID, raw, err)
 		}
-		if err := rgb11ProxyEnsureAck(ctx, endpoint.url, recipientID, true); err != nil {
+		if err := p.ensureRGB11ProxyPositiveAck(ctx, endpoint.url, recipientID, request); err != nil {
 			return nil, err
 		}
 		return &RGB11ProxyReceiveResult{
@@ -523,13 +592,20 @@ func (p *rgb11Manager) finishRGB11ProxyTerminal(requestID string, raw []byte, va
 		p.rgbManager.projectionStore == nil {
 		return validationErr
 	}
+	request, err := p.rgbManager.engine.LoadReceive(requestID)
+	if err != nil {
+		return errors.Join(validationErr, err)
+	}
+	if request.Status == corewallet.ReceiveAcknowledged ||
+		request.Status == corewallet.ReceiveAccepted || request.Status == corewallet.ReceiveSettled {
+		// A positive ACK may already have reached the sender even when the
+		// receiver only knows that the response was lost. Keep all recovery
+		// responsibility until a verified transition advances it safely.
+		return validationErr
+	}
 	var cleanupErr error
 	if err := p.releaseRGB11ReceiveReservation(requestID); err != nil {
 		cleanupErr = errors.Join(cleanupErr, err)
-	}
-	request, err := p.rgbManager.engine.LoadReceive(requestID)
-	if err != nil {
-		return errors.Join(validationErr, cleanupErr, err)
 	}
 	transferID := request.TransferID
 	if transferID == "" && len(raw) != 0 {
@@ -539,7 +615,7 @@ func (p *rgb11Manager) finishRGB11ProxyTerminal(requestID string, raw []byte, va
 	}
 	objectHash := sha256.Sum256(raw)
 	if transferID != "" && len(raw) != 0 {
-		if err := p.rgbManager.engine.MarkRelayRejected(
+		if err := p.rgbManager.rejectRGB11ReceiveLocal(
 			requestID, transferID, hex.EncodeToString(objectHash[:]), "validation-failed",
 		); err != nil && !errors.Is(err, corewallet.ErrReceiveState) {
 			cleanupErr = errors.Join(cleanupErr, err)
@@ -547,9 +623,15 @@ func (p *rgb11Manager) finishRGB11ProxyTerminal(requestID string, raw []byte, va
 	}
 	if request.TransferID != "" {
 		if state, loadErr := p.rgbManager.projectionStore.LoadTransferState(request.TransferID); loadErr == nil {
+			baseline := *state
 			state.AckStatus = "rejected"
 			state.Status = "rejected"
 			state.RejectReason = "validation-failed"
+			// Publish the matching terminal state before releasing any carrier.
+			// A concurrent accepted/settled receive must keep all of its protections.
+			if err := p.rgbManager.projectionStore.CompareAndSaveTransferState(&baseline, state); err != nil {
+				return errors.Join(validationErr, cleanupErr, err)
+			}
 			locked := p.utxoLockerL1.GetLockedUtxoList()
 			for _, outpoint := range state.OutputOutPoints {
 				if lock := locked[outpoint]; lock != nil && lock.Reason == rgb11wallet.LockReasonPending {
@@ -557,9 +639,6 @@ func (p *rgb11Manager) finishRGB11ProxyTerminal(requestID string, raw []byte, va
 						cleanupErr = errors.Join(cleanupErr, err)
 					}
 				}
-			}
-			if err := p.rgbManager.projectionStore.SaveTransferState(state); err != nil {
-				cleanupErr = errors.Join(cleanupErr, err)
 			}
 			if err := p.rgbManager.projectionStore.DeletePreparedReceive(request.TransferID); err != nil &&
 				!errors.Is(err, indexer.ErrKeyNotFound) {
@@ -704,10 +783,14 @@ func (p *rgb11Manager) FetchRGB11ProxyAck(ctx context.Context,
 	if pending.State.TransportMode != RGB11ProxyTransport {
 		return nil, ErrRGB11ProxyNoEndpoint
 	}
+	if pending.State.Status == "rejected" {
+		return &RGB11ProxyAckResult{TransferID: transferID, Available: true, Accepted: false}, nil
+	}
 	_, endpoints, err := rgb11ProxyInvoice(pending.State.Invoice)
 	if err != nil {
 		return nil, err
 	}
+	baseline := cloneRGB11BroadcastIntent(pending)
 	var attempts []error
 	var unavailable *RGB11ProxyAckResult
 	for _, endpoint := range endpoints {
@@ -733,7 +816,7 @@ func (p *rgb11Manager) FetchRGB11ProxyAck(ctx context.Context,
 		result.Accepted = *decision
 		if *decision {
 			pending.State.AckStatus = "accepted"
-			if err := p.rgbManager.projectionStore.SavePendingTransferState(pending); err != nil {
+			if err := p.rgbManager.projectionStore.CompareAndSavePendingTransferStates([]*rgb11wallet.PendingTransfer{baseline}, []*rgb11wallet.PendingTransfer{pending}); err != nil {
 				return nil, err
 			}
 		} else if pending.State.Status == "prepared" || pending.State.Status == "relayed" {
@@ -745,12 +828,12 @@ func (p *rgb11Manager) FetchRGB11ProxyAck(ctx context.Context,
 			if loadErr != nil {
 				return nil, loadErr
 			}
-			if cancelErr := p.cancelRGB11PendingBatch(batch, "recipient-rejected", nil); cancelErr != nil {
+			if cancelErr := p.cancelRGB11RejectedPendingBatch(batch, "recipient-rejected", nil); cancelErr != nil {
 				return nil, cancelErr
 			}
 		} else {
 			pending.State.AckStatus = "rejected-after-broadcast"
-			if err := p.rgbManager.projectionStore.SavePendingTransferState(pending); err != nil {
+			if err := p.rgbManager.projectionStore.CompareAndSavePendingTransferStates([]*rgb11wallet.PendingTransfer{baseline}, []*rgb11wallet.PendingTransfer{pending}); err != nil {
 				return nil, err
 			}
 		}

@@ -59,7 +59,7 @@ func (p *Manager) applyAccountManagedRebaseForSync(
 	if err != nil {
 		return err
 	}
-	return p.withAccountLocalState(applicationLocked, func() error {
+	err = p.withAccountLocalState(applicationLocked, func() error {
 		if err := p.checkAccountManagedDataImport(); err != nil {
 			return err
 		}
@@ -71,9 +71,15 @@ func (p *Manager) applyAccountManagedRebaseForSync(
 		if err := p.updateAccountManagedDataImportStage(accountManagedImportStageProviderImport); err != nil {
 			return err
 		}
-		if err := p.importAccountManagedDataSnapshot(mergedData); err != nil {
-			return err
-		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if err := p.importAccountManagedDataSnapshot(mergedData); err != nil {
+		return err
+	}
+	return p.withAccountLocalState(applicationLocked, func() error {
 		if err := p.finishAccountManagedRemoteImport(); err != nil {
 			return err
 		}

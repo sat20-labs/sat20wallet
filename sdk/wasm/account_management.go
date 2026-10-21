@@ -14,13 +14,10 @@ import (
 	"strings"
 	"sync"
 	"syscall/js"
-	"time"
 
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 	walletsdk "github.com/sat20-labs/sat20wallet/sdk/wallet"
 )
-
-const accountSessionTTL = 20 * time.Minute
 
 type accountLocatorPayload = walletsdk.AccountPublicLocator
 
@@ -32,7 +29,6 @@ type accountActivationSession struct {
 	GuardianVerified bool
 	GuardianShare    *account.RecoveryShare
 	RequestPrivate   []byte
-	ExpiresAt        time.Time
 }
 
 type accountRecoverySession struct {
@@ -45,7 +41,6 @@ type accountRecoverySession struct {
 	Backup         *account.Backup
 	Secret         []byte
 	ManagedState   *walletsdk.RecoveredAccountManagementState
-	ExpiresAt      time.Time
 }
 
 var accountSessions = struct {
@@ -229,22 +224,6 @@ func clearAccountSessions() {
 	for id, session := range accountSessions.recovery {
 		clearAccountRecoverySession(session)
 		delete(accountSessions.recovery, id)
-	}
-}
-
-func accountCleanupSessions() {
-	now := time.Now()
-	for id, session := range accountSessions.activation {
-		if session == nil || now.After(session.ExpiresAt) {
-			clearAccountActivationSession(session)
-			delete(accountSessions.activation, id)
-		}
-	}
-	for id, session := range accountSessions.recovery {
-		if session == nil || now.After(session.ExpiresAt) {
-			clearAccountRecoverySession(session)
-			delete(accountSessions.recovery, id)
-		}
 	}
 }
 
@@ -533,7 +512,7 @@ func accountCreateRecovery(this js.Value, args []js.Value) any {
 				}
 				summary := account.SummarizeBackup(pkg.Envelope.Locator, backup)
 				session = &accountActivationSession{Package: pkg, Summary: summary, Authorization: *storage,
-					Locator: locator, ExpiresAt: time.Now().Add(accountSessionTTL)}
+					Locator: locator}
 				result := map[string]any{
 					"session_id": sessionID, "locator": locatorText, "user_share": userShare,
 					"summary": summary, "storage": storage.Summary,
@@ -621,7 +600,6 @@ func accountCheckGuardianSetup(this js.Value, args []js.Value) any {
 			return nil, -1, "invalid guardian receipt"
 		}
 		accountSessions.Lock()
-		accountCleanupSessions()
 		session := accountSessions.activation[request.SessionID]
 		accountSessions.Unlock()
 		if session == nil || session.Package == nil || session.Package.Manifest.Guardian == nil {
@@ -669,7 +647,6 @@ func accountRehearse(this js.Value, args []js.Value) any {
 	}
 	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
 		accountSessions.Lock()
-		accountCleanupSessions()
 		session := accountSessions.activation[request.SessionID]
 		accountSessions.Unlock()
 		if session == nil || session.Package == nil {
@@ -718,10 +695,8 @@ func accountRehearse(this js.Value, args []js.Value) any {
 			session.Package.Envelope.Locator, publicLocator); err != nil {
 			return nil, -1, err.Error()
 		}
-		zeroAccountBytes(session.RequestPrivate)
-		session.RequestPrivate = nil
-		session.GuardianShare = nil
 		accountSessions.Lock()
+		clearAccountActivationSession(session)
 		delete(accountSessions.activation, request.SessionID)
 		accountSessions.Unlock()
 		data, err := accountStructData(map[string]any{"summary": session.Summary, "verified": true})
@@ -753,8 +728,7 @@ func accountLoadRecovery(this js.Value, args []js.Value) any {
 			return nil, -1, err.Error()
 		}
 		accountSessions.Lock()
-		accountCleanupSessions()
-		accountSessions.recovery[sessionID] = &accountRecoverySession{Package: pkg, Locator: locator, ExpiresAt: time.Now().Add(accountSessionTTL)}
+		accountSessions.recovery[sessionID] = &accountRecoverySession{Package: pkg, Locator: locator}
 		accountSessions.Unlock()
 		questions := make([]account.KnowledgeQuestion, 0, len(pkg.KnowledgeBundle.QuestionShares))
 		for _, entry := range pkg.KnowledgeBundle.QuestionShares {
@@ -776,7 +750,6 @@ func accountRecoverKnowledge(this js.Value, args []js.Value) any {
 	}
 	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
 		accountSessions.Lock()
-		accountCleanupSessions()
 		session := accountSessions.recovery[request.SessionID]
 		accountSessions.Unlock()
 		if session == nil || session.Package == nil {
@@ -805,7 +778,6 @@ func accountSetUserShare(this js.Value, args []js.Value) any {
 			return nil, -1, err.Error()
 		}
 		accountSessions.Lock()
-		accountCleanupSessions()
 		session := accountSessions.recovery[request.SessionID]
 		accountSessions.Unlock()
 		if session == nil || session.Package == nil || share.PackageID != session.Package.Envelope.Locator.PackageID {
@@ -825,7 +797,6 @@ func accountCreateGuardianRequest(this js.Value, args []js.Value) any {
 	}
 	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
 		accountSessions.Lock()
-		accountCleanupSessions()
 		recoverySession := accountSessions.recovery[request.SessionID]
 		activationSession := accountSessions.activation[request.SessionID]
 		accountSessions.Unlock()
@@ -930,7 +901,6 @@ func accountConsumeGuardianResponse(this js.Value, args []js.Value) any {
 	}
 	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
 		accountSessions.Lock()
-		accountCleanupSessions()
 		recoverySession := accountSessions.recovery[request.SessionID]
 		activationSession := accountSessions.activation[request.SessionID]
 		accountSessions.Unlock()
@@ -985,7 +955,6 @@ func accountPreviewRecovery(this js.Value, args []js.Value) any {
 	}
 	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
 		accountSessions.Lock()
-		accountCleanupSessions()
 		session := accountSessions.recovery[request.SessionID]
 		accountSessions.Unlock()
 		if session == nil || session.Package == nil {
@@ -1027,7 +996,6 @@ func accountPreviewRecovery(this js.Value, args []js.Value) any {
 		}
 		clearWASMBackup(&backup)
 		accountSessions.Lock()
-		accountCleanupSessions()
 		if accountSessions.recovery[request.SessionID] != session {
 			accountSessions.Unlock()
 			zeroAccountBytes(secret)
@@ -1040,7 +1008,6 @@ func accountPreviewRecovery(this js.Value, args []js.Value) any {
 		session.Secret = secret
 		session.Backup = &latestBackup
 		session.ManagedState = managed
-		session.ExpiresAt = time.Now().Add(accountSessionTTL)
 		accountSessions.Unlock()
 		data, err := accountStructData(map[string]any{"summary": account.SummarizeBackup(session.Package.Envelope.Locator, latestBackup)})
 		if err != nil {
@@ -1063,9 +1030,12 @@ func accountCommitRecovery(this js.Value, args []js.Value) any {
 			return nil, -1, "Manager not initialized"
 		}
 		accountSessions.Lock()
-		accountCleanupSessions()
 		session := accountSessions.recovery[request.SessionID]
-		if session == nil || session.Backup == nil {
+		if session == nil {
+			accountSessions.Unlock()
+			return nil, -1, "recovery session expired"
+		}
+		if session.Backup == nil {
 			accountSessions.Unlock()
 			return nil, -1, "account recovery preview is required"
 		}

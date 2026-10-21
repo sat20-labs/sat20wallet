@@ -4,9 +4,10 @@
       <Checkbox :checked="isSelected" @update:checked="() => handleToggleSelect()" />
     </TableCell>
     <TableCell class="truncate">
-      <a :href="explorerUrl" target="_blank" class="text-blue-400 underline">
+      <a v-if="explorerUrl" :href="explorerUrl" target="_blank" class="text-blue-400 underline">
         {{ displayUtxo }}
       </a>
+      <span v-else>{{ displayUtxo }}</span>
     </TableCell>
     <TableCell class="truncate">{{ utxo.reason || '-' }}</TableCell>
     <TableCell class="truncate">{{ formattedLockedTime }}</TableCell>
@@ -53,6 +54,7 @@ const emit = defineEmits<{
 const displayUtxo = computed(() => hideAddress(props.utxo.utxo))
 
 const explorerUrl = computed(() => {
+  if (props.network === 'regtest') return ''
   // 如果是SatoshiNet链，跳转到sat20浏览器
   const baseUrl = props.network === 'testnet'
     ? 'https://testnet.sat20.org/browser/app/#/explorer/utxo'

@@ -136,7 +136,7 @@ func EncodeManagedDataBundle(value ManagedDataBundle) ([]byte, error) {
 		writeManagedDataBytes(&buf, item.Payload)
 	}
 	if buf.Len() > ManagedDataMaxPayload {
-		return nil, fmt.Errorf("account-managed data exceeds blob limit")
+		return nil, fmt.Errorf("account-managed data is %d bytes; blob limit is %d bytes", buf.Len(), ManagedDataMaxPayload)
 	}
 	return buf.Bytes(), nil
 }
@@ -329,7 +329,7 @@ func SealManagedDataBundleWithInfo(secret []byte, accountID string, bundle Manag
 	result = append(result, nonce...)
 	result = append(result, ciphertext...)
 	if len(result) > ManagedDataMaxPayload {
-		return nil, ManagedDataEnvelopeInfo{}, fmt.Errorf("encrypted account-managed data exceeds blob limit")
+		return nil, ManagedDataEnvelopeInfo{}, fmt.Errorf("encrypted account-managed data is %d bytes; blob limit is %d bytes", len(result), ManagedDataMaxPayload)
 	}
 	return result, ManagedDataEnvelopeInfo{Compressed: compressed}, nil
 }

@@ -88,8 +88,8 @@ func newPOSPWAL1Indexer(t *testing.T, bootstrapPub string, parentByPub map[strin
 	}
 	// Read-only issuance eligibility used by the partial/remainder mint UI
 	// case. The fixture does not claim to index a successful inscription.
-	f.assets.Network.State.Tickers["ordx:f:PWAMINT"] = fakeTickerInfo("ordx:f:PWAMINT", "10000", 0, 1)
-	f.assets.Network.State.Tickers["ordx:f:PWAMINT"].Limit = "1000"
+	f.assets.Network.State.Tickers["ordx:f:pwamint"] = fakeTickerInfo("ordx:f:pwamint", "10000", 0, 1)
+	f.assets.Network.State.Tickers["ordx:f:pwamint"].Limit = "1000"
 	f.confirmedAssets = f.assets.Network.Clone()
 	server := httptest.NewServer(http.HandlerFunc(f.serveHTTP))
 	f.nodeFixture = &fakeL1Indexer{server: server, names: make(map[string]string)}
@@ -98,6 +98,22 @@ func newPOSPWAL1Indexer(t *testing.T, bootstrapPub string, parentByPub map[strin
 }
 
 func (f *posPWAL1Indexer) NodeFixture() *fakeL1Indexer { return f.nodeFixture }
+
+// Nodes validate the configured L1 server's fixed identity. The miner uses
+// its Core's identity, while all endpoints still share this one L1 ledger.
+func (f *posPWAL1Indexer) NodeFixtureForParent(t *testing.T, parentPub string) *fakeL1Indexer {
+	t.Helper()
+	require.NotEmpty(t, parentPub)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/testnet/v3/indexer/pubkey" {
+			posPWAL1JSON(w, indexerwire.IndexerPubKeyResp{PubKey: parentPub})
+			return
+		}
+		f.serveHTTP(w, r)
+	}))
+	t.Cleanup(server.Close)
+	return &fakeL1Indexer{server: server, names: make(map[string]string)}
+}
 
 func (f *posPWAL1Indexer) SeedUTXO(t *testing.T, output *indexercommon.AssetsInUtxo) {
 	t.Helper()
@@ -854,7 +870,7 @@ func (f *posPWAL1Indexer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			posPWAL1Error(w, fmt.Errorf("unsupported mint protocol %s", protocol))
 			return
 		}
-		name := indexercommon.AssetName{Protocol: protocol, Type: "f", Ticker: parts[0]}
+		name := indexercommon.AssetName{Protocol: protocol, Type: "f", Ticker: strings.ToLower(parts[0])}
 		info := f.confirmedAssets.State.Tickers[name.String()]
 		// This fixture supports unrestricted integer ORDX/BRC20 deployments. Read
 		// actual confirmed inscriptions and unspent assets; never seed a mint
@@ -894,11 +910,7 @@ func (f *posPWAL1Indexer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		posPWAL1JSON(w, indexerwire.RegisterPubKeyResp{BaseResp: ok, PubKey: pub})
 	case path == "/v3/indexer/pubkey":
-		pub := f.bootstrapPub
-		if parent := f.parentByPub[r.Header.Get("pubkey")]; parent != "" {
-			pub = parent
-		}
-		posPWAL1JSON(w, indexerwire.IndexerPubKeyResp{BaseResp: ok, PubKey: pub})
+		posPWAL1JSON(w, indexerwire.IndexerPubKeyResp{BaseResp: ok, PubKey: f.bootstrapPub})
 	case path == "/bestheight":
 		posPWAL1JSON(w, indexerwire.BestHeightResp{BaseResp: ok, Data: map[string]int{"height": int(f.height)}})
 	case path == "/btc/block/bestblockheight":
@@ -1008,6 +1020,9 @@ func (f *posPWAL1Indexer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	case strings.HasPrefix(path, "/v3/tick/info/"):
 		name := strings.TrimPrefix(path, "/v3/tick/info/")
+		if strings.HasPrefix(name, "ordx:") || strings.HasPrefix(name, "brc20:") {
+			name = strings.ToLower(name)
+		}
 		info := f.assets.Network.State.Tickers[name]
 		if info == nil {
 			posPWAL1Error(w, fmt.Errorf("ticker not found: %s", name))

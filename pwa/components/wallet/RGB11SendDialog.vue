@@ -34,7 +34,7 @@
 
         <template v-if="transferMode === 'address'">
           <div class="rounded-md border border-amber-800 bg-amber-950/40 p-3 text-xs text-amber-300">
-            {{ carrierWarning || $t('rgb11Transfer.carrierWarning') }}
+            {{ carrierWarning.replace(/\bRGB11\b/g, 'RGB') || $t('rgb11Transfer.carrierWarning') }}
           </div>
 
           <div class="space-y-2">
@@ -160,6 +160,7 @@ import { useI18n } from 'vue-i18n'
 import { storeToRefs } from 'pinia'
 import walletManager from '@/utils/sat20'
 import rgb11Address from '@/utils/rgb11Address'
+import { walletRequestSessionGuard } from '@/lib/walletSession'
 import { beginNamedPwaOperation, finishPwaOperation, type PwaOperationContext } from '@/utils/pwaOperationLog'
 import { updateOperationLog } from '@/utils/operationLog'
 import { matchesRGB11Summary, rgb11Schema, rgb11ResumedPackageSetMatches } from '@/utils/rgb11Oob'
@@ -247,21 +248,24 @@ const sendByAddress = async () => {
   message.value = ''
   success.value = false
   temporaryDelivery.value = false
-  const operation = await beginNamedPwaOperation({
-    category: 'rgb11',
-    action: 'rgb11_send_address',
-    title: 'Send RGB asset',
-    summary: 'Sending an RGB11 asset to a wallet address',
-    parameters: {
-      contract_id: assetContractID.value,
-      asset: assetName.value,
-      amount_raw: amountRaw.value,
-      destination: receiverAddress.value,
-      fee_rate: String(Number(btcFeeRate.value || 1)),
-    },
-    successMessage: 'RGB address transfer broadcast',
-  })
+  let operation: PwaOperationContext | null = null
   try {
+    const checkSession = walletRequestSessionGuard('prepareRGB11AddressTransfer')
+    operation = await beginNamedPwaOperation({
+      category: 'rgb11',
+      action: 'rgb11_send_address',
+      title: 'Send RGB asset',
+      summary: 'Sending an RGB asset to a wallet address',
+      parameters: {
+        contract_id: assetContractID.value,
+        asset: assetName.value,
+        amount_raw: amountRaw.value,
+        destination: receiverAddress.value,
+        fee_rate: String(Number(btcFeeRate.value || 1)),
+      },
+      successMessage: 'RGB address transfer broadcast',
+    })
+    checkSession()
     let id = transferId.value
     if (!id) {
       const [prepareErr, prepareResult] = await rgb11Address.prepareTransfer({
@@ -271,6 +275,7 @@ const sendByAddress = async () => {
         fee_rate: Number(btcFeeRate.value || 1),
         min_confirmations: 1,
       })
+      checkSession()
       if (prepareErr || !prepareResult?.transfer) {
         const reason = prepareErr?.message || t('rgb11Transfer.prepareFailed')
         if (/traditional RGB invoice|no RGB11 .*address capability/i.test(reason)) {
@@ -292,9 +297,11 @@ const sendByAddress = async () => {
       })
     }
 
+    checkSession()
     const [sendErr, sendResult] = await rgb11Address.deliverAndBroadcast({
       transfer_id: id,
     })
+    checkSession()
 	if (sendErr || !sendResult) throw sendErr || new Error(t('rgb11Transfer.broadcastFailed'))
     temporaryDelivery.value = !!sendResult.temporary
 	if (sendResult.awaiting_ack) {
@@ -332,7 +339,7 @@ const prepareTraditional = async () => {
     category: 'rgb11',
     action: 'rgb11_prepare_send',
     title: 'Prepare RGB transfer',
-    summary: 'Preparing an RGB11 transfer from the send dialog',
+    summary: 'Preparing an RGB transfer from the send dialog',
     parameters: {
       contract_id: assetContractID.value,
       amount_raw: amountRaw.value,
@@ -373,7 +380,7 @@ const prepareTraditional = async () => {
       } else if (transportMode === 'out-of-band') {
         items.push({ transferId: state.transfer_id, transportMode, state, summary: '', matched: '', confirmed: false })
       } else {
-        throw new Error(`unsupported RGB11 invoice transport: ${transportMode || 'missing'}`)
+        throw new Error(`unsupported RGB invoice transport: ${transportMode || 'missing'}`)
       }
     }
     if (scope !== scopeKey.value) throw new Error(t('rgb11Transfer.scopeChanged'))
@@ -435,7 +442,7 @@ const deliverProxyTransfer = async (parentOperation: PwaOperationContext | null 
     category: 'rgb11',
     action: 'rgb11_retry_proxy_delivery',
     title: 'Retry RGB proxy delivery',
-    summary: 'Retrying delivery and broadcast for an RGB11 proxy transfer',
+    summary: 'Retrying delivery and broadcast for an RGB proxy transfer',
     parameters: {
       transfer_id: transferId.value,
       transfer_count: String(batchItems.value.length),
@@ -596,7 +603,7 @@ const broadcastTraditional = async () => {
     category: 'rgb11',
     action: 'rgb11_broadcast_out_of_band',
     title: 'Broadcast RGB transfer',
-    summary: 'Broadcasting a prepared out-of-band RGB11 transfer',
+    summary: 'Broadcasting a prepared out-of-band RGB transfer',
     parameters: {
       transfer_id: transferId.value,
       transfer_count: String(batchItems.value.length),

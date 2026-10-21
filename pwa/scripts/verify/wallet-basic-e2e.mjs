@@ -29,6 +29,8 @@ const poll = { timeout: 120000, intervals: [250, 500, 1000] }
 export async function runPwaWalletBasicCases(t, fixture) {
   const { check, device, ready, walletCall } = t
   const actor = fixture.basicWallet
+  const network = fixture.config?.Chain ?? 'testnet'
+  const btcUnit = network === 'mainnet' ? 'BTC' : network === 'regtest' ? 'rBTC' : 'tBTC'
   assert.ok(actor?.mnemonic && actor.address && actor.password, 'funded basic wallet fixture is required')
   const contexts = []
   const fresh = async () => {
@@ -66,13 +68,16 @@ export async function runPwaWalletBasicCases(t, fixture) {
     await expect(page.getByRole('heading', { name: 'System Settings', exact: true })).toBeVisible()
   }
   const walletBalance = page => page.getByText('TOTAL BALANCE', { exact: true }).locator('..').getByRole('heading', { level: 2 })
+  const createdPassword = 'Pwa-create-only-2026!'
+  let createdPage
   let page
   let originalIdentity
 
   try {
     await check(requiredPwaWalletBasicCases[0], async () => {
       const created = await fresh()
-      const password = 'Pwa-create-only-2026!'
+      createdPage = created
+      const password = createdPassword
       await visit(created, '/create')
       await created.getByLabel('Password', { exact: true }).fill(password)
       await created.getByLabel('Confirm Password', { exact: true }).fill(password)
@@ -89,12 +94,13 @@ export async function runPwaWalletBasicCases(t, fixture) {
       await expect(created.getByRole('tab', { name: 'Bitcoin', exact: true })).toBeVisible()
       const before = await identity(created)
       assert.equal(before.locked, false)
-      assert.equal(before.network, 'testnet')
+      assert.equal(before.network, network)
       assert.equal((await walletCall(created, 'getWalletCatalog')).wallets.length, 1)
       assert.equal((await walletCall(created, 'getWalletAddress', 0)).address, before.address)
       await reloadUnlock(created, password)
       assert.deepEqual(await identity(created), before, 'reload changed the newly created wallet')
-      await created.context().close()
+      // Reuse this already-created identity for the no-owned-name negative
+      // case; the funded fixture may legitimately own names on a real chain.
     })
 
     await check(requiredPwaWalletBasicCases[1], async () => {
@@ -104,10 +110,10 @@ export async function runPwaWalletBasicCases(t, fixture) {
       await page.getByLabel('New Wallet Password', { exact: true }).fill(actor.password)
       await page.getByLabel('Confirm Password', { exact: true }).fill(actor.password)
       await page.getByRole('button', { name: 'Import Wallet', exact: true }).click()
-      await expect(page.getByRole('tab', { name: 'Bitcoin', exact: true })).toBeVisible()
+      await expect(page.getByRole('tab', { name: 'Bitcoin', exact: true })).toBeVisible({ timeout: poll.timeout })
       originalIdentity = await identity(page)
       assert.equal(originalIdentity.address, actor.address)
-      assert.equal(originalIdentity.network, 'testnet')
+      assert.equal(originalIdentity.network, network)
       assert.equal(originalIdentity.locked, false)
       assert.equal((await walletCall(page, 'getWalletAddress', 0)).address, actor.address)
       assert.equal((await walletCall(page, 'getWalletPubkey', 0)).pubKey, originalIdentity.publicKey)
@@ -115,16 +121,18 @@ export async function runPwaWalletBasicCases(t, fixture) {
         const amount = await walletCall(page, 'getAssetAmount', actor.address, '::')
         return BigInt(String(amount.availableAmt)) > 0n
       }, poll).toBe(true)
-      const totalSats = await page.evaluate(async address => {
+      const totalSats = await page.evaluate(async ({ address, network }) => {
         const api = (await import('/apis/ordx.ts')).default
-        const result = await api.getAddressSummary({ address, network: 'testnet' })
+        const result = await api.getAddressSummary({ address, network })
         if (result.code !== 0) throw new Error(result.msg)
         const total = result.data.find(asset => asset.Name.Protocol === '' && asset.Name.Type === '*')
         if (!total) throw new Error('L1 summary omitted the native total')
         return Number(total.Amount)
-      }, actor.address)
+      }, { address: actor.address, network })
       assert.ok(Number.isSafeInteger(totalSats) && totalSats > 0)
-      await expect(walletBalance(page)).toHaveText((totalSats / 1e8).toFixed(8) + ' tBTC')
+      const balanceWaitStarted = Date.now()
+      await expect(walletBalance(page)).toHaveText((totalSats / 1e8).toFixed(8) + ` ${btcUnit}`, { timeout: poll.timeout })
+      console.log(JSON.stringify({ phase: 'wallet-basic-native-balance-ready', wait_ms: Date.now() - balanceWaitStarted }))
     })
 
     await check(requiredPwaWalletBasicCases[2], async () => {
@@ -259,7 +267,16 @@ export async function runPwaWalletBasicCases(t, fixture) {
       assert.ok(Object.hasOwn(await walletCall(page, 'getAllLockedUtxo', actor.address), outpoint))
       await page.getByRole('row').filter({ hasText: 'manual' }).getByRole('button', { name: 'Unlock', exact: true }).click()
       await expect.poll(async () => Object.hasOwn(await walletCall(page, 'getAllLockedUtxo', actor.address), outpoint), poll).toBe(false)
-      await expect(page.getByText('No locked UTXOs', { exact: true })).toBeVisible()
+      // Existing RGB and other protection locks are legitimate. Removing this
+      // manual lock must restore the complete original lock set exactly.
+      assert.deepEqual(await walletCall(page, 'getAllLockedUtxo', actor.address), before,
+        'manual unlock changed another UTXO protection lock')
+      if (Object.keys(before).length === 0) {
+        await expect(page.getByText('No locked UTXOs', { exact: true })).toBeVisible()
+      } else {
+        await expect(page.locator('tbody tr')).toHaveCount(Object.keys(before).length)
+        await expect(page.getByText('No locked UTXOs', { exact: true })).toBeHidden()
+      }
     })
 
     await check(requiredPwaWalletBasicCases[8], async () => {
@@ -358,14 +375,25 @@ export async function runPwaWalletBasicCases(t, fixture) {
     })
 
     await check(requiredPwaWalletBasicCases[12], async () => {
-      const amount = await walletCall(page, 'getAssetAmount', actor.address, '::')
-      await visit(page, '/wallet/setting/referrer/register')
-      await expect(page.getByRole('heading', { name: 'Register as Referrer', exact: true })).toBeVisible()
-      await expect(page.getByText('当前地址没有可用的名字，请先注册名字后再进行推荐人注册。', { exact: true })).toBeVisible()
-      await page.getByRole('button', { name: 'Register as Referrer', exact: true }).click()
-      await expect(page.getByText('请填写完整信息', { exact: true })).toBeVisible()
-      await expect(page.getByRole('dialog')).toHaveCount(0)
-      assert.deepEqual(await walletCall(page, 'getAssetAmount', actor.address, '::'), amount)
+      assert.ok(createdPage, 'no-name case requires the wallet created through the page')
+      if ((await identity(createdPage)).locked) await unlockPage(createdPage, createdPassword)
+      const createdIdentity = await identity(createdPage)
+      const names = await createdPage.evaluate(async ({ address, network }) => {
+        const response = await (await import('/apis/ordx.ts')).default.getNsListByAddress({ address, network })
+        if (response.code !== 0) throw new Error(response.msg || 'name ownership query failed')
+        return response.data?.names ?? []
+      }, createdIdentity)
+      assert.deepEqual(names, [], 'negative fixture must have no owned name')
+      const amount = await walletCall(createdPage, 'getAssetAmount', createdIdentity.address, '::')
+      await visit(createdPage, '/wallet/setting/referrer/register')
+      await expect(createdPage.getByRole('heading', { name: 'Register as Referrer', exact: true })).toBeVisible()
+      await expect(createdPage.getByText('当前地址没有可用的名字，请先注册名字后再进行推荐人注册。', { exact: true })).toBeVisible()
+      await createdPage.getByRole('button', { name: 'Register as Referrer', exact: true }).click()
+      await expect(createdPage.getByText('请填写完整信息', { exact: true })).toBeVisible()
+      await expect(createdPage.getByRole('dialog')).toHaveCount(0)
+      assert.deepEqual(await walletCall(createdPage, 'getAssetAmount', createdIdentity.address, '::'), amount)
+      assert.deepEqual(await identity(createdPage), createdIdentity)
+      await createdPage.context().close()
     })
 
     await check(requiredPwaWalletBasicCases[13], async () => {

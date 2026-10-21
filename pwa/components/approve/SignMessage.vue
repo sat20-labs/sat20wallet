@@ -52,7 +52,7 @@ const confirm = async () => {
   const [error, result] = await walletManager.signMessage(props.data.domainPayload)
   if (error || !result) throw error || new Error('Wallet did not return a message signature')
   assertWalletIdentityReady(props.metadata?.identityGeneration)
-  emit('confirm', result)
+  emit('confirm', { ...result, domainPayload: props.data.domainPayload })
 }
 
 const cancel = () => emit('cancel')

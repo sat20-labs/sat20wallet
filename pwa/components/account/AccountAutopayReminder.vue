@@ -7,7 +7,7 @@
       <Icon icon="lucide:triangle-alert" class="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
       <div class="min-w-0">
         <div class="text-sm font-medium text-amber-400">
-          {{ autopay.can_fund ? 'AUTOPAY 需要充值' : 'AUTOPAY 状态异常' }}
+          {{ t('accountManagement.dkvsPaymentNeedsAttention') }}
         </div>
         <div class="mt-1 text-xs text-amber-400/90">
           {{ autopay.message || '账户付费同步当前不可用。' }}
@@ -15,19 +15,25 @@
       </div>
     </div>
     <Button v-if="autopay.can_fund" size="sm" variant="outline" class="shrink-0" @click="openFunding">
-      去充值
+      {{ t('accountManagement.dkvsPay') }}
     </Button>
+  </div>
+  <div v-else-if="autopay?.estimated_expiry_height" class="mb-3 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+    <span>{{ t('accountManagement.dkvsExpiryEstimate', { height: autopay.estimated_expiry_height }) }}</span>
+    <Button size="sm" variant="ghost" @click="openFunding">{{ t('accountManagement.dkvsPaymentDetails') }}</Button>
   </div>
 </template>
 
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { Icon } from '@iconify/vue'
 import { Button } from '@/components/ui/button'
 import accountSDK, { type AccountAutopayFundingStatus } from '@/utils/accountManagement'
 
 const router = useRouter()
+const { t } = useI18n()
 const autopay = ref<AccountAutopayFundingStatus | null>(null)
 let refreshTimer: ReturnType<typeof setInterval> | undefined
 

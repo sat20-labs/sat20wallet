@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,7 +18,11 @@ import (
 )
 
 func TestRGB11LockDiscardPlan(t *testing.T) {
-	_, recipient, _, _, _ := newRGB11GenericSendFixture(t)
+	wallet, _, err := NewInteralWallet(GetChainParam())
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipient := &Manager{wallet: wallet}
 	receiverID, err := dkvsAccountID(recipient.wallet)
 	if err != nil {
 		t.Fatal(err)
@@ -180,19 +186,19 @@ func TestRGB11MaintReadsProdLock(t *testing.T) {
 }
 
 func TestRGB11MaintUnlockLockView(t *testing.T) {
-	sender, recipient, imported, _, _ := newRGB11GenericSendFixture(t)
+	sender, recipient, imported, _, _ := newRGB11SendFixture(t, true)
 	balance, err := sender.GetRGB11AssetBalance(&imported.AssetName)
 	if err != nil || balance == nil || balance.Value.Sign() <= 0 {
 		t.Fatalf("balance=%v err=%v", balance, err)
 	}
-	request, err := recipient.CreateRGB11Invoice(RGB11InvoiceRequest{
+	request, err := recipient.rgbManager.CreateRGB11Invoice(RGB11InvoiceRequest{
 		Mode: "witness", TransportMode: "out-of-band", ContractID: imported.ContractID,
 		AmountRaw: balance.Value.String(), WitnessVout: 1, Expiry: time.Now().Add(time.Hour).Unix(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	prepared, err := sender.PrepareRGB11Transfer(context.Background(), RGB11SendRequest{
+	prepared, err := sender.rgbManager.PrepareRGB11Transfer(context.Background(), RGB11SendRequest{
 		Invoice: request.Invoice, FeeRate: 2, MinConfirmations: 1,
 	})
 	if err != nil {
@@ -314,23 +320,33 @@ func TestDiscardFreshSpentView(t *testing.T) {
 			BlockHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		}},
 	}
-	plan, err := manager.PlanRGB11StaleLock(target)
+	// The fresh raw lock is ownerless, but its journal still has a common
+	// reservation. Maintenance must refuse to delete a carrier owned there.
+	beforeReservations := manager.GetAllResv()
+	beforeJournal, err := manager.rgbManager.projectionStore.LoadPendingTransfer(pending.State.TransferID)
 	if err != nil {
-		t.Fatalf("fresh first stale plan: %v", err)
-	}
-	if plan.LockTime != rawLock.LockedTime || plan.LockReason != rawLock.Reason {
-		t.Fatalf("plan raw lock mismatch: %+v", plan)
-	}
-	if err := manager.ApplyRGB11StaleLock(*plan); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.ApplyRGB11StaleLock(*plan); err != nil {
-		t.Fatalf("idempotent stale apply: %v", err)
+	if len(beforeReservations) == 0 {
+		t.Fatal("fixture lacks the common reservation being protected")
+	}
+	plan, err := manager.PlanRGB11StaleLock(target)
+	if plan != nil || err == nil || !strings.Contains(err.Error(), "wallet reservation") {
+		t.Fatalf("fresh raw lock with a live reservation was not rejected: %v", err)
+	}
+	stored, err := manager.rgbManager.projectionStore.LoadPendingTransfer(pending.State.TransferID)
+	if err != nil || !reflect.DeepEqual(stored, beforeJournal) ||
+		!reflect.DeepEqual(manager.GetAllResv(), beforeReservations) {
+		t.Fatalf("rejected maintenance changed the journal or reservation: %v", err)
+	}
+	currentRaw, err := loadRGB11RawLock(manager.db, outpoint)
+	if err != nil || !reflect.DeepEqual(currentRaw, rawLock) {
+		t.Fatalf("rejected maintenance changed the raw lock: %v", err)
 	}
 	restarted := NewUtxoLocker(manager.db, nil, L1_NETWORK_BITCOIN)
 	restarted.Init()
 	locks := restarted.GetLockedUtxoList()
-	if locks[outpoint] != nil || locks[protected] == nil {
-		t.Fatalf("restarted raw locks=%+v", locks)
+	if !reflect.DeepEqual(locks[outpoint], rawLock) || locks[protected] == nil {
+		t.Fatal("rejected maintenance did not retain both locks after restart")
 	}
 }

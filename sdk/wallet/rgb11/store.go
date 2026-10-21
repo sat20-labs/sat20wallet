@@ -16,9 +16,10 @@ import (
 )
 
 var (
-	ErrProjectionMismatch = errors.New("RGB11 allocation proof does not match output projection")
-	ErrInvalidProof       = errors.New("RGB11 allocation proof is not valid")
-	ErrWalletScope        = errors.New("RGB11 wallet storage scope is not selected")
+	ErrProjectionMismatch   = errors.New("RGB11 allocation proof does not match output projection")
+	ErrInvalidProof         = errors.New("RGB11 allocation proof is not valid")
+	ErrWalletScope          = errors.New("RGB11 wallet storage scope is not selected")
+	ErrLocalSnapshotChanged = errors.New("RGB11 local snapshot changed")
 )
 
 type Locker interface {
@@ -153,7 +154,7 @@ func (s *ProjectionStore) SaveReceiveKey(key *ReceiveKey) error {
 	if err != nil {
 		return err
 	}
-	return s.db.Write(storageKey, encoded)
+	return s.writeReservationRecord(storageKey, encoded)
 }
 
 func (s *ProjectionStore) LoadReceiveKey(witnessScript []byte) (*ReceiveKey, error) {
@@ -216,7 +217,7 @@ func (s *ProjectionStore) DeleteReceiveReservation(requestID string) error {
 	if err != nil {
 		return err
 	}
-	return s.db.Delete(key)
+	return s.deleteReservationRecord(key)
 }
 
 func (s *ProjectionStore) ListReceiveReservations() ([]*ReceiveReservation, error) {
@@ -265,7 +266,7 @@ func (s *ProjectionStore) SaveLocalMetadata(name string, value []byte) error {
 	if err != nil {
 		return err
 	}
-	return s.db.Write(key, append([]byte(nil), value...))
+	return s.writeReservationRecord(key, append([]byte(nil), value...))
 }
 
 func (s *ProjectionStore) LoadLocalMetadata(name string) ([]byte, error) {
@@ -322,7 +323,7 @@ func (s *ProjectionStore) ValidateAndStoreConsignment(ctx context.Context, valid
 	if err != nil {
 		return nil, err
 	}
-	batch := s.db.NewWriteBatch()
+	batch := s.newWriteBatch()
 	if batch == nil {
 		return nil, errors.New("RGB11 KVDB returned nil write batch")
 	}
@@ -425,7 +426,7 @@ func (s *ProjectionStore) SaveContractObjectReference(contractID, consignmentHas
 	if err != nil {
 		return err
 	}
-	return s.db.Write(key, []byte(consignmentHash))
+	return s.writeReservationRecord(key, []byte(consignmentHash))
 }
 
 func (s *ProjectionStore) LoadContractObjectReference(contractID string) (string, error) {
@@ -460,7 +461,7 @@ func (s *ProjectionStore) SavePreparedObject(consignmentHash string, raw []byte)
 	if err != nil {
 		return err
 	}
-	return s.db.Write(key, append([]byte(nil), raw...))
+	return s.writeReservationRecord(key, append([]byte(nil), raw...))
 }
 
 func (s *ProjectionStore) SavePreparedReceive(transferID, requestID string) error {
@@ -475,7 +476,7 @@ func (s *ProjectionStore) SavePreparedReceive(transferID, requestID string) erro
 	if err != nil {
 		return err
 	}
-	return s.db.Write(key, []byte(requestID))
+	return s.writeReservationRecord(key, []byte(requestID))
 }
 
 func (s *ProjectionStore) LoadPreparedReceive(transferID string) (string, error) {
@@ -500,7 +501,7 @@ func (s *ProjectionStore) DeletePreparedReceive(transferID string) error {
 	if err != nil {
 		return err
 	}
-	return s.db.Delete(key)
+	return s.deleteReservationRecord(key)
 }
 
 // DiscardValidatedObject removes a consignment and its immutable validation
@@ -624,6 +625,19 @@ func (s *ProjectionStore) SavePendingTransferState(pending *PendingTransfer) err
 // SavePendingTransferStates atomically advances all recipient lifecycle
 // states belonging to one already-persisted Bitcoin batch.
 func (s *ProjectionStore) SavePendingTransferStates(pendingList []*PendingTransfer) error {
+	return s.savePendingTransferStates(pendingList, nil)
+}
+
+// CompareAndSavePendingTransferStates advances an observed batch only if its
+// exact persisted records are still current. No baseline is stored on disk.
+func (s *ProjectionStore) CompareAndSavePendingTransferStates(expected, pendingList []*PendingTransfer) error {
+	if len(expected) != len(pendingList) || len(expected) == 0 {
+		return ErrValidationReceipt
+	}
+	return s.savePendingTransferStates(pendingList, expected)
+}
+
+func (s *ProjectionStore) savePendingTransferStates(pendingList, expected []*PendingTransfer) error {
 	if len(pendingList) == 0 {
 		return ErrValidationReceipt
 	}
@@ -653,20 +667,66 @@ func (s *ProjectionStore) SavePendingTransferStates(pendingList []*PendingTransf
 			return err
 		}
 	}
+	if expected == nil {
+		return batch.Flush()
+	}
+	checks := make(map[string][]byte, len(expected))
+	for i, previous := range expected {
+		if previous == nil || previous.State.TransferID != pendingList[i].State.TransferID {
+			return ErrValidationReceipt
+		}
+		key, err := s.pendingKey(previous.State.TransferID)
+		if err != nil {
+			return err
+		}
+		baseline, err := encode(previous)
+		if err != nil {
+			return err
+		}
+		checks[string(key)] = baseline
+	}
+	return s.flushCompared(batch, checks)
+}
+
+// flushCompared checks observed local bytes inside the existing commit gate.
+// A nil expected value means the key was absent when the operation started.
+func (s *ProjectionStore) flushCompared(batch indexer.WriteBatch, expected map[string][]byte) error {
+	check := func(indexer.WriteBatch) (func(bool), error) {
+		for key, baseline := range expected {
+			current, err := s.db.Read([]byte(key))
+			if errors.Is(err, indexer.ErrKeyNotFound) && baseline == nil {
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			if !bytes.Equal(current, baseline) {
+				return nil, ErrLocalSnapshotChanged
+			}
+		}
+		return nil, nil
+	}
+	if committer, ok := batch.(ReservationCommitBatch); ok {
+		return committer.FlushWith(check)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := check(batch); err != nil {
+		return err
+	}
 	return batch.Flush()
 }
 
-// CompactSettledRecipientConsignments removes the sender-side delivery copy
-// after every recipient sharing the Bitcoin transaction has settled. The
-// local change consignment is retained because it is part of the wallet's
-// spendable RGB history.
+// CompactSettledRecipientConsignments removes duplicate runtime delivery
+// bytes after every recipient sharing the Bitcoin transaction has settled.
+// The content-addressed object remains immutable history and may be the only
+// validated consumer or exact retry body available after recovery.
 func (s *ProjectionStore) CompactSettledRecipientConsignments(transferIDs []string) error {
 	if len(transferIDs) == 0 {
 		return ErrValidationReceipt
 	}
 	pendingList := make([]*PendingTransfer, 0, len(transferIDs))
 	var recipientHash string
-	keepObject := false
 	for _, transferID := range transferIDs {
 		pending, err := s.LoadPendingTransfer(transferID)
 		if err != nil {
@@ -679,10 +739,6 @@ func (s *ProjectionStore) CompactSettledRecipientConsignments(transferIDs []stri
 			recipientHash = pending.State.ConsignmentHash
 		} else if pending.State.ConsignmentHash != recipientHash {
 			return ErrValidationReceipt
-		}
-		localHash := sha256.Sum256(pending.LocalConsignment)
-		if hex.EncodeToString(localHash[:]) == recipientHash {
-			keepObject = true
 		}
 		pending.RecipientConsignment = nil
 		pendingList = append(pendingList, pending)
@@ -702,22 +758,6 @@ func (s *ProjectionStore) CompactSettledRecipientConsignments(transferIDs []stri
 			return err
 		}
 		if err := batch.Put(key, encoded); err != nil {
-			return err
-		}
-	}
-	references, err := s.objectReferences()
-	if err != nil {
-		return err
-	}
-	if _, referenced := references[recipientHash]; referenced {
-		keepObject = true
-	}
-	if !keepObject {
-		key, err := s.objectKey(recipientHash)
-		if err != nil {
-			return err
-		}
-		if err := batch.Delete(key); err != nil {
 			return err
 		}
 	}
@@ -883,6 +923,35 @@ func (s *ProjectionStore) SaveTransferState(state *TransferState) error {
 	return s.writeReservationRecord(key, encoded)
 }
 
+// CompareAndSaveTransferState applies a network result only to the receive
+// record observed before the request. It does not change the record encoding.
+func (s *ProjectionStore) CompareAndSaveTransferState(expected, state *TransferState) error {
+	if expected == nil || state == nil || expected.TransferID != state.TransferID {
+		return ErrValidationReceipt
+	}
+	key, err := s.transferKey(state.TransferID)
+	if err != nil {
+		return err
+	}
+	baseline, err := encode(expected)
+	if err != nil {
+		return err
+	}
+	encoded, err := encode(state)
+	if err != nil {
+		return err
+	}
+	batch := s.newWriteBatch()
+	if batch == nil {
+		return ErrValidationReceipt
+	}
+	defer batch.Close()
+	if err := batch.Put(key, encoded); err != nil {
+		return err
+	}
+	return s.flushCompared(batch, map[string][]byte{string(key): baseline})
+}
+
 func (s *ProjectionStore) LoadTransferState(transferID string) (*TransferState, error) {
 	key, err := s.transferKey(transferID)
 	if err != nil {
@@ -1046,7 +1115,7 @@ func (s *ProjectionStore) CommitProjection(output *indexer.TxOutput, asset *inde
 	if err != nil {
 		return err
 	}
-	batch := s.db.NewWriteBatch()
+	batch := s.newWriteBatch()
 	if batch == nil {
 		return errors.New("RGB11 KVDB returned nil write batch")
 	}
@@ -1115,7 +1184,15 @@ func (s *ProjectionStore) SaveProofState(proof *AllocationProof) error {
 	if err != nil {
 		return err
 	}
-	return s.db.Write(key, encoded)
+	batch := s.newWriteBatch()
+	if batch == nil {
+		return errors.New("RGB11 KVDB returned nil write batch")
+	}
+	defer batch.Close()
+	if err := batch.Put(key, encoded); err != nil {
+		return err
+	}
+	return batch.Flush()
 }
 
 func (s *ProjectionStore) prepareProjectionReplacements(replacements []ProjectionReplacement) (
@@ -1194,7 +1271,7 @@ func (s *ProjectionStore) StageProjections(replacements []ProjectionReplacement)
 	if err != nil {
 		return err
 	}
-	batch := s.db.NewWriteBatch()
+	batch := s.newWriteBatch()
 	if batch == nil {
 		return errors.New("RGB11 KVDB returned nil write batch")
 	}
@@ -1248,7 +1325,7 @@ func (s *ProjectionStore) DeleteProjections(outpoints []string) error {
 	if err != nil {
 		return err
 	}
-	batch := s.db.NewWriteBatch()
+	batch := s.newWriteBatch()
 	if batch == nil {
 		return errors.New("RGB11 KVDB returned nil write batch")
 	}
@@ -1296,7 +1373,7 @@ func (s *ProjectionStore) ReplaceProjections(consumedOutpoints []string, replace
 	for _, outpoint := range consumedOutpoints {
 		consumed[outpoint] = true
 	}
-	batch := s.db.NewWriteBatch()
+	batch := s.newWriteBatch()
 	if batch == nil {
 		return errors.New("RGB11 KVDB returned nil write batch")
 	}
@@ -1389,6 +1466,10 @@ func (s *ProjectionStore) Balance(name indexer.AssetName) (*indexer.Decimal, err
 	if name.Protocol != Protocol {
 		return nil, ErrInvalidRGB11Asset
 	}
+	if reader, ok := s.reservations.(ReservationCommitReader); ok {
+		release := reader.LockReservationRead()
+		defer release()
+	}
 	outputs, err := s.ListOutputs()
 	if err != nil {
 		return nil, err
@@ -1399,7 +1480,7 @@ func (s *ProjectionStore) Balance(name indexer.AssetName) (*indexer.Decimal, err
 	}
 	current := make(map[string]bool, len(proofs))
 	for _, proof := range proofs {
-		if proof.Status != "spending" && proof.Status != "inconsistent" {
+		if proof.Status != "spending" && proof.Status != "inconsistent" && proof.Status != "orphaned" {
 			current[proof.OutPoint+"|"+proof.AssetName.String()] = true
 		}
 	}

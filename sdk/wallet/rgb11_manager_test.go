@@ -292,13 +292,13 @@ func TestRGB11DefaultWitnessInvoicesUseIndependentReceiveKeys(t *testing.T) {
 		rawTx: make(map[string][]byte), spendingTx: make(map[string]string),
 	}
 	manager := newRGB11FlowManager(t, wallet, rpc, evidence, 70)
-	first, err := manager.CreateRGB11Invoice(RGB11InvoiceRequest{
+	first, err := manager.rgbManager.CreateRGB11Invoice(RGB11InvoiceRequest{
 		Mode: "witness", AmountRaw: "1", WitnessVout: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := manager.CreateRGB11Invoice(RGB11InvoiceRequest{
+	second, err := manager.rgbManager.CreateRGB11Invoice(RGB11InvoiceRequest{
 		Mode: "witness", AmountRaw: "2", WitnessVout: 1,
 	})
 	if err != nil {
@@ -378,7 +378,7 @@ func TestRGB11StandardWitnessInvoicesUseIndependentReceiveKeys(t *testing.T) {
 	}, 72)
 	requests := make([]*corewallet.ReceiveRequest, 0, 2)
 	for _, amount := range []string{"1", "2"} {
-		request, err := manager.CreateRGB11Invoice(RGB11InvoiceRequest{
+		request, err := manager.rgbManager.CreateRGB11Invoice(RGB11InvoiceRequest{
 			Mode: "witness", TransportMode: RGB11ProxyTransport,
 			TransportEndpoints: []string{testRGB11ProxyTransport},
 			AmountRaw:          amount, WitnessVout: 1,
@@ -438,7 +438,7 @@ func TestRGB11StandardProxyInvoiceUsesBlindedBeneficiary(t *testing.T) {
 		PkScript: append([]byte(nil), script...), Confirmations: 6,
 	}
 	manager := newRGB11FlowManager(t, wallet, rpc, evidence, 71)
-	request, err := manager.CreateRGB11Invoice(RGB11InvoiceRequest{
+	request, err := manager.rgbManager.CreateRGB11Invoice(RGB11InvoiceRequest{
 		Mode: "blind", TransportMode: RGB11ProxyTransport,
 		TransportEndpoints: []string{testRGB11ProxyTransport}, AmountRaw: "2", WitnessVout: 1,
 	})

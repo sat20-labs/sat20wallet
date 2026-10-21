@@ -1,9 +1,63 @@
 import assert from 'node:assert/strict'
-import { isDeepStrictEqual } from 'node:util'
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect } from '@playwright/test'
+
+function dkvsFundingButton(page, quote) {
+  assert.equal(quote.can_fund, true, 'current DKVS quote cannot be funded')
+  return page.locator('[aria-label="账户备份状态"]').getByRole('button', {
+    name: quote.ready ? /^(Renew DKVS storage|续费 DKVS 存储)$/ : /^(Pay DKVS storage fees|支付 DKVS 存储费用)$/,
+  })
+}
+
+export const fixedRegtestAccountUsageCaseNames = [
+  'usage: fixed regtest ordinary-1 adds selects renames subaccount and preserves root identity',
+  'usage: fixed regtest ordinary-1 renews paid storage through current AUTOPAY',
+]
+
+export function requireFixedAccountManagementOwner(fixture) {
+  const owner = fixture?.owner
+  assert.ok(typeof owner?.mnemonic === 'string' && owner.mnemonic.trim() &&
+    typeof owner?.password === 'string' && owner.password,
+  'fixed ordinary-1 account-management owner fixture requires mnemonic and password')
+  assert.ok(owner.role === undefined || owner.role === 'ordinary-1',
+    'fixed account-management owner role must be ordinary-1')
+  for (const field of ['address', 'fingerprint']) {
+    assert.ok(owner[field] === undefined || (typeof owner[field] === 'string' && owner[field]),
+      `fixed ordinary-1 owner ${field} must be a non-empty string when provided`)
+  }
+  return {
+    mnemonic: owner.mnemonic,
+    password: owner.password,
+    role: owner.role,
+    address: owner.address,
+    fingerprint: owner.fingerprint,
+  }
+}
+
+export function assertFixedOwnerMnemonicIdentity(owner, derived) {
+  assert.ok(typeof derived?.fingerprint === 'string' && derived.fingerprint &&
+    typeof derived?.address === 'string' && derived.address,
+  'fixed ordinary-1 mnemonic must derive a fingerprint and address')
+  if (owner?.address !== undefined) {
+    assert.equal(derived.address, owner.address, 'fixed ordinary-1 mnemonic does not match fixture address')
+  }
+  if (owner?.fingerprint !== undefined) {
+    assert.equal(derived.fingerprint, owner.fingerprint, 'fixed ordinary-1 mnemonic does not match fixture fingerprint')
+  }
+}
+
+export function assertFixedRootIdentity(expected, observed) {
+  assert.ok(typeof expected?.fingerprint === 'string' && expected.fingerprint &&
+    typeof expected?.address === 'string' && expected.address,
+  'fixed-root expected identity must include fingerprint and address')
+  assert.ok(typeof observed?.fingerprint === 'string' && observed.fingerprint &&
+    typeof observed?.address === 'string' && observed.address,
+  'fixed-root observed identity must include fingerprint and address')
+  assert.equal(observed.fingerprint, expected.fingerprint, 'fixed root fingerprint changed')
+  assert.equal(observed.address, expected.address, 'fixed root address changed')
+}
 
 // Reuse real PWA root discovery and background sync across separate devices.
 async function sameModeReconfiguration(t, page, credential, mode, questions, mnemonic) {
@@ -106,6 +160,9 @@ async function sameModeReconfiguration(t, page, credential, mode, questions, mne
 export async function runPwaUsageCases(t) {
   const { check, device, ready, unlock, catalog, walletCall, accountCall, password, newPassword, questions, answers } = t
   const importMnemonic = t.rootMnemonic || 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
+  const fixedOwner = t.fixedAccountManagement == null
+    ? null
+    : requireFixedAccountManagementOwner(t.fixedAccountManagement)
   const failures = []
   const scenario = async (name, action) => {
     try { await check(name, action) } catch (error) { failures.push({ name, message: error.message }) }
@@ -176,10 +233,45 @@ export async function runPwaUsageCases(t) {
   }
   const settings = async page => {
     await page.evaluate(() => { location.hash = '#/wallet/setting/account-management' })
-    await page.getByRole('button', { name: '检查账户', exact: true }).waitFor()
+    await page.getByRole('heading', { name: '账户管理与恢复', exact: true }).waitFor()
+  }
+  const usingFixedOwner = async action => {
+    assert.ok(fixedOwner, 'fixed-root cases require the fixed ordinary-1 owner fixture')
+    const page = await device()
+    try {
+      const expectedIdentity = await walletCall(page, 'validateMnemonic', fixedOwner.mnemonic, '')
+      assertFixedOwnerMnemonicIdentity(fixedOwner, expectedIdentity)
+      const importError = await page.evaluate(async ({ mnemonic, credential }) => {
+        const [error] = await window.__SAT20_PWA_VERIFY__.useWalletStore().importWallet(mnemonic, credential)
+        return error?.message
+      }, { mnemonic: fixedOwner.mnemonic, credential: fixedOwner.password })
+      assert.equal(importError, undefined, 'PWA import of the fixed ordinary-1 root failed')
+
+      const imported = await catalog(page)
+      assert.equal(imported.length, 1, 'fixed fixture import must open one existing root, not create a random root')
+      const rootIdentity = root => ({ fingerprint: root.fingerprint, address: root.accounts?.[0]?.address })
+      assertFixedRootIdentity(expectedIdentity, rootIdentity(imported[0]))
+
+      await page.reload(); await ready(page); await unlock(page, fixedOwner.password)
+      const restored = await catalog(page)
+      assert.equal(restored.length, 1, 'fixed ordinary-1 root changed across reload')
+      assertFixedRootIdentity(expectedIdentity, rootIdentity(restored[0]))
+      await action(page, { expectedIdentity, root: restored[0] })
+    } catch (error) {
+      let diagnosticTimer
+      const view = await Promise.race([
+        page.evaluate(() => ({
+          headings: [...document.querySelectorAll('h1,h2')].map(element => element.textContent),
+          alerts: [...document.querySelectorAll('[role="alert"]')].map(element => element.textContent),
+        })).catch(() => null),
+        new Promise(resolve => { diagnosticTimer = setTimeout(() => resolve(null), 2000) }),
+      ]).finally(() => clearTimeout(diagnosticTimer))
+      console.error(JSON.stringify({ fixedOwnerFailureView: view, url: page.url() }))
+      throw error
+    } finally { await page.context().close() }
   }
   const confirmPassword = async (page, credential = password) => {
-    const dialog = page.getByRole('dialog')
+    const dialog = page.getByRole('dialog', { name: 'Confirm wallet password', exact: true })
     await dialog.locator('input[type="password"]').fill(credential)
     await dialog.getByRole('button', { name: 'Confirm', exact: true }).click()
     await dialog.waitFor({ state: 'hidden' })
@@ -402,8 +494,10 @@ export async function runPwaUsageCases(t) {
     // Use the preceding creation's real phrase. The shared root already has a
     // remote recovery package and would bypass the ordinary import under test.
     let committedCreateMnemonic = ''
-    for (const entry of ['create', 'import', 'manager']) {
-      const page = entry === 'manager' ? await fresh() : await device()
+    for (const entry of ['create', 'import', 'manager', 'manager-import']) {
+      const manager = entry.startsWith('manager')
+      const importing = entry.endsWith('import')
+      const page = manager ? await fresh() : await device()
       try {
         const before = await catalog(page)
         await page.evaluate(async entry => {
@@ -419,7 +513,7 @@ export async function runPwaUsageCases(t) {
             }
             return read(...args)
           }
-          const method = entry === 'import' ? 'importWallet' : 'createWallet'
+          const method = entry.endsWith('import') ? 'importWallet' : 'createWallet'
           const submit = sdk[method].bind(sdk)
           sdk[method] = async (...args) => {
             window.committedPageSubmissions++
@@ -427,9 +521,19 @@ export async function runPwaUsageCases(t) {
             if (!result[0] && result[1]) armed = true
             return result
           }
-          location.hash = entry === 'manager' ? '#/wallet/manager' : `#/${entry}`
+          location.hash = entry.startsWith('manager') ? '#/wallet/manager' : `#/${entry}`
         }, entry)
-        if (entry === 'import') {
+        if (entry === 'manager-import') {
+          await page.getByRole('button', { name: 'Import Wallet', exact: true }).click()
+          const dialog = page.getByRole('dialog')
+          await dialog.getByRole('textbox', { name: 'RECOVERY PHRASE', exact: true }).fill(committedCreateMnemonic)
+          await dialog.locator('button[type="submit"]').click()
+          await confirmPassword(page)
+          await expect(dialog.getByRole('button', { name: 'Reload wallet', exact: true })).toBeVisible({ timeout: 90000 })
+          await expect(dialog.locator('button[type="submit"]')).toBeDisabled()
+          // A programmatic submit exercises the handler's replay guard too.
+          await dialog.locator('form').dispatchEvent('submit')
+        } else if (entry === 'import') {
           assert.ok(committedCreateMnemonic)
           await page.getByRole('textbox', { name: 'Recovery Phrase', exact: true }).fill(committedCreateMnemonic)
           await page.getByLabel('New Wallet Password', { exact: true }).fill(password)
@@ -445,16 +549,16 @@ export async function runPwaUsageCases(t) {
           await page.getByRole('button', { name: 'Create Wallet', exact: true }).click()
           await confirmPassword(page)
         }
-        if (entry !== 'import') await expect(page.getByRole('button', { name: 'I saved my phrase, reload wallet', exact: true })).toBeVisible({ timeout: 90000 })
+        if (!importing) await expect(page.getByRole('button', { name: 'I saved my phrase, reload wallet', exact: true })).toBeVisible({ timeout: 90000 })
         const committed = await catalog(page)
         const added = committed.filter(wallet => !before.some(old => String(old.id) === String(wallet.id)))
         assert.equal(added.length, 1)
-        const mnemonic = entry === 'import' ? committedCreateMnemonic : (await page.locator('.grid.grid-cols-3 .blur-sm').allTextContents()).map(word => word.trim()).join(' ')
+        const mnemonic = importing ? committedCreateMnemonic : (await page.locator('.grid.grid-cols-3 .blur-sm').allTextContents()).map(word => word.trim()).join(' ')
         if (entry === 'create') committedCreateMnemonic = mnemonic
         assert.equal((await walletCall(page, 'validateMnemonic', mnemonic, '')).fingerprint, added[0].fingerprint)
         assert.equal(await page.evaluate(() => window.committedPageFaults), 1)
         assert.equal(await page.evaluate(() => window.committedPageSubmissions), 1)
-        await page.getByRole('button', { name: entry === 'import' ? 'Reload wallet' : 'I saved my phrase, reload wallet', exact: true }).click()
+        await page.getByRole('button', { name: importing ? 'Reload wallet' : 'I saved my phrase, reload wallet', exact: true }).click()
         await ready(page)
         await page.locator('input[type="password"]').fill(password)
         await page.locator('form button[type="submit"]').click()
@@ -717,6 +821,7 @@ export async function runPwaUsageCases(t) {
     await page.getByRole('heading', { name: '维护恢复配置', exact: true }).waitFor()
     await page.bringToFront()
     const card = page.getByRole('alert', { name: '账户备份状态', exact: true })
+    await expect(card).toContainText('数据存储：服务节点临时缓存')
     await expect(card).toContainText('待同步变更：0')
     // Pending can finish before the background worker clears an earlier CAS
     // error. Establish a healthy baseline before injecting this outage.
@@ -733,11 +838,12 @@ export async function runPwaUsageCases(t) {
       })
       await expect.poll(async () => Boolean((await accountCall(page, 'status')).last_dkvs_sync_error), { timeout: 90000 }).toBe(true)
       await expect(card).toContainText('DKVS 同步异常', { timeout: 45000 })
+      await expect(card).toContainText('最新必要数据尚未备份，恢复仅覆盖最后确认版本')
       await expect(card).not.toContainText('待同步变更：0')
       for (const route of routes) await page.context().unroute(route, unavailable)
       await settled(page)
       await expect(card).toContainText('待同步变更：0', { timeout: 45000 })
-      await expect(card).not.toContainText('必要数据正在等待同步')
+      await expect(card).not.toContainText('最新必要数据尚未备份，恢复仅覆盖最后确认版本')
       await expect(card).not.toContainText('DKVS 同步异常')
       assert.equal(page.url(), location)
     } finally { for (const route of routes) await page.context().unroute(route, unavailable) }
@@ -931,7 +1037,7 @@ export async function runPwaUsageCases(t) {
     await fillQuestions(page)
     await page.getByRole('button', { name: '创建并保存加密账户备份', exact: true }).click()
     await confirmPassword(page)
-    await page.getByRole('button', { name: '进入恢复演练', exact: true }).waitFor()
+    await page.getByRole('button', { name: '进入恢复演练', exact: true }).waitFor({ timeout: 90000 })
     const share = await page.locator('textarea[readonly]').nth(1).inputValue()
     await page.getByRole('button', { name: '进入恢复演练', exact: true }).click()
     for (let i = 0; i < 2; i++) await page.getByPlaceholder(`问题 ${i + 1} 的答案`, { exact: true }).fill(questions[i].answer)
@@ -1091,7 +1197,7 @@ export async function runPwaUsageCases(t) {
       await contactInput.fill(contact)
       await page.getByRole('button', { name: '创建并保存加密账户备份', exact: true }).click()
       await confirmPassword(page)
-      await page.getByRole('button', { name: '验证 Guardian 密文已保存', exact: true }).waitFor()
+      await page.getByRole('button', { name: '验证 Guardian 密文已保存', exact: true }).waitFor({ timeout: 90000 })
       // Only the final, receipt-bound locator can be handed to the user.
       await expect(page.getByRole('button', { name: '复制恢复码', exact: true })).toHaveCount(0)
       await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: new URL(page.url()).origin })
@@ -1104,7 +1210,7 @@ export async function runPwaUsageCases(t) {
       await guardian.locator('select').selectOption('temporary')
       await guardian.getByRole('button', { name: '接受并保存好友分片', exact: true }).click()
       await confirmPassword(guardian)
-      await expect.poll(async () => guardian.locator('textarea[readonly]').count()).toBe(2)
+      await expect.poll(async () => guardian.locator('textarea[readonly]').count(), { timeout: 90000 }).toBe(2)
       const receipt = await guardian.locator('textarea[readonly]').last().inputValue()
       await page.getByPlaceholder('粘贴 Guardian 返回的 receipt').fill(receipt)
       await page.getByRole('button', { name: '验证 Guardian 密文已保存', exact: true }).click()
@@ -1123,20 +1229,21 @@ export async function runPwaUsageCases(t) {
       await guardian.getByPlaceholder('好友发送的 Guardian 恢复请求 JSON').fill(request)
       await guardian.getByRole('button', { name: '生成加密恢复响应', exact: true }).click()
       await confirmPassword(guardian)
-      await expect.poll(async () => guardian.locator('textarea[readonly]').count()).toBe(3)
+      await expect.poll(async () => guardian.locator('textarea[readonly]').count(), { timeout: 90000 }).toBe(3)
       const response = await guardian.locator('textarea[readonly]').last().inputValue()
       await page.getByPlaceholder('粘贴 Guardian 返回的加密响应').fill(response)
       await page.getByRole('button', { name: '验证 Guardian 响应', exact: true }).click()
       for (let i = 0; i < 2; i++) await page.getByPlaceholder(`问题 ${i + 1} 的答案`, { exact: true }).fill(questions[i].answer)
       await page.getByRole('button', { name: '执行恢复演练', exact: true }).click()
       await confirmPassword(page)
-      await page.getByRole('heading', { name: '账户恢复已配置', exact: true }).waitFor()
+      await page.getByRole('heading', { name: '账户恢复已配置', exact: true }).waitFor({ timeout: 90000 })
       const status = await accountCall(page, 'status')
       assert.equal(status.recovery_configured, true)
       assert.equal(status.recovery_mode, '2of3')
       await page.getByRole('button', { name: '复制当前公开恢复码', exact: true }).click()
       assert.equal(await page.evaluate(() => navigator.clipboard.readText()), savedLocator)
       const expectedCatalog = await catalog(page)
+      const normalize = wallets => wallets.map(({ fingerprint, name, accounts }) => ({ fingerprint, name, accounts }))
       await assertNoSecrets(page, [...questions.map(q => q.answer), savedShare, password])
       await assertNoSecrets(guardian, [...questions.map(q => q.answer), password])
       // Close the original device before either recovery. Never replace the
@@ -1162,15 +1269,14 @@ export async function runPwaUsageCases(t) {
           await guardian.getByPlaceholder('好友发送的 Guardian 恢复请求 JSON').fill(recoveryRequest)
           await guardian.getByRole('button', { name: '生成加密恢复响应', exact: true }).click()
           await confirmPassword(guardian)
-          await expect.poll(() => guardian.locator('textarea[readonly]').last().inputValue()).not.toBe(previousResponse)
+          await expect.poll(() => guardian.locator('textarea[readonly]').last().inputValue(), { timeout: 90000 }).not.toBe(previousResponse)
           await recovery.getByPlaceholder('粘贴 Guardian 返回的加密响应').fill(await guardian.locator('textarea[readonly]').last().inputValue())
           await recovery.getByRole('button', { name: '使用 Guardian 响应', exact: true }).click()
           await recovery.getByRole('button', { name: '预览恢复内容', exact: true }).click()
           await recovery.getByPlaceholder('设置新的本地钱包密码').fill(newPassword)
           await recovery.getByPlaceholder('再次输入密码').fill(newPassword)
-          await Promise.all([recovery.waitForEvent('domcontentloaded'), recovery.getByRole('button', { name: '恢复全部钱包', exact: true }).click()])
+          await Promise.all([recovery.waitForEvent('domcontentloaded', { timeout: 90000 }), recovery.getByRole('button', { name: '恢复全部钱包', exact: true }).click()])
           await ready(recovery); await unlock(recovery, newPassword)
-          const normalize = wallets => wallets.map(({ fingerprint, name, accounts }) => ({ fingerprint, name, accounts }))
           assert.deepEqual(normalize(await catalog(recovery)), normalize(expectedCatalog), combination)
           await assertNoSecrets(recovery, [...questions.map(q => q.answer), savedShare, newPassword])
         } finally { await recovery.context().close() }
@@ -1368,6 +1474,216 @@ export async function runPwaUsageCases(t) {
       await assert.rejects(accountCall(page, 'previewRecovery', session))
     } finally { await page.context().close() }
   })
+  if (fixedOwner) {
+    await scenario(fixedRegtestAccountUsageCaseNames[0], () => usingFixedOwner(async (page, { expectedIdentity, root }) => {
+      const before = await catalog(page)
+      assert.equal(before.length, 1)
+      const beforeRoot = before[0]
+      assertFixedRootIdentity(expectedIdentity, {
+        fingerprint: beforeRoot.fingerprint,
+        address: beforeRoot.accounts?.find(account => Number(account.index) === 0)?.address,
+      })
+      const existingAccounts = beforeRoot.accounts.map(({ index, name, address, pubKey }) => ({ index, name, address, pubKey }))
+      assert.ok(existingAccounts.some(account => Number(account.index) === 0), 'fixed ordinary-1 root account 0 is missing')
+      const accountIndex = Math.max(0, ...existingAccounts.map(account => Number(account.index))) + 1
+      const initialName = `Fixed regtest subaccount ${accountIndex}`
+      const renamed = `Fixed regtest selected ${accountIndex}`
+      await page.evaluate(async ({ accountIndex, initialName, renamed }) => {
+        const wallet = window.__SAT20_PWA_VERIFY__.useWalletStore()
+        await wallet.addAccount(initialName, accountIndex)
+        await wallet.updateAccountName(accountIndex, renamed)
+      }, { accountIndex, initialName, renamed })
+
+      const after = await catalog(page)
+      assert.equal(after.length, 1, 'fixed account action created another root wallet')
+      const updatedRoot = after[0]
+      assert.equal(String(updatedRoot.id), String(root.id), 'fixed root wallet id changed')
+      assertFixedRootIdentity(expectedIdentity, {
+        fingerprint: updatedRoot.fingerprint,
+        address: updatedRoot.accounts?.find(account => Number(account.index) === 0)?.address,
+      })
+      assert.equal(updatedRoot.accounts.length, existingAccounts.length + 1, 'adding one subaccount changed the account count unexpectedly')
+      for (const existing of existingAccounts) {
+        const actual = updatedRoot.accounts.find(account => Number(account.index) === Number(existing.index))
+        assert.deepEqual(actual && {
+          index: actual.index,
+          name: actual.name,
+          address: actual.address,
+          pubKey: actual.pubKey,
+        }, existing,
+          `existing account ${existing.index} changed while adding a subaccount`)
+      }
+      const created = updatedRoot.accounts.find(account => Number(account.index) === accountIndex)
+      assert.ok(created, 'selected subaccount was not added to the fixed root wallet')
+      assert.equal(created.name, renamed)
+
+      const selected = await page.evaluate(() => {
+        const wallet = window.__SAT20_PWA_VERIFY__.useWalletStore()
+        return { index: wallet.accountIndex, address: wallet.address, pubKey: wallet.publicKey }
+      })
+      assert.equal(selected.index, accountIndex, 'addAccount did not select the new subaccount')
+      assert.equal(selected.address, (await walletCall(page, 'getWalletAddress', accountIndex)).address)
+      assert.equal(selected.pubKey, (await walletCall(page, 'getWalletPubkey', accountIndex)).pubKey)
+
+      await page.evaluate(async () => window.__SAT20_PWA_VERIFY__.useWalletStore().switchToAccount(0))
+      assert.equal((await page.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().accountIndex)), 0,
+        'switching back to root account 0 did not take effect')
+      assert.equal((await page.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().address)),
+        (await walletCall(page, 'getWalletAddress', 0)).address)
+
+      await page.reload(); await ready(page); await unlock(page, fixedOwner.password)
+      const restored = await catalog(page)
+      assert.equal(restored.length, 1, 'reload changed the fixed root wallet count')
+      assertFixedRootIdentity(expectedIdentity, {
+        fingerprint: restored[0].fingerprint,
+        address: restored[0].accounts?.find(account => Number(account.index) === 0)?.address,
+      })
+      assert.deepEqual(restored[0].accounts.map(({ index, name, address, pubKey }) => ({ index, name, address, pubKey })),
+        updatedRoot.accounts.map(({ index, name, address, pubKey }) => ({ index, name, address, pubKey })),
+        'subaccount selection or rename did not persist across reload')
+      assert.equal((await walletCall(page, 'getWalletCatalog')).current_account_index, 0,
+        'reload did not preserve the explicitly selected root account')
+    }))
+
+    await scenario(fixedRegtestAccountUsageCaseNames[1], () => usingFixedOwner(async (page, { expectedIdentity, root }) => {
+      const beforeCatalog = await catalog(page)
+      assert.equal(beforeCatalog.length, 1, 'fixed AUTOPAY owner imported more than one root')
+      assertFixedRootIdentity(expectedIdentity, {
+        fingerprint: beforeCatalog[0].fingerprint,
+        address: beforeCatalog[0].accounts?.find(account => Number(account.index) === 0)?.address,
+      })
+      const accountStatus = await accountCall(page, 'status')
+      assert.equal(accountStatus.active, true, 'fixed ordinary-1 account management is not active')
+      assert.equal(accountStatus.recovery_configured, true, 'fixed ordinary-1 recovery is not configured')
+      assert.equal(accountStatus.storage_mode, 'paid', 'fixed ordinary-1 is not using paid AUTOPAY storage')
+
+      await settings(page)
+      const initial = await accountCall(page, 'autopayStatus')
+      assert.equal(initial.required, true, 'fixed ordinary-1 has no AUTOPAY requirement')
+      assert.equal(initial.ready, true, 'current AUTOPAY is not ready for renewal')
+      assert.equal(initial.can_fund, true, 'current AUTOPAY does not permit a normal renewal')
+      assert.ok(initial.contract_address, 'current AUTOPAY contract address is missing')
+      assert.ok(initial.fee_asset, 'current AUTOPAY fee asset is missing')
+      assert.ok(initial.payer, 'current AUTOPAY payer is missing')
+      assert.ok(Number(initial.recommended_funding_amount) > 0, 'current AUTOPAY renewal amount is invalid')
+      const initialExpiry = Number(initial.estimated_expiry_height)
+      const fundedExpiry = Number(initial.estimated_funded_expiry_height)
+      assert.ok(Number.isSafeInteger(initialExpiry) && initialExpiry > 0,
+        'current AUTOPAY expiry estimate is missing')
+      assert.ok(Number.isSafeInteger(fundedExpiry) && fundedExpiry > initialExpiry,
+        'current AUTOPAY quote does not project an added paid interval')
+      assert.equal(initial.payer, (await walletCall(page, 'getWalletAddress', 0)).address,
+        'AUTOPAY funding source is not fixed ordinary-1 root account 0')
+      const selection = await walletCall(page, 'getWalletCatalog')
+      assert.equal(selection.current_account_index, 0, 'AUTOPAY renewal must use root account 0')
+
+      const submissions = []
+      // Observe the real UI call without replacing its result or issuing a
+      // second payment. Keep a failure visible before closing this context.
+      await page.evaluate(async () => {
+        const api = (await import('/utils/accountManagement.ts')).default
+        const original = api.fundAutopay
+        const state = { called: false, settled: false, transaction_id: '', pending: false, error: '' }
+        window.__SAT20_FIXED_AUTOPAY_DIAGNOSTIC__ = state
+        api.fundAutopay = async function (...args) {
+          state.called = true
+          try {
+            const result = await original.apply(this, args)
+            state.transaction_id = result?.transaction_id || ''
+            state.pending = Boolean(result?.pending)
+            return result
+          } catch (error) {
+            state.error = String(error?.message || error).slice(0, 500)
+            throw error
+          } finally { state.settled = true }
+        }
+      })
+      const routeFunding = async route => {
+        if (route.request().method() !== 'POST' || !/\/btc\/tx$/.test(new URL(route.request().url()).pathname)) {
+          return route.fallback()
+        }
+        if (submissions.length > 0) {
+          submissions.push({ duplicate: true })
+          return route.abort('blockedbyclient')
+        }
+        const response = await route.fetch()
+        const result = await response.json()
+        submissions.push({
+          http_status: response.status(),
+          code: result?.code,
+          txid: typeof result?.data === 'string' ? result.data : '',
+        })
+        await route.fulfill({ response })
+      }
+      await page.context().route('**/*', routeFunding)
+      try {
+        const renew = page.getByRole('button', { name: /^(Renew DKVS storage|续费 DKVS 存储)$/ })
+        await expect(renew).toBeVisible()
+        await renew.click()
+        const dialog = page.getByRole('dialog')
+        await expect(dialog).toBeVisible()
+        await expect(dialog).toContainText(initial.payer)
+        await expect(dialog).toContainText(initial.contract_address)
+        await expect(dialog).toContainText(initial.fee_asset)
+        await expect(dialog).toContainText(initial.recommended_funding_amount)
+        await expect(dialog).toContainText(String(fundedExpiry))
+        await dialog.getByRole('button', { name: /^(Confirm|确认)$/ }).click()
+        await expect(dialog).toBeHidden()
+        await expect.poll(() => submissions.length, { timeout: 90000 }).toBe(1)
+        const [submission] = submissions
+        assert.equal(submission.http_status, 200, 'AUTOPAY renewal submission returned an HTTP error')
+        assert.equal(submission.code, 0, 'AUTOPAY renewal submission failed')
+        assert.match(submission.txid, /^[0-9a-f]{64}$/i, 'AUTOPAY renewal did not return a transaction id')
+        assert.equal(submissions.some(item => item.duplicate), false, 'AUTOPAY renewal attempted a duplicate transaction')
+        await expect(page.getByText(submission.txid, { exact: false })).toBeVisible({ timeout: 90000 })
+        await expect.poll(async () => {
+          const current = await accountCall(page, 'autopayStatus')
+          return current.funding_transaction_id === submission.txid && current.ready && !current.funding_pending &&
+            Number(current.estimated_expiry_height) > initialExpiry
+        }, { timeout: 90000, message: `AUTOPAY renewal ${submission.txid} did not extend the paid interval` }).toBe(true)
+        const afterQuote = await accountCall(page, 'autopayStatus')
+        assert.ok(Number(afterQuote.estimated_expiry_height) > initialExpiry,
+          'confirmed AUTOPAY renewal did not increase the estimated expiry height')
+        const expiryPanel = await page.locator('[aria-label="DKVS 付费高度"]').innerText()
+        const expiryMessages = [
+          `预计从聪网高度 ${afterQuote.estimated_expiry_height} 起余额不足以继续付费`,
+          `Estimated insufficient payment balance from SatoshiNet height ${afterQuote.estimated_expiry_height}`,
+        ]
+        assert.ok(expiryMessages.some(message => expiryPanel.includes(message)),
+          'PWA paid-height panel does not display the renewed expiry estimate')
+        const after = await accountCall(page, 'status')
+        assert.equal(after.active, true)
+        assert.equal(after.recovery_configured, true)
+        assert.equal(after.storage_mode, 'paid')
+        assert.equal(after.package_id, accountStatus.package_id, 'AUTOPAY renewal changed the account-management package')
+        assert.equal(after.public_locator, accountStatus.public_locator, 'AUTOPAY renewal changed the recovery locator')
+        assert.deepEqual(await catalog(page), beforeCatalog, 'AUTOPAY renewal changed root wallet or subaccount metadata')
+        assertFixedRootIdentity(expectedIdentity, {
+          fingerprint: root.fingerprint,
+          address: root.accounts?.find(account => Number(account.index) === 0)?.address,
+        })
+        console.log(JSON.stringify({ fixedAutopayRenewal: {
+          transaction_id: submission.txid, contract: initial.contract_address,
+          payer: initial.payer, funding_amount: initial.recommended_funding_amount,
+          previous_expiry_height: initialExpiry, renewed_expiry_height: afterQuote.estimated_expiry_height,
+          observed_submissions: submissions.length,
+        } }))
+      } catch (error) {
+        let diagnosticTimer
+        const view = await Promise.race([
+          page.evaluate(() => ({
+            sdk: window.__SAT20_FIXED_AUTOPAY_DIAGNOSTIC__,
+            alerts: [...document.querySelectorAll('[role="alert"]')].map(element => element.textContent),
+          })).catch(() => null),
+          new Promise(resolve => { diagnosticTimer = setTimeout(() => resolve(null), 2000) }),
+        ]).finally(() => clearTimeout(diagnosticTimer))
+        console.error(JSON.stringify({ fixedAutopayFailure: view, observedSubmissions: submissions }))
+        throw error
+      } finally {
+        await page.context().unroute('**/*', routeFunding)
+      }
+    }))
+  }
   assert.deepEqual(failures, [], 'PWA usage regressions failed; see individual verdicts')
 }
 
@@ -1437,39 +1753,40 @@ export async function runRgbPwaCases(t, fixture) {
     ])
     await ready(page); await unlockRecovered(page)
   }
-  const verify = async (page, expectedScopes = fixture.scopes, allowLocalHistory = false) => {
+  const verify = async (page, expectedScopes = fixture.scopes) => {
     const wallets = await catalog(page)
     assert.equal(wallets.length, fixture.wallet_count)
     const observed = []
     for (const expected of expectedScopes) {
       const wallet = wallets.find(item => item.fingerprint === expected.fingerprint)
       assert.ok(wallet)
-      await page.evaluate(async ({ id, index }) => {
-        const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
-        await store.switchWallet(id)
-        await store.switchToAccount(index)
-      }, { id: String(wallet.id), index: expected.index })
-      const state = JSON.parse((await walletCall(page, 'getRGB11State')).state)
+      // The catalog is committed before provider import completes. A later
+      // remote apply can also start after unlock, so retry only this public
+      // selection/read boundary on the explicit import-incomplete error.
+      let state, locks
+      const deadline = Date.now() + 90000
+      for (;;) {
+        try {
+          await page.evaluate(async ({ id, index }) => {
+            const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
+            await store.switchWallet(id)
+            await store.switchToAccount(index)
+          }, { id: String(wallet.id), index: expected.index })
+          state = JSON.parse((await walletCall(page, 'getRGB11State')).state)
+          const address = wallet.accounts.find(account => account.index === expected.index).address
+          locks = await walletCall(page, 'getAllLockedUtxo', address)
+          break
+        } catch (error) {
+          if (!/account-managed data import is incomplete; restore the wallet before uploading/.test(error.message) ||
+            Date.now() >= deadline) throw error
+          await new Promise(resolve => setTimeout(resolve, 250))
+        }
+      }
       const stable = value => Object.fromEntries(['assets', 'proofs'].map(key => [key,
         [...(value[key] ?? [])].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))]))
       const actual = stable(state)
       const reference = stable(expected.state)
-      if (allowLocalHistory) {
-        // Same-device storage includes local spending history that a fresh
-        // backup restore intentionally does not import. Every backed-up asset
-        // and proof must still match; retain the complete local baseline for
-        // the strict before/after comparison below.
-        for (const key of ['assets', 'proofs']) {
-          for (const record of reference[key]) {
-            assert.ok(actual[key].some(item => isDeepStrictEqual(item, record)),
-              `local device lost backed-up RGB ${key}`)
-          }
-        }
-      } else {
-        assert.deepEqual(actual, reference, 'browser RGB assets/proofs differ from expected ownership')
-      }
-      const address = wallet.accounts.find(account => account.index === expected.index).address
-      const locks = await walletCall(page, 'getAllLockedUtxo', address)
+      assert.deepEqual(actual, reference, 'browser RGB assets/proofs differ from expected ownership')
       for (const [point, reason] of Object.entries(expected.locks)) {
         assert.ok(locks[point], `RGB allocation lost its spending lock: ${point}`)
         assert.equal(JSON.parse(locks[point]).reason, reason)
@@ -1611,6 +1928,35 @@ export async function runRgbPwaCases(t, fixture) {
     } catch (error) { failures.push({ name, message: error.message }) }
     finally { await page.context().close() }
   }
+  const rgbCaptures = []
+  const captureRGB = async (page, phase) => {
+    if (!fixture.rgb_diagnostic_file) return
+    const records = await page.evaluate(async () => {
+      const db = await new Promise((resolve, reject) => {
+        const request = indexedDB.open('sat20-wallet-sdk', 1)
+        request.onsuccess = () => resolve(request.result)
+        request.onerror = () => reject(request.error)
+      })
+      try {
+        return await new Promise((resolve, reject) => {
+          const records = {}
+          const tx = db.transaction('kv', 'readonly')
+          const cursor = tx.objectStore('kv').openCursor(IDBKeyRange.bound('rgb11-', 'rgb11.'))
+          cursor.onsuccess = () => {
+            const row = cursor.result
+            if (!row) return
+            if (typeof row.key === 'string' && row.key.startsWith('rgb11-')) records[row.key] = row.value
+            row.continue()
+          }
+          tx.oncomplete = () => resolve(records)
+          tx.onabort = () => reject(tx.error)
+          tx.onerror = () => reject(tx.error)
+        })
+      } finally { db.close() }
+    })
+    rgbCaptures.push({ phase, records })
+    writeFileSync(fixture.rgb_diagnostic_file, JSON.stringify(rgbCaptures), { mode: 0o600 })
+  }
   const channelPage = await device()
   let channelBroadcasts = 0
   await channelPage.context().route('**/v3/bitcoin/**', bitcoinRoute)
@@ -1637,69 +1983,88 @@ export async function runRgbPwaCases(t, fixture) {
           })
         } finally { db.close() }
       }
-      // This is one device's complete encoded DB, including its local wallet
-      // IDs and unfinished channel. It is not a channel transferred by account
-      // recovery. The other cases exercise actual backup restoration pages.
-      // Close the empty Manager before replacing its database. Otherwise its
-      // checkpoint worker can overwrite the handed-off selection before reload.
-      await walletCall(channelPage, 'release')
-      await channelPage.evaluate(async records => {
-        const db = await new Promise((resolve, reject) => {
-          const request = indexedDB.open('sat20-wallet-sdk', 1)
-          request.onsuccess = () => resolve(request.result)
-          request.onerror = () => reject(request.error)
-        })
-        try {
-          await new Promise((resolve, reject) => {
-            const tx = db.transaction('kv', 'readwrite')
-            tx.oncomplete = resolve
-            tx.onabort = () => reject(tx.error)
-            for (const [key, value] of Object.entries(records)) tx.objectStore('kv').put(value, key)
-          })
-        } finally { db.close() }
-      }, fixture.pending_channel.device_records)
-      await channelPage.reload(); await ready(channelPage)
-      await unlockRecovered(channelPage, 'same-device healthy cold startup before injected fault')
-      assert.equal(String((await catalog(channelPage))[0].id), String(fixture.pending_channel.wallet_id))
-      const healthyChannel = await channelPage.evaluate(async () => {
-        const { default: stp } = await import('/utils/stp.ts')
-        const [error, result] = await stp.getCurrentChannel()
-        if (error) throw error
-        return result.channelId
-      })
-      assert.equal(healthyChannel, fixture.pending_channel.id, 'local device fixture cannot restore its channel before the fault')
-      const localRGBBeforeFault = await verify(channelPage, fixture.scopes, true)
-      await channelPage.evaluate(async id => {
-        const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
-        await store.switchWallet(id)
-        await store.switchToAccount(0)
-      }, String(fixture.pending_channel.wallet_id))
-      await channelPage.evaluate(() => sessionStorage.setItem('usage-channel-import-fault', 'armed'))
-      const installFault = markerKey => {
-        const put = IDBObjectStore.prototype.put
-        IDBObjectStore.prototype.put = function(value, key) {
-          // Do not assume a catalog-only update rewrites an ownership proof
-          // or imports a provider when a newer local data generation exists.
-          // Fault the first actual post-commit import stage write; the atomic
-          // local-commit marker must still succeed.
-          if (sessionStorage.getItem('usage-channel-import-fault') === 'armed' &&
-              this.name === 'kv' && String(key) === markerKey &&
-              JSON.parse(atob(value)).stage !== 'local-commit') {
-            sessionStorage.setItem('usage-channel-import-fault-hit', 'yes')
-            throw new DOMException('usage pending channel post-commit import stage write failure', 'QuotaExceededError')
-          }
-          return put.call(this, value, key)
-        }
-      }
-      await channelPage.evaluate(installFault, fixture.pending_channel.import_marker_key)
-      await channelPage.context().addInitScript(installFault, fixture.pending_channel.import_marker_key)
       const peer = await device()
       let peerRoot
       const caseFailures = []
       try {
+        // Establish an explicit healthy remote generation first. Applying it
+        // canonicalizes receipts even on this same device, independently of
+        // which earlier browser cases ran. Compare full recovery receipts.
         await peer.context().route('**/v3/bitcoin/**', bitcoinRoute)
         await navigateRecovery(peer); await commit(peer)
         peerRoot = (await catalog(peer))[0]
+        await peer.evaluate(async id => {
+          await window.__SAT20_PWA_VERIFY__.useWalletStore().updateWalletName(id, 'Pending channel healthy baseline')
+        }, String(peerRoot.id))
+        await expect.poll(async () => (await accountCall(peer, 'status')).pending_changes ?? 0,
+          { timeout: 90000 }).toBe(0)
+        // This is one device's complete encoded DB, including its local wallet
+        // IDs and unfinished channel. It is not a channel transferred by account
+        // recovery. The other cases exercise actual backup restoration pages.
+        // Close the empty Manager before replacing its database. Otherwise its
+        // checkpoint worker can overwrite the handed-off selection before reload.
+        await walletCall(channelPage, 'release')
+        await channelPage.evaluate(async records => {
+          const db = await new Promise((resolve, reject) => {
+            const request = indexedDB.open('sat20-wallet-sdk', 1)
+            request.onsuccess = () => resolve(request.result)
+            request.onerror = () => reject(request.error)
+          })
+          try {
+            await new Promise((resolve, reject) => {
+              const tx = db.transaction('kv', 'readwrite')
+              tx.oncomplete = resolve
+              tx.onabort = () => reject(tx.error)
+              for (const [key, value] of Object.entries(records)) tx.objectStore('kv').put(value, key)
+            })
+          } finally { db.close() }
+        }, fixture.pending_channel.device_records)
+        await captureRGB(channelPage, 'seed')
+        await channelPage.reload(); await ready(channelPage)
+        await captureRGB(channelPage, 'reload-ready')
+        await unlockRecovered(channelPage, 'same-device healthy cold startup before injected fault')
+        await captureRGB(channelPage, 'unlock')
+        assert.equal(String((await catalog(channelPage))[0].id), String(fixture.pending_channel.wallet_id))
+        const healthyChannel = await channelPage.evaluate(async () => {
+          const { default: stp } = await import('/utils/stp.ts')
+          const [error, result] = await stp.getCurrentChannel()
+          if (error) throw error
+          return result.channelId
+        })
+        assert.equal(healthyChannel, fixture.pending_channel.id, 'local device fixture cannot restore its channel before the fault')
+        await expect.poll(async () => (await catalog(channelPage)).some(wallet => wallet.name === 'Pending channel healthy baseline'),
+          { timeout: 90000 }).toBe(true)
+        let localRGBBeforeFault
+        try { localRGBBeforeFault = await verify(channelPage, fixture.scopes) }
+        catch (error) {
+          // Preserve the original strict assertion even if diagnostics cannot be saved.
+          await captureRGB(channelPage, 'verify-fail').catch(() => {})
+          throw error
+        }
+        await channelPage.evaluate(async id => {
+          const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
+          await store.switchWallet(id)
+          await store.switchToAccount(0)
+        }, String(fixture.pending_channel.wallet_id))
+        await channelPage.evaluate(() => sessionStorage.setItem('usage-channel-import-fault', 'armed'))
+        const installFault = markerKey => {
+          const put = IDBObjectStore.prototype.put
+          IDBObjectStore.prototype.put = function(value, key) {
+            // Do not assume a catalog-only update rewrites an ownership proof
+            // or imports a provider when a newer local data generation exists.
+            // Fault the first actual post-commit import stage write; the atomic
+            // local-commit marker must still succeed.
+            if (sessionStorage.getItem('usage-channel-import-fault') === 'armed' &&
+                this.name === 'kv' && String(key) === markerKey &&
+                JSON.parse(atob(value)).stage !== 'local-commit') {
+              sessionStorage.setItem('usage-channel-import-fault-hit', 'yes')
+              throw new DOMException('usage pending channel post-commit import stage write failure', 'QuotaExceededError')
+            }
+            return put.call(this, value, key)
+          }
+        }
+        await channelPage.evaluate(installFault, fixture.pending_channel.import_marker_key)
+        await channelPage.context().addInitScript(installFault, fixture.pending_channel.import_marker_key)
         await peer.evaluate(async id => {
           await window.__SAT20_PWA_VERIFY__.useWalletStore().updateWalletName(id, 'Pending channel recovery state')
         }, String(peerRoot.id))
@@ -1747,9 +2112,14 @@ export async function runRgbPwaCases(t, fixture) {
         for (const [key, value] of Object.entries(fixture.pending_channel.records)) {
           assert.equal(await channelPage.evaluate(readLocal, key), value, 'authentication rewrote unfinished channel work')
         }
-        const localRGBAfterRetry = await verify(channelPage, localRGBBeforeFault)
-        assert.deepEqual(localRGBAfterRetry, localRGBBeforeFault,
-          'remote import retry changed same-device RGB assets, proofs or spending locks')
+        await captureRGB(channelPage, 'post-retry')
+        // Remote import restores canonical recovery receipts. Compare every
+        // asset/proof field, including its hash, with that recovery baseline;
+        // the device's complete spending-lock set must still remain unchanged.
+        const localRGBAfterRetry = await verify(channelPage, fixture.scopes)
+        const localLocks = scopes => scopes.map(({ fingerprint, index, locks }) => ({ fingerprint, index, locks }))
+        assert.deepEqual(localLocks(localRGBAfterRetry), localLocks(localRGBBeforeFault),
+          'remote import retry changed same-device RGB spending locks')
         assert.equal(channelBroadcasts, 0, 'channel recovery attempted a new transaction broadcast')
       } catch (error) {
         caseFailures.push(error)
@@ -1819,7 +2189,15 @@ export async function runRgbPwaCases(t, fixture) {
   } catch (error) { failures.push({ name: 'RGB recovered UI snapshot', message: error.message }) }
   finally { await snapshotPage.context().close() }
 
-  try { await runRgbPaidCases(t, fixture) }
+  try {
+    await runRgbPaidCases({ ...t, device: async (...args) => {
+      const page = await t.device(...args)
+      // Paid maintenance creates cold peers too; they must see the same
+      // controlled Bitcoin facts as the other RGB recovery devices.
+      await page.context().route('**/v3/bitcoin/**', bitcoinRoute)
+      return page
+    } }, fixture)
+  }
   catch (error) { failures.push({ name: 'paid settings', message: error.message }) }
   assert.deepEqual(failures, [], 'RGB browser recovery regressions failed; see individual verdicts')
   console.log(JSON.stringify({ passed: true, cases: 9, backend: 'real RGB issuance and paid DKVS', browser: 'real PWA and WASM' }))
@@ -1933,6 +2311,8 @@ export async function runRgbPaidCases(t, fixture) {
       await paidPage.reload(); await ready(paidPage); await unlock(paidPage, fixture.password)
       await paidPage.evaluate(() => { location.hash = '#/wallet/setting/account-management' })
       await expect(paidPage.getByRole('textbox', { name: '当前公开恢复码', exact: true })).toHaveValue(finalLocator)
+      await expect(paidPage.getByRole('alert', { name: '账户备份状态', exact: true }))
+        .toContainText('数据存储：AUTOPAY 持久存储')
       assert.equal((await accountCall(paidPage, 'status')).storage_mode, 'paid')
       assert.deepEqual(await catalog(paidPage), beforeCatalog, 'paid upgrade changed wallet or DID metadata')
       assert.equal(paidBroadcasts, 0, 'AUTOPAY reuse attempted another funding transaction')
@@ -2007,7 +2387,7 @@ export async function runRgbPaidCases(t, fixture) {
         // query button does not exist. Exercise the normal visible-page read.
         await paidPage.bringToFront()
         await paidPage.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
-        await paidPage.getByRole('button', { name: '充值 AUTOPAY', exact: true }).click()
+        await dkvsFundingButton(paidPage, await accountCall(paidPage, 'autopayStatus')).click()
         const dialog = paidPage.getByRole('dialog')
         await expect(dialog).toBeVisible()
         return dialog
@@ -2030,7 +2410,7 @@ export async function runRgbPaidCases(t, fixture) {
           await cancel.scrollIntoViewIfNeeded()
           await expect(cancel).toBeInViewport({ ratio: 1 })
           await cancel.click()
-          await expect(paidPage.getByRole('button', { name: '充值 AUTOPAY', exact: true })).toBeEnabled()
+          await expect(dkvsFundingButton(paidPage, quote)).toBeEnabled()
           assert.equal(broadcasts, beforeCancel, 'cancel confirmation broadcast a payment')
           if (index === 0) {
             dialog = await openFunding()
@@ -2144,7 +2524,7 @@ export async function runRgbPaidCases(t, fixture) {
         await expect.poll(() => submissions, { timeout: 90000 }).toBe(1)
         // This is the production two-minute wait, with contract state and execution-history
         // queries delayed after a real submission. No SDK clock override.
-        const tracker = paidPage.getByRole('region', { name: 'AUTOPAY 充值追踪' })
+        const tracker = paidPage.getByRole('region', { name: 'DKVS 付费交易追踪' })
         await expect(tracker).toContainText('原充值交易等待提交或合约确认', { timeout: 160000 })
         await expect(paidPage.getByRole('button', { name: '确认存储方式', exact: true })).toBeEnabled({ timeout: 160000 })
         const trackingText = await tracker.innerText()
@@ -2155,7 +2535,7 @@ export async function runRgbPaidCases(t, fixture) {
           'pending payment cannot authorize paid recovery storage')
         await paidPage.reload(); await ready(paidPage); await unlock(paidPage, fixture.password)
         await paidPage.evaluate(() => { location.hash = '#/wallet/setting/account-management' })
-        await expect(paidPage.getByRole('region', { name: 'AUTOPAY 充值追踪' })).toContainText(txid)
+        await expect(paidPage.getByRole('region', { name: 'DKVS 付费交易追踪' })).toContainText(txid)
         await paidPage.getByRole('button', { name: '继续提交原交易', exact: true }).click()
         await expect.poll(() => submissions, { timeout: 90000 }).toBe(2)
         assert.equal(submittedBodies[1], submittedBodies[0], 'continuation created a different signed transaction')
@@ -2210,8 +2590,8 @@ export async function runRgbPaidCases(t, fixture) {
           await paidPage.getByRole('button', { name: '查询充值状态', exact: true }).click()
           return (await accountCall(paidPage, 'autopayStatus')).ready
         }, { timeout: 90000 }).toBe(true)
-        await expect(paidPage.getByRole('region', { name: 'AUTOPAY 充值追踪' })).toContainText('合约查询确认 AUTOPAY 支付已就绪')
-        await expect(paidPage.getByRole('region', { name: 'AUTOPAY 充值追踪' })).toContainText(txid)
+        await expect(paidPage.getByRole('region', { name: 'DKVS 付费交易追踪' })).toContainText('合约查询确认 AUTOPAY 支付已就绪')
+        await expect(paidPage.getByRole('region', { name: 'DKVS 付费交易追踪' })).toContainText(txid)
         const completed = await paidPage.evaluate(async receiptTxID => {
           const response = await window.sat20wallet_operation_log.getOperationLogs()
           if (response.code !== 0) throw new Error(response.msg)
@@ -2262,10 +2642,10 @@ export async function runAutopayPwaReviewCases(t, fixture) {
     assert.ok(r.txid); await mine()
     await expect.poll(async () => (await accountCall(g, 'autopayStatus')).can_fund, poll).toBe(true)
     await cold()
-    await expect(g.getByRole('button', { name: '充值 AUTOPAY', exact: true })).toBeVisible()
+    await expect(dkvsFundingButton(g, await accountCall(g, 'autopayStatus'))).toBeVisible()
   }
   const fund = async () => {
-    await g.getByRole('button', { name: '充值 AUTOPAY', exact: true }).click()
+    await dkvsFundingButton(g, await accountCall(g, 'autopayStatus')).click()
     await g.getByRole('dialog').getByRole('button', { name: 'Confirm', exact: true }).click()
   }
   try {

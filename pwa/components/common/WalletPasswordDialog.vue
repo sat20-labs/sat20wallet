@@ -1,6 +1,6 @@
 <template>
   <Dialog :open="open" @update:open="value => { if (!value) finish() }">
-    <DialogContent class="sm:max-w-[425px]">
+    <DialogContent class="sm:max-w-[425px] z-[60]">
       <DialogHeader>
         <DialogTitle>{{ $t('walletPasswordPrompt.title') }}</DialogTitle>
         <DialogDescription>{{ $t('walletPasswordPrompt.description') }}</DialogDescription>

@@ -343,6 +343,8 @@ const cooperativeCloseSnapshot = ref<CooperativeCloseSnapshot | null>(null)
 const cooperativeCloseNetworkLabel = (networkKey: string) => (
   networkKey.toLowerCase() === 'mainnet'
     ? 'Bitcoin mainnet / SatoshiNet mainnet'
+    : networkKey.toLowerCase() === 'regtest'
+      ? 'Bitcoin regtest / SatoshiNet regtest'
     : 'Bitcoin testnet4 / SatoshiNet testnet'
 )
 

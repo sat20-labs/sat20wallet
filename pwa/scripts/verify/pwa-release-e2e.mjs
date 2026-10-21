@@ -11,17 +11,22 @@ import { chromium, expect } from '@playwright/test'
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const [wasmPath, runtimePath, temporary] = process.argv.slice(2)
 assert.ok(wasmPath && runtimePath && temporary, 'launch via TestPWAProductionReleaseE2E')
+const regtestMode = process.argv.includes('--regtest')
+const pageErrorsOnly = process.argv.includes('--page-errors-only')
+const continueAfterBuild = pageErrorsOnly || process.argv.includes('--continue-after-build')
+assert.ok(!continueAfterBuild || regtestMode, 'focused continuation is only for the existing regtest gate')
 const copied = join(temporary, 'pwa')
 const required = [
   'Release PWA: current production WASM passes the ordinary typechecked release build',
   'Release PWA: all emitted release assets match size hash MIME and release metadata',
-  'Release PWA: production onboarding boots with CSP and without development hooks',
+  regtestMode ? 'Release PWA: regtest onboarding boots without development hooks' : 'Release PWA: production onboarding boots with CSP and without development hooks',
   'Release PWA: real service worker installs a complete verified release cache',
   'Release PWA: offline cold page boots the same release and persisted local catalog',
   'Release PWA: update preserves the running page then switches and retires the old cache after READY',
   'Release PWA: corrupted WASM rejects startup and cannot activate an incomplete release',
   'Release PWA: production online offline and update flows have no unhandled page errors',
 ]
+const activeRequired = pageErrorsOnly ? required.slice(7) : continueAfterBuild ? required.slice(1) : required
 const verdicts = new Map()
 const errors = []
 const hash = bytes => createHash('sha256').update(bytes).digest('hex')
@@ -32,6 +37,12 @@ const mime = path => path.endsWith('.wasm') ? 'application/wasm' : path.endsWith
   path.endsWith('.png') ? 'image/png' : path.endsWith('.svg') ? 'image/svg+xml' : 'application/octet-stream'
 const check = async (index, action) => {
   const name = required[index], started = Date.now()
+  if (pageErrorsOnly && index !== 7) {
+    // These actions establish online/offline/update contexts for the failed
+    // error-collection gate; their earlier functional verdicts stay reused.
+    await action()
+    return
+  }
   console.log(JSON.stringify({ case: name, status: 'running', started_at: new Date(started).toISOString() }))
   try {
     await action(); verdicts.set(name, 'pass')
@@ -56,15 +67,15 @@ const check = async (index, action) => {
 }
 const build = async label => {
   await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['scripts/build-with-status.cjs'], {
+    const child = spawn('npm', ['run', regtestMode ? 'build:regtest' : 'build'], {
       cwd: copied, stdio: 'inherit', env: { ...process.env, SAT20_PWA_BUILD_ID: `e2e-${process.pid}-${label}`,
         SAT20_PWA_BUILD_STATUS_DIR: join(temporary, `build-status-${label}`), VITE_PWA_BASE_PATH: '/pwa/' },
     })
     child.once('error', reject)
-    child.once('exit', (code, signal) => code === 0 ? resolve() : reject(new Error(`production build ${label}: ${signal || code}`)))
+    child.once('exit', (code, signal) => code === 0 ? resolve() : reject(new Error(`release build ${label}: ${signal || code}`)))
   })
   const output = join(temporary, `release-${label}`)
-  await cp(join(copied, 'dist'), output, { recursive: true })
+  await cp(join(copied, regtestMode ? 'dist-regtest' : 'dist'), output, { recursive: true })
   return output
 }
 const manifests = async directory => {
@@ -79,8 +90,8 @@ const manifests = async directory => {
     assert.equal(mime(path), asset.mime)
   }
   const html = await readFile(join(directory, 'index.html'), 'utf8')
-  assert.ok(html.includes(`name="sat20-release" content="${release.releaseId}"`))
-  assert.ok(html.includes('Content-Security-Policy') && html.includes("wasm-unsafe-eval"))
+  if (!regtestMode) assert.ok(html.includes(`name="sat20-release" content="${release.releaseId}"`))
+  if (!regtestMode) assert.ok(html.includes('Content-Security-Policy') && html.includes("wasm-unsafe-eval"))
   const sw = await readFile(join(directory, 'service-worker.js'), 'utf8')
   assert.ok(sw.includes(release.releaseId)); assert.ok(!sw.includes('__SAT20_RELEASE_MANIFEST__'))
   const manifest = await load('manifest.webmanifest')
@@ -88,15 +99,28 @@ const manifests = async directory => {
   return release
 }
 const cacheName = release => `sat20-wallet-pwa-${release.releaseId}`
+const runningPageRelease = page => regtestMode
+  ? page.evaluate(() => window.__pwaObservedReadyReleases?.at(-1) ?? null)
+  : page.locator('meta[name="sat20-release"]').getAttribute('content')
 const boot = async (page, release) => {
   await page.waitForFunction(() => Boolean(window.sat20), undefined, { timeout: 120000 })
-  assert.equal(await page.locator('meta[name="sat20-release"]').getAttribute('content'), release.releaseId)
+  await expect.poll(() => runningPageRelease(page), { timeout: 120000 }).toBe(release.releaseId)
   assert.equal(await page.evaluate(() => typeof window.__SAT20_PWA_VERIFY__), 'undefined')
   await expect(page.locator('#app')).not.toBeEmpty()
 }
 const newContext = async () => {
   const context = await browser.newContext()
   context.setDefaultTimeout(60000)
+  if (regtestMode) await context.addInitScript(() => {
+    window.__pwaObservedReadyReleases = []
+    // addInitScript also executes in the initial, insecure about:blank document.
+    if (typeof ServiceWorker === 'undefined') return
+    const post = ServiceWorker.prototype.postMessage
+    ServiceWorker.prototype.postMessage = function (message, ...args) {
+      if (message?.type === 'SAT20_PAGE_READY') window.__pwaObservedReadyReleases.push(message.releaseId)
+      return post.call(this, message, ...args)
+    }
+  })
   await context.route('**/*', route => ['localhost', '127.0.0.1'].includes(new URL(route.request().url()).hostname)
     ? route.continue() : route.abort('blockedbyclient'))
   context.on('page', page => page.on('pageerror', error => errors.push(error.message)))
@@ -121,17 +145,21 @@ const state = (page, selected = false) => page.evaluate(async selected => {
 
 try {
   let releaseA, context, page, origin, catalog
-  await check(0, async () => {
+  const prepareBuild = async () => {
     await cp(root, copied, { recursive: true, filter: path => {
       const relative = path.slice(root.length).split(sep).filter(Boolean)
-      return !relative.some(part => ['node_modules', 'dist', '.git', '.build-status'].includes(part))
+      return !relative.some(part => ['node_modules', 'dist', 'dist-regtest', '.git', '.build-status'].includes(part))
     } })
     await symlink(join(root, 'node_modules'), join(copied, 'node_modules'), 'dir')
     await mkdir(join(copied, 'public/wasm'), { recursive: true })
     await copyFile(wasmPath, join(copied, 'public/wasm/sat20wallet.wasm'))
     await copyFile(runtimePath, join(copied, 'public/wasm/wasm_exec.js'))
     dist = await build('a')
-  })
+  }
+  if (continueAfterBuild) {
+    await prepareBuild()
+    console.log(JSON.stringify({ setup: 'rebuilt private artifacts through the ordinary typechecked npm entry for unfinished cases' }))
+  } else await check(0, prepareBuild)
   await check(1, async () => { releaseA = await manifests(dist) })
   server = createServer(async (request, response) => {
     try {
@@ -188,7 +216,7 @@ try {
     assert.notEqual(releaseB.releaseId, releaseA.releaseId)
     await page.evaluate(async () => { const registration = await navigator.serviceWorker.ready; await registration.update() })
     await expect.poll(() => page.evaluate(async () => Boolean((await navigator.serviceWorker.ready).waiting)), { timeout: 120000 }).toBe(true)
-    assert.equal(await page.locator('meta[name="sat20-release"]').getAttribute('content'), releaseA.releaseId)
+    assert.equal(await runningPageRelease(page), releaseA.releaseId)
     // Follow the same worker object observed by usePwaUpdate. The old page's
     // controller deliberately remains the previous release until restart.
     await page.evaluate(async () => {
@@ -199,7 +227,7 @@ try {
     })
     await expect.poll(() => page.evaluate(() => window.__sat20ReleaseTestWorker.state), { timeout: 120000 }).toBe('activated')
     await expect.poll(async () => (await state(page, true)).releaseId, { timeout: 120000 }).toBe(releaseB.releaseId)
-    assert.equal(await page.locator('meta[name="sat20-release"]').getAttribute('content'), releaseA.releaseId)
+    assert.equal(await runningPageRelease(page), releaseA.releaseId)
     assert.ok((await cacheKeys(page)).includes(cacheName(releaseA)), 'old cache retired before new page READY')
     await page.close(); page = await context.newPage(); await page.goto(origin); await boot(page, releaseB)
     await expect.poll(async () => (await cacheKeys(page)).includes(cacheName(releaseA)), { timeout: 60000 }).toBe(false)
@@ -227,10 +255,10 @@ try {
   })
   await check(7, async () => assert.deepEqual(errors, []))
 } finally {
-  for (const name of required) if (!verdicts.has(name)) console.log(JSON.stringify({ case: name, status: 'not-run' }))
-  console.log(JSON.stringify({ caseSummary: { required: required.length, pass: [...verdicts.values()].filter(value => value === 'pass').length,
-    fail: [...verdicts.values()].filter(value => value === 'fail').length, not_run: required.filter(name => !verdicts.has(name)).length } }))
+  for (const name of activeRequired) if (!verdicts.has(name)) console.log(JSON.stringify({ case: name, status: 'not-run' }))
+  console.log(JSON.stringify({ caseSummary: { required: activeRequired.length, pass: [...verdicts.values()].filter(value => value === 'pass').length,
+    fail: [...verdicts.values()].filter(value => value === 'fail').length, not_run: activeRequired.filter(name => !verdicts.has(name)).length } }))
   await browser?.close()
   await new Promise(resolve => { if (!server) return resolve(); server.close(resolve); server.closeAllConnections() })
-  if (required.some(name => verdicts.get(name) !== 'pass')) process.exitCode = 1
+  if (activeRequired.some(name => verdicts.get(name) !== 'pass')) process.exitCode = 1
 }

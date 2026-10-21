@@ -7,6 +7,7 @@ import (
 
 type rgb11ScopeBackupState struct {
 	ReconciliationState string
+	ProjectionVerified  bool
 }
 
 type rgb11ScopeReconciliation struct {

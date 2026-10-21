@@ -18,6 +18,40 @@ func rgb11BatchRecipientID(batchID string, index uint32) string {
 	return hex.EncodeToString(child[:])
 }
 
+// Complete address identity before the shared builder sizes or commits its
+// candidate. Single and batch sends must measure exactly the state they save.
+func (p *rgb11Manager) setRGB11AddressSendState(state *rgb11wallet.TransferState, endpoint *RGB11AddressEndpoint) error {
+	if state == nil || endpoint == nil {
+		return ErrRGB11Inconsistent
+	}
+	sender, err := dkvsAccountID(p.wallet)
+	if err != nil {
+		return err
+	}
+	messageID, err := rgb11AddressMessageID(state.TransferID)
+	if err != nil {
+		return err
+	}
+	deliveryKey, err := dkvsindexer.MailMsgKey(endpoint.AccountID, sender, messageID)
+	if err != nil {
+		return err
+	}
+	ackKey, err := dkvsindexer.MailMsgKey(sender, endpoint.AccountID, messageID)
+	if err != nil {
+		return err
+	}
+	state.AddressMode, state.AddressMessageID = true, messageID
+	state.TransportMode = RGB11AddressTransport
+	state.SenderAccountID, state.ReceiverAccountID = sender, endpoint.AccountID
+	state.ReceiverAddress = endpoint.Address
+	state.ReceiveCapabilityKey, state.ReceiveCapabilityHash = endpoint.CapabilityRecordKey, endpoint.CapabilityRecordHash
+	state.DeliveryRecordKey, state.RelayRecordKey, state.AckRecordKey = deliveryKey, deliveryKey, ackKey
+	state.RecipientID, state.Invoice = endpoint.AccountID, ""
+	state.SyntheticInvoiceRemoved = true
+	state.AckStatus = "awaiting-persistence"
+	return nil
+}
+
 // prepareRGB11AddressBatch reuses the native one-transaction batch builder.
 // Each output has its own persistence ACK, including repeated addresses.
 func (p *rgb11Manager) prepareRGB11AddressBatch(ctx context.Context, requests []RGB11AddressSendRequest,
@@ -63,53 +97,9 @@ func (p *rgb11Manager) prepareRGB11AddressBatch(ctx context.Context, requests []
 		}
 		endpoints[i], invoices[i] = endpoint, invoice
 	}
-	prepared, err := p.prepareRGB11Transfer(ctx, RGB11SendRequest{Invoices: invoices, FeeRate: requests[0].FeeRate, MinConfirmations: requests[0].MinConfirmations}, true)
-	if err != nil {
-		return nil, err
-	}
-	pendingList := make([]*rgb11wallet.PendingTransfer, len(prepared.States))
-	for i, state := range prepared.States {
-		pending, err := p.projectionStore.LoadPendingTransfer(state.TransferID)
-		if err != nil {
-			return prepared, err
-		}
-		endpoint := endpoints[i]
-		messageID, err := rgb11AddressMessageID(state.TransferID)
-		if err != nil {
-			return prepared, err
-		}
-		deliveryKey, err := dkvsindexer.MailMsgKey(endpoint.AccountID, sender, messageID)
-		if err != nil {
-			return prepared, err
-		}
-		ackKey, err := dkvsindexer.MailMsgKey(sender, endpoint.AccountID, messageID)
-		if err != nil {
-			return prepared, err
-		}
-		s := &pending.State
-		s.AddressMode = true
-		s.AddressMessageID = messageID
-		s.TransportMode = RGB11AddressTransport
-		s.SenderAccountID = sender
-		s.ReceiverAccountID = endpoint.AccountID
-		s.ReceiverAddress = endpoint.Address
-		s.ReceiveCapabilityKey = endpoint.CapabilityRecordKey
-		s.ReceiveCapabilityHash = endpoint.CapabilityRecordHash
-		s.DeliveryRecordKey = deliveryKey
-		s.RelayRecordKey = deliveryKey
-		s.AckRecordKey = ackKey
-		s.RecipientID = endpoint.AccountID
-		s.Invoice = ""
-		s.SyntheticInvoiceRemoved = true
-		s.AckStatus = "awaiting-persistence"
-		pendingList[i] = pending
-		prepared.States[i] = s
-	}
-	if err := p.projectionStore.SavePendingTransferStates(pendingList); err != nil {
-		return prepared, err
-	}
-	prepared.State = prepared.States[0]
-	return prepared, nil
+	return p.prepareRGB11TransferForEndpoints(ctx, RGB11SendRequest{
+		Invoices: invoices, FeeRate: requests[0].FeeRate, MinConfirmations: requests[0].MinConfirmations,
+	}, true, endpoints)
 }
 
 // loadRGB11AddressBatch requires the full persisted group. One ACK cannot

@@ -24,7 +24,16 @@
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <div class="flex flex-col gap-4">
+          <div v-if="minerInfoLoading" class="text-sm text-muted-foreground">{{ $t('loading', '加载中...') }}</div>
+          <div v-else-if="minerInfoError" class="text-sm text-destructive">{{ minerInfoError.message }}</div>
+          <div v-else-if="isStaked" class="space-y-4">
+            <p class="text-sm text-muted-foreground">{{ $t('nodeSetting.alreadyStaked', '已质押节点') }}</p>
+            <Button variant="destructive" class="w-full" @click="onUnstake"
+              :disabled="isLoading || unstakeSubmitted" :loading="isLoading">
+              {{ $t('nodeSetting.unstake', '取消质押') }}
+            </Button>
+          </div>
+          <div v-else class="flex flex-col gap-4">
             <Button aria-label="become Core Node" @click="onStake(true)" :disabled="isLoading" :loading="isLoading && isCore">
               {{ $t('nodeSetting.becomeCoreNode') }}
             </Button>
@@ -39,13 +48,14 @@
           <Alert :variant="resultSuccess ? 'default' : 'destructive'">
             <!-- <AlertTitle>{{ resultSuccess ? 'Operate Successfull' : 'Operation Fail' }}</AlertTitle> -->
             <AlertDescription>{{ resultMsg }}</AlertDescription>
-            <div v-if="resultSuccess" class="mt-2 text-xs text-gray-500">Node Type: <span class="text-zinc-400 ml-1">{{
+            <div v-if="resultSuccess && pendingAction !== 'unstake'" class="mt-2 text-xs text-gray-500">Node Type: <span class="text-zinc-400 ml-1">{{
               resultCore ? 'Core Node' : 'Mining Node' }}</span></div>
             <div v-if="txId" class="mt-2 text-xs text-gray-500">Transaction ID:<span class="text-zinc-400 ml-1">
-                <a :href="generateMempoolUrl({ network: network, path: `tx/${txId}` })" target="_blank"
+                <a v-if="pendingAction !== 'unstake'" :href="generateMempoolUrl({ network: network, path: `tx/${txId}` })" target="_blank"
                   class="text-sky-500 hover:text-sky-400 underline cursor-pointer">
                   {{ hideAddress(txId) }}
                 </a>
+                <span v-else class="font-mono">{{ txId }}</span>
               </span></div>
             <div v-if="resvId" class="mt-2 text-xs text-gray-500">Reservation ID: <span class="text-zinc-400 ml-1">{{
               hideAddress(resvId) }}</span></div>
@@ -66,19 +76,19 @@
         <DialogContent class="w-[95%]">
           <DialogHeader>
             <DialogTitle><span class="flex justify-center items-center text-zinc-300 text-lg">
-                <Icon icon="lucide:message-circle-question-mark" class="w-8 h-8 mr-1 text-green-500" /> {{ isCore ?
+                <Icon icon="lucide:message-circle-question-mark" class="w-8 h-8 mr-1 text-green-500" /> {{ pendingAction === 'unstake' ? $t('nodeSetting.confirmUnstake', '确认取消质押') : isCore ?
                   $t('nodeSetting.confirmCoreDescription') : $t('nodeSetting.confirmMinerDescription') }}<br>
               </span></DialogTitle>
             <hr class="my-2 border-zinc-950" />
             <DialogDescription>
               <p class="text-center py-2">
-                {{ $t('nodeSetting.confirmDescription') }}
+                {{ pendingAction === 'unstake' ? $t('nodeSetting.confirmUnstakeDescription', '确认解除当前节点质押？提交后请在操作日志中查看最终结果。') : $t('nodeSetting.confirmDescription') }}
               </p>
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <div class="flex justify-end gap-3">
-              <Button @click="confirmStake" :disabled="isLoading" :loading="isLoading" class="w-36">{{ $t('nodeSetting.confirm') }}</Button>
+              <Button @click="pendingAction === 'unstake' ? confirmUnstake() : confirmStake()" :disabled="isLoading" :loading="isLoading" class="w-36">{{ $t('nodeSetting.confirm') }}</Button>
               <Button variant="secondary" @click="showConfirm = false" class="w-36">{{ $t('nodeSetting.cancel')
               }}</Button>
             </div>
@@ -90,7 +100,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
+import { useQuery } from '@tanstack/vue-query'
+import { satnetApi } from '@/apis'
 import walletManager from '@/utils/sat20'
 import LayoutSecond from '@/components/layout/LayoutSecond.vue'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card'
@@ -131,6 +143,8 @@ const isLoading = ref(false)
 const isCore = ref(false)
 const resultCore = ref(false)
 const showConfirm = ref(false)
+const pendingAction = ref<'stake' | 'unstake'>('stake')
+const unstakeSubmitted = ref(false)
 const resultMsg = ref('')
 const resultSuccess = ref(false)
 const txId = ref('')
@@ -141,15 +155,30 @@ let pendingCore = false
 
 const guideUrl = "https://github.com/sat20-labs/satoshinet/blob/main/install/guide.md"
 
+const { data: minerInfoRes, isPending: minerInfoPending, isFetching: minerInfoFetching, error: minerInfoError } = useQuery({
+  queryKey: ['minerInfo', publicKey, network],
+  queryFn: () => satnetApi.getMinerInfo({ pubkey: publicKey.value, network: network.value }),
+  enabled: computed(() => !!publicKey.value && !!network.value),
+})
+const minerInfoLoading = computed(() => minerInfoPending.value || minerInfoFetching.value)
+const isStaked = computed(() => !!minerInfoRes.value?.data?.ServerNode)
+
+function onUnstake() {
+  if (isLoading.value || unstakeSubmitted.value || minerInfoLoading.value || minerInfoError.value || !isStaked.value) return
+  pendingAction.value = 'unstake'
+  showConfirm.value = true
+}
+
 function onStake(core: boolean) {
-  if (isLoading.value) return
+  if (isLoading.value || minerInfoLoading.value || minerInfoError.value || isStaked.value) return
+  pendingAction.value = 'stake'
   isCore.value = core
   pendingCore = core
   showConfirm.value = true
 }
 
 async function confirmStake() {
-  if (isLoading.value) return
+  if (isLoading.value || minerInfoLoading.value || minerInfoError.value || isStaked.value) return
   const submittedCore = pendingCore
   const submittedPubKey = publicKey.value
   isLoading.value = true
@@ -198,6 +227,33 @@ async function confirmStake() {
     resvId.value = ''
     assetName.value = ''
     amt.value = ''
+  } finally {
+    isLoading.value = false
+  }
+}
+async function confirmUnstake() {
+  if (isLoading.value || unstakeSubmitted.value || minerInfoLoading.value || minerInfoError.value || !isStaked.value) return
+  isLoading.value = true
+  showConfirm.value = false
+  resultMsg.value = ''
+  resultSuccess.value = false
+  txId.value = ''
+  resvId.value = ''
+  assetName.value = ''
+  amt.value = ''
+  try {
+    const [err, res] = await walletManager.minerUnstake(btcFeeRate.value.toString())
+    if (err) {
+      resultMsg.value = err.message || '取消质押提交失败'
+    } else {
+      unstakeSubmitted.value = true
+      resultSuccess.value = true
+      resultMsg.value = '取消质押已提交，请在操作日志中查看最终结果。'
+      txId.value = res?.txId || ''
+      resvId.value = res?.resvId || ''
+    }
+  } catch (error: any) {
+    resultMsg.value = error.message || '取消质押提交失败'
   } finally {
     isLoading.value = false
   }

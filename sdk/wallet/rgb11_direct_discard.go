@@ -4,6 +4,7 @@ package wallet
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -13,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	coreconsignment "github.com/sat20-labs/rgb11/consignment"
@@ -100,25 +100,35 @@ func (p *Manager) UnlockRGB11Discard(password string) (int64, error) {
 }
 
 func (p *Manager) PlanRGB11Discard(target RGB11DiscardTarget) (*RGB11DiscardPlan, error) {
+	if p == nil {
+		return nil, ErrRGB11Inconsistent
+	}
+	return p.planRGB11DiscardWithManager(target, p.rgbManager)
+}
+
+func (p *Manager) planRGB11DiscardWithManager(target RGB11DiscardTarget,
+	manager *rgb11Manager) (*RGB11DiscardPlan, error) {
 	if target != rgb11DiscardOnlyTarget {
 		return nil, errors.New("maintenance target is not the approved C/172d Direct message")
 	}
-	if p == nil || p.wallet == nil || p.rgbManager == nil || p.rgbManager.evidence == nil {
+	if manager == nil || manager.Manager == nil || manager.status == nil || manager.wallet == nil ||
+		manager.evidence == nil || manager.projectionStore == nil {
 		return nil, ErrRGB11Inconsistent
 	}
-	accountID, err := dkvsAccountID(p.wallet)
+	owner := manager.Manager
+	accountID, err := dkvsAccountID(manager.wallet)
 	if err != nil || accountID != target.ReceiverAccountID {
 		return nil, errors.New("active wallet is not the target receiver scope")
 	}
-	messages, err := p.readWalletDirectMessages(p.wallet)
+	messages, err := owner.readWalletDirectMessages(manager.wallet)
 	if err != nil {
 		return nil, err
 	}
 	source := rgb11DiscardSource{
-		accountID: accountID, wallet: p.wallet, walletID: p.status.CurrentWallet,
-		subAccount: p.wallet.GetSubAccount(), messages: messages,
+		accountID: accountID, wallet: manager.wallet, walletID: manager.status.CurrentWallet,
+		subAccount: manager.wallet.GetSubAccount(), messages: messages,
 		hasTransfer: func(id string) (bool, error) {
-			_, loadErr := p.rgbManager.projectionStore.LoadTransferState(id)
+			_, loadErr := manager.projectionStore.LoadTransferState(id)
 			if loadErr == nil {
 				return true, nil
 			}
@@ -128,7 +138,7 @@ func (p *Manager) PlanRGB11Discard(target RGB11DiscardTarget) (*RGB11DiscardPlan
 			return false, loadErr
 		},
 		hasProof: func(outpoint string) (bool, error) {
-			proofs, listErr := p.rgbManager.projectionStore.ListProofs()
+			proofs, listErr := manager.projectionStore.ListProofs()
 			if listErr != nil {
 				return false, listErr
 			}
@@ -139,9 +149,9 @@ func (p *Manager) PlanRGB11Discard(target RGB11DiscardTarget) (*RGB11DiscardPlan
 			}
 			return false, nil
 		},
-		getOutspend: p.rgbManager.evidence.GetOutspend,
-		getRawTx:    p.rgbManager.evidence.GetRawTx,
-		getTxStatus: p.rgbManager.evidence.GetTxStatus,
+		getOutspend: manager.evidence.GetOutspend,
+		getRawTx:    manager.evidence.GetRawTx,
+		getTxStatus: manager.evidence.GetTxStatus,
 	}
 	return buildRGB11DiscardPlan(target, source)
 }
@@ -150,34 +160,38 @@ func (p *Manager) ApplyRGB11Discard(approved RGB11DiscardPlan) error {
 	if approved.Target != rgb11DiscardOnlyTarget {
 		return errors.New("maintenance plan is not for the approved C/172d Direct message")
 	}
-	if p == nil || p.wallet == nil || p.rgbManager == nil {
-		return ErrRGB11Inconsistent
-	}
-	accountID, err := dkvsAccountID(p.wallet)
-	if err != nil || accountID != approved.Target.ReceiverAccountID {
-		return errors.New("active wallet is not the target receiver scope")
-	}
-	store, err := p.accountDKVSStore()
-	if err != nil {
-		return err
-	}
-	ops := rgb11DiscardApplyOps{
-		plan: func() (*RGB11DiscardPlan, error) {
-			return p.PlanRGB11Discard(approved.Target)
-		},
-		delete: func(key string) error { return p.DeleteMailboxMessage(p.wallet, key) },
-		confirm: func(key string) error {
-			return confirmRGB11DiscardGone(store.client, key)
-		},
-		cleanup: func() error {
-			return newDKVSReplicaStore(p.db).DiscardExactReplica(
-				store.client.replicaNamespace, approved.RecordKey, approved.RecordHash)
-		},
-		mark: func() error {
-			return p.rgbManager.markRGB11AddressMessageProcessed("consignment", approved.Target.ApplicationID)
-		},
-	}
-	return applyRGB11Discard(approved, ops)
+	_, err := runRGB11ManagedOperation(p, context.Background(), rgb11ManagedOperationContinue,
+		func(manager *rgb11Manager) (struct{}, error) {
+			if manager == nil || manager.wallet == nil || manager.projectionStore == nil {
+				return struct{}{}, ErrRGB11Inconsistent
+			}
+			accountID, err := dkvsAccountID(manager.wallet)
+			if err != nil || accountID != approved.Target.ReceiverAccountID {
+				return struct{}{}, errors.New("active wallet is not the target receiver scope")
+			}
+			store, err := p.accountDKVSStore()
+			if err != nil {
+				return struct{}{}, err
+			}
+			ops := rgb11DiscardApplyOps{
+				plan: func() (*RGB11DiscardPlan, error) {
+					return p.planRGB11DiscardWithManager(approved.Target, manager)
+				},
+				delete: func(key string) error { return p.DeleteMailboxMessage(manager.wallet, key) },
+				confirm: func(key string) error {
+					return confirmRGB11DiscardGone(store.client, key)
+				},
+				cleanup: func() error {
+					return newDKVSReplicaStore(p.db).DiscardExactReplica(
+						store.client.replicaNamespace, approved.RecordKey, approved.RecordHash)
+				},
+				mark: func() error {
+					return manager.markRGB11AddressMessageProcessed("consignment", approved.Target.ApplicationID)
+				},
+			}
+			return struct{}{}, applyRGB11Discard(approved, ops)
+		})
+	return err
 }
 
 func buildRGB11DiscardPlan(target RGB11DiscardTarget,
@@ -410,75 +424,6 @@ func rgb11DiscardWitness(raw []byte) (*coreconsignment.Container, *wire.MsgTx, e
 	}
 	tx, err := rgb11DiscardStrictTx(witness.Inner.Unwrap())
 	return container, tx, err
-}
-
-func rgb11DiscardStrictTx(value strict_types.Value) (*wire.MsgTx, error) {
-	versionValue, versionOK := value.Field("version")
-	inputsValue, inputsOK := value.Field("inputs")
-	outputsValue, outputsOK := value.Field("outputs")
-	lockTimeValue, lockTimeOK := value.Field("lockTime")
-	version, versionNumberOK := discardSigned(versionValue)
-	lockTime, lockTimeNumberOK := discardUnsigned(lockTimeValue)
-	inputs, outputs := inputsValue.Unwrap(), outputsValue.Unwrap()
-	if !versionOK || !inputsOK || !outputsOK || !lockTimeOK || !versionNumberOK || !lockTimeNumberOK ||
-		version < math.MinInt32 || version > math.MaxInt32 || lockTime > math.MaxUint32 ||
-		inputs.Kind != strict_types.ValueList || outputs.Kind != strict_types.ValueList {
-		return nil, errors.New("invalid embedded witness transaction")
-	}
-	tx := wire.NewMsgTx(int32(version))
-	tx.LockTime = uint32(lockTime)
-	for _, item := range inputs.Items {
-		item = item.Unwrap()
-		previous, previousOK := item.Field("prevOutput")
-		scriptValue, scriptOK := item.Field("sigScript")
-		sequenceValue, sequenceOK := item.Field("sequence")
-		txidValue, txidOK := previous.Unwrap().Field("txid")
-		voutValue, voutOK := previous.Unwrap().Field("vout")
-		txid, bytesOK := txidValue.Bytes()
-		vout, voutNumberOK := discardUnsigned(voutValue)
-		sequence, sequenceNumberOK := discardUnsigned(sequenceValue)
-		script, scriptBytesOK := scriptValue.Bytes()
-		if !previousOK || !scriptOK || !sequenceOK || !txidOK || !voutOK || !bytesOK || len(txid) != 32 ||
-			!voutNumberOK || vout > math.MaxUint32 || !sequenceNumberOK || sequence > math.MaxUint32 || !scriptBytesOK {
-			return nil, errors.New("invalid embedded witness input")
-		}
-		var hash chainhash.Hash
-		copy(hash[:], txid)
-		input := wire.NewTxIn(&wire.OutPoint{Hash: hash, Index: uint32(vout)}, script, nil)
-		input.Sequence = uint32(sequence)
-		tx.AddTxIn(input)
-	}
-	for _, item := range outputs.Items {
-		item = item.Unwrap()
-		amountValue, amountOK := item.Field("value")
-		scriptValue, scriptOK := item.Field("scriptPubkey")
-		amount, amountNumberOK := discardUnsigned(amountValue)
-		script, scriptBytesOK := scriptValue.Bytes()
-		if !amountOK || !scriptOK || !amountNumberOK || amount > math.MaxInt64 || !scriptBytesOK {
-			return nil, errors.New("invalid embedded witness output")
-		}
-		tx.AddTxOut(wire.NewTxOut(int64(amount), script))
-	}
-	return tx, nil
-}
-
-func discardUnsigned(value strict_types.Value) (uint64, bool) {
-	value = value.Unwrap()
-	if value.Kind == strict_types.ValueUnion && value.Inner != nil {
-		return discardUnsigned(*value.Inner)
-	}
-	return value.Uint64()
-}
-
-func discardSigned(value strict_types.Value) (int64, bool) {
-	value = value.Unwrap()
-	if value.Signed != nil {
-		return *value.Signed, true
-	}
-	if value.Unsigned != nil && *value.Unsigned <= math.MaxInt64 {
-		return int64(*value.Unsigned), true
-	}
-	return 0, false
 }
 
 func splitDiscardOutpoint(outpoint string) (string, uint32, error) {

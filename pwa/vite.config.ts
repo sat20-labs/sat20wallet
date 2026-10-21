@@ -42,10 +42,10 @@ const mimeForPath = (assetPath: string) => {
   throw new Error(`No release MIME policy for ${assetPath}`)
 }
 
-const releaseBuildPlugin = (versionInfo: Record<string, any>) => ({
+const releaseBuildPlugin = (versionInfo: Record<string, any>, outputDirectory: string) => ({
   name: 'sat20-pwa-release',
   closeBundle() {
-    const distRoot = path.resolve(__dirname, 'dist')
+    const distRoot = path.resolve(__dirname, outputDirectory)
     const serviceWorkerPath = path.join(distRoot, 'service-worker.js')
     const assetMarker = '/* __SAT20_BUILD_ASSETS__ */ []'
     const releaseMarker = '/* __SAT20_RELEASE_MANIFEST__ */ {}'
@@ -222,6 +222,8 @@ export default defineConfig(({ command, mode }) => {
   const env = loadEnv(mode, __dirname, '')
   const releaseId = `${versionInfo.version || '0.0.0'}-${versionInfo.buildId || ''}`
   const productionBuild = command === 'build' && mode === 'production'
+  const regtestBuild = mode === 'regtest'
+  const outputDirectory = regtestBuild ? 'dist-regtest' : 'dist'
 
   return {
     base: process.env.VITE_PWA_BASE_PATH || (mode === 'production' ? '/pwa/' : '/'),
@@ -234,7 +236,7 @@ export default defineConfig(({ command, mode }) => {
       solcBrowserNodeShims(),
       vue(),
       ...(productionBuild ? [productionCspPlugin(env, releaseId)] : []),
-      releaseBuildPlugin(versionInfo),
+      releaseBuildPlugin(versionInfo, outputDirectory),
     ],
     worker: {
       format: 'es',
@@ -242,13 +244,16 @@ export default defineConfig(({ command, mode }) => {
     },
     build: {
       sourcemap: false,
+      outDir: outputDirectory,
     },
     server: {
-      port: 5173,
+      host: regtestBuild ? '127.0.0.1' : undefined,
+      port: regtestBuild ? 5179 : 5173,
       strictPort: true,
     },
     preview: {
-      port: 4173,
+      host: regtestBuild ? '127.0.0.1' : undefined,
+      port: regtestBuild ? 4179 : 4173,
       strictPort: true,
     },
     resolve: {

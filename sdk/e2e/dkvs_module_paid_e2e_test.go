@@ -174,7 +174,14 @@ func sdkDKVSReviewPaidFixture(t *testing.T) (*templateFixture, *dkvsKeyPathActor
 	deploy, pool := buildDKVSKeyPathTemplateDeploy(t, a, contract.TemplateAutopay, content, a.Address,
 		defaults.AutopayDeployNonce, []dkvsPrevOut{gasOuts[0], feeOuts[0]}, wire.TxOut{Value: 10000, Assets: assets})
 	f.Network.sendManyAndMine(t, []*wire.MsgTx{deploy}, 0)
-	fundB := buildDKVSKeyPathTemplateDefaultInvoke(t, b, pool, []dkvsPrevOut{feeOuts[1]}, wire.TxOut{Value: 10000, Assets: txAsset(defaults.AutopayFeeAssetName, 5000)})
+	// Default transfers fund operating gas only. Configure the actual payer
+	// explicitly so its signed records have a live paid delegate.
+	delegateParam, err := (&contract.TemplateAutopayConfigInvokeParam{AmountPerBlock: defaults.AutopayMinAmountPerBlock}).Encode()
+	require.NoError(t, err)
+	delegateBaseFee, err := contract.GasFeeAtHeight(contract.InvokeBaseGas, 0)
+	require.NoError(t, err)
+	fundB := buildDKVSKeyPathTemplateInvoke(t, b, pool, 1, contract.TemplateInvokeAPIConfig,
+		delegateParam, []dkvsPrevOut{feeOuts[1]}, wire.TxOut{Value: 10000, Assets: txAsset(defaults.AutopayFeeAssetName, 5000-delegateBaseFee)})
 	f.Network.sendManyAndMine(t, []*wire.MsgTx{fundB}, 0)
 	param, err := (&contract.TemplateAutopayConfigInvokeParam{GasFundingAmount: "289950"}).Encode()
 	require.NoError(t, err)

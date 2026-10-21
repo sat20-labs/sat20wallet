@@ -48,8 +48,15 @@ func TestRealSatoshiNetDKVSAutopayNameAndMailboxSync(t *testing.T) {
 		content, actorA.Address, defaults.AutopayDeployNonce, []dkvsPrevOut{gasOuts[0], feeOuts[0]},
 		wire.TxOut{Value: 10000, Assets: deployAssets})
 	f.Network.sendManyAndMine(t, []*wire.MsgTx{deployA}, 0)
-	fundB := buildDKVSKeyPathTemplateDefaultInvoke(t, actorB, contractA, []dkvsPrevOut{feeOuts[1]},
-		wire.TxOut{Value: 10000, Assets: txAsset(defaults.AutopayFeeAssetName, 5000)})
+	// Default transfers fund operating gas only; this signer needs its own
+	// explicit paid delegate before creating DKVS records.
+	delegateParam, err := (&contractcommon.TemplateAutopayConfigInvokeParam{AmountPerBlock: defaults.AutopayMinAmountPerBlock}).Encode()
+	require.NoError(t, err)
+	delegateBaseFee, err := contractcommon.GasFeeAtHeight(contractcommon.InvokeBaseGas, 0)
+	require.NoError(t, err)
+	fundB := buildDKVSKeyPathTemplateInvoke(t, actorB, contractA, 1, contractcommon.TemplateInvokeAPIConfig,
+		delegateParam, []dkvsPrevOut{feeOuts[1]},
+		wire.TxOut{Value: 10000, Assets: txAsset(defaults.AutopayFeeAssetName, 5000-delegateBaseFee)})
 	f.Network.sendManyAndMine(t, []*wire.MsgTx{fundB}, 0)
 
 	// Operating gas is funded explicitly, never borrowed from delegate funds.
@@ -112,6 +119,16 @@ func TestRealSatoshiNetDKVSAutopayNameAndMailboxSync(t *testing.T) {
 
 	// Message entries use MessageService -> AccountBound mailbox, not generic
 	// KV admission. Both wallet accounts were explicitly bound at setup.
+	// DKVS readiness precedes the asynchronous STP HTTP service startup.
+	healthClient := &http.Client{Timeout: time.Second}
+	require.Eventually(t, func() bool {
+		response, err := healthClient.Get("http://" + f.Network.Core.stpAddr + "/health")
+		if err != nil {
+			return false
+		}
+		defer response.Body.Close()
+		return response.StatusCode == http.StatusOK
+	}, 15*time.Second, 100*time.Millisecond, "CoreNode STP message service must be ready")
 	recipientManager.Start()
 	recipientID := dkvsindexer.AccountID(recipientManager.GetWallet().GetPubKey().SerializeCompressed())
 	direct, err := senderManager.SendAccountDirectMessage("e2e-message", wallet.AccountMessageKindGeneric,

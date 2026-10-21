@@ -220,7 +220,6 @@ type RGB11PreparedTransfer struct {
 	States                     []*TransferState `json:"states,omitempty"`
 	RecipientConsignment       string           `json:"recipient_consignment"`
 	RecipientConsignmentBase64 string           `json:"recipient_consignment_base64"`
-	SignedPSBT                 string           `json:"signed_psbt"`
 	TxID                       string           `json:"txid"`
 }
 

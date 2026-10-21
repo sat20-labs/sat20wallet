@@ -1,6 +1,7 @@
 package rgb11wallet
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,6 +12,7 @@ import (
 
 	indexer "github.com/sat20-labs/indexer/common"
 	indexerdb "github.com/sat20-labs/indexer/indexer/db"
+	"github.com/sat20-labs/rgb11/consensus"
 	"github.com/sat20-labs/rgb11/invoicing"
 	corewallet "github.com/sat20-labs/rgb11/wallet"
 )
@@ -177,6 +179,117 @@ func TestProjectionSnapshotRejectsRGBAssetWithoutProof(t *testing.T) {
 	}
 }
 
+func TestRebindValidatedConsignmentReceiptSnapshot(t *testing.T) {
+	assetName, err := NewContractAssetKey("rgb:Ar4ouaLv-b7f7Dc_-z5EMvtu-FA5KNh1-nlae~jk-8xMBo7E", indexer.ASSET_TYPE_FT)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte("same immutable consignment")
+	rawHash := sha256.Sum256(raw)
+	const outpointA = "1111111111111111111111111111111111111111111111111111111111111111:0"
+	const outpointB = "2222222222222222222222222222222222222222222222222222222222222222:1"
+	allocationA := ValidatedAllocation{
+		OutPoint: outpointA, AssetName: assetName, Amount: *indexer.NewDefaultDecimal(10),
+		OperationID: "operation-a", AssignmentType: 4000, AssignmentIndex: 0,
+		StateClass: "fungible", SealDisclosure: []byte{1, 2, 3},
+	}
+	allocationB := ValidatedAllocation{
+		OutPoint: outpointB, AssetName: assetName, Amount: *indexer.NewDefaultDecimal(20),
+		OperationID: "operation-b", AssignmentType: 4000, AssignmentIndex: 0,
+		StateClass: "fungible", SealDisclosure: []byte{4, 5, 6},
+	}
+	existing := &ValidationReceipt{
+		Version: 1, EngineBuildID: "test-engine", ConsignmentHash: hex.EncodeToString(rawHash[:]),
+		ContractID: assetName.Ticker, SchemaID: "test-schema", StateHash: [32]byte{1},
+		ValidatedAt: 100, Status: "valid", Allocations: []ValidatedAllocation{allocationA},
+	}
+	oldHash, err := existing.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	disclosureHash := consensus.TaggedHash(consensus.SecretSealCommitmentTag, allocationA.SealDisclosure)
+	output := indexer.NewTxOutput(1_000)
+	output.OutPointStr = outpointA
+	asset := &indexer.AssetInfo{Name: assetName, Amount: *allocationA.Amount.Clone(), BindingSat: 0}
+	proof := &AllocationProof{
+		OutPoint: outpointA, AssetName: assetName, OperationID: allocationA.OperationID,
+		AssignmentType: allocationA.AssignmentType, AssignmentIndex: allocationA.AssignmentIndex,
+		StateClass: allocationA.StateClass, SealDisclosure: append([]byte(nil), allocationA.SealDisclosure...),
+		SealCommitment: hex.EncodeToString(disclosureHash[:]), ConsignmentHash: existing.ConsignmentHash,
+		ValidationHash: oldHash, WitnessTxID: strings.Repeat("11", 32), Status: "settled",
+	}
+	records, err := AddValidatedConsignmentProjectionSnapshot(nil, raw, existing, []ProjectionReplacement{{
+		Output: output, Asset: asset, Proof: proof,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fresh := *existing
+	fresh.EngineBuildID = "test-engine-revalidated"
+	fresh.StateHash = [32]byte{2}
+	fresh.ValidatedAt++
+	fresh.Allocations = []ValidatedAllocation{allocationA, allocationB}
+	newHash, err := fresh.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rebound, err := RebindValidatedConsignmentReceiptSnapshot(records, existing, &fresh)
+	if err != nil {
+		t.Fatalf("rebind current-view receipt with a newly current full Opout: %v", err)
+	}
+	if err := validateProjectionSnapshot(rebound); err != nil {
+		t.Fatalf("rebound projection snapshot is invalid: %v", err)
+	}
+	proofs, err := ProofsFromProjectionSnapshot(rebound)
+	if err != nil || len(proofs) != 1 || proofs[0].ValidationHash != newHash ||
+		proofs[0].OutPoint != outpointA || proofs[0].OperationID != allocationA.OperationID ||
+		proofs[0].SealCommitment != proof.SealCommitment {
+		t.Fatalf("rebind changed proof identity or failed to bind fresh receipt: proofs=%+v err=%v", proofs, err)
+	}
+	receipts, err := ValidationReceiptsFromProjectionSnapshot(rebound)
+	if err != nil || receipts[existing.ConsignmentHash] == nil || len(receipts[existing.ConsignmentHash].Allocations) != 2 {
+		t.Fatalf("fresh receipt was not published with the proof rebind: receipts=%+v err=%v", receipts, err)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(*ValidationReceipt)
+	}{
+		{
+			name: "fresh report omits retained proof",
+			mutate: func(receipt *ValidationReceipt) {
+				receipt.Allocations = []ValidatedAllocation{allocationB}
+			},
+		},
+		{
+			name: "amount changes",
+			mutate: func(receipt *ValidationReceipt) {
+				changed := allocationA
+				changed.Amount = *indexer.NewDefaultDecimal(11)
+				receipt.Allocations = []ValidatedAllocation{changed, allocationB}
+			},
+		},
+		{
+			name: "full Opout changes",
+			mutate: func(receipt *ValidationReceipt) {
+				changed := allocationA
+				changed.AssignmentIndex = 1
+				receipt.Allocations = []ValidatedAllocation{changed, allocationB}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			changed := fresh
+			changed.Allocations = append([]ValidatedAllocation(nil), fresh.Allocations...)
+			tc.mutate(&changed)
+			if _, err := RebindValidatedConsignmentReceiptSnapshot(records, existing, &changed); err == nil {
+				t.Fatal("rebind accepted a fresh report that does not preserve the exact retained proof")
+			}
+		})
+	}
+}
+
 func TestProjectionSnapshotRoundTripsEveryPortableRecordType(t *testing.T) {
 	sourceDB := indexerdb.NewKVDB(t.TempDir())
 	defer sourceDB.Close()
@@ -299,6 +412,62 @@ func TestProjectionSnapshotRoundTripsEveryPortableRecordType(t *testing.T) {
 	if err != nil || restoredPending.ReservationID != "pending-transfer-owner" {
 		t.Fatalf("pending reservation owner=%q err=%v", restoredPending.ReservationID, err)
 	}
+}
+
+func TestExportSnapshotRetainsAddressRecipientBodyForRedelivery(t *testing.T) {
+	db := indexerdb.NewKVDB(t.TempDir())
+	defer db.Close()
+	store := NewProjectionStore(db, nil)
+	if err := store.SetScope("wallet-address-redelivery-account-0"); err != nil {
+		t.Fatal(err)
+	}
+	recipient := []byte("exact recipient body survives uncertain acknowledgement")
+	digest := sha256.Sum256(recipient)
+	hash := hex.EncodeToString(digest[:])
+	if err := store.SavePendingTransfer(&PendingTransfer{
+		State: TransferState{
+			TransferID: "address-send", Direction: "send", Status: "delivered",
+			AddressMode: true, ConsignmentHash: hash,
+		},
+		RecipientConsignment: append([]byte(nil), recipient...),
+		LocalConsignment:     []byte("local history"),
+		SignedTx:             []byte("signed transaction"),
+		SignedPSBT:           []byte("signed psbt"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	records, err := store.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hasObject bool
+	for _, record := range records {
+		if record.Key == "object-"+hash {
+			hasObject = bytes.Equal(record.Value, recipient)
+		}
+	}
+	if !hasObject {
+		t.Fatal("portable snapshot dropped the address recipient object after delivery")
+	}
+	rehydrated, err := rehydratePendingSnapshotRecords(records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range rehydrated {
+		if !strings.HasPrefix(record.Key, "pending-") {
+			continue
+		}
+		var pending PendingTransfer
+		if err := decode(record.Value, &pending); err != nil {
+			t.Fatal(err)
+		}
+		if pending.RecipientObjectHash != hash || !bytes.Equal(pending.RecipientConsignment, recipient) {
+			t.Fatalf("recovered recipient body differs from original: %+v", pending)
+		}
+		return
+	}
+	t.Fatal("portable snapshot omitted address pending transfer")
 }
 
 func TestProjectionSnapshotRejectsInvalidReceiveReservation(t *testing.T) {

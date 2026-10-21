@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/sat20-labs/sat20wallet/sdk/account"
@@ -40,14 +41,11 @@ func TestSDKCoreModulesConnectedE2E(t *testing.T) {
 	coreRequire(t, "select sender root", sender.SwitchWallet(rootID, coreE2EPassword))
 	sender.SwitchAccount(0)
 
-	// Exercise both transport lifecycles before adding other issuance schemas.
-	// A UDA/IFA recovery defect must not prevent the NIA transport tests from
-	// reaching their own checkpoints. Failing recovery checkpoints remain red.
-	t.Run("invoice_transfer_every_paid_recovery_boundary", func(t *testing.T) {
-		coreInvoiceTransferE2E(t, cfg, chain, sender, receiver, senderMaterial, receiverMaterial)
-	})
-	t.Run("direct_transfer_every_paid_recovery_boundary", func(t *testing.T) {
-		coreDirectTransferE2E(t, cfg, chain, sender, receiver, senderMaterial, receiverMaterial)
+	// Establish ordinary backup, issuance and browser recovery first.
+	// Mixed fault/retry and concurrency flows remain explicit later groups.
+	t.Run("RGB11_self_send_cold_restore_and_respend", func(t *testing.T) {
+		coreRGB11SelfSendColdRestoreE2E(
+			t, cfg, chain, senderMaterial, receiverMaterial)
 	})
 
 	t.Run("RGB11_asset_name_and_transcend_registration_descriptor", func(t *testing.T) {
@@ -77,16 +75,65 @@ func TestSDKCoreModulesConnectedE2E(t *testing.T) {
 		coreCheckpoint(t, "IFA_multiwallet_DKVS_recovery", sender, cfg, chain, senderMaterial)
 	})
 
-	t.Run("RGB11_account_recovery_failure_boundaries", func(t *testing.T) {
-		coreRGBRecoveryFailuresE2E(t, sender, cfg, chain, senderMaterial)
-	})
-
 	t.Run("PWA_RGB11_nonempty_recovery_and_failure_retry", func(t *testing.T) {
 		coreRGBBrowserE2E(t, sender, cfg, chain, senderMaterial)
 		// The browser peer legitimately published R+1. Adopt it through the
 		// normal SDK path before the next case reconfigures the backup.
 		coreRequire(t, "sync independent browser update before reconfiguration", sender.SyncAccountManagementState(context.Background()))
-		coreAssert(t, sender.GetWalletCatalog()[0].Name == "Independent device newer state", "native sender did not adopt browser peer update")
+		if os.Getenv("SAT20_PWA_RGB_CASE") == "" {
+			coreAssert(t, sender.GetWalletCatalog()[0].Name == "Independent device newer state", "native sender did not adopt browser peer update")
+		}
+	})
+
+	if !t.Run("invoice_transfer_every_paid_recovery_boundary", func(t *testing.T) {
+		coreInvoiceTransferE2E(t, cfg, chain, sender, receiver, senderMaterial, receiverMaterial)
+	}) {
+		// Later groups reuse these managers and must not run on a failed
+		// invoice/recovery baseline left by this fault-injection group.
+		return
+	}
+
+	if !t.Run("direct_transfer_every_paid_recovery_boundary", func(t *testing.T) {
+		coreDirectTransferE2E(t, cfg, chain, sender, receiver, senderMaterial, receiverMaterial)
+	}) {
+		// Later groups share the managers left by this recovery fault test.
+		return
+	}
+
+	t.Run("RGB11_same_root_three_device_cas_cancel_broadcast_and_respend", func(t *testing.T) {
+		coreRGB11SameRootThreeDeviceE2E(t, cfg, chain, sender, receiver, senderMaterial, receiverMaterial)
+	})
+
+	t.Run("RGB11_recovery_identity_batch_and_hop_lifecycles", func(t *testing.T) {
+		coreRGB11RecoveryIdentityAndBatchE2E(
+			t, cfg, chain, sender, receiver, senderMaterial, receiverMaterial)
+	})
+
+	t.Run("RGB11_fullsend_history_cold_recovery_reorg_and_competing_intent", func(t *testing.T) {
+		coreRGBFullSendRecoveryColdRestoreE2E(
+			t, cfg, chain, sender, receiver, senderMaterial, receiverMaterial)
+	})
+
+	t.Run("RGB11_R11_stable_only_cold_restore_ignores_valid_and_corrupt_legacy_cache", func(t *testing.T) {
+		coreRGB11StableOnlyColdRestoreE2E(t, cfg, chain, senderMaterial, receiverMaterial)
+	})
+
+	t.Run("RGB11_R23_temporary_TTL_expiry_cold_restore_and_respend", func(t *testing.T) {
+		coreRGB11TemporaryTTLExpiryColdRestoreE2E(
+			t, cfg, chain, sender, receiver, receiverMaterial)
+	})
+
+	t.Run("RGB11_R09_same_root_real_CAS_loser_retains_private_intent_and_tests_recovery", func(t *testing.T) {
+		coreRGB11SameRootCASLoserE2E(t, cfg, chain, sender, receiver, senderMaterial)
+	})
+
+	t.Run("RGB11_recovery_capacity_boundaries", func(t *testing.T) {
+		coreRGBRecoveryCapacityBoundaryE2E(
+			t, cfg, chain, sender, receiver, senderMaterial, receiverMaterial)
+	})
+
+	t.Run("RGB11_account_recovery_failure_boundaries", func(t *testing.T) {
+		coreRGBRecoveryFailuresE2E(t, sender, cfg, chain, senderMaterial)
 	})
 
 	t.Run("guardian_two_of_three_and_wrong_knowledge", func(t *testing.T) {

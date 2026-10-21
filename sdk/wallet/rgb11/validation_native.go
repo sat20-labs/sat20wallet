@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"sort"
 	"strconv"
+	"time"
 
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	indexer "github.com/sat20-labs/indexer/common"
@@ -51,19 +52,263 @@ func (v NativeConsensusValidator) ValidateConsignment(ctx context.Context, raw [
 // witnesses without treating its former terminal as a currently owned output.
 // It cannot produce a receipt or allocations usable by the projection store.
 func (v NativeConsensusValidator) ValidateHistoricalConsignment(ctx context.Context, raw []byte, evidence BitcoinEvidenceProvider) error {
+	_, err := v.ValidateHistoricalConsignmentReport(ctx, raw, evidence)
+	return err
+}
+
+// ValidateHistoricalConsignmentReport returns selected graph allocations and
+// exact input Opouts consumed by transitions only after the RGB core validates
+// the complete disclosed history and its Bitcoin witnesses. These material
+// facts are not current wallet allocations.
+func (v NativeConsensusValidator) ValidateHistoricalConsignmentReport(ctx context.Context, raw []byte,
+	evidence BitcoinEvidenceProvider) (*HistoricalValidation, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
+	}
+	if evidence == nil || len(raw) == 0 {
+		return nil, ErrConsensusValidatorUnavailable
 	}
 	container, err := coreconsignment.Decode(raw)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(v.Reveals) > 0 {
 		if _, err := container.RevealGraphSeals(v.Reveals); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return container.ValidateHistory(coreEvidenceResolver{ctx: ctx, provider: evidence})
+	report, err := container.ValidateHistoryReport(coreEvidenceResolver{ctx: ctx, provider: evidence})
+	if err != nil {
+		return nil, err
+	}
+	consumers, err := validatedConsumerEdges(raw, container.ContractID, report.ValidatedConsumers)
+	if err != nil {
+		return nil, err
+	}
+	allocations, err := validatedHistoricalAllocations(container, report.HistoricalStates)
+	if err != nil {
+		return nil, err
+	}
+	materialAllocations := make([]ValidatedAllocation, 0, len(allocations))
+	for _, allocation := range allocations {
+		materialAllocations = append(materialAllocations, allocation.Allocation)
+	}
+	stateHash, err := hashAllocations(container.ContractID, container.SchemaID, materialAllocations)
+	if err != nil {
+		return nil, err
+	}
+	consignmentHash := sha256.Sum256(raw)
+	materialReceipt := &ValidationReceipt{
+		Version: 1, EngineBuildID: NativeEngineBuildID,
+		ConsignmentHash: hex.EncodeToString(consignmentHash[:]),
+		ContractID:      container.ContractID, SchemaID: container.SchemaID,
+		TransferID: container.Armor.ID, StateHash: stateHash,
+		ValidatedAt: time.Now().Unix(), Allocations: materialAllocations, Status: "valid",
+	}
+	if err := materialReceipt.validate(materialReceipt.ConsignmentHash); err != nil {
+		return nil, err
+	}
+	return &HistoricalValidation{
+		MaterialReceipt: materialReceipt, Allocations: allocations, Consumers: consumers,
+	}, nil
+}
+
+// ValidatePreparedHistoryConsignmentReport validates an embedded prepared
+// branch through core without claiming its inputs are currently spendable.
+// Callers must separately establish positive current-chain evidence before
+// classifying that branch as orphaned.
+func (v NativeConsensusValidator) ValidatePreparedHistoryConsignmentReport(ctx context.Context, raw []byte,
+	evidence BitcoinEvidenceProvider) (*PreparedHistoryValidation, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if evidence == nil || len(raw) == 0 {
+		return nil, ErrConsensusValidatorUnavailable
+	}
+	container, err := coreconsignment.Decode(raw)
+	if err != nil {
+		return nil, err
+	}
+	if len(v.Reveals) > 0 {
+		if _, err := container.RevealGraphSeals(v.Reveals); err != nil {
+			return nil, err
+		}
+	}
+	report, err := container.ValidatePreparedHistoryReport(coreEvidenceResolver{ctx: ctx, provider: evidence})
+	if err != nil {
+		return nil, err
+	}
+	consumers, err := validatedConsumerEdges(raw, container.ContractID, report.ValidatedConsumers)
+	if err != nil {
+		return nil, err
+	}
+	historicalAllocations, err := validatedHistoricalAllocations(container, report.HistoricalStates)
+	if err != nil {
+		return nil, err
+	}
+	descriptor, err := schemas.ByKind(container.GenesisReport.Kind)
+	if err != nil {
+		return nil, err
+	}
+	schemaValue, _ := container.Value.Field("schema")
+	typeSystem, _ := container.Value.Field("types")
+	genesisValue, _ := container.Value.Field("genesis")
+	metadata, err := schemas.ExtractGenesisAssetMetadata(schemaValue, typeSystem, genesisValue)
+	if err != nil {
+		return nil, err
+	}
+	assetType := indexer.ASSET_TYPE_FT
+	if !descriptor.Fungible {
+		assetType = indexer.ASSET_TYPE_NFT
+	}
+	assetName, err := NewContractAssetKey(container.ContractID, assetType)
+	if err != nil {
+		return nil, err
+	}
+	allocations := make([]ValidatedAllocation, 0, len(report.PreparedStates))
+	outputs := make(map[string]*BitcoinUTXO)
+	for _, state := range report.PreparedStates {
+		allocationAssetName := assetName
+		if state.Reference.AssignmentType != 4000 {
+			allocationAssetName.Type = "control"
+		}
+		amount := state.State.Amount
+		if !descriptor.Fungible {
+			amount = 1
+		}
+		var carrierInternalKey, tapretRoot []byte
+		if state.CarrierBinding.CommitmentMethod == "tapret1st" {
+			carrierInternalKey = append([]byte(nil), state.CarrierBinding.InternalKey[:]...)
+			tapretRoot = append([]byte(nil), state.CarrierBinding.TapretRoot[:]...)
+		}
+		witnessTxID := ""
+		if state.WitnessTxID != ([32]byte{}) {
+			witnessTxID = formatTxID(state.WitnessTxID)
+		}
+		allocations = append(allocations, ValidatedAllocation{
+			OutPoint: formatOutpoint(state.Outpoint), AssetName: allocationAssetName,
+			Amount:         indexer.Decimal{Precision: int(metadata.Precision), Value: new(big.Int).SetUint64(amount)},
+			OperationID:    hex.EncodeToString(state.Reference.OperationID[:]),
+			AssignmentType: uint32(state.Reference.AssignmentType), AssignmentIndex: uint32(state.Reference.Index),
+			StateClass: state.State.Class, StateData: append([]byte(nil), state.State.Data...),
+			SealDisclosure: append([]byte(nil), state.SealDisclosure...), SealBlinding: state.SealBlinding,
+			WitnessTxPtr: state.WitnessTxPtr, CommitmentMethod: state.CarrierBinding.CommitmentMethod,
+			CarrierInternalKey: carrierInternalKey, TapretRoot: tapretRoot,
+			TapretProof: append([]byte(nil), state.CarrierBinding.TapretProof...), WitnessTxID: witnessTxID,
+		})
+		outpoint := formatOutpoint(state.Outpoint)
+		outputs[outpoint] = &BitcoinUTXO{
+			OutPoint: outpoint, Value: state.OutputValue, PkScript: append([]byte(nil), state.OutputScript...),
+		}
+	}
+	sortValidatedAllocations(allocations)
+	witnessTxIDs := make([]string, 0, len(report.PreparedWitnessTxIDs))
+	for _, txID := range report.PreparedWitnessTxIDs {
+		witnessTxIDs = append(witnessTxIDs, formatTxID(txID))
+	}
+	return &PreparedHistoryValidation{
+		Allocations: allocations, HistoricalAllocations: historicalAllocations,
+		Outputs: outputs, WitnessTxIDs: witnessTxIDs, Consumers: consumers,
+	}, nil
+}
+
+func validatedHistoricalAllocations(container *coreconsignment.Container,
+	states []coreconsignment.ValidatedHistoricalState) ([]HistoricalAllocation, error) {
+	if container == nil {
+		return nil, ErrValidationReceipt
+	}
+	descriptor, err := schemas.ByKind(container.GenesisReport.Kind)
+	if err != nil {
+		return nil, err
+	}
+	schemaValue, _ := container.Value.Field("schema")
+	typeSystem, _ := container.Value.Field("types")
+	genesisValue, _ := container.Value.Field("genesis")
+	metadata, err := schemas.ExtractGenesisAssetMetadata(schemaValue, typeSystem, genesisValue)
+	if err != nil {
+		return nil, err
+	}
+	assetType := indexer.ASSET_TYPE_FT
+	if !descriptor.Fungible {
+		assetType = indexer.ASSET_TYPE_NFT
+	}
+	assetName, err := NewContractAssetKey(container.ContractID, assetType)
+	if err != nil {
+		return nil, err
+	}
+	allocations := make([]HistoricalAllocation, 0, len(states))
+	for _, state := range states {
+		allocationAssetName := assetName
+		if state.Reference.AssignmentType != 4000 {
+			allocationAssetName.Type = "control"
+		}
+		amount := state.State.Amount
+		if !descriptor.Fungible {
+			amount = 1
+		}
+		var carrierInternalKey, tapretRoot []byte
+		if state.CarrierBinding.CommitmentMethod == "tapret1st" {
+			carrierInternalKey = append([]byte(nil), state.CarrierBinding.InternalKey[:]...)
+			tapretRoot = append([]byte(nil), state.CarrierBinding.TapretRoot[:]...)
+		}
+		witnessTxID := ""
+		if state.WitnessTxID != ([32]byte{}) {
+			witnessTxID = formatTxID(state.WitnessTxID)
+		}
+		allocations = append(allocations, HistoricalAllocation{
+			Allocation: ValidatedAllocation{
+				OutPoint: formatOutpoint(state.Outpoint), AssetName: allocationAssetName,
+				Amount:         indexer.Decimal{Precision: int(metadata.Precision), Value: new(big.Int).SetUint64(amount)},
+				OperationID:    hex.EncodeToString(state.Reference.OperationID[:]),
+				AssignmentType: uint32(state.Reference.AssignmentType), AssignmentIndex: uint32(state.Reference.Index),
+				StateClass: state.State.Class, StateData: append([]byte(nil), state.State.Data...),
+				SealDisclosure: append([]byte(nil), state.SealDisclosure...), SealBlinding: state.SealBlinding,
+				WitnessTxPtr: state.WitnessTxPtr, CommitmentMethod: state.CarrierBinding.CommitmentMethod,
+				CarrierInternalKey: carrierInternalKey, TapretRoot: tapretRoot,
+				TapretProof: append([]byte(nil), state.CarrierBinding.TapretProof...), WitnessTxID: witnessTxID,
+			},
+			WitnessState: uint8(state.WitnessState),
+		})
+	}
+	sortHistoricalAllocations(allocations)
+	return allocations, nil
+}
+
+func sortHistoricalAllocations(allocations []HistoricalAllocation) {
+	sort.Slice(allocations, func(i, j int) bool {
+		left, right := allocations[i].Allocation, allocations[j].Allocation
+		if left.OutPoint != right.OutPoint {
+			return left.OutPoint < right.OutPoint
+		}
+		if left.OperationID != right.OperationID {
+			return left.OperationID < right.OperationID
+		}
+		if left.AssignmentType != right.AssignmentType {
+			return left.AssignmentType < right.AssignmentType
+		}
+		return left.AssignmentIndex < right.AssignmentIndex
+	})
+}
+
+func validatedConsumerEdges(raw []byte, contractID string,
+	edges []coreconsignment.ValidatedConsumer) ([]ValidatedConsumer, error) {
+	objectHash := sha256.Sum256(raw)
+	consignmentHash := hex.EncodeToString(objectHash[:])
+	consumers := make([]ValidatedConsumer, 0, len(edges))
+	for _, edge := range edges {
+		if edge.ContractID != contractID || edge.Input.AssignmentType > uint64(^uint32(0)) {
+			return nil, ErrValidationReceipt
+		}
+		consumers = append(consumers, ValidatedConsumer{
+			ConsignmentHash: consignmentHash, ContractID: edge.ContractID,
+			InputOperationID: hex.EncodeToString(edge.Input.OperationID[:]),
+			AssignmentType:   uint32(edge.Input.AssignmentType), AssignmentIndex: uint32(edge.Input.Index),
+			ConsumerOperationID: hex.EncodeToString(edge.ConsumerOperationID[:]),
+			BundleID:            hex.EncodeToString(edge.BundleID[:]), WitnessTxID: formatTxID(edge.WitnessTxID),
+			WitnessState: uint8(edge.WitnessState),
+		})
+	}
+	return consumers, nil
 }
 
 func (v NativeConsensusValidator) ValidatePreparedConsignment(ctx context.Context, raw []byte,
@@ -171,15 +416,7 @@ func (v NativeConsensusValidator) validateConsignment(ctx context.Context, raw [
 			}
 		}
 	}
-	sort.Slice(allocations, func(i, j int) bool {
-		if allocations[i].OutPoint != allocations[j].OutPoint {
-			return allocations[i].OutPoint < allocations[j].OutPoint
-		}
-		if allocations[i].OperationID != allocations[j].OperationID {
-			return allocations[i].OperationID < allocations[j].OperationID
-		}
-		return allocations[i].AssignmentIndex < allocations[j].AssignmentIndex
-	})
+	sortValidatedAllocations(allocations)
 	stateHash, err := hashAllocations(container.ContractID, container.SchemaID, allocations)
 	if err != nil {
 		return nil, nil, nil, err
@@ -198,6 +435,25 @@ func (v NativeConsensusValidator) validateConsignment(ctx context.Context, raw [
 		ConsignmentHash: hex.EncodeToString(consignmentHash[:]), ContractID: container.ContractID, SchemaID: container.SchemaID,
 		TransferID: container.Armor.ID, StateHash: stateHash, Allocations: allocations, Status: status,
 	}, outputs, witnessTxIDs, nil
+}
+
+// sortValidatedAllocations orders allocations by the complete Opout after
+// their Bitcoin carrier. Operation ID, assignment type, and assignment index
+// together identify an RGB assignment; omitting assignment type makes legal
+// FT/control allocations at the same carrier and index unstable.
+func sortValidatedAllocations(allocations []ValidatedAllocation) {
+	sort.Slice(allocations, func(i, j int) bool {
+		if allocations[i].OutPoint != allocations[j].OutPoint {
+			return allocations[i].OutPoint < allocations[j].OutPoint
+		}
+		if allocations[i].OperationID != allocations[j].OperationID {
+			return allocations[i].OperationID < allocations[j].OperationID
+		}
+		if allocations[i].AssignmentType != allocations[j].AssignmentType {
+			return allocations[i].AssignmentType < allocations[j].AssignmentType
+		}
+		return allocations[i].AssignmentIndex < allocations[j].AssignmentIndex
+	})
 }
 
 type coreEvidenceResolver struct {

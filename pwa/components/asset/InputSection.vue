@@ -78,6 +78,7 @@ import { PlusIcon, MinusIcon, Loader2Icon } from 'lucide-vue-next'
 import AssetSection from './AssetSection.vue'
 import { useL2Store, useL1Store, useWalletStore } from '@/store'
 import { storeToRefs } from 'pinia'
+import { defaultWalletNetwork } from '@/utils/networkMode'
 
 interface Props {
   type: string
@@ -87,7 +88,7 @@ interface Props {
 const props = withDefaults(defineProps<Props>(), {
   type: '',
   address: '',
-  network: 'testnet',
+  network: defaultWalletNetwork,
 })
 const emit = defineEmits(['submit'])
 

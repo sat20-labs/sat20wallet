@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -17,7 +16,7 @@ import (
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	indexerdb "github.com/sat20-labs/indexer/indexer/db"
-	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
+	"github.com/sat20-labs/sat20wallet/sdk/account"
 	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	"github.com/sat20-labs/satoshinet/btcec"
@@ -29,6 +28,99 @@ type rgb11AddressEvidence struct {
 	*rgb11FlowEvidence
 	statusMu sync.Mutex
 	statuses map[string]*rgb11wallet.BitcoinTxStatus
+}
+
+type rgb11AddressACKObservedMessageClient struct {
+	*rgb11MessageNodeClient
+	wallet            *InternalWallet
+	beforeAcceptedACK func() error
+}
+
+func (c *rgb11AddressACKObservedMessageClient) SendMessageServiceReq(
+	req *swire.MessageServiceRequest) (*swire.MessageServiceResponse, error) {
+	if c != nil && req != nil && req.Action == swire.MessageServiceActionSendDirect &&
+		req.Direct != nil && c.wallet != nil && c.beforeAcceptedACK != nil {
+		plain, err := c.wallet.DecryptFromAccount(req.Direct.RecipientAccount, req.Direct.Ciphertext)
+		if err == nil {
+			payload, decodeErr := decodeAccountMessagePayload(plain)
+			if decodeErr == nil && payload.Kind == AccountMessageKindRGB11ACK {
+				ack, ackErr := rgb11wallet.DecodeAddressACK(payload.Body)
+				if ackErr == nil && ack.Status == RGB11AddressACKAccepted {
+					if err := c.beforeAcceptedACK(); err != nil {
+						return nil, err
+					}
+				}
+			}
+		}
+	}
+	return c.rgb11MessageNodeClient.SendMessageServiceReq(req)
+}
+
+func verifyRGB11ACKUsesAuthoritativeRecovery(t *testing.T, manager *Manager,
+	transferID string, expectedRecord *swire.DKVSRecord) error {
+	t.Helper()
+	if manager == nil || expectedRecord == nil || transferID == "" {
+		return fmt.Errorf("missing RGB11 ACK recovery assertion inputs")
+	}
+	state, err := manager.rgbManager.projectionStore.LoadTransferState(transferID)
+	if err != nil {
+		return err
+	}
+	expectedHash := dkvsindexer.RecordHash(expectedRecord)
+	if state.DeliveryRecordKey != expectedRecord.Key ||
+		state.DeliveryRecordHash != hex.EncodeToString(expectedHash[:]) {
+		return fmt.Errorf("ACK attempted before actual AccountBound delivery identity was persisted")
+	}
+	if !manager.accountManagedRecoveryConfigured() {
+		return nil
+	}
+	manager.mutex.Lock()
+	snapshot, _, err := manager.captureAccountManagementSyncSnapshotBaseLocked()
+	manager.mutex.Unlock()
+	if err != nil || snapshot == nil {
+		return fmt.Errorf("capture ACK recovery snapshot: %w", err)
+	}
+	defer zeroBytes(snapshot.secret)
+	root, err := manager.accountManagementRootWallet()
+	if err != nil {
+		return err
+	}
+	dataKey, err := manager.accountManagedDataBlobKey(root)
+	if err != nil {
+		return err
+	}
+	store, err := manager.accountDKVSStore()
+	if err != nil {
+		return err
+	}
+	remote, err := store.GetAuthoritative(dataKey)
+	if err != nil {
+		return fmt.Errorf("read remote ACK recovery package: %w", err)
+	}
+	blob, err := DecodeDKVSBlobValue(remote.Value)
+	if err != nil {
+		return err
+	}
+	defer zeroBytes(blob.Data)
+	remoteBundle, err := account.OpenManagedDataBundle(
+		snapshot.secret, snapshot.profile.AccountID, blob.Data,
+	)
+	if err != nil {
+		return err
+	}
+	catalog, err := manager.accountManagedDataCatalog()
+	if err != nil {
+		return err
+	}
+	wantBundle, _, err := manager.exportAccountManagedData(catalog,
+		snapshot.profile.ManagedDataRevision)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(remoteBundle, wantBundle) {
+		return fmt.Errorf("ACK attempted before the remote account bundle matched the complete local recovery closure")
+	}
+	return nil
 }
 
 type rgb11ReadFault struct {
@@ -265,61 +357,15 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	if senderWallet == nil || recipientWallet == nil || unregisteredWallet == nil {
 		t.Fatal("create RGB11 address-mode wallets")
 	}
-	senderScript, err := AddrToPkScript(senderWallet.GetAddress(), &chaincfg.TestNet4Params)
-	if err != nil {
-		t.Fatal(err)
+	sender, recipient, imported, evidence, rpc := newRGB11GenericSendFixture(t)
+	if sender.wallet.GetAddress() != senderWallet.GetAddress() || recipient.wallet.GetAddress() != recipientWallet.GetAddress() {
+		t.Fatal("activated fixture changed original wallet addresses")
 	}
-
-	const sourceOutpoint = "14295d5bb1a191cdb6286dc0944df938421e3dfcbf0811353ccac4100c2068c5:1"
-	const plainOutpoint = "3333333333333333333333333333333333333333333333333333333333333333:0"
-	baseEvidence := &rgb11FlowEvidence{
-		utxos: map[string]*rgb11wallet.BitcoinUTXO{
-			sourceOutpoint: {OutPoint: sourceOutpoint, Value: 10_000, PkScript: senderScript, Confirmations: 6},
-		},
-		rawTx:      make(map[string][]byte),
-		spendingTx: make(map[string]string),
-	}
-	evidence := &rgb11AddressEvidence{rgb11FlowEvidence: baseEvidence, statuses: make(map[string]*rgb11wallet.BitcoinTxStatus)}
-	rpc := &rgb11FlowIndexer{outputs: make(map[string]*TxOutput)}
-	sourceOutput := indexer.NewTxOutput(10_000)
-	sourceOutput.OutPointStr = sourceOutpoint
-	sourceOutput.OutValue.PkScript = senderScript
-	rpc.outputs[sourceOutpoint] = sourceOutput
-	plainOutput := indexer.NewTxOutput(100_000)
-	plainOutput.OutPointStr = plainOutpoint
-	plainOutput.OutValue.PkScript = senderScript
-	rpc.outputs[plainOutpoint] = plainOutput
-	rpc.plain = []*indexerwire.TxOutputInfo{
-		{OutPoint: sourceOutpoint, Value: 10_000, PkScript: senderScript},
-		{OutPoint: plainOutpoint, Value: 100_000, PkScript: senderScript},
-	}
-
-	sender := newRGB11FlowManager(t, senderWallet, rpc, evidence, 101)
-	recipient := newRGB11FlowManager(t, recipientWallet, rpc, evidence, 102)
-	contract, err := os.ReadFile("../../../rgb11/testvectors/rc11/nia-example.rgba")
-	if err != nil {
-		t.Fatal(err)
-	}
-	imported, err := sender.ImportRGB11Contract(context.Background(), contract)
-	if err != nil {
-		t.Fatal(err)
-	}
-	remote := newRGB11MemoryDKVSHTTP()
+	baseEvidence := evidence.rgb11FlowEvidence
+	sourceOutpoint := rgb11GenericFixtureSource(t, sender, imported)
+	remote := sender.http.(*rgb11MemoryDKVSHTTP)
 	client := NewSatsNetDKVSClient("http", "dkvs.test", "testnet", remote)
 	messageClient := newRGB11MessageNodeClient(remote)
-	configure := func(manager *Manager) {
-		manager.cfg = &sdkcommon.Config{
-			Env: "test", Chain: "testnet",
-			IndexerL2: &sdkcommon.Indexer{Scheme: "http", Host: "dkvs.test", Proxy: "testnet"},
-		}
-		manager.http = remote
-		manager.serverNode = NewNode(
-			messageClient, "message.test", SERVER_NODE,
-			messageClient.CoreNodePubKey(), messageClient.CoreNodePubKey(),
-		)
-	}
-	configure(sender)
-	configure(recipient)
 	recordOptions := dkvsindexer.RecordOptions{TTL: testRGB11FreeLocalTTL}
 
 	request := RGB11AddressSendRequest{
@@ -431,6 +477,15 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 		t.Fatalf("idempotent delivery changed record: first=%d second=%d",
 			firstRecord.Seq, secondRecord.Seq)
 	}
+	pendingBeforeSnapshot, err := sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedRecipientConsignment := append([]byte(nil), pendingBeforeSnapshot.RecipientConsignment...)
+	if len(expectedRecipientConsignment) == 0 ||
+		rgb11ObjectHash(expectedRecipientConsignment) != pendingBeforeSnapshot.State.ConsignmentHash {
+		t.Fatal("unacknowledged Direct delivery did not retain its exact retry consignment")
+	}
 
 	snapshot, err := sender.rgbManager.projectionStore.ExportSnapshot()
 	if err != nil {
@@ -460,8 +515,11 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(pending.RecipientConsignment) != 0 || len(pending.LocalConsignment) == 0 {
-			t.Fatalf("snapshot delivery=%d local=%d", len(pending.RecipientConsignment), len(pending.LocalConsignment))
+		if len(pending.RecipientConsignment) == 0 || len(pending.LocalConsignment) == 0 ||
+			!bytes.Equal(pending.RecipientConsignment, expectedRecipientConsignment) ||
+			rgb11ObjectHash(pending.RecipientConsignment) != pending.State.ConsignmentHash {
+			t.Fatalf("snapshot lost unacknowledged retry material: recipient=%d local=%d",
+				len(pending.RecipientConsignment), len(pending.LocalConsignment))
 		}
 	}
 	if !foundPending {
@@ -522,6 +580,20 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	if receivesBeforeRetry != 1 {
 		t.Fatalf("receive records after failed ACK=%d", receivesBeforeRetry)
 	}
+	ackObserved := false
+	ackClient := &rgb11AddressACKObservedMessageClient{
+		rgb11MessageNodeClient: messageClient, wallet: recipientWallet,
+		beforeAcceptedACK: func() error {
+			if err := verifyRGB11ACKUsesAuthoritativeRecovery(t, recipient,
+				prepared.State.TransferID, deliveryRecord); err != nil {
+				return err
+			}
+			ackObserved = true
+			return nil
+		},
+	}
+	recipient.serverNode = NewNode(ackClient, "message.test", SERVER_NODE,
+		messageClient.CoreNodePubKey(), messageClient.CoreNodePubKey())
 	syncResult, err := recipient.SyncConfiguredRGB11AddressMailbox(
 		context.Background(), dkvsindexer.RecordVerificationOptions{}, deliveryOptions,
 	)
@@ -530,6 +602,9 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	}
 	if syncResult.Received != 1 || syncResult.ACKs != 0 {
 		t.Fatalf("mailbox sync=%+v", syncResult)
+	}
+	if !ackObserved {
+		t.Fatal("positive RGB11 Address ACK was not checked against its pre-ACK recovery closure")
 	}
 	if receivesAfterRetry := countRGB11Receives(t, recipient.db); receivesAfterRetry != receivesBeforeRetry {
 		t.Fatalf("retry created receive records: before=%d after=%d", receivesBeforeRetry, receivesAfterRetry)
@@ -650,9 +725,43 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !pending.State.DeliveryCacheCompacted || len(pending.RecipientConsignment) != 0 || len(pending.LocalConsignment) == 0 {
-		t.Fatalf("final sender state=%+v recipient=%d local=%d", pending.State,
-			len(pending.RecipientConsignment), len(pending.LocalConsignment))
+	// Candidate imports rehydrate immutable object references for runtime use.
+	// Portable recovery must keep one exact object, never duplicate inline bodies.
+	if pending.State.Status != "settled" || !pending.State.DeliveryAcknowledged || len(pending.LocalConsignment) == 0 {
+		t.Fatalf("final sender state=%+v local=%d", pending.State, len(pending.LocalConsignment))
+	}
+	finalSnapshot, err := sender.rgbManager.projectionStore.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalPendings, err := rgb11wallet.PendingTransfersFromProjectionSnapshot(finalSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalPendingFound := false
+	for _, portable := range finalPendings {
+		if portable.State.TransferID != prepared.State.TransferID {
+			continue
+		}
+		finalPendingFound = true
+		if len(portable.RecipientConsignment) != 0 || len(portable.LocalConsignment) != 0 || portable.RecipientObjectHash != pending.State.ConsignmentHash || portable.LocalObjectHash == "" {
+			t.Fatal("settled recovery duplicated bodies or lost exact object references")
+		}
+	}
+	if !finalPendingFound {
+		t.Fatal("settled sender journal missing from recovery")
+	}
+	recipientObjects := 0
+	for _, record := range finalSnapshot {
+		if record.Key == "object-"+pending.State.ConsignmentHash {
+			recipientObjects++
+			if !bytes.Equal(record.Value, expectedRecipientConsignment) {
+				t.Fatal("settled recovery recipient material changed")
+			}
+		}
+	}
+	if recipientObjects != 1 {
+		t.Fatalf("settled recipient object count=%d", recipientObjects)
 	}
 
 	replayRemote := newRGB11MemoryDKVSHTTP()
@@ -676,15 +785,11 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	if mailboxRecords != 1 {
 		t.Fatalf("replay mailbox records=%d", mailboxRecords)
 	}
-	restoredRecipient := newRGB11FlowManager(t, recipientWallet.Clone(), rpc, evidence, 103)
-	configureRGB11DKVSTestManager(restoredRecipient, replayRemote)
 	replayClient := newRGB11MessageNodeClient(replayRemote)
-	restoredRecipient.serverNode = NewNode(
-		replayClient, "message.test", SERVER_NODE,
-		replayClient.CoreNodePubKey(), replayClient.CoreNodePubKey(),
-	)
-	if err := restoredRecipient.bindAccountToCurrentCoreNode(restoredRecipient.wallet); err != nil {
-		t.Fatal(err)
+	restoredRecipient := newRGB11ActivatedFlowAccount(t, "comfort very add tuition senior run eight snap burst appear exile dutch",
+		replayRemote, replayClient, evidence, rpc)
+	if restoredRecipient.wallet.GetAddress() != recipientWallet.GetAddress() {
+		t.Fatal("activated replay changed the original recipient identity")
 	}
 	if err := restoredRecipient.SubscribeDKVSPrefix(mailboxTarget); err != nil {
 		t.Fatal(err)
@@ -722,7 +827,9 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	}
 	result, refreshErr := recipient.RefreshRGB11State(context.Background())
 	recipient.rgbManager.evidence = evidence
-	if !errors.Is(refreshErr, readErr) || result == nil || result.Reorged != 0 || result.Unresolved == 0 {
+	// Refresh results describe committed candidates; a rejected candidate must
+	// return the original read error without claiming a published transition.
+	if !errors.Is(refreshErr, readErr) || result != nil {
 		t.Fatalf("read fault result=%+v err=%v", result, refreshErr)
 	}
 	afterState, err := recipient.rgbManager.projectionStore.LoadTransferState(prepared.State.TransferID)

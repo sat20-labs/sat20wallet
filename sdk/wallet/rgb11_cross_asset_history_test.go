@@ -17,10 +17,10 @@ import (
 )
 
 func TestRGB11HiddenFeeHistory(t *testing.T) {
-	sender, recipient, imported, evidence, rpc := newRGB11GenericSendFixture(t)
-	const source = "14295d5bb1a191cdb6286dc0944df938421e3dfcbf0811353ccac4100c2068c5:1"
-	const protected = "c57fb2b8b73f2ee5febb0a593eb681c90eb813c6f7d3500f04d46b711a28589d:1"
-	const hidden = "0bbc6051be126edb43d04bd390967c19a9f95b4aa8fb67edf12bca1f64d3dfe6:1"
+	sender, recipient, imported, evidence, rpc := newRGB11GenericSendFixtureWithCarrier(t, 330)
+	source := rgb11GenericFixtureSource(t, sender, imported)
+	protected := seedRGB11FlowEvidenceUTXO(t, evidence.rgb11FlowEvidence, rpc.outputs[source].OutValue.PkScript, 100_000, 93)
+	hidden := seedRGB11FlowEvidenceUTXO(t, evidence.rgb11FlowEvidence, rpc.outputs[source].OutValue.PkScript, 100_000, 94)
 	script := append([]byte(nil), rpc.outputs[source].OutValue.PkScript...)
 	for _, outpoint := range []string{protected, hidden} {
 		evidence.utxos[outpoint] = &rgb11wallet.BitcoinUTXO{
@@ -56,8 +56,6 @@ func TestRGB11HiddenFeeHistory(t *testing.T) {
 		t.Fatalf("remaining second asset=%v err=%v", before, err)
 	}
 
-	evidence.utxos[source].Value = 330
-	rpc.outputs[source].OutValue.Value = 330
 	rpc.plain = []*indexerwire.TxOutputInfo{
 		{OutPoint: hidden, Value: 100_000, PkScript: script},
 		{OutPoint: protected, Value: 100_000, PkScript: script},

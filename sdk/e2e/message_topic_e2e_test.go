@@ -42,8 +42,14 @@ func TestRealSatoshiNetMessageTopicSDKToCore(t *testing.T) {
 		[]dkvsPrevOut{gasOuts[0], feeOuts[0]}, wire.TxOut{Value: 10000, Assets: deployAssets})
 	f.Network.sendManyAndMine(t, []*wire.MsgTx{deploy}, 0)
 
-	fundMember := buildDKVSKeyPathTemplateDefaultInvoke(t, memberActor, contractAddress,
-		[]dkvsPrevOut{feeOuts[1]}, wire.TxOut{Value: 10000, Assets: txAsset(defaults.AutopayFeeAssetName, 5000)})
+	// A default transfer funds operating gas, not the member's delegate.
+	memberParam, err := (&contractcommon.TemplateAutopayConfigInvokeParam{AmountPerBlock: defaults.AutopayMinAmountPerBlock}).Encode()
+	require.NoError(t, err)
+	memberBaseFee, err := contractcommon.GasFeeAtHeight(contractcommon.InvokeBaseGas, 0)
+	require.NoError(t, err)
+	fundMember := buildDKVSKeyPathTemplateInvoke(t, memberActor, contractAddress, 1,
+		contractcommon.TemplateInvokeAPIConfig, memberParam, []dkvsPrevOut{feeOuts[1]},
+		wire.TxOut{Value: 10000, Assets: txAsset(defaults.AutopayFeeAssetName, 5000-memberBaseFee)})
 	f.Network.sendManyAndMine(t, []*wire.MsgTx{fundMember}, 0)
 
 	// Delegate principal and operating gas share the same sgas asset on

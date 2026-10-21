@@ -2,6 +2,7 @@ import walletManager from '@/utils/sat20'
 import { getConfig, logLevel } from '@/config/wasm'
 import { Network } from '@/types'
 import { walletStorage } from '@/lib/walletStorage'
+import { isRegtestBuild } from '@/utils/networkMode'
 import { WASM_INTEGRITY_MANIFEST } from '@/generated/wasm-integrity'
 import { noteWasmOperation, snapshotWasmRuntimeDiagnostics } from '@/utils/wasmRuntimeDiagnostics'
 
@@ -101,6 +102,11 @@ const loadVerifiedGoRuntime = async () => {
 
 const getRuntimeConfig = async () => {
   await walletStorage.initializeState()
+  if (isRegtestBuild) {
+    if (walletStorage.getValue('env') !== 'dev') await walletStorage.setValue('env', 'dev')
+    if (walletStorage.getValue('network') !== Network.REGTEST) await walletStorage.setValue('network', Network.REGTEST)
+    return getConfig('dev', Network.REGTEST)
+  }
   if (walletStorage.getValue('env') !== 'prd') {
     await walletStorage.setValue('env', 'prd')
   }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	indexer "github.com/sat20-labs/indexer/common"
+	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 )
 
 const (
@@ -242,6 +243,15 @@ func (p *rgb11Manager) handleL1MonitorTick(ctx context.Context) error {
 	if p == nil || p.Manager == nil || p.projectionStore == nil || p.l1IndexerClient == nil {
 		return nil
 	}
+	// Wallet services may start before L1 endpoints have been configured.
+	// The client manager otherwise assumes a default indexer already exists.
+	p.l1IndexerClient.mutex.RLock()
+	configured := p.l1IndexerClient.active != nil ||
+		(len(p.l1IndexerClient.indexers) > 0 && p.l1IndexerClient.indexers[0] != nil)
+	p.l1IndexerClient.mutex.RUnlock()
+	if !configured {
+		return nil
+	}
 	height := int64(p.l1IndexerClient.GetSyncHeight())
 	if height < 0 {
 		return nil
@@ -257,12 +267,19 @@ func (p *rgb11Manager) handleL1MonitorTick(ctx context.Context) error {
 
 	previous, err := p.loadRGB11L1MonitorCheckpoint()
 	if err != nil {
+		reconciled := false
 		if !errors.Is(err, indexer.ErrKeyNotFound) {
 			// A corrupt device-local checkpoint cannot establish a common ancestor.
 			// Reconcile fail-closed, then replace it with a fresh chain window.
 			event := &RGB11L1ReorgEvent{OldTip: current, NewTip: current, Deep: true}
 			if _, reconcileErr := p.handleL1Reorg(ctx, event); reconcileErr != nil {
 				return errors.Join(err, reconcileErr)
+			}
+			reconciled = true
+		}
+		if !reconciled {
+			if err := p.refreshRGB11OnHealthyTip(ctx); err != nil {
+				return err
 			}
 		}
 		checkpoint, buildErr := buildRGB11L1MonitorCheckpoint(current, hashAt)
@@ -284,6 +301,8 @@ func (p *rgb11Manager) handleL1MonitorTick(ctx context.Context) error {
 		Log.Warningf("RGB11 L1 reorg handled old=%d:%s new=%d:%s deep=%v reorged=%d conflicted=%d",
 			event.OldTip.Height, event.OldTip.Hash, event.NewTip.Height, event.NewTip.Hash,
 			event.Deep, result.Reorged, result.Conflicted)
+	} else if err := p.refreshRGB11OnHealthyTip(ctx); err != nil {
+		return err
 	}
 
 	checkpoint, err := buildRGB11L1MonitorCheckpoint(current, hashAt)
@@ -291,4 +310,42 @@ func (p *rgb11Manager) handleL1MonitorTick(ctx context.Context) error {
 		return err
 	}
 	return p.saveRGB11L1MonitorCheckpoint(checkpoint)
+}
+
+// refreshRGB11OnHealthyTip reconciles locally held RGB11 operation/proof
+// material on startup, ordinary block extensions, and same-tip monitor ticks.
+// Bitcoin mempool visibility and outspends may change without a block-tip
+// change, so a matching checkpoint alone is not evidence that a projection is
+// still current. Empty scopes need no chain queries.
+func (p *rgb11Manager) refreshRGB11OnHealthyTip(ctx context.Context) error {
+	if p == nil || p.Manager == nil || p.projectionStore == nil {
+		return nil
+	}
+	walletID, err := p.RGB11WalletID()
+	if err != nil {
+		return err
+	}
+	snapshot, _, err := p.exportRGB11WalletSnapshot(walletID)
+	if err != nil {
+		return err
+	}
+	proofs, err := rgb11wallet.ProofsFromProjectionSnapshot(snapshot.ProjectionRecords)
+	if err != nil {
+		return err
+	}
+	transfers, err := rgb11wallet.TransfersFromProjectionSnapshot(snapshot.ProjectionRecords)
+	if err != nil {
+		return err
+	}
+	if len(proofs) == 0 && len(transfers) == 0 {
+		return nil
+	}
+	if _, err := p.RefreshRGB11State(ctx); err != nil {
+		p.setRGB11ReconciliationState("error")
+		p.notifyRGB11ChainUpdate()
+		return err
+	}
+	p.setRGB11ReconciliationState("idle")
+	p.notifyRGB11ChainUpdate()
+	return nil
 }

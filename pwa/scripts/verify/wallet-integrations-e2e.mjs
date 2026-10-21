@@ -25,21 +25,67 @@ export const requiredPwaIntegrationCases = [...dappCases, ...requiredPwaRgbCases
 // This is an ordinary DApp client, served on an ephemeral loopback port. It
 // emits production postMessage requests and records only the wallet's replies.
 // It neither implements a wallet API nor answers an SDK, STP, or Indexer call.
-export async function createPwaIntegrationDapp() {
+export async function createPwaIntegrationDapp(network = 'testnet', port = 0) {
+  assert.ok(['testnet', 'regtest'].includes(network))
   const html = `<!doctype html><meta charset="utf-8"><title>PWA acceptance DApp</title>
-    <h1>PWA acceptance DApp</h1><p>Requests require approval in the wallet.</p>
+    <main>
+      <h1>PWA acceptance DApp</h1>
+      <p id="dapp-status" role="status">Requests require approval in the wallet.</p>
+      <fieldset>
+        <legend>Wallet permissions</legend>
+        <button id="connect-read" type="button">Connect wallet (read access)</button>
+        <button id="connect-signing" type="button">Request signing permission</button>
+        <button id="connect-broadcast" type="button">Request broadcast permission</button>
+      </fieldset>
+      <fieldset>
+        <legend>Message signing</legend>
+        <label for="message-to-sign">Public message</label>
+        <textarea id="message-to-sign" rows="3">PWA acceptance: confirm this exact message.</textarea>
+        <button id="sign-message" type="button">Sign message</button>
+      </fieldset>
+      <fieldset>
+        <legend>Bitcoin PSBT</legend>
+        <label for="unsigned-psbt">Unsigned PSBT hex</label>
+        <textarea id="unsigned-psbt" rows="5" autocomplete="off" spellcheck="false"></textarea>
+        <button id="sign-psbt" type="button">Sign PSBT</button>
+        <label for="signed-psbt">Signed PSBT hex to broadcast</label>
+        <textarea id="signed-psbt" rows="5" autocomplete="off" spellcheck="false"></textarea>
+        <button id="broadcast-psbt" type="button">Broadcast signed PSBT</button>
+      </fieldset>
+      <fieldset>
+        <legend>Legacy STP Transcend deployment</legend>
+        <p>Requests wallet approval to deploy plain-sat transcend.tc. No existing channel is specified. Confirm the actual fee in the wallet.</p>
+        <button id="connect-contract" type="button">Request contract permission</button>
+        <button id="deploy-legacy-transcend" type="button">Deploy legacy Transcend contract (wallet approval)</button>
+      </fieldset>
+      <fieldset>
+        <legend>Disconnect</legend>
+        <p>DApp clients cannot revoke their own grant. Use the wallet’s Disconnect DApp control to revoke access.</p>
+        <button id="disconnect-help" type="button">Disconnect / revoke in wallet</button>
+      </fieldset>
+      <pre id="dapp-response" aria-live="polite"></pre>
+    </main>
     <script>
       const protocol = 'sat20-dapp-connect';
       const walletOrigin = new URL(document.referrer).origin;
       let sequence = 0;
-      const responses = Object.create(null), events = [];
+      const responses = Object.create(null), events = [], pending = new Map();
+      const status = document.getElementById('dapp-status');
+      const responseOutput = document.getElementById('dapp-response');
+      const readCapabilities = ['accounts:read', 'public-key:read', 'network:read'];
+      const send = (action, params) => {
+        const request = window.pwaAcceptanceClient.begin(action, params);
+        pending.set(request.requestId, action);
+        status.textContent = 'Waiting for wallet approval: ' + action;
+        return request;
+      };
       window.pwaAcceptanceClient = {
         responses, events,
         begin(action, params) {
           const now = Date.now();
           const request = { type: 'SAT20_DAPP_REQUEST', protocol,
             requestId: 'pwa-client-' + (++sequence), action, params,
-            origin: location.origin, network: 'testnet',
+            origin: location.origin, network: ${JSON.stringify(network)},
             nonce: crypto.randomUUID().replaceAll('-', ''),
             timestamp: String(now), expiresAt: now + 120000 };
           parent.postMessage(request, walletOrigin);
@@ -48,8 +94,50 @@ export async function createPwaIntegrationDapp() {
       };
       addEventListener('message', event => {
         if (event.source !== parent || event.origin !== walletOrigin || event.data?.protocol !== protocol) return;
-        if (event.data.type === 'SAT20_DAPP_RESPONSE') responses[event.data.requestId] = event.data;
-        if (event.data.type === 'SAT20_DAPP_EVENT') events.push(event.data);
+        if (event.data.type === 'SAT20_DAPP_RESPONSE') {
+          const response = event.data;
+          responses[response.requestId] = response;
+          const action = pending.get(response.requestId);
+          pending.delete(response.requestId);
+          if (action === 'signPsbt' && response.success && typeof response.result === 'string') {
+            document.getElementById('signed-psbt').value = response.result;
+          }
+          status.textContent = response.success ? 'Wallet approved: ' + (action || 'request') : 'Wallet rejected: ' + (action || 'request');
+          responseOutput.textContent = JSON.stringify({ action, requestId: response.requestId,
+            success: response.success, result: response.result, error: response.error }, null, 2);
+        }
+        if (event.data.type === 'SAT20_DAPP_EVENT') {
+          events.push(event.data);
+          if (event.data.event === 'disconnect') status.textContent = 'Wallet revoked this DApp connection.';
+        }
+      });
+      document.getElementById('connect-read').addEventListener('click', () =>
+        send('requestAccounts', { capabilities: readCapabilities, sessionOnly: true }));
+      document.getElementById('connect-signing').addEventListener('click', () =>
+        send('requestAccounts', { capabilities: [...readCapabilities, 'transaction:sign'], sessionOnly: true }));
+      document.getElementById('connect-broadcast').addEventListener('click', () =>
+        send('requestAccounts', { capabilities: [...readCapabilities, 'transaction:sign', 'transaction:broadcast'], sessionOnly: true }));
+      document.getElementById('sign-message').addEventListener('click', () => {
+        const message = document.getElementById('message-to-sign').value.trim();
+        if (!message) { status.textContent = 'Enter a public message to sign.'; return; }
+        send('signMessage', { message });
+      });
+      document.getElementById('sign-psbt').addEventListener('click', () => {
+        const psbtHex = document.getElementById('unsigned-psbt').value.trim();
+        if (!psbtHex) { status.textContent = 'Enter an unsigned PSBT hex first.'; return; }
+        send('signPsbt', { psbtHex, options: { chain: 'bitcoin' } });
+      });
+      document.getElementById('broadcast-psbt').addEventListener('click', () => {
+        const psbtHex = document.getElementById('signed-psbt').value.trim();
+        if (!psbtHex) { status.textContent = 'Sign or enter a PSBT before requesting broadcast.'; return; }
+        send('pushPsbt', { psbtHex, options: { chain: 'bitcoin' } });
+      });
+      document.getElementById('connect-contract').addEventListener('click', () =>
+        send('requestAccounts', { capabilities: [...readCapabilities, 'contract:write'], sessionOnly: true }));
+      document.getElementById('deploy-legacy-transcend').addEventListener('click', () =>
+        send('deployContract_Remote', ['transcend.tc', '{"contractType":"transcend.tc","assetName":{"Protocol":"","Type":"","Ticker":""},"startBlock":0,"endBlock":0}', 1, false]));
+      document.getElementById('disconnect-help').addEventListener('click', () => {
+        status.textContent = 'Use the wallet’s Disconnect DApp button to revoke this origin; this client has no revoke action.';
       });
       addEventListener('load', () => parent.postMessage({
         type: 'SAT20_DAPP_CLIENT_READY', protocol, origin: location.origin, href: location.href,
@@ -61,12 +149,12 @@ export async function createPwaIntegrationDapp() {
       return
     }
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
-      'Content-Security-Policy': "default-src 'none'; script-src 'unsafe-inline'; frame-ancestors http://127.0.0.1:* http://localhost:*" })
+      'Content-Security-Policy': "default-src 'none'; script-src 'unsafe-inline'; frame-ancestors http://127.0.0.1:* http://localhost:* http://pwa.localhost:5179 http://cold.localhost:5179 http://recovery.localhost:5179" })
     response.end(html)
   })
   await new Promise((resolve, reject) => {
     server.once('error', reject)
-    server.listen(0, '127.0.0.1', resolve)
+    server.listen(port, '127.0.0.1', resolve)
   })
   const origin = `http://127.0.0.1:${server.address().port}`
   return { origin, url: `${origin}/swap/`, close: () => new Promise((resolve, reject) => {
@@ -99,8 +187,26 @@ export async function runPwaDappCases(t, fixture) {
   const recipient = fixture.dappRecipient
   const endpoint = fixture.config.IndexerL1
   const base = `${endpoint.Scheme}://${endpoint.Host}/${endpoint.Proxy}`
-  const api = async path => {
-    const reply = await fetch(base + path, { signal: AbortSignal.timeout(30000) })
+  const bitcoinNetwork = fixture.config.Chain === 'regtest' ? networks.regtest : networks.testnet
+  const acceptedBroadcasts = Object.create(null)
+  const broadcastObservations = []
+  if (fixture.realBitcoinControl) context.on('response', reply => {
+    const request = reply.request()
+    if (request.method() !== 'POST' || ![`${base}/btc/tx`, `${base}/btc/txs`, `${base}/v3/bitcoin/tx/broadcast`].includes(request.url())) return
+    broadcastObservations.push((async () => {
+      const result = await reply.json()
+      if (result.code !== 0 || result.data?.accepted === false || result.data?.error) return
+      const body = request.postDataJSON()
+      for (const raw of body.signedTxsHex ?? body.SignedTxsHex ?? [body.signedTxHex ?? body.SignedTxHex ?? body.raw_tx]) {
+        const txid = Transaction.fromHex(raw).getId()
+        acceptedBroadcasts[txid] = (acceptedBroadcasts[txid] ?? 0) + 1
+      }
+    })().catch(error => ({ error })))
+  })
+  const api = async (path, body) => {
+    const reply = await fetch(base + path, { signal: AbortSignal.timeout(30000), ...(body === undefined ? {} : {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    }) })
     assert.ok(reply.ok)
     const result = await reply.json()
     assert.equal(result.code, 0, result.msg)
@@ -113,6 +219,11 @@ export async function runPwaDappCases(t, fixture) {
     assert.ok(reply.ok)
     const result = await reply.json()
     assert.ok(!result.error, result.error)
+    if (fixture.realBitcoinControl) {
+      const observations = await Promise.all(broadcastObservations)
+      for (const observation of observations) if (observation?.error) throw observation.error
+      result.l1.broadcast_count = { ...acceptedBroadcasts }
+    }
     return result
   }
   const sats = async address => BigInt((await api(`/v3/address/summary/${address}`))
@@ -153,6 +264,15 @@ export async function runPwaDappCases(t, fixture) {
       await page.getByLabel('New Wallet Password', { exact: true }).fill(actor.password)
       await page.getByLabel('Confirm Password', { exact: true }).fill(actor.password)
       await page.getByRole('button', { name: 'Import Wallet', exact: true }).click()
+      if (fixture.config.Chain === 'regtest') {
+        await expect.poll(() => page.evaluate(() => window.__observedRootRecovery ?? null), { timeout: 120000 }).toBeTruthy()
+        const recovery = await page.evaluate(() => window.__observedRootRecovery)
+        if (recovery.error) {
+          let message = recovery.error
+          for (const secret of [actor.mnemonic, actor.password]) message = message.replaceAll(secret, '[redacted]')
+          throw new Error(`real regtest root recovery rejected: ${message}`)
+        }
+      }
       await expect(page.getByRole('tab', { name: 'Bitcoin', exact: true })).toBeVisible()
       assert.equal((await walletCall(page, 'getWalletAddress', 0)).address, actor.address)
       publicKey = (await walletCall(page, 'getWalletPubkey', 0)).pubKey
@@ -177,7 +297,7 @@ export async function runPwaDappCases(t, fixture) {
 
     await check(dappCases[1], async () => {
       await approveConnection(permissions)
-      for (const [action, expected] of [['getAccounts', [actor.address]], ['getPublicKey', publicKey], ['getNetwork', 'testnet']]) {
+      for (const [action, expected] of [['getAccounts', [actor.address]], ['getPublicKey', publicKey], ['getNetwork', fixture.config.Chain]]) {
         const result = await direct(action)
         assert.equal(result.success, true)
         assert.deepEqual(result.result, expected)
@@ -204,7 +324,7 @@ export async function runPwaDappCases(t, fixture) {
     await check(dappCases[4], async () => {
       const message = 'PWA acceptance: confirm this exact message.'
       const request = await begin('signMessage', { message })
-      const payload = ['SAT20 Wallet Message', 'version:1', 'network:testnet', `origin:${integrationDapp.origin}`,
+      const payload = ['SAT20 Wallet Message', 'version:1', `network:${fixture.config.Chain}`, `origin:${integrationDapp.origin}`,
         `timestamp:${request.timestamp}`, `nonce:${request.nonce}`, `message-length:${Buffer.byteLength(message)}`, '', message].join('\n')
       const approval = dialog('Sign Message')
       await expect(approval).toContainText('SAT20 Wallet Message / v1')
@@ -240,7 +360,22 @@ export async function runPwaDappCases(t, fixture) {
       await page.waitForTimeout(10_000)
       await approveConnection(permissions)
       sourceBefore = await sats(actor.address); recipientBefore = await sats(recipient.address)
-      const outputs = await api(`/v3/address/utxos/${actor.address}`)
+      let outputs
+      if (fixture.realBitcoinControl) {
+        const [group] = await api('/v3/bitcoin/utxos/by-scripts', { scripts: [actor.pk_script] })
+        assert.ok(group && !group.error)
+        const locked = await walletCall(page, 'getAllLockedUtxo', actor.address)
+        const rgb = JSON.parse((await walletCall(page, 'getRGB11State')).state)
+        const carrierPoints = new Set(rgb.proofs.map(proof => proof.outpoint))
+        const plain = []
+        for (const coin of group.utxos) {
+          if (coin.confirmations < 1 || coin.value < 10000 || Object.hasOwn(locked, coin.outpoint) || carrierPoints.has(coin.outpoint)) continue
+          const assets = await api(`/v3/utxo/info/${coin.outpoint}`)
+          if (!assets || (assets.Assets || []).length) continue
+          plain.push({ Outpoint: coin.outpoint, Value: coin.value, Assets: [] })
+        }
+        outputs = plain
+      } else outputs = await api(`/v3/address/utxos/${actor.address}`)
       input = outputs.find(output => !(output.Assets || []).length && output.Value >= 10000)
       assert.ok(input, 'DApp fixture has no independent Bitcoin funding')
       assert.match(input.Outpoint, /^[0-9a-f]{64}:\d+$/, 'Indexer UTXO must identify its funding output')
@@ -248,9 +383,9 @@ export async function runPwaDappCases(t, fixture) {
       const previous = Transaction.fromHex(await api(`/btc/rawtx/${txid}`)).outs[Number(index)]
       assert.equal(previous.value, input.Value)
       const internal = Buffer.from(publicKey, 'hex').subarray(1)
-      assert.equal(payments.p2tr({ internalPubkey: internal, network: networks.testnet }).output.toString('hex'), actor.pk_script)
+      assert.equal(payments.p2tr({ internalPubkey: internal, network: bitcoinNetwork }).output.toString('hex'), actor.pk_script)
       assert.equal(previous.script.toString('hex'), actor.pk_script)
-      const psbt = new Psbt({ network: networks.testnet })
+      const psbt = new Psbt({ network: bitcoinNetwork })
       psbt.addInput({ hash: txid, index: Number(index), sequence: 0xfffffffd,
         witnessUtxo: { script: previous.script, value: previous.value }, tapInternalKey: internal })
       psbt.addOutput({ address: recipient.address, value: 2000 })
@@ -281,7 +416,7 @@ export async function runPwaDappCases(t, fixture) {
       assert.equal(result.success, true)
       assert.equal(typeof result.result, 'string')
       signedPsbt = result.result
-      const parsed = Psbt.fromHex(signedPsbt, { network: networks.testnet })
+      const parsed = Psbt.fromHex(signedPsbt, { network: bitcoinNetwork })
       assert.deepEqual(parsed.data.globalMap.unsignedTx.toBuffer(), psbt.data.globalMap.unsignedTx.toBuffer(),
         'wallet changed the DApp transaction while signing')
       // SDK SignPsbt finalizes even when returning PSBT rather than raw tx.
@@ -311,6 +446,56 @@ export async function runPwaDappCases(t, fixture) {
     })
 
     await check(dappCases[7], async () => {
+      if (fixture.dappResumeTxID) {
+        // Continue the original accepted payment after the test-only HTTP observer failed.
+        // Earlier authorization, malformed-signature rejection and signing assertions remain recorded PASS.
+        const txid = fixture.dappResumeTxID
+        const raw = await api(`/btc/rawtx/${txid}`)
+        const transaction = Transaction.fromHex(raw)
+        assert.equal(transaction.getId(), txid)
+        assert.equal(transaction.ins.length, 1)
+        assert.equal(transaction.outs.length, 2)
+        assert.equal(transaction.outs[0].script.toString('hex'), recipient.pk_script)
+        assert.equal(transaction.outs[0].value, 2000)
+        assert.equal(transaction.outs[1].script.toString('hex'), actor.pk_script)
+        const parentID = Buffer.from(transaction.ins[0].hash).reverse().toString('hex')
+        const parent = Transaction.fromHex(await api(`/btc/rawtx/${parentID}`))
+        const spent = parent.outs[transaction.ins[0].index]
+        assert.equal(spent.script.toString('hex'), actor.pk_script)
+        assert.equal(transaction.outs[1].value, spent.value - 2500)
+        let [status] = await api('/v3/bitcoin/tx/status/batch', { txids: [txid] })
+        assert.ok(status.exists)
+        if (!status.confirmed) {
+          assert.equal(status.in_mempool, true)
+          await control('confirm-l1')
+          ;[status] = await api('/v3/bitcoin/tx/status/batch', { txids: [txid] })
+        }
+        assert.equal(status.confirmed, true)
+        assert.ok(status.confirmations >= 1)
+        const [outspend] = await api('/v3/bitcoin/outspends/batch', { outpoints: [`${parentID}:${transaction.ins[0].index}`] })
+        assert.equal(outspend.spent, true)
+        const [paid] = await api('/v3/bitcoin/utxos/status', { outpoints: [`${txid}:0`] })
+        assert.equal(paid.exists, true); assert.equal(paid.unspent, true)
+        assert.equal(paid.value, 2000); assert.equal(paid.pk_script, recipient.pk_script)
+        assert.ok(paid.confirmations >= 1)
+        const senderBalance = await sats(actor.address), receiverBalance = await sats(recipient.address)
+        const beforeReplay = (await control('snapshot')).l1
+        await approveConnection([...permissions, 'transaction:sign', 'transaction:broadcast'])
+        const approval = page.getByRole('dialog').filter({ hasText: 'Allow this DApp to broadcast this transaction?' })
+        const replay = await begin('pushTx', { rawtx: raw, options: { chain: 'bitcoin' } })
+        await expect(approval).toContainText(integrationDapp.origin)
+        await approval.getByRole('button', { name: 'Confirm', exact: true }).click()
+        const replayResult = await response(replay)
+        assert.equal(replayResult.success, true); assert.equal(replayResult.result, txid)
+        assert.equal(await sats(actor.address), senderBalance)
+        assert.equal(await sats(recipient.address), receiverBalance)
+        const afterReplay = (await control('snapshot')).l1
+        assert.deepEqual(afterReplay.pending_txids, beforeReplay.pending_txids)
+        assert.deepEqual(afterReplay.confirmed_txids, beforeReplay.confirmed_txids)
+        assert.deepEqual(afterReplay.broadcast_count, { [txid]: 1 }, 'the single replay response must identify only the original transaction')
+        console.log(JSON.stringify({ observation: 'original DApp payment resumed', txid, confirmations: status.confirmations, paid: paid.value, fee: 500, replay: replayResult.result }))
+        return
+      }
       await page.waitForTimeout(10_000)
       assert.ok(signedPsbt && signedTransaction, 'broadcast requires the preceding independently verified signing result')
       const params = { psbtHex: signedPsbt, options: { chain: 'bitcoin' } }

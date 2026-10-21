@@ -12,6 +12,7 @@ import (
 	"github.com/btcsuite/btcd/wire"
 
 	db "github.com/sat20-labs/indexer/common"
+	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	sbtcutil "github.com/sat20-labs/satoshinet/btcutil"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
@@ -36,6 +37,21 @@ type UtxoLockOwner struct {
 	Network           string `json:"network"`
 	WalletFingerprint string `json:"wallet_fingerprint"`
 	AccountIndex      uint32 `json:"account_index"`
+}
+
+type rgb11ReservationLockTarget struct {
+	ReservationID  string
+	PreviousReason string
+}
+
+// rgb11LockPlan is derived from a complete RGB11 snapshot. Owners listed in
+// ReplacedOwners are the only existing operation reservations that this
+// candidate may move or retire; all other lock owners remain protected.
+type rgb11LockPlan struct {
+	ReplacedOwners map[string]struct{}
+	DesiredOwners  map[string]rgb11ReservationLockTarget
+	Consumed       map[string]struct{}
+	Reasons        map[string]string
 }
 
 var (
@@ -306,6 +322,325 @@ func (p *UtxoLocker) persistReservationChangesLocked(puts map[string]*LockedUtxo
 	}
 	p.refreshTime = refreshTime
 	return nil
+}
+
+// stageRGB11LockReasons adds carrier-lock updates to an existing wallet DB
+// batch. The caller runs this from the RGB reservation commit gate; the locker
+// mutex remains held until the batch completion callback publishes memory.
+func (p *UtxoLocker) stageRGB11LockReasons(batch db.WriteBatch, reasons map[string]string) (func(bool), error) {
+	if p == nil || batch == nil || p.db == nil {
+		return nil, fmt.Errorf("stage RGB11 carrier locks")
+	}
+	p.mutex.Lock()
+	unlockOnError := true
+	defer func() {
+		if unlockOnError {
+			p.mutex.Unlock()
+		}
+	}()
+	puts := make(map[string]*LockedUtxo, len(reasons))
+	// Read only the target lock records, propagating failures. The legacy
+	// reload path replaces the whole cache from a prefix scan whose error is
+	// ignored; it must not be used while preparing an atomic RGB11 commit.
+	for _, utxo := range normalizedReservationUtxos(mapKeys(reasons)) {
+		raw, err := p.db.Read([]byte(GetLockedUtxoKey(p.network, utxo)))
+		var lock *LockedUtxo
+		if err != nil {
+			if errors.Is(err, db.ErrKeyNotFound) {
+				if memory := p.lockmap[utxo]; memory != nil && memory.ReservationID != "" {
+					return nil, fmt.Errorf("read active RGB11 carrier lock %s: %w", utxo, err)
+				}
+			} else {
+				return nil, err
+			}
+		} else {
+			lock = new(LockedUtxo)
+			if err := DecodeFromBytes(raw, lock); err != nil {
+				return nil, err
+			}
+			if memory := p.lockmap[utxo]; memory != nil {
+				lock.Owner = memory.Owner
+			}
+		}
+		reason := reasons[utxo]
+		if reason == "" {
+			return nil, fmt.Errorf("empty RGB11 carrier lock reason")
+		}
+		lock = cloneLockedUtxo(lock)
+		if lock != nil && lock.ReservationID != "" {
+			// An active spend reservation owns its complete lock record and reason.
+			continue
+		}
+		if lock == nil {
+			lock = &LockedUtxo{LockedTime: time.Now().Unix()}
+		}
+		lock.Reason = reason
+		encoded, err := EncodeToBytes(lock)
+		if err != nil {
+			return nil, err
+		}
+		if err := batch.Put([]byte(GetLockedUtxoKey(p.network, utxo)), encoded); err != nil {
+			return nil, err
+		}
+		puts[utxo] = lock
+	}
+	if len(puts) == 0 {
+		unlockOnError = false
+		p.mutex.Unlock()
+		return nil, nil
+	}
+	// Keep this context's refreshTime behind the marker written by the shared
+	// batch. The next reload will then refresh unrelated lock entries changed
+	// by another context without letting a failed stage alter the live cache.
+	refreshTime := time.Now().UnixMilli()
+	if refreshTime == p.refreshTime {
+		refreshTime++
+	}
+	encodedTime, err := EncodeToBytes(refreshTime)
+	if err != nil {
+		return nil, err
+	}
+	if err := batch.Put([]byte(GeLastLockTimeKey(p.network)), encodedTime); err != nil {
+		return nil, err
+	}
+	unlockOnError = false
+	return func(committed bool) {
+		if committed {
+			for utxo, lock := range puts {
+				p.lockmap[utxo] = cloneLockedUtxo(lock)
+			}
+		}
+		p.mutex.Unlock()
+	}, nil
+}
+
+// stageRGB11LockPlan applies carrier reasons and the complete lifecycle of
+// candidate-owned RGB11 reservations in one surrounding wallet DB batch.
+// It never releases an owner absent from the old RGB11 snapshot/common
+// reservation records, and it only publishes lockmap changes after Flush.
+func (p *UtxoLocker) stageRGB11LockPlan(batch db.WriteBatch, plan rgb11LockPlan) (func(bool), error) {
+	if p == nil || batch == nil || p.db == nil {
+		return nil, fmt.Errorf("stage RGB11 lock plan")
+	}
+	p.mutex.Lock()
+	unlockOnError := true
+	defer func() {
+		if unlockOnError {
+			p.mutex.Unlock()
+		}
+	}()
+
+	prefix := []byte(GetDBKeyPrefix() + DB_KEY_LOCKEDUTXO + p.network + "-")
+	current := make(map[string]*LockedUtxo)
+	err := p.db.BatchRead(prefix, false, func(key, raw []byte) error {
+		if !strings.HasPrefix(string(key), string(prefix)) {
+			return fmt.Errorf("invalid UTXO lock key")
+		}
+		outpoint := strings.TrimPrefix(string(key), string(prefix))
+		if outpoint == "" || GetLockedUtxoKey(p.network, outpoint) != string(key) {
+			return fmt.Errorf("invalid UTXO lock outpoint")
+		}
+		lock := new(LockedUtxo)
+		if err := DecodeFromBytes(raw, lock); err != nil {
+			return err
+		}
+		if memory := p.lockmap[outpoint]; memory != nil {
+			lock.Owner = memory.Owner
+		}
+		current[outpoint] = lock
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	// A cached RGB owner with no backing DB record is a broken lock invariant;
+	// do not silently publish a candidate that would make its input selectable.
+	for outpoint, memory := range p.lockmap {
+		if memory == nil || memory.ReservationID == "" {
+			continue
+		}
+		if _, replaced := plan.ReplacedOwners[memory.ReservationID]; !replaced {
+			if _, desired := plan.DesiredOwners[outpoint]; !desired {
+				continue
+			}
+		}
+		if current[outpoint] == nil {
+			return nil, fmt.Errorf("read active RGB11 lock %s: %w", outpoint, db.ErrKeyNotFound)
+		}
+	}
+
+	allowedOwners := make(map[string]struct{}, len(plan.ReplacedOwners)+len(plan.DesiredOwners))
+	for owner := range plan.ReplacedOwners {
+		if owner != "" {
+			allowedOwners[owner] = struct{}{}
+		}
+	}
+	for _, target := range plan.DesiredOwners {
+		if target.ReservationID == "" {
+			return nil, fmt.Errorf("RGB11 lock plan has an empty reservation owner")
+		}
+		allowedOwners[target.ReservationID] = struct{}{}
+	}
+
+	touched := make(map[string]struct{})
+	for outpoint := range plan.DesiredOwners {
+		touched[outpoint] = struct{}{}
+	}
+	for outpoint := range plan.Consumed {
+		touched[outpoint] = struct{}{}
+	}
+	for outpoint := range plan.Reasons {
+		touched[outpoint] = struct{}{}
+	}
+	for outpoint, lock := range current {
+		if lock != nil {
+			if _, replaced := plan.ReplacedOwners[lock.ReservationID]; replaced && lock.ReservationID != "" {
+				touched[outpoint] = struct{}{}
+			}
+		}
+	}
+
+	puts := make(map[string]*LockedUtxo)
+	deletes := make([]string, 0)
+	setPut := func(outpoint string, lock *LockedUtxo) {
+		puts[outpoint] = lock
+		delete(current, outpoint)
+	}
+	setDelete := func(outpoint string) {
+		deletes = append(deletes, outpoint)
+		delete(current, outpoint)
+	}
+
+	for outpoint := range touched {
+		lock := cloneLockedUtxo(current[outpoint])
+		target, hasOwner := plan.DesiredOwners[outpoint]
+		if hasOwner {
+			if lock != nil && lock.ReservationID != "" && lock.ReservationID != target.ReservationID {
+				if _, replaceable := plan.ReplacedOwners[lock.ReservationID]; !replaceable {
+					return nil, fmt.Errorf("%w: %s", ErrUtxoReservationOwner, outpoint)
+				}
+			}
+			if lock != nil && lock.ReservationID == "" && lock.Reason != rgb11wallet.LockReasonPending &&
+				(target.PreviousReason == "" || lock.Reason != target.PreviousReason) {
+				return nil, fmt.Errorf("%w: %s", ErrUtxoReserved, outpoint)
+			}
+			if lock == nil {
+				lock = &LockedUtxo{LockedTime: time.Now().Unix()}
+			}
+			lock.Reason = rgb11wallet.LockReasonPending
+			lock.ReservationID = target.ReservationID
+			lock.ReservationPreviousReason = target.PreviousReason
+			setPut(outpoint, lock)
+			continue
+		}
+
+		if _, consumed := plan.Consumed[outpoint]; consumed {
+			if lock != nil {
+				if lock.ReservationID != "" {
+					if _, replaceable := allowedOwners[lock.ReservationID]; !replaceable {
+						return nil, fmt.Errorf("%w: %s", ErrUtxoReservationOwner, outpoint)
+					}
+				} else if lock.Reason != rgb11wallet.LockReasonRGB && lock.Reason != rgb11wallet.LockReasonPending {
+					return nil, fmt.Errorf("%w: %s", ErrUtxoReserved, outpoint)
+				}
+				setDelete(outpoint)
+			}
+			continue
+		}
+
+		if lock != nil && lock.ReservationID != "" {
+			if _, replaceable := plan.ReplacedOwners[lock.ReservationID]; !replaceable {
+				// A non-RGB reservation owns the whole lock, including its reason.
+				// If this is also a candidate RGB carrier, the wallet cannot publish
+				// it as available while leaving an unrelated owner in place. Fail the
+				// candidate closed; do not silently keep the lock and claim readiness.
+				if plan.Reasons[outpoint] != "" {
+					return nil, fmt.Errorf("%w: RGB11 carrier %s", ErrUtxoReservationOwner, outpoint)
+				}
+				continue
+			}
+			if reason := plan.Reasons[outpoint]; reason != "" {
+				lock.Reason = reason
+				lock.ReservationID = ""
+				lock.ReservationPreviousReason = ""
+				setPut(outpoint, lock)
+			} else if lock.ReservationPreviousReason != "" {
+				lock.Reason = lock.ReservationPreviousReason
+				lock.ReservationID = ""
+				lock.ReservationPreviousReason = ""
+				setPut(outpoint, lock)
+			} else {
+				setDelete(outpoint)
+			}
+			continue
+		}
+
+		if reason := plan.Reasons[outpoint]; reason != "" {
+			if lock != nil && lock.ReservationID == "" &&
+				lock.Reason != rgb11wallet.LockReasonRGB && lock.Reason != rgb11wallet.LockReasonPending {
+				// Preserve manual/system locks. Replacing their reason with the RGB
+				// carrier marker would make them claimable by TryReserve and could
+				// turn an explicitly protected carrier into a spend input.
+				return nil, fmt.Errorf("%w: RGB11 carrier %s", ErrUtxoReserved, outpoint)
+			}
+			if lock == nil {
+				lock = &LockedUtxo{LockedTime: time.Now().Unix()}
+			}
+			lock.Reason = reason
+			setPut(outpoint, lock)
+		}
+	}
+
+	if len(puts) == 0 && len(deletes) == 0 {
+		unlockOnError = false
+		p.mutex.Unlock()
+		return nil, nil
+	}
+	for outpoint, lock := range puts {
+		encoded, err := EncodeToBytes(lock)
+		if err != nil {
+			return nil, err
+		}
+		if err := batch.Put([]byte(GetLockedUtxoKey(p.network, outpoint)), encoded); err != nil {
+			return nil, err
+		}
+	}
+	for _, outpoint := range deletes {
+		if err := batch.Delete([]byte(GetLockedUtxoKey(p.network, outpoint))); err != nil {
+			return nil, err
+		}
+	}
+	refreshTime := time.Now().UnixMilli()
+	if refreshTime == p.refreshTime {
+		refreshTime++
+	}
+	encodedTime, err := EncodeToBytes(refreshTime)
+	if err != nil {
+		return nil, err
+	}
+	if err := batch.Put([]byte(GeLastLockTimeKey(p.network)), encodedTime); err != nil {
+		return nil, err
+	}
+	unlockOnError = false
+	return func(committed bool) {
+		if committed {
+			for outpoint, lock := range puts {
+				p.lockmap[outpoint] = cloneLockedUtxo(lock)
+			}
+			for _, outpoint := range deletes {
+				delete(p.lockmap, outpoint)
+			}
+		}
+		p.mutex.Unlock()
+	}, nil
+}
+
+func mapKeys(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	return keys
 }
 
 // TryReserve atomically reserves every requested UTXO for one operation. It is

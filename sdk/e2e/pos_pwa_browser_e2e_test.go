@@ -255,7 +255,7 @@ func runSDKWalletBrowserMode(t *testing.T, sdkWASM bool, cases ...string) {
 	witness, _, err := getP2WSHScript(bootKey.PubKey().SerializeCompressed(), coreKey.PubKey().SerializeCompressed())
 	require.NoError(t, err)
 	heartbeat := fundDKVSActorFromChannel(t, network, gasAnchor, witness, bootKey, coreKey, heartbeatActor.PkScript)
-	miner := startDKVSNoPluginNodeWithArgs(t, l1.NodeFixture(), "miner", minerMnemonic,
+	miner := startDKVSNoPluginNodeWithArgs(t, l1.NodeFixtureForParent(t, pub(coreKey)), "miner", minerMnemonic,
 		[]string{"--generate", "--miningpubkey=" + pub(minerKey), "--serverpubkey=" + pub(coreKey)},
 		stpConfig(bootstrapPeer, "s@"+pub(coreKey)+"@http://"+core.stpAddr+"/testnet"))
 	network.Miner = miner
@@ -307,6 +307,15 @@ func runSDKWalletBrowserMode(t *testing.T, sdkWASM bool, cases ...string) {
 		keys: []*btcec.PrivateKey{bootKey, coreKey, minerKey}, rewards: [][]byte{bootReward, coreReward, minerReward}}
 	require.NoError(t, control.waitSynced(ctx))
 	for _, node := range []*testHarness{boot, core} {
+		// Chain and peer readiness precede STP's asynchronous public RPC start.
+		// Wait for its listener before asserting the original browser CORS policy.
+		require.Eventually(t, func() bool {
+			connection, err := net.DialTimeout("tcp", node.stpAddr, time.Second)
+			if err != nil {
+				return false
+			}
+			return connection.Close() == nil
+		}, 30*time.Second, 100*time.Millisecond, "STP public RPC did not start at %s", node.stpAddr)
 		request, err := http.NewRequestWithContext(ctx, http.MethodOptions,
 			"http://"+node.stpAddr+"/testnet"+wwire.STP_ACTION_NFTY, nil)
 		require.NoError(t, err)

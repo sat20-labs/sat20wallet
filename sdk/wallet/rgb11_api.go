@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"context"
+	"errors"
 	indexer "github.com/sat20-labs/indexer/common"
 	corewallet "github.com/sat20-labs/rgb11/wallet"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
@@ -44,10 +45,8 @@ type (
 // owned by the dedicated rgb11Manager; keep infrastructure and protocol
 // implementation out of the outer wallet manager.
 
-// beginRGB11Operation freezes the selected wallet/account scope for the full
-// duration of a public RGB11 operation and serializes it against managed RGB
-// state machines. This preserves lifecycle/cancellation exclusivity without
-// forcing read-only UI observation to wait for managed network I/O.
+// beginRGB11Operation protects a local capture only. Release it before any
+// network access; remote RGB work uses a fixed manager view instead.
 func (p *Manager) beginRGB11Operation() func() {
 	p.rgbManagedExecutionMu.Lock()
 	p.rgbOperationMu.RLock()
@@ -62,9 +61,8 @@ func (p *Manager) beginRGB11ReadObservation() func() {
 	return p.rgbOperationMu.RUnlock
 }
 
-// beginExclusiveRGB11Operation takes the write side of the same scope lock
-// used by every public RGB11 operation. It is reserved for lifecycle changes
-// which must not race a broadcast or another cancellation.
+// beginExclusiveRGB11Operation protects local lifecycle changes. Network
+// operations use captured scopes and validate intent at their own boundaries.
 func (p *Manager) beginExclusiveRGB11Operation() func() {
 	p.rgbOperationMu.Lock()
 	return p.rgbOperationMu.Unlock
@@ -79,7 +77,62 @@ func (p *Manager) synchronizedRGB11Manager() (*rgb11Manager, error) {
 	if p == nil || p.rgbManager == nil {
 		return nil, ErrRGB11Inconsistent
 	}
+	if err := p.checkAccountManagedDataImport(); err != nil {
+		return nil, err
+	}
 	return p.rgbManager, nil
+}
+
+// captureRGB11NetworkScope takes a fixed view while lifecycle changes are
+// excluded locally. The returned stores and wallet do not follow UI selection;
+// no lifecycle lock may remain held while that view uses a remote provider.
+func (p *Manager) captureRGB11NetworkScope(root bool) (*rgb11Manager, error) {
+	if p == nil || p.rgbManager == nil {
+		return nil, ErrRGB11Inconsistent
+	}
+	p.channelIdentityMu.RLock()
+	defer p.channelIdentityMu.RUnlock()
+	p.rgbOperationMu.RLock()
+	defer p.rgbOperationMu.RUnlock()
+	if root {
+		return p.rootRGB11Manager()
+	}
+	p.mutex.RLock()
+	account, err := p.rgbManager.fixedRGB11ScopeAccount()
+	p.mutex.RUnlock()
+	if err != nil {
+		return nil, err
+	}
+	return p.newScopedRGB11Manager(account)
+}
+
+// A background/root view already owns an immutable selection. The selected
+// UI manager must capture one before beginning a lock-free network operation.
+func (p *rgb11Manager) fixedRGB11NetworkScope() (*rgb11Manager, error) {
+	if p == nil || p.Manager == nil {
+		return nil, ErrRGB11Inconsistent
+	}
+	if p.accountOwner != nil && p.accountOwner != p.Manager {
+		return p, nil
+	}
+	return p.Manager.captureRGB11NetworkScope(false)
+}
+
+// Publish only the derived status for this captured scope. A UI selection
+// made during remote work must never inherit another account's status.
+func (p *rgb11Manager) publishRGB11ConsistencyStatus() {
+	if p == nil || p.consistencyStatus == "" || p.accountOwner == nil || p.accountOwner == p.Manager {
+		return
+	}
+	owner := p.accountOwner
+	owner.rgbOperationMu.Lock()
+	defer owner.rgbOperationMu.Unlock()
+	owner.mutex.RLock()
+	defer owner.mutex.RUnlock()
+	if owner.rgbManager != nil && owner.status != nil &&
+		owner.status.CurrentWallet == p.status.CurrentWallet && owner.status.CurrentAccount == p.status.CurrentAccount {
+		owner.rgbManager.consistencyStatus = p.consistencyStatus
+	}
 }
 
 func (p *Manager) AcceptRGB11AddressACK(record *swire.DKVSRecord,
@@ -124,6 +177,12 @@ func (p *Manager) CancelRGB11OutOfBandTransfer(transferID string) error {
 		func(manager *rgb11Manager) (struct{}, error) {
 			return struct{}{}, manager.CancelRGB11OutOfBandTransfer(transferID)
 		})
+	if errors.Is(err, dkvsindexer.ErrWriteConflict) {
+		if cancelErr := p.cancelUnpublishedRGB11Transfer(transferID); cancelErr != nil {
+			return errors.Join(err, cancelErr)
+		}
+		return nil
+	}
 	return err
 }
 
@@ -159,26 +218,20 @@ func (p *Manager) DeliverAndBroadcastConfiguredRGB11AddressTransfer(transferID s
 }
 
 func (p *Manager) EnableConfiguredRGB11AddressReceive(options RGB11ReceiveCapabilityOptions) (*RGB11AddressEndpoint, error) {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
-	current, err := p.synchronizedRGB11Manager()
-	if err != nil {
-		return nil, err
-	}
-	if !p.rgb11ManagerIsRoot(current) {
-		return nil, ErrRGB11DirectRootRequired
-	}
-	return p.enableRootRGB11AddressReceiveLocked(options)
+	return runRootRGB11ManagedOperation(p, context.Background(), rgb11ManagedOperationNew,
+		func(manager *rgb11Manager) (*RGB11AddressEndpoint, error) {
+			if !p.rgb11ManagerIsRoot(manager) {
+				return nil, ErrRGB11DirectRootRequired
+			}
+			return manager.EnableConfiguredRGB11AddressReceive(options)
+		})
 }
 
+// enableRootRGB11AddressReceive is the internal lifecycle helper used while
+// bringing up account services. Its caller already owns that lifecycle; keep
+// it out of runAccountOperation to avoid recursively entering the account gate.
 func (p *Manager) enableRootRGB11AddressReceive(options RGB11ReceiveCapabilityOptions) (*RGB11AddressEndpoint, error) {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
-	return p.enableRootRGB11AddressReceiveLocked(options)
-}
-
-func (p *Manager) enableRootRGB11AddressReceiveLocked(options RGB11ReceiveCapabilityOptions) (*RGB11AddressEndpoint, error) {
-	manager, err := p.rootRGB11Manager()
+	manager, err := p.captureRGB11NetworkScope(true)
 	if err != nil {
 		return nil, err
 	}
@@ -198,13 +251,10 @@ func (p *Manager) GetRGB11AssetBalance(name *indexer.AssetName) (*Decimal, error
 func (p *Manager) GetRGB11ConsistencyStatus() string {
 	releaseRGB11Observation := p.beginRGB11ReadObservation()
 	defer releaseRGB11Observation()
+	if err := p.checkAccountManagedDataImport(); err != nil {
+		return "warning"
+	}
 	return p.rgbManager.GetRGB11ConsistencyStatus()
-}
-
-func (p *Manager) GetRGB11ProjectionStore() *rgb11wallet.ProjectionStore {
-	releaseRGB11Observation := p.beginRGB11ReadObservation()
-	defer releaseRGB11Observation()
-	return p.rgbManager.GetRGB11ProjectionStore()
 }
 
 func (p *Manager) GetRGB11ReceiveRequest(requestID string) (*corewallet.ReceiveRequest, error) {
@@ -295,13 +345,11 @@ func (p *Manager) PrepareRGB11Transfer(ctx context.Context, request RGB11SendReq
 }
 
 func (p *Manager) ProjectRGB11Allocation(outpoint string, asset *indexer.AssetInfo, proof *rgb11wallet.AllocationProof) error {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
-	manager, err := p.synchronizedRGB11Manager()
-	if err != nil {
-		return err
-	}
-	return manager.ProjectRGB11Allocation(outpoint, asset, proof)
+	_, err := runRGB11ManagedOperation(p, context.Background(), rgb11ManagedOperationContinue,
+		func(manager *rgb11Manager) (struct{}, error) {
+			return struct{}{}, manager.projectRGB11Allocation(outpoint, asset, proof)
+		})
+	return err
 }
 
 // ResumeRGB11PreparedTransfer reloads an existing transfer package without
@@ -331,28 +379,23 @@ func (p *Manager) RGB11WalletID() (string, error) {
 }
 
 func (p *Manager) RebuildRGB11Locks() error {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
-	manager, err := p.synchronizedRGB11Manager()
-	if err != nil {
-		return err
-	}
-	return manager.RebuildRGB11Locks()
+	_, err := runRGB11ManagedOperation(p, context.Background(), rgb11ManagedOperationRefresh,
+		func(manager *rgb11Manager) (struct{}, error) {
+			return struct{}{}, manager.RebuildRGB11Locks()
+		})
+	return err
 }
 
 func (p *Manager) RefreshRGB11AddressACK(record *swire.DKVSRecord,
 	verify dkvsindexer.RecordVerificationOptions) (*RGB11AddressACK, error) {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
-	manager, err := p.rootRGB11Manager()
-	if err != nil {
-		return nil, err
-	}
-	return manager.RefreshRGB11AddressACK(record, verify)
+	return runRootRGB11ManagedOperation(p, context.Background(), rgb11ManagedOperationContinue,
+		func(manager *rgb11Manager) (*RGB11AddressACK, error) {
+			return manager.RefreshRGB11AddressACK(record, verify)
+		})
 }
 
 func (p *Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResult, error) {
-	return runRGB11ManagedOperation(p, ctx, rgb11ManagedOperationContinue,
+	return runRGB11ManagedOperation(p, ctx, rgb11ManagedOperationRefresh,
 		func(manager *rgb11Manager) (*RGB11RefreshResult, error) {
 			result, err := manager.refreshRGB11State(ctx)
 			manager.wakeRGB11ChainReconciliation()
@@ -369,20 +412,16 @@ func (p *Manager) ReceiveRGB11ProxyConsignment(ctx context.Context,
 }
 
 func (p *Manager) RegisterRGB11TickerInfo(info *indexer.TickerInfo) error {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
-	manager, err := p.synchronizedRGB11Manager()
-	if err != nil {
-		return err
-	}
-	return manager.RegisterRGB11TickerInfo(info)
+	_, err := runRGB11ManagedOperation(p, context.Background(), rgb11ManagedOperationContinue,
+		func(manager *rgb11Manager) (struct{}, error) {
+			return struct{}{}, manager.RegisterRGB11TickerInfo(info)
+		})
+	return err
 }
 
 func (p *Manager) ResolveConfiguredRGB11AddressEndpoint(address string,
 	verify dkvsindexer.RecordVerificationOptions) (*RGB11AddressEndpoint, error) {
-	releaseRGB11Observation := p.beginRGB11ReadObservation()
-	defer releaseRGB11Observation()
-	manager, err := p.rootRGB11Manager()
+	manager, err := p.captureRGB11NetworkScope(true)
 	if err != nil {
 		return nil, err
 	}
@@ -392,19 +431,33 @@ func (p *Manager) ResolveConfiguredRGB11AddressEndpoint(address string,
 func (p *Manager) SyncConfiguredRGB11AddressMailbox(ctx context.Context,
 	verify dkvsindexer.RecordVerificationOptions,
 	ackOptions RGB11AddressDeliveryOptions) (*RGB11AddressMailboxSyncResult, error) {
-	current, err := p.synchronizedRGB11Manager()
-	if err != nil {
-		return nil, err
-	}
-	if !p.rgb11ManagerIsRoot(current) {
-		return nil, ErrRGB11DirectRootRequired
-	}
-	return p.syncRootRGB11AddressMailbox(ctx, verify, ackOptions)
+	return runRootRGB11ManagedOperation(p, ctx, rgb11ManagedOperationContinue,
+		func(manager *rgb11Manager) (*RGB11AddressMailboxSyncResult, error) {
+			if !p.rgb11ManagerIsRoot(manager) {
+				return nil, ErrRGB11DirectRootRequired
+			}
+			return manager.SyncConfiguredRGB11AddressMailbox(ctx, verify, ackOptions)
+		})
 }
 
 func (p *Manager) syncRootRGB11AddressMailbox(ctx context.Context,
 	verify dkvsindexer.RecordVerificationOptions,
 	ackOptions RGB11AddressDeliveryOptions) (*RGB11AddressMailboxSyncResult, error) {
+	if p == nil {
+		return nil, ErrRGB11Inconsistent
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	// Generic DKVS polling also reaches this private background adapter. A
+	// wallet without RGB recovery must not consume RGB messages, but its
+	// ordinary mailbox synchronization remains usable.
+	if !p.accountManagedRecoveryConfigured() {
+		return &RGB11AddressMailboxSyncResult{}, nil
+	}
 	return runRootRGB11ManagedOperation(p, ctx, rgb11ManagedOperationContinue,
 		func(manager *rgb11Manager) (*RGB11AddressMailboxSyncResult, error) {
 			return manager.SyncConfiguredRGB11AddressMailbox(ctx, verify, ackOptions)
@@ -412,9 +465,7 @@ func (p *Manager) syncRootRGB11AddressMailbox(ctx context.Context,
 }
 
 func (p *Manager) ValidateRGB11Consignment(ctx context.Context, raw []byte) (*rgb11wallet.ValidationReceipt, error) {
-	releaseRGB11Observation := p.beginRGB11ReadObservation()
-	defer releaseRGB11Observation()
-	manager, err := p.synchronizedRGB11Manager()
+	manager, err := p.captureRGB11NetworkScope(false)
 	if err != nil {
 		return nil, err
 	}

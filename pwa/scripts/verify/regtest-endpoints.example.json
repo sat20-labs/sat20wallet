@@ -1,0 +1,20 @@
+{
+  "Env": "dev",
+  "Chain": "regtest",
+  "Mode": "light",
+  "Peers": [
+    "b@025fb789035bc2f0c74384503401222e53f72eefdebf0886517ff26ac7985f52ad@http://127.0.0.1:30253/regtest",
+    "s@0367f26af23dc40fdad06752c38264fe621b7bbafb1d41ab436b87ded192f1336e@http://127.0.0.1:30263/regtest"
+  ],
+  "IndexerL1": {
+    "Scheme": "http",
+    "Host": "127.0.0.1:30143",
+    "Proxy": "btc/regtest"
+  },
+  "IndexerL2": {
+    "Scheme": "http",
+    "Host": "127.0.0.1:30262",
+    "Proxy": "regtest"
+  },
+  "Log": "debug"
+}

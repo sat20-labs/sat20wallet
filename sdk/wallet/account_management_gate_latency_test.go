@@ -204,6 +204,12 @@ func (h *blockedAccountConfigHTTP) DKVSClientConfig() (*dkvsindexer.ClientConfig
 func TestAccountActiveMailboxReadRejectsChangedCatalog(t *testing.T) {
 	manager, _, secret := buildRootWrapperSource(t)
 	defer zeroBytes(secret)
+	// RGB is stable-only; use the existing active-provider stub to exercise mailbox I/O.
+	if err := manager.RegisterAccountManagedDataProvider(&accountManagedActiveDataProviderStub{
+		accountManagedDataProviderStub: accountManagedDataProviderStub{id: "latency-active"},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	remote := &blockedAccountConfigHTTP{rgb11MemoryDKVSHTTP: newRGB11MemoryDKVSHTTP(),
 		started: make(chan struct{}), release: make(chan struct{}), continueAfterRelease: true}
 	manager.http = remote
@@ -242,6 +248,12 @@ func TestAccountActiveMailboxReadRejectsChangedCatalog(t *testing.T) {
 func TestAccountActiveMailboxReadSurvivesPWAReauthentication(t *testing.T) {
 	manager, _, secret := buildRootWrapperSource(t)
 	defer zeroBytes(secret)
+	// RGB is stable-only; use the existing active-provider stub to exercise mailbox I/O.
+	if err := manager.RegisterAccountManagedDataProvider(&accountManagedActiveDataProviderStub{
+		accountManagedDataProviderStub: accountManagedDataProviderStub{id: "latency-active"},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	remote := &blockedAccountConfigHTTP{rgb11MemoryDKVSHTTP: newRGB11MemoryDKVSHTTP(),
 		started: make(chan struct{}), release: make(chan struct{}), continueAfterRelease: true}
 	var release sync.Once

@@ -70,7 +70,7 @@ export const useRgb11Assets = (options: UseAssetQueryOptions = {}) => {
     queryFn: async (): Promise<RGB11StateDTO> => {
       const [err, result] = await walletManager.getRGB11State()
       if (err) throw err
-      if (!result?.state) throw new Error('RGB11 Wallet state is unavailable')
+      if (!result?.state) throw new Error('RGB wallet state is unavailable')
       return JSON.parse(result.state) as RGB11StateDTO
     },
     enabled: computed(() => queryEnabled.value && !!walletId.value && !!address.value),

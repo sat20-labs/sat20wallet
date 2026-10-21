@@ -33,6 +33,7 @@ export const requiredPwaPosCases = [
   'Escape PWA: force-close safety confirmation displays evidence and cancels safely',
   'Escape PWA: cooperative close returns confirmed BTC and ORDX to Bitcoin',
   'Funds PWA: Bitcoin advanced ORDX Send creates two reviewed asset outputs',
+  'POS PWA: existing READY channel survives page reload without a new funding',
 ]
 // Destructive channel closure uses the same fixture in a separate selected
 // run, since cooperative-close and force-close cannot share one channel.
@@ -55,7 +56,6 @@ const channelAmount = (channel, key) => (channel.localbalanceL1 || [])
 const channelBalances = channel => (channel.localbalanceL1 || [])
   .map(asset => ({ key: assetKey(asset.Name), amount: String(asset.Amount), binding: asset.BindingSat }))
   .sort((a, b) => `${a.key}:${a.binding}`.localeCompare(`${b.key}:${b.binding}`))
-const btcText = sats => `${(Number(sats) / 1e8).toFixed(8)} tBTC`
 const deanchorInputs = channel => Object.fromEntries(['localDeAnchorTx', 'remoteDeAnchorTx'].map(side => {
   const inputs = channel[side]?.TxIn
   assert.ok(inputs?.length, `${side} must exist before the L1 funding confirms`)
@@ -64,7 +64,10 @@ const deanchorInputs = channel => Object.fromEntries(['localDeAnchorTx', 'remote
 
 export async function runPwaPosCases(t, fixture) {
   const { check, device, ready, walletCall } = t
-  assert.equal(fixture.config.Chain, 'testnet')
+  assert.ok(['testnet', 'regtest'].includes(fixture.config.Chain))
+  const network = fixture.config.Chain
+  const bitcoinNetwork = network === 'regtest' ? networks.regtest : networks.testnet
+  const btcText = sats => `${(Number(sats) / 1e8).toFixed(8)} ${network === 'regtest' ? 'rBTC' : 'tBTC'}`
   const controller = new URL(fixture.control_url)
   assert.equal(controller.protocol, 'http:')
   assert.ok(['127.0.0.1', 'localhost'].includes(controller.hostname), 'controller must be loopback')
@@ -74,14 +77,19 @@ export async function runPwaPosCases(t, fixture) {
   for (const name of ['opening', 'splicing_btc', 'splicing_asset', 'deposit_btc', 'deposit_asset']) {
     assert.ok(asInteger(amounts[name]) > 0n, `${name} must be positive`)
   }
-  const walletScript = bitcoinAddress.toOutputScript(fixture.address, networks.testnet).toString('hex')
+  const walletScript = bitcoinAddress.toOutputScript(fixture.address, bitcoinNetwork).toString('hex')
   assert.notEqual(fixture.recipient.address, fixture.address, 'transfers require an independent recipient')
-  const recipientScript = bitcoinAddress.toOutputScript(fixture.recipient.address, networks.testnet).toString('hex')
+  const recipientScript = bitcoinAddress.toOutputScript(fixture.recipient.address, bitcoinNetwork).toString('hex')
   assert.equal(recipientScript, fixture.recipient.pk_script)
   let page = await device()
   const context = page.context()
   let channelId
-  let latestDeposit
+  let latestDeposit = fixture.resumeDeposit ? {
+    funding: { txid: fixture.resumeDeposit.funding_txid },
+    anchor: { txid: fixture.resumeDeposit.anchor_txid },
+    key: '::',
+    amount: asInteger(fixture.resumeDeposit.amount),
+  } : undefined
 
   const control = async (action, body = {}) => {
     const response = await fetch(new URL(`/${action}`, controller), {
@@ -123,10 +131,10 @@ export async function runPwaPosCases(t, fixture) {
     return asInteger(result.availableAmt) + asInteger(result.lockedAmt)
   }
   const readL2Total = async () => {
-    const summary = await page.evaluate(async address => {
+    const summary = await page.evaluate(async ({ address, network }) => {
       const api = (await import('/apis/satnet.ts')).default
-      return api.getAddressSummary({ address, network: 'testnet' })
-    }, fixture.address)
+      return api.getAddressSummary({ address, network })
+    }, { address: fixture.address, network })
     assert.equal(summary.code, 0, summary.msg)
     assert.ok(Array.isArray(summary.data))
     const totals = summary.data.filter(asset => asset.Name.Protocol === '' && asset.Name.Type === '*')
@@ -158,7 +166,7 @@ export async function runPwaPosCases(t, fixture) {
     // rather than only a rounded K/M suffix. SDK and chain amounts are exact.
     if (amount < 1000n) await expect(assetRow().locator('div.text-sm.font-semibold').first()).toHaveText(String(amount))
   }
-  const assertNodes = (snapshot, expected = 3) => {
+  const assertNodes = (snapshot, expected = fixture.node_count ?? 3) => {
     assert.match(snapshot.hash, txidPattern)
     assert.equal(snapshot.nodes.length, expected, 'unexpected count of live fixture nodes')
     assert.equal(new Set(snapshot.nodes.map(node => node.role)).size, expected)
@@ -173,7 +181,7 @@ export async function runPwaPosCases(t, fixture) {
       const wallet = window.__SAT20_PWA_VERIFY__.useWalletStore()
       return { address: wallet.address, network: wallet.network, locked: wallet.locked }
     })
-    assert.deepEqual(identity, { address: fixture.address, network: 'testnet', locked: false })
+    assert.deepEqual(identity, { address: fixture.address, network, locked: false })
   }
   const unlockThroughUI = async () => {
     await expect.poll(() => new URL(page.url()).hash.startsWith('#/unlock'), pollOptions).toBe(true)
@@ -184,8 +192,8 @@ export async function runPwaPosCases(t, fixture) {
     await assertIdentity()
   }
   const reopen = async closePage => {
-    if (closePage) {
-      await page.close()
+    if (closePage || page.isClosed()) {
+      if (!page.isClosed()) await page.close()
       page = await device(context)
     } else {
       await page.reload()
@@ -202,6 +210,10 @@ export async function runPwaPosCases(t, fixture) {
       const store = (await import('/store/channel.ts')).useChannelStore()
       return store.channel?.status
     }), pollOptions).toBe(16)
+    await expect.poll(() => page.evaluate(async () => {
+      const store = (await import('/store/channel.ts')).useChannelStore()
+      return store.channel?.pendingSplicing
+    }), pollOptions).toBeUndefined()
     await expect(activePanel().getByText('Channel is opening', { exact: true })).toBeHidden()
     await expect(activePanel().getByText('Splicing in', { exact: true })).toBeHidden()
     await expect(balancePanel().getByRole('heading', { level: 2 })).toHaveText(btcText(channelAmount(channel, '::')))
@@ -210,6 +222,8 @@ export async function runPwaPosCases(t, fixture) {
   const pendingFunding = async before => {
     let snapshot
     await expect.poll(async () => {
+      const failure = await page.evaluate(() => window.__SAT20_SPLICE_DIAGNOSTIC__?.error)
+      if (failure) throw new Error(`PWA splicing-in rejected before pending funding: ${failure}`)
       snapshot = await control('snapshot')
       return snapshot.l1.pending_txids.length
     }, pollOptions).toBe(1)
@@ -224,7 +238,7 @@ export async function runPwaPosCases(t, fixture) {
     assert.deepEqual([...snapshot.l1.pending_txids].sort(), [funding.txid], 'page recovery changed or duplicated funding')
     assert.deepEqual([...snapshot.l1.confirmed_txids].sort(), funding.confirmed)
   }
-  const confirmFunding = async (funding, expectedNodes = 3, v2 = false) => {
+  const confirmFunding = async (funding, expectedNodes = fixture.node_count ?? 3, v2 = fixture.pos_v2_active === true) => {
     const snapshot = await control('confirm-l1')
     assertNodes(snapshot, expectedNodes)
     assert.deepEqual(snapshot.l1.pending_txids, [])
@@ -241,6 +255,9 @@ export async function runPwaPosCases(t, fixture) {
       assert.equal(anchor.version, 1)
       assert.equal(anchor.lock_time, 0)
       assert.equal(anchor.sequence, 0xfffffffe)
+    } else if (fixture.activation_height === 0) {
+      assert.equal(fixture.config.Chain, 'regtest')
+      assert.equal(fixture.pos_activation_scheduled, false, 'zero activation height must mean an unscheduled upgrade')
     } else assert.ok(anchor.height < fixture.activation_height, 'legacy case accidentally crossed activation')
     console.log(JSON.stringify({ posFunding: funding.txid, anchor: anchor.txid, height: anchor.height }))
     return { snapshot, anchor }
@@ -254,6 +271,15 @@ export async function runPwaPosCases(t, fixture) {
   }
   const openAssetOperation = async (operation, token, tab = 'Bitcoin') => {
     await showTab(tab)
+    if (operation === 'Splicing in' && !token && tab === 'Bitcoin') {
+      // A focused channel case starts with the L1 query disabled. Switching
+      // tabs shows its action buttons before the native asset query completes.
+      await expect.poll(() => page.evaluate(async () => {
+        const store = (await import('/store/l1.ts')).useL1Store()
+        const native = store.plainList?.[0]
+        return native?.protocol === '' && native.id === '::' && native.key === '::' && native.type === '*'
+      }), pollOptions).toBe(true)
+    }
     if (token) {
       await activePanel().getByRole('button', { name: fixture.asset.type, exact: true }).click()
       await expect(assetRow()).toHaveCount(1)
@@ -266,6 +292,44 @@ export async function runPwaPosCases(t, fixture) {
     }
     await expect(dialog.getByRole('heading', { name: titles[operation], exact: true })).toBeVisible()
     return dialog
+  }
+  const observeSplicingIn = async () => {
+    await page.evaluate(async () => {
+      const stp = (await import('/utils/stp.ts')).default
+      const original = stp.splicingIn
+      const small = value => String(value ?? '').slice(0, 128)
+      const sanitize = value => String(value ?? '')
+        .replace(/\b(?:[a-z]{2,}\s+){11,23}[a-z]{2,}\b/gi, '[redacted mnemonic]')
+        .replace(/\b(mnemonic|seed|password|passphrase|private\s*key|raw\s*tx|signed\s*tx)\b\s*[:=]\s*[^,;\n]+/gi, '$1=[redacted]')
+        .replace(/\b(?:0x)?[0-9a-f]{128,}\b/gi, '[redacted hex]')
+        .slice(0, 1200)
+      const fields = { channelId: '', assetName: '', amount: '', error: '', txId: '', resvId: '' }
+      window.__SAT20_SPLICE_DIAGNOSTIC__ = fields
+      window.__SAT20_SPLICE_DIAGNOSTIC_CALLS__ = 0
+      window.__SAT20_SPLICE_DIAGNOSTIC_SETTLED__ = false
+      stp.splicingIn = async function (...args) {
+        window.__SAT20_SPLICE_DIAGNOSTIC_CALLS__ += 1
+        fields.channelId = small(args[0])
+        fields.assetName = small(args[1])
+        fields.amount = small(args[5])
+        try {
+          const result = await original.apply(this, args)
+          const error = Array.isArray(result) ? result[0] : undefined
+          const value = Array.isArray(result) ? result[1] : undefined
+          fields.error = error ? sanitize(error.message ?? error) : ''
+          const txId = value?.txId ?? value?.txid ?? value?.TxID
+          const resvId = value?.resvId ?? value?.reservationId ?? value?.reservation_id
+          fields.txId = small(txId)
+          fields.resvId = small(resvId)
+          window.__SAT20_SPLICE_DIAGNOSTIC_SETTLED__ = true
+          return result
+        } catch (error) {
+          fields.error = sanitize(error?.message ?? error)
+          window.__SAT20_SPLICE_DIAGNOSTIC_SETTLED__ = true
+          throw error
+        }
+      }
+    })
   }
   const clickAssetOperation = async (operation, amount, token, tab = 'Bitcoin') => {
     const dialog = await openAssetOperation(operation, token, tab)
@@ -281,7 +345,7 @@ export async function runPwaPosCases(t, fixture) {
       await expect(review.getByText(String(amount) + ' ' + (token ? fixture.asset.ticker.toUpperCase() : 'sats'), { exact: true })).toBeVisible()
       await expect(review.getByText(fixture.recipient.address, { exact: true })).toBeVisible()
       await expect(review.getByText(tab, { exact: true })).toBeVisible()
-      await expect(review.getByText('testnet', { exact: true })).toBeVisible()
+      await expect(review.getByText(network, { exact: true })).toBeVisible()
     }
     await dialog.getByRole('button', { name: 'Confirm', exact: true }).click()
     await expect(dialog).toBeHidden()
@@ -330,11 +394,11 @@ export async function runPwaPosCases(t, fixture) {
   }
 
   const readSummary = async (chain, address) => {
-    const response = await page.evaluate(async ({ chain, address }) => {
+    const response = await page.evaluate(async ({ chain, address, network }) => {
       const api = chain === 'Bitcoin'
         ? (await import('/apis/ordx.ts')).default : (await import('/apis/satnet.ts')).default
-      return api.getAddressSummary({ address, network: 'testnet' })
-    }, { chain, address })
+      return api.getAddressSummary({ address, network })
+    }, { chain, address, network })
     assert.equal(response.code, 0, response.msg)
     assert.ok(Array.isArray(response.data))
     return response.data
@@ -373,10 +437,10 @@ export async function runPwaPosCases(t, fixture) {
     return receipt.txid
   }
   const readL1Transaction = async txid => {
-    const response = await page.evaluate(async txid => {
+    const response = await page.evaluate(async ({ txid, network }) => {
       const api = (await import('/apis/ordx.ts')).default
-      return api.getTxRaw({ txid, network: 'testnet' })
-    }, txid)
+      return api.getTxRaw({ txid, network })
+    }, { txid, network })
     assert.equal(response.code, 0, response.msg)
     assert.match(response.data, /^[0-9a-f]+$/i)
     const tx = Transaction.fromHex(response.data)
@@ -398,7 +462,7 @@ export async function runPwaPosCases(t, fixture) {
       tx = await control('transaction', { txid })
       return tx !== null
     }, pollOptions).toBe(true)
-    if (!tx.confirmations) await control('mine')
+    if (!tx.confirmations && !fixture.realSatoshiNetFunds) await control('mine')
     await expect.poll(async () => {
       tx = await control('transaction', { txid })
       return (tx?.confirmations || 0) >= 1
@@ -428,7 +492,7 @@ export async function runPwaPosCases(t, fixture) {
     const review = dialog.locator('section[aria-live="polite"]')
     await expect(review.getByRole('heading', { name: 'Confirm Asset Split', exact: true })).toBeVisible()
     await expect(review.getByText(fixture.recipient.address, { exact: true })).toBeVisible()
-    await expect(review.getByText('Bitcoin / testnet', { exact: true })).toBeVisible()
+    await expect(review.getByText(`Bitcoin / ${network}`, { exact: true })).toBeVisible()
     await expect(review.getByText(token ? fixture.asset.key : 'BTC (sats)', { exact: true })).toBeVisible()
     await expect(review.locator('dd').filter({ hasText: new RegExp('^' + String(amount) + (token ? '' : ' sats') + '$') })).toHaveCount(1)
     await expect(review.locator('dd').filter({ hasText: new RegExp('^' + String(amount * 2n) + (token ? '' : ' sats') + '$') })).toHaveCount(1)
@@ -467,6 +531,27 @@ export async function runPwaPosCases(t, fixture) {
   const sendL2 = async token => {
     const key = token ? fixture.asset.key : '::'
     const amount = token ? 50n : 2000n
+    if (!token) {
+      await showTab('SatoshiNet')
+      await expect.poll(async () => page.evaluate(async ({ address, network }) => {
+        try {
+          const wallet = window.__SAT20_PWA_VERIFY__?.useWalletStore()
+          const { useL2Store } = await import('/store/l2.ts')
+          const l2 = useL2Store()
+          const selected = [...document.querySelectorAll('[role="tab"][aria-selected="true"]')]
+            .some(node => String(node.textContent || '').replace(/\s+/g, ' ').trim() === 'SatoshiNet')
+          const plain = Array.isArray(l2.plainList) ? l2.plainList.filter(item =>
+            item.id === '::' && item.key === '::' && item.protocol === '' && item.type === '*') : []
+          if (!selected || wallet?.address !== address || wallet?.network !== network || plain.length !== 1) return false
+          const amount = String(plain[0].amount ?? '')
+          const total = String(l2.totalSats ?? '')
+          return /^\d+$/.test(amount) && /^\d+$/.test(total) &&
+            BigInt(amount) > 0n && BigInt(amount) === BigInt(total)
+        } catch {
+          return false
+        }
+      }, { address: fixture.address, network }), pollOptions).toBe(true)
+    }
     const sourceBefore = await addressAmount('SatoshiNet', fixture.address, key)
     const sourceSatsBefore = await readL2Total()
     const recipientBefore = await addressAmount('SatoshiNet', fixture.recipient.address, key)
@@ -491,6 +576,61 @@ export async function runPwaPosCases(t, fixture) {
     await selectMode('lightning')
     const key = token ? fixture.asset.key : '::'
     const amount = token ? 100n : 4000n
+    if (!token && fixture.privateBTCRoundTripResume) {
+      const original = fixture.privateBTCRoundTripResume
+      const snapshot = await control('snapshot')
+      const unlockedTx = await confirmedL2Transaction(original.unlock_txid)
+      const lockedTx = await confirmedL2Transaction(original.lock_txid)
+      const sourceTx = await confirmedL2Transaction(original.source_txid)
+      const sourceOutputs = rpcOutputs(sourceTx).filter(output => output.script === walletScript)
+      assert.equal(sourceOutputs.length, 1)
+      const beforeAmount = sourceOutputs[0].value
+      const channelScript = bitcoinAddress.toOutputScript(channelId, bitcoinNetwork).toString('hex')
+      const inputs = async tx => Promise.all(tx.vin.map(async input => {
+        const parent = await confirmedL2Transaction(input.txid)
+        const output = rpcOutputs(parent)[input.vout]
+        assert.ok(output)
+        return { ...output, point: `${input.txid}:${input.vout}` }
+      }))
+      const unlockInputs = await inputs(unlockedTx)
+      const unlockOutputs = rpcOutputs(unlockedTx)
+      const lockInputs = await inputs(lockedTx)
+      const lockOutputs = rpcOutputs(lockedTx)
+      const total = outputs => outputs.reduce((sum, output) => sum + output.value, 0n)
+      const owned = outputs => outputs.filter(output => output.script === walletScript)
+      const collateral = outputs => outputs.filter(output => output.script === channelScript)
+      assert.ok([...unlockInputs, ...unlockOutputs, ...lockInputs, ...lockOutputs].every(output => !output.assets.length),
+        'this BTC continuation must not consume or move token assets')
+      assert.equal(total(unlockInputs) - total(unlockOutputs), 10n)
+      assert.equal(total(lockInputs) - total(lockOutputs), 10n)
+      assert.equal(owned(unlockInputs).length, 1)
+      assert.equal(owned(unlockInputs)[0].point, `${original.source_txid}:0`)
+      assert.equal(total(owned(unlockInputs)), beforeAmount)
+      assert.equal(total(owned(unlockOutputs)), beforeAmount + amount - 10n)
+      assert.equal(total(collateral(unlockInputs)) - total(collateral(unlockOutputs)), amount)
+      assert.deepEqual(lockInputs.map(input => input.point).sort(), unlockedTx.vout
+        .filter(output => output.scriptPubKey.hex === walletScript)
+        .map(output => `${unlockedTx.txid}:${output.n}`).sort())
+      assert.equal(total(collateral(lockOutputs)) - total(collateral(lockInputs)), amount)
+      assert.equal(total(owned(lockOutputs)), beforeAmount - 20n)
+      let beforeChannelAmount = 0n
+      for (const id of original.anchor_txids) {
+        beforeChannelAmount += total(collateral(rpcOutputs(await confirmedL2Transaction(id))))
+      }
+      const channel = await readyChannelUI()
+      assert.equal(channel.lastPaymentId, original.lock_txid)
+      assert.equal(channelAmount(channel, '::'), beforeChannelAmount)
+      assert.deepEqual(channelBalances(channel), [{ key: '::', amount: String(beforeChannelAmount), binding: 1 }])
+      await expect.poll(() => readL2Amount('::'), pollOptions).toBe(beforeAmount - 20n)
+      await expect.poll(readL2Total, pollOptions).toBe(beforeAmount - 20n)
+      await reopen(false)
+      assert.equal((await readyChannelUI()).lastPaymentId, original.lock_txid)
+      await assertWalletBalanceUI('SatoshiNet')
+      assert.deepEqual(await control('snapshot'), snapshot, 'original private payments readback must not broadcast or mine')
+      console.log(JSON.stringify({ privateBTCReadback: original, beforeAmount: String(beforeAmount),
+        channelAmount: String(beforeChannelAmount), finalAmount: String(beforeAmount - 20n) }))
+      return
+    }
     const before = await readChannel()
     const sourceBefore = await readL2Amount(key)
     const satsBefore = await readL2Total()
@@ -592,8 +732,9 @@ export async function runPwaPosCases(t, fixture) {
     const dialog = page.getByRole('alertdialog')
     await expect(dialog.getByRole('heading', { name: 'Confirm Cooperative Close', exact: true })).toBeVisible()
     await expect(dialog.getByText(channelId, { exact: true })).toBeVisible()
-    await expect(dialog.getByText('Bitcoin testnet4 / SatoshiNet testnet', { exact: true })).toBeVisible()
-    await expect(dialog.getByText(String(current.capacity) + ' sats', { exact: true })).toBeVisible()
+    await expect(dialog.getByText(network === 'regtest' ? 'Bitcoin regtest / SatoshiNet regtest' : 'Bitcoin testnet4 / SatoshiNet testnet', { exact: true })).toBeVisible()
+    const capacity = dialog.getByText('Current capacity', { exact: true }).locator('..')
+    await expect(capacity.getByText(String(current.capacity) + ' sats', { exact: true })).toBeVisible()
     await expect(dialog.getByText('Cooperative (force = false)', { exact: true })).toBeVisible()
     for (const balance of current.localbalanceL1) {
       const unit = assetKey(balance.Name) === '::' ? 'sats' : balance.Name.Ticker
@@ -625,10 +766,32 @@ export async function runPwaPosCases(t, fixture) {
     await assertIdentity()
     await selectMode('lightning')
 
+    if (fixture.resumePrivateChannel) {
+      assert.ok(fixture.realChannel && fixture.privateChannelID, 'continuation must identify the existing real private channel')
+      let restored
+      await expect.poll(async () => {
+        try { restored = await readChannel() }
+        catch (error) {
+          if (/getCurrentChannel: (not found|channel is nil|channel not found)$/.test(error.message.split(/\r?\n/, 1)[0])) return null
+          throw error
+        }
+        assert.equal(restored.channelId, fixture.privateChannelID, 'continuation restored a different channel')
+        return restored.status
+      }, pollOptions).toBe(16)
+      channelId = restored.channelId
+      await readyChannelUI()
+    }
+
     await check(requiredPwaPosCases[0], async () => {
       const before = await control('snapshot')
       assert.deepEqual(before.l1.pending_txids, [])
       await showTab('Channel')
+      const current = await stpRead('getCurrentChannel').then(result => JSON.parse(result.json), error => {
+        const firstLine = error.message.split(/\r?\n/, 1)[0]
+        if (/getCurrentChannel: (not found|channel is nil|channel not found)$/.test(firstLine)) return null
+        throw error
+      })
+      assert.equal(current, null, 'first channel opening requires a wallet without an existing private channel; preserve existing channels')
       await activePanel().getByRole('button', { name: 'Open', exact: true }).click()
       await activePanel().locator('input').fill(String(amounts.opening))
       await activePanel().getByRole('button', { name: 'Confirm', exact: true }).click()
@@ -636,7 +799,7 @@ export async function runPwaPosCases(t, fixture) {
       await expect(dialog.getByRole('heading', { name: 'Confirm Channel Opening', exact: true })).toBeVisible()
       const feeRate = await page.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().btcFeeRate)
       const preview = await stpRead('previewOpenChannel', String(feeRate), String(amounts.opening))
-      assert.equal(preview.valid, true)
+      assert.equal(preview.valid, true, `channel opening preview rejected: ${JSON.stringify(preview)}`)
       await expect(dialog).toContainText(`${amounts.opening} sats`)
       await expect(dialog).toContainText(`${preview.channelCapacity} sats`)
       await expect(dialog.getByRole('button', { name: 'Open Channel', exact: true })).toBeEnabled()
@@ -657,6 +820,27 @@ export async function runPwaPosCases(t, fixture) {
       const channel = await readyChannelUI()
       assert.equal(channel.capacity, preview.channelCapacity)
       assertSignedAnchor(signed, anchor, channel)
+    })
+
+    await check(requiredPwaPosCases[25], async () => {
+      const prior = await readyChannelUI()
+      const signed = deanchorInputs(prior)
+      const before = await control('snapshot')
+      assert.deepEqual(before.l1.pending_txids, [])
+      await reopen(false)
+      const current = await readyChannelUI()
+      assert.equal(current.channelId, prior.channelId)
+      assert.equal(current.capacity, prior.capacity)
+      assert.equal(current.commitHeight, prior.commitHeight)
+      assert.deepEqual(channelBalances(current), channelBalances(prior))
+      assert.deepEqual(deanchorInputs(current), signed)
+      const after = await control('snapshot')
+      assert.deepEqual(after.l1.pending_txids, [])
+      assert.deepEqual(after.l1.confirmed_txids, before.l1.confirmed_txids)
+      assert.equal(after.l1.height, before.l1.height)
+      if (before.l1.broadcast_count !== undefined) {
+        assert.deepEqual(after.l1.broadcast_count, before.l1.broadcast_count)
+      }
     })
 
     await check(requiredPwaPosCases[1], async () => {
@@ -688,6 +872,7 @@ export async function runPwaPosCases(t, fixture) {
         }, pollOptions).toBe(true)
         setStage('submit')
         const before = await control('snapshot')
+        await observeSplicingIn()
         await clickAssetOperation('Splicing in', amounts.splicing_btc, false)
         setStage('submitted')
         const funding = await pendingFunding(before)
@@ -726,7 +911,10 @@ export async function runPwaPosCases(t, fixture) {
         const displayRead = page.evaluate(async () => {
           const store = (await import('/store/channel.ts')).useChannelStore()
           const wallet = window.__SAT20_PWA_VERIFY__.useWalletStore()
+          const l1 = (await import('/store/l1.ts')).useL1Store()
           return { status: store.channel?.status, channelId: store.channel?.channelId,
+            nativeAssets: l1.plainList.map(asset => ({ id: asset.id, key: asset.key, protocol: asset.protocol, type: asset.type, amount: asset.amount })),
+            stpCalls: window.__SAT20_SPLICE_DIAGNOSTIC_CALLS__,
             pendingSplicing: store.channel?.pendingSplicing, locked: wallet.locked,
             walletId: String(wallet.walletId), accountIndex: wallet.accountIndex, address: wallet.address,
             activeTab: document.querySelector('[role="tab"][aria-selected="true"]')?.textContent,
@@ -740,7 +928,8 @@ export async function runPwaPosCases(t, fixture) {
         } finally {
           clearTimeout(displayTimeout)
         }
-        console.error(JSON.stringify({ splicingInFailure: { stage, sdkReadError,
+        const invocation = await page.evaluate(() => window.__SAT20_SPLICE_DIAGNOSTIC__).catch(() => undefined)
+        console.error(JSON.stringify({ splicingInFailure: { stage, invocation, sdkReadError,
           sdkStatus: sdkChannel?.status, reservations, display } }))
         throw error
       }
@@ -748,26 +937,110 @@ export async function runPwaPosCases(t, fixture) {
 
     await check(requiredPwaPosCases[2], async () => {
       const before = await readChannel()
+      if (network === 'regtest') assert.equal(before.channelId, fixture.privateChannelID)
       const pending = await control('snapshot')
       assert.deepEqual(pending.l1.pending_txids, [])
       assert.deepEqual(pending.mempool_txids, [])
       const activated = await control('activate')
       assertNodes(activated)
-      assert.ok(activated.height >= fixture.activation_height + 1)
+      if (network === 'regtest') {
+        assert.equal(fixture.activation_height, 32)
+        assert.equal(fixture.pos_activation_scheduled, true)
+        assert.deepEqual(activated.l1.pending_txids, [])
+        assert.deepEqual(activated.mempool_txids, [])
+        const evidence = activated.pos_activation
+        assert.ok(evidence, 'controller must return observed H-1/H/H+1 activation evidence')
+        assert.equal(evidence.start_height, pending.height)
+        assert.equal(evidence.start_hash, pending.hash)
+        assert.equal(evidence.activation_height, fixture.activation_height)
+        assert.deepEqual(evidence.steps.map(step => step.height),
+          Array.from({ length: fixture.activation_height + 1 - pending.height }, (_, i) => pending.height + i + 1))
+        assert.equal(new Set(evidence.steps.map(step => step.txid)).size, evidence.steps.length,
+          'each activation height must be driven by a distinct real SDK transaction')
+        for (const step of evidence.steps) {
+          assert.match(step.txid, txidPattern)
+          assert.match(step.hash, txidPattern)
+          assert.equal(step.l1_pending, 0)
+          assert.equal(step.snet_mempool, 0)
+        }
+        assert.equal(evidence.h_minus_1.height, fixture.activation_height - 1)
+        assert.equal(evidence.h_minus_1.pos_v2_active, false)
+        assert.equal(evidence.h_minus_1.sdk_anchor_outputs_active, true,
+          'at H-1 the SDK must select the H invoice format for the next block')
+        assert.equal(evidence.restart.before_height, fixture.activation_height - 1)
+        assert.equal(evidence.restart.after_height, fixture.activation_height - 1)
+        assert.equal(evidence.restart.before_hash, evidence.restart.after_hash,
+          'normal same-DB Core restart must preserve the immediate pre-activation tip')
+        assert.equal(evidence.restart.generate, true,
+          'the configured scheduled miner must resume after restart without a manual Generate call')
+        assert.equal(evidence.h.height, fixture.activation_height)
+        assert.equal(evidence.h.pos_v2_active, true)
+        assert.equal(evidence.h.sdk_anchor_outputs_active, true)
+        assert.equal(evidence.h_plus_1.height, fixture.activation_height + 1)
+        assert.equal(evidence.h_plus_1.pos_v2_active, true)
+        assert.equal(evidence.h_plus_1.sdk_anchor_outputs_active, true)
+        assert.equal(activated.height, fixture.activation_height + 1)
+      } else {
+        assert.ok(activated.height >= fixture.activation_height + 1)
+      }
       await reopen(false)
       const channel = await readyChannelUI()
+      if (network === 'regtest') assert.equal(channel.channelId, before.channelId)
       assert.equal(channel.capacity, before.capacity)
       assert.deepEqual(channelBalances(channel), channelBalances(before))
       assert.deepEqual(deanchorInputs(channel), deanchorInputs(before))
     })
 
     await check(requiredPwaPosCases[3], async () => {
-      const prior = await readChannel()
+      const prior = await readyChannelUI()
+      deanchorInputs(prior)
       const before = await control('snapshot')
+      if (fixture.splicingInDiagnostic) {
+        assert.deepEqual(before.l1.pending_txids, [], 'diagnostic preflight must not inherit pending Bitcoin transactions')
+        assert.deepEqual(before.mempool_txids, [], 'diagnostic preflight must not inherit pending SatoshiNet transactions')
+        const reservationState = await stpRead('allReservations')
+        assert.ok(Array.isArray(reservationState?.reservations), 'diagnostic preflight requires the actual WASM reservation list')
+        const activeChannelReservations = reservationState.reservations.flatMap(item => {
+          assert.ok(item && typeof item.type === 'string', 'reservation entries must identify their type')
+          assert.ok(Number.isInteger(Number(item.status)), 'reservation entries must expose a numeric status')
+          if (item.type === 'rgb11') return []
+          assert.equal(typeof item.json, 'string', 'non-RGB11 reservations must expose their stored JSON')
+          const stored = JSON.parse(item.json)
+          const status = Number(item.status)
+          return stored.ChannelId === prior.channelId && status > 0 && status !== 0x10000
+            ? [{ type: item.type, status }]
+            : []
+        })
+        assert.deepEqual(activeChannelReservations, [], 'diagnostic preflight must not inherit active reservations for the READY channel')
+        await observeSplicingIn()
+      }
       await clickAssetOperation('Splicing in', amounts.splicing_asset, true)
+      if (fixture.splicingInDiagnostic) {
+        await expect.poll(() => page.evaluate(() => window.__SAT20_SPLICE_DIAGNOSTIC_SETTLED__), {
+          timeout: 15000, intervals: [100, 250, 500],
+        }).toBe(true)
+        const observed = await page.evaluate(() => ({
+          calls: window.__SAT20_SPLICE_DIAGNOSTIC_CALLS__,
+          ...window.__SAT20_SPLICE_DIAGNOSTIC__,
+        }))
+        const fields = {
+          channelId: observed.channelId,
+          assetName: observed.assetName,
+          amount: observed.amount,
+          error: observed.error,
+          txId: observed.txId,
+          resvId: observed.resvId,
+        }
+        console.log(JSON.stringify({ event: 'splicing-in-diagnostic', calls: observed.calls, ...fields }))
+        assert.equal(observed.calls, 1, `diagnostic must wrap exactly one splicingIn call: ${JSON.stringify(fields)}`)
+        assert.equal(fields.channelId, prior.channelId, `splicingIn used an unexpected channel: ${JSON.stringify(fields)}`)
+        assert.equal(fields.assetName, fixture.asset.key, `splicingIn used an unexpected asset: ${JSON.stringify(fields)}`)
+        assert.equal(fields.amount, String(amounts.splicing_asset), `splicingIn used an unexpected amount: ${JSON.stringify(fields)}`)
+        assert.equal(fields.error, '', `splicingIn returned an error: ${JSON.stringify(fields)}`)
+      }
       const funding = await pendingFunding(before)
       const signed = deanchorInputs(await readChannel())
-      const { anchor } = await confirmFunding(funding, 3, true)
+      const { anchor } = await confirmFunding(funding, fixture.node_count, true)
       const channel = await readyChannelUI()
       const expected = channelAmount(prior, fixture.asset.key) + asInteger(amounts.splicing_asset)
       assert.equal(channelAmount(channel, fixture.asset.key), expected)
@@ -794,8 +1067,11 @@ export async function runPwaPosCases(t, fixture) {
 
     await check(requiredPwaPosCases[6], async () => {
       const before = await readL2Amount('::')
+      assert.ok(latestDeposit?.anchor?.txid, 'selected rotation continuation needs the verified V84 deposit receipt')
+      await page.close()
       const rotated = await control('rotation')
       assertNodes(rotated)
+      await reopen(true)
       // Go verifies each actual producer, approval and reward outpoint. The PWA
       // remains attached to that same network and must retain its confirmed funds.
       await showTab('Bitcoin')
@@ -806,14 +1082,17 @@ export async function runPwaPosCases(t, fixture) {
     })
 
     await check(requiredPwaPosCases[7], async () => {
+      await page.close()
       const offline = await control('miner-offline')
       assertNodes(offline, 2)
+      await reopen(true)
       await deposit(false, 2)
     })
 
     await check(requiredPwaPosCases[8], async () => {
       const beforeAmount = await readL2Amount('::')
       const beforeChannel = await readChannel()
+      await page.close()
       const restored = await control('restore-miner')
       assertNodes(restored)
       assert.ok(restored.anchors.some(anchor => anchor.txid === latestDeposit.anchor.txid))
@@ -835,7 +1114,31 @@ export async function runPwaPosCases(t, fixture) {
 
     // These cases follow activation and recovery, so their ordinary transactions
     // cannot advance the chain past H before the POS boundary assertions run.
-    await check(requiredPwaPosCases[9], async () => { await sendL1(false) })
+    await check(requiredPwaPosCases[9], async () => {
+      if (!fixture.bitcoinFundsResume) return sendL1(false)
+      // The original run already confirmed payment, fee and balance changes;
+      // resume only its unfinished unit/UI/reload assertions, without resending.
+      const { txid } = fixture.bitcoinFundsResume
+      const tx = await readL1Transaction(txid)
+      const paid = tx.outs.filter(output => output.script.toString('hex') === recipientScript)
+      assert.equal(paid.length, 1)
+      assert.equal(paid[0].value, 2000)
+      const endpoint = fixture.config.IndexerL1
+      const response = await fetch(`${endpoint.Scheme}://${endpoint.Host}/${endpoint.Proxy}/v3/bitcoin/tx/status/batch`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ txids: [txid] }),
+        signal: AbortSignal.timeout(30000),
+      })
+      assert.ok(response.ok)
+      const result = await response.json()
+      assert.equal(result.code, 0, result.msg)
+      assert.equal(result.data.length, 1)
+      assert.ok(result.data[0].exists && result.data[0].confirmed && result.data[0].confirmations >= 1)
+      const before = await control('snapshot')
+      await reopen(false)
+      await assertWalletBalanceUI('Bitcoin')
+      assert.deepEqual(await control('snapshot'), before, 'original payment readback must not broadcast or mine')
+      console.log(JSON.stringify({ observation: 'original confirmed Bitcoin payment readback', txid }))
+    })
     await check(requiredPwaPosCases[10], async () => { await sendL1(true) })
     await check(requiredPwaPosCases[11], async () => { await sendL1(false, true) })
     await check(requiredPwaPosCases[12], async () => { await sendL2(false) })
@@ -863,13 +1166,22 @@ export async function runPwaPosCases(t, fixture) {
         for (let i = 0; i < expected.length; i++) {
           const output = expected[i]
           const row = table.locator('tbody tr').nth(i)
-          await expect(row.getByRole('link')).toHaveAttribute('href', new RegExp('/tx/' + output.Outpoint.split(':')[0] + '$'))
+          const link = row.getByRole('link')
+          if (network === 'regtest') {
+            // There is no public explorer for this isolated chain. Preserve
+            // the outpoint identity check without linking to another network.
+            await expect(link).toHaveAttribute('href', '')
+            await expect(link).toHaveText(`${output.Outpoint.slice(0, 6)}*****${output.Outpoint.slice(-6)}`)
+          } else {
+            await expect(link).toHaveAttribute('href', new RegExp('/tx/' + output.Outpoint.split(':')[0] + '$'))
+          }
           await expect(row.locator('td').nth(1)).toHaveText(String(output.Value))
           for (const asset of output.Assets || []) await expect(row).toContainText(asset.Name.Ticker + ': ' + asset.Amount)
         }
       }
     })
     await check(requiredPwaPosCases[21], async () => {
+      await openEscape()
       const before = await control('snapshot')
       const current = await readChannel()
       const dialog = await requestCooperativeClose(current)
@@ -878,6 +1190,7 @@ export async function runPwaPosCases(t, fixture) {
       await assertCloseCancelled(before, current)
     })
     await check(requiredPwaPosCases[22], async () => {
+      await openEscape()
       const before = await control('snapshot')
       const current = await readChannel()
       const safety = await safetySnapshot()

@@ -2,19 +2,20 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { config as configMap } from '@/config'
 import { walletStorage } from '@/lib/walletStorage'
+import { isRegtestBuild } from '@/utils/networkMode'
 
-export type Env = 'prd'
+export type Env = 'dev' | 'test' | 'prd'
 export const useGlobalStore = defineStore('global', () => {
 
   const loading = ref(false)
   const version = ref(0)
-  const env = ref<Env>('prd')
+  const env = ref<Env>(isRegtestBuild ? 'dev' : 'prd')
   const stpVersion = ref('0.0.0')
   const autoLockTime = ref(walletStorage.getValue('autoLockTime') || '5')
   const hideBalance = ref(Boolean(walletStorage.getValue('hideBalance')))
 
   const config = computed(() => {
-    return configMap.prd
+    return isRegtestBuild ? configMap.regtest : configMap[env.value]
   })
   const setStpVersion = (value: string) => {
     stpVersion.value = value

@@ -24,6 +24,7 @@ const getAllowedOrigins = () => {
     configured: import.meta.env.VITE_SAT20_DAPP_ALLOWED_ORIGINS,
     development: import.meta.env.DEV,
     test: import.meta.env.MODE === 'test',
+    regtest: import.meta.env.MODE === 'regtest',
     currentProtocol: window.location.protocol,
     currentHostname: window.location.hostname,
   })

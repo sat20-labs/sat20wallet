@@ -39,6 +39,7 @@ import { computed, reactive, watch, onMounted } from 'vue'
 // 导入缺失的 store
 import { useL2Store, useL1Store } from '@/store'
 import { storeToRefs } from 'pinia'
+import { defaultWalletNetwork } from '@/utils/networkMode'
 
 interface Props {
   type: string
@@ -53,7 +54,7 @@ const { t, p, a } = query
 const props = withDefaults(defineProps<Props>(), {
   type: '',
   address: '',
-  network: 'testnet',
+  network: defaultWalletNetwork,
 })
 
 const emit = defineEmits(['change'])

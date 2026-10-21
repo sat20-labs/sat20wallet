@@ -135,10 +135,13 @@ import { Icon } from '@iconify/vue'
 import LayoutHome from '@/components/layout/LayoutHome.vue'
 import WalletHeader from '@/components/wallet/HomeHeader.vue'
 import { Button } from '@/components/ui/button'
+import walletManager from '@/utils/sat20'
+import { useGlobalStore, useWalletStore } from '@/store'
 import {
   deleteAllOperationLogs,
   getOperationLog,
   getOperationLogs,
+  projectSettledRGB11OperationLogs,
   type OperationLogRecord,
   type OperationLogStatus,
 } from '@/utils/operationLog'
@@ -151,36 +154,57 @@ const deleting = ref(false)
 const detailVisible = ref(false)
 const errorMessage = ref('')
 let refreshTimer: ReturnType<typeof setInterval> | undefined
+const walletStore = useWalletStore()
+const globalStore = useGlobalStore()
+const currentScope = () => JSON.stringify([globalStore.env, walletStore.rootAccountId,
+  walletStore.walletId, walletStore.accountIndex, walletStore.network, walletStore.address, walletStore.locked])
+let alive = true
 
 async function loadLogs() {
   if (loading.value) return
   loading.value = true
+  const scope = currentScope()
   const [error, items] = await getOperationLogs()
-  loading.value = false
+  if (!alive || scope !== currentScope()) { loading.value = false; return }
   if (error) {
+    loading.value = false
     errorMessage.value = error.message
     return
   }
+  let displayed = items
+  if (items.some(item => item.action === 'rgb11_send_address' && ['pending', 'running'].includes(item.status))) {
+    try {
+      const [rgbError, rgbResult] = await walletManager.getRGB11State()
+      if (!rgbError && rgbResult?.state) {
+        const state = JSON.parse(rgbResult.state)
+        if (Array.isArray(state.transfers)) displayed = projectSettledRGB11OperationLogs(items, state.transfers)
+      }
+    } catch { /* Keep stored logs when current RGB state cannot be read. */ }
+  }
+  loading.value = false
+  if (!alive || scope !== currentScope()) return
   errorMessage.value = ''
-  logs.value = items
+  logs.value = displayed
   if (detailVisible.value && detail.value) {
-    const [detailError, latest] = await getOperationLog(detail.value.id)
-    if (!detailError && latest) detail.value = latest
+    const latest = displayed.find(item => item.id === detail.value?.id)
+    if (latest) detail.value = latest
   }
 }
 
 async function openDetail(id: string) {
+  const scope = currentScope()
   detailVisible.value = true
   detailLoading.value = true
   detail.value = null
   const [error, item] = await getOperationLog(id)
   detailLoading.value = false
+  if (!alive || scope !== currentScope()) return
   if (error) {
     errorMessage.value = error.message
     detailVisible.value = false
     return
   }
-  detail.value = item
+  detail.value = logs.value.find(record => record.id === id) || item
 }
 
 function closeDetail() {
@@ -239,6 +263,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  alive = false
   if (refreshTimer) clearInterval(refreshTimer)
 })
 </script>

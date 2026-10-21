@@ -84,8 +84,21 @@ func TestRecoverySeparatesStableOwnershipFromActiveTransition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(stable.ProjectionRecords) != 0 {
-		t.Fatalf("unfinished spending proof leaked into stable recovery: %+v", stable.ProjectionRecords)
+	stableSnapshot, err := stable.WalletSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stableKeys := make(map[string]bool, len(stableSnapshot.ProjectionRecords))
+	for _, record := range stableSnapshot.ProjectionRecords {
+		stableKeys[record.Key] = true
+	}
+	for _, key := range []string{"proof-" + outpoint + "-" + name.String(), "pending-active-transfer"} {
+		if !stableKeys[key] {
+			t.Fatalf("complete stable recovery omitted active recovery material %s", key)
+		}
+	}
+	if err := ValidateRecoveryPackage(stable); err != nil {
+		t.Fatalf("complete stable recovery package is invalid: %v", err)
 	}
 
 	active, err := ActiveRecoveryPackageFromSnapshot(snapshot)
@@ -100,7 +113,7 @@ func TestRecoverySeparatesStableOwnershipFromActiveTransition(t *testing.T) {
 		EngineBuildID:     NativeEngineBuildID,
 		ProjectionRecords: cloneRecoveryRecords(active.ProjectionRecords),
 	}); err == nil {
-		t.Fatal("durable recovery accepted active transition records")
+		t.Fatal("durable recovery accepted an incomplete transition-only closure")
 	}
 	encoded, err := EncodeActiveRecoveryPackage(active)
 	if err != nil {

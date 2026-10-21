@@ -6,7 +6,7 @@ import (
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 )
 
-// Caller owns the account operation and local application gates. Only a
+// Caller owns the account operation, but no lifecycle lock. Only a
 // committed remote apply can resume here; restore/unknown markers stay closed.
 func (p *Manager) resumeAccountManagedRemoteImport() error {
 	marker, err := p.readAccountManagedDataImportMarker()
@@ -116,7 +116,7 @@ func (p *Manager) resumeAccountManagedRemoteImport() error {
 	}); err != nil {
 		return err
 	}
-	return p.finishAccountManagedRemoteImport()
+	return p.withAccountLocalState(false, p.finishAccountManagedRemoteImport)
 }
 
 func (p *Manager) finishAccountManagedRemoteImport() error {

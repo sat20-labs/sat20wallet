@@ -22,7 +22,7 @@
               :class="{ 'border-primary/50': wallet.id === currentWalletId }">
               <div class="flex items-center gap-3">
                 <Button variant="ghost" size="icon" class="w-10 h-10 p-0 rounded-full overflow-hidden"
-                  @click="showAvatarDialog(wallet)" v-if="wallet.id === currentWalletId">
+                  @click="isAvatarDialogOpen = true" v-if="wallet.id === currentWalletId">
                   <img v-if="wallet.avatar" :src="wallet.avatar" :alt="wallet.name"
                     class="w-full h-full object-cover" />
                   <div v-else class="w-full h-full flex items-center justify-center bg-muted/80">
@@ -124,38 +124,6 @@
             {{ $t('walletManager.chooseAvatar') }}
           </DialogDescription>
         </DialogHeader>
-        <div class="space-y-4">
-          <Tabs defaultValue="nfts" class="w-full">
-            <TabsList class="grid w-full grid-cols-2">
-              <TabsTrigger value="nfts">{{ $t('walletManager.nfts') }}</TabsTrigger>
-              <TabsTrigger value="domains">{{ $t('walletManager.btcDomains') }}</TabsTrigger>
-            </TabsList>
-            <TabsContent value="nfts">
-              <div class="grid grid-cols-3 gap-2">
-                <Button v-for="nft in nfts" :key="nft.id" variant="outline" class="aspect-square p-0 relative group"
-                  @click="selectAvatar(nft.image)">
-                  <img :src="nft.image" :alt="nft.name" class="w-full h-full object-cover rounded-lg" />
-                  <div
-                    class="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                    <Icon icon="lucide:check" class="w-6 h-6 text-white" />
-                  </div>
-                </Button>
-              </div>
-            </TabsContent>
-            <TabsContent value="domains">
-              <div class="grid grid-cols-3 gap-2">
-                <Button v-for="domain in btcDomains" :key="domain.id" variant="outline"
-                  class="aspect-square p-0 relative group" @click="selectAvatar(domain.image)">
-                  <img :src="domain.image" :alt="domain.name" class="w-full h-full object-cover rounded-lg" />
-                  <div
-                    class="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                    <Icon icon="lucide:check" class="w-6 h-6 text-white" />
-                  </div>
-                </Button>
-              </div>
-            </TabsContent>
-          </Tabs>
-        </div>
         <DialogFooter>
           <Button variant="secondary" @click="isAvatarDialogOpen = false" class="h-11 mt-2">
             {{ $t('walletManager.cancel') }}
@@ -180,7 +148,7 @@
           <div class="space-y-4">
             <div class="space-y-2">
               <Label for="mnemonic">{{ $t('walletManager.recoveryPhrase') }}</Label>
-              <Textarea id="mnemonic" v-model="importMnemonic" :disabled="isImporting" :placeholder="$t('walletManager.enterRecoveryPhrase')"
+              <Textarea id="mnemonic" v-model="importMnemonic" :disabled="isImporting || importCommitted" :placeholder="$t('walletManager.enterRecoveryPhrase')"
                 rows="3" />
               <p class="text-xs text-muted-foreground">
                 {{ $t('walletManager.recoveryPhraseHint') }}
@@ -192,11 +160,15 @@
           </p>
           <p v-if="isImporting" class="text-xs text-muted-foreground">{{ $t('walletManager.importPendingHint') }}</p>
           <p v-if="importError" role="alert" class="text-sm text-destructive">{{ importError }}</p>
+          <Alert v-if="importCommitted && committedReadError" role="status">
+            <AlertDescription>Wallet imported successfully. Reload to unlock the saved wallet.</AlertDescription>
+            <Button type="button" variant="outline" class="mt-2" @click="reloadCommittedWallet">Reload wallet</Button>
+          </Alert>
           <DialogFooter>
             <Button variant="secondary" type="button" :disabled="isImporting" @click="isImportWalletDialogOpen = false" class="h-11 mt-2">
               {{ $t('walletManager.cancel') }}
             </Button>
-            <Button type="submit" :disabled="isImporting" class="h-11 mt-2">
+            <Button type="submit" :disabled="isImporting || importCommitted" class="h-11 mt-2">
               <Icon v-if="isImporting" icon="lucide:loader-2" class="w-4 h-4 mr-2 animate-spin" />
               {{ isImporting ? $t('walletManager.importing') : $t('walletManager.import') }}
             </Button>
@@ -328,7 +300,6 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/toast-new'
 import { useApproveStore, useWalletStore } from '@/store'
 import { withWalletPassword } from '@/lib/walletPasswordPrompt'
@@ -362,6 +333,9 @@ const isCreating = ref(false)
 const isImporting = ref(false)
 const importStage = ref('')
 const importError = ref('')
+const importCommitted = ref(false)
+const committedReadError = ref(false)
+const reloadCommittedWallet = () => { window.location.hash = '#/unlock'; window.location.reload() }
 const isDeleting = ref(false)
 const isEditingName = ref(false)
 const isVerifyingMnemonic = ref(false)
@@ -377,19 +351,6 @@ const mnemonicPhrase = ref('')
 const showMnemonic = ref(false)
 const createdReadError = ref(false)
 const reloadCreatedWallet = () => { window.location.hash = '#/unlock'; window.location.reload() }
-
-// Mock NFTs and BTC Domains data
-const nfts = ref([
-  { id: 1, name: 'NFT 1', image: 'https://picsum.photos/200' },
-  { id: 2, name: 'NFT 2', image: 'https://picsum.photos/201' },
-  { id: 3, name: 'NFT 3', image: 'https://picsum.photos/202' },
-])
-
-const btcDomains = ref([
-  { id: 1, name: 'domain1.btc', image: 'https://picsum.photos/203' },
-  { id: 2, name: 'domain2.btc', image: 'https://picsum.photos/204' },
-  { id: 3, name: 'domain3.btc', image: 'https://picsum.photos/205' },
-])
 
 // 计算属性
 const currentWalletId = computed(() => walletStore.walletId)
@@ -509,6 +470,12 @@ const deleteWallet = async () => {
 
 const showImportWalletDialog = () => {
   if (isImporting.value) return
+  if (importCommitted.value && committedReadError.value) {
+    isImportWalletDialogOpen.value = true
+    return
+  }
+  importCommitted.value = false
+  committedReadError.value = false
   importStage.value = ''
   importError.value = ''
   importMnemonic.value = ''
@@ -556,7 +523,7 @@ const createWallet = async () => {
 }
 
 const importWallet = async () => {
-  if (isImporting.value) return
+  if (isImporting.value || importCommitted.value) return
 
   let mnemonic = importMnemonic.value
   importError.value = ''
@@ -578,10 +545,11 @@ const importWallet = async () => {
       importStage.value = 'authorizationCancelled'
       return
     }
-    const [err] = outcome
-    if (err) {
-      throw err
-    }
+    const [err, identity] = outcome
+    if (!identity) throw err || new Error('Wallet import failed')
+    importCommitted.value = true
+    importMnemonic.value = ''
+    if (err) throw err
     importStage.value = 'switching'
     await walletStore.switchWallet(walletStore.walletId)
 
@@ -598,6 +566,12 @@ const importWallet = async () => {
     }, 300)
     sendAccountsChangedEvent(wallets.value)
   } catch (error: any) {
+    if (importCommitted.value) {
+      committedReadError.value = true
+      importStage.value = ''
+      toast({ title: 'Wallet Imported', description: 'Wallet saved. Reload to unlock the wallet.', variant: 'default' })
+      return
+    }
     importError.value = error.message || 'Wallet import failed'
     toast({
       variant: 'destructive',
@@ -638,33 +612,6 @@ const saveWalletName = async () => {
     })
   } finally {
     isEditingName.value = false
-  }
-}
-
-const showAvatarDialog = (wallet: WalletData) => {
-  editingWallet.value = wallet
-  isAvatarDialogOpen.value = true
-}
-
-const selectAvatar = async (imageUrl: string) => {
-  if (!editingWallet.value) return
-
-  try {
-    // TODO: Implement actual avatar saving logic
-    editingWallet.value.avatar = imageUrl
-
-    toast({
-      title: 'Success',
-      description: 'Avatar updated successfully',
-      variant: 'success'
-    })
-    isAvatarDialogOpen.value = false
-  } catch (error: any) {
-    toast({
-      variant: 'destructive',
-      title: 'Error',
-      description: error.message || 'Failed to update avatar'
-    })
   }
 }
 

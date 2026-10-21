@@ -189,25 +189,7 @@ func TestConfiguredRGB11MailboxSyncUsesGenerationBeforeReplicaRead(t *testing.T)
 }
 
 func TestRGB11DirectRejectsInvalid(t *testing.T) {
-	senderKey, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	recipientKey, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	sender := newRGB11MultiDeviceManager(t, senderKey, 720)
-	recipient := newRGB11MultiDeviceManager(t, recipientKey, 721)
-	remote := newRGB11MemoryDKVSHTTP()
-	configure := func(manager *Manager) {
-		configureRGB11DKVSTestManager(manager, remote)
-		client := newRGB11MessageNodeClient(remote)
-		manager.serverNode = NewNode(client, "message.test", SERVER_NODE,
-			client.CoreNodePubKey(), client.CoreNodePubKey())
-	}
-	configure(sender)
-	configure(recipient)
+	sender, recipient, _, _, _ := newRGB11GenericSendFixture(t)
 	endpoint, err := recipient.EnableConfiguredRGB11AddressReceive(
 		RGB11ReceiveCapabilityOptions{RecordOptions: dkvsindexer.RecordOptions{TTL: testRGB11FreeLocalTTL}},
 	)
@@ -221,7 +203,10 @@ func TestRGB11DirectRejectsInvalid(t *testing.T) {
 	if err := recipient.SubscribeDKVSPrefix(mailbox); err != nil {
 		t.Fatal(err)
 	}
-	const applicationID = "invalid-rgb11-direct"
+	applicationID, err := rgb11AddressMessageID(testRGB11ConsignmentID(t, "invalid-rgb11-direct"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := sender.sendWalletDirectMessage(sender.wallet, applicationID,
 		AccountMessageKindRGB11Consignment, endpoint.AccountID, []byte("invalid")); err != nil {
 		t.Fatal(err)
@@ -234,7 +219,7 @@ func TestRGB11DirectRejectsInvalid(t *testing.T) {
 	if result.Invalid != 1 {
 		t.Fatalf("invalid Direct result=%+v", result)
 	}
-	messages, err := sender.readWalletDirectMessages(sender.wallet)
+	messages, err := sender.freshDirectMessages(sender.wallet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,5 +235,5 @@ func TestRGB11DirectRejectsInvalid(t *testing.T) {
 		}
 		return
 	}
-	t.Fatal("invalid Direct did not emit a rejected ACK")
+	t.Fatalf("invalid Direct did not emit a rejected ACK: result=%+v", result)
 }

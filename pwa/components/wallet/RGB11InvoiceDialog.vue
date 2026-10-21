@@ -413,10 +413,12 @@ const preparePackage = async () => {
     if (stateErr || !resultState?.state) throw stateErr || new Error(t('rgb11Transfer.acceptFailed'))
     ensureScope(key)
     const states = JSON.parse(resultState.state).transfers || []
-    const matches = states.filter((state: any) => state.direction === 'receive' && state.invoice === invoice.value &&
-      state.consignment_hash === receipt.consignment_hash && state.transfer_id === receipt.transfer_id &&
+    const matches = states.filter((state: any) => state.direction === 'receive' &&
+      state.receive_request_id === requestId.value && state.invoice === invoice.value &&
+      state.consignment_hash === receipt.consignment_hash &&
       state.status === 'awaiting_broadcast' && state.transport_mode === 'out-of-band')
-    if (matches.length !== 1 || receipt.contract_id !== assetContractID.value || !receipt.schema_id) throw new Error(t('rgb11Transfer.summaryMismatch'))
+    if (matches.length !== 1 || receipt.consignment_hash !== hash ||
+      receipt.contract_id !== assetContractID.value || !receipt.schema_id) throw new Error(t('rgb11Transfer.summaryMismatch'))
     const state = matches[0]
     const allocation = rgb11Amount(state)
     const expected = decimalToRaw(amount.value, Math.max(0, Number(props.asset?.precision || 0)))

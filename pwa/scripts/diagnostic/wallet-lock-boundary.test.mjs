@@ -127,6 +127,7 @@ function walletSessionFixture() {
     '@/config/wasm': { getConfig: (_env, network) => ({ network }) }, '@/lib/accountSwitchChannel': { awaitAccountChannelRefresh: (fn) => fn() },
     '@/lib/walletSession': session, '@/lib/identity-boundary': identity, '@/lib/authorized-origins': grants,
     '@/lib/walletPasswordPrompt': passwordPrompt,
+    '@/utils/networkMode': { isRegtestBuild: false },
     '@/utils/accountManagement': { __esModule: true, default: {
       status: async () => ({ active: true, account_id: 'root-account' }),
     } },

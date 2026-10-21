@@ -36,7 +36,7 @@ func (s *ProjectionStore) SaveLocalAssetName(contractID, name string) error {
 	if err != nil {
 		return err
 	}
-	return s.db.Write(key, []byte(name))
+	return s.writeReservationRecord(key, []byte(name))
 }
 
 // LoadLocalAssetName returns ErrKeyNotFound when the SDK-generated default
@@ -109,7 +109,7 @@ func (s *ProjectionStore) SaveRegisteredAssetRecord(contractID string, record *w
 	} else if !errors.Is(err, indexer.ErrKeyNotFound) {
 		return err
 	}
-	return s.db.Write(key, raw)
+	return s.writeReservationRecord(key, raw)
 }
 
 func (s *ProjectionStore) LoadRegisteredAssetName(contractID string) (string, error) {

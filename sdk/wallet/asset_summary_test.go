@@ -41,13 +41,10 @@ func TestGetAssetSummaryMergesLocalRGB11AndExcludesCarrierSats(t *testing.T) {
 		utxos: make(map[string]*rgb11wallet.BitcoinUTXO), rawTx: make(map[string][]byte), spendingTx: make(map[string]string),
 	}
 	for index := 0; index < 3; index++ {
-		outpoint := fmt.Sprintf("%064x:0", 6000+index)
+		outpoint := seedRGB11FlowEvidenceUTXO(t, evidence, walletScript, 10_000, byte(index+1))
 		flow.plain = append(flow.plain, &indexerwire.TxOutputInfo{
 			OutPoint: outpoint, Value: 10_000, PkScript: walletScript,
 		})
-		evidence.utxos[outpoint] = &rgb11wallet.BitcoinUTXO{
-			OutPoint: outpoint, Value: 10_000, PkScript: walletScript, Confirmations: 6,
-		}
 	}
 	rpc.summaries[wallet.GetAddress()] = &indexerwire.AssetSummary{
 		ListResp: indexerwire.ListResp{Total: 2},
@@ -64,7 +61,7 @@ func TestGetAssetSummaryMergesLocalRGB11AndExcludesCarrierSats(t *testing.T) {
 			Wallet:     wallet,
 		},
 	}
-	issued, err := manager.IssueRGB11Asset(context.Background(), RGB11IssueRequest{
+	issued, err := manager.rgbManager.IssueRGB11Asset(context.Background(), RGB11IssueRequest{
 		Schema: "NIA", Ticker: "SUMMARY", Name: "Summary Asset", Amounts: []uint64{100},
 	})
 	if err != nil {
@@ -174,13 +171,10 @@ func TestGetAssetSummaryPreservesIndexerAssetsWhenRGB11ProofIsMissing(t *testing
 		utxos: make(map[string]*rgb11wallet.BitcoinUTXO), rawTx: make(map[string][]byte), spendingTx: make(map[string]string),
 	}
 	for index := 0; index < 2; index++ {
-		outpoint := fmt.Sprintf("%064x:0", 7000+index)
+		outpoint := seedRGB11FlowEvidenceUTXO(t, evidence, walletScript, 10_000, byte(index+1))
 		flow.plain = append(flow.plain, &indexerwire.TxOutputInfo{
 			OutPoint: outpoint, Value: 10_000, PkScript: walletScript,
 		})
-		evidence.utxos[outpoint] = &rgb11wallet.BitcoinUTXO{
-			OutPoint: outpoint, Value: 10_000, PkScript: walletScript, Confirmations: 6,
-		}
 	}
 	rpc.summaries[wallet.GetAddress()] = &indexerwire.AssetSummary{
 		ListResp: indexerwire.ListResp{Total: 3},
@@ -202,7 +196,7 @@ func TestGetAssetSummaryPreservesIndexerAssetsWhenRGB11ProofIsMissing(t *testing
 			Wallet:     wallet,
 		},
 	}
-	issued, err := manager.IssueRGB11Asset(context.Background(), RGB11IssueRequest{
+	issued, err := manager.rgbManager.IssueRGB11Asset(context.Background(), RGB11IssueRequest{
 		Schema: "NIA", Ticker: "BROKEN", Name: "Broken Projection", Amounts: []uint64{100},
 	})
 	if err != nil {

@@ -1,9 +1,14 @@
 import { useGlobalStore } from '@/store/global'
+import { isRegtestBuild } from '@/utils/networkMode'
 class SatnetApi {
   generatePath(path: string, network: string) {
     const globalStore = useGlobalStore()
     const config = globalStore.config
     const BASE_URL = config.satnetBaseUrl
+    if (isRegtestBuild) {
+      if (network !== 'regtest') throw new Error('The isolated regtest build cannot use a public SatoshiNet network')
+      return `${BASE_URL}/regtest/${path}`
+    }
     return `${BASE_URL}/satsnet${network === 'testnet' ? '/testnet' : '/mainnet'
       }/${path}`
   }

@@ -50,8 +50,10 @@ export async function runPwaL1ProtocolCases(t, fixture) {
   const { check, device, ready, walletCall } = t
   const endpoint = fixture.config.IndexerL1
   const base = `${endpoint.Scheme}://${endpoint.Host}/${endpoint.Proxy}`
-  const api = async path => {
-    const response = await fetch(base + path, { signal: AbortSignal.timeout(30000) })
+  const observedBroadcasts = Object.create(null)
+  const observationErrors = []
+  const api = async (path, body) => {
+    const response = await fetch(base + path, { signal: AbortSignal.timeout(30000), ...(body === undefined ? {} : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }) })
     assert.ok(response.ok)
     const result = await response.json()
     assert.equal(result.code, 0, `${path}: ${result.msg}`)
@@ -65,6 +67,10 @@ export async function runPwaL1ProtocolCases(t, fixture) {
     assert.ok(response.ok)
     const result = await response.json()
     assert.ok(!result.error, result.error)
+    if (fixture.realBitcoinControl) {
+      assert.deepEqual(observationErrors, [], 'actual L1 broadcast observation failed')
+      result.l1.broadcast_count = { ...observedBroadcasts }
+    }
     return result
   }
   const balance = async (actor, key, precision = 0) => (await api(`/v3/address/summary/${actor.address}`))
@@ -76,12 +82,34 @@ export async function runPwaL1ProtocolCases(t, fixture) {
     return JSON.parse(result.data.logs)
   })
   const importActor = async (page, actor) => {
+    if (fixture.realBitcoinControl) page.context().on('request', request => {
+      if (request.method() !== 'POST' || !['/btc/tx', '/btc/txs', '/v3/bitcoin/tx/broadcast'].some(path => request.url() === base + path)) return
+      try {
+        const body = request.postDataJSON()
+        const raws = body.signedTxsHex ?? body.SignedTxsHex ?? [body.signedTxHex ?? body.SignedTxHex ?? body.raw_tx]
+        for (const raw of raws) {
+          const txid = Transaction.fromHex(raw).getId()
+          observedBroadcasts[txid] = (observedBroadcasts[txid] ?? 0) + 1
+        }
+      } catch (error) { observationErrors.push(error.message) }
+    })
     await page.evaluate(() => { location.hash = '#/import' })
     await page.getByRole('textbox', { name: 'Recovery Phrase', exact: true }).fill(actor.mnemonic)
     await page.getByLabel('New Wallet Password', { exact: true }).fill(actor.password)
     await page.getByLabel('Confirm Password', { exact: true }).fill(actor.password)
+    const importedAt = Date.now()
     await page.getByRole('button', { name: 'Import Wallet', exact: true }).click()
-    await expect(page.getByRole('tab', { name: 'Bitcoin', exact: true })).toBeVisible()
+    if (fixture.config.Chain === 'regtest') {
+      await expect.poll(() => page.evaluate(() => window.__observedRootRecovery ?? null), poll).toBeTruthy()
+      const recovery = await page.evaluate(() => window.__observedRootRecovery)
+      if (recovery.error) {
+        let message = recovery.error
+        for (const secret of [actor.mnemonic, actor.password]) message = message.replaceAll(secret, '[redacted]')
+        throw new Error(`real regtest root recovery rejected: ${message}`)
+      }
+    }
+    await expect(page.getByRole('tab', { name: 'Bitcoin', exact: true })).toBeVisible({ timeout: poll.timeout })
+    console.log(JSON.stringify({ observation: 'L1 asset wallet import readiness', elapsed_ms: Date.now() - importedAt }))
     assert.equal((await walletCall(page, 'getWalletAddress', 0)).address, actor.address)
   }
   const failures = []
@@ -95,16 +123,108 @@ export async function runPwaL1ProtocolCases(t, fixture) {
         const page = await device(); contexts.push(page.context())
         await importActor(page, sender)
         const amount = atoms(spec.amount, precision), initial = atoms(spec.balance, precision)
+        const recipientInitial = atoms(spec.recipient_balance ?? '0', precision)
+        if (spec.resume) {
+          const { txids, payment_txid, coinbase_txid, sender_before_sats, receiver_before_sats, fee_rate } = spec.resume
+          const statuses = await api('/v3/bitcoin/tx/status/batch', { txids })
+          assert.equal(statuses.length, 3)
+          assert.ok(statuses.every(tx => tx.exists && tx.confirmed && tx.confirmations >= 1))
+          const transactions = await Promise.all(txids.map(async txid => Transaction.fromHex(await api(`/btc/rawtx/${txid}`))))
+          let fees = 0n
+          for (const tx of transactions) {
+            assert.ok(tx.ins.every(input => input.witness.length > 0))
+            let inputSats = 0n
+            for (const input of tx.ins) {
+              const parent = Transaction.fromHex(await api(`/btc/rawtx/${Buffer.from(input.hash).reverse().toString('hex')}`))
+              inputSats += BigInt(parent.outs[input.index].value)
+            }
+            const fee = inputSats - tx.outs.reduce((sum, out) => sum + BigInt(out.value), 0n)
+            assert.ok(fee >= BigInt(tx.virtualSize()) * BigInt(fee_rate))
+            fees += fee
+          }
+          const payment = transactions.find(tx => tx.getId() === payment_txid)
+          assert.ok(payment)
+          const paid = payment.outs.filter(out => out.script.toString('hex') === recipient.pk_script)
+          assert.equal(paid.length, 1)
+          const reveal = transactions.find(tx => tx.getId() !== payment_txid && tx.ins.some(input => input.witness.some(witness => btcScript.decompile(witness)?.some(chunk => Buffer.isBuffer(chunk) && chunk.toString().includes('"transfer"')))))
+          assert.ok(reveal)
+          const payload = btcScript.decompile(reveal.ins[0].witness.at(-2)).filter(Buffer.isBuffer)
+            .map(chunk => { try { return JSON.parse(chunk.toString()) } catch { return null } }).find(value => value?.p === 'brc-20')
+          assert.deepEqual(payload, { p: 'brc-20', op: 'transfer', tick: asset.split(':')[2].toLowerCase(), amt: spec.amount })
+          assert.ok(txids.includes(Buffer.from(reveal.ins[0].hash).reverse().toString('hex')))
+          assert.ok(payment.ins.some(input => Buffer.from(input.hash).reverse().toString('hex') === reveal.getId()))
+          const coinbase = Transaction.fromHex(await api(`/btc/rawtx/${coinbase_txid}`))
+          assert.equal(coinbase.ins.length, 1)
+          assert.equal(Buffer.from(coinbase.ins[0].hash).toString('hex'), '00'.repeat(32))
+          assert.equal(coinbase.ins[0].index, 0xffffffff)
+          const [rewardStatus] = await api('/v3/bitcoin/tx/status/batch', { txids: [coinbase_txid] })
+          assert.equal(rewardStatus.confirmed, true)
+          assert.ok(statuses.every(tx => tx.block_hash === rewardStatus.block_hash))
+          const reward = coinbase.outs.filter(out => out.script.toString('hex') === sender.pk_script).reduce((sum, out) => sum + BigInt(out.value), 0n)
+          const paidSats = paid.reduce((sum, out) => sum + BigInt(out.value), 0n)
+          assert.equal(await balance(sender, '*'), BigInt(sender_before_sats) - paidSats - fees + reward)
+          assert.equal(await balance(recipient, '*'), BigInt(receiver_before_sats) + paidSats)
+          assert.equal(await balance(sender, asset, precision), initial - amount)
+          assert.equal(await balance(recipient, asset, precision), amount)
+          const received = await api(`/v3/address/asset/${recipient.address}/${asset}?invalid=true`)
+          assert.equal(received.reduce((sum, out) => sum + out.Assets.filter(item => keyOf(item.Name) === asset).reduce((value, item) => value + atoms(item.Amount, precision), 0n), 0n), amount)
+          assert.deepEqual(await api(`/v3/address/asset/${recipient.address}/${asset}`), [])
+          await page.reload(); await ready(page)
+          await page.locator('form input[type="password"]').fill(sender.password)
+          await page.locator('form button[type="submit"]').click()
+          await expect(page.getByRole('tab', { name: 'Bitcoin', exact: true })).toBeVisible({ timeout: poll.timeout })
+          const receiverPage = await device(); contexts.push(receiverPage.context())
+          await importActor(receiverPage, recipient)
+          for (const [actorPage, actor, expected] of [[page, sender, initial - amount], [receiverPage, recipient, amount]]) {
+            const summary = await walletCall(actorPage, 'getAssetSummary', actor.address)
+            assert.equal(summary.assets.filter(item => keyOf(item.Name) === asset).reduce((sum, item) => sum + atoms(item.Amount, precision), 0n), expected)
+            const active = actorPage.locator('[role="tabpanel"][data-state="active"]')
+            await actorPage.getByRole('tab', { name: 'Bitcoin', exact: true }).click()
+            await active.getByRole('button', { name: label, exact: true }).click()
+            const row = active.locator('div.bg-muted.border').filter({ has: actorPage.getByText(asset.split(':')[2].toUpperCase(), { exact: true }) })
+            await expect(row).toBeVisible()
+            await expect(row.locator('div.text-sm.font-semibold').first()).toHaveText(expected.toString())
+          }
+          console.log(JSON.stringify({ observation: 'original confirmed BRC20 payment readback', payment_txid, fee_sats: fees.toString(), coinbase_reward_sats: reward.toString() }))
+          assert.deepEqual((await control('snapshot')).l1.broadcast_count, {}, 'readback must not broadcast another payment')
+          return
+        }
         assert.equal(await balance(sender, asset, precision), initial)
-        assert.equal(await balance(recipient, asset, precision), 0n)
+        assert.equal(await balance(recipient, asset, precision), recipientInitial)
         const senderSats = await balance(sender, '*'), recipientSats = await balance(recipient, '*')
         const initialTransfers = await api(`/v3/address/asset/${sender.address}/${asset}`)
-        assert.equal(initialTransfers.length, id === 'brc_balance' ? 0 : 1)
+        const recipientCarriersBefore = label === 'BRC20'
+          ? await api(`/v3/address/asset/${recipient.address}/${asset}?invalid=true`) : []
+        if (id === 'runes') {
+          assert.ok(initialTransfers.length > 0, 'the actual Rune balance requires indexed carriers')
+          assert.equal(initialTransfers.reduce((sum, out) => {
+            assert.equal(out.Assets.length, 1, 'only pure Rune carriers may fund this send')
+            assert.equal(keyOf(out.Assets[0].Name), asset)
+            return sum + atoms(out.Assets[0].Amount, precision)
+          }, 0n), initial, 'all actual pure carriers must account for the sender balance')
+        } else assert.equal(initialTransfers.length, id === 'brc_balance' ? 0 : 1)
         const panel = page.locator('[role="tabpanel"][data-state="active"]')
         await page.getByRole('tab', { name: 'Bitcoin', exact: true }).click()
         await panel.getByRole('button', { name: label, exact: true }).click()
         const row = panel.locator('div.bg-muted.border').filter({ has: page.getByText(asset.split(':')[2].toUpperCase(), { exact: true }) })
-        await expect(row).toHaveCount(1)
+        const assetWaitStarted = Date.now()
+        try {
+          await expect(row).toHaveCount(1, { timeout: poll.timeout })
+        } finally {
+          if (fixture.realBitcoinControl) {
+            const durationMs = Date.now() - assetWaitStarted
+            let diagnosticTimer
+            const observed = await Promise.race([
+              Promise.all([
+                page.evaluate(() => (window.__observedAssetReads || []).slice(-12)).catch(() => []),
+                panel.locator('div.bg-muted.border').allTextContents().catch(() => []),
+              ]).then(([reads, rendered]) => ({ reads,
+                rendered: rendered.slice(0, 12).map(text => text.slice(0, 180)) })),
+              new Promise(resolve => { diagnosticTimer = setTimeout(() => resolve({ diagnostics: 'unavailable after 2s' }), 2000) }),
+            ]).finally(() => clearTimeout(diagnosticTimer))
+            console.log(JSON.stringify({ event: 'asset-row-readiness', asset, durationMs, ...observed }))
+          }
+        }
         await row.getByRole('button', { name: 'Send', exact: true }).click()
         const dialog = page.getByRole('dialog')
         await dialog.getByPlaceholder('Enter address', { exact: true }).fill(recipient.address)
@@ -166,7 +286,7 @@ export async function runPwaL1ProtocolCases(t, fixture) {
           const payloads = btcScript.decompile(script).filter(Buffer.isBuffer)
           const payload = payloads.map(chunk => { try { return JSON.parse(chunk.toString()) } catch { return null } })
             .find(value => value?.p === 'brc-20')
-          assert.deepEqual(payload, { p: 'brc-20', op: 'transfer', tick: 'pwbb', amt: spec.amount })
+          assert.deepEqual(payload, { p: 'brc-20', op: 'transfer', tick: asset.split(':')[2].toLowerCase(), amt: spec.amount })
           const commitID = Buffer.from(reveal.ins[0].hash).reverse().toString('hex')
           assert.ok(ids.includes(commitID), 'reveal did not spend this confirmation\'s commit')
           assert.ok(payment.ins.some(input => Buffer.from(input.hash).reverse().toString('hex') === reveal.getId()))
@@ -188,16 +308,30 @@ export async function runPwaL1ProtocolCases(t, fixture) {
           assert.ok(fee >= BigInt(tx.virtualSize()) * rate, 'transaction underpays the reviewed network fee rate')
           fees += fee
         }
-        assert.equal(await balance(recipient, asset, precision), 0n, 'pending send was credited as confirmed')
+        assert.equal(await balance(recipient, asset, precision), recipientInitial, 'pending send was credited as confirmed')
         await control('confirm-l1')
         assert.equal(await balance(sender, asset, precision), initial - amount)
-        assert.equal(await balance(recipient, asset, precision), amount)
+        assert.equal(await balance(recipient, asset, precision), recipientInitial + amount)
         const paidSats = paid.reduce((sum, out) => sum + BigInt(out.value), 0n)
         assert.equal(await balance(sender, '*'), senderSats - paidSats - fees)
         assert.equal(await balance(recipient, '*'), recipientSats + paidSats)
         const received = await api(`/v3/address/asset/${recipient.address}/${asset}${label === 'BRC20' ? '?invalid=true' : ''}`)
-        assert.equal(received.reduce((sum, out) => sum + out.Assets.filter(item => keyOf(item.Name) === asset)
-          .reduce((total, item) => total + atoms(item.Amount, precision), 0n), 0n), amount)
+        if (label === 'BRC20') {
+          // invalid=true includes old, consumed BRC20 transfer inscriptions.
+          // Holdings are the ledger balances asserted above; carrier evidence
+          // must identify this exact payment while preserving the old outputs.
+          const points = paid.map(out => `${payment.getId()}:${payment.outs.indexOf(out)}`)
+          const added = received.filter(out => points.includes(out.Outpoint))
+          assert.deepEqual(added.map(out => out.Outpoint).sort(), points.sort())
+          assert.equal(added.reduce((sum, out) => sum + out.Assets.filter(item => keyOf(item.Name) === asset)
+            .reduce((total, item) => total + atoms(item.Amount, precision), 0n), 0n), amount)
+          const byPoint = (left, right) => left.Outpoint.localeCompare(right.Outpoint)
+          assert.deepEqual(received.filter(out => !points.includes(out.Outpoint)).sort(byPoint), recipientCarriersBefore.sort(byPoint),
+            'sending must preserve pre-existing recipient carrier evidence')
+        } else {
+          assert.equal(received.reduce((sum, out) => sum + out.Assets.filter(item => keyOf(item.Name) === asset)
+            .reduce((total, item) => total + atoms(item.Amount, precision), 0n), 0n), recipientInitial + amount)
+        }
         if (label === 'BRC20') assert.deepEqual(await api(`/v3/address/asset/${recipient.address}/${asset}`), [])
         await page.reload(); await ready(page)
         await page.locator('form input[type="password"]').fill(sender.password)
@@ -205,7 +339,7 @@ export async function runPwaL1ProtocolCases(t, fixture) {
         await expect(page.getByRole('tab', { name: 'Bitcoin', exact: true })).toBeVisible()
         const receiverPage = await device(); contexts.push(receiverPage.context())
         await importActor(receiverPage, recipient)
-        for (const [actorPage, actor, expected] of [[page, sender, initial - amount], [receiverPage, recipient, amount]]) {
+        for (const [actorPage, actor, expected] of [[page, sender, initial - amount], [receiverPage, recipient, recipientInitial + amount]]) {
           // BRC20 holdings live in the address ledger; getAssetAmount reads
           // transferable carriers only. Use the wallet's actual summary API.
           const result = await walletCall(actorPage, 'getAssetSummary', actor.address)
@@ -222,8 +356,12 @@ export async function runPwaL1ProtocolCases(t, fixture) {
             await expect(visible.locator('div.text-sm.font-semibold').first()).toHaveText(display)
           }
         }
+        console.log(JSON.stringify({ runeOrBrcPayment: receipt.txid, asset, amount: spec.amount, sender: sender.address, recipient: recipient.address }))
       })
-    } catch (error) { failures.push(error) }
+    } catch (error) {
+      failures.push(error)
+      if (t.selectedCases) throw error
+    }
     finally { for (const context of contexts.reverse()) await context.close().catch(() => {}) }
   }
   if (failures.length) throw new AggregateError(failures, failures.map(error => error.message).join('\n'))

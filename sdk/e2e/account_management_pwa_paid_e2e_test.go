@@ -64,6 +64,9 @@ func TestSDKAccountPWAPaidFundingWithChildSelected(t *testing.T) {
 	childID, _, err := f.manager.CreateWallet(accountReviewPassword)
 	require.NoError(t, err)
 	require.Equal(t, childID, f.manager.GetCurrentWalletId())
+	_, location := accountReviewConfig(t, network)
+	transport := &accountPreparedAckTransport{inner: wallet.NewHTTPClient()}
+	f.manager.SetIndexerHttpClient_SatsNet(wallet.NewIndexerClient(location.Scheme, location.Host, location.Proxy, transport))
 
 	// The fixture's POS miner mines nonempty blocks. Submit one ordinary
 	// transfer after the SDK funding transaction to confirm its first payment.
@@ -84,8 +87,41 @@ func TestSDKAccountPWAPaidFundingWithChildSelected(t *testing.T) {
 	network.sendManyAndMine(t, []*wire.MsgTx{heartbeat}, 0)
 	funded := <-done
 	authorization, err := funded.authorization, funded.err
+	var originalID string
+	if err != nil {
+		// A submitted transaction may precede the node's public receipt. Read
+		// the exact persisted receipt to completion without replaying funding.
+		var pending *wallet.AccountAutopayPendingError
+		require.ErrorAs(t, err, &pending)
+		originalID = pending.TransactionID
+		require.NotEmpty(t, originalID)
+		require.Eventually(t, func() bool {
+			status, readErr := f.manager.GetAccountAutopayFundingStatus()
+			require.NoError(t, readErr)
+			require.Empty(t, status.FundingError)
+			require.Equal(t, originalID, status.FundingTransactionID)
+			return status.Ready && !status.FundingPending
+		}, 30*time.Second, 200*time.Millisecond, "original root funding receipt must confirm")
+		authorization, err = f.manager.ConfirmAccountStorage(wallet.AccountStoragePaid, 100)
+		require.NoError(t, err)
+		require.Empty(t, authorization.TransactionID, "confirmed original funding must be reused")
+	} else {
+		originalID = authorization.TransactionID
+		require.NotEmpty(t, originalID)
+	}
+	require.Equal(t, wallet.AccountStoragePaid, authorization.Mode)
+	require.Len(t, transport.bodies, 1, "initial paid setup must submit exactly one funding transaction")
+	logs, err := f.manager.GetOperationLogs()
 	require.NoError(t, err)
-	require.NotEmpty(t, authorization.TransactionID)
+	fundingLogs := 0
+	for _, record := range logs {
+		if record.Action == "account_autopay_fund" {
+			fundingLogs++
+			require.Equal(t, originalID, record.TxID)
+			require.Equal(t, wallet.OperationLogSucceeded, record.Status)
+		}
+	}
+	require.Equal(t, 1, fundingLogs)
 	require.Equal(t, childID, f.manager.GetCurrentWalletId(), "funding must preserve the PWA selection")
 	state := fetchTemplateAutopayView(t, network.Core, address.MustEncode())
 	require.Equal(t, "10", state.Delegates[owner.Address].AmountPerBlock)
@@ -97,10 +133,14 @@ func TestSDKAccountPWAPaidFundingWithChildSelected(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, status.Required)
 	require.True(t, status.Ready)
-	reused, err := f.manager.FundAccountAutopay(*status)
-	require.NoError(t, err)
-	require.True(t, reused.Reused)
-	require.Empty(t, reused.TransactionID)
+	for attempt := 0; attempt < 2; attempt++ {
+		reused, err := f.manager.ConfirmAccountStorage(wallet.AccountStoragePaid, 100)
+		require.NoError(t, err)
+		require.Equal(t, wallet.AccountStoragePaid, reused.Mode)
+		require.Empty(t, reused.TransactionID)
+		require.Equal(t, childID, f.manager.GetCurrentWalletId())
+	}
+	require.Len(t, transport.bodies, 1, "ready paid storage reconfirmation submitted another payment")
 }
 
 // Crash only after the real database has committed signed bytes, before any

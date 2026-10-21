@@ -183,6 +183,56 @@ func TestProjectionAndProofAreStoredTogether(t *testing.T) {
 	}
 }
 
+func TestBalanceExcludesOrphanedProof(t *testing.T) {
+	db := indexerdb.NewKVDB(t.TempDir())
+	defer db.Close()
+	store := NewProjectionStore(db, &recordingLocker{})
+	if err := store.SetScope("wallet-orphaned-proof-account-0"); err != nil {
+		t.Fatal(err)
+	}
+	contractID := "rgb:Ar4ouaLv-b7f7Dc_-z5EMvtu-FA5KNh1-nlae~jk-8xMBo7E"
+	assetName, err := NewContractAssetKey(contractID, indexer.ASSET_TYPE_FT)
+	if err != nil {
+		t.Fatal(err)
+	}
+	amount := indexer.NewDefaultDecimal(25)
+	asset := &indexer.AssetInfo{Name: assetName, Amount: *amount.Clone(), BindingSat: 0}
+	output := indexer.NewTxOutput(1_000)
+	output.OutPointStr = strings.Repeat("11", 32) + ":0"
+	raw := []byte("orphaned allocation consignment")
+	digest := sha256.Sum256(raw)
+	receipt, err := store.ValidateAndStoreConsignment(context.Background(), testValidator{receipt: &ValidationReceipt{
+		Version: 1, EngineBuildID: "test-engine", ConsignmentHash: hex.EncodeToString(digest[:]),
+		ContractID: contractID, SchemaID: "schema", StateHash: [32]byte{1}, Status: "valid",
+		Allocations: []ValidatedAllocation{{
+			OutPoint: output.OutPointStr, AssetName: assetName, Amount: *amount.Clone(),
+			OperationID: "op", AssignmentType: 4000, StateClass: "fungible", SealDisclosure: []byte{1},
+		}},
+	}}, testEvidence{}, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiptHash, err := receipt.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof := &AllocationProof{
+		OutPoint: output.OutPointStr, AssetName: assetName, OperationID: "op", AssignmentType: 4000,
+		StateClass: "fungible", SealDisclosure: []byte{1}, ConsignmentHash: receipt.ConsignmentHash,
+		ValidationHash: receiptHash, Status: "valid",
+	}
+	if err := store.CommitProjection(output, asset, proof); err != nil {
+		t.Fatal(err)
+	}
+	proof.Status = "orphaned"
+	if err := store.SaveProofState(proof); err != nil {
+		t.Fatal(err)
+	}
+	if balance, err := store.Balance(assetName); err != nil || balance != nil {
+		t.Fatalf("orphaned allocation remained in current balance: balance=%v err=%v", balance, err)
+	}
+}
+
 func TestValidationReceiptHashUsesStableStrictEncoding(t *testing.T) {
 	amount, err := indexer.NewDecimalFromString("42.50", 2)
 	if err != nil {
@@ -301,7 +351,8 @@ func TestSettledBatchDropsOnlySenderDeliveryConsignment(t *testing.T) {
 			t.Fatalf("compacted transfer %s=%+v err=%v", id, compacted, err)
 		}
 	}
-	if _, err := store.LoadObject(recipientHash); err == nil {
-		t.Fatal("sender delivery object remained after all recipients settled")
+	retained, err := store.LoadObject(recipientHash)
+	if err != nil || !bytes.Equal(retained, recipient) {
+		t.Fatalf("settled compaction removed immutable recipient history: body=%q err=%v", retained, err)
 	}
 }

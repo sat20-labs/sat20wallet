@@ -4,7 +4,7 @@ const { spawn } = require('node:child_process')
 
 const root = path.resolve(__dirname, '..')
 const profile = process.argv[2] || 'production'
-if (!['production', 'root', 'skip-check'].includes(profile)) {
+if (!['production', 'root', 'skip-check', 'regtest'].includes(profile)) {
   throw new Error(`Unsupported PWA build profile: ${profile}`)
 }
 
@@ -73,7 +73,8 @@ const main = async () => {
     const buildEnv = profile === 'root'
       ? { ...process.env, VITE_PWA_BASE_PATH: '/' }
       : process.env
-    await run('vite production build', [path.join(root, 'node_modules', 'vite', 'bin', 'vite.js'), 'build'], buildEnv)
+    const modeArgs = profile === 'regtest' ? ['--mode', 'regtest'] : []
+    await run('vite production build', [path.join(root, 'node_modules', 'vite', 'bin', 'vite.js'), 'build', ...modeArgs], buildEnv)
     writeStatus('PASSED', 0)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)

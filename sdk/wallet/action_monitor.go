@@ -122,6 +122,17 @@ func (p *Manager) actionMonitorThread(ctx context.Context, stop <-chan struct{},
 		p.handleBTCLuckyMonitorTick(sendTxInL1)
 		p.notifyMonitorTick(sendTxInL1)
 	}
+	if sendTxInL1 {
+		// Reconcile durable RGB11 material as soon as the wallet runtime starts;
+		// waiting for the first 10-second ticker leaves a stale projection
+		// visible during startup. Keep the existing channel/action handlers on
+		// their regular monitor schedule.
+		if ctx.Err() == nil {
+			if err := p.handleRGB11L1MonitorTick(ctx); err != nil && ctx.Err() == nil {
+				Log.Warningf("RGB11 L1 startup reconciliation failed: %v", err)
+			}
+		}
+	}
 
 	for {
 		select {

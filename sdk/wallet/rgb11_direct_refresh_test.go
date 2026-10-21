@@ -127,12 +127,8 @@ func TestRGB11RefreshLocalNext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	next.State.Status = "delivered"
-	next.State.AckStatus = "accepted"
-	next.State.AddressMode = true
-	if err := sender.rgbManager.projectionStore.SavePendingTransferState(next); err != nil {
-		t.Fatal(err)
-	}
+	// This successor is genuinely prepared and unbroadcast. Refresh must keep
+	// its reservation while the confirmed parent proof remains chain-derived.
 
 	shared := rgb11PendingChangeOutpoints(first)[0]
 	if len(next.State.InputOutPoints) != 1 || next.State.InputOutPoints[0] != shared {
@@ -153,7 +149,7 @@ func TestRGB11RefreshLocalNext(t *testing.T) {
 			t.Fatalf("successor reservation changed: %+v", lock)
 		}
 		stored, err := sender.rgbManager.projectionStore.LoadPendingTransfer(next.State.TransferID)
-		if err != nil || stored.State.Status != "delivered" {
+		if err != nil || stored.State.Status != "prepared" {
 			t.Fatalf("successor state changed: %+v err=%v", stored, err)
 		}
 		proofs, err := sender.rgbManager.projectionStore.ListProofs()
@@ -164,7 +160,7 @@ func TestRGB11RefreshLocalNext(t *testing.T) {
 		for _, proof := range proofs {
 			if proof.OutPoint == shared {
 				found = true
-				if proof.Status != "spending" {
+				if proof.Status != "settled" {
 					t.Fatalf("successor input proof=%s", proof.Status)
 				}
 			}

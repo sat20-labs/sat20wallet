@@ -1,11 +1,17 @@
 import assert from 'node:assert/strict'
-import { appendFileSync, existsSync, readFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { chromium, expect } from '@playwright/test'
+import { Transaction } from 'bitcoinjs-lib'
 import { createServer } from 'vite'
-import { runPwaUsageCases, runRgbPwaCases, runAutopayPwaReviewCases } from './account-management-usage-e2e.mjs'
+import {
+  fixedRegtestAccountUsageCaseNames,
+  runPwaUsageCases,
+  runRgbPwaCases,
+  runAutopayPwaReviewCases,
+} from './account-management-usage-e2e.mjs'
 import { requiredPwaBiometricCases, runPwaBiometricCases } from './wallet-biometric-e2e.mjs'
 import { requiredPwaPosCases, optionalPwaEscapeCases, runPwaPosCases } from './pos-pwa-e2e.mjs'
 import { requiredPwaL1ProtocolCases, runPwaL1ProtocolCases } from './wallet-l1-assets-e2e.mjs'
@@ -17,17 +23,312 @@ import { requiredPwaToolsCases, runPwaToolsCases } from './wallet-tools-e2e.mjs'
 import { requiredPwaMintCases, runPwaMintCases } from './wallet-mint-e2e.mjs'
 import { requiredSDKWASMCases, runSDKWASMCases } from './sdk-wasm-e2e.mjs'
 
-// Launched by sdk/e2e against its real temporary CoreNode. Inject only endpoint
-// configuration; wallet, account, crypto, storage and RPC implementations are real.
-const rgbFixture = process.argv[2] === '--rgb-fixture' ? JSON.parse(readFileSync(process.argv[3], 'utf8')) : null
-const posFixture = process.argv[2] === '--pos-fixture' ? JSON.parse(readFileSync(process.argv[3], 'utf8')) : null
+const argumentValue = (name) => {
+  const index = process.argv.indexOf(name)
+  if (index < 0) return null
+  assert.ok(process.argv[index + 1] && !process.argv[index + 1].startsWith('--'), `${name} requires a value`)
+  return process.argv[index + 1]
+}
+const argumentList = name => {
+  const index = process.argv.indexOf(name)
+  if (index < 0) return null
+  const values = []
+  for (const value of process.argv.slice(index + 1)) {
+    if (value.startsWith('--')) break
+    values.push(value)
+  }
+  return values
+}
+const readJson = path => JSON.parse(readFileSync(path, 'utf8'))
+const regtestMode = process.argv.includes('--regtest')
+const regtestConfigPath = argumentValue('--regtest-config')
+const regtestFixturePath = argumentValue('--regtest-fixture')
 const sdkWASM = process.argv.includes('--sdk-wasm')
+const focusedUsageCases = argumentList('--usage-cases')
+const focusedWalletCases = argumentList('--wallet-cases')
+const focusedRGBCases = argumentList('--rgb-cases')
+if (regtestMode) {
+  assert.ok(regtestConfigPath && regtestFixturePath,
+    '--regtest requires both --regtest-config and --regtest-fixture')
+} else {
+  assert.ok(!regtestConfigPath && !regtestFixturePath,
+    '--regtest-config and --regtest-fixture require --regtest')
+}
+
+const assertRegtestEndpointConfig = value => {
+  assert.equal(value?.Env, 'dev')
+  assert.equal(value?.Chain, 'regtest')
+  assert.equal(value?.Mode, 'light')
+  const assertLoopbackHost = (host, label) => {
+    const endpoint = new URL(`http://${host}`)
+    assert.equal(endpoint.hostname, '127.0.0.1', `${label} must use the configured loopback tunnel`)
+    assert.ok(endpoint.port, `${label} must specify its forwarded port`)
+    assert.equal(endpoint.pathname, '/')
+    assert.equal(endpoint.username, '')
+    assert.equal(endpoint.password, '')
+    return endpoint.port
+  }
+  assert.equal(value?.IndexerL1?.Scheme, 'http')
+  assert.equal(value?.IndexerL1?.Proxy, 'btc/regtest')
+  assert.equal(value?.IndexerL2?.Scheme, 'http')
+  assert.equal(value?.IndexerL2?.Proxy, 'regtest')
+  assertLoopbackHost(value?.IndexerL1?.Host, 'L1 indexer')
+  assertLoopbackHost(value?.IndexerL2?.Host, 'L2 indexer')
+  const expectedPeers = [
+    'b@025fb789035bc2f0c74384503401222e53f72eefdebf0886517ff26ac7985f52ad',
+    's@0367f26af23dc40fdad06752c38264fe621b7bbafb1d41ab436b87ded192f1336e',
+  ].sort()
+  const peers = [...(value?.Peers || [])]
+  assert.equal(peers.length, expectedPeers.length)
+  assert.deepEqual(peers.map(peer => {
+    const [role, pubkey, address, extra] = peer.split('@')
+    assert.equal(extra, undefined)
+    const endpoint = new URL(address)
+    assert.equal(endpoint.protocol, 'http:')
+    assert.equal(endpoint.hostname, '127.0.0.1')
+    assert.equal(endpoint.pathname, '/regtest')
+    assert.ok(endpoint.port, 'peer must specify its forwarded port')
+    assert.equal(endpoint.username, '')
+    assert.equal(endpoint.password, '')
+    return `${role}@${pubkey}`
+  }).sort(), expectedPeers)
+}
+
+const normalizeDecimal = value => {
+  const text = String(value)
+  assert.match(text, /^\d+(?:\.\d+)?$/)
+  const [whole, fraction = ''] = text.split('.')
+  const digits = `${whole}${fraction}`.replace(/^0+(?=\d)/, '')
+  return { units: BigInt(digits || '0'), scale: fraction.length }
+}
+const assertDecimalEqual = (left, right, message) => {
+  const a = normalizeDecimal(left)
+  const b = normalizeDecimal(right)
+  const scale = Math.max(a.scale, b.scale)
+  assert.equal(a.units * 10n ** BigInt(scale - a.scale), b.units * 10n ** BigInt(scale - b.scale), message)
+}
+const endpointUrl = (endpoint, path) =>
+  `${endpoint.Scheme}://${endpoint.Host}/${String(endpoint.Proxy).replace(/^\/+|\/+$/g, '')}/${path}`
+const readJsonEndpoint = async url => {
+  const response = await fetch(url, { signal: AbortSignal.timeout(15000) })
+  assert.ok(response.ok, `regtest endpoint returned HTTP ${response.status}`)
+  return response.json()
+}
+const verifyRegtestAnchorLink = async (config, anchor) => {
+  const fundingOutpoint = `${anchor.txid}:${anchor.vout}`
+  assert.ok(Number.isSafeInteger(anchor.valueSats) && anchor.valueSats > 0,
+    'fixture must record the exact Bitcoin funding value')
+  assert.match(anchor.scriptPubKey || '', /^(?:[0-9a-f]{2})+$/i,
+    'fixture must record the exact Bitcoin funding script')
+  assert.equal(anchor?.l2Credit?.fundingOutpoint, fundingOutpoint,
+    'L2 credit evidence must use the exact Bitcoin funding outpoint')
+  assert.match(anchor?.l2Credit?.anchorTxid || '', /^[0-9a-f]{64}$/i,
+    'fixture must record the indexed SatoshiNet anchor transaction')
+  assert.ok(Number.isSafeInteger(anchor?.l2Credit?.anchorHeight) && anchor.l2Credit.anchorHeight > 0,
+    'fixture must record the indexed SatoshiNet anchor height')
+  assert.equal(anchor.l2Credit.anchorValueSats, anchor.valueSats,
+    'recorded SatoshiNet anchor value must match the exact Bitcoin funding value')
+  assert.match(anchor?.l2Credit?.h2Txid || '', /^[0-9a-f]{64}$/i,
+    'fixture must record the confirmed H2 channel spend')
+  assert.match(anchor?.l2Credit?.h2RawHex || '', /^(?:[0-9a-f]{2})+$/i,
+    'fixture must contain the actual witness-bearing H2 transaction bytes')
+  assert.ok(Number.isSafeInteger(anchor?.l2Credit?.h2Height) && anchor.l2Credit.h2Height > anchor.l2Credit.anchorHeight,
+    'fixture must record the confirmed H2 height')
+  assert.equal(anchor.l2Credit.h2InputOutpoint, `${anchor.l2Credit.anchorTxid}:0`,
+    'H2 must spend the output of the recorded H1 anchor')
+  assert.ok(Number.isSafeInteger(anchor?.l2Credit?.h2OutputSats) && anchor.l2Credit.h2OutputSats > 0)
+  assert.ok(Number.isSafeInteger(anchor?.l2Credit?.h2FeeSats) && anchor.l2Credit.h2FeeSats > 0)
+  assert.equal(anchor.valueSats - anchor.l2Credit.h2OutputSats, anchor.l2Credit.h2FeeSats,
+    'recorded H2 output and fee must account for the H1 anchor value')
+  assert.ok(typeof anchor?.blockHash === 'string' && /^[0-9a-f]{64}$/i.test(anchor.blockHash))
+  assert.ok(typeof anchor?.l2Credit?.currentBalance === 'string' && /^\d+(?:\.\d+)?$/.test(anchor.l2Credit.currentBalance),
+    'fixture must record the actual current SDK L2 summary separately from the original anchor value')
+
+  const l1Base = `${config.IndexerL1.Scheme}://${config.IndexerL1.Host}/${config.IndexerL1.Proxy}`
+  const tipResponse = await readJsonEndpoint(`${l1Base}/bestheight`)
+  assert.equal(tipResponse.code, 0, 'L1 indexer best-height query failed')
+  const tipHeight = Number(tipResponse.data?.height ?? tipResponse.data)
+  assert.ok(Number.isSafeInteger(tipHeight) && tipHeight >= anchor.confirmationHeight,
+    'Bitcoin L1 indexer has not reached the recorded anchor confirmation height')
+  const blockResponse = await readJsonEndpoint(endpointUrl(config.IndexerL1,
+    `btc/block/blockhash/${anchor.confirmationHeight}`))
+  assert.equal(blockResponse.code, 0, 'L1 indexer block-hash query failed')
+  const indexedBlockHash = blockResponse.data
+  assert.ok(typeof indexedBlockHash === 'string' && /^[0-9a-f]{64}$/i.test(indexedBlockHash),
+    'L1 indexer returned an invalid block hash at the anchor confirmation height')
+  assert.equal(indexedBlockHash.toLowerCase(), anchor.blockHash.toLowerCase(),
+    'indexed L1 block does not match the recorded anchor block')
+
+  const rawResponse = await readJsonEndpoint(endpointUrl(config.IndexerL1, `btc/rawtx/${anchor.txid}`))
+  assert.equal(rawResponse.code, 0, 'L1 indexer did not return the Bitcoin funding transaction')
+  assert.match(rawResponse.data || '', /^[0-9a-f]+$/i)
+  const transaction = Transaction.fromHex(rawResponse.data)
+  assert.equal(transaction.getId().toLowerCase(), anchor.txid.toLowerCase())
+  assert.equal(transaction.isCoinbase(), false, 'native Bitcoin rewards cannot fund a regtest fixture')
+  assert.ok(anchor.vout < transaction.outs.length, 'anchor output index is outside the transaction')
+  assert.equal(BigInt(String(transaction.outs[anchor.vout].value)), BigInt(anchor.valueSats),
+    'Bitcoin funding output value differs from the actual SDK fixture')
+  assert.equal(transaction.outs[anchor.vout].script.toString('hex').toLowerCase(), anchor.scriptPubKey.toLowerCase(),
+    'Bitcoin funding output script differs from the actual SDK fixture')
+  const l1Transaction = await readJsonEndpoint(endpointUrl(config.IndexerL1, `btc/tx/${anchor.txid}`))
+  assert.equal(l1Transaction.code, 0, 'L1 indexer did not return the confirmed funding transaction')
+  assert.equal(String(l1Transaction.data?.txid).toLowerCase(), anchor.txid.toLowerCase())
+  assert.equal(l1Transaction.data?.block_height, anchor.confirmationHeight,
+    'Bitcoin funding transaction is not confirmed at the recorded height')
+  assert.ok(l1Transaction.data?.confirmations > 0, 'Bitcoin funding transaction is not confirmed')
+
+  const l2Tip = await readJsonEndpoint(endpointUrl(config.IndexerL2, 'bestheight'))
+  assert.equal(l2Tip.code, 0, 'SatoshiNet indexer best-height query failed')
+  const l2TipHeight = Number(l2Tip.data?.height ?? l2Tip.data)
+  assert.ok(Number.isSafeInteger(l2TipHeight) && l2TipHeight >= anchor.l2Credit.h2Height,
+    'SatoshiNet indexer has not reached the recorded H2 spend height')
+  const l2RawTransaction = await readJsonEndpoint(endpointUrl(config.IndexerL2,
+    `btc/rawtx/${anchor.l2Credit.h2Txid}`))
+  assert.equal(l2RawTransaction.code, 0, 'SatoshiNet indexer did not return the actual H2 transaction')
+  assert.equal(String(l2RawTransaction.data).toLowerCase(), anchor.l2Credit.h2RawHex.toLowerCase(),
+    'SatoshiNet indexer H2 bytes differ from the witness-verified block transaction')
+  const l2TransactionInfo = await readJsonEndpoint(endpointUrl(config.IndexerL2,
+    `btc/tx/simpleinfo/${anchor.l2Credit.h2Txid}`))
+  assert.equal(l2TransactionInfo.code, 0, 'SatoshiNet indexer did not return H2 confirmation metadata')
+  assert.equal(String(l2TransactionInfo.data?.txid).toLowerCase(), anchor.l2Credit.h2Txid.toLowerCase())
+  assert.equal(l2TransactionInfo.data?.block_height, anchor.l2Credit.h2Height,
+    'SatoshiNet indexer H2 confirmation height differs from the actual block')
+  assert.ok(l2TransactionInfo.data?.confirmations > 0, 'SatoshiNet H2 spend is not confirmed')
+
+  const l2Anchor = await readJsonEndpoint(endpointUrl(config.IndexerL2, `v3/ascend/${fundingOutpoint}`))
+  assert.equal(l2Anchor.code, 0, 'SatoshiNet indexer did not return the Bitcoin-funded anchor record')
+  assert.equal(l2Anchor.data?.fundingUtxo, fundingOutpoint,
+    'SatoshiNet anchor record does not point to the exact Bitcoin funding outpoint')
+  assert.equal(String(l2Anchor.data?.anchorTxId).toLowerCase(), anchor.l2Credit.anchorTxid.toLowerCase(),
+    'SatoshiNet anchor transaction differs from the recorded receipt')
+  assert.equal(l2Anchor.data?.height, anchor.l2Credit.anchorHeight,
+    'SatoshiNet anchor height differs from the recorded receipt')
+  assert.equal(l2Anchor.data?.value, anchor.l2Credit.anchorValueSats,
+    'SatoshiNet anchor record value differs from the exact L1-funded anchor value')
+  assert.equal(l2Anchor.data?.address, anchor.l2Credit.channelAddress,
+    'SatoshiNet anchor channel address differs from the H1 channel output')
+
+  const ledger = await readJsonEndpoint(endpointUrl(config.IndexerL2,
+    `v3/channel/ledger/${encodeURIComponent(anchor.l2Credit.channelAddress)}`))
+  assert.equal(ledger.code, 0, 'SatoshiNet indexer did not return the channel ledger')
+  assert.ok(Array.isArray(ledger.data))
+  const ledgerEntry = ledger.data.find(entry =>
+    entry.direction === 'ascending' && entry.operation === 'ascending' &&
+    String(entry.l2TxId).toLowerCase() === anchor.l2Credit.anchorTxid.toLowerCase() &&
+    String(entry.l1TxId).toLowerCase() === anchor.txid.toLowerCase() &&
+    Array.isArray(entry.l1Outpoints) && entry.l1Outpoints.includes(fundingOutpoint))
+  assert.ok(ledgerEntry, 'SatoshiNet ledger has no ascending entry linking the Bitcoin outpoint to the anchor tx')
+  assert.equal(ledgerEntry.value, anchor.l2Credit.anchorValueSats,
+    'SatoshiNet ledger value differs from the exact L1-funded anchor value')
+  const [protocol, type, ...tickerParts] = anchor.l2Credit.assetKey.split(':')
+  const ticker = tickerParts.join(':')
+
+  const l2Summary = await readJsonEndpoint(endpointUrl(config.IndexerL2,
+    `v3/address/summary/${encodeURIComponent(anchor.l2Credit.recipientAddress)}`))
+  assert.equal(l2Summary.code, 0, 'SatoshiNet indexer did not return the anchor recipient summary')
+  assert.ok(Array.isArray(l2Summary.data))
+  const credited = l2Summary.data.find(asset =>
+    asset.Name?.Protocol === protocol && asset.Name?.Type === type && asset.Name?.Ticker === ticker)
+  assert.ok(credited, 'SatoshiNet current summary omitted the SDK fixture asset')
+  assertDecimalEqual(credited.Amount, anchor.l2Credit.currentBalance,
+    'SatoshiNet current summary differs from the actual SDK balance captured before browser startup')
+}
+
+let regtestConfig = null
+let regtestFixture = null
+if (regtestMode) {
+  regtestConfig = readJson(regtestConfigPath)
+  assertRegtestEndpointConfig(regtestConfig)
+  const fixtureMode = statSync(regtestFixturePath).mode & 0o777
+  assert.equal(fixtureMode & 0o077, 0, 'private regtest fixture must not be group/world accessible')
+  regtestFixture = readJson(regtestFixturePath)
+  const anchor = regtestFixture.anchorEvidence
+  assert.equal(anchor?.source, 'bitcoin-l1')
+  assert.match(anchor?.txid || '', /^[0-9a-f]{64}$/i, 'fixture must record the actual Bitcoin L1 anchor txid')
+  assert.ok(Number.isSafeInteger(anchor?.confirmationHeight) && anchor.confirmationHeight > 0,
+    'fixture must record the confirmed L1 anchor height')
+  assert.ok(Number.isSafeInteger(anchor?.vout) && anchor.vout >= 0,
+    'fixture must record the anchor output index')
+  assert.ok(typeof anchor?.l2Credit?.channelAddress === 'string' && anchor.l2Credit.channelAddress.length > 0)
+  assert.ok(typeof anchor?.l2Credit?.recipientAddress === 'string' && anchor.l2Credit.recipientAddress.length > 0)
+  assert.ok(typeof anchor?.l2Credit?.assetKey === 'string' && anchor.l2Credit.assetKey.length > 0)
+  assert.equal(anchor.l2Credit.recipientAddress, regtestFixture.walletFixture?.basicWallet?.address,
+    'anchor history and current balance must belong to the imported ordinary wallet')
+  await verifyRegtestAnchorLink(regtestConfig, anchor)
+  assert.equal([focusedUsageCases, focusedWalletCases, focusedRGBCases].filter(Boolean).length, 1,
+    'regtest uses one existing focused case group per run')
+  assert.ok(!focusedRGBCases,
+    'real regtest RGB cases use the existing wallet integration runner, not standalone legacy --rgb-cases')
+  if (focusedUsageCases) {
+    const fixed = regtestFixture.walletFixture?.fixedAccountManagement
+    assert.ok(fixed?.owner?.mnemonic && fixed?.owner?.password &&
+      fixed?.guardian?.mnemonic && fixed?.guardian?.password,
+    'fixed-root account cases require the existing ordinary-1 owner and ordinary-2 Guardian fixture')
+    assert.ok(focusedUsageCases.every(name => fixedRegtestAccountUsageCaseNames.includes(name)),
+      'real regtest account management accepts only the fixed-root normal business cases')
+  } else {
+    assert.ok(focusedWalletCases,
+      'regtest requires an exact wallet-basic, biometric, or fixed-root account usage group')
+  }
+}
+
+// Launched by sdk/e2e against a real temporary CoreNode or by --regtest with
+// public loopback endpoints plus a private fixture. Only endpoint configuration
+// is injected; wallet, account, crypto, storage and RPC implementations stay real.
+const rgbFixtureFlag = process.argv.indexOf('--rgb-fixture')
+const posFixtureFlag = process.argv.indexOf('--pos-fixture')
+const legacyRgbFixture = rgbFixtureFlag >= 0 ? readJson(process.argv[rgbFixtureFlag + 1]) : null
+const legacyPosFixture = posFixtureFlag >= 0 ? readJson(process.argv[posFixtureFlag + 1]) : null
+const regtestWalletFixture = regtestFixture?.walletFixture ?? regtestFixture
+const parseBrowserPort = (value, label) => {
+  const text = String(value)
+  assert.match(text, /^\d+$/, `${label} must be an integer port`)
+  const port = Number(text)
+  assert.ok(Number.isSafeInteger(port) && port >= 1 && port <= 65535,
+    `${label} must be between 1 and 65535`)
+  return port
+}
+const envBrowserPort = process.env.SAT20_PWA_E2E_PORT
+const fixtureBrowserPort = regtestMode ? regtestWalletFixture?.browserPort : null
+if (regtestMode && envBrowserPort && fixtureBrowserPort !== undefined) {
+  assert.equal(parseBrowserPort(envBrowserPort, 'SAT20_PWA_E2E_PORT'),
+    parseBrowserPort(fixtureBrowserPort, 'fixture browserPort'),
+    'fixture browserPort must match SAT20_PWA_E2E_PORT')
+}
+const regtestBrowserPort = regtestMode
+  ? parseBrowserPort(fixtureBrowserPort ?? envBrowserPort ?? 5179, 'regtest browser port')
+  : null
+const posFixture = regtestMode && (focusedWalletCases || sdkWASM)
+  ? { ...regtestWalletFixture, config: regtestConfig }
+  : legacyPosFixture
+const rgbFixture = regtestMode && focusedRGBCases
+  ? { ...(regtestFixture?.rgbFixture || {}), config: regtestConfig }
+  : legacyRgbFixture
 assert.ok(!sdkWASM || posFixture, 'SDK WASM gate requires the existing real-node fixture')
-const config = posFixture?.config ?? rgbFixture?.config ?? JSON.parse(process.env.SAT20_ACCOUNT_E2E_CONFIG || 'null')
-const storageWasm = process.argv[2] === '--storage-wasm' ? process.argv[3] : null
+const config = regtestMode
+  ? regtestConfig
+  : posFixture?.config ?? rgbFixture?.config ?? JSON.parse(process.env.SAT20_ACCOUNT_E2E_CONFIG || 'null')
+const storageWasm = argumentValue('--storage-wasm')
+const expectedNetwork = regtestMode ? 'regtest' : 'testnet'
 if (!storageWasm) {
   assert.ok(config?.IndexerL2?.Host, 'launch via go test ./e2e -run ^TestSDKAccountPWAConnectedBrowser$')
-  assert.equal(config.Chain, 'testnet')
+  assert.equal(config.Chain, expectedNetwork)
+}
+if (regtestMode) {
+  console.log(JSON.stringify({
+    event: 'regtest-anchor-link',
+    bitcoinTxid: regtestFixture.anchorEvidence.txid,
+    bitcoinVout: regtestFixture.anchorEvidence.vout,
+    l1Height: regtestFixture.anchorEvidence.confirmationHeight,
+    satsNetAnchorTxid: regtestFixture.anchorEvidence.l2Credit.anchorTxid,
+    satsNetAnchorHeight: regtestFixture.anchorEvidence.l2Credit.anchorHeight,
+    l2AssetKey: regtestFixture.anchorEvidence.l2Credit.assetKey,
+    h2Txid: regtestFixture.anchorEvidence.l2Credit.h2Txid,
+    h2Height: regtestFixture.anchorEvidence.l2Credit.h2Height,
+    h2OutputSats: regtestFixture.anchorEvidence.l2Credit.h2OutputSats,
+    h2FeeSats: regtestFixture.anchorEvidence.l2Credit.h2FeeSats,
+    currentBalance: regtestFixture.anchorEvidence.l2Credit.currentBalance,
+  }))
 }
 const nodeAPIOrigins = [...new Set([
   ...[config?.IndexerL1, config?.IndexerL2].filter(Boolean).map(endpoint => `${endpoint.Scheme}://${endpoint.Host}`),
@@ -40,9 +341,56 @@ const executable = process.env.SAT20_BROWSER_EXECUTABLE || [
   '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
 ].find(existsSync)
-const integrationDapp = posFixture ? await createPwaIntegrationDapp() : null
-const server = await createServer({
-  server: { host: '127.0.0.1', port: posFixture?.browserPort ?? 0, strictPort: Boolean(posFixture?.browserPort), open: false },
+if (regtestMode && focusedWalletCases) {
+  const currentlyRegtestReadyCases = new Set([...requiredPwaWalletBasicCases, ...requiredPwaBiometricCases,
+    ...(regtestWalletFixture?.realBitcoinControl ? requiredPwaIntegrationCases.filter(name => name.startsWith("RGB PWA:")) : []),
+    ...(regtestWalletFixture?.dappWallet ? requiredPwaIntegrationCases.filter(name => name.startsWith("DApp PWA:")) : []),
+    ...requiredPwaMiningCases,
+    ...(regtestWalletFixture?.realBitcoinControl ? requiredPwaMintCases : []),
+    ...(regtestWalletFixture?.protocolWallets ? requiredPwaL1ProtocolCases : []),
+    ...(regtestWalletFixture?.realBitcoinFunds ? [requiredPwaPosCases[9], requiredPwaPosCases[10], requiredPwaPosCases[11], requiredPwaPosCases[24]] : []),
+    ...(regtestWalletFixture?.realSatoshiNetFunds ? [requiredPwaPosCases[12]] : []),
+    ...(regtestWalletFixture?.realChannel ? [requiredPwaPosCases[0], requiredPwaPosCases[1], requiredPwaPosCases[14], requiredPwaPosCases[16], ...requiredPwaPosCases.slice(20, 23)] : []),
+    ...(regtestWalletFixture?.realChannel && regtestWalletFixture?.realBitcoinControl ? [requiredPwaPosCases[25]] : []),
+    ...(regtestWalletFixture?.realChannel && regtestWalletFixture?.pos_activation_scheduled === true ? [requiredPwaPosCases[2]] : []),
+    ...(regtestWalletFixture?.realChannel && regtestWalletFixture?.pos_v2_active === true ? [requiredPwaPosCases[3]] : []),
+    ...(regtestWalletFixture?.realChannel && regtestWalletFixture?.realBitcoinControl && regtestWalletFixture?.posProducerRotation === true
+      ? requiredPwaPosCases.slice(6, 9) : [])])
+  assert.ok(focusedWalletCases.every(name => currentlyRegtestReadyCases.has(name)),
+    'regtest case requires an existing real-node fixture and a connected real Bitcoin controller')
+  const pageDependentBasicCases = new Set(requiredPwaWalletBasicCases.slice(2)
+    .filter(name => name !== requiredPwaWalletBasicCases[12]))
+  const needsImportedBasicWallet = focusedWalletCases.some(name => pageDependentBasicCases.has(name))
+  assert.ok(!needsImportedBasicWallet || focusedWalletCases.includes(requiredPwaWalletBasicCases[1]),
+    'focused wallet-basic cases that reuse the imported page must include the funded-import prerequisite')
+  assert.ok(!focusedWalletCases.includes(requiredPwaWalletBasicCases[12]) || focusedWalletCases.includes(requiredPwaWalletBasicCases[0]),
+    'the no-owned-name negative case must include its page-created wallet prerequisite')
+}
+const integrationDapp = posFixture ? await createPwaIntegrationDapp(expectedNetwork) : null
+const existingPwaURL = regtestWalletFixture?.existingPwaURL
+let existingReleaseId
+if (existingPwaURL) {
+  assert.ok(regtestMode && regtestFixture.remoteAttach === true,
+    'an existing PWA service requires the explicit isolated regtest attach fixture')
+  const endpoint = new URL(existingPwaURL)
+  assert.equal(endpoint.origin + '/', existingPwaURL)
+  assert.equal(endpoint.origin, `http://127.0.0.1:${regtestBrowserPort}`)
+  const response = await fetch(`${existingPwaURL}generated/wasm-integrity.ts`, { signal: AbortSignal.timeout(10000) })
+  assert.equal(response.status, 200, 'existing PWA service must expose its real integrity module')
+  existingReleaseId = (await response.text()).match(/"releaseId"\s*:\s*"([^"]+)"/)?.[1]
+  assert.ok(existingReleaseId, 'existing PWA release ID must be read from its actual integrity module')
+}
+const server = existingPwaURL ? {
+  resolvedUrls: { local: [existingPwaURL] },
+  listen: async () => {}, close: async () => {},
+} : await createServer({
+  ...(regtestMode ? { mode: 'regtest' } : {}),
+  server: {
+    host: '127.0.0.1',
+    port: regtestMode ? regtestBrowserPort : posFixture?.browserPort ?? 0,
+    strictPort: regtestMode || Boolean(posFixture?.browserPort),
+    open: false,
+  },
   ...(integrationDapp ? { define: {
     'import.meta.env.VITE_SAT20_MARKET_URL': JSON.stringify(integrationDapp.url),
     'import.meta.env.VITE_SAT20_DAPP_ALLOWED_ORIGINS': JSON.stringify(integrationDapp.origin),
@@ -50,8 +398,8 @@ const server = await createServer({
 })
 // SDK browser tests use the current SDK compiled into Go's temporary directory. The
 // production loader still verifies the actual bytes, MIME, size and SHA-256.
-const walletWasmPath = storageWasm ? null : posFixture?.wasmPath ?? process.env.SAT20_PWA_E2E_WASM
-const walletRuntimePath = storageWasm ? null : posFixture?.wasmRuntimePath ?? process.env.SAT20_PWA_E2E_WASM_RUNTIME
+const walletWasmPath = storageWasm ? null : (regtestWalletFixture?.wasmPath ?? posFixture?.wasmPath ?? process.env.SAT20_PWA_E2E_WASM)
+const walletRuntimePath = storageWasm ? null : (regtestWalletFixture?.wasmRuntimePath ?? posFixture?.wasmRuntimePath ?? process.env.SAT20_PWA_E2E_WASM_RUNTIME)
 assert.equal(Boolean(walletWasmPath), Boolean(walletRuntimePath), 'both current SDK WASM and its Go runtime are required')
 const walletRuntimeAssets = walletWasmPath ? [
   { role: 'go-runtime', path: '__wallet_e2e__/wasm_exec.js', mimeTypes: ['text/javascript', 'application/javascript'], bytes: readFileSync(walletRuntimePath) },
@@ -59,7 +407,7 @@ const walletRuntimeAssets = walletWasmPath ? [
 ] : []
 const walletRuntimeManifest = walletWasmPath ? {
   schemaVersion: 1,
-  releaseId: `${JSON.parse(server.config.define.__SAT20_APP_VERSION__)}-${JSON.parse(server.config.define.__SAT20_BUILD_ID__)}`,
+  releaseId: existingReleaseId ?? `${JSON.parse(server.config.define.__SAT20_APP_VERSION__)}-${JSON.parse(server.config.define.__SAT20_BUILD_ID__)}`,
   assets: walletRuntimeAssets.map(({ bytes, ...asset }) => ({ ...asset, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') })),
 } : null
 let browser
@@ -145,12 +493,9 @@ const completedCases = new Map()
 const requiredWalletRuntimeCases = ['Wallet PWA: all feature groups finish without unhandled browser errors']
 // Explicit local reruns use the same browser, WASM and node fixture. The
 // ordinary Go gate remains the complete required-case ledger above.
-const focusedUsageCases = process.argv[2] === '--usage-cases' ? process.argv.slice(3) : null
-const walletCaseFlag = process.argv.indexOf('--wallet-cases')
-const focusedWalletCases = walletCaseFlag >= 0 ? process.argv.slice(walletCaseFlag + 1) : null
 if (focusedWalletCases) {
   assert.ok(posFixture && focusedWalletCases.length, 'wallet rerun requires the existing wallet fixture and exact cases')
-  const known = sdkWASM ? requiredSDKWASMCases : [...requiredPwaPosCases, ...optionalPwaEscapeCases, ...requiredPwaL1ProtocolCases, ...requiredPwaWalletBasicCases, ...requiredPwaMintCases,
+  const known = sdkWASM ? requiredSDKWASMCases : [...requiredPwaPosCases, ...optionalPwaEscapeCases, ...requiredPwaL1ProtocolCases, ...requiredPwaWalletBasicCases, ...requiredPwaBiometricCases, ...requiredPwaMintCases,
     ...requiredPwaMiningCases, ...requiredPwaNodeCases, ...requiredPwaIntegrationCases, ...requiredPwaToolsCases]
   assert.ok(focusedWalletCases.every(name => known.includes(name)), 'unknown wallet case')
   assert.equal(new Set(focusedWalletCases).size, focusedWalletCases.length)
@@ -158,7 +503,15 @@ if (focusedWalletCases) {
 if (focusedUsageCases) {
   assert.ok(focusedUsageCases.length > 0, 'focused rerun needs at least one case')
   assert.equal(new Set(focusedUsageCases).size, focusedUsageCases.length)
-  assert.ok(focusedUsageCases.every(name => name.startsWith('usage: ') && [...requiredAccountCases, 'usage: temporary Guardian renews paid hosting without changing its own recovery', 'usage: original AUTOPAY resumes after prebroadcast exit and lost acknowledgement'].includes(name)), 'unknown usage case')
+  assert.ok(focusedUsageCases.every(name => name.startsWith('usage: ') && [...requiredAccountCases,
+    'usage: temporary Guardian renews paid hosting without changing its own recovery',
+    'usage: original AUTOPAY resumes after prebroadcast exit and lost acknowledgement',
+    ...(regtestMode ? fixedRegtestAccountUsageCaseNames : [])].includes(name)), 'unknown usage case')
+}
+if (focusedRGBCases) {
+  assert.ok(rgbFixture && focusedRGBCases.length, 'RGB rerun requires the existing RGB fixture and exact cases')
+  assert.equal(new Set(focusedRGBCases).size, focusedRGBCases.length)
+  assert.ok(focusedRGBCases.every(name => requiredRGBCases.includes(name)), 'unknown RGB case')
 }
 const verdicts = []
 const pageErrors = []
@@ -179,6 +532,7 @@ const recordProgress = (name, status, duration_ms) => appendFileSync(caseProgres
 async function check(name, action) {
   if (focusedUsageCases && !focusedUsageCases.includes(name)) return
   if (focusedWalletCases && !focusedWalletCases.includes(name)) return
+  if (focusedRGBCases && !focusedRGBCases.includes(name)) return
   const startedAt = Date.now()
   const started_at = new Date(startedAt).toISOString()
   recordProgress(name, 'running', 0)
@@ -199,6 +553,15 @@ async function check(name, action) {
           page.evaluate(() => ({
             headings: [...document.querySelectorAll('h1,h2')].map(el => el.textContent),
             alerts: [...document.querySelectorAll('[role="alert"]')].map(el => el.textContent),
+            // Error feedback is rendered as inline text in RGB dialogs and the
+            // asset panel; role=alert alone omits the reason controls are gated.
+            rgbErrors: [...document.querySelectorAll('[role="dialog"] p.text-red-400, .mt-1.break-all.text-red-400')]
+              .filter(el => el.getClientRects().length).map(el => el.textContent),
+            rgbDialogs: [...document.querySelectorAll('[role="dialog"]')]
+              .filter(el => /RGB/.test(el.querySelector('h2')?.textContent || ''))
+              .map(el => ({ title: el.querySelector('h2')?.textContent,
+                readonlyTextareas: el.querySelectorAll('textarea[readonly]').length,
+                buttons: [...el.querySelectorAll('button')].map(button => ({ label: button.textContent?.trim(), disabled: button.disabled })) })),
           })).catch(() => null),
           new Promise(resolve => { diagnosticTimer = setTimeout(() => resolve(null), 2000) }),
         ]).finally(() => clearTimeout(diagnosticTimer))
@@ -214,14 +577,32 @@ async function check(name, action) {
 }
 async function ready(page) {
   await page.waitForFunction(() => Boolean(window.__SAT20_PWA_VERIFY__), undefined, { timeout: 90000 })
-  await page.evaluate(async () => {
+  await page.evaluate(async ({ expectedNetwork, expectedConfig, regtestMode }) => {
     const verify = window.__SAT20_PWA_VERIFY__
     assertNetwork(verify.useWalletStore().network)
+    if (regtestMode) {
+      const productionConfig = await import('/config/wasm.ts')
+      const actual = productionConfig.getConfig('dev', expectedNetwork)
+      const httpConfig = (await import('/config/index.ts')).config.regtest
+      if (httpConfig.ordxBaseUrl !== `${expectedConfig.IndexerL1.Scheme}://${expectedConfig.IndexerL1.Host}` ||
+          httpConfig.satnetBaseUrl !== `${expectedConfig.IndexerL2.Scheme}://${expectedConfig.IndexerL2.Host}`) {
+        throw new Error('PWA HTTP and WASM regtest endpoints must use the same real-node fixture')
+      }
+      const sortedPeers = value => [...(value?.Peers || [])].sort()
+      if (actual.Env !== expectedConfig.Env || actual.Chain !== expectedConfig.Chain ||
+          actual.Mode !== expectedConfig.Mode || actual.IndexerL1?.Scheme !== expectedConfig.IndexerL1?.Scheme ||
+          actual.IndexerL1?.Host !== expectedConfig.IndexerL1?.Host || actual.IndexerL1?.Proxy !== expectedConfig.IndexerL1?.Proxy ||
+          actual.IndexerL2?.Scheme !== expectedConfig.IndexerL2?.Scheme || actual.IndexerL2?.Host !== expectedConfig.IndexerL2?.Host ||
+          actual.IndexerL2?.Proxy !== expectedConfig.IndexerL2?.Proxy ||
+          JSON.stringify(sortedPeers(actual)) !== JSON.stringify(sortedPeers(expectedConfig))) {
+        throw new Error('production regtest config differs from the real-node fixture')
+      }
+    }
     window.accountE2E = (await import('/utils/accountManagement.ts')).default
     function assertNetwork(network) {
-      if (network !== 'testnet') throw new Error(`unexpected fixture network: ${network}`)
+      if (network !== expectedNetwork) throw new Error(`unexpected fixture network: ${network}`)
     }
-  })
+  }, { expectedNetwork, expectedConfig: config, regtestMode })
   const continueButton = page.getByRole('button', { name: 'Continue in browser', exact: true })
   if (await continueButton.isVisible()) await continueButton.click()
 }
@@ -229,13 +610,58 @@ async function device(sharedContext) {
   const context = sharedContext ?? await browser.newContext()
   context.setDefaultTimeout(30000)
   context.setDefaultNavigationTimeout(90000)
-  // A test-only endpoint module lets normal PWA startup use the fixture. No
-  // remote service is contacted and each device has independent SDK and UI IndexedDB databases.
-  if (!sharedContext) await context.route('**/config/wasm.ts*', route => route.fulfill({
+  // Remote attach keeps the real config module and adjusts connection
+  // addresses and warning logging for this private test build. Network/schema/peer identities stay
+  // checked; local regtest continues to verify its unchanged default ports.
+  if (!sharedContext && regtestMode && regtestFixture?.remoteAttach === true) {
+    await context.route('**/config/index.ts*', async route => {
+      const response = await route.fetch()
+      assert.ok(response.ok(), 'real PWA HTTP config module must load')
+      const httpConnections = {
+        ordxBaseUrl: `${config.IndexerL1.Scheme}://${config.IndexerL1.Host}`,
+        satnetBaseUrl: `${config.IndexerL2.Scheme}://${config.IndexerL2.Host}`,
+      }
+      const body = `${await response.text()}
+        Object.assign(config.regtest, ${JSON.stringify(httpConnections)});
+      `
+      await route.fulfill({ response, body })
+    })
+    await context.route('**/config/wasm.ts*', async route => {
+      const response = await route.fetch()
+      assert.ok(response.ok(), 'real PWA config module must load')
+      // Keep background reconciliation failures observable in private evidence.
+      // Only logging and the existing remote connection addresses are changed.
+      const source = await response.text()
+      assert.equal((source.match(/\bconst logLevel = 2\b/g) ?? []).length, 1)
+      const diagnosticSource = source.replace(/\bconst logLevel = 2\b/, 'const logLevel = 3')
+      const connectionConfig = {
+        l1Host: config.IndexerL1.Host,
+        l2Host: config.IndexerL2.Host,
+        peers: config.Peers,
+      }
+      const body = `${diagnosticSource}
+        const remoteConnections = ${JSON.stringify(connectionConfig)};
+        const remoteConfig = getConfig('dev', 'regtest');
+        const peerIdentity = value => value.split('@').slice(0, 2).join('@');
+        const basePeers = remoteConfig.Peers.map(peerIdentity).sort();
+        const targetPeers = remoteConnections.peers.map(peerIdentity).sort();
+        if (JSON.stringify(basePeers) !== JSON.stringify(targetPeers)) {
+          throw new Error('remote fixture must preserve production regtest peer identities');
+        }
+        remoteConfig.IndexerL1.Host = remoteConnections.l1Host;
+        remoteConfig.IndexerL2.Host = remoteConnections.l2Host;
+        remoteConfig.Peers = remoteConnections.peers;
+      `
+      await route.fulfill({ response, body })
+    })
+  }
+  // Legacy fixture runs keep their endpoint override. Regtest must load the
+  // production config module so the isolated build mode and endpoint are tested.
+  if (!sharedContext && !regtestMode) await context.route('**/config/wasm.ts*', route => route.fulfill({
     contentType: 'text/javascript',
     body: `import { walletStorage } from '/lib/walletStorage.ts';
       await walletStorage.initializeState();
-      await walletStorage.setValue('network', 'testnet');
+      await walletStorage.setValue('network', '${expectedNetwork}');
       export const logLevel = 2; export const getConfig = () => (${JSON.stringify(config)});`,
   }))
   if (!sharedContext) await context.route('**/*', route => {
@@ -254,7 +680,7 @@ async function device(sharedContext) {
       }))
     }
   }
-  if (!sharedContext && posFixture) {
+  if (!regtestMode && !sharedContext && posFixture) {
     // Asset lists use the PWA HTTP clients as well as WASM. Forward their
     // existing requests to the same SDK fixture; never fabricate an RPC body.
     await context.route('https://apiprd.ordx.market/**', async route => {
@@ -288,6 +714,49 @@ async function device(sharedContext) {
   })
   await page.goto(server.resolvedUrls.local[0], { waitUntil: 'domcontentloaded', timeout: 90000 })
   await ready(page)
+  if (regtestMode) await page.evaluate(async () => {
+    const manager = (await import('/utils/sat20.ts')).default
+    window.__observedAssetReads = []
+    for (const method of ['getRGB11State', 'getAssetSummary']) {
+      const read = manager[method].bind(manager)
+      manager[method] = async (...args) => {
+        const observation = { method, status: 'pending', startedAt: Date.now() }
+        const reads = window.__observedAssetReads
+        reads.push(observation)
+        if (reads.length > 32) reads.shift()
+        try {
+          const result = await read(...args)
+          observation.status = result[0] ? 'error' : 'ok'
+          if (method === 'getRGB11State' && !result[0]) {
+            try {
+              const state = JSON.parse(result[1].state)
+              const amounts = list => (list || []).map(item => ({
+                asset: `${item.Name.Protocol}:${item.Name.Type}:${item.Name.Ticker}`,
+                amount: String(item.Amount.Value), precision: item.Amount.Precision,
+              }))
+              observation.rgb = { initialized: state.initialized, sync: state.sync_status,
+                consistency: state.consistency_status, assets: amounts(state.assets),
+                available: amounts(state.available_assets), pending: amounts(state.pending_assets) }
+            } catch { observation.rgb_diagnostic_unavailable = true }
+          }
+          if (method === 'getAssetSummary' && !result[0]) observation.assets = (result[1]?.assets || []).slice(0, 20)
+            .map(item => `${item.Name?.Protocol || ''}:${item.Name?.Type || ''}:${item.Name?.Ticker || ''}`)
+          return result
+        } catch (error) {
+          observation.status = 'threw'
+          throw error
+        } finally {
+          observation.durationMs = Date.now() - observation.startedAt
+        }
+      }
+    }
+    const original = manager.recoverAccountManagementFromRootMnemonic.bind(manager)
+    manager.recoverAccountManagementFromRootMnemonic = async (...args) => {
+      const result = await original(...args)
+      window.__observedRootRecovery = { error: result[0]?.message ?? '', success: Boolean(result[1]) }
+      return result
+    }
+  })
   return page
 }
 async function walletCall(page, method, ...args) {
@@ -579,6 +1048,16 @@ async function runAccountGate() {
       await wallet.switchWallet(wallet.wallets.find(item => item.fingerprint === fingerprint).id)
       await wallet.switchToAccount(1)
     }, child.fingerprint)
+    // Keep the deleting device on the root; the selected child is remote.
+    await owner.evaluate(async fingerprint => {
+      const wallet = window.__SAT20_PWA_VERIFY__.useWalletStore()
+      const rootWallet = wallet.wallets.find(item => item.fingerprint === fingerprint)
+      if (!rootWallet) throw new Error('Owner root wallet is missing before remote deletion')
+      await wallet.switchWallet(rootWallet.id)
+      if (wallet.wallet?.fingerprint !== fingerprint || wallet.accountIndex !== 0) {
+        throw new Error('Owner root selection did not complete before remote deletion')
+      }
+    }, root.fingerprint)
     await owner.evaluate(async id => {
       const [error] = await window.__SAT20_PWA_VERIFY__.useWalletStore().deleteWallet(id)
       if (error) throw error
@@ -765,7 +1244,7 @@ async function runAccountGate() {
     await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
     assert.equal(await switching, false)
     assert.deepEqual(await catalog(owner), before)
-    assert.equal(await owner.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().network), 'testnet')
+    assert.equal(await owner.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().network), expectedNetwork)
     assert.equal((await accountCall(owner, 'status')).account_id, root.accounts[0].account_id)
   })
   // Keep this strict regression last, after completing the other replicas.
@@ -820,6 +1299,16 @@ async function runAccountGate() {
       await wallet.switchToAccount(1)
     }, child.fingerprint)
     await recovery.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().lockWallet())
+    // Keep the deleting device on the root; the selected child is remote.
+    await owner.evaluate(async fingerprint => {
+      const wallet = window.__SAT20_PWA_VERIFY__.useWalletStore()
+      const rootWallet = wallet.wallets.find(item => item.fingerprint === fingerprint)
+      if (!rootWallet) throw new Error('Owner root wallet is missing before remote deletion')
+      await wallet.switchWallet(rootWallet.id)
+      if (wallet.wallet?.fingerprint !== fingerprint || wallet.accountIndex !== 0) {
+        throw new Error('Owner root selection did not complete before remote deletion')
+      }
+    }, root.fingerprint)
     await owner.evaluate(async id => {
       const [error] = await window.__SAT20_PWA_VERIFY__.useWalletStore().deleteWallet(id)
       if (error) throw error
@@ -897,7 +1386,7 @@ try {
     await runSDKWASMCases({ check, device, pageErrors }, posFixture)
   }
   else if (posFixture) {
-    const helpers = { check, device, ready, unlock, catalog, walletCall, accountCall, nodeAPIOrigins, integrationDapp, selectedCases: focusedWalletCases }
+    const helpers = { check, device, ready, unlock, catalog, walletCall, accountCall, questions, answers, nodeAPIOrigins, integrationDapp, selectedCases: focusedWalletCases }
     // Independent feature groups use fresh browser stores and continue after
     // another group fails; the required-case ledger still fails the whole gate.
     for (const [run, names] of [[runPwaPosCases, [...requiredPwaPosCases, ...optionalPwaEscapeCases]], [runPwaL1ProtocolCases, requiredPwaL1ProtocolCases], [runPwaWalletBasicCases, requiredPwaWalletBasicCases],
@@ -927,12 +1416,13 @@ try {
   }
   else if (focusedUsageCases) {
     await runPwaUsageCases({ check, device, ready, unlock, catalog, walletCall, accountCall,
-      password, newPassword, questions, answers, nodeAPIOrigins })
+      password, newPassword, questions, answers, nodeAPIOrigins,
+      fixedAccountManagement: regtestMode ? regtestWalletFixture?.fixedAccountManagement : undefined })
     assert.deepEqual(pageErrors, [], 'focused account rerun must not produce unhandled page errors')
   }
   else await runAccountGate()
 } finally {
-  const required = storageWasm ? [] : sdkWASM ? focusedWalletCases ?? requiredSDKWASMCases : posFixture ? focusedWalletCases ?? [...requiredPwaPosCases, ...requiredPwaL1ProtocolCases, ...requiredPwaWalletBasicCases, ...requiredPwaIntegrationCases, ...requiredPwaToolsCases, ...requiredPwaMintCases, ...requiredPwaMiningCases, ...requiredPwaNodeCases, ...requiredWalletRuntimeCases] : rgbFixture ? requiredRGBCases : focusedUsageCases ?? requiredAccountCases
+  const required = storageWasm ? [] : sdkWASM ? focusedWalletCases ?? requiredSDKWASMCases : posFixture ? focusedWalletCases ?? [...requiredPwaPosCases, ...requiredPwaL1ProtocolCases, ...requiredPwaWalletBasicCases, ...requiredPwaIntegrationCases, ...requiredPwaToolsCases, ...requiredPwaMintCases, ...requiredPwaMiningCases, ...requiredPwaNodeCases, ...requiredWalletRuntimeCases] : rgbFixture ? focusedRGBCases ?? requiredRGBCases : focusedUsageCases ?? requiredAccountCases
   for (const name of required) {
     if (!completedCases.has(name)) console.log(JSON.stringify({ case: name, status: 'not-run' }))
   }
@@ -940,7 +1430,7 @@ try {
   const summary = { required: required.length, pass: [...completedCases.values()].filter(status => status === 'pass').length,
     fail: [...completedCases.values()].filter(status => status === 'fail').length,
     not_run: required.filter(name => !completedCases.has(name)).length }
-  if (required.length) console.log(JSON.stringify({ caseSummary: summary, scope: focusedUsageCases || focusedWalletCases ? 'focused-rerun' : 'full-gate' }))
+  if (required.length) console.log(JSON.stringify({ caseSummary: summary, scope: focusedUsageCases || focusedWalletCases || focusedRGBCases ? 'focused-rerun' : 'full-gate' }))
   await browser?.close()
   await server.close()
   await integrationDapp?.close()

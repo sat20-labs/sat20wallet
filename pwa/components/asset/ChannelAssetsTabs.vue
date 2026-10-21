@@ -17,14 +17,14 @@
       </nav>
 
       <div class="flex items-center p-1 mb-1 gap-2">
-        <span variant="link"
+        <span v-if="l1MempoolUrl" variant="link"
           class="flex justify-center p-1 h-6 mb-1 border border-zinc-600 hover:bg-zinc-700 rounded-sm">
-          <a :href="`https://mempool.space/testnet4/address/${channel?.address || ''}`" target="_blank"
+          <a :href="l1MempoolUrl" target="_blank"
             class="mb-[1px]] hover:text-primary" :title="$t('channelAssetsTabs.viewTradeHistory')">
             <Icon icon="quill:link" class="w-4 h-4 text-zinc-400 hover:text-primary/90" />
           </a>
         </span>
-        <span variant="link"
+        <span v-if="mempoolUrl" variant="link"
           class="flex justify-center items-center p-1 h-6 mb-1 border border-zinc-600 hover:bg-zinc-700 rounded-sm">
           <a :href="mempoolUrl" target="_blank" class="mb-[1px] hover:text-primary"
             :title="$t('channelAssetsTabs.viewL2History')">
@@ -118,6 +118,10 @@ const mempoolUrl = computed(() => {
 
   return '' // 默认返回空字符串，防止未匹配的情况
 })
+const l1MempoolUrl = computed(() => generateMempoolUrl({
+  network: network.value,
+  path: `address/${channel.value?.address || ''}`,
+}))
 
 // 资产类型
 //const assetTypes = ['BTC', 'ORDX', 'Runes', 'BRC20']

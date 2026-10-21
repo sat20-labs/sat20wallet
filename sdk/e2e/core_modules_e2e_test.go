@@ -115,8 +115,12 @@ func TestSDKCoreModulesE2E(t *testing.T) {
 	wasmPath, runtimePath := buildPWAWalletRuntime(t, ctx, module)
 	t.Setenv("SAT20_PWA_E2E_WASM", wasmPath)
 	t.Setenv("SAT20_PWA_E2E_WASM_RUNTIME", runtimePath)
+	childRun := os.Getenv("SAT20WALLET_CORE_E2E_CHILD_RUN")
+	if childRun == "" {
+		childRun = "^TestSDKCoreModulesConnectedE2E$"
+	}
 	command := exec.CommandContext(ctx, filepath.Join(runtime.GOROOT(), "bin", "go"),
-		"test", "-json", "./wallet", "-run", "^TestSDKCoreModulesConnectedE2E$", "-count=1", "-timeout=26m")
+		"test", "-json", "./wallet", "-run", childRun, "-count=1", "-timeout=26m")
 	command.Dir = module
 	for _, entry := range os.Environ() {
 		if !strings.HasPrefix(entry, "SAT20WALLET_RUN_LIVE_NETWORK_TESTS=") && !strings.HasPrefix(entry, "SAT20WALLET_CORE_E2E_CONFIG=") {
@@ -164,6 +168,7 @@ func TestSDKCoreModulesE2E(t *testing.T) {
 	}
 	report := map[string]any{
 		"started_by": "TestSDKCoreModulesE2E", "finished_at": time.Now().Format(time.RFC3339),
+		"child_run": childRun,
 		"real_components":     []string{"SatoshiNet nodes", "AUTOPAY settlement", "bound CoreNode KV RPC", "current-state DKVS sync", "CoreNode message service", "RGB native validation/signing", "independent wallet databases"},
 		"controlled_boundary": "Bitcoin UTXO/transaction confirmation evidence; no public network transactions",
 		"browser_verdicts":    browserVerdicts,

@@ -24,9 +24,11 @@ import (
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
+	indexerdb "github.com/sat20-labs/indexer/indexer/db"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 	"github.com/sat20-labs/rgb11/consensus"
 	"github.com/sat20-labs/rgb11/invoicing"
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 )
 
@@ -364,6 +366,28 @@ func requireWalletLiveNetwork(t *testing.T) {
 	}
 }
 
+func openRGB11RegtestManagedWallet(t *testing.T, dbPath string, remote *rgb11MemoryDKVSHTTP, rpc *rgb11FlowIndexer, esplora *regtestEsplora) *Manager {
+	t.Helper()
+	database := indexerdb.NewKVDB(dbPath)
+	config := &sdkcommon.Config{Env: "test", Chain: "regtest",
+		IndexerL1: &sdkcommon.Indexer{Scheme: "http", Host: "dkvs.test", Proxy: "regtest"},
+		IndexerL2: &sdkcommon.Indexer{Scheme: "http", Host: "dkvs.test", Proxy: "regtest"},
+	}
+	opened := NewManager(config, database)
+	if opened == nil {
+		_ = database.Close()
+		t.Fatal("construct persistent regtest SDK manager")
+	}
+	messageClient := newRGB11MessageNodeClient(remote)
+	opened.http = remote
+	opened.serverNode = NewNode(messageClient, "message.test", SERVER_NODE,
+		messageClient.CoreNodePubKey(), messageClient.CoreNodePubKey())
+	opened.SetIndexerHttpClient(rpc)
+	opened.rgbManager.evidence = esplora
+	opened.rgbManager.scopeStates.stopReconciliations()
+	return opened
+}
+
 func TestRGB11RegtestOfficialBidirectional(t *testing.T) {
 	requireWalletLiveNetwork(t)
 	esploraURL := requiredRegtestEnv(t, "RGB11_REGTEST_ESPLORA")
@@ -390,14 +414,17 @@ func TestRGB11RegtestOfficialBidirectional(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	previousChain := _chain
+	previousChain, previousEnv, previousMode, previousIndexerChain := _chain, _env, _mode, indexer.CHAIN
 	_chain = "regtest"
-	t.Cleanup(func() { _chain = previousChain })
+	t.Cleanup(func() {
+		_chain, _env, _mode, indexer.CHAIN = previousChain, previousEnv, previousMode, previousIndexerChain
+	})
 
-	goWallet, mnemonic, err := NewInteralWallet(&chaincfg.RegressionNetParams)
-	if err != nil || goWallet == nil {
+	createdWallet, mnemonic, err := NewInteralWallet(&chaincfg.RegressionNetParams)
+	if err != nil || createdWallet == nil {
 		t.Fatalf("create Go regtest wallet: %v", err)
 	}
+	var goWallet sdkcommon.Wallet = createdWallet
 	esplora := newRegtestEsplora(esploraURL)
 	var genesisHash string
 	if err := esplora.request(http.MethodGet, "/block-height/0", "", &genesisHash); err != nil {
@@ -408,7 +435,47 @@ func TestRGB11RegtestOfficialBidirectional(t *testing.T) {
 	}
 	rpc := &rgb11FlowIndexer{outputs: make(map[string]*TxOutput)}
 	dbPath := filepath.Join(artifactDir, "go-wallet-db")
-	manager := newRGB11FlowManagerAt(t, goWallet, rpc, esplora, 1103, dbPath)
+	remote := newRGB11MemoryDKVSHTTP()
+	openManager := func() *Manager {
+		return openRGB11RegtestManagedWallet(t, dbPath, remote, rpc, esplora)
+	}
+	manager := openManager()
+	t.Cleanup(func() {
+		manager.Close()
+		if manager.db != nil {
+			_ = manager.db.Close()
+		}
+	})
+	const password = "rgb11-regtest"
+	if manager.IsWalletExist() {
+		if _, err := manager.UnlockWallet(password); err != nil {
+			t.Fatal(err)
+		}
+		goWallet = manager.wallet
+		state, err := manager.GetRGB11State()
+		if err != nil || len(state.Transfers) != 0 || len(state.Outputs) != 0 {
+			t.Fatal("existing SDK fixture already reached RGB transfer; resume its recorded phase instead of starting another transfer")
+		}
+	} else {
+		if _, err := manager.ImportWallet(mnemonic, password); err != nil {
+			t.Fatal(err)
+		}
+		if manager.wallet.GetAddress() != goWallet.GetAddress() {
+			t.Fatal("managed regtest fixture changed the original wallet identity")
+		}
+	}
+	if err := manager.InitializeAccountManagement(password); err != nil {
+		t.Fatal(err)
+	}
+	pkg, authorization, secret := rereviewRecoveryPackage(t, manager, password)
+	if err := manager.ActivateAccountManagement(secret, password, *authorization,
+		pkg.Envelope.Locator, "account://"+pkg.Envelope.Locator.PackageID); err != nil {
+		t.Fatal(err)
+	}
+	zeroBytes(secret)
+	if err := manager.SyncAccountManagementState(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 
 	// Give the Go wallet confirmed ordinary fee UTXOs before any RGB allocation
 	// is projected. The isolated chain is disposable and the coinbase outputs
@@ -601,9 +668,41 @@ func TestRGB11RegtestOfficialBidirectional(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pending.State.Status != "settled" || len(pending.RecipientConsignment) != 0 {
-		t.Fatalf("settled Go transfer was not compacted: status=%s recipient_bytes=%d",
-			pending.State.Status, len(pending.RecipientConsignment))
+	if pending.State.Status != "settled" {
+		t.Fatalf("confirmed Go transfer did not settle: status=%s", pending.State.Status)
+	}
+	// Local reads may rehydrate delivery bytes. The recovery package must keep
+	// one authenticated object, with only its hash in the pending journal.
+	walletID, err := manager.rgbManager.RGB11WalletID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, _, err := manager.rgbManager.exportRGB11WalletSnapshot(walletID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery, err := rgb11wallet.RecoveryPackageFromSnapshot(snapshot, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveryPending, err := rgb11wallet.PendingTransfersFromProjectionSnapshot(recovery.ProjectionRecords)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deduplicated := false
+	for _, row := range recoveryPending {
+		if row.State.TransferID != prepared.State.TransferID {
+			continue
+		}
+		if row.State.Status != "settled" || len(row.RecipientConsignment) != 0 ||
+			row.RecipientObjectHash != hex.EncodeToString(goConsignmentHash[:]) ||
+			!bytes.Equal(rgb11SnapshotObject(recovery.ProjectionRecords, row.RecipientObjectHash), []byte(prepared.RecipientConsignment)) {
+			t.Fatal("settled recovery lost its authenticated recipient object or duplicated delivery bytes")
+		}
+		deduplicated = true
+	}
+	if !deduplicated {
+		t.Fatal("settled recovery lost its sender journal")
 	}
 	// Every CLI invocation reloads the official on-disk wallet. Check the actual
 	// receive assignment and final state, rather than inferring them from balance.
@@ -640,13 +739,21 @@ func TestRGB11RegtestOfficialBidirectional(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager.rgbManager.scopeStates.stopReconciliations()
+	manager.Close()
 	if err := manager.db.Close(); err != nil {
 		t.Fatal(err)
 	}
 	manager.db = nil
-	goWallet = NewInternalWalletWithMnemonic(mnemonic, "", &chaincfg.RegressionNetParams)
-	manager = newRGB11FlowManagerAt(t, goWallet, rpc, esplora, 1103, dbPath)
+	manager = openManager()
+	if _, err := manager.UnlockWallet(password); err != nil {
+		t.Fatal(err)
+	}
+	if manager.wallet.GetAddress() != goWallet.GetAddress() {
+		t.Fatal("persistent restart changed the original regtest wallet identity")
+	}
+	if err := manager.SyncAccountManagementState(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := manager.RefreshRGB11State(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -696,6 +803,8 @@ func TestRGB11RegtestOfficialBidirectional(t *testing.T) {
 	}
 	summary := map[string]any{
 		"network":                     "regtest",
+		"sdk_account_gate":            "public import, activation, sync and persistent unlock",
+		"dkvs_transport":              "in-memory test transport; RGB/Bitcoin use the real official wallet and regtest",
 		"official_rgb_lib_commit":     "538f2abaa67d7ce96be32d94092e8f1b9e3ea38e",
 		"asset_id":                    assetID,
 		"schema":                      schema,
@@ -713,8 +822,8 @@ func TestRGB11RegtestOfficialBidirectional(t *testing.T) {
 			"consignment_sha256": hex.EncodeToString(goConsignmentHash[:]),
 			"bob_balance_before": uint64(bobSettledBefore), "bob_balance_after": uint64(settled),
 		},
-		"consignments_deleted_after_persist": true,
-		"go_recipient_consignment_compacted": true,
+		"consignments_deleted_after_persist":             true,
+		"go_recipient_delivery_deduplicated_in_recovery": true,
 	}
 	summaryRaw, err := json.MarshalIndent(summary, "", "  ")
 	if err != nil {
@@ -726,4 +835,173 @@ func TestRGB11RegtestOfficialBidirectional(t *testing.T) {
 
 	t.Logf("official->Go txid=%s amount=%d", officialTxID, officialToGo)
 	t.Logf("Go->official txid=%s amount=%d", prepared.TxID, goToOfficial)
+}
+
+// Continue only the read-only tail of the already confirmed NIA run. The
+// expired test process's memory DKVS is not recreated as remote authority.
+func TestRGB11RegtestOfficialConfirmedRestartReadOnly(t *testing.T) {
+	requireWalletLiveNetwork(t)
+	if requiredRegtestEnv(t, "RGB11_REGTEST_SCHEMA") != "NIA" {
+		t.Fatal("this continuation requires the recorded confirmed NIA fixture")
+	}
+	assetID := requiredRegtestEnv(t, "RGB11_REGTEST_ASSET_ID")
+	artifactDir := requiredRegtestEnv(t, "RGB11_REGTEST_EVIDENCE_DIR")
+	officialBin := requiredRegtestEnv(t, "RGB11_REGTEST_OFFICIAL_BIN")
+	officialBob := requiredRegtestEnv(t, "RGB11_REGTEST_OFFICIAL_BOB")
+	esplora := newRegtestEsplora(requiredRegtestEnv(t, "RGB11_REGTEST_ESPLORA"))
+	dbPath := filepath.Join(artifactDir, "go-wallet-db")
+	if _, err := os.Stat(dbPath); err != nil {
+		t.Fatal(err)
+	}
+	previousChain, previousEnv, previousMode, previousIndexerChain := _chain, _env, _mode, indexer.CHAIN
+	t.Cleanup(func() {
+		_chain, _env, _mode, indexer.CHAIN = previousChain, previousEnv, previousMode, previousIndexerChain
+	})
+	open := func() *Manager {
+		manager := openRGB11RegtestManagedWallet(t, dbPath, newRGB11MemoryDKVSHTTP(),
+			&rgb11FlowIndexer{outputs: make(map[string]*TxOutput)}, esplora)
+		if _, err := manager.UnlockWallet("rgb11-regtest"); err != nil {
+			manager.Close()
+			_ = manager.db.Close()
+			t.Fatal(err)
+		}
+		manager.rgbManager.scopeStates.stopReconciliations()
+		return manager
+	}
+	manager := open()
+	t.Cleanup(func() {
+		manager.Close()
+		if manager.db != nil {
+			_ = manager.db.Close()
+		}
+	})
+	before, err := manager.GetRGB11State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var send *rgb11wallet.TransferState
+	for _, state := range before.Transfers {
+		if state.Direction == "send" && rgb11wallet.ContractAssetKeyMatches(state.Asset.Name, assetID) {
+			if send != nil || state.Status != "settled" {
+				t.Fatal("recorded NIA fixture lacks exactly one settled send")
+			}
+			send = state
+		}
+	}
+	if send == nil {
+		t.Fatal("recorded NIA send is missing")
+	}
+	pending, err := manager.rgbManager.projectionStore.LoadPendingTransfer(send.TransferID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tx wire.MsgTx
+	reader := bytes.NewReader(pending.SignedTx)
+	if err := tx.Deserialize(reader); err != nil || reader.Len() != 0 || tx.TxHash().String() != send.WitnessTxID {
+		t.Fatal("persisted signed NIA transaction does not match the original witness")
+	}
+	status, err := esplora.GetTxStatus(send.WitnessTxID)
+	if err != nil || !status.Confirmed {
+		t.Fatal("original NIA witness is not confirmed")
+	}
+	recipient, err := os.ReadFile(filepath.Join(artifactDir, "go-to-official.rgba"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipientHash := sha256.Sum256(recipient)
+	if pending.RecipientObjectHash != hex.EncodeToString(recipientHash[:]) ||
+		send.ConsignmentHash != pending.RecipientObjectHash {
+		t.Fatal("original NIA delivery file does not match the persisted operation")
+	}
+	walletID, err := manager.rgbManager.RGB11WalletID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, _, err := manager.rgbManager.exportRGB11WalletSnapshot(walletID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery, err := rgb11wallet.RecoveryPackageFromSnapshot(snapshot, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := rgb11wallet.PendingTransfersFromProjectionSnapshot(recovery.ProjectionRecords)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, row := range rows {
+		if row.State.TransferID != send.TransferID {
+			continue
+		}
+		found = true
+		if row.State.Status != "settled" || len(row.RecipientConsignment) != 0 || len(row.LocalConsignment) != 0 ||
+			row.RecipientObjectHash != pending.RecipientObjectHash ||
+			!bytes.Equal(rgb11SnapshotObject(recovery.ProjectionRecords, row.RecipientObjectHash), recipient) {
+			t.Fatal("NIA recovery duplicated delivery bytes or lost authenticated history")
+		}
+	}
+	if !found {
+		t.Fatal("NIA recovery journal is missing")
+	}
+	balance, err := manager.GetRGB11AssetBalance(&send.Asset.Name)
+	if err != nil || balance == nil || balance.Value.Uint64() != 30 {
+		t.Fatalf("persisted NIA balance=%v err=%v", balance, err)
+	}
+	var transfers []struct {
+		Status      string            `json:"status"`
+		TxID        string            `json:"txid"`
+		Assignments []json.RawMessage `json:"assignments"`
+	}
+	if err := json.Unmarshal(runRegtestCommand(t, "", officialBin, "transfers", officialBob, assetID), &transfers); err != nil {
+		t.Fatal(err)
+	}
+	settledReceive := false
+	for _, transfer := range transfers {
+		if transfer.TxID != send.WitnessTxID {
+			continue
+		}
+		if transfer.Status != "Settled" || len(transfer.Assignments) != 1 || string(transfer.Assignments[0]) != `{"Fungible":20}` {
+			t.Fatal("official NIA receiver assignment is not the original settled amount")
+		}
+		settledReceive = true
+	}
+	if !settledReceive {
+		t.Fatal("official settled NIA receive is missing")
+	}
+	if balance := officialJSON(t, officialBin, "balance", officialBob, assetID); balance["settled"] != float64(40) {
+		t.Fatal("official NIA recipient balance changed from recorded confirmed 40")
+	}
+	address := manager.wallet.GetAddress()
+	manager.Close()
+	if err := manager.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	manager.db = nil
+	manager = open()
+	if manager.wallet.GetAddress() != address {
+		t.Fatal("read-only restart changed wallet identity")
+	}
+	after, err := manager.GetRGB11State()
+	if err != nil || len(after.Proofs) != len(before.Proofs) {
+		t.Fatalf("read-only restart proof count changed: err=%v", err)
+	}
+	beforeProofs := make(map[string]*rgb11wallet.AllocationProof)
+	for _, proof := range before.Proofs {
+		beforeProofs[proof.OutPoint] = proof
+	}
+	for _, proof := range after.Proofs {
+		previous := beforeProofs[proof.OutPoint]
+		if previous == nil || previous.AssetName != proof.AssetName || previous.OperationID != proof.OperationID ||
+			previous.Status != proof.Status || previous.StateClass != proof.StateClass ||
+			!bytes.Equal(previous.StateData, proof.StateData) || !bytes.Equal(previous.SealDisclosure, proof.SealDisclosure) ||
+			previous.SealCommitment != proof.SealCommitment || previous.ConsignmentHash != proof.ConsignmentHash {
+			t.Fatal("read-only restart changed an original allocation proof")
+		}
+	}
+	balance, err = manager.GetRGB11AssetBalance(&send.Asset.Name)
+	if err != nil || balance == nil || balance.Value.Uint64() != 30 {
+		t.Fatalf("reopened NIA balance=%v err=%v", balance, err)
+	}
+	t.Log("confirmed NIA read-only tail verified; no transfers, initialization, activation, sync, refresh or file deletion performed; fresh remote sync after restart remains unverified")
 }

@@ -41,14 +41,14 @@ func managedImportTestManager(t *testing.T, remote *rgb11MemoryDKVSHTTP) (*Manag
 			t.Fatal("provider import holds the account coordinator mutex")
 		}
 		manager.accountSyncMu.Unlock()
-		if manager.channelIdentityMu.TryLock() {
-			manager.channelIdentityMu.Unlock()
-			t.Fatal("provider import is not protected by the application identity gate")
+		if !manager.channelIdentityMu.TryLock() {
+			t.Fatal("provider import holds the application identity mutex across validation")
 		}
-		if manager.rgbOperationMu.TryLock() {
-			manager.rgbOperationMu.Unlock()
-			t.Fatal("provider import is not protected by the application RGB gate")
+		manager.channelIdentityMu.Unlock()
+		if !manager.rgbOperationMu.TryLock() {
+			t.Fatal("provider import holds the application RGB mutex across validation")
 		}
+		manager.rgbOperationMu.Unlock()
 		if err := manager.requireCurrentAccountManagedData(); !errors.Is(err, ErrDKVSPathNotSynced) {
 			t.Fatalf("running import should wait, not report terminal failure: %v", err)
 		}

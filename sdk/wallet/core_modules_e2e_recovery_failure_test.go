@@ -13,7 +13,7 @@ import (
 // provider. Only the first import returns a local module failure; the recovery
 // bundle still comes from real issuance, native proofs and paid DKVS records.
 type coreRGBImportFailureOnce struct {
-	AccountManagedActiveDataProvider
+	AccountManagedDataProvider
 	failure error
 	imports int
 }
@@ -23,7 +23,7 @@ func (p *coreRGBImportFailureOnce) Import(catalog AccountManagedDataCatalog, pay
 	if p.imports == 1 {
 		return p.failure
 	}
-	return p.AccountManagedActiveDataProvider.Import(catalog, payloads)
+	return p.AccountManagedDataProvider.Import(catalog, payloads)
 }
 
 func coreRGBRecoveryFailuresE2E(t *testing.T, source *Manager, cfg coreE2EConfig,
@@ -75,12 +75,11 @@ func coreRGBRecoveryFailuresE2E(t *testing.T, source *Manager, cfg coreE2EConfig
 		failure := errors.New("core E2E: transient RGB11 provider import failure")
 		target.managedDataMu.Lock()
 		provider := target.managedDataProviders[rgb11AccountManagedProviderID]
-		active, ok := provider.(AccountManagedActiveDataProvider)
-		if !ok {
+		if provider == nil {
 			target.managedDataMu.Unlock()
-			t.Fatal("core-e2e: actual RGB11 provider must preserve its active-data interface")
+			t.Fatal("core-e2e: actual durable RGB11 provider is not registered")
 		}
-		fault := &coreRGBImportFailureOnce{AccountManagedActiveDataProvider: active, failure: failure}
+		fault := &coreRGBImportFailureOnce{AccountManagedDataProvider: provider, failure: failure}
 		target.managedDataProviders[rgb11AccountManagedProviderID] = fault
 		target.managedDataMu.Unlock()
 		require.NotNil(t, provider)
@@ -148,9 +147,14 @@ func coreRGBRecoveryFailuresE2E(t *testing.T, source *Manager, cfg coreE2EConfig
 			require.NoError(t, source.SyncAccountManagementState(context.Background()))
 			remoteBefore := coreRemoteStableRGB(t, source, cfg)
 			failure := errors.New("core E2E: remote RGB provider import interrupted")
-			provider := target.managedDataProviders[rgb11AccountManagedProviderID].(AccountManagedActiveDataProvider)
-			fault := &coreRGBImportFailureOnce{AccountManagedActiveDataProvider: provider, failure: failure}
+			target.managedDataMu.RLock()
+			provider := target.managedDataProviders[rgb11AccountManagedProviderID]
+			target.managedDataMu.RUnlock()
+			require.NotNil(t, provider, "actual durable RGB11 provider must stay registered")
+			fault := &coreRGBImportFailureOnce{AccountManagedDataProvider: provider, failure: failure}
+			target.managedDataMu.Lock()
 			target.managedDataProviders[rgb11AccountManagedProviderID] = fault
+			target.managedDataMu.Unlock()
 			broadcasts := chain.broadcastCount()
 			require.ErrorIs(t, target.SyncAccountManagementState(context.Background()), failure)
 			marker, err := target.readAccountManagedDataImportMarker()

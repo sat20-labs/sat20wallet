@@ -2,7 +2,7 @@ package wallet
 
 import (
 	"context"
-	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -88,7 +88,10 @@ func importRGB11RecoveryForTest(t *testing.T, manager *Manager, encoded []byte) 
 	}
 }
 
-func TestRGB11AccountManagedRecoveryExcludesBroadcastTaskAfterRestart(t *testing.T) {
+func TestRGB11AccountManagedRecoveryIncludesBroadcastObligationAfterRestart(t *testing.T) {
+	previousChain := _chain
+	_chain = "testnet"
+	t.Cleanup(func() { _chain = previousChain })
 	senderWallet := NewInternalWalletWithMnemonic(
 		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", "", &chaincfg.TestNet4Params,
 	)
@@ -113,7 +116,7 @@ func TestRGB11AccountManagedRecoveryExcludesBroadcastTaskAfterRestart(t *testing
 	}
 	rpc := &rgb11FlowIndexer{outputs: make(map[string]*TxOutput)}
 	for index := 0; index < 3; index++ {
-		outpoint := fmt.Sprintf("%064x:0", 34+index)
+		outpoint := seedRGB11FlowEvidenceUTXO(t, evidenceBase, senderScript, 100_000, byte(34+index))
 		utxo := &rgb11wallet.BitcoinUTXO{
 			OutPoint: outpoint, Value: 100_000, PkScript: append([]byte(nil), senderScript...), Confirmations: 6,
 		}
@@ -127,8 +130,13 @@ func TestRGB11AccountManagedRecoveryExcludesBroadcastTaskAfterRestart(t *testing
 		})
 	}
 
-	sender := newRGB11FlowManager(t, senderWallet, rpc, evidence, 34)
-	recipient := newRGB11FlowManager(t, recipientWallet, rpc, evidence, 35)
+	remote := newRGB11MemoryDKVSHTTP()
+	client := newRGB11MessageNodeClient(remote)
+	sender := newRGB11ActivatedFlowAccount(t, "inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", remote, client, evidence, rpc)
+	recipient := newRGB11ActivatedFlowAccount(t, "comfort very add tuition senior run eight snap burst appear exile dutch", remote, client, evidence, rpc)
+	if sender.wallet.GetAddress() != senderWallet.GetAddress() || recipient.wallet.GetAddress() != recipientWallet.GetAddress() {
+		t.Fatal("activated fixture changed reconciliation wallets")
+	}
 	issued, err := sender.IssueRGB11Asset(context.Background(), RGB11IssueRequest{
 		Schema: "NIA", Ticker: "RECON", Name: "Reconciliation Fixture", Amounts: []uint64{10},
 	})
@@ -153,8 +161,13 @@ func TestRGB11AccountManagedRecoveryExcludesBroadcastTaskAfterRestart(t *testing
 		t.Fatal(err)
 	}
 
-	// Account management persists only the minimum RGB recovery package. A new
-	// device imports it and rebuilds locks/cache before chain reconciliation.
+	// Account management persists the complete closure needed to resume an
+	// unsettled broadcast obligation. A new device imports it and rebuilds
+	// locks/cache before chain reconciliation.
+	sourceTransfers, err := sender.rgbManager.projectionStore.ListTransfers()
+	if err != nil || len(sourceTransfers) != 1 || sourceTransfers[0].Status != "broadcast" {
+		t.Fatalf("source broadcast obligation missing before recovery: count=%d err=%v", len(sourceTransfers), err)
+	}
 	broadcastRecovery := exportRGB11RecoveryForTest(t, sender)
 	sender.rgbManager.scopeStates.stopReconciliations()
 	restoredWallet := NewInternalWalletWithMnemonic(
@@ -166,7 +179,7 @@ func TestRGB11AccountManagedRecoveryExcludesBroadcastTaskAfterRestart(t *testing
 	restored.rgbManager.scopeStates.mu.Unlock()
 	importRGB11RecoveryForTest(t, restored, broadcastRecovery)
 	transfers, err := restored.rgbManager.projectionStore.ListTransfers()
-	if err != nil || len(transfers) != 0 {
-		t.Fatalf("wallet-local broadcast task leaked into account recovery: transfers=%+v err=%v", transfers, err)
+	if err != nil || !reflect.DeepEqual(transfers, sourceTransfers) {
+		t.Fatalf("account recovery did not preserve the broadcast obligation exactly: count=%d err=%v", len(transfers), err)
 	}
 }

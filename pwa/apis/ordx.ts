@@ -1,6 +1,11 @@
 import { config as configMap } from '@/config'
+import { isRegtestBuild } from '@/utils/networkMode'
 class OrdxApi {
   generatePath(path: string, network: string) {
+    if (isRegtestBuild) {
+      if (network !== 'regtest') throw new Error('The isolated regtest build cannot use a public Bitcoin network')
+      return `${configMap.regtest.ordxBaseUrl}/btc/regtest/${path}`
+    }
     const config = configMap.prd
     const BASE_URL = config.ordxBaseUrl
     return `${BASE_URL}${
@@ -37,6 +42,10 @@ class OrdxApi {
   }
 
   async getRecommendedFees({ network }: any): Promise<any> {
+    if (isRegtestBuild) {
+      const response = await fetch(this.generatePath('ordx/GetRecommendedFees', network))
+      return response.json()
+    }
     const url = `https://apiprd.ordx.market/${
       network === 'mainnet' ? '' : 'testnet/'
     }ordx/GetRecommendedFees`
@@ -146,7 +155,10 @@ class OrdxApi {
     return response.json()
   }
   async getBTCPrice({ network }: any) {
-    const res = await fetch('https://apiprd.ordx.market/ordx/GetBTCPrice');
+    const url = isRegtestBuild
+      ? this.generatePath('ordx/GetBTCPrice', network)
+      : 'https://apiprd.ordx.market/ordx/GetBTCPrice'
+    const res = await fetch(url)
     return res;
   };
   async unlockOrdinals({ utxos, pubKey, sig, network }: any): Promise<any> {

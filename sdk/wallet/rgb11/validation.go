@@ -67,6 +67,49 @@ type PreparedValidation struct {
 	WitnessTxIDs []string
 }
 
+// PreparedHistoryValidation contains core-validated outputs and consumer
+// edges from an embedded prepared branch. Its allocations describe the RGB
+// graph only; they do not assert current Bitcoin ownership or spendability.
+type PreparedHistoryValidation struct {
+	Allocations           []ValidatedAllocation
+	HistoricalAllocations []HistoricalAllocation
+	Outputs               map[string]*BitcoinUTXO
+	WitnessTxIDs          []string
+	Consumers             []ValidatedConsumer
+}
+
+// HistoricalAllocation is an RGB allocation proven by core's complete
+// historical graph. WitnessState records the creating witness evidence, but
+// this transient report does not assert current Bitcoin ownership.
+type HistoricalAllocation struct {
+	Allocation   ValidatedAllocation
+	WitnessState uint8
+}
+
+// HistoricalValidation contains typed graph facts from a successful core
+// history validation. MaterialReceipt binds the same raw consignment to the
+// complete selected graph; it is never current ownership or spendability.
+type HistoricalValidation struct {
+	MaterialReceipt *ValidationReceipt
+	Allocations     []HistoricalAllocation
+	Consumers       []ValidatedConsumer
+}
+
+// ValidatedConsumer is an exact full Opout-to-transition edge produced by the
+// RGB core after complete history validation. Wallet projection code must not
+// infer consumers by decoding transition wire fields itself.
+type ValidatedConsumer struct {
+	ConsignmentHash     string
+	ContractID          string
+	InputOperationID    string
+	AssignmentType      uint32
+	AssignmentIndex     uint32
+	ConsumerOperationID string
+	BundleID            string
+	WitnessTxID         string
+	WitnessState        uint8
+}
+
 type PreparedConsensusValidator interface {
 	ValidatePreparedConsignment(ctx context.Context, raw []byte,
 		evidence BitcoinEvidenceProvider) (*PreparedValidation, error)

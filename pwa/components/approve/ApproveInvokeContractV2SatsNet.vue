@@ -30,25 +30,33 @@
             '交易详情') }}</h3>
 
           <!-- Swap Specific Details -->
-          <template v-if="props.data?.metadata?.action === 'swap'">
+          <template v-if="swapDetails">
             <div class="flex items-center justify-between gap-2 py-1">
               <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.orderType', '订单类型')
               }}</span>
-              <span class="text-xs sm:text-sm font-medium text-right break-words">{{ props.data?.metadata?.orderType ===
+              <span class="text-xs sm:text-sm font-medium text-right break-words">{{ swapDetails.orderType ===
                 1 ? $t('invokeContractSatsNet.sell',
                   '卖出') : $t('invokeContractSatsNet.buy', '买入') }}</span>
             </div>
             <div class="flex items-center justify-between gap-2 py-1">
-              <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.quantity', '数量')
+              <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.swapAsset', '交易资产')
               }}</span>
-              <span class="text-xs sm:text-sm font-medium text-right break-words">{{ props.data?.metadata?.quantity ||
-                '-' }}</span>
+              <span class="text-xs sm:text-sm font-medium text-right break-all">{{ swapDetails.assetName }}</span>
             </div>
             <div class="flex items-center justify-between gap-2 py-1">
-              <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.unitPrice', '单价')
+              <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.swapInputAmount', '投入数量')
               }}</span>
-              <span class="text-xs sm:text-sm font-medium text-right break-words">{{ props.data?.metadata?.unitPrice ||
-                '-' }} sats</span>
+              <span class="text-xs sm:text-sm font-medium text-right break-words">{{ swapDetails.inputAmount }}</span>
+            </div>
+            <div class="flex items-center justify-between gap-2 py-1">
+              <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.poolReferencePrice', '池内参考价（sats/资产）')
+              }}</span>
+              <span class="text-xs sm:text-sm font-medium text-right break-words">{{ swapDetails.referencePrice }}</span>
+            </div>
+            <div class="flex items-center justify-between gap-2 py-1">
+              <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.swapExpectedOutput', '预计输出（非保证）')
+              }}</span>
+              <span class="text-xs sm:text-sm font-medium text-right break-words">{{ swapDetails.expectedOutput }}</span>
             </div>
           </template>
 
@@ -95,13 +103,6 @@
           <div class="flex items-center justify-between gap-2 py-2 border-t border-border">
             <span class="text-xs font-medium flex-shrink-0">{{ $t('invokeContractSatsNet.totalCost', '总花费') }}</span>
             <span class="text-xs sm:text-sm font-medium text-primary text-right break-words">{{ totalCost }}</span>
-          </div>
-          <div v-if="props.data?.metadata?.orderType === 1"
-            class="flex items-center justify-between gap-2 py-2 border-t border-border">
-            <span class="text-xs font-medium flex-shrink-0">{{ $t('invokeContractSatsNet.totalCost', '预估收入') }}</span>
-            <span class="text-xs sm:text-sm font-medium text-primary text-right break-words">{{
-              props.data?.metadata?.sats
-            }}</span>
           </div>
           <!-- <div class="flex items-center justify-between">
             <span class="text-sm text-muted-foreground">{{$t('invokeContractSatsNet.netFee', '网络费用')}}</span>
@@ -211,6 +212,36 @@ const withdrawDetails = computed(() => {
   return {
     assetName: String(assetName || '-'),
     quantity: String(quantity || '-'),
+  }
+})
+
+const swapDetails = computed(() => {
+  const metadata = props.data?.metadata ?? {}
+  if (String(parsedInvoke.value.action ?? '').toLowerCase() !== 'swap') return null
+
+  const orderType = Number(invokeParam.value.orderType)
+  if (orderType !== 1 && orderType !== 2) return null
+
+  const assetName = String(invokeParam.value.assetName || '').trim()
+  const inputAssetName = String(props.data?.assetName ?? '').trim()
+  const inputAsset = inputAssetName === '::' || inputAssetName.toLowerCase() === 'sats'
+    ? 'sats'
+    : inputAssetName
+  const inputAmount = props.data?.amt
+  const outputAsset = orderType === 1 ? 'sats' : assetName
+  const isAssetToSats = orderType === 1
+  const outputAmount = isAssetToSats ? metadata.sats : metadata.quantity
+  const formatAmount = (amount: unknown, asset: string) => {
+    const text = String(amount ?? '').trim()
+    return text && asset ? `${text} ${asset}` : '-'
+  }
+
+  return {
+    orderType,
+    assetName: assetName || '-',
+    inputAmount: formatAmount(inputAmount, inputAsset),
+    referencePrice: String(metadata.unitPrice ?? '').trim() || '-',
+    expectedOutput: formatAmount(outputAmount, outputAsset),
   }
 })
 

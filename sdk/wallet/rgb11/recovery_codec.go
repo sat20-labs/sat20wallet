@@ -166,11 +166,24 @@ func inflateRecovery(value []byte) ([]byte, error) {
 }
 
 func EncodeRecoveryPackage(value *RecoveryPackage) ([]byte, error) {
+	encoded, _, err := EncodeRecoveryPackageWithSize(value)
+	return encoded, err
+}
+
+// EncodeRecoveryPackageWithSize returns the canonical compressed package and
+// the size of its validated uncompressed representation. The raw size is useful
+// for account-capacity preflight because this codec has an independent raw-size
+// limit before the outer managed-data compression is applied.
+func EncodeRecoveryPackageWithSize(value *RecoveryPackage) ([]byte, int, error) {
 	raw, err := encodeRecoveryRaw(value)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return deflateRecovery(raw)
+	encoded, err := deflateRecovery(raw)
+	if err != nil {
+		return nil, 0, err
+	}
+	return encoded, len(raw), nil
 }
 
 func DecodeRecoveryPackage(value []byte) (*RecoveryPackage, error) {

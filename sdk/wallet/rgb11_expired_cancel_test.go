@@ -19,15 +19,13 @@ import (
 )
 
 type expiredCancelEvidence struct {
-	mu            sync.Mutex
-	status        *rgb11wallet.BitcoinTxStatus
-	statusErr     error
-	outspends     map[string]*rgb11wallet.BitcoinOutspend
-	outspendErr   map[string]error
-	utxos         map[string]*rgb11wallet.BitcoinUTXO
-	utxoErr       map[string]error
-	statusEntered chan struct{}
-	statusRelease chan struct{}
+	mu          sync.Mutex
+	status      *rgb11wallet.BitcoinTxStatus
+	statusErr   error
+	outspends   map[string]*rgb11wallet.BitcoinOutspend
+	outspendErr map[string]error
+	utxos       map[string]*rgb11wallet.BitcoinUTXO
+	utxoErr     map[string]error
 }
 
 func (e *expiredCancelEvidence) GetUTXO(outpoint string) (*rgb11wallet.BitcoinUTXO, error) {
@@ -48,15 +46,6 @@ func (e *expiredCancelEvidence) GetUTXO(outpoint string) (*rgb11wallet.BitcoinUT
 func (*expiredCancelEvidence) GetRawTx(string) ([]byte, error) { return nil, errors.New("not found") }
 
 func (e *expiredCancelEvidence) GetTxStatus(txid string) (*rgb11wallet.BitcoinTxStatus, error) {
-	if e.statusEntered != nil {
-		select {
-		case e.statusEntered <- struct{}{}:
-		default:
-		}
-	}
-	if e.statusRelease != nil {
-		<-e.statusRelease
-	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.statusErr != nil {
@@ -226,11 +215,11 @@ func TestCancelExpiredRGB11TransferSuccessBatchAndIdempotent(t *testing.T) {
 	for _, batchSize := range []int{1, 2} {
 		t.Run(fmt.Sprintf("batch-%d", batchSize), func(t *testing.T) {
 			fixture := newExpiredCancelFixture(t, batchSize)
-			if err := fixture.manager.CancelExpiredRGB11Transfer(fixture.transferIDs[0]); err != nil {
+			if err := fixture.manager.rgbManager.CancelExpiredRGB11Transfer(fixture.transferIDs[0]); err != nil {
 				t.Fatal(err)
 			}
 			assertExpiredTombstone(t, fixture)
-			if err := fixture.manager.CancelExpiredRGB11Transfer(fixture.transferIDs[len(fixture.transferIDs)-1]); err != nil {
+			if err := fixture.manager.rgbManager.CancelExpiredRGB11Transfer(fixture.transferIDs[len(fixture.transferIDs)-1]); err != nil {
 				t.Fatalf("idempotent cancel failed: %v", err)
 			}
 			assertExpiredTombstone(t, fixture)
@@ -397,7 +386,7 @@ func TestCancelExpiredRGB11TransferRejectsUnsafeStateAndEvidence(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newExpiredCancelFixture(t, 1)
 			test.mutate(t, fixture)
-			cancelErr := fixture.manager.CancelExpiredRGB11Transfer(fixture.transferIDs[0])
+			cancelErr := fixture.manager.rgbManager.CancelExpiredRGB11Transfer(fixture.transferIDs[0])
 			if cancelErr == nil {
 				t.Fatal("unsafe cancellation succeeded")
 			}
@@ -426,7 +415,7 @@ func TestCancelExpiredRGB11TransferRejectsPartialUnexpiredBatch(t *testing.T) {
 	if err := fixture.manager.rgbManager.projectionStore.SavePendingTransferState(pending); err != nil {
 		t.Fatal(err)
 	}
-	if err := fixture.manager.CancelExpiredRGB11Transfer(fixture.transferIDs[0]); err == nil {
+	if err := fixture.manager.rgbManager.CancelExpiredRGB11Transfer(fixture.transferIDs[0]); err == nil {
 		t.Fatal("partially unexpired batch was cancelled")
 	}
 	if lock := fixture.manager.utxoLockerL1.GetLockedUtxoList()[fixture.input]; lock == nil {
@@ -436,7 +425,7 @@ func TestCancelExpiredRGB11TransferRejectsPartialUnexpiredBatch(t *testing.T) {
 
 func TestCancelExpiredRGB11TransferRejectsDamagedTerminalTombstone(t *testing.T) {
 	fixture := newExpiredCancelFixture(t, 1)
-	if err := fixture.manager.CancelExpiredRGB11Transfer(fixture.transferIDs[0]); err != nil {
+	if err := fixture.manager.rgbManager.CancelExpiredRGB11Transfer(fixture.transferIDs[0]); err != nil {
 		t.Fatal(err)
 	}
 	pending, err := fixture.manager.rgbManager.projectionStore.LoadPendingTransfer(fixture.transferIDs[0])
@@ -447,7 +436,7 @@ func TestCancelExpiredRGB11TransferRejectsDamagedTerminalTombstone(t *testing.T)
 	if err := fixture.manager.rgbManager.projectionStore.SavePendingTransferState(pending); err != nil {
 		t.Fatal(err)
 	}
-	if err := fixture.manager.CancelExpiredRGB11Transfer(fixture.transferIDs[0]); !errors.Is(err, ErrRGB11Inconsistent) {
+	if err := fixture.manager.rgbManager.CancelExpiredRGB11Transfer(fixture.transferIDs[0]); !errors.Is(err, ErrRGB11Inconsistent) {
 		t.Fatalf("damaged terminal tombstone was accepted: %v", err)
 	}
 }
@@ -467,7 +456,7 @@ func TestCancelExpiredRGB11TransferPersistenceFailureKeepsReservation(t *testing
 		t.Fatal(err)
 	}
 	fixture.manager.rgbManager.projectionStore = store
-	if err := fixture.manager.CancelExpiredRGB11Transfer(fixture.transferIDs[0]); err == nil {
+	if err := fixture.manager.rgbManager.CancelExpiredRGB11Transfer(fixture.transferIDs[0]); err == nil {
 		t.Fatal("expected persistence failure")
 	}
 	pending, err := store.LoadPendingTransfer(fixture.transferIDs[0])
@@ -483,42 +472,98 @@ func TestCancelExpiredRGB11TransferPersistenceFailureKeepsReservation(t *testing
 	}
 }
 
-func TestCancelExpiredRGB11TransferSerializesRGB11Operations(t *testing.T) {
+func TestCancelExpiredRGB11TransferKeepsLocalOperationsAvailable(t *testing.T) {
+	for _, change := range []string{"none", "broadcast-intent", "transaction-identity"} {
+		t.Run(change, func(t *testing.T) {
+			manager, transferID, evidence := newPublicExpiredRGB11CancelFixture(t)
+			var once sync.Once
+			releaseEvidence := func() { once.Do(func() { close(evidence.release) }) }
+			defer releaseEvidence()
+			cancelDone := make(chan error, 1)
+			go func() { cancelDone <- manager.CancelExpiredRGB11Transfer(transferID) }()
+			select {
+			case <-evidence.entered:
+			case err := <-cancelDone:
+				t.Fatalf("public cancel did not reach Bitcoin evidence: %v", err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("cancel did not enter evidence check")
+			}
+			localDone := make(chan error, 1)
+			go func() {
+				release := manager.beginRGB11Operation()
+				release()
+				if _, err := manager.captureRGB11NetworkScope(false); err != nil {
+					localDone <- err
+					return
+				}
+				_, err := manager.GetRGB11State()
+				localDone <- err
+			}()
+			select {
+			case err := <-localDone:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("local read or scope capture waited for network evidence")
+			}
+			before, err := manager.rgbManager.projectionStore.LoadPendingTransfer(transferID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if change != "none" {
+				updated := cloneRGB11BroadcastIntent(before)
+				if change == "broadcast-intent" {
+					updated.State.Status = rgb11StatusBroadcastAttempted
+				} else {
+					updated.SignedTx = append([]byte(nil), updated.SignedTx...)
+					updated.SignedTx[len(updated.SignedTx)-1] ^= 1
+				}
+				if err := manager.rgbManager.projectionStore.SavePendingTransferState(updated); err != nil {
+					t.Fatal(err)
+				}
+			}
+			releaseEvidence()
+			select {
+			case err := <-cancelDone:
+				if change == "none" && err != nil {
+					t.Fatal(err)
+				}
+				if change != "none" && err == nil {
+					t.Fatal("cancellation ignored newer state or transaction identity")
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("cancellation did not finish after evidence became available")
+			}
+			pending, err := manager.rgbManager.projectionStore.LoadPendingTransfer(transferID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if change == "none" {
+				if pending.State.Status != "rejected" || pending.State.RejectReason != rgb11RejectReasonInvoiceExpired {
+					t.Fatal("public expired cancel did not persist its terminal state")
+				}
+			} else {
+				for _, point := range before.State.InputOutPoints {
+					if lock := manager.utxoLockerL1.GetLockedUtxoList()[point]; lock == nil || lock.ReservationID != before.ReservationID {
+						t.Fatal("failed cancellation released input reservation")
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestCancelExpiredRGB11TransferRequiresConfiguredRecovery(t *testing.T) {
 	fixture := newExpiredCancelFixture(t, 1)
-	fixture.evidence.statusEntered = make(chan struct{}, 1)
-	fixture.evidence.statusRelease = make(chan struct{})
-	cancelDone := make(chan error, 1)
-	go func() { cancelDone <- fixture.manager.CancelExpiredRGB11Transfer(fixture.transferIDs[0]) }()
-	select {
-	case <-fixture.evidence.statusEntered:
-	case <-time.After(time.Second):
-		t.Fatal("cancel did not enter evidence check")
-	}
-	readerAcquired := make(chan struct{})
-	go func() {
-		release := fixture.manager.beginRGB11Operation()
-		close(readerAcquired)
-		release()
-	}()
-	select {
-	case <-readerAcquired:
-		t.Fatal("ordinary RGB11 operation entered during cancellation")
-	case <-time.After(25 * time.Millisecond):
-	}
-	close(fixture.evidence.statusRelease)
-	if err := <-cancelDone; err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-readerAcquired:
-	case <-time.After(time.Second):
-		t.Fatal("ordinary RGB11 operation did not resume")
+	if err := fixture.manager.CancelExpiredRGB11Transfer(fixture.transferIDs[0]); !errors.Is(err, ErrDKVSPathNotSynced) {
+		t.Fatalf("unconfigured public cancellation: %v", err)
 	}
 }
 
 func TestRefreshRGB11StateDetectsLateExpiredWitnessWithoutSignedTx(t *testing.T) {
 	fixture := newExpiredCancelFixture(t, 1)
-	if err := fixture.manager.CancelExpiredRGB11Transfer(fixture.transferIDs[0]); err != nil {
+	if err := fixture.manager.rgbManager.CancelExpiredRGB11Transfer(fixture.transferIDs[0]); err != nil {
 		t.Fatal(err)
 	}
 	assertExpiredTombstone(t, fixture)

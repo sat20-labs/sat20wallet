@@ -1,5 +1,6 @@
 import { Buffer } from 'buffer'
 import { bitcoin } from '@/lib/bitcoinjs'
+import { bitcoinNetworkFor } from '@/lib/bitcoin-network'
 
 const SIGHASH_SINGLE_ANYONECANPAY =
   bitcoin.Transaction.SIGHASH_SINGLE | bitcoin.Transaction.SIGHASH_ANYONECANPAY
@@ -64,9 +65,7 @@ export const buildL1BatchSellOrder = (
     throw new Error('utxos is required')
   }
 
-  const network = networkName === 'mainnet'
-    ? bitcoin.networks.bitcoin
-    : bitcoin.networks.testnet
+  const network = bitcoinNetworkFor(networkName)
   const tapInternalKey = normalizePublicKey(publicKey)
   const psbt = new bitcoin.Psbt({ network })
 

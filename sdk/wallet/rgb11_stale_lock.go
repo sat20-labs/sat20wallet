@@ -3,6 +3,7 @@
 package wallet
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -77,6 +78,14 @@ type rgb11LockApplyOps struct {
 }
 
 func (p *Manager) PlanRGB11StaleLock(target RGB11StaleLockTarget) (*RGB11StaleLockPlan, error) {
+	manager, err := p.captureRGB11NetworkScope(false)
+	if err != nil {
+		return nil, err
+	}
+	return manager.planRGB11StaleLock(target)
+}
+
+func (p *rgb11Manager) planRGB11StaleLock(target RGB11StaleLockTarget) (*RGB11StaleLockPlan, error) {
 	if target != rgb11StaleLockOnlyTarget {
 		return nil, errors.New("maintenance target is not the approved C/69fa lock")
 	}
@@ -120,7 +129,7 @@ func (p *Manager) PlanRGB11StaleLock(target RGB11StaleLockTarget) (*RGB11StaleLo
 	if err != nil {
 		return nil, err
 	}
-	allReservations := p.GetAllResv()
+	allReservations := p.accountManagementOwner().GetAllResv()
 	reservationJSON := make([]string, 0, len(allReservations))
 	for _, reservation := range allReservations {
 		if reservation == nil {
@@ -151,26 +160,31 @@ func (p *Manager) ApplyRGB11StaleLock(approved RGB11StaleLockPlan) error {
 	if approved.Target != rgb11StaleLockOnlyTarget {
 		return errors.New("maintenance plan is not for the approved C/69fa lock")
 	}
-	if p == nil || p.wallet == nil || p.utxoLockerL1 == nil {
-		return ErrRGB11Inconsistent
-	}
-	accountID, err := dkvsAccountID(p.wallet)
-	if err != nil || accountID != approved.Target.ReceiverAccountID {
-		return errors.New("active wallet is not the target receiver scope")
-	}
-	ops := rgb11LockApplyOps{
-		plan: func() (*RGB11StaleLockPlan, error) {
-			return p.PlanRGB11StaleLock(approved.Target)
-		},
-		delete: func() error {
-			return p.discardRGB11RawLock(approved)
-		},
-		absent: func() bool {
-			_, err := loadRGB11RawLock(p.db, approved.Target.OutPoint)
-			return errors.Is(err, errRGB11LockGone)
-		},
-	}
-	return applyRGB11LockDiscard(approved, ops)
+	_, err := runRGB11ManagedOperation(p, context.Background(), rgb11ManagedOperationContinue,
+		func(manager *rgb11Manager) (struct{}, error) {
+			if manager == nil || manager.wallet == nil ||
+				manager.utxoLockerL1 == nil || manager.db == nil {
+				return struct{}{}, ErrRGB11Inconsistent
+			}
+			accountID, err := dkvsAccountID(manager.wallet)
+			if err != nil || accountID != approved.Target.ReceiverAccountID {
+				return struct{}{}, errors.New("active wallet is not the target receiver scope")
+			}
+			ops := rgb11LockApplyOps{
+				plan: func() (*RGB11StaleLockPlan, error) {
+					return manager.planRGB11StaleLock(approved.Target)
+				},
+				delete: func() error {
+					return p.discardRGB11RawLock(approved)
+				},
+				absent: func() bool {
+					_, err := loadRGB11RawLock(manager.db, approved.Target.OutPoint)
+					return errors.Is(err, errRGB11LockGone)
+				},
+			}
+			return struct{}{}, applyRGB11LockDiscard(approved, ops)
+		})
+	return err
 }
 
 func buildRGB11LockPlan(target RGB11StaleLockTarget,

@@ -18,6 +18,9 @@ import (
 )
 
 func GetChainParam_SatsNet() *chaincfg.Params {
+	if _chain == "regtest" {
+		return &chaincfg.RegressionNetParams
+	}
 	if IsTestNet() {
 		return &chaincfg.TestNetParams
 	} else {

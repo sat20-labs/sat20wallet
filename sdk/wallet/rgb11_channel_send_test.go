@@ -3,7 +3,6 @@ package wallet
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,12 +29,13 @@ import (
 // coverage for a channel peer; it is not an STP contract authorization mock.
 type rgb11ChannelRecordingPeer struct {
 	*rgb11MessageNodeClient
-	peerWallet  common.Wallet
-	rebuild     *Manager
-	prev        txscript.PrevOutputFetcher
-	witness     []byte
-	afterSign   func(*wire.MsgTx)
-	responseErr error
+	peerWallet   common.Wallet
+	rebuild      *Manager
+	prev         txscript.PrevOutputFetcher
+	witness      []byte
+	afterSign    func(*wire.MsgTx)
+	responseErr  error
+	networkProbe *rgbNetworkAuditProbe
 
 	expectedChannel string
 	expectedReason  string
@@ -48,6 +48,9 @@ type rgb11ChannelRecordingPeer struct {
 
 func (p *rgb11ChannelRecordingPeer) SendSigReq(req *wwire.SignRequest,
 	sig []byte) ([][][]byte, error) {
+	if p.networkProbe != nil {
+		p.networkProbe.record()
+	}
 	if req == nil {
 		return nil, errors.New("missing channel sign request")
 	}
@@ -127,15 +130,12 @@ func (p *rgb11ChannelRecordingPeer) SendSigReq(req *wwire.SignRequest,
 	return [][][]byte{peerSigs}, nil
 }
 
-// rgb11ChannelRecoveryEvidence models the narrow race where a peer has
-// signed and the Bitcoin node has accepted the transaction, but the signing
-// response is lost before the sender can observe the acceptance. The one-shot
-// hidden status makes the first broadcast attempt retain its durable intent;
-// ResumeRGB11Send then sees the same txid and recovers the witness from rawTx.
+// rgb11ChannelRecoveryEvidence records a peer broadcast whose signing response
+// is lost. The sender can resolve acceptance from the recorded chain evidence
+// and recover the witness; subsequent resume must not broadcast or sign again.
 type rgb11ChannelRecoveryEvidence struct {
 	*rgb11AddressEvidence
 	mu                 sync.Mutex
-	hideNextStatus     map[string]bool
 	broadcastCalls     int
 	blockNextStatus    bool
 	blockStatusTxID    string
@@ -147,11 +147,6 @@ var _ rgb11wallet.BitcoinEvidenceProvider = (*rgb11ChannelRecoveryEvidence)(nil)
 
 func (e *rgb11ChannelRecoveryEvidence) GetTxStatus(txid string) (*rgb11wallet.BitcoinTxStatus, error) {
 	e.mu.Lock()
-	if e.hideNextStatus[txid] {
-		delete(e.hideNextStatus, txid)
-		e.mu.Unlock()
-		return nil, nil
-	}
 	block := e.blockNextStatus && txid == e.blockStatusTxID
 	started, release := e.blockStatusStarted, e.blockStatusRelease
 	if block {
@@ -183,11 +178,20 @@ func (e *rgb11ChannelRecoveryEvidence) recordSignedBroadcast(txid string, tx *wi
 	}
 	e.rgb11FlowEvidence.mu.Lock()
 	e.rgb11FlowEvidence.rawTx[txid] = append([]byte(nil), raw.Bytes()...)
+	for _, input := range tx.TxIn {
+		outpoint := input.PreviousOutPoint.String()
+		e.rgb11FlowEvidence.spendingTx[outpoint] = txid
+		delete(e.rgb11FlowEvidence.utxos, outpoint)
+	}
+	for vout, output := range tx.TxOut {
+		outpoint := fmt.Sprintf("%s:%d", txid, vout)
+		e.rgb11FlowEvidence.utxos[outpoint] = &rgb11wallet.BitcoinUTXO{
+			OutPoint: outpoint, Value: output.Value,
+			PkScript: append([]byte(nil), output.PkScript...),
+		}
+	}
 	e.rgb11FlowEvidence.mu.Unlock()
 	e.rgb11AddressEvidence.setStatus(txid, rgb11wallet.BitcoinTxStatus{TxID: txid, InMempool: true})
-	e.mu.Lock()
-	e.hideNextStatus[txid] = true
-	e.mu.Unlock()
 	return nil
 }
 
@@ -373,11 +377,14 @@ func newRGB11ChannelSendCase(t *testing.T) *rgb11ChannelSendCase {
 	if channelAsset.AssetName == existing.AssetName {
 		t.Fatal("channel genesis unexpectedly reused the existing RGB asset")
 	}
-	encodedPSBT, err := hex.DecodeString(prepared.SignedPSBT)
+	preparedPending, err := sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	packet, err := psbt.NewFromRawBytes(bytes.NewReader(encodedPSBT), false)
+	if len(preparedPending.SignedPSBT) == 0 {
+		t.Fatal("private channel pending state lost the deferred signature package")
+	}
+	packet, err := psbt.NewFromRawBytes(bytes.NewReader(preparedPending.SignedPSBT), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -463,6 +470,8 @@ func acknowledgeRGB11ChannelSend(t *testing.T, c *rgb11ChannelSendCase) error {
 func TestRGB11ChannelSendRequiresACKAndCoSignsRealP2WSH(t *testing.T) {
 	c := newRGB11ChannelSendCase(t)
 	sender, prepared, peer, evidence := c.sender, c.prepared, c.peer, c.evidence
+	probe := &rgbNetworkAuditProbe{owner: sender}
+	peer.networkProbe = probe
 	witness := c.witness
 
 	// Persist and reload the pre-ACK wallet snapshot while the deferred channel
@@ -493,12 +502,14 @@ func TestRGB11ChannelSendRequiresACKAndCoSignsRealP2WSH(t *testing.T) {
 	if pending.ChannelSend == nil || pending.ChannelSend.Signed || len(pending.SignedPSBT) == 0 {
 		t.Fatalf("channel pending state lost deferred PSBT: channel=%+v psbt=%d", pending.ChannelSend, len(pending.SignedPSBT))
 	}
+	unsignedIntent := cloneRGB11BroadcastIntent(pending)
 
 	// The final sender mailbox ACK is now the SDK transition boundary. It
 	// automatically co-signs and broadcasts from durable reservation state.
 	if err := acknowledgeRGB11ChannelSend(t, c); err != nil {
 		t.Fatal(err)
 	}
+	probe.assertUnlocked(t)
 	peer.mu.Lock()
 	if peer.signRequests != 1 || peer.lastRequest == nil {
 		t.Fatalf("peer signature requests=%d last=%v", peer.signRequests, peer.lastRequest != nil)
@@ -520,6 +531,27 @@ func TestRGB11ChannelSendRequiresACKAndCoSignsRealP2WSH(t *testing.T) {
 	}
 	if err := VerifySignedTx(finalTx, peer.prev); err != nil {
 		t.Fatalf("verify final channel transaction: %v", err)
+	}
+	if sameRGB11BroadcastIntent(unsignedIntent, pending) {
+		t.Fatal("joint signing unexpectedly preserved byte-identical unsigned transaction intent")
+	}
+	if !validRGB11ChannelSigningTransition(unsignedIntent, pending) {
+		t.Fatal("verified same-channel unsigned-to-signed transition was not recognized")
+	}
+	if adopted, complete, err := sender.rgbManager.reloadRGB11BroadcastIntentWithChannelSign(
+		[]*rgb11wallet.PendingTransfer{unsignedIntent}, true); err != nil || !complete || len(adopted) != 1 {
+		t.Fatalf("inner-barrier reload rejected the completed same-channel witness: adopted=%d complete=%t err=%v",
+			len(adopted), complete, err)
+	}
+	changedChannelData := cloneRGB11BroadcastIntent(pending)
+	changedChannelData.ChannelSend.MoreData = append(changedChannelData.ChannelSend.MoreData, 0)
+	if validRGB11ChannelSigningTransition(unsignedIntent, changedChannelData) {
+		t.Fatal("channel signing transition accepted changed MoreData")
+	}
+	invalidSignature := cloneRGB11BroadcastIntent(pending)
+	invalidSignature.SignedTx[len(invalidSignature.SignedTx)-1] ^= 1
+	if validRGB11ChannelSigningTransition(unsignedIntent, invalidSignature) {
+		t.Fatal("channel signing transition accepted an invalid witness signature")
 	}
 	if len(finalTx.TxIn) != 1 || len(finalTx.TxIn[0].Witness) != 4 ||
 		len(finalTx.TxIn[0].Witness[1]) == 0 || len(finalTx.TxIn[0].Witness[2]) == 0 ||
@@ -548,7 +580,6 @@ func testRGB11ChannelSendRecoversAfterPeerResponseLoss(t *testing.T, observedBef
 	sender, prepared, peer := c.sender, c.prepared, c.peer
 	recoveryEvidence := &rgb11ChannelRecoveryEvidence{
 		rgb11AddressEvidence: c.evidence,
-		hideNextStatus:       make(map[string]bool),
 	}
 	sender.rgbManager.evidence = recoveryEvidence
 	peer.afterSign = func(tx *wire.MsgTx) {
@@ -558,23 +589,15 @@ func testRGB11ChannelSendRecoversAfterPeerResponseLoss(t *testing.T, observedBef
 	}
 	peer.responseErr = errors.New("simulated peer connection interruption after broadcast")
 	err := acknowledgeRGB11ChannelSend(t, c)
-	var unknown *RGB11BroadcastResultUnknownError
-	if !errors.As(err, &unknown) {
-		t.Fatalf("lost peer response err=%v", err)
-	}
-	txID := unknown.TxID
-	if txID != prepared.TxID {
-		t.Fatalf("lost peer response txid=%s expected=%s", txID, prepared.TxID)
-	}
-	if unknown.TxID != prepared.TxID {
-		t.Fatalf("unknown response txid=%s expected=%s", unknown.TxID, prepared.TxID)
+	if err != nil {
+		t.Fatalf("could not resolve peer broadcast from chain evidence: %v", err)
 	}
 	pending, err := sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pending.State.Status != rgb11StatusBroadcastAttempted || pending.ChannelSend == nil || pending.ChannelSend.Signed {
-		t.Fatalf("lost response did not retain unsigned durable intent: state=%+v channel=%+v", pending.State, pending.ChannelSend)
+	if !rgb11BroadcastCompleteStatus(pending.State.Status) || pending.ChannelSend == nil || !pending.ChannelSend.Signed {
+		t.Fatalf("visible peer broadcast did not persist recovered witness: state=%+v channel=%+v", pending.State, pending.ChannelSend)
 	}
 	if len(pending.SignedTx) == 0 || len(pending.SignedPSBT) == 0 {
 		t.Fatal("lost response discarded the fixed transaction material")
@@ -596,17 +619,14 @@ func testRGB11ChannelSendRecoversAfterPeerResponseLoss(t *testing.T, observedBef
 	peer.mu.Unlock()
 
 	if observedBeforeResume {
-		// Reconciliation may observe the accepted transaction before Resume,
-		// while the lost peer response still leaves the durable witness unsigned.
-		batch, err := sender.rgbManager.loadRGB11AddressBatch(pending)
-		if err != nil {
+		// Reconciliation may refresh the accepted transaction before Resume;
+		// the complete peer witness must remain available.
+		if _, err := sender.RefreshRGB11State(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-		for _, item := range batch {
-			item.State.Status = "pending"
-		}
-		if err := sender.rgbManager.projectionStore.SavePendingTransferStates(batch); err != nil {
-			t.Fatal(err)
+		observed, err := sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
+		if err != nil || observed.State.Status != "pending" {
+			t.Fatalf("chain reconciliation did not observe the original mempool transaction: err=%v", err)
 		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -647,12 +667,11 @@ func testRGB11ChannelSendRecoversAfterPeerResponseLoss(t *testing.T, observedBef
 	peer.mu.Unlock()
 }
 
-func TestRGB11ChannelRecoveryPublicResumeWaitsForRefresh(t *testing.T) {
+func TestRGB11ChannelRecoveryPublicResumeDoesNotWaitForRefresh(t *testing.T) {
 	c := newRGB11ChannelSendCase(t)
 	sender, prepared, peer := c.sender, c.prepared, c.peer
 	recoveryEvidence := &rgb11ChannelRecoveryEvidence{
 		rgb11AddressEvidence: c.evidence,
-		hideNextStatus:       make(map[string]bool),
 	}
 	sender.rgbManager.evidence = recoveryEvidence
 	peer.afterSign = func(tx *wire.MsgTx) {
@@ -662,9 +681,8 @@ func TestRGB11ChannelRecoveryPublicResumeWaitsForRefresh(t *testing.T) {
 	}
 	peer.responseErr = errors.New("simulated peer response loss after broadcast")
 	err := acknowledgeRGB11ChannelSend(t, c)
-	var unknown *RGB11BroadcastResultUnknownError
-	if !errors.As(err, &unknown) || unknown.TxID != prepared.TxID {
-		t.Fatalf("expected ambiguous broadcast result: unknown=%t err_type=%T", errors.As(err, &unknown), err)
+	if err != nil {
+		t.Fatalf("could not resolve peer broadcast before refresh race: %v", err)
 	}
 
 	// Remove scheduled retries so the only competing refresh is the explicitly
@@ -681,39 +699,18 @@ func TestRGB11ChannelRecoveryPublicResumeWaitsForRefresh(t *testing.T) {
 	if signedTx.TxID() != prepared.TxID {
 		t.Fatal("recorded signed transaction id mismatch")
 	}
-	flowEvidence := recoveryEvidence.rgb11AddressEvidence.rgb11FlowEvidence
-	txid := signedTx.TxID()
-	flowEvidence.mu.Lock()
-	for _, txIn := range signedTx.TxIn {
-		flowEvidence.spendingTx[txIn.PreviousOutPoint.String()] = txid
+	// Observe the recorded real transaction through the same public refresh
+	// used in normal operation, rather than manufacturing a pending journal.
+	if _, err := sender.RefreshRGB11State(context.Background()); err != nil {
+		t.Fatalf("observe peer broadcast before refresh race: %v", err)
 	}
-	txHash := signedTx.TxHash()
-	for vout, txOut := range signedTx.TxOut {
-		outpoint := wire.OutPoint{Hash: txHash, Index: uint32(vout)}.String()
-		flowEvidence.utxos[outpoint] = &rgb11wallet.BitcoinUTXO{
-			OutPoint: outpoint, Value: txOut.Value,
-			PkScript: append([]byte(nil), txOut.PkScript...), Confirmations: 0,
-		}
-	}
-	flowEvidence.mu.Unlock()
 	pending, err := sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
-	if err != nil {
-		t.Fatalf("load pending transfer: error=%t", err != nil)
-	}
-	batch, err := sender.rgbManager.loadRGB11AddressBatch(pending)
-	if err != nil {
-		t.Fatalf("load pending batch: error=%t", err != nil)
-	}
-	for _, item := range batch {
-		item.State.Status = "pending"
-	}
-	if err := sender.rgbManager.projectionStore.SavePendingTransferStates(batch); err != nil {
-		t.Fatalf("mark batch pending: error=%t", err != nil)
+	if err != nil || pending.State.Status != "pending" {
+		t.Fatalf("peer broadcast was not reconciled as pending: err=%v", err)
 	}
 
 	started, release := make(chan struct{}), make(chan struct{})
 	recoveryEvidence.mu.Lock()
-	delete(recoveryEvidence.hideNextStatus, prepared.TxID)
 	recoveryEvidence.blockNextStatus = true
 	recoveryEvidence.blockStatusTxID = prepared.TxID
 	recoveryEvidence.blockStatusStarted = started
@@ -775,9 +772,9 @@ func TestRGB11ChannelRecoveryPublicResumeWaitsForRefresh(t *testing.T) {
 	if refreshLoadErr != nil || afterRefresh == nil {
 		t.Fatalf("load state after refresh: load_error=%t state_present=%t", refreshLoadErr != nil, afterRefresh != nil)
 	}
-	if returnedTxID != "" || !errors.Is(resumeErr, context.DeadlineExceeded) || afterResumeSigned || afterResumeWitnessItems != 0 {
-		t.Errorf("public ResumeRGB11Send bypassed the refresh barrier: returned=%t deadline=%t signed=%t signed_tx_len=%d witness_items=%d",
-			returnedTxID != "", errors.Is(resumeErr, context.DeadlineExceeded), afterResumeSigned, afterResumeTxLen, afterResumeWitnessItems)
+	if returnedTxID != prepared.TxID || resumeErr != nil || !afterResumeSigned || afterResumeWitnessItems != 4 || !bytes.Equal(afterResume.SignedTx, signedRaw) {
+		t.Errorf("public ResumeRGB11Send failed to reuse the signed result during remote refresh: txid_matches=%t error=%v signed=%t signed_tx_len=%d witness_items=%d",
+			returnedTxID == prepared.TxID, resumeErr, afterResumeSigned, afterResumeTxLen, afterResumeWitnessItems)
 	}
 	if refreshErr != nil {
 		t.Errorf("refresh failed after barrier release: %v", refreshErr)

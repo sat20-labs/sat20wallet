@@ -61,8 +61,16 @@ func TestRGB11NamingIssueRenameAndReceiverOrigin(t *testing.T) {
 		outputs: map[string]*TxOutput{origin: output},
 		plain:   []*indexerwire.TxOutputInfo{{OutPoint: origin, Value: 10000, PkScript: script}},
 	}
-	manager := newRGB11FlowManager(t, issuerWallet, rpc, evidence, 41)
-	issued, err := manager.rgbManager.IssueRGB11Asset(context.Background(), RGB11IssueRequest{
+	remote := newRGB11MemoryDKVSHTTP()
+	client := newRGB11MessageNodeClient(remote)
+	evidence.txStatuses = map[string]*rgb11wallet.BitcoinTxStatus{
+		tx.TxHash().String(): {TxID: tx.TxHash().String(), Confirmed: true, Confirmations: 6},
+	}
+	manager := newRGB11ActivatedFlowAccount(t, "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about", remote, client, evidence, rpc)
+	if manager.wallet.GetAddress() != address {
+		t.Fatal("activated issuer changed fixture wallet")
+	}
+	issued, err := manager.IssueRGB11Asset(context.Background(), RGB11IssueRequest{
 		Schema: "NIA", Ticker: "NAMING", Name: "Naming test", Precision: 0, Amounts: []uint64{1000}, MinConfirmations: 1,
 	})
 	if err != nil {
@@ -137,8 +145,11 @@ func TestRGB11NamingIssueRenameAndReceiverOrigin(t *testing.T) {
 	if recipientWallet == nil {
 		t.Fatal("create recipient fixture")
 	}
-	recipient := newRGB11FlowManager(t, recipientWallet, rpc, evidence, 42)
-	if _, err := recipient.rgbManager.ImportRGB11Contract(context.Background(), []byte(issued.Armor)); err != nil {
+	recipient := newRGB11ActivatedFlowAccount(t, "comfort very add tuition senior run eight snap burst appear exile dutch", remote, client, evidence, rpc)
+	if recipient.wallet.GetAddress() != recipientWallet.GetAddress() {
+		t.Fatal("activated recipient changed fixture wallet")
+	}
+	if _, err := recipient.ImportRGB11Contract(context.Background(), []byte(issued.Armor)); err != nil {
 		t.Fatal(err)
 	}
 	received, err := recipient.GetRGB11State()
@@ -163,10 +174,7 @@ func TestRGB11NamingIssueRenameAndReceiverOrigin(t *testing.T) {
 	if err != nil || len(received.TickerInfos) != 1 || len(received.Assets) != 0 || received.TickerInfos[0].AssetKey != issued.AssetName.String() || received.TickerInfos[0].Ticker != "receiver reload alias" {
 		t.Fatalf("zero-balance imported contract disappeared after restart: %+v %v", received, err)
 	}
-	if err := restarted.projectionStore.SetScope("wallet-empty-account-0"); err != nil {
-		t.Fatal(err)
-	}
-	if err := restarted.engineStore.SetScope("wallet-empty-account-0"); err != nil {
+	if err := recipient.SwitchAccount(1); err != nil {
 		t.Fatal(err)
 	}
 	empty, err := recipient.GetRGB11State()
@@ -176,7 +184,7 @@ func TestRGB11NamingIssueRenameAndReceiverOrigin(t *testing.T) {
 	if err := recipient.SetRGB11LocalAssetName(issued.ContractID, "foreign alias"); !errors.Is(err, rgb11wallet.ErrInvalidRGB11Asset) {
 		t.Fatalf("empty wallet renamed another scope's contract: %v", err)
 	}
-	if err := restarted.selectRGB11Scope(); err != nil {
+	if err := recipient.SwitchAccount(0); err != nil {
 		t.Fatal(err)
 	}
 

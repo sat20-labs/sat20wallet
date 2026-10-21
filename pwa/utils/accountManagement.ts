@@ -107,6 +107,9 @@ export interface AccountAutopayFundingStatus {
   effective_amount_per_block?: string
   recommended_funding_amount?: string
   recommended_funding_blocks?: number
+  remaining_payment_blocks?: number
+  estimated_expiry_height?: number
+  estimated_funded_expiry_height?: number
 }
 
 export interface AccountAutopayFundingResult {

@@ -19,7 +19,7 @@
         <Button size="icon" variant="ghost" @click="handlerRefresh">
           <Icon icon="lets-icons:refresh-2-light" class="text-zinc-300 mb-[1px]" />
         </Button>
-        <Button size="icon" variant="ghost" as-child>
+        <Button v-if="mempoolUrl" size="icon" variant="ghost" as-child>
           <a :href="mempoolUrl" target="_blank" class="mb-[1px] hover:text-primary"
             :title="$t('l1AssetsTabs.viewTradeHistory')">
             <Icon icon="quill:link" class="text-zinc-400 hover:text-primary/90" />
@@ -31,6 +31,10 @@
     <!-- Asset Lists -->
     <div class="space-y-2">
       <div v-if="selectedType === 'RGB11'" class="rounded-lg border border-zinc-700 bg-muted/60 p-3 text-xs text-zinc-400">
+        <div class="mb-3 flex flex-wrap items-center gap-2 text-foreground">
+          <span class="text-sm font-semibold">{{ $t('rgb11Transfer.protocolVersion') }}</span>
+          <span class="rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 font-mono text-xs font-semibold text-primary">0.11.1</span>
+        </div>
         <div class="flex justify-between gap-3">
           <span>{{ $t('rgb11Transfer.consistency') }}: {{ rgb11State.consistency_status }}</span>
           <span>{{ $t('rgb11Transfer.accountManaged') }}</span>
@@ -60,7 +64,7 @@
             <div v-for="task in rgb11PendingTasks" :key="task.key"
               class="rounded border border-amber-800/60 bg-amber-950/20 p-2">
               <div class="flex items-center justify-between gap-2">
-                <span>{{ task.representative.asset?.Name?.Ticker || 'RGB11' }} · {{ rgb11TaskMode(task) }}</span>
+                <span>{{ task.representative.asset?.Name?.Ticker || 'RGB' }} · {{ rgb11TaskMode(task) }}</span>
                 <span :class="rgb11TransferStatusClass(task.representative.status)">
                   {{ task.representative.status }}
                 </span>
@@ -101,8 +105,8 @@
             <div v-for="transfer in rgb11Transfers" :key="transfer.transfer_id"
               class="rounded border border-zinc-700/60 p-2">
               <div class="flex items-center justify-between gap-2">
-                <span>{{ transfer.direction }} · {{ transfer.asset?.Name?.Ticker || 'RGB11' }}</span>
-                <span :class="rgb11TransferStatusClass(transfer.status)">{{ transfer.status }}</span>
+                <span class="min-w-0 flex-1 break-all">{{ transfer.direction }} · {{ transfer.asset?.Name?.Ticker || 'RGB' }}</span>
+                <span class="shrink-0" :class="rgb11TransferStatusClass(transfer.status)">{{ transfer.status }}</span>
               </div>
               <div>{{ $t('rgb11Transfer.ackStatus') }}: {{ transfer.ack_status || 'pending' }}</div>
               <div v-if="transfer.reject_reason" class="text-red-400">
@@ -138,8 +142,8 @@
                 {{ asset.display_name }}
               </div>
               <div v-if="asset.protocol === 'rgb11'" class="break-all font-mono text-[10px] leading-4 text-zinc-500"
-                :title="asset.canonical_name || `rgb11:${asset.type || 'f'}:${asset.ticker}`">
-                {{ $t('rgb11Transfer.assetId') }}: {{ asset.canonical_name || `rgb11:${asset.type || 'f'}:${asset.ticker}` }}
+                :title="asset.canonical_name || asset.key || `rgb11:${asset.type || 'f'}:${asset.ticker}`">
+                {{ $t('rgb11Transfer.assetId') }}: {{ asset.canonical_name || asset.key || `rgb11:${asset.type || 'f'}:${asset.ticker}` }}
               </div>
               <div v-if="asset.protocol === 'rgb11' && asset.contract_id" class="break-all font-mono text-[10px] leading-4 text-zinc-500"
                 :title="asset.contract_id">
@@ -796,6 +800,8 @@ const formatAmount = (asset: Asset) => {
 const handlerRefresh = async () => {
   console.log('L1AssetsTabs - Refresh')
   if (selectedType.value === 'RGB11') {
+    let checkSession: () => void
+    try { checkSession = walletRequestSessionGuard('refreshRGB11State') } catch { return }
     try {
       await syncDirectMailboxOnce(true)
     } catch {
@@ -803,6 +809,14 @@ const handlerRefresh = async () => {
     } finally {
       startDirectMailboxRetry(true)
     }
+    try {
+      checkSession()
+      await refreshRGB11TaskState(checkSession)
+    } catch (error) {
+      try { checkSession() } catch { return }
+      rgb11Store.setError(error instanceof Error ? error.message : String(error || ''))
+    }
+    return
   }
   emit('refresh')
 }

@@ -10,13 +10,17 @@ import (
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 )
 
-func rereviewRecoveryPackage(t *testing.T, manager *Manager) (*account.RecoveryPackage, *AccountStorageAuthorization, []byte) {
+func rereviewRecoveryPackage(t *testing.T, manager *Manager, passwords ...string) (*account.RecoveryPackage, *AccountStorageAuthorization, []byte) {
 	t.Helper()
+	password := "password"
+	if len(passwords) > 0 {
+		password = passwords[0]
+	}
 	auth, err := manager.ConfirmAccountStorage(AccountStorageTemporary, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	backup, err := manager.ExportAccountBackupForPWA("password", nil)
+	backup, err := manager.ExportAccountBackupForPWA(password, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

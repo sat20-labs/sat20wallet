@@ -472,7 +472,7 @@ func (p *Manager) GetAccountAutopayFundingStatus() (*AccountAutopayFundingStatus
 		}
 	}
 	if pending {
-		waiting, receiptErr := p.reconcileAccountAutopayReceipt(record, status.Ready)
+		waiting, receiptErr := p.reconcileAccountAutopayReceipt(record)
 		if receiptErr != nil && waiting {
 			return nil, receiptErr
 		}
@@ -502,6 +502,26 @@ func (p *Manager) GetAccountAutopayFundingStatus() (*AccountAutopayFundingStatus
 		return nil, err
 	}
 	status.EffectiveAmountPerBlock = fundingRate
+	if status.FundingPending {
+		status.EstimatedExpiryHeight = 0
+		status.RemainingPaymentBlocks = 0
+	}
+	// Forecast only against a running, current payment view. A paused or stale
+	// contract must not imply that adding delegate principal restores service.
+	if state != nil && strings.EqualFold(state.Status, "active") && !status.FundingPending &&
+		(status.Ready || status.CanFund) && status.Reason != AccountAutopayReasonPaymentExpired {
+		balanceText := status.Balance
+		if balanceText == "" {
+			balanceText = "0"
+		}
+		balance, balanceErr := decimalRat(balanceText)
+		principal, principalErr := decimalRat(status.RecommendedFundingAmount)
+		rate, rateErr := decimalRat(fundingRate)
+		if balanceErr == nil && principalErr == nil && rateErr == nil {
+			balance.Add(balance, principal)
+			status.EstimatedFundedExpiryHeight, _ = accountAutopayExpiryHeight(status.CurrentBlock, balance, rate)
+		}
+	}
 	return &status, nil
 }
 
@@ -610,8 +630,7 @@ func (p *Manager) confirmPaidAccountStorageWithWallet(location AccountIndexerLoc
 		return nil, fmt.Errorf("check existing AUTOPAY storage: %w", err)
 	}
 	if accountAutopayLogPending(previous) {
-		previousReady := accountAutopayStateReady(state, defaults, payer, previous.Parameters["amount_per_block"])
-		waiting, receiptErr := p.reconcileAccountAutopayReceipt(previous, previousReady)
+		waiting, receiptErr := p.reconcileAccountAutopayReceipt(previous)
 		if receiptErr != nil {
 			return nil, receiptErr
 		}
@@ -677,13 +696,6 @@ func (p *Manager) FundAccountAutopay(confirmed AccountAutopayFundingStatus) (*Ac
 	if !status.Required {
 		return nil, fmt.Errorf("current account does not use paid DKVS storage")
 	}
-	if status.Ready {
-		return &AccountAutopayFundingResult{
-			ContractAddress: defaults.AutopayContract, FeeAsset: defaults.AutopayFeeAssetName,
-			AmountPerBlock: amountPerBlock, FundingAmount: fundingAmount,
-			FundingBlocks: accountPaidDefaultFundingBlocks, Reused: true,
-		}, nil
-	}
 	if !status.CanFund {
 		return nil, fmt.Errorf("AUTOPAY cannot be funded: %s", status.Message)
 	}
@@ -725,8 +737,7 @@ func (p *Manager) fundAccountAutopayWithWallet(defaults dkvsindexer.NetworkDefau
 		if err != nil {
 			return existing.TxID, &AccountAutopayPendingError{TransactionID: existing.TxID, Cause: err}
 		}
-		oldReady := accountAutopayStateReady(state, defaults, payer, existing.Parameters["amount_per_block"])
-		waiting, err := p.reconcileAccountAutopayReceipt(existing, oldReady)
+		waiting, err := p.reconcileAccountAutopayReceipt(existing)
 		if err != nil {
 			return existing.TxID, err
 		}
@@ -766,12 +777,20 @@ func (p *Manager) fundAccountAutopayWithWallet(defaults dkvsindexer.NetworkDefau
 			Message: "AUTOPAY 充值未提交", Details: map[string]string{"error": err.Error()}})
 		return "", errors.Join(err, logErr)
 	}
-	if err := p.waitForAccountAutopayReady(defaults, amountPerBlock, payer); err != nil {
+	// Existing service readiness cannot confirm a new renewal. Reconcile the
+	// exact transaction persisted by the invoke path before reporting success.
+	record, err = p.operationLogManager().Get(record.ID)
+	if err != nil {
 		return result.TxID, &AccountAutopayPendingError{TransactionID: result.TxID, Cause: err}
 	}
-	if _, err := p.UpdateOperationLog(record.ID, OperationLogUpdate{
-		Status: OperationLogSucceeded, Message: "合约查询确认 AUTOPAY 支付已就绪",
-	}); err != nil {
+	waiting, err := p.reconcileAccountAutopayReceipt(record)
+	if err != nil {
+		return result.TxID, err
+	}
+	if waiting {
+		return result.TxID, &AccountAutopayPendingError{TransactionID: result.TxID}
+	}
+	if err := p.waitForAccountAutopayReady(defaults, amountPerBlock, payer); err != nil {
 		return result.TxID, &AccountAutopayPendingError{TransactionID: result.TxID, Cause: err}
 	}
 	return result.TxID, nil

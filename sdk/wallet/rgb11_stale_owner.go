@@ -4,6 +4,7 @@ package wallet
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -78,48 +79,63 @@ func (p *Manager) ApplyRGB11StaleOwner(approved RGB11StaleOwnerPlan) error {
 	if approved.Target != rgb11StaleLockOnlyTarget {
 		return errors.New("maintenance plan is not for the approved C/4Dmrd owner")
 	}
-	want, err := rgb11OwnerFingerprint(approved)
-	if err != nil || approved.Fingerprint == "" || want != approved.Fingerprint {
-		return errors.New("approved stale owner plan fingerprint mismatch")
-	}
-	source, err := p.rgb11OwnerSource(approved.Target)
-	if err != nil {
-		return err
-	}
-	current, planErr := buildRGB11OwnerPlan(approved.Target, source, approved.ReservationIDHash)
-	if planErr != nil {
-		return planErr
-	}
-	if current == nil || *current != approved {
-		return errors.New("approved stale owner plan no longer matches live evidence")
-	}
-	if source.pending.ReservationID != "" {
-		if err := p.clearRGB11StaleOwner(approved.Target.TransferID, approved.ReservationIDHash); err != nil {
-			return err
-		}
-	}
-	readback, err := p.rgbManager.projectionStore.LoadPendingTransfer(approved.Target.TransferID)
-	if err != nil || readback.ReservationID != "" {
-		if err != nil {
-			return err
-		}
-		return errors.New("target reservation owner clearing was not persisted")
-	}
-	verified, err := p.rgb11OwnerSource(approved.Target)
-	if err != nil {
-		return err
-	}
-	after, err := buildRGB11OwnerPlan(approved.Target, verified, approved.ReservationIDHash)
-	if err != nil || after == nil || *after != approved {
-		if err != nil {
-			return err
-		}
-		return errors.New("protected RGB11 state changed while clearing owner")
-	}
-	return nil
+	_, err := runRGB11ManagedOperation(p, context.Background(), rgb11ManagedOperationContinue,
+		func(manager *rgb11Manager) (struct{}, error) {
+			if manager == nil {
+				return struct{}{}, ErrRGB11OperationScopeChanged
+			}
+			want, err := rgb11OwnerFingerprint(approved)
+			if err != nil || approved.Fingerprint == "" || want != approved.Fingerprint {
+				return struct{}{}, errors.New("approved stale owner plan fingerprint mismatch")
+			}
+			source, err := manager.rgb11OwnerSource(approved.Target)
+			if err != nil {
+				return struct{}{}, err
+			}
+			current, planErr := buildRGB11OwnerPlan(approved.Target, source, approved.ReservationIDHash)
+			if planErr != nil {
+				return struct{}{}, planErr
+			}
+			if current == nil || *current != approved {
+				return struct{}{}, errors.New("approved stale owner plan no longer matches live evidence")
+			}
+			if source.pending.ReservationID != "" {
+				if err := manager.clearRGB11StaleOwner(approved.Target.TransferID, approved.ReservationIDHash); err != nil {
+					return struct{}{}, err
+				}
+			}
+			readback, err := manager.projectionStore.LoadPendingTransfer(approved.Target.TransferID)
+			if err != nil || readback.ReservationID != "" {
+				if err != nil {
+					return struct{}{}, err
+				}
+				return struct{}{}, errors.New("target reservation owner clearing was not persisted")
+			}
+			verified, err := manager.rgb11OwnerSource(approved.Target)
+			if err != nil {
+				return struct{}{}, err
+			}
+			after, err := buildRGB11OwnerPlan(approved.Target, verified, approved.ReservationIDHash)
+			if err != nil || after == nil || *after != approved {
+				if err != nil {
+					return struct{}{}, err
+				}
+				return struct{}{}, errors.New("protected RGB11 state changed while clearing owner")
+			}
+			return struct{}{}, nil
+		})
+	return err
 }
 
 func (p *Manager) clearRGB11StaleOwner(transferID, ownerHash string) error {
+	manager, err := p.captureRGB11NetworkScope(false)
+	if err != nil {
+		return err
+	}
+	return manager.clearRGB11StaleOwner(transferID, ownerHash)
+}
+
+func (p *rgb11Manager) clearRGB11StaleOwner(transferID, ownerHash string) error {
 	if p == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil ||
 		strings.TrimSpace(transferID) == "" || !validDiscardHex(ownerHash, 32) {
 		return ErrRGB11Inconsistent
@@ -135,21 +151,31 @@ func (p *Manager) clearRGB11StaleOwner(transferID, ownerHash string) error {
 	if hex.EncodeToString(digest[:]) != ownerHash {
 		return errors.New("target reservation owner changed after approval")
 	}
+	baseline := cloneRGB11BroadcastIntent(pending)
 	pending.ReservationID = ""
-	if err := p.rgbManager.projectionStore.SavePendingTransferState(pending); err != nil {
+	if err := p.rgbManager.projectionStore.CompareAndSavePendingTransferStates([]*rgb11wallet.PendingTransfer{baseline}, []*rgb11wallet.PendingTransfer{pending}); err != nil {
 		return err
 	}
+	backupErr := p.rgbManager.autoBackupRGB11AfterMutation()
 	readback, err := p.rgbManager.projectionStore.LoadPendingTransfer(transferID)
 	if err != nil {
-		return err
+		return errors.Join(err, backupErr)
 	}
 	if readback.ReservationID != "" {
-		return errors.New("target reservation owner clearing was not persisted")
+		return errors.Join(errors.New("target reservation owner clearing was not persisted"), backupErr)
 	}
-	return nil
+	return backupErr
 }
 
 func (p *Manager) rgb11OwnerSource(target RGB11StaleLockTarget) (rgb11OwnerSource, error) {
+	manager, err := p.captureRGB11NetworkScope(false)
+	if err != nil {
+		return rgb11OwnerSource{}, err
+	}
+	return manager.rgb11OwnerSource(target)
+}
+
+func (p *rgb11Manager) rgb11OwnerSource(target RGB11StaleLockTarget) (rgb11OwnerSource, error) {
 	var source rgb11OwnerSource
 	if target != rgb11StaleLockOnlyTarget {
 		return source, errors.New("maintenance target is not the approved C/4Dmrd owner")
@@ -205,7 +231,7 @@ func (p *Manager) rgb11OwnerSource(target RGB11StaleLockTarget) (rgb11OwnerSourc
 	if err != nil {
 		return source, err
 	}
-	allReservations := p.GetAllResv()
+	allReservations := p.accountManagementOwner().GetAllResv()
 	reservationJSON := make([]string, 0, len(allReservations))
 	for _, reservation := range allReservations {
 		if reservation == nil {

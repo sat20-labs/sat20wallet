@@ -4,7 +4,7 @@
       class="flex items-center justify-between w-full p-2 text-left text-primary font-medium rounded-lg">
       <div>
         <h2 class="text-lg font-bold text-zinc-200">{{ $t('networkSetting.title') }}</h2>
-        <p class="text-muted-foreground">{{ $t('networkSetting.subtitle') }}</p>
+        <p class="text-muted-foreground">{{ $t(isRegtestBuild ? 'networkSetting.regtestSubtitle' : 'networkSetting.subtitle') }}</p>
       </div>
       <div class="mr-2">
         <Icon v-if="isExpanded" icon="lucide:chevrons-up" class="mr-2 h-4 w-4" />
@@ -21,8 +21,13 @@
             <SelectValue :placeholder="$t('networkSetting.selectNetwork')" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem :value="Network.MAINNET">{{ $t('networkSetting.mainnet') }}</SelectItem>
-            <SelectItem :value="Network.TESTNET">{{ $t('networkSetting.testnet') }}</SelectItem>
+            <template v-if="isRegtestBuild">
+              <SelectItem :value="Network.REGTEST">{{ $t('networkSetting.regtest') }}</SelectItem>
+            </template>
+            <template v-else>
+              <SelectItem :value="Network.MAINNET">{{ $t('networkSetting.mainnet') }}</SelectItem>
+              <SelectItem :value="Network.TESTNET">{{ $t('networkSetting.testnet') }}</SelectItem>
+            </template>
           </SelectContent>
         </Select>
       </div>
@@ -62,6 +67,7 @@ import {
 import { useWalletStore } from '@/store/wallet'
 import { storeToRefs } from 'pinia'
 import { restartApp } from '@/utils/app-restart'
+import { isRegtestBuild } from '@/utils/networkMode'
 
 const isExpanded = ref(false)
 const walletStore = useWalletStore()

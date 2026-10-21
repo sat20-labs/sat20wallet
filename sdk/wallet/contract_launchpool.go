@@ -2123,7 +2123,6 @@ func (p *LaunchPoolContractRunTime) returnAssetsToDeployer() error {
 		p.CloseAssetTxID = txID
 		p.TotalOutputAssets = p.TotalOutputAssets.Add(assetAmt)
 		p.AssetAmtInPool = p.AssetAmtInPool.Sub(assetAmt)
-		p.SatsValueInPool -= DEFAULT_FEE_SATSNET
 		p.recordCloseAssetTxID(txID)
 	}
 	p.mutex.Unlock()
@@ -2493,7 +2492,6 @@ func (p *LaunchPoolContractRunTime) SetPeerActionResult(action string, param any
 				p.CheckPointBlock = dealInfo.Height
 				p.TotalOutputAssets = p.TotalOutputAssets.Add(dealInfo.TotalAmt)
 				p.AssetAmtInPool = p.AssetAmtInPool.Sub(dealInfo.TotalAmt)
-				p.SatsValueInPool -= DEFAULT_FEE_SATSNET
 				p.CloseAssetTxID = dealInfo.TxId
 				p.recordCloseAssetTxID(dealInfo.TxId)
 				bUpdate = true

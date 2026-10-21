@@ -37,6 +37,7 @@ import { computed } from 'vue'
 import { cn } from '@/lib/utils' // Assuming you have the cn utility from shadcn
 import { Buffer } from 'buffer'
 import { bitcoin } from '@/lib/bitcoinjs'
+import { bitcoinNetworkFor } from '@/lib/bitcoin-network'
 import { useWalletStore } from '@/store'
 // --- Type Definitions (Copied from SignPsbt.vue) ---
 interface AssetName {
@@ -75,7 +76,7 @@ const walletStore = useWalletStore()
 
 const destination = (item: TxDetailItem) => {
   const script = Buffer.from(item.PkScript, 'base64')
-  const network = walletStore.network === 'mainnet' ? bitcoin.networks.bitcoin : bitcoin.networks.testnet
+  const network = bitcoinNetworkFor(walletStore.network)
   try {
     return bitcoin.address.fromOutputScript(script, network)
   } catch {

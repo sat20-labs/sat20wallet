@@ -3,6 +3,8 @@ package wallet
 import (
 	"errors"
 	"fmt"
+	"math"
+	"math/big"
 	"strings"
 	"time"
 
@@ -30,27 +32,30 @@ const (
 // AUTOPAY delegate. It is intentionally separate from account storage mode:
 // an expired paid delegate remains paid and must be funded again.
 type AccountAutopayFundingStatus struct {
-	FundingTransactionID     string `json:"funding_transaction_id,omitempty"`
-	FundingError             string `json:"funding_error,omitempty"`
-	FundingPending           bool   `json:"funding_pending,omitempty"`
-	FundingCanResume         bool   `json:"funding_can_resume,omitempty"`
-	Required                 bool   `json:"required"`
-	Ready                    bool   `json:"ready"`
-	NeedsFunding             bool   `json:"needs_funding"`
-	CanFund                  bool   `json:"can_fund"`
-	Reason                   string `json:"reason"`
-	Message                  string `json:"message,omitempty"`
-	ContractAddress          string `json:"contract_address,omitempty"`
-	FeeAsset                 string `json:"fee_asset,omitempty"`
-	Payer                    string `json:"payer,omitempty"`
-	CurrentBlock             int64  `json:"current_block,omitempty"`
-	LastPayHeight            int64  `json:"last_pay_height,omitempty"`
-	AmountPerBlock           string `json:"amount_per_block,omitempty"`
-	Balance                  string `json:"balance,omitempty"`
-	RequiredAmountPerBlock   string `json:"required_amount_per_block,omitempty"`
-	EffectiveAmountPerBlock  string `json:"effective_amount_per_block,omitempty"`
-	RecommendedFundingAmount string `json:"recommended_funding_amount,omitempty"`
-	RecommendedFundingBlocks uint64 `json:"recommended_funding_blocks,omitempty"`
+	FundingTransactionID        string `json:"funding_transaction_id,omitempty"`
+	FundingError                string `json:"funding_error,omitempty"`
+	FundingPending              bool   `json:"funding_pending,omitempty"`
+	FundingCanResume            bool   `json:"funding_can_resume,omitempty"`
+	Required                    bool   `json:"required"`
+	Ready                       bool   `json:"ready"`
+	NeedsFunding                bool   `json:"needs_funding"`
+	CanFund                     bool   `json:"can_fund"`
+	Reason                      string `json:"reason"`
+	Message                     string `json:"message,omitempty"`
+	ContractAddress             string `json:"contract_address,omitempty"`
+	FeeAsset                    string `json:"fee_asset,omitempty"`
+	Payer                       string `json:"payer,omitempty"`
+	CurrentBlock                int64  `json:"current_block,omitempty"`
+	LastPayHeight               int64  `json:"last_pay_height,omitempty"`
+	AmountPerBlock              string `json:"amount_per_block,omitempty"`
+	Balance                     string `json:"balance,omitempty"`
+	RequiredAmountPerBlock      string `json:"required_amount_per_block,omitempty"`
+	EffectiveAmountPerBlock     string `json:"effective_amount_per_block,omitempty"`
+	RecommendedFundingAmount    string `json:"recommended_funding_amount,omitempty"`
+	RecommendedFundingBlocks    uint64 `json:"recommended_funding_blocks,omitempty"`
+	RemainingPaymentBlocks      uint64 `json:"remaining_payment_blocks,omitempty"`
+	EstimatedExpiryHeight       int64  `json:"estimated_expiry_height,omitempty"`
+	EstimatedFundedExpiryHeight int64  `json:"estimated_funded_expiry_height,omitempty"`
 }
 
 func accountAutopayStateFundingStatus(state *dkvsindexer.AutopayContractState,
@@ -140,9 +145,29 @@ func accountAutopayStateFundingStatus(state *dkvsindexer.AutopayContractState,
 		return result
 	}
 	result.Ready = true
+	result.CanFund = true // An explicit, confirmed renewal may precede expiry.
 	result.Reason = AccountAutopayReasonReady
 	result.Message = "AUTOPAY 支付正常。"
+	if delegate.LastPayHeight == state.CurrentBlock &&
+		(state.NextPayHeight == 0 || state.NextPayHeight-state.CurrentBlock == 1) {
+		result.EstimatedExpiryHeight, result.RemainingPaymentBlocks = accountAutopayExpiryHeight(state.CurrentBlock, balance, amount)
+	}
 	return result
+}
+
+// The existing paid gate requires another full block's balance after each
+// payment. Expiry is therefore the block that exhausts that balance, not the
+// following block. This estimate is never used as proof of payment.
+func accountAutopayExpiryHeight(height int64, balance, rate *big.Rat) (int64, uint64) {
+	if height <= 0 || balance == nil || balance.Sign() < 0 || rate == nil || rate.Sign() <= 0 {
+		return 0, 0
+	}
+	quotient := new(big.Rat).Quo(balance, rate)
+	blocks := new(big.Int).Quo(quotient.Num(), quotient.Denom())
+	if !blocks.IsInt64() || blocks.Int64() > math.MaxInt64-height {
+		return 0, 0
+	}
+	return height + blocks.Int64(), blocks.Uint64()
 }
 
 func accountAutopayStateReady(state *dkvsindexer.AutopayContractState, defaults dkvsindexer.NetworkDefaults,
@@ -158,7 +183,20 @@ func (p *Manager) accountAutopayState(defaults dkvsindexer.NetworkDefaults) (*dk
 	if err != nil {
 		return nil, err
 	}
-	return dkvsindexer.DecodeAutopayContractState([]byte(raw), defaults.AutopayContract)
+	state, err := dkvsindexer.DecodeAutopayContractState([]byte(raw), defaults.AutopayContract)
+	if err != nil {
+		return nil, err
+	}
+	height := p.l2IndexerClient.GetSyncHeight()
+	if height < 0 {
+		return nil, fmt.Errorf("unable to read SatoshiNet indexer height")
+	}
+	// Runtime currentBlock records the last invocation, not every settlement.
+	// Normalize only this decoded view; never change contract state on the node.
+	if int64(height) > state.CurrentBlock {
+		state.CurrentBlock = int64(height)
+	}
+	return state, nil
 }
 
 func (p *Manager) accountAutopayReady(defaults dkvsindexer.NetworkDefaults, payer, requiredAmount string) (bool, error) {

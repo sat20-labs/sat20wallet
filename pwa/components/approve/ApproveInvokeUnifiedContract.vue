@@ -92,7 +92,14 @@ const contractType = computed(() => req.value?.ContractType || req.value?.contra
 const contractAddress = computed(() => req.value?.ContractAddress || req.value?.contractAddress || '')
 const firstAsset = computed(() => {
   const assets = req.value?.Assets || req.value?.assets
-  return Array.isArray(assets) ? (assets[0] || {}) : {}
+  if (Array.isArray(assets)) return assets[0] || {}
+  const value = req.value?.Value ?? req.value?.value
+  const subtype = req.value?.SubType || req.value?.subType
+  const action = req.value?.Action || req.value?.action
+  return contractType.value === 'agent' && subtype === 'prediction' && action === 'bet' &&
+    Number.isSafeInteger(value) && value > 0
+    ? { AssetName: '::', Amount: value }
+    : {}
 })
 const betAssetName = computed(() => firstAsset.value?.AssetName || firstAsset.value?.assetName || '')
 const betAmount = computed(() => firstAsset.value?.Amount || firstAsset.value?.amount || '')

@@ -142,7 +142,7 @@ func newFakeL1Indexer(t *testing.T, indexerPubKey string, lockedPkScript []byte,
 
 	fake := &fakeL1Indexer{names: make(map[string]string)}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/testnet/kv/register" {
+		if r.URL.Path == "/testnet/kv/register" || (r.Method == http.MethodGet && r.URL.Path == "/testnet/v3/indexer/pubkey") {
 			require.NoError(t, json.NewEncoder(w).Encode(indexerwire.RegisterPubKeyResp{
 				BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"},
 				PubKey:   indexerPubKey,
@@ -458,7 +458,7 @@ func newTestHarness(t *testing.T, exe, nodeDir, p2pAddr, rpcAddr string, args, e
 	t.Helper()
 	require.NoError(t, os.MkdirAll(filepath.Join(nodeDir, "logs"), 0o755))
 	logPath := filepath.Join(nodeDir, "btcd.stdout.log")
-	logFile, err := os.Create(logPath)
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	require.NoError(t, err)
 
 	cmd := exec.Command(exe, args...)
@@ -699,10 +699,18 @@ func joinBlocks(nodes []*testHarness) error {
 }
 
 func satoshinetBuildArtifacts(t *testing.T) satoshinetArtifacts {
+	return buildSatoshiNetTestArtifacts(t, false)
+}
+
+func satoshinetCoreBuildArtifacts(t *testing.T) satoshinetArtifacts {
+	return buildSatoshiNetTestArtifacts(t, true)
+}
+
+func buildSatoshiNetTestArtifacts(t *testing.T, coreOnly bool) satoshinetArtifacts {
 	t.Helper()
 	satoshinetBuildMu.Lock()
 	defer satoshinetBuildMu.Unlock()
-	if satoshinetTestArtifacts.coreExecutable != "" {
+	if satoshinetTestArtifacts.coreExecutable != "" && (coreOnly || satoshinetTestArtifacts.minerExecutable != "") {
 		return satoshinetTestArtifacts
 	}
 
@@ -730,19 +738,23 @@ func satoshinetBuildArtifacts(t *testing.T) satoshinetArtifacts {
 		artifacts.minerExecutable += ".exe"
 	}
 
-	cmd := exec.Command("go", "build", "-buildmode=plugin", "-o", artifacts.minerPlugin, "main.go")
-	cmd.Dir = sdkPluginDir
-	output, err := cmd.CombinedOutput()
-	require.NoError(t, err, string(output))
+	if !coreOnly {
+		cmd := exec.Command("go", "build", "-buildmode=plugin", "-o", artifacts.minerPlugin, "main.go")
+		cmd.Dir = sdkPluginDir
+		output, err := cmd.CombinedOutput()
+		require.NoError(t, err, string(output))
 
-	cmd = exec.Command("go", "build", "-tags=rpctest,wallet_plugin", "-o", artifacts.minerExecutable, "github.com/sat20-labs/satoshinet")
-	cmd.Dir = satoshinetDir
-	output, err = cmd.CombinedOutput()
-	require.NoError(t, err, string(output))
+		cmd = exec.Command("go", "build", "-tags=rpctest,wallet_plugin", "-o", artifacts.minerExecutable, "github.com/sat20-labs/satoshinet")
+		cmd.Dir = satoshinetDir
+		output, err = cmd.CombinedOutput()
+		require.NoError(t, err, string(output))
+	} else {
+		artifacts.minerExecutable, artifacts.minerPlugin = "", ""
+	}
 
-	cmd = exec.Command("go", "build", "-buildmode=plugin", "-o", artifacts.corePlugin, "main.go")
+	cmd := exec.Command("go", "build", "-buildmode=plugin", "-o", artifacts.corePlugin, "main.go")
 	cmd.Dir = transcendPluginDir
-	output, err = cmd.CombinedOutput()
+	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
 
 	cmd = exec.Command("go", "build", "-tags=rpctest,stp_plugin", "-o", artifacts.coreExecutable, "github.com/sat20-labs/satoshinet")

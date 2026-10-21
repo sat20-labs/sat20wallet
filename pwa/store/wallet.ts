@@ -24,6 +24,7 @@ import {
 } from '@/lib/identity-boundary'
 import { clearSessionDappGrants } from '@/lib/authorized-origins'
 import accountManagementSDK from '@/utils/accountManagement'
+import { isRegtestBuild } from '@/utils/networkMode'
 
 
 export const useWalletStore = defineStore('wallet', () => {
@@ -225,6 +226,9 @@ export const useWalletStore = defineStore('wallet', () => {
   }
 
   const setNetwork = async (value: Network) => {
+    if (isRegtestBuild && value !== Network.REGTEST) {
+      throw new Error('The isolated regtest build cannot switch to a public network')
+    }
     if (value === network.value) return true
     if (isSwitchingNetwork.value) return false
     // Confirm before releasing the current manager. The password is local to
@@ -263,7 +267,7 @@ export const useWalletStore = defineStore('wallet', () => {
       throw new Error('Root account is not explicitly available for network switch')
     }
     isSwitchingNetwork.value = true
-    const env = 'prd' as const
+    const env: 'dev' | 'prd' = isRegtestBuild ? 'dev' : 'prd'
     const previousNetwork = network.value
     const previousConfig = getConfig(env, previousNetwork)
     const targetConfig = getConfig(env, value)

@@ -612,7 +612,7 @@ func (p *Manager) AllowSplicingInV2(resv *SplicingReservation, utxos, fees []*Tx
 	if needStub > 0 {
 		for range needStub {
 			weightEstimate.AddP2WSHOutput()
-			feeValue -= int64(needStub) * stubValue
+			feeValue -= stubValue
 		}
 	}
 
@@ -646,9 +646,6 @@ func (p *Manager) AllowSplicingInV2(resv *SplicingReservation, utxos, fees []*Tx
 			feeValue += info.OutValue.Value
 			feeUtxosInfo = append(feeUtxosInfo, info)
 			weightEstimate.AddTaprootKeySpendInput(txscript.SigHashDefault)
-			if feeValue >= weightEstimate.Fee(feeRate) {
-				break
-			}
 		}
 	}
 	switch assetName.Protocol {

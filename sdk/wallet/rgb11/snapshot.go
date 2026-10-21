@@ -18,6 +18,228 @@ type SnapshotRecord struct {
 	Value []byte `json:"value"`
 }
 
+// SnapshotProofUpdate changes only the chain-derived projection fields for an
+// existing allocation proof. It is used to prepare a recovery/refresh snapshot
+// before any of its records are published to the wallet database.
+type SnapshotProofUpdate struct {
+	OutPoint      string
+	AssetName     indexer.AssetName
+	Status        string
+	Confirmations int64
+}
+
+// ProofsFromProjectionSnapshot decodes the proof records without consulting a
+// live ProjectionStore. The returned proof values are independent copies.
+func ProofsFromProjectionSnapshot(records []SnapshotRecord) ([]*AllocationProof, error) {
+	proofs := make([]*AllocationProof, 0)
+	for _, record := range records {
+		if !strings.HasPrefix(record.Key, "proof-") {
+			continue
+		}
+		proof := new(AllocationProof)
+		if err := decode(record.Value, proof); err != nil || proof.OutPoint == "" ||
+			proof.AssetName.Protocol != Protocol ||
+			record.Key != "proof-"+proof.OutPoint+"-"+proof.AssetName.String() {
+			return nil, ErrInvalidProof
+		}
+		proofs = append(proofs, proof)
+	}
+	return proofs, nil
+}
+
+// OutputsFromProjectionSnapshot decodes independently owned output records so
+// recovery can compare cached carrier value/script and asset amounts with
+// fresh validation evidence before publishing a candidate.
+func OutputsFromProjectionSnapshot(records []SnapshotRecord) (map[string]*indexer.TxOutput, error) {
+	outputs := make(map[string]*indexer.TxOutput)
+	for _, record := range records {
+		if !strings.HasPrefix(record.Key, "output-") {
+			continue
+		}
+		outpoint := strings.TrimPrefix(record.Key, "output-")
+		output := new(indexer.TxOutput)
+		if err := decode(record.Value, output); err != nil || output.OutPointStr != outpoint || outpoint == "" {
+			return nil, ErrProjectionMismatch
+		}
+		if _, exists := outputs[outpoint]; exists {
+			return nil, ErrProjectionMismatch
+		}
+		outputs[outpoint] = output.Clone()
+	}
+	return outputs, nil
+}
+
+// ValidationReceiptsFromProjectionSnapshot decodes the receipt records that
+// accompany a projection snapshot. Each receipt remains bound to its storage
+// key and committed consignment hash.
+func ValidationReceiptsFromProjectionSnapshot(records []SnapshotRecord) (map[string]*ValidationReceipt, error) {
+	receipts := make(map[string]*ValidationReceipt)
+	for _, record := range records {
+		if !strings.HasPrefix(record.Key, "validation-") {
+			continue
+		}
+		hash := strings.TrimPrefix(record.Key, "validation-")
+		receipt := new(ValidationReceipt)
+		if err := decode(record.Value, receipt); err != nil || receipt.validate(hash) != nil {
+			return nil, ErrValidationReceipt
+		}
+		receipts[hash] = receipt
+	}
+	return receipts, nil
+}
+
+// TransfersFromProjectionSnapshot decodes the operation states from the same
+// candidate snapshot used for proofs and objects. It intentionally avoids
+// reading live projection/reservation stores while a cold import is being
+// resolved.
+func TransfersFromProjectionSnapshot(records []SnapshotRecord) ([]*TransferState, error) {
+	type transferKey struct {
+		direction  string
+		transferID string
+	}
+	byID := make(map[transferKey]*TransferState)
+	for _, record := range records {
+		switch {
+		case strings.HasPrefix(record.Key, "pending-"):
+			var pending PendingTransfer
+			if err := decode(record.Value, &pending); err != nil || pending.State.TransferID == "" ||
+				record.Key != "pending-"+pending.State.TransferID {
+				return nil, ErrRGB11Inconsistent
+			}
+			state := pending.State
+			byID[transferKey{direction: state.Direction, transferID: state.TransferID}] = &state
+		case strings.HasPrefix(record.Key, "transfer-"):
+			var state TransferState
+			if err := decode(record.Value, &state); err != nil || state.TransferID == "" ||
+				record.Key != "transfer-"+state.TransferID {
+				return nil, ErrRGB11Inconsistent
+			}
+			key := transferKey{direction: state.Direction, transferID: state.TransferID}
+			if _, exists := byID[key]; !exists {
+				copy := state
+				byID[key] = &copy
+			}
+		}
+	}
+	states := make([]*TransferState, 0, len(byID))
+	for _, state := range byID {
+		states = append(states, state)
+	}
+	sort.Slice(states, func(i, j int) bool {
+		if states[i].TransferID != states[j].TransferID {
+			return states[i].TransferID < states[j].TransferID
+		}
+		return states[i].Direction < states[j].Direction
+	})
+	return states, nil
+}
+
+// PendingTransfersFromProjectionSnapshot returns the private operation records
+// from one recovery candidate. It is used only to derive their existing
+// reservation locks before the candidate is published.
+func PendingTransfersFromProjectionSnapshot(records []SnapshotRecord) ([]*PendingTransfer, error) {
+	result := make([]*PendingTransfer, 0)
+	seen := make(map[string]bool)
+	for _, record := range records {
+		if !strings.HasPrefix(record.Key, "pending-") {
+			continue
+		}
+		pending := new(PendingTransfer)
+		if err := decode(record.Value, pending); err != nil || pending.State.TransferID == "" ||
+			record.Key != "pending-"+pending.State.TransferID || seen[pending.State.TransferID] {
+			return nil, ErrRGB11Inconsistent
+		}
+		seen[pending.State.TransferID] = true
+		copy := *pending
+		result = append(result, &copy)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].State.TransferID < result[j].State.TransferID
+	})
+	return result, nil
+}
+
+// ReceiveReservationsFromProjectionSnapshot decodes the receive-side lock
+// records in the same candidate used to build the projection and owner plan.
+func ReceiveReservationsFromProjectionSnapshot(records []SnapshotRecord) ([]*ReceiveReservation, error) {
+	result := make([]*ReceiveReservation, 0)
+	seen := make(map[string]bool)
+	for _, record := range records {
+		if !strings.HasPrefix(record.Key, "receive-reservation-") {
+			continue
+		}
+		reservation := new(ReceiveReservation)
+		if err := decode(record.Value, reservation); err != nil || reservation.RequestID == "" ||
+			record.Key != "receive-reservation-"+reservation.RequestID || seen[reservation.RequestID] {
+			return nil, ErrRGB11Inconsistent
+		}
+		seen[reservation.RequestID] = true
+		copy := *reservation
+		result = append(result, &copy)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].RequestID < result[j].RequestID })
+	return result, nil
+}
+
+// UpdateProjectionSnapshotProofs returns a validated copy of a projection
+// snapshot with the requested proof statuses applied. Every update must match
+// exactly one existing proof; callers cannot accidentally publish a partial
+// candidate after a missing or duplicate proof identity.
+func UpdateProjectionSnapshotProofs(records []SnapshotRecord, updates []SnapshotProofUpdate) ([]SnapshotRecord, error) {
+	if len(updates) == 0 {
+		result := make([]SnapshotRecord, len(records))
+		for i, record := range records {
+			result[i] = SnapshotRecord{Key: record.Key, Value: append([]byte(nil), record.Value...)}
+		}
+		return result, nil
+	}
+	byKey := make(map[string]SnapshotProofUpdate, len(updates))
+	for _, update := range updates {
+		if update.OutPoint == "" || update.AssetName.Protocol != Protocol ||
+			(update.Status != "valid" && update.Status != "settled" && update.Status != "spending" &&
+				update.Status != "inconsistent" && update.Status != "orphaned") {
+			return nil, ErrInvalidProof
+		}
+		key := "proof-" + update.OutPoint + "-" + update.AssetName.String()
+		if _, exists := byKey[key]; exists {
+			return nil, ErrInvalidProof
+		}
+		byKey[key] = update
+	}
+	result := make([]SnapshotRecord, len(records))
+	seen := make(map[string]bool, len(updates))
+	for i, record := range records {
+		result[i] = SnapshotRecord{Key: record.Key, Value: append([]byte(nil), record.Value...)}
+		update, ok := byKey[record.Key]
+		if !ok {
+			continue
+		}
+		if seen[record.Key] {
+			return nil, ErrInvalidProof
+		}
+		proof := new(AllocationProof)
+		if err := decode(record.Value, proof); err != nil || proof.OutPoint != update.OutPoint ||
+			proof.AssetName != update.AssetName {
+			return nil, ErrInvalidProof
+		}
+		proof.Status = update.Status
+		proof.Confirmations = update.Confirmations
+		encoded, err := encode(proof)
+		if err != nil {
+			return nil, err
+		}
+		result[i].Value = encoded
+		seen[record.Key] = true
+	}
+	if len(seen) != len(byKey) {
+		return nil, ErrInvalidProof
+	}
+	if err := validateProjectionSnapshot(result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 func (s *ProjectionStore) snapshotPrefix() ([]byte, error) {
 	s.mu.RLock()
 	scope := s.scope
@@ -47,12 +269,10 @@ func (s *ProjectionStore) ExportSnapshot() ([]SnapshotRecord, error) {
 		return nil, err
 	}
 
-	// Consignments are represented once by object-<hash> records in DKVS
-	// snapshots. Runtime pending records are rehydrated on import. A recipient
-	// consignment kept only for address mailbox redelivery is transient cache
-	// and its object is excluded after delivery.
-	deliveryObjects := make(map[string]struct{})
-	canonicalObjects := make(map[string]struct{})
+	// Consignments are represented once by immutable object-<hash> records in
+	// snapshots. Runtime pending records are rehydrated on import. Keep the
+	// recipient object even after delivery: it may be the only exact copy of the
+	// consumer history or the body needed to retry after an uncertain ACK.
 	for index := range records {
 		if !strings.HasPrefix(records[index].Key, "pending-") {
 			continue
@@ -64,39 +284,19 @@ func (s *ProjectionStore) ExportSnapshot() ([]SnapshotRecord, error) {
 		if len(pending.RecipientConsignment) > 0 {
 			hash := sha256.Sum256(pending.RecipientConsignment)
 			pending.RecipientObjectHash = hex.EncodeToString(hash[:])
-			if pending.State.AddressMode && pending.State.Status != "prepared" {
-				deliveryObjects[pending.RecipientObjectHash] = struct{}{}
-			}
 		}
 		if len(pending.LocalConsignment) > 0 {
 			hash := sha256.Sum256(pending.LocalConsignment)
 			pending.LocalObjectHash = hex.EncodeToString(hash[:])
-			canonicalObjects[pending.LocalObjectHash] = struct{}{}
 		}
 		pending.RecipientConsignment = nil
 		pending.LocalConsignment = nil
-		if pending.State.Status != "prepared" && (pending.ChannelSend == nil || pending.ChannelSend.Signed) {
-			pending.SignedPSBT = nil
-		}
 		encoded, encodeErr := encode(&pending)
 		if encodeErr != nil {
 			return nil, encodeErr
 		}
 		records[index].Value = encoded
 	}
-	filtered := records[:0]
-	for _, record := range records {
-		if strings.HasPrefix(record.Key, "object-") {
-			hash := strings.TrimPrefix(record.Key, "object-")
-			_, delivery := deliveryObjects[hash]
-			_, canonical := canonicalObjects[hash]
-			if delivery && !canonical {
-				continue
-			}
-		}
-		filtered = append(filtered, record)
-	}
-	records = filtered
 	sort.Slice(records, func(i, j int) bool { return records[i].Key < records[j].Key })
 	if err := s.ValidateSnapshot(records); err != nil {
 		return nil, err
@@ -133,25 +333,7 @@ func (s *ProjectionStore) StageSnapshotImport(batch indexer.WriteBatch, records 
 	if err != nil {
 		return err
 	}
-	existing := make([][]byte, 0)
-	if err := s.db.BatchRead(prefix, false, func(key, _ []byte) error {
-		existing = append(existing, append([]byte(nil), key...))
-		return nil
-	}); err != nil {
-		return err
-	}
-	for _, key := range existing {
-		if err := batch.Delete(key); err != nil {
-			return err
-		}
-	}
-	for _, record := range records {
-		key := append(append([]byte(nil), prefix...), []byte(record.Key)...)
-		if err := batch.Put(key, append([]byte(nil), record.Value...)); err != nil {
-			return err
-		}
-	}
-	return nil
+	return stageSnapshotRecords(s.db, batch, prefix, records)
 }
 
 func (s *ProjectionStore) ValidateSnapshot(records []SnapshotRecord) error {
@@ -335,8 +517,7 @@ func validateProjectionSnapshot(records []SnapshotRecord) error {
 		if pending.LocalObjectHash != "" && objects[pending.LocalObjectHash] == nil {
 			return ErrValidationReceipt
 		}
-		if pending.State.Status == "prepared" && pending.RecipientObjectHash != "" &&
-			objects[pending.RecipientObjectHash] == nil {
+		if pending.RecipientObjectHash != "" && objects[pending.RecipientObjectHash] == nil {
 			return ErrValidationReceipt
 		}
 	}
@@ -529,21 +710,37 @@ func (s *EngineStore) StageSnapshotImport(batch indexer.WriteBatch, records []Sn
 	if err != nil {
 		return err
 	}
-	existing := make([][]byte, 0)
-	if err := s.db.BatchRead(prefix, false, func(key, _ []byte) error {
-		existing = append(existing, append([]byte(nil), key...))
+	return stageSnapshotRecords(s.db, batch, prefix, records)
+}
+
+// Stage only the byte differences. Keep reservation rebuilding in the original
+// atomic batch even when the engine/projection record itself is unchanged.
+func stageSnapshotRecords(database indexer.KVDB, batch indexer.WriteBatch, prefix []byte, records []SnapshotRecord) error {
+	existing := make(map[string][]byte)
+	if err := database.BatchRead(prefix, false, func(key, value []byte) error {
+		existing[string(key)] = append([]byte(nil), value...)
 		return nil
 	}); err != nil {
 		return err
 	}
-	for _, key := range existing {
-		if err := batch.Delete(key); err != nil {
+	for _, record := range records {
+		key := append(append([]byte(nil), prefix...), []byte(record.Key)...)
+		previous, found := existing[string(key)]
+		delete(existing, string(key))
+		if found && bytes.Equal(previous, record.Value) {
+			if reservations, ok := batch.(*reservationBatch); ok {
+				if err := reservations.stageReservation(key, record.Value); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		if err := batch.Put(key, append([]byte(nil), record.Value...)); err != nil {
 			return err
 		}
 	}
-	for _, record := range records {
-		key := append(append([]byte(nil), prefix...), []byte(record.Key)...)
-		if err := batch.Put(key, append([]byte(nil), record.Value...)); err != nil {
+	for key := range existing {
+		if err := batch.Delete([]byte(key)); err != nil {
 			return err
 		}
 	}

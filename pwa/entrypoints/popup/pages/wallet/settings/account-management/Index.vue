@@ -7,19 +7,19 @@
         </Button>
         <div>
           <h1 class="text-xl font-semibold">账户管理与恢复</h1>
-          <p class="text-sm text-muted-foreground">账户管理从第一个钱包开始生效；可在此配置恢复材料和 AUTOPAY 持久同步。</p>
+          <p class="text-sm text-muted-foreground">账户管理从第一个钱包开始生效；可在此配置恢复材料和 AUTOPAY 持久存储。</p>
         </div>
       </div>
 
       <Alert v-if="savedState?.active" aria-label="账户备份状态">
         <AlertDescription class="space-y-1">
           <div>账户管理：已启用</div>
-          <div>数据存储：{{ savedState.storage_mode === 'paid' ? 'AUTOPAY 全网同步' : '服务节点临时缓存' }}</div>
+          <div>数据存储：{{ savedState.storage_mode === 'paid' ? 'AUTOPAY 持久存储' : '服务节点临时缓存' }}</div>
           <div
             v-if="autopayStatus?.required && !autopayStatus.ready"
             class="mt-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-amber-400"
           >
-            <div class="font-medium">AUTOPAY 需要处理</div>
+            <div class="font-medium">{{ t('accountManagement.dkvsPaymentNeedsAttention') }}</div>
             <div class="mt-1">{{ autopayStatus.message || 'AUTOPAY 当前无法继续支付。' }}</div>
             <div v-if="autopayStatus.current_block" class="mt-1 text-amber-400/80">
               当前高度 {{ autopayStatus.current_block }}
@@ -33,20 +33,33 @@
               @click="fundAutopay"
             >
               <Icon v-if="busy" icon="lucide:loader-2" class="mr-2 h-4 w-4 animate-spin" />
-              充值 AUTOPAY
+              {{ t('accountManagement.dkvsPay') }}
             </Button>
           </div>
           <div
             v-else-if="autopayStatus?.required && autopayStatus.ready"
             class="text-green-500"
           >
-            AUTOPAY 支付正常
+            {{ t('accountManagement.dkvsPaymentNormal') }}
+            <Button v-if="autopayStatus.can_fund" size="sm" variant="outline" class="ml-2" :disabled="busy" @click="fundAutopay">
+              {{ t('accountManagement.dkvsRenew') }}
+            </Button>
+          </div>
+
+          <div v-if="autopayStatus?.required" aria-label="DKVS 付费高度" class="mt-2 space-y-1 text-sm">
+            <div v-if="autopayStatus.current_block">{{ t('accountManagement.dkvsCurrentHeight', { height: autopayStatus.current_block }) }}</div>
+            <div v-if="autopayStatus.last_pay_height">{{ t('accountManagement.dkvsPaidHeight', { height: autopayStatus.last_pay_height }) }}</div>
+            <div v-else>{{ t('accountManagement.dkvsPaidHeightUnknown') }}</div>
+            <div v-if="autopayStatus.amount_per_block">{{ t('accountManagement.dkvsBalanceAndRate', { balance: autopayStatus.balance || '0', rate: autopayStatus.amount_per_block, asset: autopayStatus.fee_asset }) }}</div>
+            <div v-if="autopayStatus.estimated_expiry_height">{{ t('accountManagement.dkvsExpiryEstimate', { height: autopayStatus.estimated_expiry_height }) }}</div>
+            <div v-else class="text-muted-foreground">{{ t('accountManagement.dkvsExpiryUnavailable') }}</div>
+            <p class="text-xs text-muted-foreground">{{ t('accountManagement.dkvsExpiryCaveat') }}</p>
           </div>
 
           <div>恢复配置：{{ savedState.recovery_configured ? '已配置' : '未配置' }}</div>
           <div v-if="savedState.recovery_configured">恢复模式：{{ savedState.recovery_mode }}</div>
           <div>托管数据版本：{{ savedState.managed_data_revision || 0 }}</div>
-          <div v-if="savedState.managed_data_dirty" class="text-amber-500">必要数据正在等待同步</div>
+          <div v-if="savedState.managed_data_dirty" class="text-amber-500">最新必要数据尚未备份，恢复仅覆盖最后确认版本</div>
           <div v-if="savedState.last_rehearsal_at">上次演练：{{ new Date(savedState.last_rehearsal_at).toLocaleString() }}</div>
           <div>待同步变更：{{ savedState.pending_changes || 0 }}</div>
           <div
@@ -73,7 +86,7 @@
         <Button class="w-full" :disabled="busy" @click="reconfiguring = true">重新配置恢复或升级存储</Button>
       </section>
 
-      <section v-if="autopayStatus?.funding_transaction_id || autopayFundingResult?.transaction_id" aria-label="AUTOPAY 充值追踪" class="rounded-lg border p-3 space-y-2 text-sm">
+      <section v-if="autopayStatus?.funding_transaction_id || autopayFundingResult?.transaction_id" aria-label="DKVS 付费交易追踪" class="rounded-lg border p-3 space-y-2 text-sm">
         <p>{{ autopayStatus?.funding_error || (autopayStatus?.ready && !autopayStatus?.funding_pending ? '合约查询确认 AUTOPAY 支付已就绪' : (autopayStatus?.funding_pending ?? autopayFundingResult?.pending) ? '原充值交易等待提交或合约确认' : '已记录充值交易，AUTOPAY 当前未就绪') }}</p>
         <p class="break-all">交易号：{{ autopayStatus?.funding_transaction_id || autopayFundingResult?.transaction_id }}</p>
         <p v-if="autopayStatus?.funding_pending" class="text-xs text-muted-foreground">请查询原交易，不需要再次充值。</p>
@@ -480,7 +493,7 @@ const paidConfirmRows = computed(() => {
       value: paidConfirmContext.value === 'guardian'
         ? '由当前 Guardian 根钱包支付好友恢复分片的 DKVS 持久存储费用'
         : funding
-          ? '为账户管理的 AUTOPAY 付费存储充值'
+          ? t('accountManagement.dkvsPay')
         : t('accountManagement.autopayPurpose'),
     },
     ...[
@@ -509,6 +522,10 @@ const paidConfirmRows = computed(() => {
         count: funding ? fundingQuote?.recommended_funding_blocks || 1000 : 1000,
       }),
     },
+    ...(funding && fundingQuote?.estimated_funded_expiry_height ? [{
+      label: t('accountManagement.dkvsFundedExpiry'),
+      value: t('accountManagement.dkvsExpiryEstimate', { height: fundingQuote.estimated_funded_expiry_height }),
+    }] : []),
     ...(funding ? [
       { label: t('tools.txConfirm.operatingGas'), value: t('accountManagement.fundingOperatingGas') },
     ] : []),

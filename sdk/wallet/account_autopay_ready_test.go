@@ -5,6 +5,7 @@ import (
 	"fmt"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
@@ -224,13 +225,26 @@ func TestAccountAutopayStateRejectsWrongContractConfiguration(t *testing.T) {
 // Intercept only lookup transport: production REST decoding and receipt/log
 // transitions run unchanged. Actual submission is covered by the node E2E.
 type autopayReceiptTestHTTP struct {
-	height    int64
-	lookupErr error
-	history   []contractcommon.ContractHistoryRecord
-	state     *dkvsindexer.AutopayContractState
+	height        int64
+	lookupErr     error
+	history       []contractcommon.ContractHistoryRecord
+	state         *dkvsindexer.AutopayContractState
+	bestHeight    int
+	bestHeightErr error
+	postCalls     atomic.Int32
 }
 
 func (h *autopayReceiptTestHTTP) SendGetRequest(url *URL) ([]byte, error) {
+	if strings.HasSuffix(url.Path, "/bestheight") {
+		if h.bestHeightErr != nil {
+			return nil, h.bestHeightErr
+		}
+		height := h.bestHeight
+		if height <= 0 && h.state != nil {
+			height = int(h.state.CurrentBlock)
+		}
+		return json.Marshal(map[string]any{"code": 0, "data": map[string]int{"height": height}})
+	}
 	if strings.HasSuffix(url.Path, "/state") {
 		return json.Marshal(map[string]any{"code": 0, "data": h.state})
 	}
@@ -242,7 +256,8 @@ func (h *autopayReceiptTestHTTP) SendGetRequest(url *URL) ([]byte, error) {
 	}
 	return json.Marshal(map[string]any{"code": 0, "total": len(h.history), "data": h.history})
 }
-func (*autopayReceiptTestHTTP) SendPostRequest(*URL, []byte) ([]byte, error) {
+func (h *autopayReceiptTestHTTP) SendPostRequest(*URL, []byte) ([]byte, error) {
+	h.postCalls.Add(1)
 	return nil, fmt.Errorf("lookup must not submit")
 }
 
@@ -257,7 +272,12 @@ func TestAccountAutopayReceiptReconciliationRequiresOriginalTransaction(t *testi
 		want      OperationLogStatus
 		failure   bool
 	}{
-		{name: "ready_and_confirmed", ready: true, height: 100, want: OperationLogSucceeded},
+		{name: "ready_and_confirmed_without_execution_stays_pending", ready: true, height: 100, want: OperationLogPending},
+		{name: "ready_but_new_transaction_unconfirmed", ready: true, want: OperationLogPending},
+		{name: "ready_and_new_transaction_executed", ready: true, height: 100, want: OperationLogSucceeded,
+			history: []contractcommon.ContractHistoryRecord{{Contract: "autopay", Height: 101, TxID: txid, Kind: "result", Status: "success"}}},
+		{name: "ready_but_new_transaction_reverted", ready: true, height: 100, want: OperationLogFailed, failure: true,
+			history: []contractcommon.ContractHistoryRecord{{Contract: "autopay", Height: 101, TxID: txid, Kind: "result", Status: "revert"}}},
 		{name: "ready_but_original_query_unavailable", ready: true, lookupErr: fmt.Errorf("lookup offline"), want: OperationLogPending},
 		{name: "missing_original_is_unknown", ready: true, height: -1, want: OperationLogPending},
 		{name: "confirmed_still_waiting_first_payment", height: 100, want: OperationLogPending},
@@ -281,7 +301,7 @@ func TestAccountAutopayReceiptReconciliationRequiresOriginalTransaction(t *testi
 			require.NoError(t, err)
 			record, err = logs.Update(record.ID, OperationLogUpdate{Status: OperationLogPending, TxID: txid})
 			require.NoError(t, err)
-			waiting, err := manager.reconcileAccountAutopayReceipt(record, test.ready)
+			waiting, err := manager.reconcileAccountAutopayReceipt(record)
 			require.Equal(t, test.failure, err != nil)
 			require.Equal(t, test.want == OperationLogPending, waiting)
 			stored, err := logs.Get(record.ID)

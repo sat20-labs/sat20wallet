@@ -17,26 +17,33 @@ import (
 
 func coreAssets(assets indexer.TxAssets) map[string]string {
 	result := make(map[string]string)
-	for _, a := range assets { result[a.Name.String()] = a.Amount.Value.String() }
+	for _, a := range assets {
+		result[a.Name.String()] = a.Amount.Value.String()
+	}
 	return result
 }
 
 type coreRGBView struct {
-	Assets, Available, Pending map[string]string
-	Proofs, Tasks, Invoices, Locked map[string]string
+	Initialized                              bool
+	SyncStatus                               string
+	ConsistencyStatus                        string
+	Assets, Available, Pending               map[string]string
+	Outputs, Proofs, Tasks, Invoices, Locked map[string]string
 }
 
-// A confirmed, actually signature-verified spend turns its old allocation into
-// history, which account recovery deliberately compacts. Do NOT use this for
-// mempool spends: their input proofs, reservations and spending restrictions
-// must remain recoverable until the transition has completed.
+// This public ownership/readiness view intentionally omits settled historical
+// proof rows. The complete durable recovery closure is compared separately by
+// corePendingCheckpoint; this view remains useful for checking spendable
+// balance and restriction behavior after fresh chain reconciliation.
 func coreConfirmedHistoricalOutput(t *testing.T, manager *Manager, point string) bool {
 	t.Helper()
 	chain, ok := manager.rgbManager.evidence.(*coreE2EChain)
 	coreAssert(t, ok, "semantic checker lost its controlled Bitcoin evidence")
 	spend, err := chain.GetOutspend(point)
 	coreRequire(t, "check allocation spending evidence", err)
-	if !spend.Spent || spend.SpendingTx == "" { return false }
+	if !spend.Spent || spend.SpendingTx == "" {
+		return false
+	}
 	status, err := chain.GetTxStatus(spend.SpendingTx)
 	coreRequire(t, "check confirmed spending transaction", err)
 	return status.Confirmed && status.Confirmations >= 6
@@ -47,23 +54,41 @@ func coreRGBSemantic(t *testing.T, manager *Manager) coreRGBView {
 	state, err := manager.GetRGB11State()
 	coreRequire(t, "read actual RGB state", err)
 	view := coreRGBView{
-		Assets: coreAssets(state.Assets), Available: coreAssets(state.AvailableAssets), Pending: coreAssets(state.PendingAssets),
-		Proofs: map[string]string{}, Tasks: map[string]string{}, Invoices: map[string]string{}, Locked: map[string]string{},
+		Initialized: state.Initialized, SyncStatus: state.SyncStatus,
+		ConsistencyStatus: state.ConsistencyStatus,
+		Assets:            coreAssets(state.Assets), Available: coreAssets(state.AvailableAssets), Pending: coreAssets(state.PendingAssets),
+		Outputs: map[string]string{}, Proofs: map[string]string{}, Tasks: map[string]string{},
+		Invoices: map[string]string{}, Locked: map[string]string{},
+	}
+	for _, output := range state.Outputs {
+		if output != nil {
+			view.Outputs[output.OutPointStr] = coreDigest(coreAssets(output.Assets))
+		}
 	}
 	locks := manager.GetUtxoLocker().GetLockedUtxoList()
 	for _, p := range state.Proofs {
-		if p.Status == "spent" || coreConfirmedHistoricalOutput(t, manager, p.OutPoint) { continue }
+		if p.Status == "spent" || coreConfirmedHistoricalOutput(t, manager, p.OutPoint) {
+			continue
+		}
 		key := p.OutPoint + "|" + p.AssetName.String() + "|" + p.OperationID + fmt.Sprint("|", p.AssignmentType, "|", p.AssignmentIndex)
 		view.Proofs[key] = fmt.Sprintf("%s|%s|%s", p.Status, p.ConsignmentHash, p.WitnessTxID)
-		if lock := locks[p.OutPoint]; lock != nil { view.Locked[p.OutPoint] = fmt.Sprint(lock.Reason) }
+		if lock := locks[p.OutPoint]; lock != nil {
+			view.Locked[p.OutPoint] = fmt.Sprint(lock.Reason)
+		}
 	}
-	for _, r := range state.Reservations { view.Invoices[r.RequestID] = r.Invoice + "|" + r.Status }
+	for _, r := range state.Reservations {
+		view.Invoices[r.RequestID] = r.Invoice + "|" + r.Status
+	}
 	for _, task := range state.Transfers {
-		if task.Status == "settled" || task.Status == "rejected" || task.Status == "cancelled" || task.Status == "expired" { continue }
+		if task.Status == "settled" || task.Status == "rejected" || task.Status == "cancelled" || task.Status == "expired" {
+			continue
+		}
 		view.Tasks[task.Direction+"|"+task.TransferID] = fmt.Sprintf("%s|%s|%s|%s|%v|%v", task.Status, task.AckStatus,
 			task.WitnessTxID, task.ConsignmentHash, task.InputOutPoints, task.OutputOutPoints)
 		for _, point := range task.InputOutPoints {
-			if lock := locks[point]; lock != nil { view.Locked[point] = fmt.Sprint(lock.Reason) }
+			if lock := locks[point]; lock != nil {
+				view.Locked[point] = fmt.Sprint(lock.Reason)
+			}
 		}
 	}
 	return view
@@ -71,13 +96,17 @@ func coreRGBSemantic(t *testing.T, manager *Manager) coreRGBView {
 
 func coreDigest(v any) string {
 	raw, err := json.Marshal(v)
-	if err != nil { panic(err) }
+	if err != nil {
+		panic(err)
+	}
 	return fmt.Sprintf("%x", sha256.Sum256(raw))
 }
 
 func coreCanonicalCatalog(manager *Manager) map[string]string {
 	result := map[string]string{}
-	for _, entry := range manager.GetWalletCatalog() { result[entry.Fingerprint] = entry.Name + "|" + coreDigest(entry.Accounts) }
+	for _, entry := range manager.GetWalletCatalog() {
+		result[entry.Fingerprint] = entry.Name + "|" + coreDigest(entry.Accounts)
+	}
 	return result
 }
 
@@ -105,6 +134,29 @@ func coreVerifyPaidRecords(t *testing.T, source *Manager, cfg coreE2EConfig) {
 	}
 }
 
+func coreReplayManagedOutbox(t *testing.T, target *Manager) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		_, err := target.syncDKVSOnce()
+		if err != nil && !errors.Is(err, ErrDKVSPathNotSynced) {
+			coreRequire(t, "replay original managed outbox", err)
+		}
+		err = target.SyncAccountManagementState(context.Background())
+		if err != nil && !errors.Is(err, ErrDKVSPathNotSynced) {
+			coreRequire(t, "confirm replayed account baseline", err)
+		}
+		plan, planErr := target.currentAccountManagedOutboxPlan()
+		coreRequire(t, "read replayed managed outbox", planErr)
+		if err == nil && !plan.Pending && !coreCaptureManagedProfile(target).dirty {
+			return
+		}
+		coreAssert(t, time.Now().Before(deadline),
+			"original managed outbox did not reach a clean confirmed baseline")
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 func coreSynchronizeRestoredAccount(t *testing.T, target *Manager) {
 	t.Helper()
 	client, err := target.ensureDKVSManager().primaryClient()
@@ -115,8 +167,12 @@ func coreSynchronizeRestoredAccount(t *testing.T, target *Manager) {
 	coreRequire(t, "restored mailbox directory readiness", err)
 	for attempt := 0; attempt < 3; attempt++ {
 		err = target.SyncAccountManagementState(context.Background())
-		if err == nil || errors.Is(err, ErrRGB11ManagedOperationActive) { return }
-		if !errors.Is(err, ErrDKVSPathNotSynced) { break }
+		if err == nil || errors.Is(err, ErrRGB11ManagedOperationActive) {
+			return
+		}
+		if !errors.Is(err, ErrDKVSPathNotSynced) {
+			break
+		}
 		time.Sleep(50 * time.Millisecond)
 	}
 	coreRequire(t, "synchronize restored account", err)
@@ -127,11 +183,20 @@ func coreDescribeDifference(t *testing.T, source, recovered coreRGBView) {
 	missing, changedStatus, changedReceipt, changedWitness := 0, 0, 0, 0
 	for key, value := range source.Proofs {
 		other, exists := recovered.Proofs[key]
-		if !exists { missing++; continue }
+		if !exists {
+			missing++
+			continue
+		}
 		a, b := strings.Split(value, "|"), strings.Split(other, "|")
-		if a[0] != b[0] { changedStatus++ }
-		if a[1] != b[1] { changedReceipt++ }
-		if a[2] != b[2] { changedWitness++ }
+		if a[0] != b[0] {
+			changedStatus++
+		}
+		if a[1] != b[1] {
+			changedReceipt++
+		}
+		if a[2] != b[2] {
+			changedWitness++
+		}
 	}
 	t.Logf("core-e2e: diagnostic counts: proofs=%d/%d missing=%d status_changes=%d receipt_changes=%d witness_changes=%d tasks=%d/%d invoices=%d/%d locks=%d/%d",
 		len(source.Proofs), len(recovered.Proofs), missing, changedStatus, changedReceipt, changedWitness,
@@ -152,7 +217,9 @@ func coreCheckpoint(t *testing.T, name string, source *Manager, cfg coreE2EConfi
 		for _, entry := range source.GetWalletCatalog() {
 			var restoredID int64
 			for _, candidate := range targetCatalog {
-				if candidate.Fingerprint == entry.Fingerprint { restoredID = candidate.ID }
+				if candidate.Fingerprint == entry.Fingerprint {
+					restoredID = candidate.ID
+				}
 			}
 			coreAssert(t, restoredID != 0, "missing restored wallet fingerprint")
 			coreRequire(t, "select source scope", source.SwitchWallet(entry.ID, coreE2EPassword))
@@ -173,6 +240,11 @@ func coreCheckpoint(t *testing.T, name string, source *Manager, cfg coreE2EConfi
 	})
 }
 
-type coreOfflineHTTP struct { HttpClient }
-func (coreOfflineHTTP) SendGetRequest(*URL) ([]byte, error) { return nil, errors.New("intentional offline read") }
-func (coreOfflineHTTP) SendPostRequest(*URL, []byte) ([]byte, error) { return nil, errors.New("intentional offline write") }
+type coreOfflineHTTP struct{ HttpClient }
+
+func (coreOfflineHTTP) SendGetRequest(*URL) ([]byte, error) {
+	return nil, errors.New("intentional offline read")
+}
+func (coreOfflineHTTP) SendPostRequest(*URL, []byte) ([]byte, error) {
+	return nil, errors.New("intentional offline write")
+}

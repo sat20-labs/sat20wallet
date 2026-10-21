@@ -16,6 +16,15 @@ func TestAccountRestorePostSyncNetworkWaitDoesNotBlockRGBState(t *testing.T) {
 	remote := newRGB11MemoryDKVSHTTP()
 	source, _ := managedImportTestSource(t, remote)
 	target, provider := managedImportTestManager(t, remote)
+	// Keep the post-sync network phase observable with a real active provider;
+	// RGB recovery now uses only the stable bundle and does not read its cache.
+	for _, manager := range []*Manager{source, target} {
+		if err := manager.RegisterAccountManagedDataProvider(&accountManagedActiveDataProviderStub{
+			accountManagedDataProviderStub: accountManagedDataProviderStub{id: "postsync-active"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	localImport := make(chan struct{})
 	beforeImport := provider.beforeImport
 	provider.beforeImport = func() {

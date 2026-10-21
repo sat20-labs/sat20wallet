@@ -10,12 +10,22 @@ import (
 )
 
 func TestRGB11IncompleteWitnessReservationIsNotRecoverable(t *testing.T) {
+	oldChain := _chain
+	_chain = "testnet"
+	t.Cleanup(func() { _chain = oldChain })
 	w := NewInternalWalletWithMnemonic(
 		"comfort very add tuition senior run eight snap burst appear exile dutch",
 		"",
 		&chaincfg.TestNet4Params,
 	)
-	mgr := newRGB11FlowManager(t, w, &rgb11FlowIndexer{}, &rgb11FlowEvidence{}, 817)
+	remote := newRGB11MemoryDKVSHTTP()
+	client := newRGB11MessageNodeClient(remote)
+	mgr := newRGB11ActivatedFlowAccount(t,
+		"comfort very add tuition senior run eight snap burst appear exile dutch",
+		remote, client, &rgb11FlowEvidence{}, &rgb11FlowIndexer{})
+	if mgr.wallet.GetAddress() != w.GetAddress() {
+		t.Fatal("activated fixture changed the original recipient identity")
+	}
 
 	req, err := mgr.CreateRGB11Invoice(RGB11InvoiceRequest{
 		Mode:          "witness",

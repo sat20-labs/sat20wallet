@@ -3,11 +3,11 @@ package wallet
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"testing"
 	"time"
 
+	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
@@ -22,28 +22,86 @@ type rgb11StaleOwnerFixture struct {
 
 func seedRGB11StaleOwner(t *testing.T) *rgb11StaleOwnerFixture {
 	t.Helper()
-	sender, recipient, imported, evidence, rpc := newRGB11GenericSendFixture(t)
-	ctx := context.Background()
-	balance, err := sender.GetRGB11AssetBalance(&imported.AssetName)
-	if err != nil || balance == nil || balance.Value.Sign() <= 0 {
-		t.Fatalf("balance=%v err=%v", balance, err)
+	senderWallet, _, err := NewInteralWallet(&chaincfg.TestNet4Params)
+	if err != nil {
+		t.Fatalf("create stale-owner sender wallet: %v", err)
 	}
-	invoice, err := recipient.CreateRGB11Invoice(RGB11InvoiceRequest{
-		Mode: "witness", TransportMode: "out-of-band", ContractID: imported.ContractID,
+	recipientWallet, _, err := NewInteralWallet(&chaincfg.TestNet4Params)
+	if err != nil {
+		t.Fatalf("create stale-owner receiver wallet: %v", err)
+	}
+	senderScript, err := AddrToPkScript(senderWallet.GetAddress(), &chaincfg.TestNet4Params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidenceBase := &rgb11FlowEvidence{
+		utxos: make(map[string]*rgb11wallet.BitcoinUTXO),
+		rawTx: make(map[string][]byte), txStatuses: make(map[string]*rgb11wallet.BitcoinTxStatus),
+		spendingTx: make(map[string]string),
+	}
+	evidence := &rgb11AddressEvidence{
+		rgb11FlowEvidence: evidenceBase, statuses: make(map[string]*rgb11wallet.BitcoinTxStatus),
+	}
+	rpc := &rgb11FlowIndexer{outputs: make(map[string]*TxOutput)}
+	for i := 0; i < 4; i++ {
+		seedTx := wire.NewMsgTx(wire.TxVersion)
+		seedTx.AddTxIn(wire.NewTxIn(&wire.OutPoint{Index: wire.MaxPrevOutIndex}, []byte{1, byte(i + 1)}, nil))
+		seedTx.AddTxOut(wire.NewTxOut(100_000, senderScript))
+		var rawSeed bytes.Buffer
+		if err := seedTx.Serialize(&rawSeed); err != nil {
+			t.Fatal(err)
+		}
+		producerTxID := seedTx.TxHash().String()
+		outpoint := fmt.Sprintf("%s:0", producerTxID)
+		evidenceBase.utxos[outpoint] = &rgb11wallet.BitcoinUTXO{
+			OutPoint: outpoint, Value: 100_000,
+			PkScript: append([]byte(nil), senderScript...), Confirmations: 6,
+		}
+		evidenceBase.rawTx[producerTxID] = append([]byte(nil), rawSeed.Bytes()...)
+		evidence.setStatus(producerTxID, rgb11wallet.BitcoinTxStatus{
+			TxID: producerTxID, Confirmed: true, Confirmations: 6, BlockHeight: 123,
+			BlockHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		})
+		output := indexer.NewTxOutput(100_000)
+		output.OutPointStr = outpoint
+		output.OutValue.PkScript = append([]byte(nil), senderScript...)
+		rpc.outputs[outpoint] = output
+		rpc.plain = append(rpc.plain, &indexerwire.TxOutputInfo{
+			OutPoint: outpoint, Value: 100_000, PkScript: append([]byte(nil), senderScript...),
+		})
+	}
+	sender := newRGB11FlowManager(t, senderWallet, rpc, evidence, 201)
+	recipient := newRGB11FlowManager(t, recipientWallet, rpc, evidence, 202)
+	ctx := context.Background()
+	issued, err := sender.rgbManager.IssueRGB11Asset(ctx, RGB11IssueRequest{
+		Schema: "NIA", Ticker: "OWN", Name: "Stale owner evidence fixture", Amounts: []uint64{1},
+	})
+	if err != nil || issued == nil {
+		t.Fatalf("seed stale-owner asset: result=%v err=%v", issued, err)
+	}
+	if _, err := sender.RefreshRGB11State(ctx); err != nil {
+		t.Fatalf("refresh seed stale-owner allocation: %v", err)
+	}
+	balance, err := sender.rgbManager.GetRGB11AssetBalance(&issued.AssetName)
+	if err != nil || balance == nil || balance.Value.Sign() <= 0 {
+		t.Fatalf("seed balance: balance=%v err=%v", balance, err)
+	}
+	invoice, err := recipient.rgbManager.CreateRGB11Invoice(RGB11InvoiceRequest{
+		Mode: "witness", TransportMode: "out-of-band", ContractID: issued.ContractID,
 		AmountRaw: balance.Value.String(), WitnessVout: 1, Expiry: time.Now().Add(time.Hour).Unix(),
 	})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("seed invoice: %v", err)
 	}
-	prepared, err := sender.PrepareRGB11Transfer(ctx, RGB11SendRequest{
+	prepared, err := sender.rgbManager.PrepareRGB11Transfer(ctx, RGB11SendRequest{
 		Invoice: invoice.Invoice, FeeRate: 2, MinConfirmations: 1,
 	})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("seed prepare: %v", err)
 	}
 	pending, err := sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("seed pending: %v", err)
 	}
 	pending.State.Status, pending.State.AckStatus = "settled", "accepted"
 	if err := sender.rgbManager.projectionStore.SavePendingTransferState(pending); err != nil {
@@ -94,8 +152,8 @@ func seedRGB11StaleOwner(t *testing.T) *rgb11StaleOwnerFixture {
 func TestRGB11StaleOwnerMismatch(t *testing.T) {
 	fixture := seedRGB11StaleOwner(t)
 	result, err := fixture.manager.RefreshRGB11State(context.Background())
-	if !errors.Is(err, ErrUtxoReservationOwner) {
-		t.Fatalf("stale owner was not reproduced: result=%+v err=%v", result, err)
+	if err != nil {
+		t.Fatalf("atomic cleanup of confirmed historical input: result=%+v err=%v", result, err)
 	}
 	if result == nil || result.Unresolved != 0 || result.Settled != 0 ||
 		result.Pending != 0 || result.Reorged != 0 || result.Conflicted != 0 {
@@ -104,11 +162,22 @@ func TestRGB11StaleOwnerMismatch(t *testing.T) {
 	stored, loadErr := fixture.manager.rgbManager.projectionStore.LoadPendingTransfer(
 		fixture.pending.State.TransferID,
 	)
-	if loadErr != nil || stored.State.Status != "settled" || stored.ReservationID == "" {
+	if loadErr != nil || stored.State.Status != "settled" ||
+		stored.ReservationID != fixture.pending.ReservationID {
 		t.Fatalf("stale journal=%+v err=%v", stored, loadErr)
 	}
 	lock := fixture.manager.utxoLockerL1.GetLockedUtxoList()[fixture.input]
-	if lock == nil || lock.ReservationID != "" || lock.Reason != rgb11wallet.LockReasonPending {
-		t.Fatalf("ownerless input lock was not recreated: %+v", lock)
+	if lock != nil {
+		t.Fatalf("consumed input was relocked: %+v", lock)
+	}
+	proof, err := fixture.manager.rgbManager.projectionStore.LoadProof(
+		fixture.input, fixture.pending.State.Asset.Name)
+	if err != nil || proof.Status != "spending" {
+		t.Fatalf("confirmed historical proof changed: %v", err)
+	}
+	restarted := NewUtxoLocker(fixture.manager.db, nil, L1_NETWORK_BITCOIN)
+	restarted.Init()
+	if restarted.GetLockedUtxoList()[fixture.input] != nil {
+		t.Fatal("consumed input lock persisted after atomic cleanup")
 	}
 }

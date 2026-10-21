@@ -1,7 +1,9 @@
 import { Chain, type Env } from '@/types/index';
 import { Network } from '@/types/index';
+import { bitcoin } from '@/lib/bitcoinjs'
 import { ordxApi } from '@/apis';
 import sat20 from '@/utils/sat20';
+import { isRegtestBuild } from '@/utils/networkMode'
 export const hideAddress = (
   str?: string | null,
   num: number = 6,
@@ -27,6 +29,17 @@ export const generateMempoolUrl = ({
   chain?: Chain;
   env?: Env;
 }) => {
+  if (network === Network.REGTEST) {
+    const baseUrl = chain === Chain.SATNET
+      ? import.meta.env.VITE_SAT20_REGTEST_L2_MEMPOOL_URL
+      : import.meta.env.VITE_SAT20_REGTEST_L1_MEMPOOL_URL
+    if (!baseUrl) return ''
+
+    const normalizedBaseUrl = baseUrl.replace(/\/+$/, '')
+    const normalizedPath = path?.replace(/^\/+/, '')
+    return normalizedPath ? `${normalizedBaseUrl}/${normalizedPath}` : normalizedBaseUrl
+  }
+  if (isRegtestBuild) return ''
   const satMempoolUrl: Record<Env, string> = {
     dev: 'https://mempool.dev.sat20.org',
     test: 'https://mempool.test.sat20.org',
@@ -116,6 +129,16 @@ export function validateBTCAddress(address: string, network: string = 'mainnet')
   if (!address || typeof address !== 'string') return false
 
   const trimmedAddress = address.trim()
+  if (isRegtestBuild && network !== Network.REGTEST) return false
+
+  if (network === Network.REGTEST) {
+    try {
+      bitcoin.address.toOutputScript(trimmedAddress, bitcoin.networks.regtest)
+      return true
+    } catch {
+      return false
+    }
+  }
 
   if (network === 'testnet') {
     // Testnet 地址格式：

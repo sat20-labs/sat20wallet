@@ -259,14 +259,10 @@ func TestRealSatoshiNetTemplateExchangeGasForSatoshiAndClose(t *testing.T) {
 
 func TestTemplateAutopayPaysAndCloses(t *testing.T) {
 	const feeAsset = "ordx:f:e2eautopay"
-	f := newTemplateFixture(t, map[string]int64{feeAsset: 1000})
+	f, gasBank, feeOuts := newAutopaySignedFixture(t, feeAsset)
 	gas := contractcommon.GetGasAssetName()
 	deployerAddr := f.A.Address
 	recipientAddr := f.B.Address
-
-	gasBank := f.splitGasBank(t, 3)
-	feeOuts := f.split(t, f.A, f.assetAnchors[feeAsset], feeAsset,
-		[]int64{30, 15}, []int64{10000, 10000}, []*templateActor{f.A, f.C})
 
 	content, err := contractcommon.EncodeTemplateAutopayContent(contractcommon.TemplateAutopayContract{
 		ServiceName:       "dkvs",
@@ -281,16 +277,24 @@ func TestTemplateAutopayPaysAndCloses(t *testing.T) {
 		contractcommon.TemplateAutopay, content, deployerAddr, []byte("autopay"),
 		[]wire.OutPoint{gasBank.take(t, f.A), feeOuts[0]},
 		wire.TxOut{Value: 10000, Assets: deployAssets})
+	signAutopayKeyInputs(t, f, deployTx, f.A)
+	requireAutopayTamperedSignatureRejected(t, f, deployTx)
 	deployBlock := f.Network.sendManyAndMine(t, []*wire.MsgTx{deployTx}, 0)
 	requireSingleResultTx(t, deployBlock)
 
 	heartbeatTx := buildTemplateAssetTransfer(t, f.A, gasBank.take(t, f.A), gas, 290000, 9000, f.A)
+	signAutopayKeyInputs(t, f, heartbeatTx, f.A)
 	payBlock := f.Network.sendManyAndMine(t, []*wire.MsgTx{heartbeatTx}, 0)
 	payResult := requireSingleResultTx(t, payBlock)
 	requireTxOutputAssetAmount(t, payResult, recipientAddr, feeAsset, "10")
 
-	fundTx := buildTemplateDefaultInvokeFor(t, f.C, contract, []wire.OutPoint{feeOuts[1]},
-		wire.TxOut{Value: 10000, Assets: txAsset(feeAsset, 15)})
+	configParam, err := (&templateruntime.AutopayConfigInvokeParam{AmountPerBlock: "10"}).Encode()
+	require.NoError(t, err)
+	configAssets := append(txAsset(gas, 290000), txAsset(feeAsset, 15)...)
+	fundTx := buildTemplateInvokeFor(t, f.C, contract, 1, contractcommon.TemplateInvokeAPIConfig, configParam,
+		[]wire.OutPoint{gasBank.take(t, f.C), feeOuts[1]},
+		wire.TxOut{Value: 20000, Assets: configAssets})
+	signAutopayKeyInputs(t, f, fundTx, f.C)
 	f.Network.sendAndMine(t, fundTx, 0)
 	state := fetchTemplateAutopayView(t, f.Network.Bootstrap, contract.MustEncode())
 	require.Equal(t, templateruntime.AutopayStatusActive, state.Status)
@@ -299,6 +303,7 @@ func TestTemplateAutopayPaysAndCloses(t *testing.T) {
 	closeTx := buildTemplateInvokeFor(t, f.A, contract, 1, contractcommon.TemplateInvokeAPIClose, nil,
 		[]wire.OutPoint{gasBank.take(t, f.A)},
 		wire.TxOut{Value: 10000, Assets: txAsset(gas, 290000)})
+	signAutopayKeyInputs(t, f, closeTx, f.A)
 	closeBlock := f.Network.sendManyAndMine(t, []*wire.MsgTx{closeTx}, 0)
 	closeResult := requireSingleResultTx(t, closeBlock)
 	requireTxOutputAssetAmount(t, closeResult, deployerAddr, feeAsset, "10")

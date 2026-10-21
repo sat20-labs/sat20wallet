@@ -14,7 +14,7 @@
       <Button size="icon" variant="ghost" aria-label="Home" @click="loadHome">
         <Icon icon="lucide:home" class="text-lg" />
       </Button>
-      <Button size="sm" variant="outline" :disabled="disconnecting" aria-label="Disconnect DApp" @click="disconnectDapp">
+      <Button v-if="!embeddedMarket" size="sm" variant="outline" :disabled="disconnecting" aria-label="Disconnect DApp" @click="disconnectDapp">
         <Icon icon="lucide:unplug" class="mr-1 text-sm" aria-hidden="true" />
         Disconnect
       </Button>
@@ -24,6 +24,7 @@
       <iframe
         ref="frameRef"
         :key="frameKey"
+        v-if="frameUrl"
         :src="frameUrl"
         class="h-full w-full border-0 bg-background"
         allow="clipboard-read; clipboard-write"
@@ -33,7 +34,7 @@
       />
 
       <div
-        v-if="loading"
+        v-if="frameUrl && loading"
         class="absolute inset-0 flex items-center justify-center bg-background/90"
       >
         <div class="text-center">
@@ -43,7 +44,7 @@
       </div>
 
       <div
-        v-if="!isOnline || loadError"
+        v-if="!frameUrl || !isOnline || loadError"
         class="absolute inset-0 flex items-center justify-center bg-background p-6"
       >
         <div class="w-full max-w-sm text-center">
@@ -75,9 +76,14 @@ import NavFooter from '@/components/layout/NavFooter.vue'
 import { usePwaDappBridge } from '@/composables/usePwaDappBridge'
 import { useWalletStore } from '@/store'
 import { Network } from '@/types'
+import { isRegtestBuild } from '@/utils/networkMode'
 import { MarketFrameReady } from '@/utils/marketFrameReady'
 import { SAT20_DAPP_PROTOCOL } from '@/types/sat20-dapp-connect'
-import { getCurrentDappScope, revokeDappGrant } from '@/lib/authorized-origins'
+import { createDappGrant, getCurrentDappScope, revokeDappGrant } from '@/lib/authorized-origins'
+import { getEmbeddedMarketCapabilities } from '@/lib/dapp-origin-policy'
+import { assertWalletIdentityReady } from '@/lib/identity-boundary'
+import { assertNoMnemonicView } from '@/lib/sensitive-session'
+import { walletStorage } from '@/lib/walletStorage'
 import {
   consumePendingDappIdentityDisconnect,
   registerReadyDappIdentitySink,
@@ -92,8 +98,28 @@ const DEFAULT_TESTNET_MARKET_URL = import.meta.env.DEV
 
 const router = useRouter()
 const walletStore = useWalletStore()
+const originPolicy = {
+  development: import.meta.env.DEV,
+  test: import.meta.env.MODE === 'test',
+  regtest: isRegtestBuild,
+  configured: import.meta.env.VITE_SAT20_DAPP_ALLOWED_ORIGINS,
+  currentProtocol: window.location.protocol,
+  currentHostname: window.location.hostname,
+}
 
 const resolveMarketUrl = () => {
+  if (isRegtestBuild) {
+    const configuredUrl = import.meta.env.VITE_SAT20_MARKET_URL
+    if (!configuredUrl) return ''
+    try {
+      const url = new URL(configuredUrl)
+      if (!['localhost', '127.0.0.1', '[::1]', '::1'].includes(url.hostname) || url.protocol !== 'http:') return ''
+      url.searchParams.set('network', 'regtest')
+      return url.href
+    } catch {
+      return ''
+    }
+  }
   const network = walletStore.network === Network.TESTNET ? 'testnet' : 'mainnet'
   const configuredUrl = import.meta.env.VITE_SAT20_MARKET_URL
   const baseUrl = configuredUrl || (network === 'testnet' ? DEFAULT_TESTNET_MARKET_URL : DEFAULT_MARKET_URL)
@@ -109,10 +135,13 @@ const resolveMarketUrl = () => {
 }
 
 const normalizeDappUrl = (urlValue: string) => {
-  const network = walletStore.network === Network.TESTNET ? 'testnet' : 'mainnet'
+  const network = isRegtestBuild
+    ? 'regtest'
+    : walletStore.network === Network.TESTNET ? 'testnet' : 'mainnet'
 
   try {
     const url = new URL(urlValue, frameUrl.value)
+    if (isRegtestBuild && (!['localhost', '127.0.0.1', '[::1]', '::1'].includes(url.hostname) || url.protocol !== 'http:')) return ''
     url.searchParams.set('network', network)
     return url.href
   } catch {
@@ -123,8 +152,8 @@ const normalizeDappUrl = (urlValue: string) => {
 const frameRef = ref<HTMLIFrameElement | null>(null)
 const frameKey = ref(0)
 const frameUrl = ref(resolveMarketUrl())
-const loading = ref(true)
-const loadError = ref(false)
+const loading = ref(Boolean(frameUrl.value))
+const loadError = ref(!frameUrl.value)
 const readyTimedOut = ref(false)
 const disconnecting = ref(false)
 const readyGate = new MarketFrameReady((state) => {
@@ -146,6 +175,14 @@ watch(frameRef, (frame) => readyGate.bind(navigationGeneration, frame?.contentWi
 const isOnline = ref(navigator.onLine)
 const activeDappOrigin = ref('')
 const activeDappUrl = ref(frameUrl.value)
+const embeddedMarket = computed(() => {
+  try {
+    const origin = new URL(activeDappUrl.value || frameUrl.value).origin
+    return getEmbeddedMarketCapabilities(origin, originPolicy) !== null
+  } catch {
+    return false
+  }
+})
 
 const displayUrl = computed(() => {
   try {
@@ -157,7 +194,9 @@ const displayUrl = computed(() => {
 
 const errorTitle = computed(() => isOnline.value ? 'Market failed to load' : 'Network unavailable')
 const errorMessage = computed(() => isOnline.value
-  ? (readyTimedOut.value ? 'Could not confirm Market is ready. Try again.' : 'Check the Market frame policy or try again.')
+  ? (!frameUrl.value
+    ? 'No local regtest Market endpoint is configured.'
+    : readyTimedOut.value ? 'Could not confirm Market is ready. Try again.' : 'Check the Market frame policy or try again.')
   : 'The wallet is still available offline, but Market needs a network connection.'
 )
 
@@ -176,10 +215,10 @@ const targetOrigin = () => {
   }
 }
 
-const announceWalletReady = (origin = targetOrigin()) => {
+const announceWalletReady = (origin = targetOrigin(), payload: Record<string, unknown> = {}) => {
   if (!origin || !bridge.isAllowedOrigin(origin)) return
   activeDappOrigin.value = origin
-  bridge.announceReady(origin)
+  bridge.announceReady(origin, payload)
 }
 
 const handleDappNavigate = (event: MessageEvent, message: Record<string, unknown>) => {
@@ -203,6 +242,7 @@ const handleDappNavigate = (event: MessageEvent, message: Record<string, unknown
     }
 
     const normalizedHref = normalizeDappUrl(href.href)
+    if (!normalizedHref) return
     frameUrl.value = normalizedHref
     activeDappUrl.value = normalizedHref
     activeDappOrigin.value = href.origin
@@ -216,7 +256,7 @@ const handleDappNavigate = (event: MessageEvent, message: Record<string, unknown
 const handleLoad = (event: Event) => {
   if (event.target !== frameRef.value || !readyGate.matchesSource(frameRef.value?.contentWindow ?? null)) return
   // DOM load is not application readiness (including browser error documents).
-  announceWalletReady()
+  if (!embeddedMarket.value) announceWalletReady()
 }
 
 const handleClientReady = async (event: MessageEvent) => {
@@ -233,14 +273,48 @@ const handleClientReady = async (event: MessageEvent) => {
   }
   if (!readyGate.ready(event, bridge.isAllowedOrigin)) return
   activeDappUrl.value = message.href
-  announceWalletReady(event.origin)
   deactivateIdentitySink()
-  unregisterIdentitySink = registerReadyDappIdentitySink(event.origin, (payload) => {
-    bridge.announceEvent('disconnect', event.origin, payload)
-  })
   if (consumePendingDappIdentityDisconnect(event.origin)) {
     bridge.announceEvent('disconnect', event.origin, { reason: 'wallet_scope_changed' })
   }
+  const navigation = navigationGeneration
+  const capabilities = getEmbeddedMarketCapabilities(event.origin, originPolicy)
+  let payload: Record<string, unknown> = {}
+  if (capabilities) {
+    try {
+      const scope = await getCurrentDappScope()
+      const identity = walletStorage.getState()
+      const assertCurrent = () => {
+        assertNoMnemonicView()
+        assertWalletIdentityReady(scope.identityGeneration)
+        const state = walletStorage.getState()
+        if (navigation !== navigationGeneration || !readyGate.matchesSource(event.source) ||
+          event.source !== frameRef.value?.contentWindow || state.locked ||
+          state.walletId !== identity.walletId || state.pubkey !== identity.pubkey ||
+          state.address !== identity.address || state.network !== scope.network ||
+          state.accountIndex !== scope.accountIndex || !state.address || !state.pubkey) {
+          throw new Error('Embedded Market identity or frame changed')
+        }
+      }
+      assertCurrent()
+      const network = new URL(message.href).searchParams.get('network')
+      if (network && network !== scope.network) throw new Error('Market network does not match wallet')
+      const createdAt = Date.now()
+      await createDappGrant({
+        ...scope, origin: event.origin, capabilities: [...capabilities],
+        createdAt, expiresAt: createdAt + 24 * 60 * 60_000, sessionOnly: true,
+      }, assertCurrent)
+      assertCurrent()
+      payload = { network: scope.network, accounts: [identity.address], publicKey: identity.pubkey }
+    } catch {
+      // A lock, navigation or account switch must not publish the old identity.
+      return
+    }
+  }
+  announceWalletReady(event.origin, payload)
+  unregisterIdentitySink = registerReadyDappIdentitySink(event.origin, (identityPayload) => {
+    bridge.announceEvent('disconnect', event.origin, identityPayload)
+  })
 }
 
 const handleError = (event: Event) => {
@@ -248,6 +322,7 @@ const handleError = (event: Event) => {
 }
 
 const reload = () => {
+  if (!frameUrl.value) return
   frameUrl.value = activeDappUrl.value || frameUrl.value
   activeDappOrigin.value = targetOrigin()
   beginNavigation()
@@ -256,6 +331,13 @@ const reload = () => {
 
 const loadHome = () => {
   frameUrl.value = resolveMarketUrl()
+  if (!frameUrl.value) {
+    activeDappUrl.value = ''
+    activeDappOrigin.value = ''
+    loadError.value = true
+    loading.value = false
+    return
+  }
   activeDappUrl.value = frameUrl.value
   activeDappOrigin.value = targetOrigin()
   beginNavigation()
@@ -283,8 +365,10 @@ const updateOnlineState = () => {
 }
 
 onMounted(() => {
-  beginNavigation()
-  readyGate.bind(navigationGeneration, frameRef.value?.contentWindow ?? null)
+  if (frameUrl.value) {
+    beginNavigation()
+    readyGate.bind(navigationGeneration, frameRef.value?.contentWindow ?? null)
+  }
   activeDappOrigin.value = targetOrigin()
   bridge.start()
   window.addEventListener('message', handleClientReady)

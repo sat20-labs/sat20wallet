@@ -19,7 +19,7 @@
         <Button size="icon" variant="ghost" @click="handlerRefresh">
           <Icon icon="lets-icons:refresh-2-light" class="text-zinc-300 mb-[1px]" />
         </Button>
-        <Button size="icon" variant="ghost" as-child>
+        <Button v-if="mempoolUrl" size="icon" variant="ghost" as-child>
           <a :href="mempoolUrl" target="_blank" class="mb-[1px] hover:text-primary"
             :title="$t('l2AssetsTabs.viewTradeHistory')">
             <Icon icon="quill:link" class="text-zinc-400 hover:text-primary/90" />

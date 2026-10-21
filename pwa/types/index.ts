@@ -1,7 +1,7 @@
 export enum Network {
   MAINNET = 'mainnet',
   TESTNET = 'testnet',
-  // REGTEST = 'regtest',
+  REGTEST = 'regtest',
   // TESTNET4 = 'testnet4',
 }
 export type Env = 'dev' | 'test' | 'prd';

@@ -14,10 +14,30 @@ type ReservationPersistence interface {
 }
 
 // ReservationCommitLocker coordinates a local atomic commit with readers of
-// the engine/common-reservation relationship. Staging, callbacks and transport
-// run outside this gate. Every scope of one wallet database shares the gate.
+// the engine/common-reservation relationship. Staging runs before this gate;
+// the underlying flush and post-commit publication callbacks run while it is
+// held. Every scope of one wallet database shares the gate.
 type ReservationCommitLocker interface {
 	LockReservationCommit() func()
+}
+
+// ReservationCommitReader coordinates a multi-read observation with the
+// reservation/projection commit gate. Readers must hold the returned release
+// function across every query that forms one logical view.
+type ReservationCommitReader interface {
+	LockReservationRead() func()
+}
+
+// ReservationCommitStage stages related same-database records after the
+// reservation write gate is acquired. Its completion callback publishes
+// in-memory state after a successful database flush and before reservation
+// callbacks, while the gate is still held.
+type ReservationCommitStage func(indexer.WriteBatch) (func(committed bool), error)
+
+// ReservationCommitBatch is implemented by wallet reservation batches that
+// can stage related state in the same gated database commit.
+type ReservationCommitBatch interface {
+	FlushWith(ReservationCommitStage) error
 }
 
 type reservationBatch struct {
@@ -36,6 +56,15 @@ func NewReservationWriteBatch(db indexer.KVDB, scope string, persistence Reserva
 }
 
 func (b *reservationBatch) Put(key, value []byte) error {
+	if err := b.stageReservation(key, value); err != nil {
+		return err
+	}
+	return b.WriteBatch.Put(key, value)
+}
+
+// Unchanged snapshot records still rebuild reservation rows and RAM callbacks
+// when their scope is imported; their potentially large raw values need no PUT.
+func (b *reservationBatch) stageReservation(key, value []byte) error {
 	var record any
 	projection := "rgb11-" + b.scope + "-"
 	engine := "rgb11-engine-" + b.scope + "-wallet/receive/"
@@ -74,19 +103,40 @@ func (b *reservationBatch) Put(key, value []byte) error {
 			b.committed = append(b.committed, done)
 		}
 	}
-	return b.WriteBatch.Put(key, value)
+	return nil
 }
 
 func (b *reservationBatch) Flush() error {
-	err := func() error {
-		if locker, ok := b.persistence.(ReservationCommitLocker); ok {
-			release := locker.LockReservationCommit()
-			defer release()
+	return b.FlushWith(nil)
+}
+
+func (b *reservationBatch) FlushWith(stage ReservationCommitStage) (err error) {
+	var release func()
+	if locker, ok := b.persistence.(ReservationCommitLocker); ok {
+		release = locker.LockReservationCommit()
+		defer release()
+	}
+	var finish func(bool)
+	finishCalled := false
+	defer func() {
+		if finish != nil && !finishCalled {
+			finish(false)
 		}
-		return b.WriteBatch.Flush()
 	}()
-	if err != nil {
+	if stage != nil {
+		finish, err = stage(b.WriteBatch)
+		if err != nil {
+			return err
+		}
+	}
+	if err = b.WriteBatch.Flush(); err != nil {
 		return err
+	}
+	if finish != nil {
+		complete := finish
+		finish = nil
+		finishCalled = true
+		complete(true)
 	}
 	for _, done := range b.committed {
 		done()
@@ -116,6 +166,18 @@ func (s *ProjectionStore) writeReservationRecord(key, value []byte) error {
 	}
 	defer batch.Close()
 	if err := batch.Put(key, value); err != nil {
+		return err
+	}
+	return batch.Flush()
+}
+
+func (s *ProjectionStore) deleteReservationRecord(key []byte) error {
+	batch := s.newWriteBatch()
+	if batch == nil {
+		return ErrWalletScope
+	}
+	defer batch.Close()
+	if err := batch.Delete(key); err != nil {
 		return err
 	}
 	return batch.Flush()

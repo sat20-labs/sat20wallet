@@ -503,7 +503,7 @@ const formatBalance = (balance: number | string, chain: string, _network: string
   const numericBalance = typeof balance === 'string' ? parseFloat(balance) : balance
   const formattedBalance = (numericBalance / 1e8).toFixed(8)
   //const unit = chain.toLowerCase() === 'bitcoin' ? 'tBTC' : chain.toLowerCase() === 'channel' ? 'cBTC' : 'sBTC'
-  const unit = _network === 'testnet' ? 'tBTC' : 'BTC'
+  const unit = _network === 'regtest' ? 'rBTC' : _network === 'testnet' ? 'tBTC' : 'BTC'
   return `${formattedBalance} ${unit}`
 }
 
