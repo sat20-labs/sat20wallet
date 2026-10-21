@@ -8,7 +8,7 @@ SP 专项复用本文件的浏览器 runner、真实 WASM 加载器、IndexedDB�
 | --- | --- | --- |
 | SDK 真实收发 | `TestSPManagerBitcoinCoreSendReceiveE2E` | 正常 Manager、两输入与找零、Core 广播确认、生产 SP HTTP、准确收款、重复扫描不重复入账 |
 | SDK 生命周期 | `TestSilentPayProductionManagerLifecycleE2E` | 正常构造器、内置 Provider、磁盘 KVDB、密码认证、关闭重开、账户和网络隔离 |
-| PWA 入口与启用 | `TestSPSilentPayBrowserE2E` 中 2 个叶子 | 首页真实收款入口；页面启用、二维码、复制、未扫描状态和刷新页面恢复 |
+| PWA 入口与启用 | `TestSPSilentPayBrowserE2E` 中 2 个叶子 | 首页真实收款入口跳转已有 SP 页面；保留普通 BTC 复制、SatoshiNet 不显示 SP；页面启用、二维码、复制、未扫描状态和刷新页面恢复 |
 | PWA 收发 | 同入口中 1 个叶子 | 页面金额/地址确认、重复点击只广播一次、Core 确认、接收方手动刷新、精确余额 |
 | PWA 切换与迟到响应 | 同入口中 3 个叶子 | 真实 HTTP 响应延迟时切子账户、拒绝跨出隔离 regtest、锁定与重新认证 |
 | PWA 失败与重试 | 同入口中 3 个叶子 | 网络中断保留最近余额、重试、无效 SP 地址、取消不广播 |

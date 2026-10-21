@@ -31,6 +31,9 @@ func (p *coreRGBImportFailureOnce) Import(catalog AccountManagedDataCatalog, pay
 func coreRGBRecoveryFailuresE2E(t *testing.T, source *Manager, cfg coreE2EConfig,
 	chain *coreE2EChain, material *coreRecoveryMaterial) {
 	t.Helper()
+	// Earlier cases may publish through an independent manager of this root.
+	// Adopt that authoritative revision before taking the recovery baseline.
+	coreSynchronizeRestoredAccount(t, source)
 	load := func(t *testing.T) (*Manager, *RecoveredAccountManagementState) {
 		t.Helper()
 		target := coreNewE2EManager(t, cfg, chain, "")

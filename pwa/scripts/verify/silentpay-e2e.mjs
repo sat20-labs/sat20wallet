@@ -55,7 +55,13 @@ export async function runPwaSilentPayCases(t, fixture) {
     await expect(page.getByRole('button', { name: 'Refresh private BTC balance', exact: true })).toBeVisible(poll)
   }
   const refresh = async page => {
+    const response = page.waitForResponse(r => new URL(r.url()).pathname === '/test/v1/sp/scan-data', { timeout: 30000 })
     await page.getByRole('button', { name: 'Refresh private BTC balance', exact: true }).click()
+    await response
+    // A previous complete balance stays visible while a new scan runs. Wait
+    // for this scan's UI completion before reading its persisted SDK result.
+    await expect(page.getByRole('button', { name: 'Refresh private BTC balance', exact: true })).toBeEnabled(poll)
+    await expect(page.getByRole('alert')).toHaveCount(0)
     await expect(page.getByText('SP balance (confirmed snapshot)', { exact: true })).toBeVisible(poll)
     const i = await identity(page)
     const result = await walletCall(page, 'getSilentPayBalance', i.id, i.index)
@@ -81,9 +87,12 @@ export async function runPwaSilentPayCases(t, fixture) {
     return async () => { release(); await page.context().unroute(pattern, handler) }
   }
   const sendForm = async (page, address) => {
-    await visit(page, '/wallet')
-    await page.getByRole('tab', { name: 'Bitcoin', exact: true }).click()
+    await visit(page, '/wallet?tab=l1')
+    await expect(page.getByRole('tab', { name: 'Bitcoin', exact: true })).toHaveAttribute('aria-selected', 'true', poll)
     const panel = page.getByText('TOTAL BALANCE', { exact: true }).locator('..')
+    // The imported sender has real confirmed funding. Wait for the home asset
+    // query before clicking: the button is visible before native sats load.
+    await expect.poll(async () => Number((await panel.locator('h2').innerText()).split(' ')[0]), poll).toBeGreaterThan(0)
     await panel.getByRole('button', { name: 'Send', exact: true }).click()
     const dialog = page.getByRole('dialog')
     await dialog.getByRole('button', { name: 'Normal', exact: true }).click()
@@ -94,9 +103,44 @@ export async function runPwaSilentPayCases(t, fixture) {
   const actions = [
     async () => {
       const page = await importActor(spec.receiver)
-      await page.getByText('TOTAL BALANCE', { exact: true }).locator('..').getByRole('button', { name: 'Receive', exact: true }).click()
+      const before = await identity(page)
+      const openReceive = () => page.getByText('TOTAL BALANCE', { exact: true }).locator('..').getByRole('button', { name: 'Receive', exact: true }).click()
+      await openReceive()
       await expect(page.getByRole('button', { name: 'Private · SP', exact: true }),
         'the actual home receive entry must expose SP without a direct URL').toBeVisible(poll)
+      // The existing ordinary receive flow must still display its QR and copy
+      // the actual ordinary BTC address before navigating to the SP page.
+      await expect(page.locator('canvas')).toBeVisible()
+      await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+      await page.getByRole('button', { name: 'Copy Address', exact: true }).click()
+      await expect.poll(() => page.evaluate(() => navigator.clipboard.readText()), poll).toBe(spec.receiver.address)
+      await page.getByRole('button', { name: '✕', exact: true }).click()
+
+      await page.getByRole('tab', { name: 'SatoshiNet', exact: true }).click()
+      await expect(page.getByRole('tab', { name: 'SatoshiNet', exact: true })).toHaveAttribute('aria-selected', 'true', poll)
+      await openReceive()
+      await expect(page.getByRole('button', { name: 'Copy Address', exact: true })).toBeVisible()
+      await expect(page.locator('canvas')).toBeVisible()
+      await expect(page.getByRole('button', { name: 'Private · SP', exact: true })).toHaveCount(0)
+      await page.getByRole('button', { name: '✕', exact: true }).click()
+
+      await page.getByRole('tab', { name: 'Bitcoin', exact: true }).click()
+      await expect(page.getByRole('tab', { name: 'Bitcoin', exact: true })).toHaveAttribute('aria-selected', 'true', poll)
+      await openReceive()
+      await page.getByRole('button', { name: 'Private · SP', exact: true }).click()
+      await expect(page).toHaveURL(/#\/wallet\/receive$/)
+      await expect(page.getByRole('button', { name: 'Copy Address', exact: true })).toHaveCount(0)
+      await expect(page.getByRole('button', { name: 'Ordinary BTC', exact: true })).toBeVisible()
+      // Select the existing page's private receiving method through the UI.
+      await page.getByRole('button', { name: 'Private · SP', exact: true }).click()
+      const enable = page.getByRole('button', { name: 'Enable private BTC receive for this account', exact: true })
+      await expect(enable).toBeVisible(poll)
+      await enable.click()
+      await expect(page.getByRole('button', { name: 'Refresh private BTC balance', exact: true })).toBeVisible(poll)
+      assert.deepEqual(await identity(page), before)
+      const account = await walletCall(page, 'getSilentPayAccount', before.id, before.index)
+      assert.equal(account.enabled, true)
+      assert.equal(account.address, spec.address)
     },
     async () => {
       const page = await importActor(spec.receiver)
@@ -106,16 +150,25 @@ export async function runPwaSilentPayCases(t, fixture) {
       const before = await identity(page)
       const account = await walletCall(page, 'getSilentPayAccount', before.id, before.index)
       assert.equal(account.address, spec.address)
-      const qr = QRCode.create(account.address, { errorCorrectionLevel: 'H' }).modules
-      assert.equal(await page.locator('canvas').evaluate((canvas, expected) => {
+      // Independent encoders can choose different legal masks and boost error
+      // correction. Every candidate still encodes this exact address, in byte
+      // mode, and every rendered module must match a complete candidate.
+      const candidates = ['L', 'M', 'Q', 'H'].flatMap(errorCorrectionLevel =>
+        Array.from({ length: 8 }, (_, maskPattern) => {
+          const qr = QRCode.create([{ data: account.address, mode: 'byte' }], { errorCorrectionLevel, maskPattern }).modules
+          return { size: qr.size, data: Array.from(qr.data) }
+        }))
+      await expect.poll(() => page.locator('canvas').evaluate((canvas, candidates) => {
         const pixels = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data
-        for (let y = 0; y < expected.size; y++) for (let x = 0; x < expected.size; x++) {
-          const px = Math.floor((x + 0.5) * canvas.width / expected.size)
-          const py = Math.floor((y + 0.5) * canvas.height / expected.size)
-          if ((pixels[(py * canvas.width + px) * 4] < 128) !== Boolean(expected.data[y * expected.size + x])) return false
-        }
-        return true
-      }, { size: qr.size, data: Array.from(qr.data) }), true, 'QR must encode the exact SP address')
+        return candidates.some(expected => {
+          for (let y = 0; y < expected.size; y++) for (let x = 0; x < expected.size; x++) {
+            const px = Math.floor((x + 0.5) * canvas.width / expected.size)
+            const py = Math.floor((y + 0.5) * canvas.height / expected.size)
+            if ((pixels[(py * canvas.width + px) * 4] < 128) !== Boolean(expected.data[y * expected.size + x])) return false
+          }
+          return true
+        })
+      }, candidates), { ...poll, message: 'QR must encode the exact SP address' }).toBe(true)
       await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
       await page.locator('.w-64 button').click()
       await expect.poll(() => page.evaluate(() => navigator.clipboard.readText()), poll).toBe(account.address)
@@ -144,10 +197,14 @@ export async function runPwaSilentPayCases(t, fixture) {
       await expect(dialog.locator('dl')).toContainText('regtest')
       // Dispatch two genuine clicks in the same task; production's submission
       // guard must still permit exactly one signed transaction and broadcast.
+      const broadcast = sender.waitForResponse(r => r.request().method() === 'POST' && r.url() === `${base}/btc/tx`, { timeout: 30000 })
       await dialog.getByRole('button', { name: 'Confirm', exact: true }).evaluate(button => { button.click(); button.click() })
+      const accepted = await (await broadcast).json()
+      assert.equal(accepted.code, 0, 'actual Core broadcast must succeed before mining')
       await expect.poll(async () => (await control('stats')).broadcasts, poll).toBe(stats.broadcasts + 1)
       assert.equal(raws.length, 1)
       const tx = Transaction.fromHex(raws[0])
+      assert.equal(accepted.data, tx.getId())
       assert.equal(tx.outs[0].value, Number(spec.amount))
       const confirmed = await control('mine')
       assert.equal(confirmed.broadcasts, stats.broadcasts + 1)
@@ -218,7 +275,8 @@ export async function runPwaSilentPayCases(t, fixture) {
     async () => {
       const page = await importActor(spec.sender)
       const stats = await control('stats')
-      let dialog = await sendForm(page, spec.address.slice(0, -1) + '!')
+      const badChecksum = spec.address.slice(0, -1) + (spec.address.endsWith('q') ? 'p' : 'q')
+      const dialog = await sendForm(page, badChecksum)
       await dialog.getByRole('button', { name: 'Confirm', exact: true }).click()
       // This UI delegates checksum validation to the actual SDK submission.
       await dialog.getByRole('button', { name: 'Confirm', exact: true }).click()
