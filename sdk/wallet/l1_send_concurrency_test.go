@@ -27,17 +27,31 @@ type concurrentL1SendIndexer struct {
 	broadcast chan struct{}
 	release   chan struct{}
 	firstTx   *wire.MsgTx
+	published []*wire.MsgTx
 }
 
-func (c *concurrentL1SendIndexer) GetUtxoListWithTicker(_ string, _ *indexer.AssetName) []*indexer.AssetsInUtxo {
+func (c *concurrentL1SendIndexer) GetUtxoListWithTicker(_ string, name *indexer.AssetName) []*indexer.AssetsInUtxo {
 	c.queried <- struct{}{}
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 	result := make([]*indexer.AssetsInUtxo, 0, len(c.listed))
 	for _, output := range c.listed {
-		result = append(result, output.Clone().ToAssetsInUtxo())
+		if indexer.IsPlainAsset(name) && !output.HasAsset() || !indexer.IsPlainAsset(name) && output.GetAsset(name).Sign() > 0 {
+			result = append(result, output.Clone().ToAssetsInUtxo())
+		}
 	}
 	return result
+}
+
+func (c *concurrentL1SendIndexer) GetRawTx(txid string) (string, error) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	for _, tx := range c.published {
+		if tx.TxID() == txid {
+			return EncodeMsgTx(tx)
+		}
+	}
+	return "", fmt.Errorf("unknown transaction %s", txid)
 }
 
 func (c *concurrentL1SendIndexer) verify(txs []*wire.MsgTx, consume bool) error {
@@ -67,6 +81,7 @@ func (c *concurrentL1SendIndexer) verify(txs []*wire.MsgTx, consume bool) error 
 	}
 	if consume {
 		c.outputs, c.spent = outputs, spent
+		c.published = append(c.published, txs...)
 		for _, tx := range txs {
 			for i, output := range tx.TxOut {
 				// Only large, plain wallet change is selectable; inscription
@@ -78,6 +93,113 @@ func (c *concurrentL1SendIndexer) verify(txs []*wire.MsgTx, consume bool) error 
 		}
 	}
 	return nil
+}
+
+func TestL1SmallOrdxSendGeneratesStubsWithoutReenteringSendLock(t *testing.T) {
+	for _, amount := range []int64{100, 1} {
+		t.Run(fmt.Sprint(amount), func(t *testing.T) {
+			manager := safetyTestManager(t, &Channel{ChannelInDB: *NewChannelInDB()})
+			manager.db = newMemoryKVDB()
+			address := manager.wallet.GetAddress()
+			script, err := GetPkScriptFromAddress(address)
+			require.NoError(t, err)
+			name := indexer.AssetName{Protocol: indexer.PROTOCOL_NAME_ORDX, Type: indexer.ASSET_TYPE_FT, Ticker: "stub-race"}
+			manager.tickerInfoMap = map[string]*indexer.TickerInfo{name.String(): {AssetName: name, N: 1}}
+			funding := indexer.NewTxOutput(100_000)
+			funding.OutPointStr = fmt.Sprintf("%064x:0", 1)
+			funding.OutValue.PkScript = script
+			asset := indexer.NewTxOutput(10_000)
+			asset.OutPointStr = fmt.Sprintf("%064x:0", 2)
+			asset.OutValue.PkScript = script
+			asset.Assets = indexer.TxAssets{{Name: name, Amount: *indexer.NewDefaultDecimal(10_000), BindingSat: 1}}
+			asset.Offsets[name] = indexer.AssetOffsets{{Start: 0, End: 10_000}}
+			client := &concurrentL1SendIndexer{
+				outputs: map[wire.OutPoint]*wire.TxOut{*funding.OutPoint(): &funding.OutValue, *asset.OutPoint(): &asset.OutValue},
+				listed:  []*TxOutput{funding, asset}, spent: make(map[wire.OutPoint]bool), script: script,
+				queried: make(chan struct{}, 32), broadcast: make(chan struct{}), release: make(chan struct{}),
+			}
+			manager.l1IndexerClient = &IndexerRPCClientMgr{active: client}
+			manager.utxoLockerL1 = NewUtxoLocker(manager.db, client, L1_NETWORK_BITCOIN)
+			var release sync.Once
+			unblock := func() { release.Do(func() { close(client.release) }) }
+			t.Cleanup(unblock)
+			type result struct {
+				txid string
+				err  error
+			}
+			assetSent := make(chan result, 1)
+			go func() {
+				txid, _, err := manager.BatchSendAssetsV3([]*SendAssetInfo{{Address: address,
+					AssetName: &name, AssetAmt: indexer.NewDefaultDecimal(amount)}}, name.String(), 1, nil, "", false)
+				assetSent <- result{txid, err}
+			}()
+			select {
+			case <-client.broadcast:
+			case sent := <-assetSent:
+				t.Fatalf("small ORDX send did not generate its missing stub: %v", sent.err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("small ORDX send deadlocked before broadcasting its missing stub")
+			}
+			require.Len(t, client.firstTx.TxOut, 3)
+			require.EqualValues(t, 330, client.firstTx.TxOut[0].Value)
+			require.EqualValues(t, 330, client.firstTx.TxOut[1].Value)
+			for len(client.queried) > 0 {
+				<-client.queried
+			}
+			plainSent := make(chan result, 1)
+			go func() {
+				tx, err := manager.SendAssets(address, ASSET_PLAIN_SAT.String(), "1000", 1, nil)
+				var txid string
+				if tx != nil {
+					txid = tx.TxID()
+				}
+				plainSent <- result{txid, err}
+			}()
+			prematureSelection := false
+			select {
+			case <-client.queried:
+				prematureSelection = true
+			case <-time.After(100 * time.Millisecond):
+			}
+			unblock()
+			var assetResult, plainResult result
+			select {
+			case assetResult = <-assetSent:
+			case <-time.After(5 * time.Second):
+				t.Fatal("small ORDX send did not complete after its stub broadcast")
+			}
+			select {
+			case plainResult = <-plainSent:
+			case <-time.After(5 * time.Second):
+				t.Fatal("competing plain send did not complete")
+			}
+			require.False(t, prematureSelection, "competing send must wait through the prerequisite and final asset broadcasts")
+			require.NoError(t, assetResult.err)
+			require.NoError(t, plainResult.err)
+			require.Len(t, client.published, 3)
+			require.Equal(t, assetResult.txid, client.published[1].TxID())
+			require.Equal(t, plainResult.txid, client.published[2].TxID())
+			assetTx := client.published[1]
+			require.Equal(t, wire.OutPoint{Hash: client.firstTx.TxHash(), Index: 0}, assetTx.TxIn[0].PreviousOutPoint)
+			combined := indexer.NewTxOutput(0)
+			for _, input := range assetTx.TxIn {
+				previous := asset
+				if input.PreviousOutPoint != *asset.OutPoint() {
+					previous = indexer.NewTxOutput(client.outputs[input.PreviousOutPoint].Value)
+				}
+				require.NoError(t, combined.Append(previous))
+			}
+			for i, output := range assetTx.TxOut {
+				part, remaining, err := combined.Cut(output.Value)
+				require.NoError(t, err)
+				combined = remaining
+				if i == 0 {
+					require.Equal(t, fmt.Sprint(amount), part.GetAsset(&name).String())
+				}
+			}
+			require.Empty(t, combined.Assets, "stub construction and network fees must preserve ORDX")
+		})
+	}
 }
 
 func (c *concurrentL1SendIndexer) TestRawTx_Bitcoin(raw []string) error {

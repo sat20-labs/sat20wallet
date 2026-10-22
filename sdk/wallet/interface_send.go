@@ -1099,6 +1099,26 @@ func (p *Manager) GenerateStubUtxos(localWallet common.Wallet,
 	return tx.TxID(), fee, nil
 }
 
+// generateStubUtxosLocked is a prerequisite of an already serialized wallet
+// send. The caller must hold l1SendMu until the final asset transaction has also
+// been broadcast; entering BatchSendAssetsWithWallet here would lock it twice.
+func (p *Manager) generateStubUtxosLocked(localWallet common.Wallet,
+	n int, feeRate int64) (string, int64, error) {
+	address := localWallet.GetAddress()
+	tx, fetcher, fee, err := p.BuildBatchSendTx_btc(address, address, 330, n, nil, feeRate, nil, true)
+	if err != nil {
+		return "", fee, err
+	}
+	tx, err = SignTxWithWallet(localWallet, tx, fetcher)
+	if err != nil {
+		return "", fee, err
+	}
+	if err := p.BroadcastTxs([]*wire.MsgTx{tx}); err != nil {
+		return "", fee, err
+	}
+	return tx.TxID(), fee, nil
+}
+
 func (p *Manager) GenerateStubUtxosV2(n int, excludedUtxoMap map[string]bool,
 	feeRate int64) (*wire.MsgTx, int64, error) {
 
@@ -3700,8 +3720,8 @@ func (p *Manager) BatchSendAssetsV3(dest []*SendAssetInfo,
 		tx, prevFetcher, fee, err = p.BuildBatchSendTxV3_btc(srcAddr, excluded,
 			dest, feeRate, memo, false, false, autoAdjust)
 	case indexer.PROTOCOL_NAME_ORDX:
-		tx, prevFetcher, fee, err = p.BuildBatchSendTxV3_ordx(srcAddr, excluded,
-			dest, assetName, feeRate, memo, false, false, p.wallet, false)
+		tx, prevFetcher, fee, err = p.buildBatchSendTxWithStubGenerator_ordx(srcAddr, excluded,
+			dest, assetName, feeRate, memo, false, false, p.wallet, false, 0, p.generateStubUtxosLocked)
 	case indexer.PROTOCOL_NAME_RUNES:
 		if len(memo) != 0 { // TODO 等主网支持多个op_return后再修改
 			return "", 0, fmt.Errorf("do not attach memo when send runes asset")
@@ -3950,6 +3970,18 @@ func (p *Manager) buildBatchSendTxWithHeight_ordx(srcAddress string, excluded ma
 	localWallet common.Wallet, payFeeByLocalAddress bool, maxConfirmedInputHeight int) (
 	*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
 
+	return p.buildBatchSendTxWithStubGenerator_ordx(srcAddress, excluded, dest, assetName,
+		feeRate, memo, excludeRecentBlock, inChannel, localWallet, payFeeByLocalAddress,
+		maxConfirmedInputHeight, p.GenerateStubUtxos)
+}
+
+func (p *Manager) buildBatchSendTxWithStubGenerator_ordx(srcAddress string, excluded map[string]bool,
+	dest []*SendAssetInfo, assetName *AssetName,
+	feeRate int64, memo []byte, excludeRecentBlock, inChannel bool,
+	localWallet common.Wallet, payFeeByLocalAddress bool, maxConfirmedInputHeight int,
+	generateWalletStubs func(common.Wallet, int, int64) (string, int64, error)) (
+	*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
+
 	if localWallet == nil {
 		localWallet = p.wallet
 	}
@@ -4008,7 +4040,7 @@ func (p *Manager) buildBatchSendTxWithHeight_ordx(srcAddress string, excluded ma
 			if inChannel {
 				stubTx, fee, err = p.CoGenerateStubUtxos(localWallet, stubNum+10, feeRate, "", 0, false)
 			} else {
-				stubTx, fee, err = p.GenerateStubUtxos(localWallet, 2, feeRate)
+				stubTx, fee, err = generateWalletStubs(localWallet, 2, feeRate)
 			}
 			if err != nil {
 				Log.Errorf("GenerateStubUtxos %d failed, %v", stubNum+10, err)
