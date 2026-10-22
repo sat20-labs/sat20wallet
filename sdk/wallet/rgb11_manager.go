@@ -90,6 +90,7 @@ type rgb11Manager struct {
 	accountOwner      *Manager
 	scopeStates       *rgb11ScopeStateRegistry
 	channelSend       *rgb11ChannelSendContext
+	nativeDepositMemo []byte
 }
 
 func newRGB11Manager(owner *Manager, database indexer.KVDB, locker *UtxoLocker,
@@ -1008,7 +1009,28 @@ func (p *rgb11Manager) GetRGB11AssetBalance(name *indexer.AssetName) (*Decimal, 
 	if name == nil || name.Protocol != rgb11wallet.Protocol || p.rgbManager.projectionStore == nil {
 		return nil, rgb11wallet.ErrInvalidRGB11Asset
 	}
-	return p.rgbManager.projectionStore.Balance(*name)
+	outputs, err := p.projectionStore.ListOutputs()
+	if err != nil {
+		return nil, err
+	}
+	proofs, err := p.projectionStore.ListProofs()
+	if err != nil {
+		return nil, err
+	}
+	current := make(map[string]bool)
+	for _, proof := range proofs {
+		if proof.Status != "spending" && proof.Status != "inconsistent" && proof.Status != "orphaned" {
+			current[proof.OutPoint+"|"+proof.AssetName.String()] = true
+		}
+	}
+	var balance *Decimal
+	for _, output := range outputs {
+		if p.ownsRGB11ChannelScript(output.OutValue.PkScript) || !current[output.OutPointStr+"|"+name.String()] {
+			continue
+		}
+		balance = balance.AddAlignPrecision(output.GetAsset(name))
+	}
+	return balance, nil
 }
 
 // rgb11CarrierLockAllowsSpend treats an unreserved RGB marker as the one lock
@@ -1049,8 +1071,8 @@ func validateRGB11TickerInfoName(info *indexer.TickerInfo) error {
 	if contractID == "" {
 		return rgb11wallet.ErrInvalidRGB11Asset
 	}
-	// This SDK is still L1-only. An imported metadata string must never
-	// impersonate an authenticated SatoshiNet registry assignment.
+	// A human-readable registry name cannot be asserted by imported metadata.
+	// Native STP identity remains the immutable full ContractID projection key.
 	if ext.CanonicalName != "" {
 		return rgb11wallet.ErrRGB11STPUnavailable
 	}
@@ -1103,6 +1125,9 @@ func (p *rgb11Manager) GetRGB11State() (*RGB11State, error) {
 	var pendingAssets indexer.TxAssets
 	stateOutputs := make([]*RGB11Output, 0, len(outputs))
 	for _, output := range outputs {
+		if p.ownsRGB11ChannelScript(output.OutValue.PkScript) {
+			continue
+		}
 		stateOutputs = append(stateOutputs, &RGB11Output{
 			OutPointStr: output.OutPointStr,
 			Assets:      output.Assets.Clone(),
@@ -1601,6 +1626,13 @@ func (p *rgb11Manager) selectRGB11IssueOutpoints(count int, minConfirmations int
 			reservedChanges[candidate.OutPoint] != "" {
 			continue
 		}
+		protected, err := p.NativeContractInputProtected(candidate.OutPoint)
+		if err != nil {
+			return nil, err
+		}
+		if protected || p.isSTPNativeInputProtected(candidate.OutPoint) {
+			continue
+		}
 		if _, err := p.rgbManager.projectionStore.LoadOutput(candidate.OutPoint); err == nil {
 			continue
 		} else if !errors.Is(err, indexer.ErrKeyNotFound) {
@@ -2097,7 +2129,7 @@ func rgb11TickerInfoFromValidatedContract(container *coreconsignment.Container,
 		SchemaID:        container.SchemaID, ContractID: container.ContractID,
 		ContractHash: receipt.ConsignmentHash, RejectListURL: metadata.RejectListURL,
 		ControlMode: descriptor.DefaultControlMode,
-		STPAllowed:  false, ValidationStatus: "valid",
+		STPAllowed:  ValidateSTPAsset(&assetName, STPOpCommit) == nil, ValidationStatus: "valid",
 	}
 	extContent, err := json.Marshal(ext)
 	if err != nil {
@@ -2177,6 +2209,16 @@ func (p *rgb11Manager) rgb11TickerPresentation(info *indexer.TickerInfo) (*RGB11
 	if err := json.Unmarshal(info.Content, &ext); err != nil {
 		return nil, err
 	}
+	// Capability is determined by the installed protocol adapter. A persisted
+	// pre-upgrade display flag is not an authorization or a permanent denial.
+	ext.STPAllowed = ValidateSTPAsset(&info.AssetName, STPOpCommit) == nil
+	content, err := json.Marshal(ext)
+	if err != nil {
+		return nil, err
+	}
+	copy := *info
+	copy.Content = content
+	info = &copy
 	contractID := ext.ContractID
 	label, status := ext.DisplayTicker, ext.NamingStatus
 	if label == "" {
@@ -3710,6 +3752,9 @@ func (p *rgb11Manager) selectRGB11AllocationsOnce(contractID string, amount uint
 }
 
 func (p *rgb11Manager) mergeRGB11SpendHistories(selected []rgb11SpendAllocation) (*coreconsignment.Container, string, error) {
+	if p.channelSend != nil && p.channelSend.preserveChannelValue {
+		return p.mergeNativePublicSpendHistories(selected)
+	}
 	hashes := make(map[string]struct{})
 	for _, allocation := range selected {
 		if allocation.proof == nil || allocation.proof.ConsignmentHash == "" {
@@ -3792,6 +3837,7 @@ func (p *rgb11Manager) buildRGB11WitnessTx(selected []rgb11SpendAllocation, reci
 	prevFetcher := txscript.NewMultiPrevOutFetcher(nil)
 	tx := wire.NewMsgTx(2)
 	var inputValue int64
+	var channelValue int64
 	addInput := func(outpoint string, value int64, pkScript []byte) (int, error) {
 		if index, ok := unique[outpoint]; ok {
 			return index, nil
@@ -3808,6 +3854,9 @@ func (p *rgb11Manager) buildRGB11WitnessTx(selected []rgb11SpendAllocation, reci
 		unique[outpoint] = index
 		inputOutpoints = append(inputOutpoints, outpoint)
 		inputValue += value
+		if p.channelSend != nil && p.channelSend.preserveChannelValue && bytes.Equal(pkScript, p.channelSend.pkScript) {
+			channelValue += value
+		}
 		return index, nil
 	}
 	walletScript, err := AddrToPkScript(p.wallet.GetAddress(), GetChainParam())
@@ -3874,6 +3923,16 @@ func (p *rgb11Manager) buildRGB11WitnessTx(selected []rgb11SpendAllocation, reci
 	}
 	tx.AddTxOut(wire.NewTxOut(0, changeScript))
 	changeIndex := len(tx.TxOut) - 1
+	feeChangeIndex := -1
+	if p.channelSend != nil && p.channelSend.preserveChannelValue {
+		feeChangeIndex = len(tx.TxOut)
+		tx.AddTxOut(wire.NewTxOut(0, walletScript))
+	}
+	if len(p.nativeDepositMemo) != 0 {
+		// The RGB commitment remains the first OP_RETURN. The additional
+		// signed commitment binds the public contract and L2 beneficiary.
+		tx.AddTxOut(wire.NewTxOut(0, append([]byte(nil), p.nativeDepositMemo...)))
+	}
 	recipientValue := int64(len(recipientScripts)) * rgb11CarrierValue
 
 	feeAddress := p.wallet.GetAddress()
@@ -3897,7 +3956,12 @@ func (p *rgb11Manager) buildRGB11WitnessTx(selected []rgb11SpendAllocation, reci
 			estimate.AddTxOutput(output)
 		}
 		fee := estimate.Fee(feeRate)
-		if inputValue >= recipientValue+rgb11CarrierValue+fee {
+		if feeChangeIndex >= 0 && inputValue >= recipientValue+channelValue+rgb11CarrierValue+fee {
+			tx.TxOut[changeIndex].Value = channelValue
+			tx.TxOut[feeChangeIndex].Value = inputValue - channelValue - recipientValue - fee
+			return tx, prevFetcher, inputOutpoints, signingKeys, fee, nil
+		}
+		if feeChangeIndex < 0 && inputValue >= recipientValue+rgb11CarrierValue+fee {
 			tx.TxOut[changeIndex].Value = inputValue - recipientValue - fee
 			return tx, prevFetcher, inputOutpoints, signingKeys, fee, nil
 		}

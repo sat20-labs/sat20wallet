@@ -12,6 +12,8 @@ func TestSTPAssetRulesRejectUnsupportedIdentityAndOperation(t *testing.T) {
 	ordxName := indexer.AssetName{Protocol: indexer.PROTOCOL_NAME_ORDX, Type: indexer.ASSET_TYPE_NS, Ticker: "alice.sats"}
 	runeNFT := indexer.AssetName{Protocol: indexer.PROTOCOL_NAME_RUNES, Type: indexer.ASSET_TYPE_NFT, Ticker: "ART"}
 	brcNFT := indexer.AssetName{Protocol: indexer.PROTOCOL_NAME_BRC20, Type: indexer.ASSET_TYPE_NFT, Ticker: "ordi"}
+	atomNFT := indexer.AssetName{Protocol: indexer.PROTOCOL_NAME_ATOM, Type: indexer.ASSET_TYPE_NFT, Ticker: "quark"}
+	atomBadTicker := indexer.AssetName{Protocol: indexer.PROTOCOL_NAME_ATOM, Type: indexer.ASSET_TYPE_FT, Ticker: "QUARK"}
 	rgbName := indexer.AssetName{Protocol: "rgb11", Type: indexer.ASSET_TYPE_FT, Ticker: "ordi"}
 	tests := []struct {
 		name      string
@@ -25,6 +27,8 @@ func TestSTPAssetRulesRejectUnsupportedIdentityAndOperation(t *testing.T) {
 		{"name-contract", ordxSTPRules{}, &ordxName, STPOpContract},
 		{"rune-nft", runesSTPRules{}, &runeNFT, STPOpSpliceIn},
 		{"brc20-nft", brc20STPRules{}, &brcNFT, STPOpForceClose},
+		{"atomicals-nft", atomicalsSTPProtocol{}, &atomNFT, STPOpSpliceIn},
+		{"atomicals-noncanonical-ticker", atomicalsSTPProtocol{}, &atomBadTicker, STPOpCommit},
 		{"different-protocol", brc20STPRules{}, &rgbName, STPOpCommit},
 	}
 	for _, test := range tests {
@@ -50,6 +54,7 @@ func TestSTPAssetRulesKeepExistingChannelAssetClasses(t *testing.T) {
 		{ordxSTPRules{}, indexer.AssetName{Protocol: indexer.PROTOCOL_NAME_ORDX, Type: indexer.ASSET_TYPE_EXOTIC, Ticker: "uncommon"}},
 		{runesSTPRules{}, indexer.AssetName{Protocol: indexer.PROTOCOL_NAME_RUNES, Type: indexer.ASSET_TYPE_FT, Ticker: "CHANNEL•TEST"}},
 		{brc20STPRules{}, indexer.AssetName{Protocol: indexer.PROTOCOL_NAME_BRC20, Type: indexer.ASSET_TYPE_FT, Ticker: "ordi"}},
+		{atomicalsSTPProtocol{}, indexer.AssetName{Protocol: indexer.PROTOCOL_NAME_ATOM, Type: indexer.ASSET_TYPE_FT, Ticker: "quark"}},
 	}
 	for _, asset := range assets {
 		for _, operation := range operations {
@@ -72,6 +77,8 @@ func TestSTPAssetContractNormalizationPreservesIdentityRules(t *testing.T) {
 		{"ordx-case", ordxSTPRules{}, indexer.AssetName{Protocol: indexer.PROTOCOL_NAME_ORDX, Type: indexer.ASSET_TYPE_FT, Ticker: "DogCoin"}, "dogcoin", true},
 		{"brc20-case", brc20STPRules{}, indexer.AssetName{Protocol: indexer.PROTOCOL_NAME_BRC20, Type: indexer.ASSET_TYPE_FT, Ticker: "ORDI"}, "ordi", true},
 		{"brc20-five-bytes", brc20STPRules{}, indexer.AssetName{Protocol: indexer.PROTOCOL_NAME_BRC20, Type: indexer.ASSET_TYPE_FT, Ticker: "ABCDE"}, "abcde", true},
+		{"atomicals-case", atomicalsSTPProtocol{}, indexer.AssetName{Protocol: indexer.PROTOCOL_NAME_ATOM, Type: indexer.ASSET_TYPE_FT, Ticker: "QUARK"}, "quark", true},
+		{"atomicals-invalid", atomicalsSTPProtocol{}, indexer.AssetName{Protocol: indexer.PROTOCOL_NAME_ATOM, Type: indexer.ASSET_TYPE_FT, Ticker: "Bad-Name"}, "", false},
 		{"rune-spacers", runesSTPRules{}, indexer.AssetName{Protocol: indexer.PROTOCOL_NAME_RUNES, Type: indexer.ASSET_TYPE_FT, Ticker: "CHANNEL•TEST"}, "CHANNEL•TEST", true},
 		{"rune-dot", runesSTPRules{}, indexer.AssetName{Protocol: indexer.PROTOCOL_NAME_RUNES, Type: indexer.ASSET_TYPE_FT, Ticker: "CHANNEL.TEST"}, "", false},
 		{"rune-case", runesSTPRules{}, indexer.AssetName{Protocol: indexer.PROTOCOL_NAME_RUNES, Type: indexer.ASSET_TYPE_FT, Ticker: "channel"}, "", false},

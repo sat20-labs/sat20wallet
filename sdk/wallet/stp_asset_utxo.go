@@ -124,9 +124,9 @@ func (ordxSTPProtocol) BuildCommitment(p *Manager, req STPAssetCommitmentRequest
 }
 
 func (runesSTPProtocol) BuildCommitment(p *Manager, req STPAssetCommitmentRequest) (*STPAssetPlan, error) {
-	plain, err := p.HandleOutputsRunes(req.Tx, req.Channel.GetFundingOutputWithProtocol(indexer.PROTOCOL_NAME_RUNES),
+	plain, err := p.handleOutputsRunesAfterPrefix(req.Tx, req.Channel.GetFundingOutputWithProtocol(indexer.PROTOCOL_NAME_RUNES),
 		req.LocalBalance, req.RemoteBalance, req.Channel.GetStubUtxos(indexer.PROTOCOL_NAME_RUNES),
-		req.LocalScript, req.RemoteScript, req.Weight, req.Channel.ChannelId)
+		req.LocalScript, req.RemoteScript, req.Weight, req.Channel.ChannelId, req.PrefixInputs, req.PrefixOutputs)
 	return &STPAssetPlan{Tx: req.Tx, ExtraPlainSats: plain}, err
 }
 

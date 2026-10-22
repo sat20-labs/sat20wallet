@@ -33,6 +33,33 @@ type STPAssetPlanner interface {
 	BindSplice(*Manager, STPAssetSpliceRequest) error
 }
 
+// STPAssetSplicePlanner is implemented by protocols whose allocations depend
+// on the whole transaction rather than ordinal offsets. It validates ownership,
+// co-carried assets and balances before filling the existing reservation.
+type STPAssetSplicePlanner interface {
+	PlanSplice(*Manager, *SplicingReservation, []*TxOutput, []*TxOutput, int, int64, STPAssetOperation) error
+}
+
+// SplitOutputs creates a transaction-local asset view. It does not attest that
+// an allocation is valid: BindSplice and the final protocol verifier must check
+// the completed transaction against the protocol's native evidence.
+type STPAssetOutputSplitter interface {
+	SplitOutputs([]*TxOutput, *AssetName, int64, *Decimal) (*TxOutput, *TxOutput, error)
+}
+
+// ClassifyOutputs restores protocol-specific allocations after ordinal-only
+// output accounting. Inputs retain the complete independently verified state.
+type STPAssetOutputClassifier interface {
+	ClassifyOutputs(*Manager, *wire.MsgTx, []*TxOutput, []*TxOutput) error
+}
+
+// PrepareLayout reserves protocol commitments that must precede other outputs.
+// Asset inputs and allocations are still added in the normal ordered planning
+// pass, so ordinal-bound protocols retain matching input/output sat prefixes.
+type STPAssetLayoutPreparer interface {
+	PrepareLayout(*Manager, STPAssetCommitmentRequest) error
+}
+
 // Recovery preparation is part of commitment construction, before STP releases
 // any signature or revokes the previous commitment. The returned transactions
 // use the existing PrevTxs/NextTxs/Others persistence and recovery paths.
@@ -99,6 +126,10 @@ type STPAssetCommitmentRequest struct {
 	FeeRate       int64
 	Weight        *utils.TxWeightEstimator
 	ServerCommit  bool
+	// Prefix counts protect protocols with transaction-wide input/output
+	// allocation rules from later adapters that insert their own carriers.
+	PrefixInputs  int
+	PrefixOutputs int
 }
 
 type STPAssetSpliceRequest struct {
@@ -108,8 +139,9 @@ type STPAssetSpliceRequest struct {
 }
 
 // STPAssetPlan describes a transaction package rather than a single transfer.
-// Plans are transient: STP signs and stores their transactions in its existing
-// reservation/commitment records. No new wire or database format is introduced.
+// Plans are transient: STP signs and stores their transactions in reservation
+// and commitment records. Native adapters also persist proof sidecars and a
+// recovery journal; legacy assets keep their existing transaction encoding.
 type STPAssetPlan struct {
 	Tx             *wire.MsgTx
 	PrevFetcher    *txscript.MultiPrevOutFetcher
@@ -119,6 +151,13 @@ type STPAssetPlan struct {
 	OtherTxs       []*CommitmentTx
 	PlainInputs    []*TxOutput
 	ExtraPlainSats int64
+	// Native carrier value belongs to the channel initiator in both views of
+	// a commitment; it is distinct from the commitment owner's plain balance.
+	InitiatorPlainSats int64
+	NativeProofs       map[string][]byte
+	// ProtocolData is ephemeral planner/verifier state, never wire or DB data.
+	ProtocolData   any
+	FixedPrefix    bool
 	LocalOutputs   []*CommitAssetOutput
 	RemoteOutputs  []*CommitAssetOutput
 	RecoveryOutput *wire.TxOut
@@ -208,9 +247,10 @@ func (r *STPAssetRegistry) Resolve(asset *indexer.AssetName, operation STPAssetO
 }
 
 func newBuiltinSTPAssetRegistry() *STPAssetRegistry {
-	// Preserve the existing commitment layout: inscriptions, sat-bound
-	// assets, Runes (which binds output indexes), then STP's plain-sats step.
-	r, err := NewSTPAssetRegistry(brc20STPProtocol{}, ordxSTPProtocol{}, runesSTPProtocol{}, btcSTPProtocol{})
+	// ARC20 occupies the first spendable outputs. Preserve the relative order
+	// of inscriptions, sat-bound assets and Runes; RGB reserves its zero-value
+	// commitment marker before planning and adds its carriers after them.
+	r, err := NewSTPAssetRegistry(atomicalsSTPProtocol{}, brc20STPProtocol{}, ordxSTPProtocol{}, runesSTPProtocol{}, rgb11STPProtocol{}, btcSTPProtocol{})
 	if err != nil {
 		panic(err)
 	}
@@ -341,6 +381,23 @@ func (p *Manager) planSTPCommitmentAssets(req STPAssetCommitmentRequest) ([]stpP
 	}
 	var plans []stpPlannedAsset
 	for _, protocol := range stpAssetProtocols.ordered {
+		if preparer, ok := protocol.(STPAssetLayoutPreparer); ok {
+			if err := preparer.PrepareLayout(p, req); err != nil {
+				return nil, err
+			}
+		}
+	}
+	// Layout preparation may reserve only zero-value unspendable outputs.
+	for _, output := range req.Tx.TxOut {
+		if output.Value != 0 || !txscript.IsUnspendable(output.PkScript) {
+			return nil, fmt.Errorf("asset layout preparation added a spendable output")
+		}
+	}
+	if len(req.Tx.TxIn) != 0 {
+		return nil, fmt.Errorf("asset layout preparation added inputs")
+	}
+	req.PrefixOutputs = len(req.Tx.TxOut)
+	for _, protocol := range stpAssetProtocols.ordered {
 		beforeInputs := append([]*wire.TxIn(nil), req.Tx.TxIn...)
 		beforeOutputs := append([]*wire.TxOut(nil), req.Tx.TxOut...)
 		plan, err := protocol.BuildCommitment(p, req)
@@ -352,17 +409,58 @@ func (p *Manager) planSTPCommitmentAssets(req STPAssetCommitmentRequest) ([]stpP
 		}
 		snapshotSTPAssetLayout(req.Tx, beforeInputs, beforeOutputs, protocol.Policy(nil).FixedOutputIndexes, plan)
 		plans = append(plans, stpPlannedAsset{protocol: protocol, plan: plan})
+		if plan.FixedPrefix {
+			req.PrefixInputs = len(req.Tx.TxIn)
+			req.PrefixOutputs = len(req.Tx.TxOut)
+		}
 	}
 	return plans, nil
 }
 
 func verifySTPCommitmentAssets(req STPAssetCommitmentRequest, plans []stpPlannedAsset) error {
+	fetcher := req.Channel.GetCommitmentPrefetchor()
 	for _, item := range plans {
+		for _, inscribe := range item.plan.PrevTxs {
+			if inscribe == nil {
+				return fmt.Errorf("nil materialized STP input")
+			}
+			for _, tx := range []*wire.MsgTx{inscribe.CommitTx, inscribe.RevealTx} {
+				if tx == nil {
+					continue
+				}
+				for i := range tx.TxOut {
+					output := indexer.GenerateTxOutput(tx, i)
+					fetcher.AddPrevOut(*output.OutPoint(), output.TxOut())
+				}
+			}
+		}
+	}
+	for _, item := range plans {
+		item.plan.PrevFetcher = fetcher
 		if err := item.protocol.Verify(STPAssetVerification{Operation: req.Operation, Tx: req.Tx, Plan: item.plan}); err != nil {
 			return fmt.Errorf("verify %s commitment: %w", item.protocol.Protocol(), err)
 		}
 	}
 	return nil
+}
+
+func collectSTPAssetProofs(plans []stpPlannedAsset) (map[string][]byte, error) {
+	var result map[string][]byte
+	for _, item := range plans {
+		for protocol, proof := range item.plan.NativeProofs {
+			if protocol != item.protocol.Protocol() || len(proof) == 0 {
+				return nil, fmt.Errorf("invalid %s native plan proof", protocol)
+			}
+			if result == nil {
+				result = make(map[string][]byte)
+			}
+			if _, exists := result[protocol]; exists {
+				return nil, fmt.Errorf("duplicate %s native proof", protocol)
+			}
+			result[protocol] = append([]byte(nil), proof...)
+		}
+	}
+	return result, nil
 }
 
 func stpRecoveryInputs(commit *ChannelCommitment, balances map[AssetName]*Decimal, operation STPAssetOperation) (STPAssetRecoveryInputs, error) {

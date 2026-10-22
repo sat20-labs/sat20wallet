@@ -1,8 +1,8 @@
 package wallet
 
 import (
-	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/btcsuite/btcd/wire"
@@ -31,8 +31,16 @@ func TestSTPAssetRegistryRejectsUnsupportedCapabilities(t *testing.T) {
 		t.Fatal("a missing asset entered STP")
 	}
 	rgb := indexer.AssetName{Protocol: "rgb11", Type: indexer.ASSET_TYPE_FT, Ticker: "contract-id"}
-	if _, err := registry.Resolve(&rgb, STPOpSpliceIn); !errors.Is(err, ErrRGB11STPUnavailable) {
-		t.Fatalf("RGB admission must retain the unavailable error, got %v", err)
+	if _, err := registry.Resolve(&rgb, STPOpSpliceIn); err == nil {
+		t.Fatal("a noncanonical RGB contract ID entered STP")
+	}
+	rgb.Ticker = strings.Repeat("ab", 32)
+	if _, err := registry.Resolve(&rgb, STPOpSpliceIn); err != nil {
+		t.Fatalf("canonical RGB FT must resolve to its proof-verifying adapter: %v", err)
+	}
+	rgb.Type = indexer.ASSET_TYPE_NFT
+	if _, err := registry.Resolve(&rgb, STPOpSpliceIn); err == nil {
+		t.Fatal("an unsupported RGB asset schema entered STP")
 	}
 	rune := indexer.AssetName{Protocol: indexer.PROTOCOL_NAME_RUNES, Type: indexer.ASSET_TYPE_FT, Ticker: "TEST•RUNE"}
 	if _, err := registry.Resolve(&rune, STPAssetOperation("unimplemented")); err == nil {

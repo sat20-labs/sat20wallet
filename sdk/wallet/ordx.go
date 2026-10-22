@@ -92,6 +92,9 @@ func (p *Manager) DeployTicker_ordx(ticker string, max, lim int64, n int, feeRat
 		return nil, fmt.Errorf("invalid max %d", max)
 	}
 
+	p.l1SendMu.Lock()
+	defer p.l1SendMu.Unlock()
+
 	wallet := p.wallet
 	address := wallet.GetAddress()
 
@@ -175,6 +178,9 @@ func (p *Manager) MintAsset_ordx(destAddr string, tickInfo *indexer.TickerInfo,
 	if amt == 0 {
 		amt = limit
 	}
+
+	p.l1SendMu.Lock()
+	defer p.l1SendMu.Unlock()
 
 	wallet := p.wallet
 	address := wallet.GetAddress()
