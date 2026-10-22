@@ -138,8 +138,10 @@ func HasMultiAsset(output *TxOutput, assetName *indexer.AssetName) bool {
 			// 任何其他资产都冲突
 			return true
 		case indexer.PROTOCOL_NAME_BRC20:
-			// 过滤mint时的铭文
-			if asset.Name.Type == indexer.ASSET_TYPE_NFT {
+			// Only the underlying ORDX inscription may be ignored. An NFT
+			// from another protocol remains a distinct asset to preserve.
+			if asset.Name.Protocol == indexer.PROTOCOL_NAME_ORDX &&
+				asset.Name.Type == indexer.ASSET_TYPE_NFT {
 				continue
 			}
 			return true
@@ -147,17 +149,23 @@ func HasMultiAsset(output *TxOutput, assetName *indexer.AssetName) bool {
 			// 过滤低层的铭文，或者稀有聪
 			switch asset.Name.Type { // 这两种有可能是底层资产
 			case indexer.ASSET_TYPE_NFT:
-				if assetName.Type == indexer.ASSET_TYPE_NS ||
-					assetName.Type == indexer.ASSET_TYPE_FT {
+				if asset.Name.Protocol == indexer.PROTOCOL_NAME_ORDX &&
+					(assetName.Type == indexer.ASSET_TYPE_NS ||
+						assetName.Type == indexer.ASSET_TYPE_FT) {
 					continue
 				}
 
 			case indexer.ASSET_TYPE_EXOTIC:
-				if assetName.Type == indexer.ASSET_TYPE_FT {
+				if asset.Name.Protocol == indexer.PROTOCOL_NAME_ORDX &&
+					assetName.Type == indexer.ASSET_TYPE_FT {
 					continue
 				}
 			}
 
+			return true
+		default:
+			// ARC20, RGB11 and future protocols have no safe coasset
+			// exception. Do not silently drop any unrelated asset.
 			return true
 		}
 	}
