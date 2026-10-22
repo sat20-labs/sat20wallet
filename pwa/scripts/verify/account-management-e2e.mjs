@@ -16,6 +16,7 @@ import { requiredPwaBiometricCases, runPwaBiometricCases } from './wallet-biomet
 import { requiredPwaPosCases, optionalPwaEscapeCases, runPwaPosCases } from './pos-pwa-e2e.mjs'
 import { requiredPwaL1ProtocolCases, runPwaL1ProtocolCases } from './wallet-l1-assets-e2e.mjs'
 import { requiredPwaWalletBasicCases, runPwaWalletBasicCases } from './wallet-basic-e2e.mjs'
+import { requiredPwaSilentPayCases, runPwaSilentPayCases } from './silentpay-e2e.mjs'
 import { createPwaIntegrationDapp, requiredPwaIntegrationCases, runPwaIntegrationCases } from './wallet-integrations-e2e.mjs'
 import { requiredPwaMiningCases, runPwaMiningCases } from './wallet-mining-e2e.mjs'
 import { requiredPwaNodeCases, runPwaNodeCases } from './wallet-node-e2e.mjs'
@@ -309,7 +310,11 @@ const config = regtestMode
   ? regtestConfig
   : posFixture?.config ?? rgbFixture?.config ?? JSON.parse(process.env.SAT20_ACCOUNT_E2E_CONFIG || 'null')
 const storageWasm = argumentValue('--storage-wasm')
-const expectedNetwork = regtestMode ? 'regtest' : 'testnet'
+const expectedNetwork = regtestMode || posFixture?.silentPay ? 'regtest' : 'testnet'
+if (posFixture?.silentPay) {
+  assert.ok(focusedWalletCases?.length && focusedWalletCases.every(name => requiredPwaSilentPayCases.includes(name)),
+    'isolated L1 SP fixture runs only explicitly selected SP browser cases')
+}
 if (!storageWasm) {
   assert.ok(config?.IndexerL2?.Host, 'launch via go test ./e2e -run ^TestSDKAccountPWAConnectedBrowser$')
   assert.equal(config.Chain, expectedNetwork)
@@ -384,7 +389,7 @@ const server = existingPwaURL ? {
   resolvedUrls: { local: [existingPwaURL] },
   listen: async () => {}, close: async () => {},
 } : await createServer({
-  ...(regtestMode ? { mode: 'regtest' } : {}),
+  ...(regtestMode || posFixture?.silentPay ? { mode: 'regtest' } : {}),
   server: {
     host: '127.0.0.1',
     port: regtestMode ? regtestBrowserPort : posFixture?.browserPort ?? 0,
@@ -496,7 +501,7 @@ const requiredWalletRuntimeCases = ['Wallet PWA: all feature groups finish witho
 if (focusedWalletCases) {
   assert.ok(posFixture && focusedWalletCases.length, 'wallet rerun requires the existing wallet fixture and exact cases')
   const known = sdkWASM ? requiredSDKWASMCases : [...requiredPwaPosCases, ...optionalPwaEscapeCases, ...requiredPwaL1ProtocolCases, ...requiredPwaWalletBasicCases, ...requiredPwaBiometricCases, ...requiredPwaMintCases,
-    ...requiredPwaMiningCases, ...requiredPwaNodeCases, ...requiredPwaIntegrationCases, ...requiredPwaToolsCases]
+    ...requiredPwaMiningCases, ...requiredPwaNodeCases, ...requiredPwaIntegrationCases, ...requiredPwaToolsCases, ...requiredPwaSilentPayCases]
   assert.ok(focusedWalletCases.every(name => known.includes(name)), 'unknown wallet case')
   assert.equal(new Set(focusedWalletCases).size, focusedWalletCases.length)
 }
@@ -690,15 +695,17 @@ async function device(sharedContext) {
       const requested = new URL(route.request().url())
       let endpoint
       let suffix
-      if (requested.pathname.startsWith('/btc/testnet/')) {
+      const l1Prefix = `/btc/${expectedNetwork}/`
+      const l2Prefix = `/satsnet/${expectedNetwork}/`
+      if (requested.pathname.startsWith(l1Prefix)) {
         endpoint = config.IndexerL1
-        suffix = requested.pathname.slice('/btc/testnet/'.length)
-      } else if (requested.pathname.startsWith('/satsnet/testnet/')) {
+        suffix = requested.pathname.slice(l1Prefix.length)
+      } else if (requested.pathname.startsWith(l2Prefix)) {
         endpoint = config.IndexerL2
-        suffix = requested.pathname.slice('/satsnet/testnet/'.length)
-      } else if (requested.pathname === '/testnet/ordx/GetRecommendedFees' || requested.pathname === '/ordx/GetBTCPrice') {
+        suffix = requested.pathname.slice(l2Prefix.length)
+      } else if (requested.pathname === `/${expectedNetwork}/ordx/GetRecommendedFees` || requested.pathname === '/ordx/GetBTCPrice') {
         endpoint = config.IndexerL1
-        suffix = requested.pathname.replace(/^\/(?:testnet\/)?/, '')
+        suffix = requested.pathname.replace(/^\/(?:(?:testnet|regtest)\/)?/, '')
       } else return route.abort('blockedbyclient')
       const proxy = String(endpoint.Proxy || 'testnet').replace(/^\/+|\/+$/g, '')
       const target = `${endpoint.Scheme}://${endpoint.Host}/${proxy}/${suffix}${requested.search}`
@@ -1392,10 +1399,11 @@ try {
     const helpers = { check, device, ready, unlock, catalog, walletCall, accountCall, questions, answers, nodeAPIOrigins, integrationDapp, selectedCases: focusedWalletCases }
     // Independent feature groups use fresh browser stores and continue after
     // another group fails; the required-case ledger still fails the whole gate.
-    for (const [run, names] of [[runPwaPosCases, [...requiredPwaPosCases, ...optionalPwaEscapeCases]], [runPwaL1ProtocolCases, requiredPwaL1ProtocolCases], [runPwaWalletBasicCases, requiredPwaWalletBasicCases],
+    for (const [run, names] of [[runPwaSilentPayCases, requiredPwaSilentPayCases], [runPwaPosCases, [...requiredPwaPosCases, ...optionalPwaEscapeCases]], [runPwaL1ProtocolCases, requiredPwaL1ProtocolCases], [runPwaWalletBasicCases, requiredPwaWalletBasicCases],
       [runPwaIntegrationCases, requiredPwaIntegrationCases], [runPwaToolsCases, requiredPwaToolsCases],
       [runPwaMintCases, requiredPwaMintCases], [runPwaMiningCases, requiredPwaMiningCases],
       [runPwaNodeCases, requiredPwaNodeCases]]) {
+      if (run === runPwaSilentPayCases && !posFixture.silentPay) continue
       if (focusedWalletCases && !names.some(name => focusedWalletCases.includes(name))) continue
       try { await run(helpers, posFixture) }
       catch (error) {
