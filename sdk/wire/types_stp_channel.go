@@ -183,12 +183,18 @@ type LockReq struct {
 }
 
 type CommitSigInfo struct {
-	CommitSig            [][]byte     `json:"commitSig"`
-	CommitDeAnchorSig    [][]byte     `json:"commitDeAnchorSig"`
-	CommitPrevTxSig      [][][]byte   `json:"commitPrevTxSig"`
-	CommitNextTxSig      [][][]byte   `json:"commitNextTxSig"`
-	CommitOtherPrevTxSig [][][][]byte `json:"commitOtherPrevTxSig,omitempty"`
-	CommitOtherTxSig     [][][]byte   `json:"commitOtherTxSig,omitempty"`
+	// RecoveryOnly obtains the counterparty's complete dependent sweeps before
+	// releasing signatures for the parent commitment or its funding ancestors.
+	RecoveryOnly         bool              `json:"recoveryOnly,omitempty"`
+	RecoveryCommitTxID   string            `json:"recoveryCommitTxId,omitempty"`
+	NativeOtherTxs       [][]string        `json:"nativeOtherTxs,omitempty"`
+	CommitAssetProofs    map[string][]byte `json:"commitAssetProofs,omitempty"`
+	CommitSig            [][]byte          `json:"commitSig"`
+	CommitDeAnchorSig    [][]byte          `json:"commitDeAnchorSig"`
+	CommitPrevTxSig      [][][]byte        `json:"commitPrevTxSig"`
+	CommitNextTxSig      [][][]byte        `json:"commitNextTxSig"`
+	CommitOtherPrevTxSig [][][][]byte      `json:"commitOtherPrevTxSig,omitempty"`
+	CommitOtherTxSig     [][][]byte        `json:"commitOtherTxSig,omitempty"`
 }
 
 type LockResp struct {
@@ -213,9 +219,12 @@ type LockCommitSigAndRevokeReq struct { // CommitSig and RevokeAndAck
 
 type LockCommitSigAndRevokeResp struct { // RevokeAndAck
 	BaseResp
-	Id      int64         `json:"id"`
-	Rev     *RevokeAndAck `json:"rev"`
-	LockSig [][]byte      `json:"lockSig"` // 拿到对方的rev后才能生成
+	RecoveryOnly       bool          `json:"recoveryOnly,omitempty"`
+	RecoveryCommitTxID string        `json:"recoveryCommitTxId,omitempty"`
+	NativeOtherTxs     [][]string    `json:"nativeOtherTxs,omitempty"`
+	Id                 int64         `json:"id"`
+	Rev                *RevokeAndAck `json:"rev"`
+	LockSig            [][]byte      `json:"lockSig"` // 拿到对方的rev后才能生成
 }
 
 type LockAckReq struct {
@@ -262,6 +271,9 @@ type UnlockResp struct { // 是否同意更新状态
 type RevokeAndAck struct {
 	Revocation [32]byte `json:"revocation"` // the preimage to the revocation hash of the prior commitment tx.
 	NextRevKey []byte   `json:"nextRevKey"` // the next commitment point for the next commitment tx
+	// Fully signed recovery packages for the sender's new commitment. Each
+	// group is ordered as previous transactions, the sweep, then successors.
+	NativeOtherTxs [][]string `json:"nativeOtherTxs,omitempty"`
 }
 
 type UnlockCommitSigReq struct { // CommitSig
@@ -351,6 +363,8 @@ type RecoverPaymentRevokeAndAckResp struct {
 // splicing in
 
 type SplicingInRequest struct {
+	AssetFunding map[string][]byte `json:"assetFunding,omitempty"`
+	AssetEntropy [32]byte          `json:"assetEntropy,omitempty"`
 	MsgHeader
 	ChannelId          string   `json:"channel"`
 	CommitHeight       int      `json:"commitHeight"`
@@ -424,6 +438,8 @@ type SplicingInRevokeAndAckResp struct { // 仅仅简单应答
 
 // splicing out
 type SplicingOutRequest struct {
+	AssetFunding map[string][]byte `json:"assetFunding,omitempty"`
+	AssetEntropy [32]byte          `json:"assetEntropy,omitempty"`
 	MsgHeader
 	ChannelId    string   `json:"channel"`
 	CommitHeight int      `json:"commitHeight"`
