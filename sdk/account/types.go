@@ -47,6 +47,8 @@ type WalletBackup struct {
 	Mnemonic     string       `json:"mnemonic"`
 	AccountCount uint32       `json:"account_count"`
 	SubAccounts  []SubAccount `json:"sub_accounts"`
+	// SPEnabled lists the subaccount indexes opted into Silent Payments.
+	SPEnabled []uint32 `json:"sp_enabled,omitempty"`
 }
 
 type Backup struct {

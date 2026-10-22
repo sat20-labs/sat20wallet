@@ -45,7 +45,14 @@ func TestUnifiedTemplateAutopayDeployFund_testnet(t *testing.T) {
 	stateJSON, stateErr := manager.QueryContract(&ContractQueryRequest{
 		Query: ContractQueryState, Contract: defaults.AutopayContract,
 	})
-	if stateErr != nil || !liveAutopayContractExists(stateJSON, defaults.AutopayContract) {
+	if stateErr != nil {
+		t.Fatalf("query AUTOPAY state before deployment: %v", stateErr)
+	}
+	_, exists, lookupErr := liveAutopayContractLookup(stateJSON, defaults.AutopayContract)
+	if lookupErr != nil {
+		t.Fatalf("classify AUTOPAY state before deployment: %v", lookupErr)
+	}
+	if !exists {
 		content, contentErr := defaults.AutopayContent()
 		if contentErr != nil {
 			t.Fatalf("build AUTOPAY content: %v", contentErr)
@@ -74,6 +81,10 @@ func TestUnifiedTemplateAutopayDeployFund_testnet(t *testing.T) {
 	}
 
 	fundLiveAutopayOperatingGas(t, manager, defaults.AutopayContract, operatorBudget, budget)
+	if os.Getenv("SAT20WALLET_AUTOPAY_DEPLOY_OPERATOR_ONLY") == "1" {
+		t.Log("AUTOPAY deployed and operator reserve configured; PWA delegate setup is intentionally left to the PWA writer")
+		return
+	}
 
 	amountPerBlock, err := accountAmountPerBlock(defaults, accountDefaultRecordCount)
 	if err != nil {
@@ -224,6 +235,48 @@ func fundLiveAutopayOperatingGas(t *testing.T, manager *Manager, contractAddress
 
 }
 
+func liveAutopayContractLookup(raw, contract string) (*dkvsindexer.AutopayContractState, bool, error) {
+	if raw == "" {
+		return nil, false, fmt.Errorf("empty AUTOPAY state response")
+	}
+	var envelope struct {
+		Code    *int                       `json:"code"`
+		Msg     string                     `json:"msg"`
+		Data    json.RawMessage            `json:"data"`
+		State   json.RawMessage            `json:"state"`
+		Details map[string]json.RawMessage `json:"details"`
+	}
+	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
+		return nil, false, fmt.Errorf("decode AUTOPAY state response: %w", err)
+	}
+	if envelope.Code != nil && *envelope.Code != 0 {
+		return nil, false, fmt.Errorf("AUTOPAY state response code %d: %s", *envelope.Code, envelope.Msg)
+	}
+	if value, ok := envelope.Details["exists"]; ok {
+		var exists bool
+		if err := json.Unmarshal(value, &exists); err != nil {
+			return nil, false, fmt.Errorf("decode AUTOPAY existence flag: %w", err)
+		}
+		if !exists {
+			return nil, false, nil
+		}
+	}
+	if len(envelope.Data) != 0 && string(envelope.Data) != "null" {
+		return liveAutopayContractLookup(string(envelope.Data), contract)
+	}
+	if len(envelope.State) != 0 && string(envelope.State) != "null" {
+		return liveAutopayContractLookup(string(envelope.State), contract)
+	}
+	state, err := dkvsindexer.DecodeAutopayContractState([]byte(raw), contract)
+	if err != nil {
+		return nil, false, fmt.Errorf("decode AUTOPAY contract state: %w", err)
+	}
+	if state.Contract != contract || contractcommon.NormalizeTemplateName(state.TemplateName) != contractcommon.TemplateAutopay {
+		return nil, false, fmt.Errorf("AUTOPAY contract identity mismatch")
+	}
+	return state, true, nil
+}
+
 func liveAutopayContractExists(raw, contract string) bool {
 	state, err := dkvsindexer.DecodeAutopayContractState([]byte(raw), contract)
 	return err == nil && state != nil &&
@@ -240,6 +293,31 @@ func TestLiveAutopayContractExists(t *testing.T) {
 	}
 	if !liveAutopayContractExists(`{"templateName":"autopay.tc","status":"funding"}`, contract) {
 		t.Fatal("AUTOPAY contract was reported as missing")
+	}
+}
+
+func TestLiveAutopayContractLookup(t *testing.T) {
+	contract := "autopay-contract"
+	if _, exists, err := liveAutopayContractLookup(`{"code":0,"details":{"exists":false}}`, contract); err != nil || exists {
+		t.Fatalf("explicit absence must be safe to deploy: exists=%v err=%v", exists, err)
+	}
+	if _, exists, err := liveAutopayContractLookup(`{"code":0,"data":{"details":{"exists":false}}}`, contract); err != nil || exists {
+		t.Fatalf("nested explicit absence must be safe to deploy: exists=%v err=%v", exists, err)
+	}
+	if _, _, err := liveAutopayContractLookup(`{"code":-1,"msg":"query failed"}`, contract); err == nil {
+		t.Fatal("query error must not authorize deployment")
+	}
+	if _, _, err := liveAutopayContractLookup(`{}`, contract); err == nil {
+		t.Fatal("unknown state must not authorize deployment")
+	}
+	if _, _, err := liveAutopayContractLookup(`{"contract":"autopay-contract","templateName":"amm.tc","status":"active"}`, contract); err == nil {
+		t.Fatal("a different template must not authorize deployment")
+	}
+	if _, _, err := liveAutopayContractLookup(`{"contract":"other-contract","templateName":"autopay.tc","status":"active"}`, contract); err == nil {
+		t.Fatal("a different contract must not be treated as the configured AUTOPAY contract")
+	}
+	if _, exists, err := liveAutopayContractLookup(`{"contract":"autopay-contract","templateName":"autopay.tc","status":"active"}`, contract); err != nil || !exists {
+		t.Fatalf("valid existing AUTOPAY state not recognized: exists=%v err=%v", exists, err)
 	}
 }
 

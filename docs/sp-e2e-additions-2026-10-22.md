@@ -1,6 +1,6 @@
 # SP SDK / PWA E2E 增量验证
 
-日期：2026-10-22。记录用户批准的六组测试，以及随后批准的首页 SP 收款入口最小修复。
+日期：2026-10-22。记录用户批准的六组测试、首页 SP 收款入口最小修复，以及独立账户备份的 SP 启用标记补全。
 
 ## 首页入口修复后结果
 
@@ -66,6 +66,37 @@ PWA 共 9 个独立叶子，复用 `account-management-e2e.mjs`。SDK 和 Core �
 - 证据：修复前 `browser-v4/sp-pwa.jsonl:2` 为 FAIL；修复后 `home-entry-fixed/sp-pwa.jsonl` 全部 9 项 PASS。
 
 本次生产改动仅涉及上述收款弹层组件。
+
+## 独立账户备份补全 SP 启用标记
+
+原来 SP 启用标记通过账户托管 Provider 备份，但独立 `account.Backup` 仅导出助记词和普通子账户元数据。用户要求直接加入备份结构后，已将 `WalletBackup.SPEnabled []uint32` 接入导出及两个独立恢复入口，JSON 字段为 `sp_enabled`，只保存已启用的子账户编号。规范化时排序并拒绝重复或越界编号；精简 root bootstrap 备份时，仅保留账户 0 对应的启用标记。
+
+`RestoreAccountBackup` 和 `RestoreAccountBackupWithResult` 均还原启用标记并持久化到 `WalletInDB`。测试通过独立备份传输到全新数据库、使用新密码恢复，核对账户 0/2 的原 SP 地址及账户 1 保持未启用；不传源设备数据库或托管 Provider 数据。恢复启用标记不会生成虚假的已扫描余额，收款视图仍需重新扫描。
+
+| 验证 | 结果 |
+| --- | --- |
+| 修复前独立备份恢复回归 | 两个恢复子测试均因 SP 标记丢失失败（预期 RED） |
+| 修复后钱包 SP、备份及托管恢复相关回归 | 36 PASS / 0 FAIL / 0 SKIP；两个原失败恢复路径均通过 |
+| `sdk/account/...` 全部测试 | 38 PASS / 0 FAIL / 0 SKIP，包含新增标记校验、JSON/加密往返及 root 精简测试 |
+| JS/WASM 编译 | PASS；产物仅写临时目录 |
+
+证据目录：`/private/tmp/sat20-sp-backup-validation-20261022`。原始失败与最终结果分别保存在 `red.jsonl`、`green-wallet.jsonl`、`green-account.jsonl` 及对应摘要中，WASM 编译日志为 `wasm-build.log`。现有账户托管 Provider 和其远端格式保持原有实现；没有新增同步机制。修改未暂存、未提交。
+
+## 真实 DKVS 独立设备恢复复验
+
+执行 `TestSDKAccountSilentPayRemoteBackupIndependentRecovery_NotUI`，使用现有真实本地 SatoshiNet bootstrap/core/miner 与生产 DKVS HTTP/签名/CAS/账户恢复路径。账户使用临时 FREE_LOCAL 存储，不配置付费存储或 AUTOPAY。源设备确认启用 SP 的托管备份已上传后关闭；新设备使用独立数据库，仅以原 root 助记词和新本地密码恢复。
+
+最终结果：**1 PASS / 0 FAIL / 0 SKIP / 0 NOT_RUN**，退出码 0，Go 包耗时 17.593 秒（shell 30 秒）。确认：
+
+- 原三个子账户完整恢复；账户 0 的 SP 启用标记为 true，账户 1/2 保持 false。
+- 恢复后的 SP 收款地址与源设备地址完全一致；原普通收款地址同样保持一致。
+- 账户 ID、root 指纹及托管数据修订号与上传后状态一致；远端记录签名、FREE_LOCAL fee proof 和 TTL 断言均通过。
+
+首轮在准备阶段的稳定快照检查失败，尚未进入新设备恢复。根因为测试将 `ManagedDataEnvelope`（内部加密数据）与完整 DKB1 blob 直接比较。仅修正测试读取：调用现有 `DecodeDKVSBlobValue` 后比较 `Data`，其余修订号、签名、启用标记和地址断言保留；随后同一测试复验通过。本次未修改生产代码。
+
+证据根目录：`/private/tmp/sat20-sp-dkvs-recovery-validation-20261022`。首轮失败保存在 `run.jsonl` / `run-summary.json`，9 份节点日志另存于 `first-run-node-logs`；最终通过记录位于 `fixed-test/run.jsonl` / `fixed-test/run-summary.json` / `fixed-test/metadata.txt`。最终测试文件 SHA-256：`e1a636507334c5176a586ba0ecee07221a939ddc0dc92fb896d43f99c865e3ca`，运行前后相同。目录 0700、日志 0600，未暂存或提交。
+
+本项验证 SDK 账户元数据跨设备恢复，不包含 PWA 恢复 UI、SP 实际资金重扫或付费/公网 DKVS 持久性验收。
 
 ## 验证边界
 
