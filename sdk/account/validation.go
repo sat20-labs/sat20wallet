@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	bip39 "github.com/tyler-smith/go-bip39"
@@ -79,7 +80,14 @@ func NormalizeBackup(value Backup) (Backup, error) {
 				return Backup{}, ErrInvalidBackup
 			}
 		}
-		out.Wallets[walletIndex] = WalletBackup{Name: name, Mnemonic: mnemonic, AccountCount: wallet.AccountCount, SubAccounts: subAccounts}
+		spEnabled := append([]uint32(nil), wallet.SPEnabled...)
+		sort.Slice(spEnabled, func(i, j int) bool { return spEnabled[i] < spEnabled[j] })
+		for i, index := range spEnabled {
+			if index >= wallet.AccountCount || (i > 0 && spEnabled[i-1] == index) {
+				return Backup{}, fmt.Errorf("%w: invalid SP subaccount", ErrInvalidBackup)
+			}
+		}
+		out.Wallets[walletIndex] = WalletBackup{Name: name, Mnemonic: mnemonic, AccountCount: wallet.AccountCount, SubAccounts: subAccounts, SPEnabled: spEnabled}
 	}
 	return out, nil
 }
@@ -102,6 +110,13 @@ func RootBootstrapBackup(value Backup) (Backup, error) {
 	}
 	root.AccountCount = 1
 	root.SubAccounts = []SubAccount{rootAccount}
+	root.SPEnabled = nil
+	for _, index := range normalized.Wallets[0].SPEnabled {
+		if index == 0 {
+			root.SPEnabled = []uint32{0}
+			break
+		}
+	}
 	return Backup{Version: Version, Wallets: []WalletBackup{root}}, nil
 }
 
