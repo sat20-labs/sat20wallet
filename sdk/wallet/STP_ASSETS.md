@@ -144,6 +144,31 @@ unsupported combinations must fail before signatures are released.
 
 ## Public contracts and native settlement
 
+### Private channel versus public Transcend
+
+Both routes admit the same native asset classes: RGB11 fungible contracts and
+Atomicals ARC20 fungible tokens. Their operation sets describe different custody
+models. A private channel has commitment updates, expansion, cooperative close,
+force close and revoked-state punishment. A public `transcend.tc` pool has
+co-signed deposits and withdrawals; private-channel close/punishment operations
+are not public-pool operations. Sharing an adapter does not make the two state
+machines or their recovery tests interchangeable.
+
+| Boundary | Private channel | Public `transcend.tc` |
+| --- | --- | --- |
+| RGB11 quantities | Exact contract precision; authenticated consignments and source history | Same precision and proof requirements; pool inventory is separate from wallet inventory |
+| ARC20 quantities | Integral native units; authenticated indexer facts and regular coloring | Same native identity and coloring requirements |
+| ARC20 partial amount below 330 | Rejected when the selected input has asset change: the splice recipient is currently fixed at vout 0 | Supported when one small recipient can be moved after the exact-quantity change output |
+| ARC20 full small allocation | Supported with enough plain BTC to pad the carrier | Supported with enough plain BTC to pad the carrier |
+| ARC20 two small colored outputs | Rejected if regular coloring cannot preserve both allocations | Same rejection; padding must not silently change token quantities |
+
+The private partial-splice limit is a current transaction-layout restriction,
+not a blanket minimum ARC20 balance and not a limitation on RGB11 quantities.
+The relevant amount is the allocation in the selected native inputs, rather
+than the wallet's aggregate balance. Rejected layouts must leave the existing
+commitment, reservations and asset balances unchanged. Neither route treats BTC
+carrier padding as extra tokens.
+
 The shared contract runtime and manager own native deposit, inventory and
 withdrawal handling. These facilities do not require a private `Channel`
 instance and are not confined to `TranscendContractRuntime`.
@@ -270,6 +295,7 @@ work/
   satoshinet/
   indexer/
   rgb11/
+  badger/
 ```
 
 SDK regression command, from `sat20wallet/sdk`:
@@ -294,6 +320,14 @@ contract families and five ARC20 families. New integration tests use the real
 RGB core, real signatures, native ARC20 coloring, observed canonical chain
 evidence and isolated databases; L1 indexer fixtures do not invent RGB state.
 
+`TestChannel_atomicals` covers both close modes, complete exit and re-entry,
+small full allocations with padded carriers, expansion, duplicate expansion
+rejection and revoked-state punishment with already signed recovery packages.
+It also verifies that an unsupported small partial splice leaves both peers'
+persisted commitments and active reservations unchanged. Empty funding records
+after a full exit must not prevent the next plain commitment; a live allocation
+with missing balances must still fail.
+
 Focused public contract coverage is available as:
 
 ```sh
@@ -308,3 +342,18 @@ succeeds. Launchpool also covers recovery after a lost activation reply. SDK
 write failures, reopen/replay, fixed issuance recovery and decimal boundaries.
 Run aggregates sequentially when they share the legacy test database path; no
 additional build tag or skipped aggregate member is required.
+
+The public Transcend tests also reject changed RGB identities, beneficiaries,
+quantities, carrier facts, assignments, consignments and Bitcoin witnesses at
+both Core owners before receipts, pool inventory or mapped balances appear.
+ARC20 public coverage includes fractional-quantity rejection, small outputs at
+their actual colored indexes, complete pool drainage and one-unit re-entry.
+
+CI checks out the public dependencies from `main` in dependency order: indexer,
+the SatoshiNet native-proof companion, wallet, then Transcend. The private
+Transcend repository owns the two aggregate gates and the wallet's live-node
+account/PWA and RGB backup/recovery E2E, because those tests build its private
+STP plugin. Wallet's public CI retains its standalone Go, WASM and PWA checks.
+A wallet-only change must also run Transcend's integration workflow against
+that candidate using its `wallet_ref` dispatch input (a branch or commit);
+cross-repository runs are not triggered automatically.

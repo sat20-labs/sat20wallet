@@ -216,6 +216,10 @@ export async function runPwaWalletBasicCases(t, fixture) {
       await security.getByRole('combobox').click()
       await page.getByRole('option', { name: '15 minutes', exact: true }).click()
       await security.getByRole('button', { name: 'Hide Balance', exact: true }).click()
+      await expect.poll(() => page.evaluate(() => {
+        const storage = window.__SAT20_PWA_VERIFY__.walletStorage
+        return { autoLockTime: storage.getValue('autoLockTime'), hideBalance: storage.getValue('hideBalance') }
+      }), { timeout: 5000, intervals: [100, 250, 500] }).toEqual({ autoLockTime: '15', hideBalance: true })
       await reloadUnlock(page, actor.password)
       await visit(page, '/wallet')
       await expect(walletBalance(page)).toHaveText('••••••••')

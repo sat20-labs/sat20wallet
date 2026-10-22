@@ -42,10 +42,12 @@ import (
 )
 
 const (
-	bootstrapMnemonic = "acquire pet news congress unveil erode paddle crumble blue fish match eye"
-	coreMnemonic      = "uniform bulb body vital later special era tourist build chief devote annual"
-	minerMnemonic     = "letter advice cage absurd amount doctor acoustic avoid letter advice cage above"
-	rpcReadyTimeout   = 2 * time.Minute
+	harnessPortStart  uint32 = 20000
+	harnessPortEnd    uint32 = 29995 // Five-port blocks end at 29999, below Linux's default ephemeral range.
+	bootstrapMnemonic        = "acquire pet news congress unveil erode paddle crumble blue fish match eye"
+	coreMnemonic             = "uniform bulb body vital later special era tourist build chief devote annual"
+	minerMnemonic            = "letter advice cage absurd amount doctor acoustic avoid letter advice cage above"
+	rpcReadyTimeout          = 2 * time.Minute
 )
 
 var (
@@ -54,7 +56,7 @@ var (
 	satoshinetNodeDirsMu     sync.Mutex
 	activeSatoshiNetNodeDirs = make(map[string]bool)
 	satoshinetRuntimeLock    *os.File
-	nextHarnessPort          uint32 = initialHarnessPort()
+	nextHarnessPort          uint32 = harnessPortStart - 5
 	satoshinetTestConf              = `env: test
 chain: testnet
 mode: %s
@@ -87,10 +89,6 @@ type satoshinetArtifacts struct {
 	corePlugin      string
 	minerExecutable string
 	minerPlugin     string
-}
-
-func initialHarnessPort() uint32 {
-	return uint32(20000 + (os.Getpid()%5000)*4)
 }
 
 type fakeL1Asset struct {
@@ -623,6 +621,9 @@ func nextNodeAddresses(t *testing.T) (string, string, string, string) {
 	t.Helper()
 	for {
 		base := atomic.AddUint32(&nextHarnessPort, 5)
+		if base > harnessPortEnd {
+			t.Fatalf("SatoshiNet E2E port range exhausted: next block starts at %d, allowed blocks end at %d", base, harnessPortEnd)
+		}
 		p2p := fmt.Sprintf("127.0.0.1:%d", base)
 		rpc := fmt.Sprintf("127.0.0.1:%d", base+1)
 		indexer := fmt.Sprintf("127.0.0.1:%d", base+2)

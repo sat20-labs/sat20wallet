@@ -279,6 +279,50 @@ func TestAtomicalsCommitmentProtectsNativeAndOrdinalPrefixes(t *testing.T) {
 	require.Empty(t, outputs[3].Assets)
 }
 
+func TestAtomicalsCommitmentRetiresOnlyEmptyAllocations(t *testing.T) {
+	atomicalsTestEnvironment(t)
+	manager := safetyTestManager(t, &Channel{ChannelInDB: *NewChannelInDB()})
+	manager.serverNode = &Node{client: &atomicalsTestNode{}}
+	name := atomicalsTestName()
+	atomicalsTestConfigure(manager, name)
+	for _, test := range []struct {
+		name    string
+		funded  bool
+		balance int64
+		valid   bool
+	}{
+		{"full_exit", false, 0, true},
+		{"live_funding_without_balance", true, 0, false},
+		{"balance_without_funding", false, 1000, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			channel := &Channel{ChannelInDB: *NewChannelInDB()}
+			channel.FundingUtxos[*name] = nil
+			if test.funded {
+				channel.FundingUtxos[*name] = []*TxOutput{atomicalsTestInput(21, name, 1000, 1400, []byte{0x51})}
+			}
+			tx := wire.NewMsgTx(2)
+			marker := wire.NewTxOut(0, []byte{txscript.OP_RETURN, 1, 42})
+			tx.AddTxOut(marker)
+			plan, err := (atomicalsSTPProtocol{}).BuildCommitment(manager, STPAssetCommitmentRequest{
+				Tx: tx, Channel: channel,
+				LocalBalance: map[AssetName]*Decimal{*name: indexer.NewDefaultDecimal(test.balance)},
+				LocalScript:  []byte{0x51}, RemoteScript: []byte{0x52},
+			})
+			if !test.valid {
+				require.Error(t, err, "an inconsistent live allocation must not be silently retired")
+				return
+			}
+			require.NoError(t, err)
+			require.Empty(t, tx.TxIn)
+			require.Len(t, tx.TxOut, 1)
+			require.Same(t, marker, tx.TxOut[0])
+			require.Nil(t, plan.ProtocolData, "an empty allocation needs no native coloring evidence")
+			require.False(t, plan.FixedPrefix)
+		})
+	}
+}
+
 func TestAtomicalsClassifierRejectsBurnAndMismatchedFacts(t *testing.T) {
 	atomicalsTestEnvironment(t)
 	manager := safetyTestManager(t, &Channel{ChannelInDB: *NewChannelInDB()})

@@ -164,7 +164,7 @@ func (protocol atomicalsSTPProtocol) PlanSplice(p *Manager, resv *SplicingReserv
 	var selectedFees []*TxOutput
 	for _, input := range fees {
 		if err := atomicalsPlainInput(input); err != nil {
-			return err
+			return fmt.Errorf("invalid ARC20 splice fee input: %w", err)
 		}
 		if !bytes.Equal(input.OutValue.PkScript, owner) {
 			return fmt.Errorf("ARC20 fee input does not belong to action initiator")

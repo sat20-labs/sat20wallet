@@ -57,6 +57,12 @@ func (protocol atomicalsSTPProtocol) BuildCommitment(p *Manager, req STPAssetCom
 			return nil, err
 		}
 		required, err := atomicalsAdd(local, remote)
+		// A full splice-out keeps the asset key with an empty funding slice.
+		// That retired allocation contributes no inputs to the next commitment.
+		// Do not skip a live allocation merely because its balances disappeared.
+		if err == nil && required == 0 && len(group.Outputs) == 0 {
+			continue
+		}
 		if err != nil || required == 0 {
 			return nil, fmt.Errorf("missing ARC20 commitment balances")
 		}
