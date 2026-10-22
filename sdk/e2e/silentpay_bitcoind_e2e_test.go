@@ -112,7 +112,14 @@ func spRealBitcoind(t *testing.T) (*spRealCoreRPC, *spRealCoreRPC, func()) {
 	}
 	dir := t.TempDir()
 	rpcPort, p2pPort := spRealFreePort(t), spRealFreePort(t)
-	logFile, err := os.Create(filepath.Join(dir, "bitcoind.log"))
+	logPath := filepath.Join(dir, "bitcoind.log")
+	if evidence := os.Getenv("SAT20_SP_EVIDENCE_DIR"); evidence != "" {
+		if err := os.MkdirAll(evidence, 0700); err != nil {
+			t.Fatal(err)
+		}
+		logPath = filepath.Join(evidence, strings.ReplaceAll(t.Name(), "/", "-")+"-bitcoind.log")
+	}
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
 	if err != nil {
 		t.Fatal(err)
 	}
