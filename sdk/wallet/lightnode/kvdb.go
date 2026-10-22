@@ -306,6 +306,10 @@ type jsBatchWrite struct {
 func (p *jsDB) NewWriteBatch() common.WriteBatch {
 	return &jsBatchWrite{db: p, batch: make(map[string]string), deletions: make(map[string]bool)}
 }
+
+// Flush uses one IndexedDB readwrite transaction and waits for oncomplete;
+// transaction abort is reported without committing any staged operation.
+func (p *jsDB) NewAtomicWriteBatch() common.WriteBatch { return p.NewWriteBatch() }
 func (b *jsBatchWrite) Put(key, value []byte) error {
 	if b.batch == nil {
 		return fmt.Errorf("IndexedDB: batch is closed")

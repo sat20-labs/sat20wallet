@@ -7,7 +7,6 @@ import (
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/wire"
-	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
 	swire "github.com/sat20-labs/satoshinet/wire"
@@ -66,31 +65,25 @@ func (p *Manager) CreateCoopCloseTx(channel *Channel, toDAOPkScript, revealKey [
 	var weightEstimate utils.TxWeightEstimator
 	closingTx := wire.NewMsgTx(2)
 
-	brc20Outputs := channel.GetFundingOutputWithProtocol(indexer.PROTOCOL_NAME_BRC20)
-	inscribes, brc20Stubs, _, _, err := p.HandleOutputsBrc20(closingTx, brc20Outputs, localBalance, remoteBalance,
-		channel.GetStubUtxos(indexer.PROTOCOL_NAME_BRC20),
-		toLocalScript, toRemoteScript, revealKey, &weightEstimate, feeRate, channel.ChannelId)
+	assetReq := STPAssetCommitmentRequest{
+		Operation: STPOpCoopClose, Channel: channel, Tx: closingTx,
+		LocalBalance: localBalance, RemoteBalance: remoteBalance,
+		LocalScript: toLocalScript, RemoteScript: toRemoteScript,
+		RevealKey: revealKey, FeeRate: feeRate, Weight: &weightEstimate,
+	}
+	assetPlans, err := p.planSTPCommitmentAssets(assetReq)
 	if err != nil {
-		Log.Errorf("HandleOutputsBrc20 failed, %v", err)
 		return nil, nil, err
 	}
-
-	ordxOutputs := channel.GetFundingOutputWithProtocol(indexer.PROTOCOL_NAME_ORDX)
-	if err := p.HandleOutputsOrdx(closingTx, ordxOutputs, localBalance, remoteBalance,
-		channel.GetStubUtxos(indexer.PROTOCOL_NAME_ORDX), toLocalScript, toRemoteScript, &weightEstimate, channel.ChannelId); err != nil {
-		Log.Errorf("HandleOutputsOrdx failed, %v", err)
-		return nil, nil, err
+	var inscribes []*InscribeResv
+	var extraStubs []*TxOutput
+	var plainSats int64
+	for _, item := range assetPlans {
+		inscribes = append(inscribes, item.plan.PrevTxs...)
+		extraStubs = append(extraStubs, item.plan.PlainInputs...)
+		plainSats += item.plan.ExtraPlainSats + item.plan.InitiatorPlainSats
 	}
-
-	runesOutputs := channel.GetFundingOutputWithProtocol(indexer.PROTOCOL_NAME_RUNES)
-	plainSats, err := p.HandleOutputsRunes(closingTx, runesOutputs, localBalance, remoteBalance,
-		channel.GetStubUtxos(indexer.PROTOCOL_NAME_RUNES), toLocalScript, toRemoteScript, &weightEstimate, channel.ChannelId)
-	if err != nil {
-		Log.Errorf("HandleOutputsRunes failed, %v", err)
-		return nil, nil, err
-	}
-
-	plainSats += AddCommitmentPlainAndStubInputs(closingTx, channel, brc20Stubs, &weightEstimate)
+	plainSats += AddCommitmentPlainAndStubInputs(closingTx, channel, extraStubs, &weightEstimate)
 
 	localPlainValue := localBalance[PLAIN_ASSET].Int64() + plainSats
 	remotePlainValue := remoteBalance[PLAIN_ASSET].Int64()
@@ -108,6 +101,19 @@ func (p *Manager) CreateCoopCloseTx(channel *Channel, toDAOPkScript, revealKey [
 	if localPlainValue >= 330 {
 		txOutLocal.Value = localPlainValue
 		closingTx.AddTxOut(txOutLocal)
+	}
+
+	for _, item := range assetPlans {
+		if err := item.protocol.CompleteRecovery(p, assetReq, item.plan); err != nil {
+			return nil, nil, err
+		}
+	}
+	if err := verifySTPCommitmentAssets(assetReq, assetPlans); err != nil {
+		return nil, nil, err
+	}
+	channel.ClosingAssetProofs, err = collectSTPAssetProofs(assetPlans)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	PrintJsonTx(closingTx, "co-closing")

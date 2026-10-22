@@ -154,13 +154,19 @@ func (p *Manager) coBatchSendV3WithMaxConfirmedInputHeight(localWallet common.Wa
 	if localWallet == nil {
 		localWallet = p.wallet
 	}
-	if len(memo) > txscript.MaxDataCarrierSize {
-		return "", 0, fmt.Errorf("too large data %d in op_return", len(memo))
-	}
-
 	asset := ParseAssetString(assetNameStr)
 	if asset == nil {
 		return "", 0, fmt.Errorf("invalid asset name %s", assetNameStr)
+	}
+	// RGB's Bitcoin OP_RETURN is its consensus commitment. The contract
+	// invoice is carried by the authenticated peer message, and includes a
+	// full immutable contract ID instead of a short ticker.
+	if asset.Protocol == "rgb11" {
+		if len(memo) > 4096 {
+			return "", 0, fmt.Errorf("native contract invoice is too large")
+		}
+	} else if len(memo) > txscript.MaxDataCarrierSize {
+		return "", 0, fmt.Errorf("too large data %d in op_return", len(memo))
 	}
 	tickerInfo := p.getTickerInfo(asset)
 	if tickerInfo == nil {
@@ -175,40 +181,35 @@ func (p *Manager) coBatchSendV3WithMaxConfirmedInputHeight(localWallet common.Wa
 		return "", 0, fmt.Errorf("invalid channel address")
 	}
 	if asset.Protocol == "rgb11" {
-		if sendDeAnchorTx {
-			return "", 0, ErrRGB11STPUnavailable
-		}
 		md, err := json.Marshal(wwire.RemoteSignMoreData_Contract{ContractURL: contractURL,
-			InvokeCount: invokeCount, StaticMerkleRoot: static, RuntimeMerkleRoot: runtime, MoreData: memo})
+			InvokeCount: invokeCount, StaticMerkleRoot: static, RuntimeMerkleRoot: runtime, MoreData: memo, NativeWithdrawal: sendDeAnchorTx})
 		if err != nil {
 			return "", 0, err
+		}
+		if sendDeAnchorTx {
+			return p.SendNativeRGB11ContractWithdrawal(localWallet, dest, assetNameStr, feeRate, channelID, reason, md, excludeRecentBlock, maxConfirmedInputHeight)
 		}
 		return p.sendRGB11FromChannelAtHeight(localWallet, dest, assetNameStr, feeRate, channelID, reason, md, payFeeByCurrentAddress, excludeRecentBlock, maxConfirmedInputHeight)
 	}
 
-	var (
-		tx          *wire.MsgTx
-		prevFetcher *txscript.MultiPrevOutFetcher
-		fee         int64
-		inscribes   []*InscribeResv
-		err         error
-	)
-	switch asset.Protocol {
-	case "":
-		tx, prevFetcher, fee, err = p.buildBatchSendTxWithAddressHeight_btc(channelID, dest, feeRate, memo, true, excludeRecentBlock, maxConfirmedInputHeight)
-	case indexer.PROTOCOL_NAME_ORDX:
-		tx, prevFetcher, fee, err = p.buildBatchSendTxWithAddressHeight_ordx(localWallet, channelID, dest, assetName, feeRate, memo, true, excludeRecentBlock, payFeeByCurrentAddress, maxConfirmedInputHeight)
-	case indexer.PROTOCOL_NAME_RUNES:
-		tx, prevFetcher, fee, err = p.buildBatchSendTxWithAddressHeight_runes(localWallet, channelID, dest, assetName, feeRate, true, excludeRecentBlock, payFeeByCurrentAddress, maxConfirmedInputHeight)
-	case indexer.PROTOCOL_NAME_BRC20:
-		tx, prevFetcher, fee, inscribes, err = p.buildBatchSendTxWithAddressHeight_brc20(localWallet, channelID, dest, assetName, feeRate, memo, true, excludeRecentBlock, payFeeByCurrentAddress, maxConfirmedInputHeight)
-	default:
-		return "", 0, fmt.Errorf("CoBatchSendV3 unsupport protocol %s", asset.Protocol)
-	}
+	protocol, err := STPAssetProtocolFor(asset, STPOpTransfer)
 	if err != nil {
 		return "", 0, err
 	}
+	plan, err := protocol.BuildTransfer(p, STPAssetTransferRequest{
+		Wallet: localWallet, Address: channelID, Destinations: dest, Asset: assetName,
+		FeeRate: feeRate, Memo: memo, ExcludeRecentBlock: excludeRecentBlock,
+		PayFeeByCurrentAddress: payFeeByCurrentAddress, MaxConfirmedInputHeight: maxConfirmedInputHeight,
+	})
+	if err != nil {
+		return "", 0, err
+	}
+	tx, prevFetcher, fee, inscribes := plan.Tx, plan.PrevFetcher, plan.Fee, plan.PrevTxs
 	defer p.unlockOpenInscribes(inscribes)
+	snapshotSTPAssetLayout(tx, nil, nil, true, plan)
+	if err := protocol.Verify(STPAssetVerification{Operation: STPOpTransfer, Tx: tx, Plan: plan}); err != nil {
+		return "", 0, err
+	}
 
 	witness, peerPubKey, err := p.ChannelWitness(localWallet, channelID)
 	if err != nil {
@@ -250,6 +251,9 @@ func (p *Manager) coBatchSendV3WithMaxConfirmedInputHeight(localWallet common.Wa
 		return "", 0, err
 	}
 
+	if err := protocol.Verify(STPAssetVerification{Operation: STPOpTransfer, Tx: tx, Plan: plan}); err != nil {
+		return "", 0, err
+	}
 	tx, totalFee, err := p.ReqRemoteSignAndBroadcast(localWallet, witness, peerPubKey, reason, channelID, signData, txsSignInfo, txs, txs2, md)
 	if err != nil {
 		return "", 0, err

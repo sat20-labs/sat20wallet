@@ -12,9 +12,10 @@ import (
 	stxscript "github.com/sat20-labs/satoshinet/txscript"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
+
 const (
-	MAX_PAYLOAD_LEN_INBTC = txscript.MaxDataCarrierSize - 2  // bitcoin network
-	MAX_PAYLOAD_LEN_INSATOSHINET = stxscript.MaxDataCarrierSize - 2  // bitcoin network
+	MAX_PAYLOAD_LEN_INBTC        = txscript.MaxDataCarrierSize - 2  // bitcoin network
+	MAX_PAYLOAD_LEN_INSATOSHINET = stxscript.MaxDataCarrierSize - 2 // bitcoin network
 )
 
 func IsValidNullData(nullData []byte) bool {
@@ -55,7 +56,7 @@ func OutputFromSatsNet(output *TxOutput_SatsNet) *TxOutput {
 			Value:    output.Value(),
 			PkScript: output.OutValue.PkScript,
 		},
-		Assets:   output.OutValue.Assets.Clone(),
+		Assets: output.OutValue.Assets.Clone(),
 	}
 	return &n
 }
@@ -147,7 +148,7 @@ func HasMultiAsset(output *TxOutput, assetName *indexer.AssetName) bool {
 			switch asset.Name.Type { // 这两种有可能是底层资产
 			case indexer.ASSET_TYPE_NFT:
 				if assetName.Type == indexer.ASSET_TYPE_NS ||
-				assetName.Type == indexer.ASSET_TYPE_FT {
+					assetName.Type == indexer.ASSET_TYPE_FT {
 					continue
 				}
 
@@ -156,11 +157,11 @@ func HasMultiAsset(output *TxOutput, assetName *indexer.AssetName) bool {
 					continue
 				}
 			}
-			
+
 			return true
 		}
 	}
-	
+
 	return false
 }
 
@@ -197,6 +198,12 @@ func CloneOutput(outputs []*indexer.TxOutput) []*indexer.TxOutput {
 }
 
 func GenTxOutput(inputs []*indexer.TxOutput, assetName *AssetName, value int64, amt *indexer.Decimal) (*TxOutput, *TxOutput, error) {
+	if assetName == nil {
+		return nil, nil, fmt.Errorf("missing asset for output allocation")
+	}
+	if splitter, ok := stpAssetProtocols.byName[assetName.Protocol].(STPAssetOutputSplitter); ok {
+		return splitter.SplitOutputs(inputs, assetName, value, amt)
+	}
 	combined := indexer.NewTxOutput(0)
 	for _, u := range inputs {
 		combined.Append(u)
@@ -259,10 +266,7 @@ func IsRunes(protocol string) bool {
 }
 
 func IsBindingSat(assetName *AssetName) bool {
-	if assetName == nil {
-		return true // plain sats
-	}
-	return assetName.N > 0
+	return STPAssetBindingSat(assetName) > 0
 }
 
 func IsPlainAsset(name *AssetName) bool {
@@ -272,14 +276,14 @@ func IsPlainAsset(name *AssetName) bool {
 func GetAssetName(ticker *indexer.TickerInfo) *AssetName {
 	return &AssetName{
 		AssetName: ticker.AssetName,
-		N:         ticker.N,
+		N:         stpAssetNameN(ticker.Protocol, ticker.Divisibility, ticker.N),
 	}
 }
 
 func GetAssetName2(info *swire.AssetInfo) *AssetName {
 	return &AssetName{
 		AssetName: info.Name,
-		N:         int(info.BindingSat),
+		N:         stpAssetNameN(info.Name.Protocol, info.Amount.Precision, int(info.BindingSat)),
 	}
 }
 
@@ -299,23 +303,18 @@ func IsLPT(assetName *AssetName) bool {
 // brc20需要n个
 // 输出时目标地址上需要的stub
 func NeedStubUtxoForChannel(name *indexer.AssetName) (int, int64) {
-	switch name.Protocol {
-	case indexer.PROTOCOL_NAME_RUNES:
-		return 1, 330
-	case indexer.PROTOCOL_NAME_ORDX:
-		if name.Type == indexer.ASSET_TYPE_FT || name.Type == indexer.ASSET_TYPE_EXOTIC {
-			return 2, 330
-		}
-		return 0, 0
-	case indexer.PROTOCOL_NAME_BRC20:
-		return 2, STUB_VALUE_BRC20
-	default:
+	if name == nil {
 		return 0, 0
 	}
+	policy := STPPolicyFor(&AssetName{AssetName: *name})
+	return policy.StubCount, policy.StubValue
 }
 
 // 输入时需要一个330的stub
 func NeedStubUtxoForInputAsset(name *AssetName, amt *Decimal) bool {
+	if STPPolicyFor(name).NoOrdinalInputStub {
+		return false
+	}
 	if c, _ := NeedStubUtxoForChannel(&name.AssetName); c > 0 {
 		satsNum := GetBindingSatNum(amt, name.N)
 		return satsNum != 0 && satsNum < 330

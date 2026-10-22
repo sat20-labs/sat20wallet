@@ -293,6 +293,9 @@ func (p *Manager) DeployTicker_runes(destAddr string, ticker string, symbol int3
 func (p *Manager) DeployTicker_runesWithTerms(destAddr string, ticker string, symbol int32,
 	max, limit int64, selfMint bool, divisibility int64, feeRate int64) (*InscribeResv, error) {
 
+	p.l1SendMu.Lock()
+	defer p.l1SendMu.Unlock()
+
 	wallet := p.wallet
 	address := wallet.GetAddress()
 
@@ -345,6 +348,9 @@ func (p *Manager) PrepareDeployTicker_runes(destAddr string, ticker string, symb
 
 func (p *Manager) PrepareDeployTicker_runesWithTerms(destAddr string, ticker string, symbol int32,
 	max, limit int64, selfMint bool, divisibility int64, feeRate int64) (*InscribeResv, error) {
+
+	p.l1SendMu.Lock()
+	defer p.l1SendMu.Unlock()
 
 	wallet := p.wallet
 	address := wallet.GetAddress()

@@ -405,7 +405,7 @@ func (p *Manager) CreateDeAnchorTx(channelAddr string, splicingOutTxId string,
 		input.Merge(output)
 	}
 
-	outValue := totalValue + indexer.GetBindingSatNum(totalAmt, uint32(assetName.N))
+	outValue := totalValue + indexer.GetBindingSatNum(totalAmt, STPAssetBindingSat(assetName))
 	out1, out2, err := input.Split(&assetName.AssetName, outValue, totalAmt)
 	if err != nil {
 		return nil, nil, err

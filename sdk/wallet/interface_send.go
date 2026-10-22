@@ -1099,6 +1099,26 @@ func (p *Manager) GenerateStubUtxos(localWallet common.Wallet,
 	return tx.TxID(), fee, nil
 }
 
+// generateStubUtxosLocked is a prerequisite of an already serialized wallet
+// send. The caller must hold l1SendMu until the final asset transaction has also
+// been broadcast; entering BatchSendAssetsWithWallet here would lock it twice.
+func (p *Manager) generateStubUtxosLocked(localWallet common.Wallet,
+	n int, feeRate int64) (string, int64, error) {
+	address := localWallet.GetAddress()
+	tx, fetcher, fee, err := p.BuildBatchSendTx_btc(address, address, 330, n, nil, feeRate, nil, true)
+	if err != nil {
+		return "", fee, err
+	}
+	tx, err = SignTxWithWallet(localWallet, tx, fetcher)
+	if err != nil {
+		return "", fee, err
+	}
+	if err := p.BroadcastTxs([]*wire.MsgTx{tx}); err != nil {
+		return "", fee, err
+	}
+	return tx.TxID(), fee, nil
+}
+
 func (p *Manager) GenerateStubUtxosV2(n int, excludedUtxoMap map[string]bool,
 	feeRate int64) (*wire.MsgTx, int64, error) {
 
@@ -1206,7 +1226,11 @@ func (p *Manager) BatchSendAssetsWithWallet(localWallet common.Wallet, destAddr 
 		return p.sendRGB11Assets(localWallet, dest, name, feeRate, memo)
 	}
 
-	var inscribe *InscribeResv
+	p.l1SendMu.Lock()
+	defer p.l1SendMu.Unlock()
+
+	var inscribes []*InscribeResv
+	defer func() { p.unlockOpenInscribes(inscribes) }()
 	newName := GetAssetName(tickerInfo)
 	localAddress := localWallet.GetAddress()
 	switch name.Protocol {
@@ -1217,20 +1241,42 @@ func (p *Manager) BatchSendAssetsWithWallet(localWallet common.Wallet, destAddr 
 	case indexer.PROTOCOL_NAME_RUNES:
 		tx, prevFetcher, fee, err = p.BuildBatchSendTx_runes(localAddress, destAddr, newName, dAmt, n, feeRate, memo)
 	case indexer.PROTOCOL_NAME_BRC20:
+		var inscribe *InscribeResv
 		tx, prevFetcher, fee, inscribe, err = p.BuildBatchSendTx_brc20(localAddress, destAddr, newName, dAmt, n, feeRate, memo)
+		if inscribe != nil {
+			inscribes = append(inscribes, inscribe)
+		}
 	default:
-		return nil, 0, fmt.Errorf("buildBatchSendTx unsupport protocol %s", name.Protocol)
+		protocol, resolveErr := STPAssetProtocolFor(name, STPOpTransfer)
+		if resolveErr != nil {
+			return nil, 0, resolveErr
+		}
+		destinations := make([]*SendAssetInfo, n)
+		for i := range destinations {
+			destinations[i] = &SendAssetInfo{Address: destAddr, AssetName: name, AssetAmt: dAmt.Clone()}
+		}
+		plan, planErr := protocol.BuildTransfer(p, STPAssetTransferRequest{
+			Wallet: localWallet, Address: localAddress, Destinations: destinations, Asset: newName, FeeRate: feeRate, Memo: memo,
+		})
+		if plan != nil {
+			inscribes = plan.PrevTxs
+		}
+		if planErr != nil {
+			return nil, 0, planErr
+		}
+		if plan == nil || plan.Tx == nil || plan.PrevFetcher == nil {
+			return nil, 0, fmt.Errorf("asset protocol returned an incomplete transfer plan")
+		}
+		snapshotSTPAssetLayout(plan.Tx, nil, nil, true, plan)
+		if err := protocol.Verify(STPAssetVerification{Operation: STPOpTransfer, Tx: plan.Tx, Plan: plan}); err != nil {
+			return nil, 0, err
+		}
+		tx, prevFetcher, fee, inscribes = plan.Tx, plan.PrevFetcher, plan.Fee, plan.PrevTxs
 	}
 	if err != nil {
 		Log.Errorf("buildBatchSendTx failed. %v", err)
 		return nil, 0, err
 	}
-	defer func() {
-		if inscribe != nil && inscribe.Status != RS_CLOSED {
-			p.utxoLockerL1.UnlockUtxosWithTx(inscribe.CommitTx)
-		}
-	}()
-
 	// sign
 	tx, err = SignTxWithWallet(localWallet, tx, prevFetcher)
 	if err != nil {
@@ -1239,8 +1285,11 @@ func (p *Manager) BatchSendAssetsWithWallet(localWallet common.Wallet, destAddr 
 	}
 
 	var txs []*wire.MsgTx
-	if inscribe != nil {
-		txs = []*wire.MsgTx{inscribe.CommitTx, inscribe.RevealTx, tx}
+	if len(inscribes) != 0 {
+		for _, inscribe := range inscribes {
+			txs = append(txs, inscribe.CommitTx, inscribe.RevealTx)
+		}
+		txs = append(txs, tx)
 		err = p.TestAcceptance(txs)
 		if err != nil {
 			Log.Errorf("TestAcceptance failed. %v", err)
@@ -1255,7 +1304,7 @@ func (p *Manager) BatchSendAssetsWithWallet(localWallet common.Wallet, destAddr 
 		Log.Errorf("BroadcastTxs failed. %v", err)
 		return nil, 0, err
 	}
-	if inscribe != nil {
+	for _, inscribe := range inscribes {
 		inscribe.Status = RS_CLOSED
 	}
 
@@ -2170,6 +2219,9 @@ func CalcFee_SendTx(inputLen, outputLen, feeLen int, assetName *AssetName,
 // 需要同步修改 (p *MiniMemPool) rebuildTxOutput
 func (p *Manager) RebuildTxOutput(tx *wire.MsgTx, preFectcher map[string]*TxOutput) (
 	[]*TxOutput, []*TxOutput, error) {
+	if tx == nil || len(tx.TxIn) == 0 || len(tx.TxOut) == 0 {
+		return nil, nil, fmt.Errorf("missing transaction for asset reconstruction")
+	}
 	// 尝试为tx的输出分配资产
 	// 按ordx协议的规则
 	// 按runes协议的规则
@@ -2177,6 +2229,9 @@ func (p *Manager) RebuildTxOutput(tx *wire.MsgTx, preFectcher map[string]*TxOutp
 	var inputs []*TxOutput
 	var input *TxOutput
 	for _, txIn := range tx.TxIn {
+		if txIn == nil {
+			return nil, nil, fmt.Errorf("nil input for asset reconstruction")
+		}
 		if txIn.PreviousOutPoint.Index == swire.MaxPrevOutIndex {
 			continue
 		}
@@ -2191,12 +2246,28 @@ func (p *Manager) RebuildTxOutput(tx *wire.MsgTx, preFectcher map[string]*TxOutp
 			}
 		}
 
+		if info == nil {
+			return nil, nil, fmt.Errorf("missing previous output %s", utxo)
+		}
+		ordinal := info.Clone()
+		filtered := ordinal.Assets[:0]
+		for _, asset := range ordinal.Assets {
+			if _, native := stpAssetProtocols.byName[asset.Name.Protocol].(STPAssetOutputClassifier); native {
+				delete(ordinal.Offsets, asset.Name)
+				continue
+			}
+			filtered = append(filtered, asset)
+		}
+		ordinal.Assets = filtered
 		if input == nil {
-			input = info
-		} else {
-			input.Append(info)
+			input = ordinal
+		} else if err := input.Append(ordinal); err != nil {
+			return nil, nil, err
 		}
 		inputs = append(inputs, info.Clone())
+	}
+	if input == nil {
+		return nil, nil, fmt.Errorf("no previous outputs for asset reconstruction")
 	}
 
 	txId := tx.TxID()
@@ -2207,6 +2278,9 @@ func (p *Manager) RebuildTxOutput(tx *wire.MsgTx, preFectcher map[string]*TxOutp
 	var err error
 	var edicts []runestone.Edict
 	for i, txOut := range tx.TxOut {
+		if txOut == nil || txOut.Value < 0 {
+			return nil, nil, fmt.Errorf("invalid output %d for asset reconstruction", i)
+		}
 		var curr *indexer.TxOutput
 		if indexer.IsOpReturn(txOut.PkScript) {
 			stone := runestone.Runestone{}
@@ -2346,6 +2420,13 @@ func (p *Manager) RebuildTxOutput(tx *wire.MsgTx, preFectcher map[string]*TxOutp
 	// 	}
 	// }
 
+	for _, protocol := range stpAssetProtocols.ordered {
+		if classifier, ok := protocol.(STPAssetOutputClassifier); ok {
+			if err := classifier.ClassifyOutputs(p, tx, inputs, outputs); err != nil {
+				return nil, nil, err
+			}
+		}
+	}
 	return inputs, outputs, nil
 }
 
@@ -3622,6 +3703,9 @@ func (p *Manager) BatchSendAssetsV3(dest []*SendAssetInfo,
 		return tx.TxID(), fee, err
 	}
 
+	p.l1SendMu.Lock()
+	defer p.l1SendMu.Unlock()
+
 	var tx *wire.MsgTx
 	var prevFetcher *txscript.MultiPrevOutFetcher
 	var fee int64
@@ -3629,14 +3713,15 @@ func (p *Manager) BatchSendAssetsV3(dest []*SendAssetInfo,
 
 	srcAddr := p.wallet.GetAddress()
 	var inscribes []*InscribeResv
+	defer func() { p.unlockOpenInscribes(inscribes) }()
 	excluded := make(map[string]bool)
 	switch name.Protocol {
 	case "": // btc
 		tx, prevFetcher, fee, err = p.BuildBatchSendTxV3_btc(srcAddr, excluded,
 			dest, feeRate, memo, false, false, autoAdjust)
 	case indexer.PROTOCOL_NAME_ORDX:
-		tx, prevFetcher, fee, err = p.BuildBatchSendTxV3_ordx(srcAddr, excluded,
-			dest, assetName, feeRate, memo, false, false, p.wallet, false)
+		tx, prevFetcher, fee, err = p.buildBatchSendTxWithStubGenerator_ordx(srcAddr, excluded,
+			dest, assetName, feeRate, memo, false, false, p.wallet, false, 0, p.generateStubUtxosLocked)
 	case indexer.PROTOCOL_NAME_RUNES:
 		if len(memo) != 0 { // TODO 等主网支持多个op_return后再修改
 			return "", 0, fmt.Errorf("do not attach memo when send runes asset")
@@ -3647,21 +3732,31 @@ func (p *Manager) BatchSendAssetsV3(dest []*SendAssetInfo,
 		tx, prevFetcher, fee, inscribes, err = p.BuildBatchSendTxV3_brc20(srcAddr,
 			excluded, dest, assetName, feeRate, memo, false, false, p.wallet, false)
 	default:
-		return "", 0, fmt.Errorf("BatchSendAssetsV3 unsupport protocol %s", name.Protocol)
+		protocol, resolveErr := STPAssetProtocolFor(name, STPOpTransfer)
+		if resolveErr != nil {
+			return "", 0, resolveErr
+		}
+		plan, planErr := protocol.BuildTransfer(p, STPAssetTransferRequest{
+			Wallet: p.wallet, Address: srcAddr, Destinations: dest, Asset: assetName, FeeRate: feeRate, Memo: memo,
+		})
+		if plan != nil {
+			inscribes = plan.PrevTxs
+		}
+		if planErr != nil {
+			return "", 0, planErr
+		}
+		if plan == nil || plan.Tx == nil || plan.PrevFetcher == nil {
+			return "", 0, fmt.Errorf("asset protocol returned an incomplete transfer plan")
+		}
+		snapshotSTPAssetLayout(plan.Tx, nil, nil, true, plan)
+		if err := protocol.Verify(STPAssetVerification{Operation: STPOpTransfer, Tx: plan.Tx, Plan: plan}); err != nil {
+			return "", 0, err
+		}
+		tx, prevFetcher, fee, inscribes = plan.Tx, plan.PrevFetcher, plan.Fee, plan.PrevTxs
 	}
 	if err != nil {
 		return "", 0, err
 	}
-	defer func() {
-		if len(inscribes) != 0 {
-			for _, insc := range inscribes {
-				if insc.Status != RS_CLOSED {
-					p.utxoLockerL1.UnlockUtxosWithTx(insc.CommitTx)
-				}
-			}
-		}
-	}()
-
 	// sign
 	tx, err = p.SignTx(tx, prevFetcher)
 	if err != nil {
@@ -3875,6 +3970,18 @@ func (p *Manager) buildBatchSendTxWithHeight_ordx(srcAddress string, excluded ma
 	localWallet common.Wallet, payFeeByLocalAddress bool, maxConfirmedInputHeight int) (
 	*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
 
+	return p.buildBatchSendTxWithStubGenerator_ordx(srcAddress, excluded, dest, assetName,
+		feeRate, memo, excludeRecentBlock, inChannel, localWallet, payFeeByLocalAddress,
+		maxConfirmedInputHeight, p.GenerateStubUtxos)
+}
+
+func (p *Manager) buildBatchSendTxWithStubGenerator_ordx(srcAddress string, excluded map[string]bool,
+	dest []*SendAssetInfo, assetName *AssetName,
+	feeRate int64, memo []byte, excludeRecentBlock, inChannel bool,
+	localWallet common.Wallet, payFeeByLocalAddress bool, maxConfirmedInputHeight int,
+	generateWalletStubs func(common.Wallet, int, int64) (string, int64, error)) (
+	*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
+
 	if localWallet == nil {
 		localWallet = p.wallet
 	}
@@ -3933,7 +4040,7 @@ func (p *Manager) buildBatchSendTxWithHeight_ordx(srcAddress string, excluded ma
 			if inChannel {
 				stubTx, fee, err = p.CoGenerateStubUtxos(localWallet, stubNum+10, feeRate, "", 0, false)
 			} else {
-				stubTx, fee, err = p.GenerateStubUtxos(localWallet, 2, feeRate)
+				stubTx, fee, err = generateWalletStubs(localWallet, 2, feeRate)
 			}
 			if err != nil {
 				Log.Errorf("GenerateStubUtxos %d failed, %v", stubNum+10, err)

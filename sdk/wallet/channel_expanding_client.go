@@ -53,6 +53,10 @@ func (p *Manager) markRecoverAscended(resv *SplicingReservation, ascendData *sin
 func (p *Manager) AllowExpand(resv *SplicingReservation, utxo string) error {
 	channel := resv.Channel
 	assetName := resv.AssetName
+	protocol, err := STPAssetProtocolFor(&assetName.AssetName, STPOpExpand)
+	if err != nil {
+		return err
+	}
 	if len(channel.InControl([]string{utxo})) > 0 {
 		return fmt.Errorf("utxo has been in channel")
 	}
@@ -66,12 +70,31 @@ func (p *Manager) AllowExpand(resv *SplicingReservation, utxo string) error {
 	if err != nil {
 		return err
 	}
+	if _, native := protocol.(STPAssetFundingProtocol); native {
+		if err := p.AcceptSTPChannelFunding(channel, assetName, []*TxOutput{info}, resv.AssetFunding, resv.AssetEntropy); err != nil {
+			return err
+		}
+		builder, ok := protocol.(STPAssetExpansionFunding)
+		if !ok {
+			return fmt.Errorf("%s does not support proof-backed expansion", protocol.Protocol())
+		}
+		resv.NativeAnchorProof, err = builder.BuildExpansionAnchorProof(p, channel, assetName, info)
+		if err != nil {
+			return err
+		}
+		if len(resv.NativeAnchorProof) == 0 {
+			return fmt.Errorf("missing native expansion anchor proof")
+		}
+	}
 	amt, _ := info.GetAssetV2(&assetName.AssetName)
 	if amt.Sign() == 0 {
 		return fmt.Errorf("utxo %s has not specific asset", utxo)
 	}
 	if !bytes.Equal(channel.ChanPoint.OutValue.PkScript, info.OutValue.PkScript) {
 		return fmt.Errorf("utxo %s is not in channel address", utxo)
+	}
+	if err := protocol.VerifyInput(assetName, info); err != nil {
+		return err
 	}
 	if err := AlignAsset(info, &assetName.AssetName); err != nil {
 		return err
@@ -132,7 +155,7 @@ func isPeerChannelPendingError(err error) bool {
 
 func (p *Manager) getAllUnmanagedUtxos(channel *Channel, assetName *swire.AssetName) ([]string, error) {
 	var utxomap []*indexerwire.TxOutputInfo
-	if assetName.Protocol == indexer.PROTOCOL_NAME_BRC20 {
+	if STPPolicyFor(&AssetName{AssetName: *assetName}).AccountBased {
 		utxomap = p.GetIndexerClient().GetUtxoListWithBRC20Ticker(channel.Address, assetName, true)
 	} else {
 		utxomap = p.GetIndexerClient().GetUtxoListWithTicker(channel.Address, assetName)
@@ -247,6 +270,10 @@ func (p *Manager) ExpandAssetInChannel(channel *Channel, assetName *swire.AssetN
 
 func (p *Manager) FunderInitExpandingProcess(channel *Channel, assetName *swire.AssetName, utxo string,
 	reason string, memo []byte) (string, *Decimal, int64, error) {
+	if err := ValidateSTPAsset(assetName, STPOpExpand); err != nil {
+		return "", nil, 0, err
+	}
+
 	oldChannel, err := p.loadChannel(channel.ChannelId)
 	if err != nil {
 		return "", nil, 0, err
@@ -276,6 +303,23 @@ func (p *Manager) FunderInitExpandingProcess(channel *Channel, assetName *swire.
 	resv.FeeRate = p.GetFeeRate()
 	resv.RevealPrivKey = priv.Serialize()
 	resv.Memo = memo
+	protocol, err := STPAssetProtocolFor(assetName, STPOpExpand)
+	if err != nil {
+		return "", nil, 0, err
+	}
+	if _, native := protocol.(STPAssetFundingProtocol); native {
+		input, err := p.GetIndexerClient().GetTxOutput(utxo)
+		if err != nil {
+			return "", nil, 0, err
+		}
+		// A client-validated carrier needs its previously supplied consignment.
+		// Preparing it does not insert a P2WSH balance into the ordinary wallet.
+		resv.AssetFunding, err = p.PrepareSTPChannelFunding(channel, resv.AssetName, []*TxOutput{input})
+		if err != nil {
+			return "", nil, 0, err
+		}
+		resv.AssetEntropy = channel.AssetEntropy
+	}
 
 	if err := p.AllowExpand(&resv, utxo); err != nil {
 		Log.Errorf("AllowExpand failed. %v", err)
@@ -312,6 +356,8 @@ func (p *Manager) FunderInitExpandingProcess(channel *Channel, assetName *swire.
 	}
 
 	resv.InReq = &wwire.SplicingInRequest{
+		AssetFunding:       cloneSTPAssetProofs(resv.AssetFunding),
+		AssetEntropy:       resv.AssetEntropy,
 		MsgHeader:          wwire.NewMsgHeader(),
 		ChannelId:          channel.ChannelId,
 		CommitHeight:       channel.CommitHeight,
@@ -449,6 +495,10 @@ func (p *Manager) ExpandAssetInChannelSatsNet(channel *Channel, assetName *swire
 }
 
 func (p *Manager) FunderInitExpandingProcessSatsNet(channel *Channel, assetName *swire.AssetName, utxos []string) (*Decimal, error) {
+	if err := ValidateSTPAsset(assetName, STPOpExpand); err != nil {
+		return nil, err
+	}
+
 	oldChannel, err := p.loadChannel(channel.ChannelId)
 	if err != nil {
 		return nil, err
@@ -459,7 +509,7 @@ func (p *Manager) FunderInitExpandingProcessSatsNet(channel *Channel, assetName 
 	}
 
 	var revealPrivKey []byte
-	if channel.HasProtocolAsset(indexer.PROTOCOL_NAME_BRC20) {
+	if channel.NeedsSTPRevealKey() {
 		priv, err := btcec.NewPrivateKey()
 		if err != nil {
 			return nil, err

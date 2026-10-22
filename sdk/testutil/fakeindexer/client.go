@@ -378,6 +378,11 @@ func CreateGenesisTx_SatsNet(n *Network) (*swire.MsgTx, error) {
 type Client struct {
 	*wallet.RESTClient
 	Network *Network
+	// Native anchors must run the complete production proof, signature and
+	// output verifier before this fixture publishes any simulated chain state.
+	// Leaving the hook unset rejects native anchors instead of inventing RGB
+	// balances through the legacy script-only fixture.
+	NativeAnchorValidator func(*swire.MsgTx) (*wallet.AnchorData, error)
 }
 
 func NewClient(n *Network) *Client {
@@ -1091,6 +1096,10 @@ func (p *Client) BroadCastTx(tx *wire.MsgTx) (string, error) {
 	if ok {
 		return tx.TxID(), nil
 	}
+	atomicalsOutputs, err := p.atomicalsAllocationsLocked(tx)
+	if err != nil {
+		return "", fmt.Errorf("ARC20 native allocation: %w", err)
+	}
 	p.Network.TxBroadcasted[tx.TxID()] = txHex
 
 	txs := p.Network.Blocks[p.Network.Height]
@@ -1199,7 +1208,7 @@ func (p *Client) BroadCastTx(tx *wire.MsgTx) (string, error) {
 			return "", fmt.Errorf("can't find utxo %s", utxo)
 		}
 		value := p.Network.UtxoValue[index]
-		txAssets := p.Network.UtxoAssets[index]
+		txAssets := atomicalsOrdinalAssets(p.Network.UtxoAssets[index])
 		txOffsets := p.Network.Offsets[index]
 		satBindingMap := make(map[int64]*indexer.AssetInfo)
 		if p.Network.IsBitcoinNet() && len(txAssets) == 1 && txAssets[0].Name.Protocol == indexer.PROTOCOL_NAME_BRC20 {
@@ -1631,6 +1640,9 @@ func (p *Client) BroadCastTx(tx *wire.MsgTx) (string, error) {
 
 			}
 		}
+		if err := utxoAssets.Merge(atomicalsOutputs[i]); err != nil {
+			return "", err
+		}
 		p.Network.UtxoAssets = append(p.Network.UtxoAssets, utxoAssets)
 		p.Network.Offsets = append(p.Network.Offsets, utxoOffsets)
 
@@ -1792,6 +1804,39 @@ func (p *Client) BroadCastTxs(txs []*wire.MsgTx) error {
 }
 
 func (p *Client) BroadCastTx_SatsNet(tx *swire.MsgTx) (string, error) {
+	var nativeAnchor *wallet.AnchorData
+	_, hasNative, nativeErr := sindexer.NativeAssetProof(tx)
+	if nativeErr != nil {
+		return "", nativeErr
+	}
+	if hasNative {
+		if p.NativeAnchorValidator == nil {
+			return "", fmt.Errorf("native anchor requires the complete production verifier")
+		}
+		var err error
+		nativeAnchor, err = p.NativeAnchorValidator(tx)
+		if err != nil {
+			return "", err
+		}
+		if nativeAnchor == nil {
+			return "", fmt.Errorf("native anchor verifier returned no authenticated source")
+		}
+	} else {
+		for _, input := range tx.TxIn {
+			if input == nil || input.PreviousOutPoint.Index != swire.AnchorTxOutIndex {
+				continue
+			}
+			parsed, err := wallet.ParseStandardAnchorScript(input.SignatureScript)
+			if err != nil {
+				return "", err
+			}
+			for _, asset := range parsed.Assets {
+				if asset.Name.Protocol == "rgb11" {
+					return "", fmt.Errorf("native RGB anchor is missing its authenticated proof")
+				}
+			}
+		}
+	}
 
 	txHex, err := wallet.EncodeMsgTx_SatsNet(tx)
 	if err != nil {
@@ -1806,6 +1851,11 @@ func (p *Client) BroadCastTx_SatsNet(tx *swire.MsgTx) (string, error) {
 	_, ok := p.Network.TxBroadcasted[tx.TxID()]
 	if ok {
 		return tx.TxID(), nil
+	}
+	if nativeAnchor != nil {
+		if previous := p.Network.AscendMap[nativeAnchor.Utxo]; previous != "" && previous != tx.TxID() {
+			return "", fmt.Errorf("native source already ascended in %s", previous)
+		}
 	}
 	p.Network.TxBroadcasted[tx.TxID()] = txHex
 
@@ -1843,7 +1893,11 @@ func (p *Client) BroadCastTx_SatsNet(tx *swire.MsgTx) (string, error) {
 	for _, txIn := range tx.TxIn {
 		utxo := txIn.PreviousOutPoint.String()
 		if txIn.PreviousOutPoint.Index == swire.AnchorTxOutIndex {
-			anchorData, _, err = wallet.CheckAnchorPkScript(tx.TxIn[0].SignatureScript, tx.TxOut, false)
+			if nativeAnchor != nil {
+				anchorData, err = nativeAnchor, nil
+			} else {
+				anchorData, _, err = wallet.CheckAnchorPkScript(tx.TxIn[0].SignatureScript, tx.TxOut, false)
+			}
 			if err == nil {
 				p.Network.AscendMap[anchorData.Utxo] = tx.TxID()
 			}

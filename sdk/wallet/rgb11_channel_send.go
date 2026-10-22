@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"bytes"
+	stdcontext "context"
 	"encoding/json"
 	"fmt"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
+	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
 type rgb11ChannelSendContext struct {
@@ -20,10 +22,12 @@ type rgb11ChannelSendContext struct {
 	excluded                map[string]bool
 	maxConfirmedInputHeight int
 	excludeRecentBlock      bool
+	preserveChannelValue    bool
 }
 
-// SendRGB11FromChannel uses the existing STP authorization request. It does not
-// enable RGB ascend/descend or grant a peer permission to bypass its contract.
+// SendRGB11FromChannel uses the existing authenticated STP signing request.
+// Native public withdrawals additionally require the contract's exact paired
+// descend and independently validated public-pool inventory.
 func (p *Manager) SendRGB11FromChannel(local common.Wallet, dest []*SendAssetInfo,
 	asset string, feeRate int64, channelID, reason string, moreData []byte, payFeeByLocal, excludeRecentBlock bool) (string, int64, error) {
 	return p.sendRGB11FromChannelAtHeight(local, dest, asset, feeRate, channelID, reason, moreData, payFeeByLocal, excludeRecentBlock, 0)
@@ -89,6 +93,12 @@ func (p *Manager) newRGB11ChannelSendContext(local common.Wallet, channelID, rea
 	if reason == "" || json.Unmarshal(moreData, &fields) != nil || fields == nil {
 		return nil, fmt.Errorf("invalid RGB11 channel signing context")
 	}
+	var nativeWithdrawal bool
+	if raw := fields["nativeWithdrawal"]; len(raw) != 0 {
+		if err := json.Unmarshal(raw, &nativeWithdrawal); err != nil {
+			return nil, err
+		}
+	}
 	witness, peer, err := p.channelWitness(local, channelID)
 	if err != nil {
 		return nil, err
@@ -103,7 +113,7 @@ func (p *Manager) newRGB11ChannelSendContext(local common.Wallet, channelID, rea
 		excluded = channel.UtxosInControl()
 		channel.Mutex.RUnlock()
 	}
-	return &rgb11ChannelSendContext{wallet: local, pkScript: script, excluded: excluded,
+	return &rgb11ChannelSendContext{wallet: local, pkScript: script, excluded: excluded, preserveChannelValue: nativeWithdrawal,
 		data: rgb11wallet.ChannelSendData{ChannelID: channelID, WitnessScript: witness,
 			PeerPubKey: peer, Reason: reason, MoreData: append([]byte(nil), moreData...), PayFeeByLocal: payFeeByLocal}}, nil
 }
@@ -121,6 +131,11 @@ func (p *rgb11Manager) ownsRGB11ChannelScript(script []byte) bool {
 	owner := p.accountManagementOwner()
 	if owner == nil {
 		return false
+	}
+	if channel, err := AddrFromPkScript(script); err == nil {
+		if _, _, err := owner.nativeChannelWitness(p.wallet, channel); err == nil {
+			return true
+		}
 	}
 	localKey := p.wallet.GetPaymentPubKey().SerializeCompressed()
 	if node := owner.GetServerNode(); node != nil && node.Pubkey != nil {
@@ -152,8 +167,11 @@ func (p *rgb11Manager) signRGB11ChannelBatch(batch []*rgb11wallet.PendingTransfe
 	baseline := cloneRGB11PendingBatch(batch)
 	first := batch[0]
 	data := first.ChannelSend
-	if data == nil || data.Signed {
+	if data == nil {
 		return nil
+	}
+	if data.Signed {
+		return p.broadcastNativeContractDescend(first)
 	}
 	for _, item := range batch {
 		if item == nil || !sameRGB11ChannelSend(data, item.ChannelSend) || !item.State.AddressMode ||
@@ -199,7 +217,35 @@ func (p *rgb11Manager) signRGB11ChannelBatch(batch []*rgb11wallet.PendingTransfe
 	if err := json.Unmarshal(data.MoreData, &fields); err != nil {
 		return err
 	}
-	fields["tx1"], err = json.Marshal([]*wwire.TxSignInfo{{Tx: txHex, L1Tx: true, LocalSigs: sigs}})
+	signInfos := []*wwire.TxSignInfo{{Tx: txHex, L1Tx: true, LocalSigs: sigs}}
+	descend, descendPrev, err := p.nativeContractDescendPlan(first, batch)
+	if err != nil {
+		return err
+	}
+	if descend != nil {
+		receipts, err := owner.nativeContractSigningReceipts(stdcontext.Background(), context.wallet, data.ChannelID, tx, prevFetcher)
+		if err != nil {
+			return err
+		}
+		if len(receipts) != 0 {
+			fields["nativeSettlementReceipts"], err = json.Marshal(receipts)
+			if err != nil {
+				return err
+			}
+		} else {
+			delete(fields, "nativeSettlementReceipts")
+		}
+		sigs2, err := PartialSignTxWithWallet_SatsNet(context.wallet, descend, descendPrev, data.WitnessScript, data.PeerPubKey)
+		if err != nil {
+			return err
+		}
+		encoded, err := EncodeMsgTx_SatsNet(descend)
+		if err != nil {
+			return err
+		}
+		signInfos = append(signInfos, &wwire.TxSignInfo{Tx: encoded, LocalSigs: sigs2, Reason: "descend"})
+	}
+	fields["tx1"], err = json.Marshal(signInfos)
 	if err != nil {
 		return err
 	}
@@ -237,11 +283,15 @@ func (p *rgb11Manager) signRGB11ChannelBatch(batch []*rgb11wallet.PendingTransfe
 	if err := p.checkRGB11OperationSource(); err != nil {
 		return err
 	}
-	peerSigs, err := owner.serverNode.client.SendSigReq(&req, sig)
+	peer, err := owner.configuredSigningPeer(data.PeerPubKey)
 	if err != nil {
 		return err
 	}
-	if len(peerSigs) != 1 {
+	peerSigs, err := peer.client.SendSigReq(&req, sig)
+	if err != nil {
+		return err
+	}
+	if len(peerSigs) != len(signInfos) {
 		return fmt.Errorf("invalid RGB11 channel signature response")
 	}
 	if _, err := FinalSignTxWithWallet(context.wallet, tx, prevFetcher, data.WitnessScript, false, data.PeerPubKey, peerSigs[0]); err != nil {
@@ -253,6 +303,21 @@ func (p *rgb11Manager) signRGB11ChannelBatch(batch []*rgb11wallet.PendingTransfe
 	if err := VerifySignedTx(tx, prevFetcher); err != nil {
 		return err
 	}
+	if descend != nil {
+		if _, err := FinalSignTxWithWallet_SatsNet(context.wallet, descend, descendPrev, data.WitnessScript, data.PeerPubKey, peerSigs[1]); err != nil {
+			return err
+		}
+		if err := VerifySignedTx_SatsNet(descend, descendPrev); err != nil {
+			return err
+		}
+		var more wwire.RemoteSignMoreData_Contract
+		if err := json.Unmarshal(data.MoreData, &more); err != nil {
+			return err
+		}
+		if err := owner.RecordNativeContractBroadcast(more.ContractURL, []*wire.MsgTx{tx}, []*swire.MsgTx{descend}, proof); err != nil {
+			return err
+		}
+	}
 	var signed bytes.Buffer
 	if err := tx.Serialize(&signed); err != nil {
 		return err
@@ -261,7 +326,10 @@ func (p *rgb11Manager) signRGB11ChannelBatch(batch []*rgb11wallet.PendingTransfe
 		item.SignedTx = append([]byte(nil), signed.Bytes()...)
 		item.ChannelSend.Signed = true
 	}
-	return p.projectionStore.CompareAndSavePendingTransferStates(baseline, batch)
+	if err := p.projectionStore.CompareAndSavePendingTransferStates(baseline, batch); err != nil {
+		return err
+	}
+	return p.broadcastNativeContractDescend(first)
 }
 
 func sameRGB11ChannelSend(a, b *rgb11wallet.ChannelSendData) bool {
@@ -311,6 +379,9 @@ func (p *rgb11Manager) recoverRGB11BroadcastWitness(batch []*rgb11wallet.Pending
 		prevFetcher.AddPrevOut(input.PreviousOutPoint, packet.Inputs[i].WitnessUtxo)
 	}
 	if err := VerifySignedTx(tx, prevFetcher); err != nil {
+		return err
+	}
+	if err := p.recoverNativeContractBroadcast(first, tx); err != nil {
 		return err
 	}
 	for _, item := range batch {

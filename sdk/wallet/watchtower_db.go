@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -72,6 +73,18 @@ func loadPunishTx(db db.KVDB, channelId, commitTxId string) ([]*wire.MsgTx, erro
 }
 
 func decodePunishTxValue(buf []byte) ([]*wire.MsgTx, error) {
+	var native nativePunishRecord
+	if DecodeFromBytes(buf, &native) == nil && native.Version != 0 {
+		if native.Version != 1 || native.ChannelID == "" || native.CommitTxID == "" || len(native.Transactions) == 0 || len(native.Proofs) == 0 {
+			return nil, fmt.Errorf("invalid native punishment record")
+		}
+		for _, tx := range native.Transactions {
+			if tx == nil {
+				return nil, fmt.Errorf("nil native punishment transaction")
+			}
+		}
+		return native.Transactions, nil
+	}
 	result := make([]*wire.MsgTx, 0)
 	var textErr error
 	parts := strings.Split(string(buf), "-")
@@ -261,9 +274,21 @@ func deleteAllWatchtowerDataWithPending(kv db.KVDB, channelId, commitTxId string
 		utxos = append(utxos, utxo)
 	}
 
-	batch := kv.NewWriteBatch()
-	if batch == nil {
-		return nil, nil, fmt.Errorf("NewWriteBatch failed")
+	var batch db.WriteBatch
+	native, err := loadNativePunishRecord(kv, channelId, commitTxId)
+	if err != nil && !errors.Is(err, db.ErrKeyNotFound) {
+		return nil, nil, err
+	}
+	if native != nil {
+		batch, err = NewAtomicWriteBatch(kv)
+		if err != nil {
+			return nil, nil, err
+		}
+	} else {
+		batch = kv.NewWriteBatch()
+		if batch == nil {
+			return nil, nil, fmt.Errorf("NewWriteBatch failed")
+		}
 	}
 	defer batch.Close()
 	for _, key := range punishKeys {

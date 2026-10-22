@@ -42,6 +42,7 @@ func (p *Manager) SignNextCommitment(info *RevocationInfo) error {
 	}
 
 	info.RemoteCommitInfo.CommitTx = commitTx
+	info.RemoteCommitInfo.CommitAssetProofs = cloneSTPAssetProofs(channel.RemoteCommitment.AssetProofs)
 	info.RemoteCommitInfo.CommitSig = sigs
 	info.RemoteCommitInfo.CommitPrevTxs = nil
 	info.RemoteCommitInfo.CommitPrevTxSig = nil
@@ -92,11 +93,17 @@ func (p *Manager) SignNextCommitment(info *RevocationInfo) error {
 	info.RemoteCommitInfo.CommitDeAnchorSig = deAnchorSig
 	info.Channel.RemoteCommitment.DeAnchorTx = deAnchorTx
 	info.Channel.RemoteCommitment.DeAnchorSig = deAnchorSig
-	return nil
+	if err := p.verifySTPChannelProofs(channel, commitTx, channel.RemoteCommitment.AssetProofs, STPOpCommit); err != nil {
+		return err
+	}
+	return p.persistSTPNativeCommitment(channel, channel.RemoteCommitment, "remote")
 }
 
 func (p *Manager) ReceiveNewCommitment(info *RevocationInfo, commitSig *wwire.CommitSigInfo, prevSignedTx []*wire.MsgTx) error {
 	channel := info.Channel
+	if err := acceptSTPSignedNativeParents(channel, prevSignedTx); err != nil {
+		return err
+	}
 	localWallet := p.GetWallet()
 
 	// 对端发来的是本地视角的下一版 commitment tx 签名。本地用下一版
@@ -122,6 +129,12 @@ func (p *Manager) ReceiveNewCommitment(info *RevocationInfo, commitSig *wwire.Co
 	commitTx, inscribes, next, others, err := p.CreateCommitTxWithOthers(0, channel, keyRing, bootstrapKey, info.FeeRate)
 	if err != nil {
 		Log.Errorf("CreateCommitTx failed. %v", err)
+		return err
+	}
+	if !equalSTPAssetProofs(channel.LocalCommitment.AssetProofs, commitSig.CommitAssetProofs) {
+		return fmt.Errorf("commitment native proof differs from the independently built transaction")
+	}
+	if err := p.verifySTPChannelProofs(channel, commitTx, channel.LocalCommitment.AssetProofs, STPOpCommit); err != nil {
 		return err
 	}
 	err = p.SignAndVerifyCommitTxWithOthers(info.Channel, prevSignedTx, commitTx, commitSig.CommitSig,
@@ -179,16 +192,25 @@ func (p *Manager) ReceiveNewCommitment(info *RevocationInfo, commitSig *wwire.Co
 	info.LocalCommitInfo.CommitSigInfo = *commitSig
 	info.Channel.LocalCommitment.DeAnchorSig = commitSig.CommitDeAnchorSig
 	info.Channel.LocalCommitment.DeAnchorTx = deAnchorTx
-	return nil
+	return p.persistSTPNativeCommitment(channel, channel.LocalCommitment, "local")
 }
 
 func (p *Manager) RevokeCurrentCommitment(info *RevocationInfo) (*wwire.RevokeAndAck, error) {
 	channel := info.Channel
+	otherTxs, err := encodeSTPNativeOtherTransactions(channel)
+	if err != nil {
+		return nil, err
+	}
+	if needsSTPNativeCommitmentJournal(channel, channel.LocalCommitment) {
+		if err := p.markSTPNativeRevocationReady(channel); err != nil {
+			return nil, err
+		}
+	}
 	localWallet := p.GetWallet()
 
 	// 只有在对端的新 commitment 已经验证通过后，才释放当前 commitment secret。
 	// 这个 secret 会让对端具备惩罚本方旧 commitment tx 的能力。
-	revocationMsg := &wwire.RevokeAndAck{}
+	revocationMsg := &wwire.RevokeAndAck{NativeOtherTxs: otherTxs}
 	commitSecret := localWallet.GetCommitSecret(info.Channel.PeerNodeId, uint32(channel.CommitHeight))
 	if commitSecret == nil {
 		return nil, fmt.Errorf("GetRevocationSecret failed")
@@ -196,7 +218,6 @@ func (p *Manager) RevokeCurrentCommitment(info *RevocationInfo) (*wwire.RevokeAn
 	copy(revocationMsg.Revocation[:], commitSecret.Serialize())
 	info.Channel.LocalCommitment.Revocation = revocationMsg.Revocation[:]
 
-	var err error
 	revocationMsg.NextRevKey, err = p.GetNextRevocationKey(info.Channel)
 	return revocationMsg, err
 }
@@ -217,6 +238,9 @@ func (p *Manager) ReceiveRevocation(info *RevocationInfo, revMsg *wwire.RevokeAn
 		Log.Errorf("revocation key mismatch")
 		return fmt.Errorf("revocation key mismatch")
 	}
+	if err := p.acceptSTPNativeOtherTransactions(info.Channel, revMsg.NativeOtherTxs); err != nil {
+		return err
+	}
 
 	info.RemoteRev = revMsg
 
@@ -236,7 +260,7 @@ func (p *Manager) ReceiveRevocation(info *RevocationInfo, revMsg *wwire.RevokeAn
 		punishTxs := append([]*wire.MsgTx{}, info.OldChannel.RemoteCommitment.NextTxs...)
 		punishTxs = append(punishTxs, signedPunishTx)
 		punishTxs = appendCommitmentOtherTxs(punishTxs, info.OldChannel.RemoteCommitment)
-		if err := p.GetWatchTower().AddCommitTx(info.Channel, info.OldChannel.RemoteCommitment.CommitTx, punishTxs); err != nil {
+		if err := p.GetWatchTower().AddCommitTx(info.OldChannel, info.OldChannel.RemoteCommitment.CommitTx, punishTxs); err != nil {
 			return err
 		}
 	}
@@ -256,6 +280,7 @@ func appendCommitmentOtherTxs(txs []*wire.MsgTx, commitment *ChannelCommitment) 
 		if other.CommitTx != nil {
 			txs = append(txs, other.CommitTx)
 		}
+		txs = append(txs, other.NextTxs...)
 	}
 	return txs
 }

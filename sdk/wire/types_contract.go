@@ -129,15 +129,17 @@ type TxSignInfo struct {
 
 // sn -> bn messages
 type RemoteSignMoreData_Contract struct {
-	Tx                []*TxSignInfo      `json:"tx1"`
-	Witness           []byte             `json:"witness"`
-	ContractURL       string             `json:"contractURL"`
-	InvokeCount       int64              `json:"invokeCount"`
-	StaticMerkleRoot  []byte             `json:"staticMerkleRoot"`
-	RuntimeMerkleRoot []byte             `json:"runtimeMerkleRoot"`
-	Action            string             `json:"action"`
-	MoreData          []byte             `json:"more"` // 有时候Tx中无法放入足够数据
-	RGB11Proof        *RGB11SigningProof `json:"rgb11,omitempty"`
+	Tx                       []*TxSignInfo                     `json:"tx1"`
+	Witness                  []byte                            `json:"witness"`
+	ContractURL              string                            `json:"contractURL"`
+	InvokeCount              int64                             `json:"invokeCount"`
+	StaticMerkleRoot         []byte                            `json:"staticMerkleRoot"`
+	RuntimeMerkleRoot        []byte                            `json:"runtimeMerkleRoot"`
+	Action                   string                            `json:"action"`
+	MoreData                 []byte                            `json:"more"` // 有时候Tx中无法放入足够数据
+	RGB11Proof               *RGB11SigningProof                `json:"rgb11,omitempty"`
+	NativeWithdrawal         bool                              `json:"nativeWithdrawal,omitempty"`
+	NativeSettlementReceipts []*NativeChannelSettlementReceipt `json:"nativeSettlementReceipts,omitempty"`
 }
 
 // RGB11SigningProof is the private proof sidecar of a channel signing request.

@@ -40,8 +40,17 @@ type ChannelInDB struct {
 	// 如果一个output没有utxoId，说明还没有确认，不能使用该output，一层和二层都一样
 	ChanPoint    *TxOutput                 // 白聪，跟随splicing更新，至少包含 MIN_SERVER_RESERVE_SATS
 	FundingUtxos map[AssetName][]*TxOutput // 不包括ChanPoint
-	PendingUtxos map[string]*TxOutput      // key: txId, 还没有广播 (暂时无用)
-	StubUtxos    map[AssetName][]*TxOutput // 某些资产需要预先提供一个stub的utxo，方便做资产的分配。必须是330聪
+	// Native asset proofs are kept with the custody state, never synthesized
+	// from an indexer's Bitcoin-only output view.
+	AssetFunding       map[string][]byte
+	AssetEntropy       [32]byte
+	ClosingAssetProofs map[string][]byte
+	// Exact signed, possibly unbroadcast funding ancestors are required to
+	// use a commitment after revocation even if the main reservation is lost.
+	NativeParents  []*wire.MsgTx
+	NativePrevouts map[string]*wire.TxOut
+	PendingUtxos   map[string]*TxOutput      // key: txId, 还没有广播 (暂时无用)
+	StubUtxos      map[AssetName][]*TxOutput // 某些资产需要预先提供一个stub的utxo，方便做资产的分配。必须是330聪
 	// 如果自身通道没有stub utxo，可以由服务节点提供，但需要支付一定的费用
 	// channel 地址上的资产
 	// 一层，已经被通道管理的utxo，按照通道最终状态分配；还不在通道管理范围的，属于通道发起方
@@ -72,6 +81,7 @@ func NewChannelInDB() *ChannelInDB {
 		Version:        CV_INIT,
 		FeeCfg:         NewFeeConfig(),
 		FundingUtxos:   make(map[AssetName][]*TxOutput),
+		AssetFunding:   make(map[string][]byte),
 		PendingUtxos:   make(map[string]*TxOutput),
 		StubUtxos:      make(map[AssetName][]*TxOutput),
 		UtxosL2:        make(map[string]*TxOutput_SatsNet),
@@ -103,11 +113,16 @@ func (c *ChannelInDB) Clone() *ChannelInDB {
 		RemoteChanCfg: c.RemoteChanCfg,
 		Memo:          c.Memo,
 
-		ChanPoint:      c.ChanPoint,
-		FundingUtxos:   make(map[AssetName][]*TxOutput),
-		PendingUtxos:   make(map[string]*TxOutput),
-		UtxosL2:        make(map[string]*TxOutput_SatsNet),
-		PendingUtxosL2: make(map[string]*TxOutput_SatsNet),
+		ChanPoint:          c.ChanPoint,
+		FundingUtxos:       make(map[AssetName][]*TxOutput),
+		AssetFunding:       cloneSTPAssetProofs(c.AssetFunding),
+		AssetEntropy:       c.AssetEntropy,
+		ClosingAssetProofs: cloneSTPAssetProofs(c.ClosingAssetProofs),
+		NativeParents:      cloneSTPBitcoinChain(c.NativeParents),
+		NativePrevouts:     cloneSTPPrevouts(c.NativePrevouts),
+		PendingUtxos:       make(map[string]*TxOutput),
+		UtxosL2:            make(map[string]*TxOutput_SatsNet),
+		PendingUtxosL2:     make(map[string]*TxOutput_SatsNet),
 
 		LastPaymentTxId:  c.LastPaymentTxId,
 		TotalSatSent:     c.TotalSatSent,
@@ -115,14 +130,16 @@ func (c *ChannelInDB) Clone() *ChannelInDB {
 		CommitHeight:     c.CommitHeight,
 		LocalCommitment: &ChannelCommitment{
 			ChannelCommitmentV1: ChannelCommitmentV1{
-				LocalBalance:  make(map[AssetName]*indexer.Decimal),
-				RemoteBalance: make(map[AssetName]*indexer.Decimal),
+				RecoveryFeeIndexes: append([]uint32(nil), c.LocalCommitment.RecoveryFeeIndexes...),
+				LocalBalance:       make(map[AssetName]*indexer.Decimal),
+				RemoteBalance:      make(map[AssetName]*indexer.Decimal),
 			},
 		},
 		RemoteCommitment: &ChannelCommitment{
 			ChannelCommitmentV1: ChannelCommitmentV1{
-				LocalBalance:  make(map[AssetName]*indexer.Decimal),
-				RemoteBalance: make(map[AssetName]*indexer.Decimal),
+				RecoveryFeeIndexes: append([]uint32(nil), c.RemoteCommitment.RecoveryFeeIndexes...),
+				LocalBalance:       make(map[AssetName]*indexer.Decimal),
+				RemoteBalance:      make(map[AssetName]*indexer.Decimal),
 			},
 		},
 
@@ -308,7 +325,10 @@ func (p *ChannelInDB) GetManagedAssetAmount(name *AssetName) *Decimal {
 func (p *ChannelInDB) AddFundingOutput(output *TxOutput, name *AssetName) error {
 	// 为了效率，要先确保output中没有其他无关资产
 	n := output.Clone()
-	if name.Protocol == indexer.PROTOCOL_NAME_BRC20 {
+	if STPPolicyFor(name).AccountBased {
+		if n.Invalids == nil {
+			n.Invalids = make(map[indexer.AssetName]bool)
+		}
 		n.Invalids[name.AssetName] = true
 	}
 	uv := p.FundingUtxos[*name]
@@ -327,7 +347,7 @@ func (p *ChannelInDB) RemoveFundingOutput(outputs []*TxOutput, name *AssetName) 
 	uv := p.FundingUtxos[*name]
 
 	// brc20先更新保存的output资产；如果该资产已经被完全移出，也要清理旧funding记录。
-	if name.Protocol == indexer.PROTOCOL_NAME_BRC20 {
+	if STPPolicyFor(name).AccountBased {
 		for _, removed := range outputs {
 			amt := removed.GetAsset(&name.AssetName)
 			for _, existing := range uv {
@@ -602,8 +622,8 @@ func (p *ChannelInDB) GetCommitmentPrefetchor() *txscript.MultiPrevOutFetcher {
 }
 
 func (p *ChannelInDB) HasProtocolAsset(protocol string) bool {
-	for k := range p.FundingUtxos {
-		if k.Protocol == protocol {
+	for k, outputs := range p.FundingUtxos {
+		if k.Protocol == protocol && len(outputs) != 0 {
 			return true
 		}
 	}
@@ -790,7 +810,7 @@ func (p *ChannelInDB) NeedStubUtxo(name *AssetName) (int, int64) {
 }
 
 func (p *ChannelInDB) GetStubUtxoForAsset(name *AssetName) []*TxOutput {
-	if name.Protocol == indexer.PROTOCOL_NAME_RUNES {
+	if STPPolicyFor(name).SharedStubs {
 		// 符文的stub不区分资产名称
 		n := *name
 		n.Ticker = ""
@@ -811,11 +831,11 @@ func (p *ChannelInDB) GetStubUtxos(protocol string) map[AssetName][]*TxOutput {
 	return result
 }
 
-// 排除brc20的stub
+// Exclude stubs consumed by account-based asset preparation.
 func (p *ChannelInDB) GetStubUtxoList() []*TxOutput {
 	result := make([]*TxOutput, 0)
 	for k, v := range p.StubUtxos {
-		if k.Protocol == indexer.PROTOCOL_NAME_BRC20 {
+		if STPPolicyFor(&k).AccountBased {
 			continue
 		}
 		result = append(result, v...)
@@ -827,7 +847,7 @@ func (p *ChannelInDB) GetStubUtxoList() []*TxOutput {
 }
 
 func (p *ChannelInDB) SetStubUtxoForAsset(output []*TxOutput, name *AssetName) {
-	if name.Protocol == indexer.PROTOCOL_NAME_RUNES {
+	if STPPolicyFor(name).SharedStubs {
 		n := *name
 		n.Ticker = ""
 		p.StubUtxos[n] = output
@@ -1141,4 +1161,15 @@ func (p *ChannelInDB) checkData() (bool, bool) {
 		p.ChannelId, p.LocalCommitment.CommitTx.TxID(), p.RemoteCommitment.CommitTx.TxID())
 
 	return true, updated
+}
+
+// NeedsSTPRevealKey reports whether any funded asset prepares transfer
+// transactions as part of the next commitment.
+func (p *ChannelInDB) NeedsSTPRevealKey() bool {
+	for name := range p.FundingUtxos {
+		if STPPolicyFor(&name).NeedsRevealKey {
+			return true
+		}
+	}
+	return false
 }

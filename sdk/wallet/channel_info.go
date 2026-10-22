@@ -60,7 +60,7 @@ func convertBalance(balance map[AssetName]*Decimal) []*DisplayAsset {
 		result = append(result, &DisplayAsset{
 			AssetName:  k.AssetName,
 			Amount:     amount,
-			BindingSat: uint32(k.N),
+			BindingSat: STPAssetBindingSat(&k),
 		})
 	}
 	return result

@@ -20,7 +20,6 @@ import (
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 
 	indexer "github.com/sat20-labs/indexer/common"
-	"github.com/sat20-labs/indexer/indexer/runes/runestone"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
@@ -879,43 +878,11 @@ func (p *ContractBase) IsExclusive() bool {
 }
 
 func (p *ContractBase) CheckContent() error {
-	if indexer.IsPlainAsset(&p.AssetName) {
-		return nil
+	protocol, err := STPAssetProtocolFor(&p.AssetName, STPOpContract)
+	if err != nil {
+		return err
 	}
-	if p.AssetName.Protocol != indexer.PROTOCOL_NAME_ORDX &&
-		p.AssetName.Protocol != indexer.PROTOCOL_NAME_RUNES &&
-		p.AssetName.Protocol != indexer.PROTOCOL_NAME_BRC20 {
-		return fmt.Errorf("invalid protocol %s", p.AssetName.Protocol)
-	}
-	if p.AssetName.Ticker == "" {
-		return fmt.Errorf("invalid asset name %s", p.AssetName.Ticker)
-	}
-	if p.AssetName.Type != indexer.ASSET_TYPE_FT {
-		return fmt.Errorf("invalid asset type %s", p.AssetName.Type)
-	}
-
-	if p.AssetName.Protocol == indexer.PROTOCOL_NAME_ORDX {
-		if !indexer.IsValidSat20Name(p.AssetName.Ticker) {
-			return fmt.Errorf("invalid asset name %s", p.AssetName.Ticker)
-		}
-		p.AssetName.Ticker = strings.ToLower(p.AssetName.Ticker)
-	} else if p.AssetName.Protocol == indexer.PROTOCOL_NAME_RUNES {
-		// 为了简化处理，我们简单拒绝“.”
-		if strings.Contains(p.AssetName.Ticker, ".") {
-			return fmt.Errorf("\".\" not allowed, use • instead")
-		}
-		_, err := runestone.SpacedRuneFromString(p.AssetName.Ticker)
-		if err != nil {
-			return fmt.Errorf("invalid asset name %s", p.AssetName.Ticker)
-		}
-	} else if p.AssetName.Protocol == indexer.PROTOCOL_NAME_BRC20 {
-		if len(p.AssetName.Ticker) != 4 && len(p.AssetName.Ticker) != 5 {
-			return fmt.Errorf("invalid ticker length %d", len(p.AssetName.Ticker))
-		}
-		p.AssetName.Ticker = strings.ToLower(p.AssetName.Ticker)
-	}
-
-	return nil
+	return protocol.NormalizeContract(&p.AssetName)
 }
 
 func (p *ContractBase) GetContractBase() *ContractBase {
@@ -1106,7 +1073,8 @@ type ContractRuntimeBase struct {
 	refreshTime     int64
 	responseHistory map[int][]*InvokeItem // 按照100个为一桶，根据区块顺序记录，跟 history 保持一致
 
-	dealDivisibility int // 有些小数点太长，最后结算时没必要那么长，保留一部分即可
+	dealDivisibility          int // 有些小数点太长，最后结算时没必要那么长，保留一部分即可
+	nativeMetadataInitialized bool
 
 	mutex sync.RWMutex
 }
@@ -1216,10 +1184,14 @@ func (p *ContractRuntimeBase) InitFromContent(content []byte, stp ContractManage
 		return err
 	}
 
-	tickInfo := p.stp.GetTickerInfo(p.runtime.GetAssetName())
+	tickInfo := p.contractAssetTicker()
 	if tickInfo != nil {
 		p.Divisibility = tickInfo.Divisibility
 		p.N = tickInfo.N
+		if p.nativePublicContract() {
+			p.N = tickInfo.Divisibility
+			p.nativeMetadataInitialized = true
+		}
 	} else {
 		tc := p.runtime.GetTemplateName()
 		switch tc {
@@ -1239,6 +1211,9 @@ func (p *ContractRuntimeBase) InitFromContent(content []byte, stp ContractManage
 		p.dealDivisibility = p.Divisibility
 	}
 
+	if err := p.restoreNativePublicMetadata(); err != nil {
+		return err
+	}
 	p.StaticMerkleRoot = p.runtime.CalcStaticMerkleRoot()
 
 	return nil
@@ -2164,6 +2139,13 @@ func (p *ContractRuntimeBase) CheckInvokeTx_SatsNet(invokeTx *InvokeTx_SatsNet) 
 }
 
 func (p *ContractRuntimeBase) CheckInvokeTx(invokeTx *InvokeTx) error {
+	if invokeTx.nativeContractInput != nil {
+		if !p.nativePublicContract() || invokeTx.nativeContractInput.Output == nil ||
+			invokeTx.nativeContractInput.Recipient != invokeTx.Invoker {
+			return fmt.Errorf("native contract receipt does not match the invoke")
+		}
+		return nil
+	}
 
 	if invokeTx.InvokeParam == nil {
 		if !p.runtime.AllowInvokeWithNoParam() {
@@ -2277,6 +2259,10 @@ func (p *ContractRuntimeBase) PreprocessInvokeData(data *InvokeDataInBlock) erro
 }
 
 func (p *ContractRuntimeBase) InvokeWithBlock(data *InvokeDataInBlock) error {
+	p.reconcileNativeContractBlock()
+	if err := p.materializeNativeContractInvokes(data); err != nil {
+		return err
+	}
 	p.mutex.Lock()
 	if p.EnableBlockL1 == INIT_ENABLE_BLOCK || data.Height < p.EnableBlockL1 {
 		if p.EnableBlockL1 != INIT_ENABLE_BLOCK && p.CurrBlockL1 < data.Height {
@@ -2313,6 +2299,10 @@ func (p *ContractRuntimeBase) InvokeWithBlock(data *InvokeDataInBlock) error {
 				p.resyncBlock(from, data.Height-1)
 				Log.Infof("%s has resync L1 from %d to %d", p.URL(), from, data.Height-1)
 				p.mutex.Lock()
+				if p.nativePublicContract() && p.CurrBlockL1+1 != data.Height {
+					p.mutex.Unlock()
+					return fmt.Errorf("%w: preceding deposit blocks have not completed", ErrNativeContractRetry)
+				}
 			}
 		}
 	}
@@ -2380,6 +2370,7 @@ func (p *ContractRuntimeBase) PreprocessInvokeData_SatsNet(data *InvokeDataInBlo
 
 // 外面不能加锁
 func (p *ContractRuntimeBase) InvokeWithBlock_SatsNet(data *InvokeDataInBlock_SatsNet) error {
+	p.reconcileNativeContractBlock()
 
 	//
 	p.mutex.Lock()
@@ -2914,6 +2905,9 @@ func (p *ContractRuntimeBase) invokeCompleted() {
 
 func (p *ContractRuntimeBase) buildDepositAnchorTx(itemId int64, output *indexer.TxOutput, destAddr string,
 	height int, reason string) (*swire.MsgTx, error) {
+	if output == nil {
+		return nil, fmt.Errorf("deposit source is unavailable")
+	}
 	//
 	var assetName *AssetName
 	if !output.HasAsset() {
@@ -3221,7 +3215,9 @@ func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
 		}
 	}
 
-	saveContractInvokeResult(p.stp.GetDB(), url, txId, reason)
+	if !(p.nativePublicContract() && reason == INVOKE_RESULT_WITHDRAW) {
+		saveContractInvokeResult(p.stp.GetDB(), url, txId, reason)
+	}
 	return txId, fee, stubFee, nil
 }
 
@@ -3403,6 +3399,10 @@ func (p *ContractRuntimeBase) genSendInfoFromTx(tx *wire.MsgTx, preFectcher map[
 			output := outputs[i]
 			plainSat := int64(0)
 			amt := output.GetAsset(assetName)
+			if assetName.Protocol == "rgb11" && (amt == nil || amt.Sign() == 0) {
+				// Independently funded plain change is not a token recipient.
+				continue
+			}
 			if isPlainAsset {
 				plainSat = output.GetPlainSat()
 				amt = nil
@@ -3432,6 +3432,29 @@ func (p *ContractRuntimeBase) genSendInfoFromTx(tx *wire.MsgTx, preFectcher map[
 
 // 根据deposit的item信息，恢复TxOutput
 func (p *ContractRuntimeBase) GetInvokeOutput(item *SwapHistoryItem) *indexer.TxOutput {
+	if name := indexer.NewAssetNameFromString(item.AssetName); name != nil && name.Protocol == indexer.PROTOCOL_NAME_ATOM {
+		// ARC20 binds its quantity to sats but its carrier may contain extra
+		// Bitcoin value. Recover the actual indexed prevout and verify the
+		// exact deposit identity; amount*N cannot reconstruct its value.
+		output, err := p.stp.GetIndexerClient().GetTxOutput(item.InUtxo)
+		if err != nil || output == nil || output.OutPointStr != item.InUtxo ||
+			!bytes.Equal(output.OutValue.PkScript, p.GetPkScript()) ||
+			output.GetAsset(name).Cmp(item.RemainingAmt) != 0 {
+			return nil
+		}
+		output = output.Clone()
+		output.UtxoId = item.UtxoId
+		return output
+	}
+	if p.nativePublicContract() {
+		source, err := p.stp.GetWalletMgr().loadNativeChannelSource(p.ChannelAddr, item.InUtxo)
+		if err != nil || source.Output == nil {
+			return nil
+		}
+		output := source.Output.Clone()
+		output.UtxoId = item.UtxoId
+		return output
+	}
 	var value int64
 	isPlainSat := item.AssetName == indexer.ASSET_PLAIN_SAT.String()
 	if isPlainSat {
@@ -3946,14 +3969,15 @@ type InvokeDataInBlock_SatsNet struct {
 }
 
 type InvokeTx struct {
-	Tx          *wire.MsgTx
-	TxIndex     int
-	InvokeVout  int
-	TxOutput    *TxOutput
-	Address     string
-	InvokeParam *sindexer.ContractInvokeData
-	Invoker     string
-	Handled     bool
+	Tx                  *wire.MsgTx
+	TxIndex             int
+	InvokeVout          int
+	TxOutput            *TxOutput
+	Address             string
+	InvokeParam         *sindexer.ContractInvokeData
+	Invoker             string
+	Handled             bool
+	nativeContractInput *NativeContractInput
 }
 
 type InvokeDataInBlock struct {

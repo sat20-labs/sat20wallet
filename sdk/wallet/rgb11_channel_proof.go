@@ -42,8 +42,42 @@ func (p *Manager) RebuildRGB11TxOutput(tx *wire.MsgTx, proof *wwire.RGB11Signing
 	if prepared == nil || prepared.Receipt == nil {
 		return nil, nil, ErrRGB11Inconsistent
 	}
+	history, err := validator.ValidatePreparedHistoryConsignmentReport(context.Background(), proof.Consignment, provider)
+	if err != nil {
+		return nil, nil, err
+	}
+	// Only the core's validated Opout-to-transition edges identify what this
+	// particular Bitcoin transaction consumes. The Bitcoin indexer has no RGB
+	// input balances, and a terminal allocation alone does not prove its inputs.
+	consumed := make(map[string]bool)
+	for _, edge := range history.Consumers {
+		if edge.WitnessTxID == tx.TxID() {
+			consumed[nativeAllocationID(edge.InputOperationID, edge.AssignmentType, edge.AssignmentIndex)] = true
+		}
+	}
+	nativeInputs := make(map[string]indexer.TxAssets)
+	for _, historical := range history.HistoricalAllocations {
+		allocation := historical.Allocation
+		id := nativeAllocationID(allocation.OperationID, allocation.AssignmentType, allocation.AssignmentIndex)
+		if !consumed[id] {
+			continue
+		}
+		if allocation.AssetName.Protocol != rgb11wallet.Protocol || allocation.AssetName.Type != indexer.ASSET_TYPE_FT || allocation.Amount.Sign() <= 0 {
+			return nil, nil, ErrRGB11AssetPreservation
+		}
+		assets := nativeInputs[allocation.OutPoint]
+		if err := assets.Add(&indexer.AssetInfo{Name: allocation.AssetName, Amount: *allocation.Amount.Clone(), BindingSat: 0}); err != nil {
+			return nil, nil, err
+		}
+		nativeInputs[allocation.OutPoint] = assets
+		delete(consumed, id)
+	}
+	if len(consumed) != 0 || len(nativeInputs) == 0 {
+		return nil, nil, fmt.Errorf("RGB11 signing proof has incomplete consumed allocation evidence")
+	}
 	inputs := make([]*TxOutput, 0, len(tx.TxIn))
 	knownRGB := make(map[indexer.AssetName]bool)
+	inputTotals := make(map[indexer.AssetName]*indexer.Decimal)
 	for _, input := range tx.TxIn {
 		output, err := p.l1IndexerClient.GetTxOutput(input.PreviousOutPoint.String())
 		if err != nil || output == nil {
@@ -73,7 +107,20 @@ func (p *Manager) RebuildRGB11TxOutput(tx *wire.MsgTx, proof *wwire.RGB11Signing
 				}
 			}
 		}
-		inputs = append(inputs, output.Clone())
+		bitcoin, err := provider.GetUTXO(input.PreviousOutPoint.String())
+		if err != nil || bitcoin == nil || bitcoin.Value != output.Value() || !bytes.Equal(bitcoin.PkScript, output.OutValue.PkScript) {
+			return nil, nil, fmt.Errorf("RGB11 signing input carrier is not the current exact Bitcoin output: %w", err)
+		}
+		resolved := output.Clone()
+		resolved.Assets = nativeInputs[input.PreviousOutPoint.String()]
+		for _, asset := range resolved.Assets {
+			inputTotals[asset.Name] = inputTotals[asset.Name].Add(&asset.Amount)
+		}
+		delete(nativeInputs, input.PreviousOutPoint.String())
+		inputs = append(inputs, resolved)
+	}
+	if len(nativeInputs) != 0 {
+		return nil, nil, fmt.Errorf("RGB11 consumer graph does not match Bitcoin inputs")
 	}
 	outputs := make([]*TxOutput, len(tx.TxOut))
 	txid := tx.TxID()
@@ -83,6 +130,7 @@ func (p *Manager) RebuildRGB11TxOutput(tx *wire.MsgTx, proof *wwire.RGB11Signing
 		outputs[i].OutValue.PkScript = append([]byte(nil), output.PkScript...)
 	}
 	projected := 0
+	outputTotals := make(map[indexer.AssetName]*indexer.Decimal)
 	for _, allocation := range prepared.Receipt.Allocations {
 		point, err := wire.NewOutPointFromString(allocation.OutPoint)
 		if err != nil {
@@ -106,6 +154,7 @@ func (p *Manager) RebuildRGB11TxOutput(tx *wire.MsgTx, proof *wwire.RGB11Signing
 			return nil, nil, err
 		}
 		projected++
+		outputTotals[allocation.AssetName] = outputTotals[allocation.AssetName].Add(&allocation.Amount)
 		delete(knownRGB, allocation.AssetName)
 	}
 	if projected == 0 {
@@ -113,6 +162,14 @@ func (p *Manager) RebuildRGB11TxOutput(tx *wire.MsgTx, proof *wwire.RGB11Signing
 	}
 	if len(knownRGB) != 0 {
 		return nil, nil, ErrRGB11AssetPreservation
+	}
+	if len(inputTotals) != len(outputTotals) {
+		return nil, nil, ErrRGB11AssetPreservation
+	}
+	for name, amount := range inputTotals {
+		if amount.Cmp(outputTotals[name]) != 0 {
+			return nil, nil, ErrRGB11AssetPreservation
+		}
 	}
 	return inputs, outputs, nil
 }

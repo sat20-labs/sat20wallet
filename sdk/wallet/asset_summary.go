@@ -276,7 +276,7 @@ func (p *Manager) getLocalRGB11AssetBalance(address string, name *indexer.AssetN
 	if err != nil {
 		return nil, true, err
 	}
-	balance, err := manager.projectionStore.Balance(*name)
+	balance, err := manager.GetRGB11AssetBalance(name)
 	return balance, true, err
 }
 

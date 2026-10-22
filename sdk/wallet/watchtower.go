@@ -140,12 +140,21 @@ func (p *WatchTower) HasBroadcastedCommitTx(commitTxId string) bool {
 
 // 只有撤销的commitTx才需要发给watchTower
 func (p *WatchTower) AddCommitTx(channel *Channel, commitTx *wire.MsgTx, signedPunishTx []*wire.MsgTx) error {
-	if len(signedPunishTx) == 0 {
+	if channel == nil || commitTx == nil || len(signedPunishTx) == 0 {
 		return fmt.Errorf("at least one signed punish transaction is required")
 	}
 
 	txId := commitTx.TxID()
-	err := savePunishTx(p.manager.db, channel, txId, signedPunishTx)
+	proofs, err := p.nativePunishProofs(channel, commitTx, signedPunishTx)
+	if err != nil {
+		return err
+	}
+	if len(proofs) != 0 {
+		err = saveNativePunishRecord(p.manager.db, &nativePunishRecord{Version: 1, ChannelID: channel.ChannelId,
+			CommitTxID: txId, Transactions: cloneSTPBitcoinChain(signedPunishTx), Proofs: proofs})
+	} else {
+		err = savePunishTx(p.manager.db, channel, txId, signedPunishTx)
+	}
 	if err != nil {
 		Log.Errorf("savePunishTx %s-%s failed. %v", channel.ChannelId, txId, err)
 		return err
