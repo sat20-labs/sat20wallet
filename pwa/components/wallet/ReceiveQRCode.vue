@@ -29,6 +29,11 @@
           <Icon icon="solar:copy-linear" class="text-zinc-400 w-4 h-4 ml-2" />
           {{ $t('receiveQRcode.copyAddress') }}
         </button>
+        <button v-if="chain.toLowerCase() === 'bitcoin'" type="button"
+          class="w-full rounded-lg border border-primary px-4 py-2 text-sm text-primary hover:bg-zinc-700"
+          @click="openSilentPay">
+          Private · SP
+        </button>
       </div>
     </div>
   </div>
@@ -40,6 +45,7 @@ import { hideAddress } from '@/utils'
 import QRCode from 'qrcode'
 import { useToast } from '@/components/ui/toast-new'
 import { Icon } from '@iconify/vue'
+import { useRouter } from 'vue-router'
 
 
 // Props for address and chain
@@ -50,6 +56,13 @@ const { address, chain } = defineProps<{
 
 const qrCanvas = ref<HTMLCanvasElement | null>(null)
 const { toast } = useToast()
+const router = useRouter()
+const emit = defineEmits<{ close: [] }>()
+
+const openSilentPay = () => {
+  emit('close')
+  router.push('/wallet/receive')
+}
 
 // Generate QR Code
 const generateQRCode = async () => {
