@@ -608,27 +608,28 @@ func coreAssertRGB11SettledRecoveryPublished(t *testing.T, receiver *Manager,
 	}
 	payloads, err := receiver.currentAccountManagedProviderPayloads(rgb11AccountManagedProviderID)
 	coreRequire(t, "read settled receiver stable RGB11 package", err)
-	for _, payload := range payloads {
-		packageValue, err := rgb11wallet.DecodeRecoveryPackage(payload.Payload)
-		coreRequire(t, "decode settled receiver stable RGB11 package", err)
-		foundProof, foundObject, foundReceipt, foundTransfer := false, false, false, false
-		for _, record := range packageValue.ProjectionRecords {
-			switch record.Key {
-			case proofKey:
-				foundProof = true
-			case "object-" + prepared.State.ConsignmentHash:
-				foundObject = true
-			case "validation-" + prepared.State.ConsignmentHash:
-				foundReceipt = true
-			case "transfer-" + prepared.State.TransferID:
-				foundTransfer = true
-			}
+	scopeID, err := receiver.rgbManager.rgb11AccountManagedScopeID()
+	coreRequire(t, "resolve settled receiver recovery scope", err)
+	payload, ok := payloads[scopeID]
+	coreAssert(t, ok && payload.Scope == scopeID,
+		"settled receiver scope is absent from its stable RGB11 package")
+	packageValue, err := rgb11wallet.DecodeRecoveryPackage(payload.Payload)
+	coreRequire(t, "decode settled receiver stable RGB11 package", err)
+	foundProof, foundObject, foundReceipt, foundTransfer := false, false, false, false
+	for _, record := range packageValue.ProjectionRecords {
+		switch record.Key {
+		case proofKey:
+			foundProof = true
+		case "object-" + prepared.State.ConsignmentHash:
+			foundObject = true
+		case "validation-" + prepared.State.ConsignmentHash:
+			foundReceipt = true
+		case "transfer-" + prepared.State.TransferID:
+			foundTransfer = true
 		}
-		coreAssert(t, foundProof && foundObject && foundReceipt && foundTransfer,
-			"settled stable package omitted proof, consumer, validation receipt, or transfer lifecycle")
-		return
 	}
-	t.Fatal("core-e2e: no stable RGB11 package available after settling receiver proof")
+	coreAssert(t, foundProof && foundObject && foundReceipt && foundTransfer,
+		"settled stable package omitted proof, consumer, validation receipt, or transfer lifecycle")
 }
 
 type coreManagedRecoverySize struct {

@@ -20,8 +20,18 @@ func (p *Manager) HandleChannelSafetyStatus() {
 		if channel == nil {
 			continue
 		}
+		if handled, err := p.RetryNativePreparedRecovery(channel); handled {
+			if err != nil {
+				Log.Errorf("channel %s prepared recovery failed: %v", channel.ChannelId, err)
+			}
+			continue
+		}
 		channel.Mutex.RLock()
-		if channel.Status == CS_READY {
+		if p.GetChannel(channel.ChannelId) != channel {
+			channel.Mutex.RUnlock()
+			continue
+		}
+		if channel.Status == CS_READY || channel.Status == CS_NATIVE_RECOVERY {
 			if channel.ChanPoint != nil && channel.ChanPoint.OutPointStr != "" {
 				funding[channel.ChanPoint.OutPointStr] = channel
 			}
@@ -137,6 +147,9 @@ func (p *Manager) HandleUnexpectedChannelClose(channel *Channel, txid string, sp
 	if err != nil {
 		return err
 	}
+	if p.GetChannel(channel.ChannelId) != channel {
+		return nil // The observation belongs to a replaced pre-operation instance.
+	}
 	if generation.status <= CS_CLOSED {
 		return nil
 	}
@@ -169,6 +182,62 @@ func (p *Manager) HandleUnexpectedChannelClose(channel *Channel, txid string, sp
 }
 
 func (p *Manager) finalizePeerForceClose(channel *Channel, generation channelSafetyGeneration, txid string) error {
+	if nativeForceClose(&ClosingReservation{Channel: channel}) {
+		// The latest peer commitment is valid, but the native receipt must be
+		// imported from the actual confirmed witness before terminal cleanup.
+		// Keep a durable monitor task even if the second chain/indexer lags.
+		for _, pending := range p.GetClosingReservations() {
+			if pending != nil && pending.ChannelId == channel.ChannelId && nativeForceClose(pending) {
+				_, err := p.RetryNativeForceClose(pending)
+				return err
+			}
+		}
+		if p.GetIndexerRPCClient() == nil || !p.GetIndexerRPCClient().IsTxConfirmed(txid) {
+			return fmt.Errorf("peer native force-close is awaiting confirmation")
+		}
+		raw, err := p.GetIndexerRPCClient().GetRawTx(txid)
+		if err != nil {
+			return err
+		}
+		actual, err := DecodeMsgTx(raw)
+		if err != nil || actual.TxID() != txid {
+			return fmt.Errorf("peer native force-close canonical transaction is unavailable")
+		}
+		channel.Mutex.Lock()
+		if p.GetChannel(channel.ChannelId) != channel || !channelSafetyTransitionMatches(channel, generation) {
+			channel.Mutex.Unlock()
+			return fmt.Errorf("channel changed during peer native force-close")
+		}
+		packageTxs := []*wire.MsgTx{actual}
+		packageTxs = append(packageTxs, channel.RemoteCommitment.NextTxs...)
+		packageTxs = appendCommitmentOtherTxs(packageTxs, channel.RemoteCommitment)
+		fetcher := channel.GetCommitmentPrefetchor()
+		AddTxOutputsToPrevFetcher(fetcher, actual)
+		for _, successor := range packageTxs[1:] {
+			if successor == nil {
+				channel.Mutex.Unlock()
+				return fmt.Errorf("missing signed peer force-close recovery transaction")
+			}
+			if err := VerifySignedTx(successor, fetcher); err != nil {
+				channel.Mutex.Unlock()
+				return fmt.Errorf("peer force-close recovery is not fully signed: %w", err)
+			}
+			AddTxOutputsToPrevFetcher(fetcher, successor)
+		}
+		resv := &ClosingReservation{ClosingDataInDB: ClosingDataInDB{
+			ReservationBase: NewReservationBase(p.GenerateNewResvId(), false, 0, channel.LocalWallet()),
+			ChannelId:       channel.ChannelId, CloseTx: actual, PreTxs: packageTxs,
+			AssetProofs: cloneSTPAssetProofs(channel.RemoteCommitment.AssetProofs),
+			DeAnchorTx:  channel.RemoteCommitment.DeAnchorTx,
+		}, Channel: channel}
+		err = p.persistNativeForceCloseLocked(resv, resv.ClosingDataInDB, CS_CLOSE_FORCELY_SWEEP_BROADCASTED)
+		channel.Mutex.Unlock()
+		if err != nil {
+			return err
+		}
+		_, err = p.RetryNativeForceClose(resv)
+		return err
+	}
 	if err := p.persistTerminalTransition(channel, generation, CS_CLOSED_FORCELY); err != nil {
 		return err
 	}
@@ -211,7 +280,13 @@ func (p *Manager) handleRevokedCommitment(channel *Channel, generation channelSa
 		}
 		return err
 	}
-	return p.completePunishBroadcast(generation.channelID, commitTxID, lastSafetyTxIdFromTxs(txs))
+	if err := p.completePunishBroadcast(generation.channelID, commitTxID, lastSafetyTxIdFromTxs(txs)); err != nil {
+		if retryErr := tower.SetBroadcastedFlag(commitTxID); retryErr != nil {
+			return retryErr
+		}
+		return err
+	}
+	return nil
 }
 
 func (p *Manager) completePunishBroadcast(channelID, commitTxID, punishTxID string) error {
@@ -223,6 +298,13 @@ func (p *Manager) completePunishBroadcast(channelID, commitTxID, punishTxID stri
 }
 
 func (p *Manager) completePunishBroadcastState(channelID, commitTxID string) error {
+	tower := p.GetWatchTower()
+	if tower == nil {
+		return fmt.Errorf("watchtower is not initialized")
+	}
+	if err := tower.importNativePunishment(channelID, commitTxID); err != nil {
+		return err
+	}
 	channel := p.FindChannel(channelID)
 	if channel == nil {
 		return fmt.Errorf("channel %s not found while completing punish", channelID)
@@ -235,10 +317,6 @@ func (p *Manager) completePunishBroadcastState(channelID, commitTxID string) err
 		return err
 	}
 	p.DisableChannel(channel)
-	tower := p.GetWatchTower()
-	if tower == nil {
-		return fmt.Errorf("watchtower is not initialized")
-	}
 	if err := tower.completePunishCleanup(channelID, commitTxID); err != nil {
 		return err
 	}

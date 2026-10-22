@@ -30,6 +30,16 @@ func (p *Manager) isL1SendInputProtected(outpoint string) bool {
 // Explicit inputs may legitimately carry a non-RGB reservation (for example
 // a channel sweep), but may never be used to inscribe over RGB state.
 func (p *Manager) isL1RGBInputProtected(outpoint string) bool {
+	if p.db != nil {
+		if protected, err := p.NativeContractInputProtected(outpoint); err != nil || protected {
+			return true
+		}
+	}
+	// Private native funding remains protected even before derived wallet
+	// locks have been restored from the channel's durable proof inventory.
+	if p.isSTPNativeInputProtected(outpoint) {
+		return true
+	}
 	// Until every provider is restored, absence of a projection is not evidence
 	// that an input is plain BTC. Protect all inputs, including explicit ones.
 	if p.db != nil {

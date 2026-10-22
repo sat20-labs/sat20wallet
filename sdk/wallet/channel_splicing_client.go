@@ -80,6 +80,11 @@ func (p *Manager) FunderInitSplicingInProcess(channel *Channel, assetName *swire
 	resv.FeeRate = feeRate
 	resv.RevealPrivKey = revealPrivKey
 	resv.Inscribe = inscribe
+	resv.AssetFunding, err = p.PrepareSTPChannelFunding(channel, resv.AssetName, utxos)
+	if err != nil {
+		return "", 0, err
+	}
+	resv.AssetEntropy = channel.AssetEntropy
 
 	if inscribe != nil {
 		var preSignedTx []*wire.MsgTx
@@ -109,6 +114,8 @@ func (p *Manager) FunderInitSplicingInProcess(channel *Channel, assetName *swire
 	}
 
 	resv.InReq = &wwire.SplicingInRequest{
+		AssetFunding:       cloneSTPAssetProofs(resv.AssetFunding),
+		AssetEntropy:       resv.AssetEntropy,
 		MsgHeader:          wwire.NewMsgHeader(),
 		ChannelId:          channel.ChannelId,
 		CommitHeight:       channel.CommitHeight,
@@ -485,6 +492,9 @@ func (p *Manager) AllowSplicingIn(resv *SplicingReservation, utxos, fees []strin
 		feeInputs = append(feeInputs, info)
 	}
 
+	if err := p.AcceptSTPChannelFunding(resv.Channel, resv.AssetName, assetInputs, resv.AssetFunding, resv.AssetEntropy); err != nil {
+		return err
+	}
 	return p.AllowSplicingInV2(resv, assetInputs, feeInputs, needStub, stubValue)
 }
 
@@ -493,6 +503,9 @@ func (p *Manager) AllowSplicingInV2(resv *SplicingReservation, utxos, fees []*Tx
 	protocol, err := STPAssetProtocolFor(&assetName.AssetName, STPOpSpliceIn)
 	if err != nil {
 		return err
+	}
+	if planner, ok := protocol.(STPAssetSplicePlanner); ok {
+		return planner.PlanSplice(p, resv, utxos, fees, needStub, stubValue, STPOpSpliceIn)
 	}
 	policy := protocol.Policy(assetName)
 	amt := resv.Amt.Clone()
@@ -563,6 +576,8 @@ func (p *Manager) AllowSplicingInV2(resv *SplicingReservation, utxos, fees []*Tx
 	}
 	if totalAssetAmount.Cmp(amt) > 0 {
 		weightEstimate.AddP2TROutput()
+	}
+	if totalAssetAmount.Cmp(amt) > 0 || policy.AlwaysSplicePayload {
 		payload, err := protocol.EstimateSplicePayload(assetName, 1)
 		if err != nil {
 			return err
@@ -864,6 +879,9 @@ func (p *Manager) AllowSplicingOutV2(resv *SplicingReservation, fees []*TxOutput
 	protocol, err := STPAssetProtocolFor(&resv.AssetName.AssetName, STPOpSpliceOut)
 	if err != nil {
 		return err
+	}
+	if planner, ok := protocol.(STPAssetSplicePlanner); ok {
+		return planner.PlanSplice(p, resv, resv.Channel.GetFundingOutputs(resv.AssetName), fees, 0, 0, STPOpSpliceOut)
 	}
 	policy := protocol.Policy(resv.AssetName)
 	channel := resv.Channel

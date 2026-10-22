@@ -34,6 +34,7 @@ type ClosingDataInDB struct {
 	SplicingResvId  int64
 	PreTxs          []*wire.MsgTx
 	CloseTx         *wire.MsgTx
+	AssetProofs     map[string][]byte
 	DeAnchorTx      *swire.MsgTx
 }
 
@@ -92,9 +93,13 @@ type SplicingDataInDB struct {
 	StubIsSet      bool  // 是否设置了stub utxo
 	DestAddr       string
 
-	SplicingTx *wire.MsgTx
-	AnchorTx   *swire.MsgTx // or deanchorTx
-	PreTxs     []*wire.MsgTx
+	SplicingTx        *wire.MsgTx
+	AssetFunding      map[string][]byte
+	AssetProofs       map[string][]byte
+	AssetEntropy      [32]byte
+	NativeAnchorProof []byte
+	AnchorTx          *swire.MsgTx // or deanchorTx
+	PreTxs            []*wire.MsgTx
 
 	RecoverAscended         bool
 	RecoveredAnchorTxId     string

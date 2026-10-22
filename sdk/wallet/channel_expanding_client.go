@@ -70,6 +70,22 @@ func (p *Manager) AllowExpand(resv *SplicingReservation, utxo string) error {
 	if err != nil {
 		return err
 	}
+	if _, native := protocol.(STPAssetFundingProtocol); native {
+		if err := p.AcceptSTPChannelFunding(channel, assetName, []*TxOutput{info}, resv.AssetFunding, resv.AssetEntropy); err != nil {
+			return err
+		}
+		builder, ok := protocol.(STPAssetExpansionFunding)
+		if !ok {
+			return fmt.Errorf("%s does not support proof-backed expansion", protocol.Protocol())
+		}
+		resv.NativeAnchorProof, err = builder.BuildExpansionAnchorProof(p, channel, assetName, info)
+		if err != nil {
+			return err
+		}
+		if len(resv.NativeAnchorProof) == 0 {
+			return fmt.Errorf("missing native expansion anchor proof")
+		}
+	}
 	amt, _ := info.GetAssetV2(&assetName.AssetName)
 	if amt.Sign() == 0 {
 		return fmt.Errorf("utxo %s has not specific asset", utxo)
@@ -287,6 +303,23 @@ func (p *Manager) FunderInitExpandingProcess(channel *Channel, assetName *swire.
 	resv.FeeRate = p.GetFeeRate()
 	resv.RevealPrivKey = priv.Serialize()
 	resv.Memo = memo
+	protocol, err := STPAssetProtocolFor(assetName, STPOpExpand)
+	if err != nil {
+		return "", nil, 0, err
+	}
+	if _, native := protocol.(STPAssetFundingProtocol); native {
+		input, err := p.GetIndexerClient().GetTxOutput(utxo)
+		if err != nil {
+			return "", nil, 0, err
+		}
+		// A client-validated carrier needs its previously supplied consignment.
+		// Preparing it does not insert a P2WSH balance into the ordinary wallet.
+		resv.AssetFunding, err = p.PrepareSTPChannelFunding(channel, resv.AssetName, []*TxOutput{input})
+		if err != nil {
+			return "", nil, 0, err
+		}
+		resv.AssetEntropy = channel.AssetEntropy
+	}
 
 	if err := p.AllowExpand(&resv, utxo); err != nil {
 		Log.Errorf("AllowExpand failed. %v", err)
@@ -323,6 +356,8 @@ func (p *Manager) FunderInitExpandingProcess(channel *Channel, assetName *swire.
 	}
 
 	resv.InReq = &wwire.SplicingInRequest{
+		AssetFunding:       cloneSTPAssetProofs(resv.AssetFunding),
+		AssetEntropy:       resv.AssetEntropy,
 		MsgHeader:          wwire.NewMsgHeader(),
 		ChannelId:          channel.ChannelId,
 		CommitHeight:       channel.CommitHeight,

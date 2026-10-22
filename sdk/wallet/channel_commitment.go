@@ -21,7 +21,12 @@ type ChannelCommitmentV1 struct {
 
 	// CommitTx is the latest version of the commitment state, broadcast
 	// able by us.
-	CommitTx *wire.MsgTx
+	CommitTx       *wire.MsgTx
+	AssetProofs    map[string][]byte
+	RecoveryProofs map[string][]byte
+	// RecoveryFeeIndexes identifies the plain reserve outputs created by STP.
+	// Asset carriers and protocol-specific follow-up reserves are never fees.
+	RecoveryFeeIndexes []uint32
 
 	Revocation []byte // previous commitment tx revocation
 
@@ -41,7 +46,9 @@ type ChannelCommitmentV1 struct {
 type CommitmentTx struct {
 	// CommitTx is the latest version of the commitment state, broadcast
 	// able by us.
-	CommitTx *wire.MsgTx
+	CommitTx       *wire.MsgTx
+	AssetProofs    map[string][]byte
+	RecoveryProofs map[string][]byte
 
 	// CommitSig is one half of the signature required to fully complete
 	// the script for the commitment transaction above. This is the

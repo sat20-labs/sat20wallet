@@ -44,7 +44,7 @@ func (p *Manager) inscribeV2(srcUtxoMgr *UtxoMgr, destAddr string,
 				return nil, fmt.Errorf("inscription input contains protected RGB state")
 			}
 			if utxo.HasAsset() {
-					return nil, fmt.Errorf("inscription input contains asset")
+				return nil, fmt.Errorf("inscription input contains asset")
 			}
 			total += utxo.OutValue.Value
 			commitTxPrevOutputList = append(commitTxPrevOutputList, utxo)
@@ -129,6 +129,9 @@ func (p *Manager) DeployTicker_brc20(ticker string, max, lim int64, decimal int6
 		return nil, fmt.Errorf("invalid ticker length %s", ticker)
 	}
 
+	p.l1SendMu.Lock()
+	defer p.l1SendMu.Unlock()
+
 	return p.inscribeV2(NewUtxoMgr(p.wallet.GetAddress(), p.l1IndexerClient), "",
 		map[string]bool{},
 		body, feeRate, nil, false, nil, p.SignTxV2, 0, nil, true)
@@ -154,6 +157,9 @@ func (p *Manager) MintAsset_brc20(destAddr string, assetName *indexer.AssetName,
 // 需要调用方确保amt<=limit
 func (p *Manager) MintAssetV2_brc20(destAddr string, assetName *indexer.AssetName,
 	amt *Decimal, defaultUtxos []*TxOutput, feeRate int64) (*InscribeResv, error) {
+
+	p.l1SendMu.Lock()
+	defer p.l1SendMu.Unlock()
 
 	if assetName.Protocol != indexer.PROTOCOL_NAME_BRC20 {
 		return nil, fmt.Errorf("not brc20")

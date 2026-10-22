@@ -81,7 +81,7 @@ func (p *Manager) CreateCoopCloseTx(channel *Channel, toDAOPkScript, revealKey [
 	for _, item := range assetPlans {
 		inscribes = append(inscribes, item.plan.PrevTxs...)
 		extraStubs = append(extraStubs, item.plan.PlainInputs...)
-		plainSats += item.plan.ExtraPlainSats
+		plainSats += item.plan.ExtraPlainSats + item.plan.InitiatorPlainSats
 	}
 	plainSats += AddCommitmentPlainAndStubInputs(closingTx, channel, extraStubs, &weightEstimate)
 
@@ -103,7 +103,16 @@ func (p *Manager) CreateCoopCloseTx(channel *Channel, toDAOPkScript, revealKey [
 		closingTx.AddTxOut(txOutLocal)
 	}
 
+	for _, item := range assetPlans {
+		if err := item.protocol.CompleteRecovery(p, assetReq, item.plan); err != nil {
+			return nil, nil, err
+		}
+	}
 	if err := verifySTPCommitmentAssets(assetReq, assetPlans); err != nil {
+		return nil, nil, err
+	}
+	channel.ClosingAssetProofs, err = collectSTPAssetProofs(assetPlans)
+	if err != nil {
 		return nil, nil, err
 	}
 

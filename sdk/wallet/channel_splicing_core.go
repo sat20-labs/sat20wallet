@@ -26,7 +26,7 @@ func CreateSplicingInAnchorTx(resv *SplicingReservation, toDAOPkScript []byte,
 			localAsset = &swire.AssetInfo{
 				Name:       assetName.AssetName,
 				Amount:     *resv.SplicingAmt.Clone(),
-				BindingSat: uint32(tickerInfo.N),
+				BindingSat: STPAssetBindingSat(GetAssetName(tickerInfo)),
 			}
 		} else {
 			Log.Errorf("Invalid splicingAmt %s", resv.SplicingAmt.String())
@@ -44,13 +44,18 @@ func CreateSplicingInAnchorTx(resv *SplicingReservation, toDAOPkScript []byte,
 	if IsPlainAsset(assetName) {
 		value = splicingOutput.Value()
 	} else if IsBindingSat(assetName) {
-		value = indexer.GetBindingSatNum(&localAsset.Amount, uint32(assetName.N))
+		value = indexer.GetBindingSatNum(&localAsset.Amount, STPAssetBindingSat(assetName))
 		localValue = value
 	} else {
 		localValue = 0
 	}
+	invoiceSig := resv.InvoiceSig
+	if len(resv.NativeAnchorProof) != 0 {
+		invoiceSig = nil
+		bindOutputs = true
+	}
 	anchorScript, err := sindexer.StandardAnchorScriptWithSig(splicingOutput.OutPointStr,
-		redeemScript, value, splicingOutput.Assets, resv.InvoiceSig)
+		redeemScript, value, splicingOutput.Assets, invoiceSig)
 	if err != nil {
 		Log.Errorf("StandardAnchorScript failed, %v", err)
 		return nil
@@ -70,7 +75,7 @@ func CreateSplicingInAnchorTx(resv *SplicingReservation, toDAOPkScript []byte,
 	tx.AddTxOut(txOut0)
 
 	assetInfo := fmt.Sprintf("%s-%s-%d-%d", tickerInfo.AssetName.String(),
-		tickerInfo.MaxSupply, tickerInfo.Divisibility, tickerInfo.N)
+		tickerInfo.MaxSupply, tickerInfo.Divisibility, STPAssetBindingSat(GetAssetName(tickerInfo)))
 	nullDataScript1, err := sindexer.NullDataScript(sindexer.CONTENT_TYPE_ASCENDING, []byte(assetInfo))
 	if err != nil {
 		Log.Errorf("sindexer.NullDataScript failed. %v", err)
@@ -90,6 +95,17 @@ func CreateSplicingInAnchorTx(resv *SplicingReservation, toDAOPkScript []byte,
 		tx.AddTxOut(swire.NewTxOut(0, nil, memo))
 	}
 
+	if len(resv.NativeAnchorProof) != 0 {
+		if err := sindexer.SetNativeAssetProof(tx, resv.NativeAnchorProof); err != nil {
+			Log.Errorf("set native anchor proof: %v", err)
+			return nil
+		}
+		anchorScript, err = sindexer.StandardAnchorScriptWithSig(splicingOutput.OutPointStr, redeemScript, value, splicingOutput.Assets, resv.InvoiceSig)
+		if err != nil {
+			return nil
+		}
+		tx.TxIn[0].SignatureScript = anchorScript
+	}
 	if resv.InvoiceSig != nil {
 		if _, _, err := CheckAnchorPkScript(anchorScript, tx.TxOut, bindOutputs); err != nil {
 			Log.Errorf("CheckAnchorPkScript failed, %v", err)
@@ -147,14 +163,14 @@ func CreateSplicingOutDeAnchorTx(resv *SplicingReservation) (*swire.MsgTx, stxsc
 
 	descentOutput := &TxOutput_SatsNet{
 		OutValue: swire.TxOut{
-			Value: indexer.GetBindingSatNum(resv.SplicingAmt, uint32(resv.AssetName.N)),
+			Value: indexer.GetBindingSatNum(resv.SplicingAmt, STPAssetBindingSat(resv.AssetName)),
 		},
 	}
 	if !IsPlainAsset(resv.AssetName) {
 		descentOutput.OutValue.Assets = swire.TxAssets{{
 			Name:       resv.AssetName.AssetName,
 			Amount:     *resv.SplicingAmt.Clone(),
-			BindingSat: uint32(resv.AssetName.N),
+			BindingSat: STPAssetBindingSat(resv.AssetName),
 		}}
 	}
 
@@ -283,26 +299,55 @@ func (p *Manager) CreateSplicingInTx(resv *SplicingReservation) (*wire.MsgTx, tx
 	if err != nil {
 		return nil, nil, err
 	}
+	mainTxOut := splicingTx.TxOut[0]
+	var changeTxOut *wire.TxOut
+	if hasSplicingChangeAsset {
+		changeTxOut = splicingTx.TxOut[1]
+	}
+	chanPointTxOut := splicingTx.TxOut[chanPointIndex]
+	var stubTxOuts []*wire.TxOut
+	if c, _ := resv.Channel.NeedStubUtxo(resv.AssetName); c > 0 {
+		stubTxOuts = append(stubTxOuts, splicingTx.TxOut[chanPointIndex+1:chanPointIndex+1+c]...)
+	}
 	if err := protocol.BindSplice(p, STPAssetSpliceRequest{Operation: STPOpSpliceIn, Reservation: resv, Tx: splicingTx}); err != nil {
 		return nil, nil, err
 	}
 
-	resv.SplicingOutput.OutPointStr = fmt.Sprintf("%s:%d", splicingTx.TxID(), 0)
-	resv.SplicingOutput.OutValue.PkScript = splicingTx.TxOut[0].PkScript
+	mainIndex, err := stpOutputIndex(splicingTx, mainTxOut)
+	if err != nil {
+		return nil, nil, err
+	}
+	resv.SplicingOutput.OutPointStr = fmt.Sprintf("%s:%d", splicingTx.TxID(), mainIndex)
+	resv.SplicingOutput.OutValue.PkScript = mainTxOut.PkScript
 	if hasSplicingChangeAsset {
-		resv.SplicingChangeOutput.OutPointStr = fmt.Sprintf("%s:%d", splicingTx.TxID(), 1)
-		resv.SplicingChangeOutput.OutValue.PkScript = splicingTx.TxOut[1].PkScript
+		changeIndex, err := stpOutputIndex(splicingTx, changeTxOut)
+		if err != nil {
+			return nil, nil, err
+		}
+		resv.SplicingChangeOutput.OutPointStr = fmt.Sprintf("%s:%d", splicingTx.TxID(), changeIndex)
+		resv.SplicingChangeOutput.OutValue.PkScript = changeTxOut.PkScript
+	}
+	chanPointIndex, err = stpOutputIndex(splicingTx, chanPointTxOut)
+	if err != nil {
+		return nil, nil, err
 	}
 	resv.NewChanPoint = indexer.GenerateTxOutput(splicingTx, chanPointIndex)
 	if c, _ := resv.Channel.NeedStubUtxo(resv.AssetName); c > 0 {
 		stubs := make([]*TxOutput, 0)
 		for i := range c {
-			stub := indexer.GenerateTxOutput(splicingTx, chanPointIndex+1+i)
+			stubIndex, err := stpOutputIndex(splicingTx, stubTxOuts[i])
+			if err != nil {
+				return nil, nil, err
+			}
+			stub := indexer.GenerateTxOutput(splicingTx, stubIndex)
 			stubs = append(stubs, stub)
 		}
 		resv.Channel.SetStubUtxoForAsset(stubs, resv.AssetName)
 	}
 
+	if err := retainSTPNativeParent(resv.Channel, splicingTx, prevFetcher); err != nil {
+		return nil, nil, err
+	}
 	PrintJsonTx(splicingTx, "splicing-in")
 	return splicingTx, prevFetcher, nil
 }
@@ -399,18 +444,39 @@ func (p *Manager) CreateSplicingOutTx(resv *SplicingReservation) (*wire.MsgTx, t
 	if err != nil {
 		return nil, nil, err
 	}
+	mainTxOut := splicingTx.TxOut[0]
+	var changeTxOut *wire.TxOut
+	if resv.SplicingChangeOutput != nil {
+		changeTxOut = splicingTx.TxOut[1]
+	}
+	chanPointTxOut := splicingTx.TxOut[chanPointIndex]
 	if err := protocol.BindSplice(p, STPAssetSpliceRequest{Operation: STPOpSpliceOut, Reservation: resv, Tx: splicingTx}); err != nil {
 		return nil, nil, err
 	}
 
-	resv.SplicingOutput.OutPointStr = fmt.Sprintf("%s:%d", splicingTx.TxID(), 0)
-	resv.SplicingOutput.OutValue.PkScript = splicingTx.TxOut[0].PkScript
+	mainIndex, err := stpOutputIndex(splicingTx, mainTxOut)
+	if err != nil {
+		return nil, nil, err
+	}
+	resv.SplicingOutput.OutPointStr = fmt.Sprintf("%s:%d", splicingTx.TxID(), mainIndex)
+	resv.SplicingOutput.OutValue.PkScript = mainTxOut.PkScript
 	if resv.SplicingChangeOutput != nil {
-		resv.SplicingChangeOutput.OutPointStr = fmt.Sprintf("%s:%d", splicingTx.TxID(), 1)
-		resv.SplicingChangeOutput.OutValue.PkScript = splicingTx.TxOut[1].PkScript
+		changeIndex, err := stpOutputIndex(splicingTx, changeTxOut)
+		if err != nil {
+			return nil, nil, err
+		}
+		resv.SplicingChangeOutput.OutPointStr = fmt.Sprintf("%s:%d", splicingTx.TxID(), changeIndex)
+		resv.SplicingChangeOutput.OutValue.PkScript = changeTxOut.PkScript
+	}
+	chanPointIndex, err = stpOutputIndex(splicingTx, chanPointTxOut)
+	if err != nil {
+		return nil, nil, err
 	}
 	resv.NewChanPoint = indexer.GenerateTxOutput(splicingTx, chanPointIndex)
 
+	if err := retainSTPNativeParent(resv.Channel, splicingTx, prevFetcher); err != nil {
+		return nil, nil, err
+	}
 	PrintJsonTx(splicingTx, "splicing-out")
 	return splicingTx, prevFetcher, nil
 }

@@ -24,7 +24,7 @@ func CreatePaymentTx(payment *PaymentReservation) error {
 				return fmt.Errorf("CreateUnlockTx failed. %v", err)
 			}
 			for _, amt := range payment.DestAmt {
-				satsNum += GetBindingSatNum(amt, payment.AssetName.N)
+				satsNum += GetBindingSatNum(amt, int(STPAssetBindingSat(payment.AssetName)))
 			}
 		} else {
 			tx, prevFetcher, err = CreateLockTx(payment.OldChannel, payment.AssetName,
@@ -33,7 +33,7 @@ func CreatePaymentTx(payment *PaymentReservation) error {
 				Log.Errorf("CreateLockTx failed. %v", err)
 				return err
 			}
-			satsNum = GetBindingSatNum(payment.Amt, payment.AssetName.N)
+			satsNum = GetBindingSatNum(payment.Amt, int(STPAssetBindingSat(payment.AssetName)))
 		}
 
 		payment.PaymentPreFetcher = prevFetcher
@@ -256,7 +256,7 @@ func CreateUnlockTx(channel *Channel, destAddr []string, assetName *AssetName, a
 		unlockAsset := wire.AssetInfo{
 			Name:       assetName.AssetName,
 			Amount:     *amt.Clone(),
-			BindingSat: uint32(assetName.N),
+			BindingSat: STPAssetBindingSat(assetName),
 		}
 		if err := inputValue.SubAsset(&unlockAsset); err != nil {
 			return nil, nil, err
@@ -391,7 +391,7 @@ func CreateLockTx(channel *Channel, assetName *AssetName, amt *Decimal, lockUtxo
 	lockAsset := wire.AssetInfo{
 		Name:       assetName.AssetName,
 		Amount:     *amt.Clone(),
-		BindingSat: uint32(assetName.N),
+		BindingSat: STPAssetBindingSat(assetName),
 	}
 	var inputValue TxOutput_SatsNet
 	if err := inputValue.AddAsset(&lockAsset); err != nil {

@@ -198,6 +198,12 @@ func CloneOutput(outputs []*indexer.TxOutput) []*indexer.TxOutput {
 }
 
 func GenTxOutput(inputs []*indexer.TxOutput, assetName *AssetName, value int64, amt *indexer.Decimal) (*TxOutput, *TxOutput, error) {
+	if assetName == nil {
+		return nil, nil, fmt.Errorf("missing asset for output allocation")
+	}
+	if splitter, ok := stpAssetProtocols.byName[assetName.Protocol].(STPAssetOutputSplitter); ok {
+		return splitter.SplitOutputs(inputs, assetName, value, amt)
+	}
 	combined := indexer.NewTxOutput(0)
 	for _, u := range inputs {
 		combined.Append(u)
@@ -260,10 +266,7 @@ func IsRunes(protocol string) bool {
 }
 
 func IsBindingSat(assetName *AssetName) bool {
-	if assetName == nil {
-		return true // plain sats
-	}
-	return assetName.N > 0
+	return STPAssetBindingSat(assetName) > 0
 }
 
 func IsPlainAsset(name *AssetName) bool {
@@ -273,14 +276,14 @@ func IsPlainAsset(name *AssetName) bool {
 func GetAssetName(ticker *indexer.TickerInfo) *AssetName {
 	return &AssetName{
 		AssetName: ticker.AssetName,
-		N:         ticker.N,
+		N:         stpAssetNameN(ticker.Protocol, ticker.Divisibility, ticker.N),
 	}
 }
 
 func GetAssetName2(info *swire.AssetInfo) *AssetName {
 	return &AssetName{
 		AssetName: info.Name,
-		N:         int(info.BindingSat),
+		N:         stpAssetNameN(info.Name.Protocol, info.Amount.Precision, int(info.BindingSat)),
 	}
 }
 
@@ -309,6 +312,9 @@ func NeedStubUtxoForChannel(name *indexer.AssetName) (int, int64) {
 
 // 输入时需要一个330的stub
 func NeedStubUtxoForInputAsset(name *AssetName, amt *Decimal) bool {
+	if STPPolicyFor(name).NoOrdinalInputStub {
+		return false
+	}
 	if c, _ := NeedStubUtxoForChannel(&name.AssetName); c > 0 {
 		satsNum := GetBindingSatNum(amt, name.N)
 		return satsNum != 0 && satsNum < 330

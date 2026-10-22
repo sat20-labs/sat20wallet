@@ -102,6 +102,9 @@ type Manager struct {
 	mutex             sync.RWMutex
 	rgbOperationMu    sync.RWMutex
 	channelIdentityMu sync.RWMutex
+	// Serializes L1 wallet coin selection through broadcast or input reservation.
+	// UtxoLocker protects recorded inputs, but cannot cover concurrent selectors.
+	l1SendMu sync.Mutex
 	// Shared by all RGB scope views of this manager; never held for network I/O.
 	rgbReservationMu sync.RWMutex
 
@@ -123,8 +126,10 @@ type Manager struct {
 	l1IndexerClient *IndexerRPCClientMgr
 	l2IndexerClient *IndexerRPCClientMgr
 
-	bootstrapNode []*Node // 引导节点，全网目前唯一，以后由基金会提供至少3个，通过MPC管理密钥
-	serverNode    *Node   // 服务节点，由引导节点更新维护，一般情况下，用户只跟一个服务节点打交道
+	bootstrapNode      []*Node // 引导节点，全网目前唯一，以后由基金会提供至少3个，通过MPC管理密钥
+	serverNode         *Node   // 服务节点，由引导节点更新维护，一般情况下，用户只跟一个服务节点打交道
+	accountServiceMu   sync.RWMutex
+	accountServiceNode *Node // Optional account transport, independent of the channel signer.
 
 	utxoLockerL1 *UtxoLocker
 	utxoLockerL2 *UtxoLocker

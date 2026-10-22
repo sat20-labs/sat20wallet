@@ -295,6 +295,12 @@ func (p *Manager) HandleChannelReservationStatus(sendTxInL1 bool) {
 				p.handleChannelActionTimeout(resv.Id, RESV_TYPE_CLOSE)
 				continue
 			}
+			if handled, err := p.RetryNativeForceClose(resv); handled {
+				if err != nil {
+					Log.Warnf("native force close retry %s: %v", resv.Channel.ChannelId, err)
+				}
+				continue
+			}
 			switch resv.Channel.Status {
 			case CS_CLOSING_STARTED:
 				_ = p.HandleClosingStarted(resv)
@@ -591,6 +597,11 @@ func (p *Manager) HandleSplicingInStarted(resv *SplicingReservation) error {
 }
 
 func (p *Manager) HandleSplicingInConfirmed(resv *SplicingReservation) error {
+	if len(resv.AssetProofs) != 0 {
+		if err := p.ImportSTPChannelSettlement(resv.SplicingTx, resv.AssetProofs); err != nil {
+			return err
+		}
+	}
 	resv.Status = RS_SPLICINGIN_CONFIRMED
 	if err := p.SaveWalletReservation(resv); err != nil {
 		return err
@@ -666,6 +677,9 @@ func (p *Manager) HandleSplicingOutDeAnchorConfirmed(resv *SplicingReservation) 
 }
 
 func (p *Manager) HandleSplicingOutChannelReady(resv *SplicingReservation) error {
+	if err := p.ImportSTPChannelSettlement(resv.SplicingTx, resv.AssetProofs); err != nil {
+		return err
+	}
 	Log.Infof("handleSplicingOutChannelReady channel ready: %s", resv.ChannelId)
 	resv.Status = RS_CLOSED
 	if err := p.SaveWalletReservation(resv); err != nil {
@@ -715,6 +729,9 @@ func (p *Manager) HandleClosingConfirmed(resv *ClosingReservation) error {
 func (p *Manager) HandleChannelClosed(resv *ClosingReservation) error {
 	if resv == nil || resv.Channel == nil {
 		return fmt.Errorf("invalid closing reservation")
+	}
+	if err := p.ImportSTPChannelSettlement(resv.Channel.ClosingTx, resv.Channel.ClosingAssetProofs); err != nil {
+		return err
 	}
 	Log.Infof("channel closed: %s", resv.ChannelId)
 	if resv.Channel.UpdateTime != 0 && resv.Channel.UpdateTime != resv.Id {

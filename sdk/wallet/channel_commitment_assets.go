@@ -69,10 +69,12 @@ func (p *Manager) CreateCommitTx3(whoseCommit int, channel *Channel, keyRing *Co
 	var inscribes []*InscribeResv
 	var extraStubs []*TxOutput
 	var plainSats int64
+	var initiatorPlainSats int64
 	for _, item := range assetPlans {
 		inscribes = append(inscribes, item.plan.PrevTxs...)
 		extraStubs = append(extraStubs, item.plan.PlainInputs...)
 		plainSats += item.plan.ExtraPlainSats
+		initiatorPlainSats += item.plan.InitiatorPlainSats
 	}
 	plainSats += AddCommitmentPlainAndStubInputs(commitTx, channel, extraStubs, &weightEstimate)
 
@@ -80,6 +82,11 @@ func (p *Manager) CreateCommitTx3(whoseCommit int, channel *Channel, keyRing *Co
 	// also reserve enough value on the delayed side for future punish/sweep
 	// transactions.
 	localPlainValue, remotePlainValue := InitCommitmentPlainValues(localBalance, remoteBalance, plainSats)
+	if serverCommit {
+		remotePlainValue += initiatorPlainSats
+	} else {
+		localPlainValue += initiatorPlainSats
+	}
 	localPkScript := delayPkScript
 	remotePkScript := directPkScript
 
@@ -113,8 +120,10 @@ func (p *Manager) CreateCommitTx3(whoseCommit int, channel *Channel, keyRing *Co
 		return nil, nil, nil, nil, fmt.Errorf("CreateCommitTx3 %w", err)
 	}
 
+	var recoveryFeeIndexes []uint32
 	if remotePlainValue >= 330 {
 		txOut2 := &wire.TxOut{PkScript: remotePkScript, Value: remotePlainValue}
+		recoveryFeeIndexes = append(recoveryFeeIndexes, uint32(len(commitTx.TxOut)))
 		commitTx.AddTxOut(txOut2)
 		weightEstimate.AddTxOutput(txOut2)
 	}
@@ -126,6 +135,7 @@ func (p *Manager) CreateCommitTx3(whoseCommit int, channel *Channel, keyRing *Co
 	localPlainValue -= requiredFee
 	if localPlainValue >= 330 {
 		txOut1.Value = localPlainValue
+		recoveryFeeIndexes = append(recoveryFeeIndexes, uint32(len(commitTx.TxOut)))
 		commitTx.AddTxOut(txOut1)
 	}
 
@@ -144,7 +154,7 @@ func (p *Manager) CreateCommitTx3(whoseCommit int, channel *Channel, keyRing *Co
 	if serverCommit {
 		// STP chooses the recovery branch and spending script; each protocol
 		// materializes the assets required by that branch.
-		sweeps, err := p.createServerCommitmentOtherSweeps(channel, commitTx, assetPlans, keyRing.GetRevealKey(), feeRate)
+		sweeps, err := p.createServerCommitmentOtherSweeps(channel, commitTx, assetPlans, recoveryFeeIndexes, keyRing.GetRevealKey(), feeRate)
 		if err != nil {
 			return nil, nil, nil, nil, err
 		}
@@ -153,12 +163,23 @@ func (p *Manager) CreateCommitTx3(whoseCommit int, channel *Channel, keyRing *Co
 	if err := verifySTPCommitmentAssets(assetReq, assetPlans); err != nil {
 		return nil, nil, nil, nil, err
 	}
+	proofs, err := collectSTPAssetProofs(assetPlans)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if whoseCommit == 0 {
+		channel.LocalCommitment.AssetProofs = proofs
+		channel.LocalCommitment.RecoveryFeeIndexes = append([]uint32(nil), recoveryFeeIndexes...)
+	} else {
+		channel.RemoteCommitment.AssetProofs = proofs
+		channel.RemoteCommitment.RecoveryFeeIndexes = append([]uint32(nil), recoveryFeeIndexes...)
+	}
 
 	return commitTx, inscribes, next, others, nil
 }
 
 func (p *Manager) createServerCommitmentOtherSweeps(channel *Channel, commitTx *wire.MsgTx,
-	assetPlans []stpPlannedAsset, revealPrivKey []byte, feeRate int64) ([]*CommitmentTx, error) {
+	assetPlans []stpPlannedAsset, recoveryFeeIndexes []uint32, revealPrivKey []byte, feeRate int64) ([]*CommitmentTx, error) {
 
 	// When a server commitment pays client-owned assets to the channel script,
 	// client recovery needs an additional sweep chain. This keeps the client
@@ -199,13 +220,17 @@ func (p *Manager) createServerCommitmentOtherSweeps(channel *Channel, commitTx *
 
 	var plainFeeOutput *TxOutput
 	plainFeeIndex := -1
-	if len(commitTx.TxOut) > 0 {
-		lastIndex := len(commitTx.TxOut) - 1
-		if bytes.Equal(commitTx.TxOut[lastIndex].PkScript, channelPkScript) {
-			if !materializedIndex[lastIndex] {
-				plainFeeIndex = lastIndex
-				plainFeeOutput = indexer.GenerateTxOutput(commitTx, lastIndex)
+	for _, outputIndex := range recoveryFeeIndexes {
+		i := int(outputIndex)
+		if i >= len(commitTx.TxOut) || materializedIndex[i] {
+			return nil, fmt.Errorf("invalid plain recovery reserve index %d", i)
+		}
+		if bytes.Equal(commitTx.TxOut[i].PkScript, channelPkScript) {
+			if plainFeeOutput != nil {
+				return nil, fmt.Errorf("multiple channel plain recovery reserves")
 			}
+			plainFeeIndex = i
+			plainFeeOutput = indexer.GenerateTxOutput(commitTx, i)
 		}
 	}
 
@@ -244,6 +269,42 @@ func (p *Manager) createServerCommitmentOtherSweeps(channel *Channel, commitTx *
 
 	if len(directAssetOutputs) == 0 && len(transferOutputs) == 0 && len(feeOutputs) == 0 {
 		return nil, nil
+	}
+
+	// Native recovery is bound only after account-based protocols have
+	// materialized their transfers. The combined builder receives the same
+	// asset order and one shared set of fee inputs as the legacy sweep.
+	proofs, err := collectSTPAssetProofs(assetPlans)
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range assetPlans {
+		native, ok := item.protocol.(STPAssetChannelProtocol)
+		if !ok || len(proofs[item.protocol.Protocol()]) == 0 {
+			continue
+		}
+		candidate := NewChannelCommitment()
+		candidate.CommitTx, candidate.AssetProofs = commitTx, proofs
+		inputs := append(append([]*TxOutput{}, directAssetOutputs...), transferOutputs...)
+		plan, err := native.BuildChannelRecovery(p, STPAssetRecoveryRequest{
+			Channel: channel, Commitment: candidate, Operation: STPOpForceClose,
+			Branch: "other-sweep", RecipientScript: recvPkScript,
+			CommitmentScript: channel.RedeemScript, ScriptType: SCRIPT_TYPE_CHANNEL,
+			Inputs: inputs, FeeInputs: feeOutputs, PrevTxs: prevTxs, FeeRate: feeRate,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if plan == nil {
+			return nil, fmt.Errorf("native other-sweep returned no recovery plan")
+		}
+		if plan.NoNativeAssets {
+			continue
+		}
+		if plan.Tx == nil || len(plan.NativeProofs[item.protocol.Protocol()]) == 0 {
+			return nil, fmt.Errorf("native other-sweep lost its proof")
+		}
+		return []*CommitmentTx{{CommitTx: plan.Tx, PrevTxs: prevTxs, AssetProofs: plan.NativeProofs}}, nil
 	}
 
 	sweepTx, err := createOtherSweepTx(commitTx, prevTxs, directAssetOutputs, transferOutputs, feeOutputs, recvPkScript, feeRate)
@@ -365,8 +426,19 @@ func createOtherSweepTx(parentTx *wire.MsgTx, _ []*wire.MsgTx,
 
 func (p *Manager) HandleOutputsRunes(commitTx *wire.MsgTx, outputs []*AssetToOutput,
 	localBalance, remoteBalance map[AssetName]*Decimal,
-	_ map[AssetName][]*TxOutput, localPkScript, remotePkScript []byte,
+	stubs map[AssetName][]*TxOutput, localPkScript, remotePkScript []byte,
 	weightEstimate *utils.TxWeightEstimator, channelId string) (int64, error) {
+	return p.handleOutputsRunesAfterPrefix(commitTx, outputs, localBalance, remoteBalance, stubs,
+		localPkScript, remotePkScript, weightEstimate, channelId, 0, 0)
+}
+
+func (p *Manager) handleOutputsRunesAfterPrefix(commitTx *wire.MsgTx, outputs []*AssetToOutput,
+	localBalance, remoteBalance map[AssetName]*Decimal,
+	_ map[AssetName][]*TxOutput, localPkScript, remotePkScript []byte,
+	weightEstimate *utils.TxWeightEstimator, channelId string, prefixInputs, prefixOutputs int) (int64, error) {
+	if prefixInputs < 0 || prefixInputs > len(commitTx.TxIn) || prefixOutputs < 0 || prefixOutputs > len(commitTx.TxOut) {
+		return 0, fmt.Errorf("invalid native asset prefix")
+	}
 
 	// Runes uses edicts, so the first runes input/output pair is inserted at
 	// the front and the remote amount is assigned by OP_RETURN output index.
@@ -389,7 +461,9 @@ func (p *Manager) HandleOutputsRunes(commitTx *wire.MsgTx, outputs []*AssetToOut
 		localRemaining := localValue
 		for _, utxo := range uv {
 			if firstInput == 0 {
-				commitTx.TxIn = append([]*wire.TxIn{utxo.TxIn()}, commitTx.TxIn...)
+				commitTx.TxIn = append(commitTx.TxIn, nil)
+				copy(commitTx.TxIn[prefixInputs+1:], commitTx.TxIn[prefixInputs:])
+				commitTx.TxIn[prefixInputs] = utxo.TxIn()
 				firstInput = utxo.Value()
 				outputIndex++
 			} else {
@@ -422,7 +496,9 @@ func (p *Manager) HandleOutputsRunes(commitTx *wire.MsgTx, outputs []*AssetToOut
 	if total > 0 {
 		total -= firstInput
 		txOut1 := &wire.TxOut{PkScript: localPkScript, Value: firstInput}
-		commitTx.TxOut = append([]*wire.TxOut{txOut1}, commitTx.TxOut...)
+		commitTx.TxOut = append(commitTx.TxOut, nil)
+		copy(commitTx.TxOut[prefixOutputs+1:], commitTx.TxOut[prefixOutputs:])
+		commitTx.TxOut[prefixOutputs] = txOut1
 		weightEstimate.AddTxOutput(txOut1)
 
 		if len(transferEdicts) > 0 {
@@ -431,13 +507,32 @@ func (p *Manager) HandleOutputsRunes(commitTx *wire.MsgTx, outputs []*AssetToOut
 			weightEstimate.AddTxOutput(txOut2)
 			total -= 330
 
-			nullDataScript, err := EncipherRunePayload(transferEdicts)
+			var nullDataScript []byte
+			var err error
+			if prefixOutputs == 0 {
+				// Preserve existing Runes-only commitment bytes and transaction IDs.
+				nullDataScript, err = EncipherRunePayload(transferEdicts)
+			} else {
+				pointer := uint32(prefixOutputs)
+				nullDataScript, err = EncipherRunePayloadWithPointer(transferEdicts, &pointer)
+			}
 			if err != nil {
 				Log.Errorf("too many edicts, %d, %v", len(transferEdicts), err)
 				return 0, err
 			}
 
 			txOut := &wire.TxOut{PkScript: nullDataScript, Value: 0}
+			commitTx.AddTxOut(txOut)
+			weightEstimate.AddTxOutput(txOut)
+		} else if prefixOutputs != 0 {
+			// The implicit Runes remainder destination is output zero. A native
+			// prefix may occupy that output, so bind the actual Runes carrier.
+			pointer := uint32(prefixOutputs)
+			payload, err := EncipherRunePayloadWithPointer(nil, &pointer)
+			if err != nil {
+				return 0, err
+			}
+			txOut := wire.NewTxOut(0, payload)
 			commitTx.AddTxOut(txOut)
 			weightEstimate.AddTxOutput(txOut)
 		}

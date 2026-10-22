@@ -83,7 +83,11 @@ func (p *Manager) ExportAccountBackup(password string, metadata map[int64]Accoun
 			name = fmt.Sprintf("Wallet %d", len(backup.Wallets)+1)
 		}
 		subAccounts := make([]account.SubAccount, info.Accounts)
+		var spEnabled []uint32
 		for index := 0; index < info.Accounts; index++ {
+			if info.SPEnabled[uint32(index)] {
+				spEnabled = append(spEnabled, uint32(index))
+			}
 			did := meta.SubAccountDIDs[uint32(index)]
 			if did == "" {
 				did = info.AccountDIDs[uint32(index)]
@@ -96,7 +100,7 @@ func (p *Manager) ExportAccountBackup(password string, metadata map[int64]Accoun
 				Index: uint32(index), Name: accountName, DID: did,
 			}
 		}
-		backup.Wallets = append(backup.Wallets, account.WalletBackup{Name: name, Mnemonic: mnemonic, AccountCount: uint32(info.Accounts), SubAccounts: subAccounts})
+		backup.Wallets = append(backup.Wallets, account.WalletBackup{Name: name, Mnemonic: mnemonic, AccountCount: uint32(info.Accounts), SubAccounts: subAccounts, SPEnabled: spEnabled})
 	}
 	return account.NormalizeBackup(backup)
 }
@@ -127,6 +131,10 @@ func (p *Manager) RestoreAccountBackup(value account.Backup, password string) er
 		for _, sub := range item.SubAccounts {
 			info.AccountNames[sub.Index] = sub.Name
 			info.AccountDIDs[sub.Index] = sub.DID
+		}
+		info.SPEnabled = make(map[uint32]bool, len(item.SPEnabled))
+		for _, index := range item.SPEnabled {
+			info.SPEnabled[index] = true
 		}
 		err = saveWallet(p.db, &info.WalletInDB)
 		p.mutex.Unlock()

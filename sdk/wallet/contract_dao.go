@@ -850,7 +850,7 @@ func (p *DaoContractRunTime) InitFromDB(stp ContractManager, resv ContractDeploy
 
 	// }
 
-	return nil
+	return p.restoreNativePublicMetadata()
 }
 
 func (p *DaoContractRunTime) IsIdle() bool {
@@ -1497,7 +1497,7 @@ func (p *DaoContractRunTime) DeploySelf() bool {
 func (p *DaoContractRunTime) AllowDeploy() error {
 
 	// 检查合约的资产名称是否已经存在
-	tickerInfo := p.stp.GetTickerInfo(p.resv.GetContract().GetAssetName())
+	tickerInfo := p.contractAssetTicker()
 	if tickerInfo == nil {
 		return fmt.Errorf("getTickerInfo %s failed", p.resv.GetContract().GetAssetName().String())
 	}

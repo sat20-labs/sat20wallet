@@ -25,6 +25,9 @@ const (
 	// CS_ANCHOR_RECOVERABLE is testnet-only: the persisted opening anchor
 	// disappeared after a chain rollback and cannot currently be replayed.
 	CS_ANCHOR_RECOVERABLE ChannelStatus = 5
+	// A newer durable native commitment may already have revoked the stored
+	// state. Hold signing until recovery reconciles it; force-close is allowed.
+	CS_NATIVE_RECOVERY ChannelStatus = 6
 
 	// 8-15 closing
 	CS_CLOSING_STARTED              ChannelStatus = 7

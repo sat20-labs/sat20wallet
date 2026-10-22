@@ -139,7 +139,7 @@ func CreateAnchorTx(splicingOutput *indexer.TxOutput, assetName *AssetName, tick
 			localAsset = &wire.AssetInfo{
 				Name:       assetName.AssetName,
 				Amount:     *amt,
-				BindingSat: uint32(tickerInfo.N),
+				BindingSat: STPAssetBindingSat(GetAssetName(tickerInfo)),
 			}
 		} else {
 			Log.Errorf("can't find expected asset %s in utxo %s", assetName.String(), splicingOutput.OutPointStr)
@@ -151,7 +151,7 @@ func CreateAnchorTx(splicingOutput *indexer.TxOutput, assetName *AssetName, tick
 	if IsPlainAsset(assetName) {
 		value = splicingOutput.Value()
 	} else if IsBindingSat(assetName) {
-		value = indexer.GetBindingSatNum(&localAsset.Amount, uint32(assetName.N))
+		value = indexer.GetBindingSatNum(&localAsset.Amount, STPAssetBindingSat(assetName))
 	}
 
 	pkScript, err := utils.WitnessScriptHash(redeemScript)
@@ -186,7 +186,7 @@ func CreateAnchorTx(splicingOutput *indexer.TxOutput, assetName *AssetName, tick
 	}
 
 	assetInfo := fmt.Sprintf("%s-%s-%d-%d", tickerInfo.AssetName.String(),
-		tickerInfo.MaxSupply, tickerInfo.Divisibility, tickerInfo.N)
+		tickerInfo.MaxSupply, tickerInfo.Divisibility, STPAssetBindingSat(GetAssetName(tickerInfo)))
 	nullDataScript, err := sindexer.NullDataScript(sindexer.CONTENT_TYPE_ASCENDING, []byte(assetInfo))
 	if err != nil {
 		return nil, err

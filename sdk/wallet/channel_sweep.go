@@ -15,6 +15,7 @@ import (
 )
 
 type SignedSweepTxPackage struct {
+	NativeProofs  map[string][]byte
 	SweepTx       *wire.MsgTx
 	Txs           []*wire.MsgTx
 	PrevFetcher   txscript.PrevOutputFetcher
@@ -24,6 +25,69 @@ type SignedSweepTxPackage struct {
 	Signed        bool
 	Verified      bool
 	Broadcastable bool
+}
+
+// Plain recovery reserves are recorded when the commitment is independently
+// built. Their position depends on the delayed/direct script rebalance, so a
+// leading protocol count or the final transaction output is not authority to
+// spend an asset carrier as fees.
+func commitmentRecoveryFeeIndexes(commit *ChannelCommitment, selected []int, views []*TxOutput) (map[int]bool, error) {
+	if commit == nil || commit.CommitTx == nil || len(selected) == 0 {
+		return nil, fmt.Errorf("missing commitment recovery selection")
+	}
+	chosen := make(map[int]bool)
+	previous := -1
+	for _, index := range selected {
+		if index <= previous || index < 0 || index >= len(commit.CommitTx.TxOut) || commit.CommitTx.TxOut[index] == nil {
+			return nil, fmt.Errorf("invalid or reordered commitment recovery selection")
+		}
+		previous, chosen[index] = index, true
+	}
+	indexes := append([]uint32(nil), commit.RecoveryFeeIndexes...)
+	if len(indexes) == 0 {
+		if len(commit.AssetProofs) != 0 {
+			return nil, fmt.Errorf("native commitment is missing explicit recovery fee outputs")
+		}
+		for name, amount := range commit.LocalBalance {
+			if amount != nil && amount.Sign() != 0 && STPPolicyFor(&name).NoOrdinalInputStub {
+				return nil, fmt.Errorf("non-ordinal commitment is missing explicit recovery fee outputs")
+			}
+		}
+		// Preserve stored pre-upgrade ordinal commitments, whose recovery
+		// convention reserves their final selected output for fees.
+		indexes = []uint32{uint32(selected[len(selected)-1])}
+	}
+	consumed := make(map[uint32]bool)
+	hash := commit.CommitTx.TxHash()
+	for _, next := range commit.NextTxs {
+		if next == nil {
+			return nil, fmt.Errorf("nil recovery predecessor")
+		}
+		for _, input := range next.TxIn {
+			if input != nil && input.PreviousOutPoint.Hash == hash {
+				consumed[input.PreviousOutPoint.Index] = true
+			}
+		}
+	}
+	fees, seen := make(map[int]bool), make(map[uint32]bool)
+	for _, index := range indexes {
+		if int(index) >= len(commit.CommitTx.TxOut) || seen[index] || consumed[index] {
+			return nil, fmt.Errorf("invalid or already consumed recovery fee output")
+		}
+		seen[index] = true
+		output := commit.CommitTx.TxOut[index]
+		if output == nil || output.Value < 0 || txscript.IsUnspendable(output.PkScript) {
+			return nil, fmt.Errorf("invalid recovery fee carrier")
+		}
+		if views != nil && (int(index) >= len(views) || views[index] == nil || views[index].HasAsset() ||
+			views[index].Value() != output.Value || !bytes.Equal(views[index].OutValue.PkScript, output.PkScript)) {
+			return nil, fmt.Errorf("recovery fee output carries assets or differs from verified output")
+		}
+		if chosen[int(index)] {
+			fees[int(index)] = true
+		}
+	}
+	return fees, nil
 }
 
 func FindOutputIndexes(commitTx *wire.MsgTx, ourPkScript, theirPkScript []byte) ([]int, []int, error) {
@@ -72,8 +136,39 @@ func (p *Manager) CreateAndVerifyPunishTx(channel *Channel, rev []byte, feeRate 
 		return nil, nil
 	}
 
-	punishTx, prevFetcher, err := CreatePunishmentTx(channel.RemoteCommitment, revPrivKey, channel.LocalChanCfg.PaymentKey,
-		remoteIndex, toLocalScript.WitnessScriptToSign(), feeRate)
+	recvScript, err := GetP2TRpkScript(channel.LocalChanCfg.PaymentKey)
+	if err != nil {
+		return nil, err
+	}
+	native, err := p.buildSTPChannelRecovery(STPAssetRecoveryRequest{
+		Channel: channel, Commitment: channel.RemoteCommitment, Operation: STPOpPunish,
+		Branch: "punish", OutputIndexes: remoteIndex, RecipientScript: recvScript,
+		CommitmentScript: toLocalScript.WitnessScriptToSign(), ScriptType: SCRIPT_TYPE_PUNISH, FeeRate: feeRate,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var punishTx *wire.MsgTx
+	var prevFetcher txscript.PrevOutputFetcher
+	if native != nil {
+		punishTx, prevFetcher = native.Tx, native.PrevFetcher
+		hashes := txscript.NewTxSigHashes(punishTx, prevFetcher)
+		for i, input := range punishTx.TxIn {
+			previous := prevFetcher.FetchPrevOutput(input.PreviousOutPoint)
+			if previous == nil || !bytes.Equal(previous.PkScript, toLocalScript.PkScript()) {
+				return nil, fmt.Errorf("native punishment changed the spending branch")
+			}
+			signature, err := txscript.RawTxInWitnessSignature(punishTx, hashes, i, previous.Value,
+				toLocalScript.WitnessScriptToSign(), txscript.SigHashAll, revPrivKey)
+			if err != nil {
+				return nil, err
+			}
+			input.Witness = wire.TxWitness{signature, []byte{1}, toLocalScript.WitnessScriptToSign()}
+		}
+	} else {
+		punishTx, prevFetcher, err = CreatePunishmentTx(channel.RemoteCommitment, revPrivKey, channel.LocalChanCfg.PaymentKey,
+			remoteIndex, toLocalScript.WitnessScriptToSign(), feeRate)
+	}
 	if err != nil {
 		Log.Errorf("Failed to create punish tx: %v", err)
 		return nil, err
@@ -135,12 +230,13 @@ func (p *Manager) BuildSignedSweepTxForClient(channel *Channel, height int, feeR
 	}
 
 	result := &SignedSweepTxPackage{
-		SweepTx:     sweepTx,
-		Txs:         []*wire.MsgTx{sweepTx},
-		PrevFetcher: prevFetcher,
-		Fee:         fee,
-		CommitTxId:  commitTx.TxID(),
-		SweepTxId:   sweepTx.TxID(),
+		NativeProofs: cloneSTPAssetProofs(channel.LocalCommitment.RecoveryProofs),
+		SweepTx:      sweepTx,
+		Txs:          []*wire.MsgTx{sweepTx},
+		PrevFetcher:  prevFetcher,
+		Fee:          fee,
+		CommitTxId:   commitTx.TxID(),
+		SweepTxId:    sweepTx.TxID(),
 	}
 
 	_, err = PartialSignTxWithWallet(channel.LocalWallet(), sweepTx, prevFetcher, commitmentScript, true, nil)
@@ -179,35 +275,29 @@ func CreatePunishmentTx(remoteCommit *ChannelCommitment, revocationPrivKey *btce
 	if err != nil {
 		return nil, nil, err
 	}
+	feeIndexes, err := commitmentRecoveryFeeIndexes(remoteCommit, outputIndex, nil)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	var plainSats []*TxOutput
 	txId := oldCommitTx.TxID()
 	hash := oldCommitTx.TxHash()
-	for i, index := range outputIndex {
+	for _, index := range outputIndex {
 		txOut := oldCommitTx.TxOut[index]
 		outPoint := wire.NewOutPoint(&hash, uint32(index))
-		if i+1 <= recovery.LeadingPlainOutputs {
-			// BRC20 对应的 commitment output 本身仍是白聪，不能直接作为资产
-			// 输出转走；真正的 transfer reveal 输出在 NextTxs 中处理。
+		if feeIndexes[index] {
 			plainSats = append(plainSats, &indexer.TxOutput{OutPointStr: fmt.Sprintf("%s:%d", txId, index), OutValue: *txOut})
 			continue
 		}
-
-		if i < len(outputIndex)-1 {
-			txIn := wire.NewTxIn(outPoint, nil, nil)
-			punishTx.AddTxIn(txIn)
-			weightEstimate.AddNestedP2WSHInput(int64(len(commitmentScript)))
-			prevFetcher.AddPrevOut(*outPoint, txOut)
-
-			out := wire.NewTxOut(txOut.Value, recvPkScript)
-			punishTx.AddTxOut(out)
-			weightEstimate.AddP2TROutput()
-		} else {
-			plainSats = append(plainSats, &indexer.TxOutput{OutPointStr: fmt.Sprintf("%s:%d", txId, index), OutValue: *txOut})
-		}
+		punishTx.AddTxIn(wire.NewTxIn(outPoint, nil, nil))
+		weightEstimate.AddNestedP2WSHInput(int64(len(commitmentScript)))
+		prevFetcher.AddPrevOut(*outPoint, txOut)
+		punishTx.AddTxOut(wire.NewTxOut(txOut.Value, recvPkScript))
+		weightEstimate.AddP2TROutput()
 	}
 
-	if recovery.LeadingPlainOutputs != 0 {
+	if len(recovery.Transfers) != 0 {
 		for _, output := range recovery.Transfers {
 			outPoint := output.OutPoint()
 			txOut := output.TxOut()
@@ -306,6 +396,15 @@ func (p *Manager) CreateSweepTx(commit *ChannelCommitment, outputIndex []int,
 	if feeRate <= 0 {
 		return nil, nil, 0, fmt.Errorf("invalid sweep fee rate %d", feeRate)
 	}
+	if native, err := p.buildSTPChannelRecovery(STPAssetRecoveryRequest{
+		Commitment: commit, Operation: STPOpForceClose, Branch: "sweep", OutputIndexes: outputIndex,
+		RecipientScript: recvPkScript, CommitmentScript: commitmentScript, ScriptType: scriptType,
+		CSVDelay: csvDelay, Height: currHeight, FeeRate: feeRate,
+	}); err != nil {
+		return nil, nil, 0, err
+	} else if native != nil {
+		return native.Tx, native.PrevFetcher, native.Fee, nil
+	}
 	commitTx := commit.CommitTx
 	localBalance := commit.LocalBalance
 	prevFetcher := txscript.NewMultiPrevOutFetcher(nil)
@@ -321,43 +420,37 @@ func (p *Manager) CreateSweepTx(commit *ChannelCommitment, outputIndex []int,
 	if err != nil {
 		return nil, nil, 0, err
 	}
+	feeIndexes, err := commitmentRecoveryFeeIndexes(commit, outputIndex, nil)
+	if err != nil {
+		return nil, nil, 0, err
+	}
 
 	sweepTx.LockTime = currHeight
 	txID := commitTx.TxID()
 	hash := commitTx.TxHash()
 	var plainSats []*TxOutput
-	for i, index := range outputIndex {
+	for _, index := range outputIndex {
 		if index < 0 || index >= len(commitTx.TxOut) {
 			return nil, nil, 0, fmt.Errorf("invalid sweep output index %d", index)
 		}
 		txOut := commitTx.TxOut[index]
 		outPoint := wire.NewOutPoint(&hash, uint32(index))
-		if i+1 <= recovery.LeadingPlainOutputs {
-			// BRC20 的 commitment output 先按白聪保留，真正的资产转移输出来自
-			// 已经预构造的 reveal tx。
+		if feeIndexes[index] {
 			plainSats = append(plainSats, &indexer.TxOutput{
 				OutPointStr: fmt.Sprintf("%s:%d", txID, index), OutValue: *txOut,
 			})
 			continue
 		}
-
-		if i < len(outputIndex)-1 {
-			txIn := &wire.TxIn{PreviousOutPoint: *outPoint, Sequence: csvDelay}
-			sweepTx.AddTxIn(txIn)
-			weightEstimate.AddNestedP2WSHInput(int64(len(commitmentScript)))
-			prevFetcher.AddPrevOut(*outPoint, txOut)
-
-			out := wire.NewTxOut(txOut.Value, recvPkScript)
-			sweepTx.AddTxOut(out)
-			weightEstimate.AddTxOutput(out)
-		} else {
-			plainSats = append(plainSats, &indexer.TxOutput{
-				OutPointStr: fmt.Sprintf("%s:%d", txID, index), OutValue: *txOut,
-			})
-		}
+		txIn := &wire.TxIn{PreviousOutPoint: *outPoint, Sequence: csvDelay}
+		sweepTx.AddTxIn(txIn)
+		weightEstimate.AddNestedP2WSHInput(int64(len(commitmentScript)))
+		prevFetcher.AddPrevOut(*outPoint, txOut)
+		out := wire.NewTxOut(txOut.Value, recvPkScript)
+		sweepTx.AddTxOut(out)
+		weightEstimate.AddTxOutput(out)
 	}
 
-	if recovery.LeadingPlainOutputs != 0 {
+	if len(recovery.Transfers) != 0 {
 		for _, output := range recovery.Transfers {
 			outPoint := output.OutPoint()
 			txOut := output.TxOut()

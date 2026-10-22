@@ -1,6 +1,7 @@
 package wallet
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -453,6 +454,17 @@ func (p *Manager) InvokeContractV2(contractURL string, jsonInvokeParam string,
 	if !runtime.GetRuntimeBase().IsActive() {
 		return "", fmt.Errorf("contract is not active")
 	}
+	if name := ParseAssetString(assetName); name != nil && name.Protocol == "rgb11" {
+		var invoke InvokeParam
+		if json.Unmarshal([]byte(jsonInvokeParam), &invoke) != nil || invoke.Action != INVOKE_API_DEPOSIT {
+			return "", fmt.Errorf("native L1 contract funding requires an authenticated deposit intent")
+		}
+		prepared, err := p.PrepareNativeContractDeposit(context.Background(), contractURL, p.GetWallet().GetAddress(), assetName, amt, feeRate)
+		if err != nil {
+			return "", err
+		}
+		return p.ResumeNativeContractDeposit(context.Background(), prepared.TransferID)
+	}
 
 	var nullDataScript []byte
 	asset := indexer.NewAssetNameFromString(assetName)
@@ -621,6 +633,13 @@ func (p *Manager) DepositWithContract(destAddr string, assetName string, amt str
 	if !r.GetRuntimeBase().IsActive() {
 		return "", fmt.Errorf("contract not active")
 	}
+	if name := ParseAssetString(assetName); name != nil && name.Protocol == "rgb11" {
+		prepared, err := p.PrepareNativeContractDeposit(context.Background(), url, destAddr, assetName, amt, feeRate)
+		if err != nil {
+			return "", err
+		}
+		return p.ResumeNativeContractDeposit(context.Background(), prepared.TransferID)
+	}
 
 	depositPara := DepositInvokeParam{
 		OrderType: ORDERTYPE_DEPOSIT,
@@ -692,7 +711,13 @@ func (p *Manager) withdrawWithContract(destAddr string, assetName string, amt st
 
 	// 检查其主网地址是否有足够的资产
 	name := indexer.NewAssetNameFromString(assetName)
+	if name == nil {
+		return "", fmt.Errorf("invalid asset name")
+	}
 	tickInfo := p.GetTickerInfo(name)
+	if name.Protocol == "rgb11" {
+		tickInfo = p.GetSendTickerInfo_SatsNet(name)
+	}
 	if tickInfo == nil {
 		return "", fmt.Errorf("can't find ticker info %s", assetName)
 	}
@@ -700,7 +725,15 @@ func (p *Manager) withdrawWithContract(destAddr string, assetName string, amt st
 	if err != nil {
 		return "", err
 	}
+	if dAmt.Sign() <= 0 {
+		return "", fmt.Errorf("withdrawal amount must be positive")
+	}
 	total := p.GetAssetBalance(coreChannelId, indexer.NewAssetNameFromString(assetName))
+	if name.Protocol == "rgb11" {
+		// The user pays the L2 withdrawal from its L2 balance. Public native
+		// pool solvency comes from revalidated proof inventory at settlement.
+		total = p.GetAssetBalance_SatsNet("", name)
+	}
 	if total.Cmp(dAmt) < 0 {
 		return "", fmt.Errorf("no enough asset %s in channel %s, require %s but only %s",
 			assetName, coreChannelId, amt, total.String())

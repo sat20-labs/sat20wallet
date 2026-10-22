@@ -12,14 +12,23 @@ func (p *Manager) ForcelyCloseChannel(channel *Channel, feeRate int64) (string, 
 	if channel == nil {
 		return "", "", fmt.Errorf("channel is nil")
 	}
+	channel.Mutex.Lock()
+	defer channel.Mutex.Unlock()
 
 	commitTx := channel.LocalCommitment.CommitTx
 	if commitTx == nil {
 		return "", "", fmt.Errorf("can't find lastest commitment TX")
 	}
+	if err := p.verifySTPChannelProofs(channel, commitTx, channel.LocalCommitment.AssetProofs, STPOpForceClose); err != nil {
+		return "", "", err
+	}
 
 	prevFetcher := channel.GetCommitmentPrefetchor()
 	var txs []*wire.MsgTx
+	if err := verifySTPNativeParents(channel); err != nil {
+		return "", "", err
+	}
+	txs = append(txs, cloneSTPBitcoinChain(channel.NativeParents)...)
 	if len(channel.LocalCommitment.PrevTxs) != 0 {
 		for _, tx := range channel.LocalCommitment.PrevTxs {
 			output := indexer.GenerateTxOutput(tx, 0)
@@ -55,6 +64,7 @@ func (p *Manager) ForcelyCloseChannel(channel *Channel, feeRate int64) (string, 
 			ChannelId:       channel.ChannelId,
 			FeeRate:         feeRate,
 			CloseTx:         commitTx,
+			AssetProofs:     cloneSTPAssetProofs(channel.LocalCommitment.AssetProofs),
 			DeAnchorTx:      deAnchorTx,
 		},
 		Channel: channel,
@@ -71,6 +81,23 @@ func (p *Manager) ForcelyCloseChannel(channel *Channel, feeRate int64) (string, 
 		},
 	})
 	p.bindOperationLogReservationBestEffort(logID, RESV_TYPE_CLOSE, resv.Id)
+	if nativeForceClose(resv) {
+		resv.PreTxs = append(txs, commitTx)
+		resv.PreTxs = append(resv.PreTxs, channel.LocalCommitment.NextTxs...)
+		resv.PreTxs = appendCommitmentOtherTxs(resv.PreTxs, channel.LocalCommitment)
+		// Both transactions and the proof are durable before either chain can
+		// observe a spend. A lost broadcast response leaves this exact package
+		// pending for the same monitor that restores it after a restart.
+		err := p.startNativeForceCloseLocked(resv)
+		if channel.Status != CS_CLOSE_FORCELY_BROADCASTED {
+			return "", "", err
+		}
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{
+			Status: OperationLogRunning, Message: "Force-close package saved; monitoring both chain confirmations", TxID: commitTx.TxID(),
+			Details: map[string]string{"commit_txid": commitTx.TxID(), "deanchor_txid": deAnchorTx.TxID()},
+		})
+		return commitTx.TxID(), deAnchorTx.TxID(), err
+	}
 
 	PrintJsonTx_SatsNet(resv.DeAnchorTx, "forcely close deAnchorTx")
 	deAnchorTxId, err := p.BroadcastTx_SatsNet(resv.DeAnchorTx)
@@ -155,7 +182,7 @@ func (p *Manager) CloserForcelyClose(channelID string, feeRate int64) (string, s
 	if channel == nil {
 		return "", "", fmt.Errorf("can't find channel %s", channelID)
 	}
-	if channel.Status < CS_READY {
+	if channel.Status < CS_READY && channel.Status != CS_NATIVE_RECOVERY {
 		return "", "", fmt.Errorf("channel %s invalid status %d", channelID, channel.Status)
 	}
 
@@ -163,8 +190,6 @@ func (p *Manager) CloserForcelyClose(channelID string, feeRate int64) (string, s
 		return "", "", err
 	}
 
-	channel.Mutex.Lock()
-	defer channel.Mutex.Unlock()
 	return p.ForcelyCloseChannel(channel, feeRate)
 }
 
@@ -213,6 +238,16 @@ func (p *Manager) HandleChannelForceCloseConfirmed(resv *ClosingReservation) err
 	if resv == nil || resv.Channel == nil || resv.Channel.ClosingTx == nil {
 		return fmt.Errorf("invalid force close reservation")
 	}
+	if nativeForceClose(resv) {
+		resv.Lock()
+		defer resv.Unlock()
+		resv.Channel.Mutex.Lock()
+		defer resv.Channel.Mutex.Unlock()
+		return p.nativeForceCloseConfirmedLocked(resv)
+	}
+	if err := p.ImportSTPChannelSettlement(resv.Channel.ClosingTx, resv.AssetProofs); err != nil {
+		return err
+	}
 
 	Log.Warnf("channel %s forcely close confirmed", resv.Channel.ChannelId)
 	p.SendMessageToUpper(MSG_CHANNEL_FORCELY_CLOSED, resv.Channel.ClosingTx.TxID())
@@ -243,6 +278,10 @@ func (p *Manager) HandleChannelForceCloseConfirmed(resv *ClosingReservation) err
 func (p *Manager) HandleChannelForceCloseWaitToSweep(resv *ClosingReservation, height int) error {
 	if resv == nil || resv.Channel == nil {
 		return fmt.Errorf("invalid force close reservation")
+	}
+	if nativeForceClose(resv) {
+		_, err := p.RetryNativeForceClose(resv)
+		return err
 	}
 	if height-resv.CloseHeight <= int(resv.Channel.CsvDelay) {
 		return nil
@@ -277,6 +316,7 @@ func (p *Manager) HandleChannelForceCloseWaitToSweep(resv *ClosingReservation, h
 	}
 
 	resv.Channel.ClosingTx = sweepTxPackage.SweepTx
+	resv.AssetProofs = cloneSTPAssetProofs(sweepTxPackage.NativeProofs)
 	resv.Channel.Status = CS_CLOSE_FORCELY_SWEEP_BROADCASTED
 	resv.Status = ResvStatus(resv.Channel.Status)
 	p.updateOperationLogByReservationBestEffort(RESV_TYPE_CLOSE, resv.Id, OperationLogUpdate{
@@ -294,6 +334,16 @@ func (p *Manager) HandleChannelForceCloseWaitToSweep(resv *ClosingReservation, h
 func (p *Manager) HandleChannelForceCloseSweepConfirmed(resv *ClosingReservation) error {
 	if resv == nil || resv.Channel == nil || resv.Channel.ClosingTx == nil {
 		return fmt.Errorf("invalid force close reservation")
+	}
+	if nativeForceClose(resv) {
+		resv.Lock()
+		defer resv.Unlock()
+		resv.Channel.Mutex.Lock()
+		defer resv.Channel.Mutex.Unlock()
+		return p.nativeForceCloseCompletedLocked(resv)
+	}
+	if err := p.ImportSTPChannelSettlement(resv.Channel.ClosingTx, resv.AssetProofs); err != nil {
+		return err
 	}
 
 	Log.Warnf("channel %s forcely close sweep confirmed", resv.Channel.ChannelId)

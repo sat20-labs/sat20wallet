@@ -1085,6 +1085,10 @@ func (p *Manager) prepareAccountRestoreWithRootLocked(value account.Backup, pass
 			info.AccountNames[sub.Index] = sub.Name
 			info.AccountDIDs[sub.Index] = sub.DID
 		}
+		info.SPEnabled = make(map[uint32]bool, len(item.SPEnabled))
+		for _, index := range item.SPEnabled {
+			info.SPEnabled[index] = true
+		}
 		key, err := p.newSnaclKey(password)
 		if err != nil {
 			return nil, fmt.Errorf("derive restored wallet key %q: %w", item.Name, err)

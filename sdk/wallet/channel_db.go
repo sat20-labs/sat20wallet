@@ -40,8 +40,17 @@ type ChannelInDB struct {
 	// 如果一个output没有utxoId，说明还没有确认，不能使用该output，一层和二层都一样
 	ChanPoint    *TxOutput                 // 白聪，跟随splicing更新，至少包含 MIN_SERVER_RESERVE_SATS
 	FundingUtxos map[AssetName][]*TxOutput // 不包括ChanPoint
-	PendingUtxos map[string]*TxOutput      // key: txId, 还没有广播 (暂时无用)
-	StubUtxos    map[AssetName][]*TxOutput // 某些资产需要预先提供一个stub的utxo，方便做资产的分配。必须是330聪
+	// Native asset proofs are kept with the custody state, never synthesized
+	// from an indexer's Bitcoin-only output view.
+	AssetFunding       map[string][]byte
+	AssetEntropy       [32]byte
+	ClosingAssetProofs map[string][]byte
+	// Exact signed, possibly unbroadcast funding ancestors are required to
+	// use a commitment after revocation even if the main reservation is lost.
+	NativeParents  []*wire.MsgTx
+	NativePrevouts map[string]*wire.TxOut
+	PendingUtxos   map[string]*TxOutput      // key: txId, 还没有广播 (暂时无用)
+	StubUtxos      map[AssetName][]*TxOutput // 某些资产需要预先提供一个stub的utxo，方便做资产的分配。必须是330聪
 	// 如果自身通道没有stub utxo，可以由服务节点提供，但需要支付一定的费用
 	// channel 地址上的资产
 	// 一层，已经被通道管理的utxo，按照通道最终状态分配；还不在通道管理范围的，属于通道发起方
@@ -72,6 +81,7 @@ func NewChannelInDB() *ChannelInDB {
 		Version:        CV_INIT,
 		FeeCfg:         NewFeeConfig(),
 		FundingUtxos:   make(map[AssetName][]*TxOutput),
+		AssetFunding:   make(map[string][]byte),
 		PendingUtxos:   make(map[string]*TxOutput),
 		StubUtxos:      make(map[AssetName][]*TxOutput),
 		UtxosL2:        make(map[string]*TxOutput_SatsNet),
@@ -103,11 +113,16 @@ func (c *ChannelInDB) Clone() *ChannelInDB {
 		RemoteChanCfg: c.RemoteChanCfg,
 		Memo:          c.Memo,
 
-		ChanPoint:      c.ChanPoint,
-		FundingUtxos:   make(map[AssetName][]*TxOutput),
-		PendingUtxos:   make(map[string]*TxOutput),
-		UtxosL2:        make(map[string]*TxOutput_SatsNet),
-		PendingUtxosL2: make(map[string]*TxOutput_SatsNet),
+		ChanPoint:          c.ChanPoint,
+		FundingUtxos:       make(map[AssetName][]*TxOutput),
+		AssetFunding:       cloneSTPAssetProofs(c.AssetFunding),
+		AssetEntropy:       c.AssetEntropy,
+		ClosingAssetProofs: cloneSTPAssetProofs(c.ClosingAssetProofs),
+		NativeParents:      cloneSTPBitcoinChain(c.NativeParents),
+		NativePrevouts:     cloneSTPPrevouts(c.NativePrevouts),
+		PendingUtxos:       make(map[string]*TxOutput),
+		UtxosL2:            make(map[string]*TxOutput_SatsNet),
+		PendingUtxosL2:     make(map[string]*TxOutput_SatsNet),
 
 		LastPaymentTxId:  c.LastPaymentTxId,
 		TotalSatSent:     c.TotalSatSent,
@@ -115,14 +130,16 @@ func (c *ChannelInDB) Clone() *ChannelInDB {
 		CommitHeight:     c.CommitHeight,
 		LocalCommitment: &ChannelCommitment{
 			ChannelCommitmentV1: ChannelCommitmentV1{
-				LocalBalance:  make(map[AssetName]*indexer.Decimal),
-				RemoteBalance: make(map[AssetName]*indexer.Decimal),
+				RecoveryFeeIndexes: append([]uint32(nil), c.LocalCommitment.RecoveryFeeIndexes...),
+				LocalBalance:       make(map[AssetName]*indexer.Decimal),
+				RemoteBalance:      make(map[AssetName]*indexer.Decimal),
 			},
 		},
 		RemoteCommitment: &ChannelCommitment{
 			ChannelCommitmentV1: ChannelCommitmentV1{
-				LocalBalance:  make(map[AssetName]*indexer.Decimal),
-				RemoteBalance: make(map[AssetName]*indexer.Decimal),
+				RecoveryFeeIndexes: append([]uint32(nil), c.RemoteCommitment.RecoveryFeeIndexes...),
+				LocalBalance:       make(map[AssetName]*indexer.Decimal),
+				RemoteBalance:      make(map[AssetName]*indexer.Decimal),
 			},
 		},
 
@@ -605,8 +622,8 @@ func (p *ChannelInDB) GetCommitmentPrefetchor() *txscript.MultiPrevOutFetcher {
 }
 
 func (p *ChannelInDB) HasProtocolAsset(protocol string) bool {
-	for k := range p.FundingUtxos {
-		if k.Protocol == protocol {
+	for k, outputs := range p.FundingUtxos {
+		if k.Protocol == protocol && len(outputs) != 0 {
 			return true
 		}
 	}

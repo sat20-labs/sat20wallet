@@ -31,6 +31,9 @@ func (p *coreRGBImportFailureOnce) Import(catalog AccountManagedDataCatalog, pay
 func coreRGBRecoveryFailuresE2E(t *testing.T, source *Manager, cfg coreE2EConfig,
 	chain *coreE2EChain, material *coreRecoveryMaterial) {
 	t.Helper()
+	// Earlier cases may publish through an independent manager of this root.
+	// Adopt that authoritative revision before taking the recovery baseline.
+	coreSynchronizeRestoredAccount(t, source)
 	load := func(t *testing.T) (*Manager, *RecoveredAccountManagementState) {
 		t.Helper()
 		target := coreNewE2EManager(t, cfg, chain, "")
@@ -150,6 +153,7 @@ func coreRGBRecoveryFailuresE2E(t *testing.T, source *Manager, cfg coreE2EConfig
 					if len(sourceView.Assets) > 0 {
 						nonemptyScopes++
 					}
+					var refreshResult *RGB11RefreshResult
 					if cold {
 						// Readiness is intentionally RAM-only. With automatic workers
 						// stopped, cold ownership must remain unspendable until the
@@ -164,12 +168,61 @@ func coreRGBRecoveryFailuresE2E(t *testing.T, source *Manager, cfg coreE2EConfig
 						require.Equal(t, sourceView.Invoices, targetView.Invoices)
 						require.Equal(t, sourceView.Locked, targetView.Locked)
 						refreshStarted := time.Now()
-						_, err := target.RefreshRGB11State(context.Background())
+						var refreshErr error
+						refreshResult, refreshErr = target.RefreshRGB11State(context.Background())
 						sample := coreE2EDuration("fresh_chain_reconciliation", refreshStarted)
 						sample["account_index"] = sub.Index
 						samples = append(samples, sample)
-						require.NoError(t, err)
+						require.NoError(t, refreshErr)
 						targetView = coreRGBSemantic(t, target)
+						// Compare derived runtime status after the same public chain pass.
+						// Run the source control only after the cold target path completed.
+						_, sourceRefreshErr := source.RefreshRGB11State(context.Background())
+						require.NoError(t, sourceRefreshErr)
+						sourceView = coreRGBSemantic(t, source)
+					}
+					if coreDigest(sourceView) != coreDigest(targetView) {
+						t.Logf("core-e2e: cold recovery mismatch cold=%t account=%d source_wallet=%d target_wallet=%d initialized=%t/%t sync=%q/%q consistency=%q/%q projection_available=%t/%t",
+							cold, sub.Index, entry.ID, restoredID,
+							sourceView.Initialized, targetView.Initialized, sourceView.SyncStatus, targetView.SyncStatus,
+							sourceView.ConsistencyStatus, targetView.ConsistencyStatus,
+							source.rgbManager.rgb11ProjectionAvailable(), target.rgbManager.rgb11ProjectionAvailable())
+						for _, field := range []struct {
+							name           string
+							source, target map[string]string
+						}{
+							{"assets", sourceView.Assets, targetView.Assets},
+							{"available", sourceView.Available, targetView.Available},
+							{"pending", sourceView.Pending, targetView.Pending},
+							{"outputs", sourceView.Outputs, targetView.Outputs},
+							{"proofs", sourceView.Proofs, targetView.Proofs},
+							{"tasks", sourceView.Tasks, targetView.Tasks},
+							{"invoices", sourceView.Invoices, targetView.Invoices},
+							{"locks", sourceView.Locked, targetView.Locked},
+						} {
+							missing, extra, changed := 0, 0, 0
+							for key, value := range field.source {
+								other, exists := field.target[key]
+								if !exists {
+									missing++
+								} else if other != value {
+									changed++
+								}
+							}
+							for key := range field.target {
+								if _, exists := field.source[key]; !exists {
+									extra++
+								}
+							}
+							t.Logf("core-e2e: cold recovery field=%s equal=%t count=%d/%d missing=%d extra=%d changed=%d",
+								field.name, coreDigest(field.source) == coreDigest(field.target),
+								len(field.source), len(field.target), missing, extra, changed)
+						}
+						if refreshResult != nil {
+							t.Logf("core-e2e: cold recovery refresh settled=%d pending=%d reorged=%d conflicted=%d unresolved=%d inconsistent=%d",
+								refreshResult.Settled, refreshResult.Pending, refreshResult.Reorged,
+								refreshResult.Conflicted, refreshResult.Unresolved, len(refreshResult.Inconsistent))
+						}
 					}
 					require.Equal(t, coreDigest(sourceView), coreDigest(targetView), "every scope's proofs, ownership, readiness and locks must survive restart and fresh verification")
 				}

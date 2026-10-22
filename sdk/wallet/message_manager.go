@@ -127,24 +127,34 @@ func decodeAccountMessagePayload(encoded []byte) (*AccountMessagePayload, error)
 }
 
 func (p *Manager) currentCoreNodeID() (string, error) {
-	if p == nil || p.serverNode == nil || p.serverNode.NodeId == nil {
+	node := p.getAccountServiceNode()
+	return accountServiceCoreNodeID(node)
+}
+
+func accountServiceCoreNodeID(node *Node) (string, error) {
+	if node == nil || node.NodeId == nil || node.Pubkey == nil {
 		return "", ErrMessageServiceUnavailable
 	}
-	if p.ServerIsBootstrapNode() {
+	if node.NodeType == BOOTSTRAP_NODE ||
+		hex.EncodeToString(node.NodeId.SerializeCompressed()) == indexer.GetBootstrapPubKey() ||
+		hex.EncodeToString(node.Pubkey.SerializeCompressed()) == indexer.GetBootstrapPubKey() {
 		return "", fmt.Errorf("%w: bootstrap node is not an account service CoreNode", ErrMessageServiceUnavailable)
 	}
-	return hex.EncodeToString(p.serverNode.NodeId.SerializeCompressed()), nil
+	return hex.EncodeToString(node.NodeId.SerializeCompressed()), nil
 }
 
 func (p *Manager) messageServiceClient() (MessageServiceRPCClient, string, error) {
-	coreID, err := p.currentCoreNodeID()
+	// Capture the client and identity together. Account routing can be configured
+	// independently of the channel's bootstrap/co-signing peer.
+	node := p.getAccountServiceNode()
+	coreID, err := accountServiceCoreNodeID(node)
 	if err != nil {
 		return nil, "", err
 	}
-	if p.serverNode.client == nil {
+	if node.client == nil {
 		return nil, "", ErrMessageServiceUnavailable
 	}
-	client, ok := p.serverNode.client.(MessageServiceRPCClient)
+	client, ok := node.client.(MessageServiceRPCClient)
 	if !ok {
 		return nil, "", ErrMessageServiceUnavailable
 	}
