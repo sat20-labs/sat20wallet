@@ -533,8 +533,8 @@ func (s *ProjectionStore) DiscardValidatedObject(consignmentHash string) error {
 	return batch.Flush()
 }
 
-// SavePendingTransfer atomically persists private seal data, the signed
-// witness transaction and both recipient/local consignments before relay or
+// SavePendingTransfer atomically persists private seal data, the unsigned
+// witness transaction/PSBT and both recipient/local consignments before relay or
 // broadcast is allowed.
 func (s *ProjectionStore) SavePendingTransfer(pending *PendingTransfer) error {
 	return s.SavePendingTransfers([]*PendingTransfer{pending})

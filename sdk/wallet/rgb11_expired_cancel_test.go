@@ -2,7 +2,6 @@ package wallet
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -647,25 +646,5 @@ func TestCancelExpiredRGB11TransferRequiresConfiguredRecovery(t *testing.T) {
 	fixture := newExpiredCancelFixture(t, 1)
 	if err := fixture.manager.CancelExpiredRGB11Transfer(fixture.transferIDs[0]); !errors.Is(err, ErrDKVSPathNotSynced) {
 		t.Fatalf("unconfigured public cancellation: %v", err)
-	}
-}
-
-func TestRefreshRGB11StateDetectsLateExpiredWitnessWithoutSignedTx(t *testing.T) {
-	fixture := newExpiredCancelFixture(t, 1)
-	if err := fixture.manager.rgbManager.CancelExpiredRGB11Transfer(fixture.transferIDs[0]); err != nil {
-		t.Fatal(err)
-	}
-	assertExpiredTombstone(t, fixture)
-	fixture.evidence.status = &rgb11wallet.BitcoinTxStatus{TxID: fixture.witnessTxID, InMempool: true}
-	result, err := fixture.manager.rgbManager.RefreshRGB11State(context.Background())
-	if !errors.Is(err, ErrRGB11Inconsistent) || result == nil || result.Conflicted != 1 {
-		t.Fatalf("late witness was not detected: result=%+v err=%v", result, err)
-	}
-	pending, loadErr := fixture.manager.rgbManager.projectionStore.LoadPendingTransfer(fixture.transferIDs[0])
-	if loadErr != nil {
-		t.Fatal(loadErr)
-	}
-	if pending.State.Status != "conflicted" || pending.State.AckStatus != "invalidated" || len(pending.SignedTx) != 0 {
-		t.Fatalf("unexpected late witness tombstone: %+v", pending.State)
 	}
 }

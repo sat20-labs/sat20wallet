@@ -3290,7 +3290,7 @@ func (p *rgb11Manager) prepareRGB11TransferForEndpoints(ctx context.Context, req
 	if p.channelSend != nil {
 		changeScript = p.channelSend.pkScript
 	}
-	tx, prevFetcher, inputOutpoints, taprootRoots, _, err := p.buildRGB11WitnessTx(
+	tx, prevFetcher, inputOutpoints, _, _, err := p.buildRGB11WitnessTx(
 		selected, recipientScripts, changeScript, anchors.OpretScript(mpcCommitment), request.FeeRate,
 	)
 	if err != nil {
@@ -3312,19 +3312,15 @@ func (p *rgb11Manager) prepareRGB11TransferForEndpoints(ctx context.Context, req
 			_ = p.utxoLockerL1.ReleaseReservation(reserved, reservationID)
 		}
 	}()
-	packet, signedTx, signedPSBT, err := p.signRGB11PSBT(
+	packet, signedTx, signedPSBT, err := p.buildRGB11PSBT(
 		tx, prevFetcher, [32]byte(contractID), transitionCommitment.OperationID,
-		transition.Encoded, bundleCommitment.BundleID, mpcProof, mpcCommitment, inputs, taprootRoots,
+		transition.Encoded, bundleCommitment.BundleID, mpcProof, mpcCommitment, inputs,
 	)
 	if err != nil {
 		return nil, err
 	}
-	// The standard non-donation flow gives recipients the unsigned public
-	// witness needed to validate the assigned output, while the fully signed
-	// transaction remains private to the sender until all ACKs are collected.
-	// A different txid here would make that separation unsafe (for example, an
-	// input that requires a signatureScript), so reject it instead of producing
-	// a consignment anchored to a transaction the sender cannot later broadcast.
+	// Prepare never signs a Bitcoin spend. The unsigned witness fixes the RGB
+	// commitment and txid; the broadcast boundary signs the exact same body.
 	if packet == nil || packet.UnsignedTx == nil || packet.UnsignedTx.TxID() != signedTx.TxID() {
 		return nil, ErrRGB11Inconsistent
 	}
@@ -3944,10 +3940,10 @@ func (p *rgb11Manager) buildRGB11WitnessTx(selected []rgb11SpendAllocation, reci
 	}
 }
 
-func (p *rgb11Manager) signRGB11PSBT(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher,
+func (p *rgb11Manager) buildRGB11PSBT(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher,
 	contractID, transitionID [32]byte, transition []byte, bundleID [32]byte,
 	mpcProof anchors.MPCProof, mpcCommitment [32]byte,
-	inputs []operations.TransitionInput, signingKeys map[int]RGB11InputSigningKey) (*psbt.Packet, *wire.MsgTx, []byte, error) {
+	inputs []operations.TransitionInput) (*psbt.Packet, *wire.MsgTx, []byte, error) {
 	packet, err := CreatePsbt(tx, prevFetcher, nil)
 	if err != nil {
 		return nil, nil, nil, err
@@ -4019,43 +4015,11 @@ func (p *rgb11Manager) signRGB11PSBT(tx *wire.MsgTx, prevFetcher txscript.PrevOu
 		&psbt.Unknown{Key: opretHostKey, Value: []byte{1}},
 		&psbt.Unknown{Key: opretCommitmentKey, Value: append([]byte(nil), mpcCommitment[:]...)},
 	)
-	if p.channelSend != nil {
-		var encoded bytes.Buffer
-		if err := packet.Serialize(&encoded); err != nil {
-			return nil, nil, nil, err
-		}
-		return packet, tx.Copy(), encoded.Bytes(), nil
-	}
-	if len(signingKeys) == 0 {
-		if err := p.wallet.SignPsbt(packet); err != nil {
-			return nil, nil, nil, err
-		}
-	} else {
-		signer, ok := p.wallet.(interface {
-			SignRGB11Psbt(*psbt.Packet, map[int]RGB11InputSigningKey) error
-		})
-		if !ok {
-			return nil, nil, nil, fmt.Errorf("active wallet does not support RGB11 input signing")
-		}
-		if err := signer.SignRGB11Psbt(packet, signingKeys); err != nil {
-			return nil, nil, nil, err
-		}
-	}
-	if err := psbt.MaybeFinalizeAll(packet); err != nil {
-		return nil, nil, nil, err
-	}
 	var encoded bytes.Buffer
 	if err := packet.Serialize(&encoded); err != nil {
 		return nil, nil, nil, err
 	}
-	finalTx, err := psbt.Extract(packet)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	if err := VerifySignedTx(finalTx, prevFetcher); err != nil {
-		return nil, nil, nil, err
-	}
-	return packet, finalTx, encoded.Bytes(), nil
+	return packet, tx.Copy(), encoded.Bytes(), nil
 }
 
 func queryValue(invoice *invoicing.Invoice, key string) string {

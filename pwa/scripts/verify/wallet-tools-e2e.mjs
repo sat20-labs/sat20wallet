@@ -1,13 +1,14 @@
+import { isDeepStrictEqual } from 'node:util'
 import assert from 'node:assert/strict'
 import { expect } from '@playwright/test'
 
-// Real Tools clicks, bundled solc, WASM signatures and canonical contract
+// Real Tools clicks, precompiled Solidity fixtures, WASM signatures and canonical contract
 // execution. This suite runs after POS and before the final node-stake cases.
 export const requiredPwaToolsCases = [
   'Tools PWA: deploy and fund an Exchange template through wallet pages',
   'Tools PWA: Faucet sends sats and receives actual contract-settled GAS',
   'Tools PWA: template close is signed through the page and settles remaining GAS',
-  'Tools PWA: bundled Solidity compiler deploys the current SDK probe on chain',
+  'Tools PWA: precompiled Solidity fixture deploys the current SDK probe on chain',
   'Tools PWA: EVM call changes canonical state and appears in page history',
   'Tools PWA: Agent configuration rejects an unsafe source before signing',
   'Tools PWA: direct WASM reconciles Exchange index queries and deployed service status',
@@ -34,7 +35,7 @@ export async function runPwaToolsCases(t, fixture) {
   const { check, device, walletCall } = t
   const actor = fixture.basicWallet
   assert.ok(actor?.mnemonic && fixture.recipient?.mnemonic)
-  assert.ok(fixture.tools?.evmSource && fixture.tools.gasAsset)
+  assert.ok(fixture.tools?.evmInitCode && fixture.tools.gasAsset)
   assert.equal(fixture.config.Chain, 'testnet')
   const controller = new URL(fixture.control_url)
   assert.equal(controller.protocol, 'http:')
@@ -379,15 +380,11 @@ export async function runPwaToolsCases(t, fixture) {
     await check(requiredPwaToolsCases[3], async () => {
       page = await importWallet(actor)
       await deployForm('EVM', 'Standard EVM AMM')
-      await fill('Solidity source', fixture.tools.evmSource, 'textarea')
-      await fill('Contract name', fixture.tools.evmContractName)
-      await fill('Constructor args JSON', JSON.stringify([gas, fixture.asset.key]))
-      await panel().getByRole('button', { name: 'Generate init code', exact: true }).click()
-      await expect(panel().getByText(`Compiled contract: ${fixture.tools.evmContractName}`, { exact: true })).toBeVisible({ timeout: 120000 })
-      await expect(panel().getByText(/^Browser compiler version: 0\.8\./)).toBeVisible()
-      await expect(field('Init code hex').locator('textarea')).toHaveValue(/^0x[0-9a-f]+$/i)
+      assert.match(fixture.tools.evmInitCode, /^0x[0-9a-f]+$/i)
+      await fill('Init code hex', fixture.tools.evmInitCode, 'textarea')
+      await expect(field('Init code hex').locator('textarea')).toHaveValue(fixture.tools.evmInitCode)
       evm = await submitDeploy('Standard EVM AMM')
-      assert.equal(evm.sourceVerification?.verified, false, 'local compiler output must not claim node source verification')
+      assert.notEqual(evm.sourceVerification?.verified, true, 'a supplied artifact must not claim node source verification')
       await expect.poll(async () => findField(await contractRead('getContractState', evm.contractAddress), 'custom')?.counter, poll).toBe(0)
       await openContract(evm.contractAddress)
       await historyThroughUI(evm.contractAddress, evm.txid)
@@ -530,11 +527,22 @@ export async function runPwaToolsCases(t, fixture) {
         'Core has no deployed service contract to inspect')
       const serverURL = fixture.publicContracts['::']
       assert.ok(serverURL && serverContracts.contractURLs.includes(serverURL), 'the confirmed fixture service contract is missing')
-      const status = await walletCall(page, 'getDeployedContractStatus', serverURL)
-      assert.ok(typeof status.contractStatus === 'string' && status.contractStatus.length > 0)
-      const parsedStatus = JSON.parse(status.contractStatus)
-      assert.ok(parsedStatus && typeof parsedStatus === 'object', 'Core contract status is not valid JSON')
-      assert.deepEqual(parsedStatus, JSON.parse((await serverQuery(`/info/contract/${encodeURIComponent(serverURL)}`)).status))
+      // Mining can advance currentBlock between the WASM and HTTP reads.
+      // Compare the complete objects only inside a stable canonical snapshot.
+      let comparedStatus = false
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const beforeStatus = JSON.parse((await serverQuery(`/info/contract/${encodeURIComponent(serverURL)}`)).status)
+        const status = await walletCall(page, 'getDeployedContractStatus', serverURL)
+        assert.ok(typeof status.contractStatus === 'string' && status.contractStatus.length > 0)
+        const parsedStatus = JSON.parse(status.contractStatus)
+        assert.ok(parsedStatus && typeof parsedStatus === 'object', 'Core contract status is not valid JSON')
+        const afterStatus = JSON.parse((await serverQuery(`/info/contract/${encodeURIComponent(serverURL)}`)).status)
+        if (!isDeepStrictEqual(beforeStatus, afterStatus)) continue
+        assert.deepEqual(parsedStatus, afterStatus, 'WASM status disagrees with a stable canonical snapshot')
+        comparedStatus = true
+        break
+      }
+      assert.ok(comparedStatus, 'Core status never stabilized across five WASM/HTTP comparisons')
       const serverHistory = await walletCall(page, 'getContractInvokeHistoryInServer', serverURL, 0, 100)
       assert.ok(typeof serverHistory.history === 'string' && serverHistory.history.length > 0)
       const history = JSON.parse(serverHistory.history)

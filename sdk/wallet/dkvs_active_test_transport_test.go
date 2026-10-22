@@ -55,8 +55,16 @@ func (h *rgb11MemoryDKVSHTTP) activePage(request dkvs.ActiveSyncRequest) (*dkvs.
 	}
 	if request.Full {
 		h.snapshotCalls++
+		if h.snapshotsByPrefix == nil {
+			h.snapshotsByPrefix = make(map[string]int)
+		}
+		h.snapshotsByPrefix[scope.Prefix]++
 	} else {
 		h.deltaCalls++
+		if h.deltasByPrefix == nil {
+			h.deltasByPrefix = make(map[string]int)
+		}
+		h.deltasByPrefix[scope.Prefix]++
 	}
 	sort.Slice(current, func(a, b int) bool {
 		if !request.Full && h.changedAt[current[a].Key] != h.changedAt[current[b].Key] {

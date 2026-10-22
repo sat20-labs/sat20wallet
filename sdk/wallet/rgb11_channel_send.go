@@ -272,13 +272,17 @@ func sameRGB11ChannelSend(a, b *rgb11wallet.ChannelSendData) bool {
 		bytes.Equal(a.WitnessScript, b.WitnessScript) && bytes.Equal(a.PeerPubKey, b.PeerPubKey) && bytes.Equal(a.MoreData, b.MoreData)
 }
 
-// A peer may have broadcast successfully and lost its response. Recover the
+// A peer or another device may have broadcast and lost its response. Recover the
 // complete witness from Bitcoin using the already committed txid; never ask
 // for a different transaction or release the shared RGB carrier.
-func (p *rgb11Manager) recoverRGB11ChannelWitness(batch []*rgb11wallet.PendingTransfer) error {
+func (p *rgb11Manager) recoverRGB11BroadcastWitness(batch []*rgb11wallet.PendingTransfer) error {
 	baseline := cloneRGB11PendingBatch(batch)
 	first := batch[0]
-	if first.ChannelSend == nil || first.ChannelSend.Signed {
+	stored, err := decodeRGB11BroadcastTx(first.SignedTx)
+	if err != nil {
+		return err
+	}
+	if stored.HasWitness() && (first.ChannelSend == nil || first.ChannelSend.Signed) {
 		return nil
 	}
 	raw, err := p.evidence.GetRawTx(first.State.WitnessTxID)
@@ -296,7 +300,7 @@ func (p *rgb11Manager) recoverRGB11ChannelWitness(batch []*rgb11wallet.PendingTr
 	if err != nil {
 		return err
 	}
-	if packet.UnsignedTx.TxID() != tx.TxID() || len(packet.Inputs) != len(tx.TxIn) {
+	if !sameRGB11UnsignedTx(packet.UnsignedTx, tx) || !sameRGB11UnsignedTx(stored, tx) || len(packet.Inputs) != len(tx.TxIn) {
 		return ErrRGB11Inconsistent
 	}
 	prevFetcher := txscript.NewMultiPrevOutFetcher(nil)
@@ -316,7 +320,9 @@ func (p *rgb11Manager) recoverRGB11ChannelWitness(batch []*rgb11wallet.PendingTr
 	}
 	for _, item := range batch {
 		item.SignedTx = append([]byte(nil), raw...)
-		item.ChannelSend.Signed = true
+		if item.ChannelSend != nil {
+			item.ChannelSend.Signed = true
+		}
 	}
 	return p.projectionStore.CompareAndSavePendingTransferStates(baseline, batch)
 }

@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/btcsuite/btcd/btcutil/psbt"
+	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
@@ -76,8 +78,55 @@ func setRGB11BroadcastTestStore(t testing.TB, manager *Manager, db indexer.KVDB)
 	return store
 }
 
-func TestRGB11BroadcastUnknownPersistsIrreversibleIntent(t *testing.T) {
+// Broadcast-response tests begin after authorization and signing, using a real
+// Bitcoin signature. The expired-cancel fixture itself remains unsigned.
+func newRGB11BroadcastFixture(t *testing.T) *expiredCancelFixture {
+	t.Helper()
 	fixture := newExpiredCancelFixture(t, 1)
+	runtime := fixture.manager.rgbManager
+	pending, err := runtime.projectionStore.LoadPendingTransfer(fixture.transferIDs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	packet, err := psbt.NewFromRawBytes(bytes.NewReader(pending.SignedPSBT), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	script, err := AddrToPkScript(fixture.manager.wallet.GetAddress(), &chaincfg.TestNet4Params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	packet.Inputs[0].WitnessUtxo = wire.NewTxOut(100_000, script)
+	var prepared bytes.Buffer
+	if err := packet.Serialize(&prepared); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.manager.wallet.SignPsbt(packet); err != nil {
+		t.Fatal(err)
+	}
+	if err := psbt.MaybeFinalizeAll(packet); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := psbt.Extract(packet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var signed bytes.Buffer
+	if err := tx.Serialize(&signed); err != nil {
+		t.Fatal(err)
+	}
+	pending.SignedTx, pending.SignedPSBT = signed.Bytes(), prepared.Bytes()
+	pending.State.Status, pending.State.AckStatus = "delivered", "accepted"
+	pending.State.DeliveryAcknowledged = true
+	pending.State.DeliveryRecordKey, pending.State.DeliveryRecordHash = "/mail/test/msg", "durable-record-hash"
+	if err := runtime.projectionStore.SavePendingTransferState(pending); err != nil {
+		t.Fatal(err)
+	}
+	return fixture
+}
+
+func TestRGB11BroadcastUnknownPersistsIrreversibleIntent(t *testing.T) {
+	fixture := newRGB11BroadcastFixture(t)
 	evidence := &controlledRGB11BroadcastEvidence{
 		BitcoinEvidenceProvider: fixture.evidence,
 		err:                     context.DeadlineExceeded,
@@ -93,6 +142,9 @@ func TestRGB11BroadcastUnknownPersistsIrreversibleIntent(t *testing.T) {
 	txID, err := runtime.broadcastRGB11PendingBatch([]*rgb11wallet.PendingTransfer{pending}, nil)
 	if !errors.Is(err, ErrRGB11BroadcastResultUnknown) || txID != fixture.witnessTxID {
 		t.Fatalf("unexpected ambiguous broadcast result: txid=%s err=%v", txID, err)
+	}
+	if evidence.calls() != 1 {
+		t.Fatalf("ambiguous-response fixture never reached broadcast: calls=%d", evidence.calls())
 	}
 	stored, err := runtime.projectionStore.LoadPendingTransfer(fixture.transferIDs[0])
 	if err != nil {
@@ -112,7 +164,7 @@ func TestRGB11BroadcastUnknownPersistsIrreversibleIntent(t *testing.T) {
 }
 
 func TestRGB11BroadcastEmptyBackendTxIDRemainsUnknown(t *testing.T) {
-	fixture := newExpiredCancelFixture(t, 1)
+	fixture := newRGB11BroadcastFixture(t)
 	evidence := &controlledRGB11BroadcastEvidence{
 		BitcoinEvidenceProvider: fixture.evidence,
 		// A successful response without the expected txid is not proof that
@@ -169,10 +221,21 @@ func TestRGB11BroadcastPersistenceFailureRecoversFromBitcoinEvidence(t *testing.
 	runtime := sender.rgbManager
 	runtime.evidence = evidence
 	runtime.scopeStates = nil
-	failingDB := &failNthFlushDB{KVDB: sender.db, failAt: 2}
+	failingDB := &failNthFlushDB{KVDB: sender.db}
+	evidence.onBroadcast = func() {
+		failingDB.mu.Lock()
+		failingDB.failAt = failingDB.count + 1
+		failingDB.mu.Unlock()
+	}
 	store := setRGB11BroadcastTestStore(t, sender, failingDB)
 	pending, err := store.LoadPendingTransfer(prepared.State.TransferID)
 	if err != nil {
+		t.Fatal(err)
+	}
+	// The public OOB entry records the explicitly reviewed recipient summary
+	// before reaching this lower broadcast/persistence boundary.
+	pending.State.AckStatus = "accepted-out-of-band"
+	if err := store.SavePendingTransferState(pending); err != nil {
 		t.Fatal(err)
 	}
 
@@ -235,7 +298,7 @@ func TestRGB11BroadcastPersistenceFailureRecoversFromBitcoinEvidence(t *testing.
 }
 
 func TestRGB11AddressBroadcastUsesDurableIntent(t *testing.T) {
-	fixture := newExpiredCancelFixture(t, 1)
+	fixture := newRGB11BroadcastFixture(t)
 	evidence := &controlledRGB11BroadcastEvidence{
 		BitcoinEvidenceProvider: fixture.evidence,
 		err:                     context.DeadlineExceeded,
@@ -275,7 +338,7 @@ func TestRGB11BroadcastResultPreservesNewerLocalState(t *testing.T) {
 			name = "newer-settled-state"
 		}
 		t.Run(name, func(t *testing.T) {
-			fixture := newExpiredCancelFixture(t, 1)
+			fixture := newRGB11BroadcastFixture(t)
 			manager := fixture.manager.rgbManager
 			evidence := &controlledRGB11BroadcastEvidence{BitcoinEvidenceProvider: fixture.evidence, txID: fixture.witnessTxID}
 			manager.evidence = evidence

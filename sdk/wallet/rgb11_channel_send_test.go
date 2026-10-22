@@ -535,22 +535,22 @@ func TestRGB11ChannelSendRequiresACKAndCoSignsRealP2WSH(t *testing.T) {
 	if sameRGB11BroadcastIntent(unsignedIntent, pending) {
 		t.Fatal("joint signing unexpectedly preserved byte-identical unsigned transaction intent")
 	}
-	if !validRGB11ChannelSigningTransition(unsignedIntent, pending) {
+	if !validRGB11SigningTransition(unsignedIntent, pending) {
 		t.Fatal("verified same-channel unsigned-to-signed transition was not recognized")
 	}
-	if adopted, complete, err := sender.rgbManager.reloadRGB11BroadcastIntentWithChannelSign(
+	if adopted, complete, err := sender.rgbManager.reloadRGB11BroadcastIntentWithSigning(
 		[]*rgb11wallet.PendingTransfer{unsignedIntent}, true); err != nil || !complete || len(adopted) != 1 {
 		t.Fatalf("inner-barrier reload rejected the completed same-channel witness: adopted=%d complete=%t err=%v",
 			len(adopted), complete, err)
 	}
 	changedChannelData := cloneRGB11BroadcastIntent(pending)
 	changedChannelData.ChannelSend.MoreData = append(changedChannelData.ChannelSend.MoreData, 0)
-	if validRGB11ChannelSigningTransition(unsignedIntent, changedChannelData) {
+	if validRGB11SigningTransition(unsignedIntent, changedChannelData) {
 		t.Fatal("channel signing transition accepted changed MoreData")
 	}
 	invalidSignature := cloneRGB11BroadcastIntent(pending)
 	invalidSignature.SignedTx[len(invalidSignature.SignedTx)-1] ^= 1
-	if validRGB11ChannelSigningTransition(unsignedIntent, invalidSignature) {
+	if validRGB11SigningTransition(unsignedIntent, invalidSignature) {
 		t.Fatal("channel signing transition accepted an invalid witness signature")
 	}
 	if len(finalTx.TxIn) != 1 || len(finalTx.TxIn[0].Witness) != 4 ||

@@ -20,23 +20,25 @@ type rgb11MemoryDKVSHTTP struct {
 	records map[string]*swire.DKVSRecord
 	// Retained only for negative fixtures that inject obsolete payloads. The
 	// current-state endpoint neither populates nor consumes this map.
-	deleted          map[string]dkvsindexer.DKVSKeyState
-	generations      map[string]uint64
-	changedAt        map[string]uint64
-	endpointID       string
-	freeLocal        dkvsindexer.FreeLocalCachePolicy
-	maxRecords       int
-	postGate         <-chan struct{}
-	postCommitErr    error
-	autopayState     *dkvsindexer.AutopayContractState
-	autopayError     error
-	bestHeight       int64
-	bestHeightErr    error
-	statusCalls      int
-	snapshotCalls    int
-	deltaCalls       int
-	deltaUnavailable bool
-	readCalls        int
+	deleted           map[string]dkvsindexer.DKVSKeyState
+	generations       map[string]uint64
+	changedAt         map[string]uint64
+	endpointID        string
+	freeLocal         dkvsindexer.FreeLocalCachePolicy
+	maxRecords        int
+	postGate          <-chan struct{}
+	postCommitErr     error
+	autopayState      *dkvsindexer.AutopayContractState
+	autopayError      error
+	bestHeight        int64
+	bestHeightErr     error
+	statusCalls       int
+	snapshotCalls     int
+	deltaCalls        int
+	snapshotsByPrefix map[string]int
+	deltasByPrefix    map[string]int
+	deltaUnavailable  bool
+	readCalls         int
 }
 
 func newRGB11MemoryDKVSHTTP() *rgb11MemoryDKVSHTTP {
@@ -62,13 +64,16 @@ func (h *rgb11MemoryDKVSHTTP) DKVSClientConfig() (*dkvsindexer.ClientConfig, err
 func (h *rgb11MemoryDKVSHTTP) SendGetRequest(url *URL) ([]byte, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if strings.HasSuffix(url.Path, "/btc/block/bestblockheight") {
+	if strings.HasSuffix(url.Path, "/btc/block/bestblockheight") || strings.HasSuffix(url.Path, "/bestheight") {
 		if h.bestHeightErr != nil {
 			return nil, h.bestHeightErr
 		}
 		height := h.bestHeight
 		if height == 0 {
 			height = 1
+		}
+		if strings.HasSuffix(url.Path, "/bestheight") {
+			return rgb11DKVSResponse(0, "ok", map[string]int64{"height": height}, "", 0)
 		}
 		return rgb11DKVSResponse(0, "ok", height, "", 0)
 	}

@@ -32,6 +32,11 @@ type sdkContractReviewFixture struct {
 func newSDKContractReviewFixture(t *testing.T) *sdkContractReviewFixture {
     t.Helper()
     f := newTemplateFixture(t, map[string]int64{reviewAssetA: 20000, reviewAssetB: 20000})
+    // Establish this fixture's SDK network before deriving payer addresses;
+    // a preceding Bitcoin regtest case may have selected a different chain.
+    owner, _ := newWalletManagerForNode(t, f.Network.Core, dkvsClientMnemonic)
+    other, _ := newWalletManagerForNode(t, f.Network.Core, messageTopicMemberMnemonic)
+    reader, _ := newWalletManagerForNode(t, f.Network.Bootstrap, "")
     ownerKey := newDKVSKeyPathActor(t, keyFromMnemonic(t, dkvsClientMnemonic, 0))
     otherKey := newDKVSKeyPathActor(t, keyFromMnemonic(t, messageTopicMemberMnemonic, 0))
     var amounts, values []int64
@@ -45,9 +50,6 @@ func newSDKContractReviewFixture(t *testing.T) *sdkContractReviewFixture {
         splitToDKVSKeyPathActors(t, f, f.assetAnchors[asset], asset,
             []int64{10000, 10000}, []int64{100000, 100000}, []*dkvsKeyPathActor{ownerKey, otherKey})
     }
-    owner, _ := newWalletManagerForNode(t, f.Network.Core, dkvsClientMnemonic)
-    other, _ := newWalletManagerForNode(t, f.Network.Core, messageTopicMemberMnemonic)
-    reader, _ := newWalletManagerForNode(t, f.Network.Bootstrap, "")
     require.Equal(t, ownerKey.Address, owner.GetWallet().GetAddress())
     require.Equal(t, otherKey.Address, other.GetWallet().GetAddress())
     return &sdkContractReviewFixture{network: f.Network, owner: owner, other: other, reader: reader}

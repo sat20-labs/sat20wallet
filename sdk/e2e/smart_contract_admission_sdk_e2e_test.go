@@ -133,7 +133,7 @@ func TestSDKSmartContractsAdmission(t *testing.T) {
 	// Gas admission is on a separate funded contract and is last: the red
 	// implementation can poison mining, but cannot contaminate earlier cases.
 	t.Run("raw_below_base_gas_is_rejected_by_node_not_only_encoder", func(t *testing.T) {
-		artifact, err := CompileSolidityFile("testdata/contracts/SDKReviewProbe.sol", "SDKReviewProbe", SolidityCompileOptions{})
+		artifact, err := LoadSolidityArtifact("testdata/contracts/SDKReviewProbe.sol", "SDKReviewProbe")
 		require.NoError(t, err)
 		address := f.deployEVM(t, appendSolidityConstructorArgs(artifact.Bytecode, evmABIString(bound), evmABIString(bound)))
 		inputs, total, prev := sdkAdmissionInputs(t, f, wallet.GetGasAssetName(), 10000)

@@ -264,19 +264,21 @@ func TestRGB11StandardOutOfBandPrepareBroadcastAccept(t *testing.T) {
 	if err := witness.Deserialize(bytes.NewReader(pending.SignedTx)); err != nil {
 		t.Fatal(err)
 	}
-	hasSignature := false
-	for _, input := range witness.TxIn {
-		if len(input.SignatureScript) != 0 || len(input.Witness) != 0 {
-			hasSignature = true
-			break
-		}
-	}
-	if !hasSignature {
-		t.Fatal("sender did not retain the signed witness transaction")
-	}
+	assertRGB11UnsignedPending(t, sender.rgbManager, prepared.State.TransferID)
+	unsigned := witness.Copy()
 	witnessTxID, err := sender.BroadcastRGB11OutOfBand([]string{prepared.State.TransferID})
 	if err != nil {
 		t.Fatal(err)
+	}
+	pending, err = sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := witness.Deserialize(bytes.NewReader(pending.SignedTx)); err != nil {
+		t.Fatal(err)
+	}
+	if !witness.HasWitness() || !sameRGB11UnsignedTx(unsigned, witness) {
+		t.Fatal("OOB acceptance did not sign the exact prepared transaction")
 	}
 	recipientOutpoint := witnessTxID + ":1"
 	evidence.mu.Lock()

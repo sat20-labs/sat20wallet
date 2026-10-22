@@ -10,7 +10,7 @@ import (
 )
 
 func TestSDKSmartContractsEVM(t *testing.T) {
-    artifact, err := CompileSolidityFile("testdata/contracts/SDKReviewProbe.sol", "SDKReviewProbe", SolidityCompileOptions{})
+    artifact, err := LoadSolidityArtifact("testdata/contracts/SDKReviewProbe.sol", "SDKReviewProbe")
     require.NoError(t, err)
     f := newSDKContractReviewFixture(t)
     code := appendSolidityConstructorArgs(artifact.Bytecode, evmABIString(reviewAssetA), evmABIString(reviewAssetB))
@@ -109,7 +109,7 @@ func TestSDKSmartContractsEVM(t *testing.T) {
         })
     }
     t.Run("constructor_revert_has_no_runtime_and_refunds_funding", func(t *testing.T) {
-        failed, err := CompileSolidityFile("testdata/contracts/SDKReviewProbe.sol", "SDKReviewRevertingConstructor", SolidityCompileOptions{})
+        failed, err := LoadSolidityArtifact("testdata/contracts/SDKReviewProbe.sol", "SDKReviewRevertingConstructor")
         require.NoError(t, err)
         result, err := f.owner.DeployUnifiedContract(&wallet.ContractDeployRequest{ContractType: wallet.ContractTypeEVM,
             ContractContent: hex.EncodeToString(failed.Bytecode), ContentEncoding: "hex", GasLimit: contract.DeployBaseGas, FundingValue: 100,
@@ -150,7 +150,7 @@ func TestSDKSmartContractsEVM(t *testing.T) {
 // Legal execution exhaustion and invalid admission are separate assertions.
 // Invalid gas runs last on isolated nodes so it cannot contaminate later tests.
 func TestSDKSmartContractsOutOfGas(t *testing.T) {
-    artifact, err := CompileSolidityFile("testdata/contracts/SDKReviewProbe.sol", "SDKReviewProbe", SolidityCompileOptions{})
+    artifact, err := LoadSolidityArtifact("testdata/contracts/SDKReviewProbe.sol", "SDKReviewProbe")
     require.NoError(t, err)
     f := newSDKContractReviewFixture(t)
     code := appendSolidityConstructorArgs(artifact.Bytecode, evmABIString(reviewAssetA), evmABIString(reviewAssetB))

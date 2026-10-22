@@ -7,7 +7,7 @@ export const requiredPwaRgbCases = [
   'RGB PWA: issue a real NIA contract and protect its confirmed carrier',
   'RGB PWA: export and import a standard contract without crediting the recipient',
   'RGB PWA: an out-of-band witness invoice survives authenticated reload',
-  'RGB PWA: prepare and sign a transfer without broadcasting before receiver validation',
+  'RGB PWA: prepare an unsigned transfer before receiver validation',
   'RGB PWA: receiver validation persists the same package and grants no spendable balance',
   'RGB PWA: restored sender matches the receiver summary before broadcasting the actual transaction',
   'RGB PWA: confirmed receive conserves RGB supply and persists the actual carrier proofs',
@@ -270,6 +270,13 @@ async function runPwaRgbCaseGroup(t, fixture, udaOnly) {
           direction: transfer.direction, asset: transfer.asset?.Name, status: transfer.status,
           witness_txid: transfer.witness_txid, reject_reason: transfer.reject_reason,
           input_outpoints: transfer.input_outpoints, output_outpoints: transfer.output_outpoints })) }))
+      // One diagnostic refresh after failure; the assertion below still uses
+      // the original failed snapshot. This must never become retry-to-pass.
+      const diagnostic = await sender.evaluate(async () => {
+        const [error, result] = await window.sat20.refreshRGB11State()
+        return { error: error?.message ?? null, result: result?.result ?? null }
+      }).catch(error => ({ error: error.message, result: null }))
+      console.error(JSON.stringify({ observation: 'RGB failed issuance diagnostic refresh', schema, ...diagnostic }))
     }
     assert.equal(issued.consistency_status, 'ok')
     assert.equal(sum(issued.available_assets, key), BigInt(schema === 'UDA' ? '1' : supply))
@@ -331,7 +338,7 @@ async function runPwaRgbCaseGroup(t, fixture, udaOnly) {
     await send.getByRole('button', { name: 'Invoice', exact: true }).click()
     await send.getByPlaceholder('1', { exact: true }).fill(amount)
     await send.locator('textarea').first().fill(invoiceText)
-    await send.getByRole('button', { name: 'Build and Sign', exact: true }).click()
+    await send.getByRole('button', { name: 'Prepare Transfer', exact: true }).click()
     await expect(send.getByRole('button', { name: 'Download armored consignment for PWA', exact: true })).toBeVisible({ timeout: 180000 })
     return send
   }
@@ -862,9 +869,17 @@ async function runPwaRgbCaseGroup(t, fixture, udaOnly) {
       const unspent = await evidence('/v3/bitcoin/utxos/status', { outpoints: prepared.input_outpoints })
       assert.ok(unspent.every(output => output.exists && output.unspent))
       sameTxIDs(before, await control('snapshot'))
+      const cancelledState = await state(sender)
+      console.log(JSON.stringify({ observation: 'RGB after unbroadcast cancellation',
+        consistency: cancelledState.consistency_status, sync: cancelledState.sync_status }))
     })
 
     await check(requiredPwaRgbCases[8], async () => {
+      if (sender) {
+        const beforeIFA = await state(sender)
+        console.log(JSON.stringify({ observation: 'RGB before IFA issuance',
+          consistency: beforeIFA.consistency_status, sync: beforeIFA.sync_status }))
+      }
       const issued = await issue('IFA', 'PWAIFA', '1000', '9000')
       const controlKey = issued.key.replace(/^rgb11:f:/, 'rgb11:control:')
       assert.equal(sum(issued.issued.available_assets, controlKey), 9000n)

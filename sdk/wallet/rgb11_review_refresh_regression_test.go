@@ -241,8 +241,24 @@ func TestRGB11AddressMetadataIncludedInFirstAtomicCommit(t *testing.T) {
 					}
 					for _, state := range states {
 						if !state.AddressMode || state.SenderAccountID == "" || state.ReceiverAccountID == "" ||
-							state.DeliveryRecordKey == "" || state.Invoice != "" || !state.SyntheticInvoiceRemoved {
+							state.Invoice != "" || !state.SyntheticInvoiceRemoved {
 							t.Errorf("first %s commit omitted address metadata", state.Direction)
+						}
+						if state.Direction == "send" {
+							relay, relayErr := dkvsindexer.MailMsgKey(state.ReceiverAccountID, state.SenderAccountID, state.AddressMessageID)
+							ack, ackErr := dkvsindexer.MailMsgKey(state.SenderAccountID, state.ReceiverAccountID, state.AddressMessageID)
+							if relayErr != nil || ackErr != nil || state.RelayRecordKey != relay || state.AckRecordKey != ack {
+								t.Error("send commit lost stable business correlation keys")
+							}
+							if state.DeliveryMode == "" {
+								if state.DeliveryRecordKey != "" || state.DeliveryRecordHash != "" {
+									t.Error("undelivered send commit contains a fabricated mailbox receipt")
+								}
+							} else if state.DeliveryRecordKey == "" || state.DeliveryRecordHash == "" {
+								t.Error("delivered send commit omitted actual mailbox receipt")
+							}
+						} else if state.DeliveryRecordKey == "" || state.DeliveryRecordHash == "" {
+							t.Error("first receive commit omitted actual mailbox receipt")
 						}
 					}
 				}
@@ -260,8 +276,18 @@ func TestRGB11AddressMetadataIncludedInFirstAtomicCommit(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, state := range prepared.States {
-				if _, err := sender.rgbManager.deliverRGB11AddressTransferStore(mustRGB11ConfiguredStore(t, sender), state.TransferID, RGB11AddressDeliveryOptions{}); err != nil {
+				if state.DeliveryRecordKey != "" || state.DeliveryRecordHash != "" || state.DeliveryMode != "" {
+					t.Fatal("prepared transfer must not claim a mailbox delivery")
+				}
+				result, err := sender.rgbManager.deliverRGB11AddressTransferStore(mustRGB11ConfiguredStore(t, sender), state.TransferID, RGB11AddressDeliveryOptions{})
+				if err != nil {
 					t.Fatal(err)
+				}
+				persisted, err := sender.rgbManager.projectionStore.LoadPendingTransfer(state.TransferID)
+				if err != nil || result.RecordKey == "" || result.RecordHash == "" || persisted == nil ||
+					persisted.State.DeliveryRecordKey != result.RecordKey || persisted.State.DeliveryRecordHash != result.RecordHash ||
+					persisted.State.RelayRecordKey != state.RelayRecordKey || persisted.State.AckRecordKey != state.AckRecordKey {
+					t.Fatalf("delivered receipt or stable business keys not committed: err=%v", err)
 				}
 			}
 			result, err := recipient.rgbManager.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})

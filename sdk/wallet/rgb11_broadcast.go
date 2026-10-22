@@ -89,6 +89,7 @@ func sameRGB11BroadcastIntent(left, right *rgb11wallet.PendingTransfer) bool {
 	}
 	return sameRGB11BroadcastOperation(left, right) &&
 		bytes.Equal(left.SignedTx, right.SignedTx) &&
+		bytes.Equal(left.SignedPSBT, right.SignedPSBT) &&
 		sameRGB11ChannelSend(left.ChannelSend, right.ChannelSend)
 }
 
@@ -112,10 +113,15 @@ func cloneRGB11BroadcastIntent(pending *rgb11wallet.PendingTransfer) *rgb11walle
 	return &cloned
 }
 
-func validRGB11ChannelSigningTransition(unsigned, signed *rgb11wallet.PendingTransfer) bool {
-	if !sameRGB11BroadcastOperation(unsigned, signed) || unsigned.ChannelSend == nil ||
-		unsigned.ChannelSend.Signed || signed.ChannelSend == nil || !signed.ChannelSend.Signed ||
-		len(unsigned.SignedPSBT) == 0 {
+func validRGB11SigningTransition(unsigned, signed *rgb11wallet.PendingTransfer) bool {
+	if unsigned == nil || signed == nil || !sameRGB11BroadcastOperation(unsigned, signed) || len(unsigned.SignedPSBT) == 0 ||
+		!bytes.Equal(unsigned.SignedPSBT, signed.SignedPSBT) {
+		return false
+	}
+	if signed.State.Status != rgb11StatusBroadcastAttempted && !rgb11BroadcastCompleteStatus(signed.State.Status) {
+		return false
+	}
+	if unsigned.ChannelSend != nil && (unsigned.ChannelSend.Signed || signed.ChannelSend == nil || !signed.ChannelSend.Signed) {
 		return false
 	}
 	packet, err := psbt.NewFromRawBytes(bytes.NewReader(unsigned.SignedPSBT), false)
@@ -124,12 +130,12 @@ func validRGB11ChannelSigningTransition(unsigned, signed *rgb11wallet.PendingTra
 		return false
 	}
 	unsignedTx, err := decodeRGB11BroadcastTx(unsigned.SignedTx)
-	if err != nil || unsignedTx.TxID() != unsigned.State.WitnessTxID ||
+	if err != nil || unsignedTx.HasWitness() || unsignedTx.TxID() != unsigned.State.WitnessTxID ||
 		!sameRGB11UnsignedTx(packet.UnsignedTx, unsignedTx) {
 		return false
 	}
 	signedTx, err := decodeRGB11BroadcastTx(signed.SignedTx)
-	if err != nil || signedTx.TxID() != unsigned.State.WitnessTxID ||
+	if err != nil || !signedTx.HasWitness() || signedTx.TxID() != unsigned.State.WitnessTxID ||
 		!sameRGB11UnsignedTx(unsignedTx, signedTx) {
 		return false
 	}
@@ -146,6 +152,14 @@ func validRGB11ChannelSigningTransition(unsigned, signed *rgb11wallet.PendingTra
 		prevFetcher.AddPrevOut(input.PreviousOutPoint, packet.Inputs[i].WitnessUtxo)
 	}
 	return VerifySignedTx(signedTx, prevFetcher) == nil
+}
+
+func rgb11PendingHasWitness(pending *rgb11wallet.PendingTransfer) bool {
+	if pending == nil {
+		return false
+	}
+	tx, err := decodeRGB11BroadcastTx(pending.SignedTx)
+	return err == nil && tx.HasWitness() && (pending.ChannelSend == nil || pending.ChannelSend.Signed)
 }
 
 func cloneRGB11PendingBatch(pending []*rgb11wallet.PendingTransfer) []*rgb11wallet.PendingTransfer {
@@ -182,11 +196,11 @@ func sameRGB11UnsignedTx(left, right *wire.MsgTx) bool {
 // verifies that the exact tx/batch still has a broadcastable phase locally.
 func (p *rgb11Manager) reloadRGB11BroadcastIntent(expected []*rgb11wallet.PendingTransfer) (
 	[]*rgb11wallet.PendingTransfer, bool, error) {
-	return p.reloadRGB11BroadcastIntentWithChannelSign(expected, false)
+	return p.reloadRGB11BroadcastIntentWithSigning(expected, false)
 }
 
-func (p *rgb11Manager) reloadRGB11BroadcastIntentWithChannelSign(
-	expected []*rgb11wallet.PendingTransfer, allowChannelSign bool,
+func (p *rgb11Manager) reloadRGB11BroadcastIntentWithSigning(
+	expected []*rgb11wallet.PendingTransfer, allowSigning bool,
 ) ([]*rgb11wallet.PendingTransfer, bool, error) {
 	current := make([]*rgb11wallet.PendingTransfer, 0, len(expected))
 	allComplete := len(expected) != 0
@@ -199,8 +213,8 @@ func (p *rgb11Manager) reloadRGB11BroadcastIntentWithChannelSign(
 			return nil, false, err
 		}
 		sameIntent := sameRGB11BroadcastIntent(old, pending)
-		if !sameIntent && allowChannelSign {
-			sameIntent = validRGB11ChannelSigningTransition(old, pending)
+		if !sameIntent && allowSigning {
+			sameIntent = validRGB11SigningTransition(old, pending)
 		}
 		if !sameIntent {
 			return nil, false, ErrRGB11Inconsistent
@@ -256,8 +270,8 @@ func (p *rgb11Manager) broadcastRGB11PendingBatch(
 		}
 	}
 	if allComplete {
-		if first.ChannelSend != nil && !first.ChannelSend.Signed {
-			if err := p.recoverRGB11ChannelWitness(pendingList); err != nil {
+		if !rgb11PendingHasWitness(first) {
+			if err := p.recoverRGB11BroadcastWitness(pendingList); err != nil {
 				return expectedTxID, &RGB11BroadcastResultUnknownError{TxID: expectedTxID, Err: err}
 			}
 		}
@@ -273,7 +287,7 @@ func (p *rgb11Manager) broadcastRGB11PendingBatch(
 			return "", err
 		}
 	}
-	// The signed transaction and every transition dependency must be accepted
+	// The prepared transaction and every transition dependency must be accepted
 	// by the account's CoreNode before the first irreversible backend call.
 	if owner := p.accountManagementOwner(); owner != nil {
 		if err := p.syncRGB11OperationRecovery(context.Background()); err != nil {
@@ -287,8 +301,8 @@ func (p *rgb11Manager) broadcastRGB11PendingBatch(
 	pendingList = currentPending
 	if allComplete {
 		first = pendingList[0]
-		if first.ChannelSend != nil && !first.ChannelSend.Signed {
-			if err := p.recoverRGB11ChannelWitness(pendingList); err != nil {
+		if !rgb11PendingHasWitness(first) {
+			if err := p.recoverRGB11BroadcastWitness(pendingList); err != nil {
 				return expectedTxID, &RGB11BroadcastResultUnknownError{TxID: expectedTxID, Err: err}
 			}
 		}
@@ -305,14 +319,22 @@ func (p *rgb11Manager) broadcastRGB11PendingBatch(
 	_, visible := p.expectedRGB11TransactionStatus(first)
 	var backendTxID string
 	var broadcastErr error
-	if !visible && first.ChannelSend != nil && !first.ChannelSend.Signed {
-		channelSignBaseline := make([]*rgb11wallet.PendingTransfer, 0, len(pendingList))
+	unsignedTx, decodeErr := decodeRGB11BroadcastTx(first.SignedTx)
+	if decodeErr != nil {
+		return "", decodeErr
+	}
+	if !visible && (!unsignedTx.HasWitness() || first.ChannelSend != nil && !first.ChannelSend.Signed) {
+		signBaseline := make([]*rgb11wallet.PendingTransfer, 0, len(pendingList))
 		for _, pending := range pendingList {
-			channelSignBaseline = append(channelSignBaseline, cloneRGB11BroadcastIntent(pending))
+			signBaseline = append(signBaseline, cloneRGB11BroadcastIntent(pending))
 		}
-		broadcastErr = p.signRGB11ChannelBatch(pendingList)
+		if first.ChannelSend != nil {
+			broadcastErr = p.signRGB11ChannelBatch(pendingList)
+		} else {
+			broadcastErr = p.signRGB11OrdinaryBatch(pendingList)
+		}
 		if broadcastErr == nil {
-			// Joint signing changes the private pending payload after the initial
+			// Signing changes the private pending payload after the initial
 			// intent barrier. Persist that exact signed witness under the same
 			// account CAS before making the local backend broadcast attempt.
 			if owner := p.accountManagementOwner(); owner != nil {
@@ -321,7 +343,7 @@ func (p *rgb11Manager) broadcastRGB11PendingBatch(
 			if broadcastErr == nil {
 				var allCompleteAfterSign bool
 				pendingList, allCompleteAfterSign, broadcastErr =
-					p.reloadRGB11BroadcastIntentWithChannelSign(channelSignBaseline, true)
+					p.reloadRGB11BroadcastIntentWithSigning(signBaseline, true)
 				if broadcastErr == nil && allCompleteAfterSign {
 					// A peer or another device may already have completed this exact
 					// witness while joint signing was in flight.
@@ -355,8 +377,8 @@ func (p *rgb11Manager) broadcastRGB11PendingBatch(
 			}
 		}
 	}
-	if first.ChannelSend != nil && !first.ChannelSend.Signed {
-		if err := p.recoverRGB11ChannelWitness(pendingList); err != nil {
+	if !rgb11PendingHasWitness(first) {
+		if err := p.recoverRGB11BroadcastWitness(pendingList); err != nil {
 			return expectedTxID, &RGB11BroadcastResultUnknownError{TxID: expectedTxID, Err: err}
 		}
 	}
@@ -381,4 +403,124 @@ func (p *rgb11Manager) broadcastRGB11PendingBatch(
 		return expectedTxID, &RGB11BroadcastPersistenceError{TxID: expectedTxID, Err: backupErr}
 	}
 	return expectedTxID, nil
+}
+
+// signRGB11OrdinaryBatch shares the channel path's durable broadcast boundary.
+// Signing keys are rederived from the existing ownership proofs, including
+// Tapret/internal receive carriers, so cold recovery needs no extra metadata.
+func (p *rgb11Manager) signRGB11OrdinaryBatch(batch []*rgb11wallet.PendingTransfer) error {
+	if len(batch) == 0 || p.wallet == nil {
+		return ErrRGB11Inconsistent
+	}
+	first := batch[0]
+	for _, item := range batch {
+		if item == nil || item.ChannelSend != nil || item.State.Status != rgb11StatusBroadcastAttempted ||
+			item.State.WitnessTxID != first.State.WitnessTxID || !bytes.Equal(item.SignedTx, first.SignedTx) || !bytes.Equal(item.SignedPSBT, first.SignedPSBT) {
+			return ErrRGB11Inconsistent
+		}
+		switch item.State.TransportMode {
+		case "out-of-band":
+			if item.State.AckStatus != "accepted-out-of-band" {
+				return ErrRGB11BatchAckRequired
+			}
+		case RGB11AddressTransport:
+			if !item.State.DeliveryAcknowledged || item.State.AckStatus != "accepted" || item.State.DeliveryRecordKey == "" || item.State.DeliveryRecordHash == "" {
+				return ErrRGB11AddressDeliveryRequired
+			}
+		case RGB11ProxyTransport:
+			if item.State.AckStatus != "accepted" {
+				return ErrRGB11BatchAckRequired
+			}
+		default:
+			return ErrRGB11Inconsistent
+		}
+	}
+	packet, err := psbt.NewFromRawBytes(bytes.NewReader(first.SignedPSBT), false)
+	if err != nil {
+		return err
+	}
+	unsigned, err := decodeRGB11BroadcastTx(first.SignedTx)
+	if err != nil || unsigned.HasWitness() || !sameRGB11UnsignedTx(unsigned, packet.UnsignedTx) || len(packet.Inputs) != len(unsigned.TxIn) {
+		return ErrRGB11Inconsistent
+	}
+	proofs, err := p.projectionStore.ListProofs()
+	if err != nil {
+		return err
+	}
+	walletScript, err := AddrToPkScript(p.wallet.GetAddress(), GetChainParam())
+	if err != nil {
+		return err
+	}
+	keys := make(map[int]RGB11InputSigningKey)
+	prev := txscript.NewMultiPrevOutFetcher(nil)
+	for i, input := range unsigned.TxIn {
+		utxo := packet.Inputs[i].WitnessUtxo
+		if utxo == nil || len(input.SignatureScript) != 0 {
+			return ErrRGB11Inconsistent
+		}
+		key := RGB11InputSigningKey{Index: p.wallet.GetSubAccount()}
+		if !bytes.Equal(utxo.PkScript, walletScript) {
+			found := false
+			for _, proof := range proofs {
+				if proof == nil || proof.OutPoint != input.PreviousOutPoint.String() || proof.CarrierBinding == nil {
+					continue
+				}
+				binding := proof.CarrierBinding
+				if !bytes.Equal(binding.ActualPkScript, utxo.PkScript) || !p.ownsRGB11Carrier(binding, walletScript) {
+					return ErrRGB11Inconsistent
+				}
+				candidate := RGB11InputSigningKey{}
+				candidate.Change, candidate.Index = rgb11CarrierPath(binding.DerivationIndex)
+				if binding.CommitmentMethod == "tapret1st" {
+					if len(binding.TapretRoot) != 32 {
+						return ErrRGB11Inconsistent
+					}
+					candidate.TaprootMerkleRoot = append([]byte(nil), binding.TapretRoot...)
+				}
+				if found && (key.Change != candidate.Change || key.Index != candidate.Index || !bytes.Equal(key.TaprootMerkleRoot, candidate.TaprootMerkleRoot)) {
+					return ErrRGB11Inconsistent
+				}
+				key, found = candidate, true
+			}
+			if !found {
+				return ErrRGB11Inconsistent
+			}
+		}
+		keys[i] = key
+		prev.AddPrevOut(input.PreviousOutPoint, utxo)
+	}
+	signer, ok := p.wallet.(interface {
+		SignRGB11Psbt(*psbt.Packet, map[int]RGB11InputSigningKey) error
+	})
+	if !ok {
+		return fmt.Errorf("active wallet does not support RGB11 input signing")
+	}
+	if err := p.checkRGB11OperationSource(); err != nil {
+		return err
+	}
+	if err := signer.SignRGB11Psbt(packet, keys); err != nil {
+		return err
+	}
+	if err := psbt.MaybeFinalizeAll(packet); err != nil {
+		return err
+	}
+	signed, err := psbt.Extract(packet)
+	if err != nil {
+		return err
+	}
+	if !sameRGB11UnsignedTx(unsigned, signed) {
+		return ErrRGB11Inconsistent
+	}
+	if err := VerifySignedTx(signed, prev); err != nil {
+		return err
+	}
+	var raw bytes.Buffer
+	if err := signed.Serialize(&raw); err != nil {
+		return err
+	}
+	baseline := cloneRGB11PendingBatch(batch)
+	for _, item := range batch {
+		item.SignedTx = append([]byte(nil), raw.Bytes()...)
+	}
+	return p.projectionStore.CompareAndSavePendingTransferStates(baseline, batch)
 }

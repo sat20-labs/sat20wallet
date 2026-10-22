@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"testing"
-	"time"
 
 	indexercommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet"
@@ -66,7 +65,7 @@ func TestRealSatoshiNetHarnessAscendAndEVMContract(t *testing.T) {
 		witnessScript, bootstrapKey, spendScript)
 	network.sendAndMine(t, anchorTx, 1)
 
-	artifact, err := CompileSolidityFile(filepath.Join("testdata", "contracts", "Counter.sol"), "Counter", SolidityCompileOptions{})
+	artifact, err := LoadSolidityArtifact(filepath.Join("testdata", "contracts", "Counter.sol"), "Counter")
 	require.NoError(t, err)
 	require.NotEmpty(t, artifact.ABI)
 	require.NotEmpty(t, artifact.Bytecode)
@@ -129,8 +128,8 @@ func TestRealSatoshiNetEVMSignedAssetVault(t *testing.T) {
 		[]int64{500, 500}, []int64{1000, 1000},
 		[]*templateActor{f.A, f.A})
 
-	artifact, err := CompileSolidityFile(filepath.Join("testdata", "contracts", "SignedAssetVault.sol"),
-		"SignedAssetVault", SolidityCompileOptions{})
+	artifact, err := LoadSolidityArtifact(filepath.Join("testdata", "contracts", "SignedAssetVault.sol"),
+		"SignedAssetVault")
 	require.NoError(t, err)
 	require.NotEmpty(t, artifact.Bytecode)
 
@@ -223,7 +222,7 @@ func TestRealSatoshiNetEVMAssetApps(t *testing.T) {
 	source := filepath.Join("testdata", "contracts", "AssetApps.sol")
 	ownerEVM := evmAddressFromAddressString(f.A.Address)
 
-	escrowArtifact, err := CompileSolidityFile(source, "Escrow", SolidityCompileOptions{})
+	escrowArtifact, err := LoadSolidityArtifact(source, "Escrow")
 	require.NoError(t, err)
 	escrowInit := appendSolidityConstructorArgs(escrowArtifact.Bytecode,
 		evmABIString(appAsset),
@@ -265,7 +264,7 @@ func TestRealSatoshiNetEVMAssetApps(t *testing.T) {
 	requireAssetSummaryZero(t, f.Network.Bootstrap, escrow.MustEncode(), appAsset)
 	requireAssetSummaryAmount(t, f.Network.Bootstrap, f.A.Address, appAsset, "1750")
 
-	crowdArtifact, err := CompileSolidityFile(source, "Crowdfund", SolidityCompileOptions{})
+	crowdArtifact, err := LoadSolidityArtifact(source, "Crowdfund")
 	require.NoError(t, err)
 	crowdInit := appendSolidityConstructorArgs(crowdArtifact.Bytecode,
 		evmABIString(appAsset),
@@ -328,7 +327,7 @@ func TestRealSatoshiNetEVMStandardApps(t *testing.T) {
 		[]*templateActor{f.A, f.B, f.A, f.B})
 
 	source := filepath.Join("testdata", "contracts", "StandardApps.sol")
-	ammArtifact, err := CompileSolidityFile(source, "ConstantProductAMM", SolidityCompileOptions{Timeout: 2 * time.Minute})
+	ammArtifact, err := LoadSolidityArtifact(source, "ConstantProductAMM")
 	require.NoError(t, err)
 	ammInit := appendSolidityConstructorArgs(ammArtifact.Bytecode, evmABIString(appAsset))
 	ammDeploy, amm, _ := buildEVMDeployTxFor(t, f.A, ammInit, 301, deployGasLimit, 2, inputGasAsset, gasOuts[0])
@@ -375,7 +374,7 @@ func TestRealSatoshiNetEVMStandardApps(t *testing.T) {
 	requireTxOutputValueAtLeast(t, closeAMMResult, f.A.Address, 893)
 	requireAssetSummaryZero(t, f.Network.Bootstrap, amm.MustEncode(), appAsset)
 
-	orderArtifact, err := CompileSolidityFile(source, "LimitOrderBook", SolidityCompileOptions{Timeout: 2 * time.Minute})
+	orderArtifact, err := LoadSolidityArtifact(source, "LimitOrderBook")
 	require.NoError(t, err)
 	orderInit := appendSolidityConstructorArgs(orderArtifact.Bytecode, evmABIString(appAsset))
 	orderDeploy, orderBook, _ := buildEVMDeployTxFor(t, f.A, orderInit, 302, deployGasLimit, 12, inputGasAsset, gasOuts[5])
@@ -502,7 +501,7 @@ func TestRealSatoshiNetEVMAMMDefaultInvoke(t *testing.T) {
 		[]int64{50}, []int64{1000}, []*templateActor{f.C})
 
 	source := filepath.Join("testdata", "contracts", "StandardApps.sol")
-	artifact, err := CompileSolidityFile(source, "ConstantProductAMM", SolidityCompileOptions{Timeout: 2 * time.Minute})
+	artifact, err := LoadSolidityArtifact(source, "ConstantProductAMM")
 	require.NoError(t, err)
 	initCode := appendSolidityConstructorArgs(artifact.Bytecode, evmABIString(appAsset))
 	deployTx, amm, _ := buildEVMDeployTxFor(t, f.A, initCode, 401, deployGasLimit, 2,
@@ -560,7 +559,7 @@ func TestRealSatoshiNetEVMAMMGasAsset(t *testing.T) {
 		[]*templateActor{f.A, f.A, f.B, f.C, f.B, f.A})
 
 	source := filepath.Join("testdata", "contracts", "StandardApps.sol")
-	ammArtifact, err := CompileSolidityFile(source, "ConstantProductAMM", SolidityCompileOptions{})
+	ammArtifact, err := LoadSolidityArtifact(source, "ConstantProductAMM")
 	require.NoError(t, err)
 	ammInit := appendSolidityConstructorArgs(ammArtifact.Bytecode, evmABIString(gas))
 	ammDeploy, amm, _ := buildEVMDeployTxFor(t, f.A, ammInit, 201, deployGasLimit, 2, inputGasAsset, gasOuts[0])
@@ -626,7 +625,7 @@ func TestRealSatoshiNetEVMInternalERC20(t *testing.T) {
 		[]*templateActor{f.A, f.A, f.A, f.A, f.A, f.A, f.A, f.A, f.B, f.B, f.B, f.B, f.A})
 
 	source := filepath.Join("testdata", "contracts", "AssetApps.sol")
-	artifact, err := CompileSolidityFile(source, "InternalERC20", SolidityCompileOptions{})
+	artifact, err := LoadSolidityArtifact(source, "InternalERC20")
 	require.NoError(t, err)
 	initCode := appendSolidityConstructorArgs(artifact.Bytecode,
 		evmABIString("Internal Demo Token"),

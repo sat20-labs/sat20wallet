@@ -219,8 +219,8 @@ func (p *Manager) resumeRGB11Send(ctx context.Context, transferID string) (*wire
 			}
 			result.tx, result.fee = tx, fee
 			if rgb11BroadcastCompleteStatus(first.State.Status) {
-				if first.ChannelSend != nil && !first.ChannelSend.Signed {
-					if err := manager.recoverRGB11ChannelWitness(batch); err != nil {
+				if !rgb11PendingHasWitness(first) {
+					if err := manager.recoverRGB11BroadcastWitness(batch); err != nil {
 						return result, err
 					}
 					// loadRGB11AddressBatch returns separately loaded records; witness
@@ -257,17 +257,17 @@ func (p *Manager) resumeRGB11Send(ctx context.Context, transferID string) (*wire
 			if err != nil {
 				return result, err
 			}
-			if first.ChannelSend != nil {
-				updated, err := manager.projectionStore.LoadPendingTransfer(transferID)
-				if err != nil {
-					return result, err
-				}
-				if updated.ChannelSend == nil || !updated.ChannelSend.Signed {
-					return result, ErrRGB11Inconsistent
-				}
-				if err := result.tx.Deserialize(bytes.NewReader(updated.SignedTx)); err != nil {
-					return result, err
-				}
+			// Signing happened after the stack-local prepared transaction was read.
+			// Return the exact persisted broadcast witness for every send mode.
+			updated, err := manager.projectionStore.LoadPendingTransfer(transferID)
+			if err != nil {
+				return result, err
+			}
+			if !rgb11PendingHasWitness(updated) {
+				return result, ErrRGB11Inconsistent
+			}
+			if err := result.tx.Deserialize(bytes.NewReader(updated.SignedTx)); err != nil {
+				return result, err
 			}
 			result.done = true
 			return result, nil

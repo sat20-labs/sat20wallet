@@ -56,7 +56,7 @@ func sdkReviewRestartCore(t *testing.T, f *sdkContractReviewFixture) {
 
 func TestSDKSmartContractsAdditional(t *testing.T) {
 	f := newSDKContractReviewFixture(t)
-	artifact, err := CompileSolidityFile("testdata/contracts/SDKReviewProbe.sol", "SDKReviewProbe", SolidityCompileOptions{})
+	artifact, err := LoadSolidityArtifact("testdata/contracts/SDKReviewProbe.sol", "SDKReviewProbe")
 	require.NoError(t, err)
 	code := appendSolidityConstructorArgs(artifact.Bytecode, evmABIString(reviewAssetA), evmABIString(reviewAssetB))
 	request := &wallet.ContractDeployRequest{ContractType: wallet.ContractTypeEVM,

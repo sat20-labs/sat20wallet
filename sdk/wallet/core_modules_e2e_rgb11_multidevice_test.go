@@ -63,15 +63,13 @@ func coreRGB11SameRootThreeDeviceE2E(t *testing.T, cfg coreE2EConfig, chain *cor
 
 	beforeTransfers := chain.broadcastCount()
 
-	firstInvoice, err := receiver.CreateRGB11Invoice(RGB11InvoiceRequest{
-		Mode: "witness", TransportMode: "out-of-band", ContractID: issued.ContractID,
-		AmountRaw: "1", WitnessVout: 1, Expiry: time.Now().Add(time.Hour).Unix(),
-	})
-	coreRequire(t, "create invoice for cancel-wins ordering", err)
-	firstPrepared, err := deviceA.PrepareRGB11Transfer(ctx, RGB11SendRequest{
-		Invoice: firstInvoice.Invoice, FeeRate: 2, MinConfirmations: 1,
-	})
+	firstExpiry := time.Now().Add(30 * time.Second).Unix()
+	firstPrepared, _, err := deviceA.PrepareConfiguredRGB11AddressTransfer(ctx, RGB11AddressSendRequest{
+		ReceiverAddress: receiver.GetWallet().GetAddress(), AssetName: issued.AssetName,
+		AmountRaw: "1", FeeRate: 2, MinConfirmations: 1, Expiry: firstExpiry,
+	}, dkvsindexer.RecordVerificationOptions{})
 	coreRequire(t, "prepare first shared-input operation", err)
+	assertRGB11UnsignedPending(t, deviceA.rgbManager, firstPrepared.State.TransferID)
 	coreAssert(t, chain.broadcastCount() == beforeTransfers,
 		"prepared first device broadcast before any delivery/ACK")
 	coreAssertRGB11Reservation(t, deviceA, firstPrepared.State.TransferID, true)
@@ -95,12 +93,33 @@ func coreRGB11SameRootThreeDeviceE2E(t *testing.T, cfg coreE2EConfig, chain *cor
 	// A phone adopts the prepared transfer through the real account CAS, cancels
 	// it, and releases the reservation before the computer tries its stale ID.
 	coreRequire(t, "second device adopts prepared transfer", deviceB.SyncAccountManagementState(ctx))
-	coreRequire(t, "second device wins cancel before broadcast",
-		deviceB.CancelRGB11OutOfBandTransfer(firstPrepared.State.TransferID))
-	coreAssertRGB11Reservation(t, deviceB, firstPrepared.State.TransferID, false)
-	if _, err := deviceA.BroadcastRGB11OutOfBand([]string{firstPrepared.State.TransferID}); err == nil {
-		t.Fatal("stale computer broadcast an intent canceled by another device")
+	assertRGB11UnsignedPending(t, deviceB.rgbManager, firstPrepared.State.TransferID)
+	if delay := time.Until(time.Unix(firstExpiry, 0)); delay > 0 {
+		time.Sleep(delay)
 	}
+	coreRequire(t, "second device wins cancel before broadcast",
+		deviceB.CancelExpiredRGB11Transfer(firstPrepared.State.TransferID))
+	coreAssertRGB11Reservation(t, deviceB, firstPrepared.State.TransferID, false)
+	if _, err := deviceA.BroadcastRGB11AddressTransfer(firstPrepared.State.TransferID); !errors.Is(err, ErrRGB11AddressDeliveryRequired) {
+		t.Fatalf("stale computer broadcast after another device's expiry cancellation: %v", err)
+	}
+	staleDelivery, err := deviceC.DeliverAndBroadcastConfiguredRGB11AddressTransfer(firstPrepared.State.TransferID, RGB11AddressDeliveryOptions{})
+	coreRequire(t, "stale third device resumes a canceled preparation without side effects", err)
+	coreAssert(t, staleDelivery != nil && !staleDelivery.Broadcast && staleDelivery.TxID == "" &&
+		staleDelivery.RecordKey == "" && staleDelivery.RecordHash == "" && staleDelivery.ObjectID == "",
+		"stale third device delivered or broadcast a canceled preparation")
+	for _, device := range []*Manager{deviceA, deviceC} {
+		canceled, loadErr := device.rgbManager.projectionStore.LoadPendingTransfer(firstPrepared.State.TransferID)
+		coreRequire(t, "read terminal preparation on stale device after expiry cancellation", loadErr)
+		coreAssert(t, canceled.State.Status == "rejected" && canceled.State.AckStatus == "rejected" &&
+			canceled.State.RejectReason == rgb11RejectReasonInvoiceExpired &&
+			len(canceled.SignedTx) == 0 && len(canceled.SignedPSBT) == 0 && len(canceled.RecipientConsignment) == 0 && len(canceled.LocalConsignment) == 0,
+			"stale device revived private material from a canceled preparation")
+	}
+	noDelivery, err := receiver.SyncConfiguredRGB11AddressMailbox(ctx, dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+	coreRequire(t, "check receiver mailbox after stale delivery attempt", err)
+	coreAssert(t, noDelivery != nil && noDelivery.Received == 0 && noDelivery.ACKs == 0 && noDelivery.Invalid == 0,
+		"canceled preparation reached the receiver mailbox")
 	coreAssert(t, chain.broadcastCount() == beforeTransfers,
 		"stale broadcast after cancellation reached the Bitcoin backend")
 	coreAssertRGB11Reservation(t, deviceA, firstPrepared.State.TransferID, false)
@@ -118,9 +137,11 @@ func coreRGB11SameRootThreeDeviceE2E(t *testing.T, cfg coreE2EConfig, chain *cor
 	coreRequire(t, "prepare direct transfer after cross-device cancellation", err)
 	coreAssert(t, overlapsRGB11Outpoints(firstPrepared.State.InputOutPoints,
 		directPrepared.State.InputOutPoints), "cancel did not free the source input for a new intent")
-	directIntentBaseline, err := deviceA.rgbManager.projectionStore.LoadPendingTransfer(directPrepared.State.TransferID)
+	directPreparedBaseline, err := deviceA.rgbManager.projectionStore.LoadPendingTransfer(directPrepared.State.TransferID)
 	coreRequire(t, "capture direct immutable broadcast intent", err)
-	directIntentBaseline = cloneRGB11BroadcastIntent(directIntentBaseline)
+	directPreparedBaseline = cloneRGB11BroadcastIntent(directPreparedBaseline)
+	coreAssert(t, !rgb11PendingHasWitness(directPreparedBaseline), "Direct preparation signed before any receiver ACK")
+	var signedIntentBaseline *rgb11wallet.PendingTransfer
 	delivered, err := deviceA.DeliverAndBroadcastConfiguredRGB11AddressTransfer(
 		directPrepared.State.TransferID, RGB11AddressDeliveryOptions{})
 	coreRequire(t, "deliver direct consignment before ACK", err)
@@ -144,7 +165,16 @@ func coreRGB11SameRootThreeDeviceE2E(t *testing.T, cfg coreE2EConfig, chain *cor
 		BitcoinEvidenceProvider: chain,
 		entered:                 backendEntered,
 		release:                 backendRelease,
-		beforeBroadcast: func() error {
+		beforeBroadcast: func(raw []byte) error {
+			signedB, err := deviceB.rgbManager.projectionStore.LoadPendingTransfer(directPrepared.State.TransferID)
+			if err != nil {
+				return err
+			}
+			if signedB.State.Status != rgb11StatusBroadcastAttempted ||
+				!validRGB11SigningTransition(directPreparedBaseline, signedB) || !bytes.Equal(raw, signedB.SignedTx) {
+				return errors.New("backend did not receive the exact valid signed preparation")
+			}
+			signedIntentBaseline = cloneRGB11BroadcastIntent(signedB)
 			// Device C commits a metadata edit after B's broadcast-intent CAS but
 			// before B reaches the local chain backend. This keeps B's same signed
 			// raw transaction in flight across a newer account revision.
@@ -160,7 +190,7 @@ func coreRGB11SameRootThreeDeviceE2E(t *testing.T, cfg coreE2EConfig, chain *cor
 			}
 			if pending.State.WitnessTxID != directPrepared.TxID ||
 				pending.State.Status != rgb11StatusBroadcastAttempted ||
-				!sameRGB11BroadcastIntent(directIntentBaseline, pending) {
+				!sameRGB11BroadcastIntent(signedIntentBaseline, pending) {
 				return errors.New("selected account revision lost or changed the in-flight broadcast intent")
 			}
 			return nil
@@ -190,26 +220,26 @@ func coreRGB11SameRootThreeDeviceE2E(t *testing.T, cfg coreE2EConfig, chain *cor
 		t.Fatal("device B did not reach the post-CAS backend boundary")
 	}
 
-	// A's explicit backend error cannot revoke B's already-authorized call. The
+	// A's backend timeout cannot revoke B's already-authorized call. The
 	// raw transaction remains the same and its input lock must survive until the
 	// in-flight backend outcome is known.
 	beforeDirectBroadcast := chain.broadcastCount()
 	previousAEvidence := deviceA.rgbManager.evidence
-	deviceA.rgbManager.evidence = &coreE2ERejectedBroadcastEvidence{
+	deviceA.rgbManager.evidence = &coreE2EUnknownBroadcastEvidence{
 		BitcoinEvidenceProvider: previousAEvidence,
 	}
-	_, rejectedErr := deviceA.BroadcastRGB11AddressTransfer(directPrepared.State.TransferID)
+	_, timeoutErr := deviceA.BroadcastRGB11AddressTransfer(directPrepared.State.TransferID)
 	deviceA.rgbManager.evidence = previousAEvidence
-	coreAssert(t, errors.Is(rejectedErr, ErrRGB11BroadcastResultUnknown),
-		"device A did not preserve the signed intent after its backend rejected the in-flight transaction")
+	coreAssert(t, errors.Is(timeoutErr, ErrRGB11BroadcastResultUnknown) && errors.Is(timeoutErr, context.DeadlineExceeded),
+		"device A did not preserve the signed intent after its backend timed out on the in-flight transaction")
 	coreAssert(t, chain.broadcastCount() == beforeDirectBroadcast,
 		"device A's rejected backend call unexpectedly reached the controlled chain")
 	uncertainA, err := deviceA.rgbManager.projectionStore.LoadPendingTransfer(directPrepared.State.TransferID)
-	coreRequire(t, "read device A pending after its rejected backend call", err)
+	coreRequire(t, "read device A pending after its timed-out backend call", err)
 	coreAssert(t, uncertainA.State.WitnessTxID == directPrepared.TxID &&
 		uncertainA.State.Status == rgb11StatusBroadcastAttempted &&
-		bytes.Equal(uncertainA.SignedTx, directIntentBaseline.SignedTx),
-		"device A's backend error replaced or dropped the original signed transaction")
+		bytes.Equal(uncertainA.SignedTx, signedIntentBaseline.SignedTx),
+		"device A's backend timeout replaced or dropped the original signed transaction")
 	coreAssertRGB11Reservation(t, deviceA, directPrepared.State.TransferID, true)
 	competing, _, competingErr := deviceA.PrepareConfiguredRGB11AddressTransfer(ctx,
 		RGB11AddressSendRequest{ReceiverAddress: receiver.GetWallet().GetAddress(),
@@ -222,6 +252,10 @@ func coreRGB11SameRootThreeDeviceE2E(t *testing.T, cfg coreE2EConfig, chain *cor
 		t.Fatal("device C canceled the positively ACKed transaction while device B was still in the backend")
 	}
 	coreAssertRGB11Reservation(t, deviceC, directPrepared.State.TransferID, true)
+	afterCanceledAttempt, err := deviceC.rgbManager.projectionStore.LoadPendingTransfer(directPrepared.State.TransferID)
+	coreRequire(t, "read immutable signed intent after third device's rejected cancellation", err)
+	coreAssert(t, afterCanceledAttempt.State.Status == rgb11StatusBroadcastAttempted && sameRGB11BroadcastIntent(signedIntentBaseline, afterCanceledAttempt),
+		"third device's cancellation changed the in-flight signed intent")
 
 	releaseBackend()
 	deviceBOutcome := <-deviceBResult
@@ -239,7 +273,7 @@ func coreRGB11SameRootThreeDeviceE2E(t *testing.T, cfg coreE2EConfig, chain *cor
 		"sender device did not adopt metadata selected during its operation barrier")
 	currentIntent, err := deviceA.rgbManager.projectionStore.LoadPendingTransfer(directPrepared.State.TransferID)
 	coreRequire(t, "read sender intent after metadata rebase", err)
-	coreAssert(t, sameRGB11BroadcastIntent(directIntentBaseline, currentIntent),
+	coreAssert(t, sameRGB11BroadcastIntent(signedIntentBaseline, currentIntent),
 		"metadata adoption changed the original immutable broadcast intent")
 
 	// Device B's cancellation attempt is now stale and must preserve the same
@@ -881,7 +915,7 @@ func (*coreE2EUnknownBroadcastEvidence) Broadcast([]byte) (string, error) {
 // CoreNode; the wrapped evidence provider is the existing CoreModules fixture.
 type coreE2EInFlightBroadcastEvidence struct {
 	rgb11wallet.BitcoinEvidenceProvider
-	beforeBroadcast func() error
+	beforeBroadcast func([]byte) error
 	entered         chan struct{}
 	release         <-chan struct{}
 	enterErr        error
@@ -891,7 +925,7 @@ type coreE2EInFlightBroadcastEvidence struct {
 func (e *coreE2EInFlightBroadcastEvidence) Broadcast(raw []byte) (string, error) {
 	e.once.Do(func() {
 		if e.beforeBroadcast != nil {
-			e.enterErr = e.beforeBroadcast()
+			e.enterErr = e.beforeBroadcast(raw)
 		}
 		if e.enterErr == nil && e.entered != nil {
 			close(e.entered)

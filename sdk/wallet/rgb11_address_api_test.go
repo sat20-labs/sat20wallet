@@ -57,12 +57,13 @@ func TestConfiguredRGB11AddressTransportRetentionUsesServiceNodePolicy(t *testin
 }
 
 func TestConfiguredRGB11AddressTransferRejectsChildAccount(t *testing.T) {
-	privateKey, err := btcec.NewPrivateKey()
-	if err != nil {
+	manager, _, _, _, _ := newRGB11GenericSendFixture(t)
+	if err := manager.EnsureAccount(manager.status.CurrentWallet, 1, "child", ""); err != nil {
 		t.Fatal(err)
 	}
-	manager := newRGB11MultiDeviceManager(t, privateKey, 710)
-	manager.SwitchAccount(1)
+	if err := manager.SwitchAccount(1); err != nil {
+		t.Fatal(err)
+	}
 	if _, _, err := manager.PrepareConfiguredRGB11AddressTransfer(
 		context.Background(), RGB11AddressSendRequest{}, dkvsindexer.RecordVerificationOptions{},
 	); !errors.Is(err, ErrRGB11TraditionalReceiveRequired) {
@@ -70,7 +71,7 @@ func TestConfiguredRGB11AddressTransferRejectsChildAccount(t *testing.T) {
 	}
 }
 
-func TestConfiguredRGB11DirectAPIsRejectNonRootWalletByPublicKey(t *testing.T) {
+func TestRGB11DirectScopeRejectsNonRootWalletByPublicKey(t *testing.T) {
 	rootKey, err := btcec.NewPrivateKey()
 	if err != nil {
 		t.Fatal(err)
@@ -95,23 +96,30 @@ func TestConfiguredRGB11DirectAPIsRejectNonRootWalletByPublicKey(t *testing.T) {
 	if err := manager.rgbManager.selectRGB11Scope(); err != nil {
 		t.Fatal(err)
 	}
+	// Public wrappers route to the managed root. Exercise the scope guard
+	// itself here so changing UI selection cannot weaken identity validation.
 	// Private-key-backed test wallets both have process-local ID zero. The
 	// root check must therefore compare their public account identities.
 	if manager.rgb11ManagerIsRoot(manager.rgbManager) {
 		t.Fatal("non-root wallet with the same local wallet ID was accepted")
 	}
-	if _, err := manager.EnableConfiguredRGB11AddressReceive(
+	if _, err := manager.rgbManager.EnableConfiguredRGB11AddressReceive(
 		RGB11ReceiveCapabilityOptions{}); !errors.Is(err, ErrRGB11DirectRootRequired) {
 		t.Fatalf("enable Direct receive err=%v", err)
 	}
-	if _, err := manager.SyncConfiguredRGB11AddressMailbox(context.Background(),
+	if _, err := manager.rgbManager.SyncConfiguredRGB11AddressMailbox(context.Background(),
 		dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{}); !errors.Is(err, ErrRGB11DirectRootRequired) {
 		t.Fatalf("sync Direct mailbox err=%v", err)
 	}
 }
 
-func TestConfiguredRGB11MailboxSyncUsesGenerationBeforeReplicaRead(t *testing.T) {
-	manager, remote := finalDKVSTestManager(t)
+func TestRGB11MailboxConsumerUsesGenerationBeforeReplicaRead(t *testing.T) {
+	_, manager, _, _, _ := newRGB11GenericSendFixture(t)
+	remote := manager.http.(*rgb11MemoryDKVSHTTP)
+	consumer, err := manager.rootRGB11Manager()
+	if err != nil {
+		t.Fatal(err)
+	}
 	accountID, err := dkvsAccountID(manager.wallet)
 	if err != nil {
 		t.Fatal(err)
@@ -143,13 +151,16 @@ func TestConfiguredRGB11MailboxSyncUsesGenerationBeforeReplicaRead(t *testing.T)
 	}
 	remote.seedInternalMailboxRecord(record)
 	remote.mu.Lock()
-	initialSnapshots := remote.snapshotCalls
+	initialSnapshots := remote.snapshotsByPrefix[mailboxPrefix]
 	initialStatus := remote.statusCalls
-	initialDeltas := remote.deltaCalls
+	initialDeltas := remote.deltasByPrefix[mailboxPrefix]
 	generation := remote.generations[mailboxPrefix]
 	remote.mu.Unlock()
 
-	result, err := manager.SyncConfiguredRGB11AddressMailbox(context.Background(),
+	// Exercise the real mailbox consumer independently of the managed wrapper's
+	// earlier recovery synchronization. Count only this mailbox scope; the
+	// same client also synchronizes unrelated subscribed account scopes.
+	result, err := consumer.SyncConfiguredRGB11AddressMailbox(context.Background(),
 		dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -158,7 +169,7 @@ func TestConfiguredRGB11MailboxSyncUsesGenerationBeforeReplicaRead(t *testing.T)
 		t.Fatalf("mailbox result=%+v", result)
 	}
 	remote.mu.Lock()
-	statusCalls, snapshots, deltas := remote.statusCalls, remote.snapshotCalls, remote.deltaCalls
+	statusCalls, snapshots, deltas := remote.statusCalls, remote.snapshotsByPrefix[mailboxPrefix], remote.deltasByPrefix[mailboxPrefix]
 	remote.mu.Unlock()
 	// Active sync returns metadata and current values together. The old
 	// status-then-delta round trip must not be reintroduced by RGB consumers.
@@ -177,14 +188,14 @@ func TestConfiguredRGB11MailboxSyncUsesGenerationBeforeReplicaRead(t *testing.T)
 		t.Fatalf("current mailbox value was not installed before consumption: %v", err)
 	}
 
-	if _, err := manager.SyncConfiguredRGB11AddressMailbox(context.Background(),
+	if _, err := consumer.SyncConfiguredRGB11AddressMailbox(context.Background(),
 		dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	remote.mu.Lock()
 	defer remote.mu.Unlock()
-	if remote.snapshotCalls != snapshots || remote.statusCalls != initialStatus {
-		t.Fatalf("unchanged mailbox used obsolete/full synchronization: status=%d snapshots=%d", remote.statusCalls, remote.snapshotCalls)
+	if remote.snapshotsByPrefix[mailboxPrefix] != snapshots || remote.statusCalls != initialStatus {
+		t.Fatalf("unchanged mailbox used obsolete/full synchronization: status=%d snapshots=%d", remote.statusCalls, remote.snapshotsByPrefix[mailboxPrefix])
 	}
 }
 

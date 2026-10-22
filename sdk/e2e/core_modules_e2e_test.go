@@ -110,7 +110,9 @@ func TestSDKCoreModulesE2E(t *testing.T) {
 	_, file, _, ok := runtime.Caller(0)
 	require.True(t, ok)
 	module := filepath.Dir(filepath.Dir(file))
-	ctx, cancel := context.WithTimeout(context.Background(), 27*time.Minute)
+	// The 20-hop lifecycle alone takes about 13 minutes on CI. Leave room
+	// for its preceding recovery/browser cases and child shutdown.
+	ctx, cancel := context.WithTimeout(context.Background(), 46*time.Minute)
 	defer cancel()
 	wasmPath, runtimePath := buildPWAWalletRuntime(t, ctx, module)
 	t.Setenv("SAT20_PWA_E2E_WASM", wasmPath)
@@ -120,7 +122,7 @@ func TestSDKCoreModulesE2E(t *testing.T) {
 		childRun = "^TestSDKCoreModulesConnectedE2E$"
 	}
 	command := exec.CommandContext(ctx, filepath.Join(runtime.GOROOT(), "bin", "go"),
-		"test", "-json", "./wallet", "-run", childRun, "-count=1", "-timeout=26m")
+		"test", "-json", "./wallet", "-run", childRun, "-count=1", "-timeout=45m")
 	command.Dir = module
 	for _, entry := range os.Environ() {
 		if !strings.HasPrefix(entry, "SAT20WALLET_RUN_LIVE_NETWORK_TESTS=") && !strings.HasPrefix(entry, "SAT20WALLET_CORE_E2E_CONFIG=") {

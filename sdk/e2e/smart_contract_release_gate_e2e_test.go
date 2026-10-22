@@ -17,7 +17,7 @@ import (
 // candidate is last on its own temporary network; no existing wallets are used.
 func TestSDKSmartContractReleaseEscrow(t *testing.T) {
 	f := newSDKContractReviewFixture(t)
-	artifact, err := CompileSolidityFile("testdata/contracts/SDKReviewProbe.sol", "SDKReviewProbe", SolidityCompileOptions{})
+	artifact, err := LoadSolidityArtifact("testdata/contracts/SDKReviewProbe.sol", "SDKReviewProbe")
 	require.NoError(t, err)
 	code := appendSolidityConstructorArgs(artifact.Bytecode, evmABIString(reviewAssetA), evmABIString(reviewAssetB))
 	address := f.deployEVM(t, code)

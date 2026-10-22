@@ -208,8 +208,9 @@ type PendingTransfer struct {
 	LocalConsignment     []byte        `json:"-"`
 	RecipientObjectHash  string        `json:"-"`
 	LocalObjectHash      string        `json:"-"`
-	// Channel sends retain the fixed unsigned transaction and its PSBT until
-	// ChannelSend.Signed is true; ACK delivery must precede joint signing.
+	// SignedTx holds the fixed unsigned transaction until the broadcast boundary.
+	// SignedPSBT retains its original unsigned PSBT, including previous outputs.
+	// ChannelSend.Signed additionally tracks the existing joint-signing phase.
 	SignedTx      []byte                 `json:"-"`
 	SignedPSBT    []byte                 `json:"-"`
 	ChangeSeals   []seals.GraphBlindSeal `json:"-"`

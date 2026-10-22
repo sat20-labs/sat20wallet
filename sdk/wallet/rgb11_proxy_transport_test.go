@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"github.com/btcsuite/btcd/txscript"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -675,6 +676,14 @@ func TestRGB11ProxyDeliveryWaitsForAckBeforeBroadcast(t *testing.T) {
 	if err := tx.Serialize(&signed); err != nil {
 		t.Fatal(err)
 	}
+	packet, err := CreatePsbt(tx, txscript.NewCannedPrevOutputFetcher(script, 10_000), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var preparedPSBT bytes.Buffer
+	if err := packet.Serialize(&preparedPSBT); err != nil {
+		t.Fatal(err)
+	}
 	consignment, err := os.ReadFile("../../../rgb11/testvectors/rc11/nia-transfer.rgba")
 	if err != nil {
 		t.Fatal(err)
@@ -697,7 +706,7 @@ func TestRGB11ProxyDeliveryWaitsForAckBeforeBroadcast(t *testing.T) {
 		},
 		RecipientConsignment: consignment,
 		LocalConsignment:     append([]byte(nil), consignment...),
-		SignedTx:             signed.Bytes(), SignedPSBT: []byte{1}, CreatedAt: time.Now().Unix(),
+		SignedTx:             signed.Bytes(), SignedPSBT: preparedPSBT.Bytes(), CreatedAt: time.Now().Unix(),
 		ReservationID: "proxy-transfer-reservation",
 	}
 	if err := manager.rgbManager.projectionStore.SavePendingTransfer(pending); err != nil {

@@ -473,7 +473,7 @@ func readTestnetSeq2Remote(client *SatsNetDKVSClient, stateKey,
 	if err != nil {
 		return testnetSeq2RemotePair{}, err
 	}
-	config, err := client.GetDKVSClientConfig()
+	config, err = client.GetDKVSClientConfig()
 	if err != nil {
 		return testnetSeq2RemotePair{}, err
 	}

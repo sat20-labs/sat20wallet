@@ -51,7 +51,14 @@ const posPWAActivationHeight int32 = 32
 // controlled: nodes, POS, STP, WASM, signatures, L2 indexing and browser stores
 // run their production implementations. No public endpoint or wallet is used.
 func TestSDKWalletPWAConnectedBrowser(t *testing.T) {
-	runSDKWalletPWABrowser(t)
+	// Reuse the existing Node runner's strict case selector for targeted retries.
+	// An empty setting retains the full gate; unknown names fail in that runner.
+	var cases []string
+	if selection := os.Getenv("SAT20_PWA_E2E_CASES"); selection != "" {
+		require.NoError(t, json.Unmarshal([]byte(selection), &cases))
+		require.NotEmpty(t, cases, "an explicit case selection must not run an empty gate")
+	}
+	runSDKWalletPWABrowser(t, cases...)
 }
 
 func TestSDKWalletPWAAssetContextStability(t *testing.T) {
@@ -347,8 +354,9 @@ func runSDKWalletBrowserMode(t *testing.T, sdkWASM bool, cases ...string) {
 	t.Cleanup(server.Close)
 	config, _ := accountReviewConfig(t, network)
 	config.IndexerL1 = &sdkcommon.Indexer{Scheme: "http", Host: l1.NodeFixture().host(), Proxy: "testnet"}
-	evmSource, err := os.ReadFile(filepath.Join(sdk, "e2e", "testdata", "contracts", "SDKReviewProbe.sol"))
+	evmArtifact, err := LoadSolidityArtifact(filepath.Join(sdk, "e2e", "testdata", "contracts", "SDKReviewProbe.sol"), "SDKReviewProbe")
 	require.NoError(t, err)
+	evmInitCode := appendSolidityConstructorArgs(evmArtifact.Bytecode, evmABIString(gas), evmABIString(asset))
 	fixture := map[string]any{
 		"browserPort": browserPort,
 		"config":      config, "control_url": server.URL, "activation_height": posPWAActivationHeight,
@@ -360,7 +368,7 @@ func runSDKWalletBrowserMode(t *testing.T, sdkWASM bool, cases ...string) {
 		"stake":           map[string]string{"asset": stakeL1, "amount": fmt.Sprint(stakeL1Amount)},
 		"publicContracts": publicContracts,
 		"coreSTPURL":      "http://" + core.stpAddr + "/testnet",
-		"tools":           map[string]string{"evmSource": string(evmSource), "evmContractName": "SDKReviewProbe", "gasAsset": gas},
+		"tools":           map[string]string{"evmInitCode": "0x" + hex.EncodeToString(evmInitCode), "evmContractName": "SDKReviewProbe", "gasAsset": gas},
 		"asset":           map[string]string{"key": asset, "type": "ORDX", "ticker": "pwapos"},
 		"amounts": map[string]string{"opening": "1000000", "splicing_btc": "100000", "splicing_asset": "700",
 			"deposit_btc": "10000", "deposit_asset": "600"},

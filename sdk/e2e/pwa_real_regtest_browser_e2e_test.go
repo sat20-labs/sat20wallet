@@ -1018,7 +1018,7 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 			"RGB PWA: issue a real NIA contract and protect its confirmed carrier",
 			"RGB PWA: export and import a standard contract without crediting the recipient",
 			"RGB PWA: an out-of-band witness invoice survives authenticated reload",
-			"RGB PWA: prepare and sign a transfer without broadcasting before receiver validation",
+			"RGB PWA: prepare an unsigned transfer before receiver validation",
 			"RGB PWA: receiver validation persists the same package and grants no spendable balance",
 			"RGB PWA: restored sender matches the receiver summary before broadcasting the actual transaction",
 			"RGB PWA: confirmed receive conserves RGB supply and persists the actual carrier proofs",

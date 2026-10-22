@@ -70,7 +70,7 @@ func TestSDKSmartContractDeployFailureSettlement(t *testing.T) {
 			code, err := base64.StdEncoding.DecodeString(encoded)
 			require.NoError(t, err)
 			if module == wallet.ContractTypeEVM {
-				artifact, err := CompileSolidityFile("testdata/contracts/SDKReviewProbe.sol", "SDKReviewProbe", SolidityCompileOptions{})
+				artifact, err := LoadSolidityArtifact("testdata/contracts/SDKReviewProbe.sol", "SDKReviewProbe")
 				require.NoError(t, err)
 				code = appendSolidityConstructorArgs(artifact.Bytecode, evmABIString(reviewAssetA), evmABIString(reviewAssetB))
 				kind, subtype, actor, limit = contract.ContractTypeEVM, "", "0x"+hex.EncodeToString(btcutil.Hash160([]byte(owner))), 5000000

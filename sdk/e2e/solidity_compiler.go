@@ -22,7 +22,12 @@ const defaultSolidityEVMVersion = "paris"
 
 type SolidityArtifact struct {
 	SourceName          string          `json:"sourceName"`
+	SourceSHA256        string          `json:"sourceSHA256"`
 	ContractName        string          `json:"contractName"`
+	CompilerVersion     string          `json:"compilerVersion"`
+	EVMVersion          string          `json:"evmVersion"`
+	OptimizerEnabled    bool            `json:"optimizerEnabled"`
+	OptimizerRuns       int             `json:"optimizerRuns"`
 	ABI                 json.RawMessage `json:"abi"`
 	Bytecode            []byte          `json:"-"`
 	BytecodeHex         string          `json:"bytecode"`
@@ -95,6 +100,19 @@ func CompileSoliditySource(sourceName, source, contractName string, opts Solidit
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+	versionOutput, err := exec.CommandContext(ctx, solc, "--version").Output()
+	if err != nil {
+		return SolidityArtifact{}, fmt.Errorf("read solc version: %w", err)
+	}
+	var compilerVersion string
+	for _, line := range strings.Split(string(versionOutput), "\n") {
+		if strings.HasPrefix(line, "Version: ") {
+			compilerVersion = strings.TrimSpace(strings.TrimPrefix(line, "Version: "))
+		}
+	}
+	if compilerVersion == "" {
+		return SolidityArtifact{}, errors.New("solc did not report its compiler version")
+	}
 	cmd := exec.CommandContext(ctx, solc, "--standard-json")
 	cmd.Stdin = bytes.NewReader(payload)
 	output, err := cmd.CombinedOutput()
@@ -146,9 +164,15 @@ func CompileSoliditySource(sourceName, source, contractName string, opts Solidit
 		return SolidityArtifact{}, fmt.Errorf("decode deployed bytecode: %w", err)
 	}
 
+	sourceHash := sha256.Sum256([]byte(source))
 	return SolidityArtifact{
 		SourceName:          sourceName,
+		SourceSHA256:        hex.EncodeToString(sourceHash[:]),
 		ContractName:        contractName,
+		CompilerVersion:     compilerVersion,
+		EVMVersion:          evmVersion,
+		OptimizerEnabled:    true,
+		OptimizerRuns:       200,
 		ABI:                 append(json.RawMessage(nil), compiled.ABI...),
 		Bytecode:            bytecode,
 		BytecodeHex:         "0x" + hex.EncodeToString(bytecode),

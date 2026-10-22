@@ -1,0 +1,18 @@
+{
+  "sourceName": "SDKReviewProbe.sol",
+  "sourceSHA256": "909f7369b4a0dec3e85f877e43751150acaf63cf95eff429c6f76ccc2595ad8c",
+  "contractName": "SDKReviewRevertingConstructor",
+  "compilerVersion": "0.8.35+commit.47b9dedd",
+  "evmVersion": "paris",
+  "optimizerEnabled": true,
+  "optimizerRuns": 200,
+  "abi": [
+    {
+      "inputs": [],
+      "stateMutability": "payable",
+      "type": "constructor"
+    }
+  ],
+  "bytecode": "0x6080604081905262461bcd60e51b81526020608481905260a4527f696e74656e74696f6e616c20636f6e7374727563746f7220726f6c6c6261636b60c452606490fdfe",
+  "deployedBytecode": "0x6080604052600080fdfea2646970667358221220777f3dd56d394dd2a6b1e76d748bdb1ee0eae573fe42581065ee30b61b0b162a64736f6c63430008230033"
+}

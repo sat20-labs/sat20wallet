@@ -383,6 +383,21 @@ func TestGenericBatchSendAssetsRGB11(t *testing.T) {
 		if err == nil && tx == nil {
 			err = fmt.Errorf("missing sent transaction")
 		}
+		if err == nil && !tx.HasWitness() {
+			err = fmt.Errorf("generic RGB send returned an unsigned transaction after broadcast")
+		}
+		if err == nil {
+			var raw bytes.Buffer
+			if encodeErr := tx.Serialize(&raw); encodeErr != nil {
+				err = encodeErr
+			}
+			evidence.mu.Lock()
+			matches := bytes.Equal(raw.Bytes(), evidence.broadcasted)
+			evidence.mu.Unlock()
+			if !matches {
+				err = fmt.Errorf("generic RGB send did not return the exact broadcast witness")
+			}
+		}
 		done <- result{err, fee}
 	}()
 	finished := false
@@ -580,6 +595,7 @@ func TestRGB11DirectReservationResumesAfterSDKRestart(t *testing.T) {
 	if prepared.State == nil || !prepared.State.AddressMode {
 		t.Fatalf("prepared Direct state=%+v", prepared.State)
 	}
+	unsigned := assertRGB11UnsignedPending(t, sender.rgbManager, prepared.State.TransferID)
 	delivery, err := sender.DeliverAndBroadcastConfiguredRGB11AddressTransfer(
 		prepared.State.TransferID, RGB11AddressDeliveryOptions{},
 	)
@@ -589,6 +605,7 @@ func TestRGB11DirectReservationResumesAfterSDKRestart(t *testing.T) {
 	if !delivery.AwaitingACK || delivery.Broadcast {
 		t.Fatalf("Direct transfer crossed broadcast boundary before ACK: %+v", delivery)
 	}
+	assertRGB11UnsignedPending(t, sender.rgbManager, prepared.State.TransferID)
 	received, err := recipient.SyncConfiguredRGB11AddressMailbox(
 		context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{},
 	)
@@ -619,6 +636,9 @@ func TestRGB11DirectReservationResumesAfterSDKRestart(t *testing.T) {
 	pending, err := restarted.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !validRGB11SigningTransition(unsigned, pending) {
+		t.Fatal("restarted module did not sign the exact restored unsigned operation")
 	}
 	if !rgb11BroadcastCompleteStatus(pending.State.Status) ||
 		!pending.State.DeliveryAcknowledged || pending.State.AckStatus != "accepted" {

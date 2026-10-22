@@ -9,7 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/btcsuite/btcd/btcutil/psbt"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/rgb11/invoicing"
@@ -884,6 +886,9 @@ func samePendingSigningIntent(left, right PendingTransfer) bool {
 	if len(right.SignedTx) == 0 && right.State.Status == "rejected" {
 		return true
 	}
+	if left.ChannelSend == nil {
+		return validOrdinarySigningTransition(left, right)
+	}
 	if left.ChannelSend == nil || right.ChannelSend == nil || left.ChannelSend.Signed ||
 		!right.ChannelSend.Signed || left.State.WitnessTxID == "" ||
 		left.State.WitnessTxID != right.State.WitnessTxID {
@@ -900,6 +905,56 @@ func samePendingSigningIntent(left, right PendingTransfer) bool {
 	var unsignedBase, signedBase bytes.Buffer
 	return unsigned.SerializeNoWitness(&unsignedBase) == nil && signed.SerializeNoWitness(&signedBase) == nil &&
 		bytes.Equal(unsignedBase.Bytes(), signedBase.Bytes())
+}
+
+// A normal witness may be added exactly once at the broadcast boundary. The
+// prepared PSBT stays unchanged and authenticates every previous output used
+// to verify the signature; equal txids alone never authorize a replacement.
+func validOrdinarySigningTransition(left, right PendingTransfer) bool {
+	if right.ChannelSend != nil || len(left.SignedPSBT) == 0 || !bytes.Equal(left.SignedPSBT, right.SignedPSBT) {
+		return false
+	}
+	switch right.State.Status {
+	case "broadcast-attempted", "broadcast", "pending", "settled":
+	default:
+		return false
+	}
+	unsigned, ok := recoveryWitnessTx(left.SignedTx, left.State.WitnessTxID)
+	if !ok || unsigned.HasWitness() {
+		return false
+	}
+	signed, ok := recoveryWitnessTx(right.SignedTx, left.State.WitnessTxID)
+	if !ok || !signed.HasWitness() || left.State.WitnessTxID != right.State.WitnessTxID {
+		return false
+	}
+	var a, b bytes.Buffer
+	if unsigned.SerializeNoWitness(&a) != nil || signed.SerializeNoWitness(&b) != nil || !bytes.Equal(a.Bytes(), b.Bytes()) {
+		return false
+	}
+	packet, err := psbt.NewFromRawBytes(bytes.NewReader(left.SignedPSBT), false)
+	if err != nil || packet.UnsignedTx == nil || len(packet.Inputs) != len(unsigned.TxIn) {
+		return false
+	}
+	var body bytes.Buffer
+	if packet.UnsignedTx.SerializeNoWitness(&body) != nil || !bytes.Equal(body.Bytes(), a.Bytes()) {
+		return false
+	}
+	prev := txscript.NewMultiPrevOutFetcher(nil)
+	for i, input := range unsigned.TxIn {
+		if len(input.SignatureScript) != 0 || packet.Inputs[i].WitnessUtxo == nil {
+			return false
+		}
+		prev.AddPrevOut(input.PreviousOutPoint, packet.Inputs[i].WitnessUtxo)
+	}
+	hashes := txscript.NewTxSigHashes(signed, prev)
+	for i, input := range signed.TxIn {
+		utxo := prev.FetchPrevOutput(input.PreviousOutPoint)
+		vm, err := txscript.NewEngine(utxo.PkScript, signed, i, txscript.StandardVerifyFlags, nil, hashes, utxo.Value, prev)
+		if err != nil || vm.Execute() != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func recoveryWitnessTx(raw []byte, txID string) (*wire.MsgTx, bool) {
