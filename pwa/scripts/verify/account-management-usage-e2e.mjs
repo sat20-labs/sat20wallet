@@ -2522,8 +2522,8 @@ export async function runRgbPaidCases(t, fixture) {
         } finally { await paidPage.evaluate(() => window.__restoreFundingPut()) }
         await confirmPaid()
         await expect.poll(() => submissions, { timeout: 90000 }).toBe(1)
-        // This is the production two-minute wait, with contract state and execution-history
-        // queries delayed after a real submission. No SDK clock override.
+        // Delay contract state and execution-history queries after a real submission to
+        // exercise the unresolved-receipt path. No SDK clock override.
         const tracker = paidPage.getByRole('region', { name: 'DKVS 付费交易追踪' })
         await expect(tracker).toContainText('原充值交易等待提交或合约确认', { timeout: 160000 })
         await expect(paidPage.getByRole('button', { name: '确认存储方式', exact: true })).toBeEnabled({ timeout: 160000 })
@@ -2555,18 +2555,25 @@ export async function runRgbPaidCases(t, fixture) {
         // A block Result can aggregate several invokes and expose only one
         // source reference. An unrelated Result cannot complete our receipt.
         delayHistory = false
-        const history = []
-        for (let start = 0; ;) {
-          const response = await walletCall(paidPage, 'queryContract', {
-            ContractType: 'template', Query: 'history', Contract: receipt.parameters.contract, Start: start, Limit: 100,
-          })
-          const batch = JSON.parse(response.result)
-          history.push(...batch.data)
-          start += batch.data.length
-          if (!batch.data.length || start >= batch.total) break
-        }
-        assert.equal(history.filter(item => item.txid === txid && item.kind === 'invoke' && item.height > 0).length, 1,
-          'real node history must contain exactly one confirmed original invocation')
+        let history = []
+        await expect.poll(async () => {
+          const current = []
+          for (let start = 0; ;) {
+            const response = await walletCall(paidPage, 'queryContract', {
+              ContractType: 'template', Query: 'history', Contract: receipt.parameters.contract, Start: start, Limit: 100,
+            })
+            const batch = JSON.parse(response.result)
+            current.push(...batch.data)
+            start += batch.data.length
+            if (!batch.data.length || start >= batch.total) break
+          }
+          history = current
+          return current.filter(item => item.txid === txid && item.kind === 'invoke' && item.height > 0).length
+        }, {
+          timeout: 90000,
+          intervals: [250, 500, 1000],
+          message: 'real node history must contain exactly one confirmed original invocation',
+        }).toBe(1)
         const originalResult = history.find(item => item.kind === 'result' && item.height > 0 &&
           (item.txid === txid || item.details?.result_for_txid === txid))
         console.log(JSON.stringify({ funding_history_evidence: { original_invocation_count: 1,
