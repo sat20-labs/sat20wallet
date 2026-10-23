@@ -1,0 +1,81 @@
+name: STP admission checks
+on:
+  create:
+permissions:
+  contents: read
+jobs:
+  admission:
+    if: ${{ github.event.ref_type == 'branch' && startsWith(github.event.ref, 'stp-admission-check-20261023') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: sat20wallet
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/indexer
+          ref: main
+          path: indexer
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/satoshinet
+          ref: main
+          path: satoshinet
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/rgb11
+          ref: main
+          path: rgb11
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/badger
+          ref: main
+          path: badger
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.13'
+          cache: false
+      - name: Prepare reviewed admission call sites
+        working-directory: sat20wallet
+        run: |
+          python3 .github/stp-admission-check.py
+          gofmt -w sdk/wallet/stp_asset_compatibility.go sdk/wallet/stp_asset_compatibility_test.go sdk/wallet/stp_asset_admission_test.go sdk/wallet/channel_splicing_client.go sdk/wallet/channel_expanding_client.go sdk/wallet/channel_asset_proof.go
+          git diff --check
+      - name: Compile and test admission and asset protection only
+        working-directory: sat20wallet/sdk
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./wallet -run '^Test(STPChannelAssetCompatibility|STPChannelAdmissionBeforeIO|HasMultiAssetPreservesNativeAndLegacyCarriers)$' -count=1 -timeout=5m -v 2>&1 | tee /tmp/stp-admission.log
+      - name: Export verified blobs for the GitHub connector
+        working-directory: sat20wallet
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess
+          paths = ['sdk/wallet/stp_asset_compatibility.go', 'sdk/wallet/stp_asset_compatibility_test.go', 'sdk/wallet/stp_asset_admission_test.go', 'sdk/wallet/channel_splicing_client.go', 'sdk/wallet/channel_expanding_client.go', 'sdk/wallet/channel_asset_proof.go']
+          for path in paths:
+              with open(path) as source:
+                  payload = json.dumps({'content': source.read(), 'encoding': 'utf-8'})
+              response = subprocess.check_output(['gh', 'api', '--method', 'POST', 'repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/blobs', '--input', '-'], input=payload.encode())
+              blob = json.loads(response)
+              print('STP_BLOB ' + json.dumps({'path': path, 'mode': '100644', 'type': 'blob', 'sha': blob['sha']}), flush=True)
+          print('SOURCE_HEAD=' + os.environ['GITHUB_SHA'])
+          PY
+          # No commit, push or branch-reference update is performed here.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stp-admission-diagnostics
+          path: /tmp/stp-admission.log
+          retention-days: 1
