@@ -97,7 +97,8 @@ func TestSTPChannelAdmissionBeforeIO(t *testing.T) {
 			check("client splice-in", err)
 			_, _, _, err = manager.FunderInitExpandingProcess(channel, &incoming.AssetName, "unused:0", "", nil)
 			check("client expansion", err)
-			resv := &SplicingReservation{Channel: channel}
+			resv := &SplicingReservation{}
+			resv.Channel = channel
 			resv.AssetName = &incoming
 			check("peer expansion", manager.AllowExpand(resv, "unused:0"))
 			_, err = manager.PrepareSTPChannelFunding(channel, &incoming, nil)
