@@ -38,7 +38,7 @@ func (p *Manager) getTxOutputFromIndexerOrInscribe(utxo string, inscribe *Inscri
 func (p *Manager) FunderInitSplicingInProcess(channel *Channel, assetName *swire.AssetName,
 	amt *Decimal, feeRate int64, utxos, fees []*TxOutput, inscribe *InscribeResv,
 	revealPrivKey []byte, reason string) (string, int64, error) {
-	if err := ValidateSTPAsset(assetName, STPOpSpliceIn); err != nil {
+	if err := ValidateSTPAssetForChannel(channel, assetName, STPOpSpliceIn); err != nil {
 		return "", 0, err
 	}
 

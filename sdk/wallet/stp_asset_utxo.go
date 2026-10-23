@@ -23,6 +23,12 @@ type runesSTPProtocol struct {
 	stpUTXORecovery
 }
 
+func (runesSTPProtocol) RecognizesSTPSweepDataCarrier(script []byte) bool {
+	stone := runestone.Runestone{}
+	artifact, err := stone.DecipherFromPkScript(script)
+	return err == nil && artifact != nil && artifact.Runestone != nil && artifact.Cenotaph == nil
+}
+
 // UTXO-based protocols recover directly from the commitment outputs. BRC20
 // overrides these methods because its balance needs another transfer inscription.
 type stpUTXORecovery struct{}

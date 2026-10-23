@@ -9,6 +9,15 @@ import (
 
 type brc20STPProtocol struct{ brc20STPRules }
 
+// Invalid BRC20 records are consumed transfer inscriptions or already-applied
+// account credits. Their Bitcoin carriers remain spendable, but the display
+// amount is not a second transferable allocation. No other protocol inherits
+// this interpretation merely by declaring an account-based policy.
+func (protocol brc20STPProtocol) IsSTPHistoricalDisplayOnly(asset *indexer.AssetInfo) bool {
+	return asset != nil && protocol.ValidateAsset(&asset.Name, STPOpForceClose) == nil &&
+		asset.Amount.Validate() == nil && asset.Amount.Sign() >= 0
+}
+
 func (brc20STPProtocol) EstimateSplicePayload(*AssetName, int) ([]byte, error) { return nil, nil }
 
 func (brc20STPProtocol) VerifyInput(asset *AssetName, input *TxOutput) error {

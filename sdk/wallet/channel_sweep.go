@@ -245,7 +245,7 @@ func (p *Manager) BuildSignedSweepTxForClient(channel *Channel, height int, feeR
 	}
 	result.Signed = true
 
-	err = VerifySignedTx(sweepTx, prevFetcher)
+	result.Fee, err = VerifySignedTxV2(sweepTx, prevFetcher)
 	if err != nil {
 		Log.Errorf("VerifySignedTx failed, %v", err)
 		return nil, err
@@ -291,7 +291,7 @@ func CreatePunishmentTx(remoteCommit *ChannelCommitment, revocationPrivKey *btce
 			continue
 		}
 		punishTx.AddTxIn(wire.NewTxIn(outPoint, nil, nil))
-		weightEstimate.AddNestedP2WSHInput(int64(len(commitmentScript)))
+		weightEstimate.AddWitnessInput(stpRecoveryWitnessSize(commitmentScript, STPOpPunish, false))
 		prevFetcher.AddPrevOut(*outPoint, txOut)
 		punishTx.AddTxOut(wire.NewTxOut(txOut.Value, recvPkScript))
 		weightEstimate.AddP2TROutput()
@@ -302,7 +302,7 @@ func CreatePunishmentTx(remoteCommit *ChannelCommitment, revocationPrivKey *btce
 			outPoint := output.OutPoint()
 			txOut := output.TxOut()
 			punishTx.AddTxIn(wire.NewTxIn(outPoint, nil, nil))
-			weightEstimate.AddNestedP2WSHInput(int64(len(commitmentScript)))
+			weightEstimate.AddWitnessInput(stpRecoveryWitnessSize(commitmentScript, STPOpPunish, false))
 			prevFetcher.AddPrevOut(*outPoint, txOut)
 			punishTx.AddTxOut(wire.NewTxOut(txOut.Value, recvPkScript))
 			weightEstimate.AddP2TROutput()
@@ -321,7 +321,7 @@ func CreatePunishmentTx(remoteCommit *ChannelCommitment, revocationPrivKey *btce
 		outPoint := plain.OutPoint()
 		txIn := wire.NewTxIn(outPoint, nil, nil)
 		punishTx.AddTxIn(txIn)
-		weightEstimate.AddNestedP2WSHInput(int64(len(commitmentScript)))
+		weightEstimate.AddWitnessInput(stpRecoveryWitnessSize(commitmentScript, STPOpPunish, false))
 		prevFetcher.AddPrevOut(*outPoint, plain.TxOut())
 	}
 	if len(punishTx.TxOut) == 0 {
@@ -388,6 +388,13 @@ func addSweepFeeChange(tx *wire.MsgTx, weightEstimate *utils.TxWeightEstimator,
 func (p *Manager) CreateSweepTx(commit *ChannelCommitment, outputIndex []int,
 	recvPkScript []byte, scriptType int, csvDelay, currHeight uint32,
 	commitmentScript []byte, feeRate int64) (*wire.MsgTx, txscript.PrevOutputFetcher, int64, error) {
+	return p.createSweepTx(commit, outputIndex, recvPkScript, scriptType, csvDelay, currHeight,
+		commitmentScript, feeRate, false)
+}
+
+func (p *Manager) createSweepTx(commit *ChannelCommitment, outputIndex []int,
+	recvPkScript []byte, scriptType int, csvDelay, currHeight uint32,
+	commitmentScript []byte, feeRate int64, coSigned bool) (*wire.MsgTx, txscript.PrevOutputFetcher, int64, error) {
 	// 构建清扫交易。sweep 花费的是自己 commitment 的 delayed output，需要满足
 	// CSV，并用当前高度作为 locktime。
 	if commit == nil || commit.CommitTx == nil || len(outputIndex) == 0 || len(recvPkScript) == 0 {
@@ -399,7 +406,7 @@ func (p *Manager) CreateSweepTx(commit *ChannelCommitment, outputIndex []int,
 	if native, err := p.buildSTPChannelRecovery(STPAssetRecoveryRequest{
 		Commitment: commit, Operation: STPOpForceClose, Branch: "sweep", OutputIndexes: outputIndex,
 		RecipientScript: recvPkScript, CommitmentScript: commitmentScript, ScriptType: scriptType,
-		CSVDelay: csvDelay, Height: currHeight, FeeRate: feeRate,
+		CSVDelay: csvDelay, Height: currHeight, FeeRate: feeRate, CoSignedSweep: coSigned,
 	}); err != nil {
 		return nil, nil, 0, err
 	} else if native != nil {
@@ -443,7 +450,7 @@ func (p *Manager) CreateSweepTx(commit *ChannelCommitment, outputIndex []int,
 		}
 		txIn := &wire.TxIn{PreviousOutPoint: *outPoint, Sequence: csvDelay}
 		sweepTx.AddTxIn(txIn)
-		weightEstimate.AddNestedP2WSHInput(int64(len(commitmentScript)))
+		weightEstimate.AddWitnessInput(stpRecoveryWitnessSize(commitmentScript, STPOpForceClose, coSigned))
 		prevFetcher.AddPrevOut(*outPoint, txOut)
 		out := wire.NewTxOut(txOut.Value, recvPkScript)
 		sweepTx.AddTxOut(out)
@@ -455,7 +462,7 @@ func (p *Manager) CreateSweepTx(commit *ChannelCommitment, outputIndex []int,
 			outPoint := output.OutPoint()
 			txOut := output.TxOut()
 			sweepTx.AddTxIn(&wire.TxIn{PreviousOutPoint: *outPoint, Sequence: csvDelay})
-			weightEstimate.AddNestedP2WSHInput(int64(len(commitmentScript)))
+			weightEstimate.AddWitnessInput(stpRecoveryWitnessSize(commitmentScript, STPOpForceClose, coSigned))
 			prevFetcher.AddPrevOut(*outPoint, txOut)
 			out := wire.NewTxOut(txOut.Value, recvPkScript)
 			sweepTx.AddTxOut(out)
@@ -473,7 +480,7 @@ func (p *Manager) CreateSweepTx(commit *ChannelCommitment, outputIndex []int,
 		outPoint := plain.OutPoint()
 		txIn := &wire.TxIn{PreviousOutPoint: *outPoint, Sequence: csvDelay}
 		sweepTx.AddTxIn(txIn)
-		weightEstimate.AddNestedP2WSHInput(int64(len(commitmentScript)))
+		weightEstimate.AddWitnessInput(stpRecoveryWitnessSize(commitmentScript, STPOpForceClose, coSigned))
 		prevFetcher.AddPrevOut(*outPoint, plain.TxOut())
 	}
 
@@ -555,7 +562,7 @@ func (p *Manager) CreateSweepTxForClient(commit *ChannelCommitment, outputIndex 
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("GetP2TRpkScript failed: %v", err)
 	}
-	return p.CreateSweepTx(commit, outputIndex, recvPkScript, SCRIPT_TYPE_SWEEP, csvDelay, currHeight, commitmentScript, feeRate)
+	return p.createSweepTx(commit, outputIndex, recvPkScript, SCRIPT_TYPE_SWEEP, csvDelay, currHeight, commitmentScript, feeRate, false)
 }
 
 func (p *Manager) CreateSweepTxForServer(commit *ChannelCommitment, outputIndex []int,
@@ -568,5 +575,6 @@ func (p *Manager) CreateSweepTxForServer(commit *ChannelCommitment, outputIndex 
 		Log.Errorf("GetP2WSHScript failed. %v", err)
 		return nil, nil, 0, err
 	}
-	return p.CreateSweepTx(commit, outputIndex, recvPkScript, SCRIPT_TYPE_SWEEP, csvDelay, currHeight, commitmentScript, feeRate)
+	return p.createSweepTx(commit, outputIndex, recvPkScript, SCRIPT_TYPE_SWEEP, csvDelay, currHeight, commitmentScript, feeRate,
+		!localPubKey.IsEqual(bootstrapKey))
 }

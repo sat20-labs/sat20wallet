@@ -51,8 +51,14 @@ func (p *Manager) markRecoverAscended(resv *SplicingReservation, ascendData *sin
 }
 
 func (p *Manager) AllowExpand(resv *SplicingReservation, utxo string) error {
+	if resv == nil || resv.AssetName == nil {
+		return fmt.Errorf("missing channel expansion context")
+	}
 	channel := resv.Channel
 	assetName := resv.AssetName
+	if err := ValidateSTPAssetForChannel(channel, &assetName.AssetName, STPOpExpand); err != nil {
+		return err
+	}
 	protocol, err := STPAssetProtocolFor(&assetName.AssetName, STPOpExpand)
 	if err != nil {
 		return err
@@ -270,7 +276,7 @@ func (p *Manager) ExpandAssetInChannel(channel *Channel, assetName *swire.AssetN
 
 func (p *Manager) FunderInitExpandingProcess(channel *Channel, assetName *swire.AssetName, utxo string,
 	reason string, memo []byte) (string, *Decimal, int64, error) {
-	if err := ValidateSTPAsset(assetName, STPOpExpand); err != nil {
+	if err := ValidateSTPAssetForChannel(channel, assetName, STPOpExpand); err != nil {
 		return "", nil, 0, err
 	}
 

@@ -105,10 +105,13 @@ type STPAssetRecoveryRequest struct {
 	ScriptType       int
 	CSVDelay         uint32
 	Height           uint32
-	FeeRate          int64
-	Inputs           []*TxOutput
-	FeeInputs        []*TxOutput
-	PrevTxs          []*wire.MsgTx
+	// Ordinary Core delayed sweeps require an independent Bootstrap signature.
+	// Client and Bootstrap-owned delayed outputs use the single-signature path.
+	CoSignedSweep bool
+	FeeRate       int64
+	Inputs        []*TxOutput
+	FeeInputs     []*TxOutput
+	PrevTxs       []*wire.MsgTx
 }
 
 type STPAssetRecoveryPlan struct {
@@ -644,6 +647,9 @@ func (p *Manager) PrepareSTPChannelFunding(channel *Channel, asset *AssetName, i
 	if channel == nil || asset == nil {
 		return nil, fmt.Errorf("missing channel funding context")
 	}
+	if err := ValidateSTPAssetForChannel(channel, &asset.AssetName, STPOpSpliceIn); err != nil {
+		return nil, err
+	}
 	protocol, err := STPAssetProtocolFor(&asset.AssetName, STPOpSpliceIn)
 	if err != nil {
 		return nil, err
@@ -718,6 +724,9 @@ func applySTPValidatedFundingInputs(inputs, validated []*TxOutput) {
 func (p *Manager) AcceptSTPChannelFunding(channel *Channel, asset *AssetName, inputs []*TxOutput, proofs map[string][]byte, entropy [32]byte) error {
 	if channel == nil || asset == nil {
 		return fmt.Errorf("missing channel funding context")
+	}
+	if err := ValidateSTPAssetForChannel(channel, &asset.AssetName, STPOpSpliceIn); err != nil {
+		return err
 	}
 	protocol, err := STPAssetProtocolFor(&asset.AssetName, STPOpSpliceIn)
 	if err != nil {

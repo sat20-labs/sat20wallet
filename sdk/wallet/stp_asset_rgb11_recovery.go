@@ -122,9 +122,9 @@ func (protocol rgb11STPProtocol) BuildChannelRecovery(p *Manager, req STPAssetRe
 		tx.AddTxIn(&wire.TxIn{PreviousOutPoint: *point, Sequence: sequence})
 		fetcher.AddPrevOut(*point, output.TxOut())
 		if req.Branch == "other-sweep" {
-			weight.AddWitnessInput(utils.MultiSigWitnessSize)
+			weight.AddWitnessInput(stpMultisigWitnessSize(req.CommitmentScript))
 		} else {
-			weight.AddNestedP2WSHInput(int64(len(req.CommitmentScript)))
+			weight.AddWitnessInput(stpRecoveryWitnessSize(req.CommitmentScript, req.Operation, req.CoSignedSweep))
 		}
 		return nil
 	}

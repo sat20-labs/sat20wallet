@@ -12,6 +12,49 @@ import (
 	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
 )
 
+// Only a registered protocol can recognize a proofless data carrier. An RGB
+// DBC or an unknown commitment must not be treated as evidence of plain Bitcoin.
+type stpSweepDataCarrierRecognizer interface {
+	RecognizesSTPSweepDataCarrier([]byte) bool
+}
+
+// This is an explicit protocol-owned interpretation of an invalid marker, not
+// a permission granted to every account-based or future asset protocol.
+type stpHistoricalDisplayAsset interface {
+	IsSTPHistoricalDisplayOnly(*indexer.AssetInfo) bool
+}
+
+func recognizesSTPSweepDataCarrier(script []byte) bool {
+	for _, protocol := range stpAssetProtocols.ordered {
+		if recognizer, ok := protocol.(stpSweepDataCarrierRecognizer); ok && recognizer.RecognizesSTPSweepDataCarrier(script) {
+			return true
+		}
+	}
+	return false
+}
+
+// VerifySTPChannelInputsWithoutProof rejects locally known client-validated
+// carriers when no native material accompanies their spend. Success does not
+// establish that an otherwise undisclosed asset is absent from the transaction.
+func (p *Manager) VerifySTPChannelInputsWithoutProof(tx *wire.MsgTx) error {
+	if p == nil || tx == nil {
+		return fmt.Errorf("missing STP input verification context")
+	}
+	for _, input := range tx.TxIn {
+		if input == nil {
+			return fmt.Errorf("nil STP input for native proof verification")
+		}
+	}
+	for _, protocol := range stpAssetProtocols.ordered {
+		if verifier, ok := protocol.(STPAssetHiddenInputVerifier); ok {
+			if err := verifier.VerifyUndisclosedChannelInputs(p, tx); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // STPSweepRGB11Proof exports only the public terminal transition for the exact
 // sweep. Never serialize the private ChannelPackage into a signing request.
 func STPSweepRGB11Proof(tx *wire.MsgTx, proofs map[string][]byte) (*wwire.RGB11SigningProof, error) {
@@ -60,18 +103,17 @@ func (p *Manager) ValidateSTPServerSweep(tx *wire.MsgTx, destination []byte,
 			(!txscript.IsUnspendable(output.PkScript) && !bytes.Equal(output.PkScript, destination)) {
 			return nil, fmt.Errorf("STP sweep changed its recipient or valued commitment")
 		}
+		if proof == nil && txscript.IsUnspendable(output.PkScript) && !recognizesSTPSweepDataCarrier(output.PkScript) {
+			return nil, fmt.Errorf("STP sweep has an unrecognized commitment without a native proof")
+		}
 	}
 	var inputs, outputs []*TxOutput
 	var err error
 	if proof != nil {
 		inputs, outputs, err = p.rebuildRGB11TxOutput(tx, proof, true)
 	} else {
-		for _, protocol := range stpAssetProtocols.ordered {
-			if verifier, ok := protocol.(STPAssetHiddenInputVerifier); ok {
-				if err := verifier.VerifyUndisclosedChannelInputs(p, tx); err != nil {
-					return nil, err
-				}
-			}
+		if err := p.VerifySTPChannelInputsWithoutProof(tx); err != nil {
+			return nil, err
 		}
 		inputs, outputs, err = p.RebuildTxOutput(tx, previous)
 	}
@@ -83,10 +125,26 @@ func (p *Manager) ValidateSTPServerSweep(tx *wire.MsgTx, destination []byte,
 	}
 	inTotals, outTotals := make(map[indexer.AssetName]*Decimal), make(map[indexer.AssetName]*Decimal)
 	add := func(totals map[indexer.AssetName]*Decimal, output *TxOutput) error {
-		if output == nil || len(output.Invalids) != 0 {
+		if output == nil {
 			return fmt.Errorf("invalid STP sweep asset state")
 		}
+		for name, invalid := range output.Invalids {
+			if !invalid {
+				continue
+			}
+			asset, assetErr := output.Assets.Find(&name)
+			protocol, protocolErr := STPAssetProtocolFor(&name, STPOpForceClose)
+			history, ok := protocol.(stpHistoricalDisplayAsset)
+			if assetErr != nil || protocolErr != nil || !ok || !history.IsSTPHistoricalDisplayOnly(asset) {
+				return fmt.Errorf("invalid STP sweep asset state: %s at %s", name.String(), output.OutPointStr)
+			}
+		}
 		for _, asset := range output.Assets {
+			if output.Invalids[asset.Name] {
+				// The adapter authenticated this as an already-consumed display
+				// record. A new valid transfer of the same ticker still counts.
+				continue
+			}
 			if asset.Amount.Validate() != nil || asset.Amount.Sign() < 0 {
 				return fmt.Errorf("invalid STP sweep asset quantity")
 			}
