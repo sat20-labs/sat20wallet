@@ -233,9 +233,27 @@ test('network identity uses mainnet and migrates legacy livenet storage', () => 
   const storage = read('lib/walletStorage.ts')
   assert.match(types, /MAINNET = 'mainnet'/)
   assert.doesNotMatch(types, /LIVENET/)
-  assert.match(config, /\[Network\.MAINNET\]: NetworkConfig/)
+  const source = `${types}\n${config.replace(/^import .*$/gm, '')}`
+  const { code } = transformSync(source, { loader: 'ts', target: 'es2022', format: 'cjs' })
+  const getConfig = runInNewContext(`${code}\nmodule.exports.getConfig`, { module: { exports: {} } })
+  for (const env of ['dev', 'test', 'prd']) {
+    const mainnet = getConfig(env, 'mainnet')
+    assert.equal(mainnet.Chain, 'mainnet')
+    assert.equal(mainnet.IndexerL1.Proxy, 'btc/mainnet')
+    assert.equal(mainnet.IndexerL2.Proxy, 'satsnet/mainnet')
+    assert.throws(() => getConfig(env, 'livenet'), /Invalid network/)
+  }
   assert.doesNotMatch(config, /Network\.LIVENET/)
-  assert.match(storage, /network: Network\.MAINNET/)
+  const storageSource = `${types}\n${read('utils/networkMode.ts')}\n${storage}`
+    .replace(/^import .*$/gm, '')
+  for (const [mode, network] of [['production', 'mainnet'], ['regtest', 'regtest']]) {
+    const { code: storageCode } = transformSync(storageSource, {
+      loader: 'ts', target: 'es2022', format: 'cjs',
+      define: { 'import.meta.env.MODE': JSON.stringify(mode) },
+    })
+    const walletStorage = runInNewContext(`${storageCode}\nmodule.exports.walletStorage`, { module: { exports: {} } })
+    assert.equal(walletStorage.getValue('network'), network)
+  }
   assert.match(storage, /state\.network as string\) === 'livenet'[\s\S]*state\.network = Network\.MAINNET/)
   assert.match(storage, /state\.accountRecovery && \(state\.accountRecovery\.network as string\) === 'livenet'[\s\S]*state\.accountRecovery\.network = Network\.MAINNET/)
 })

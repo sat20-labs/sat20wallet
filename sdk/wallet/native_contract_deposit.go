@@ -40,12 +40,14 @@ type NativeContractDepositIntent struct {
 // sender change secrets or private channel package. Sender recovery remains in
 // the existing RGB pending-transfer store and its protected input reservation.
 type NativeContractDeposit struct {
-	Version       uint32                      `json:"version"`
-	TransferID    string                      `json:"transfer_id"`
-	Intent        NativeContractDepositIntent `json:"intent"`
-	SignedTx      []byte                      `json:"signed_tx"`
-	WitnessScript []byte                      `json:"witness_script"`
-	Source        *NativeChannelSource        `json:"source"`
+	Version    uint32                      `json:"version"`
+	TransferID string                      `json:"transfer_id"`
+	Intent     NativeContractDepositIntent `json:"intent"`
+	// Like PendingTransfer.SignedTx at prepare time, this is the fixed unsigned
+	// transaction. Final signatures belong to the existing RGB broadcast record.
+	SignedTx      []byte               `json:"signed_tx"`
+	WitnessScript []byte               `json:"witness_script"`
+	Source        *NativeChannelSource `json:"source"`
 }
 
 type nativeContractDepositJournal struct {
@@ -103,7 +105,7 @@ func nativeContractWitness(contract ContractRuntime) ([]byte, error) {
 	return witness, nil
 }
 
-// PrepareNativeContractDeposit fixes the signed Bitcoin transaction before
+// PrepareNativeContractDeposit fixes the unsigned Bitcoin transaction before
 // delivery. Retrying uses ResumeNativeContractDeposit with this TransferID;
 // it never reselects inputs or creates another native transition.
 func (p *Manager) PrepareNativeContractDeposit(ctx context.Context, contractURL, recipient,
@@ -279,29 +281,31 @@ func (p *Manager) ResumeNativeContractDeposit(ctx context.Context, transferID st
 			return "", err
 		}
 	}
-	// A retry may follow an accepted broadcast whose response was lost. The
-	// exact observed bytes are enough to recover that attempt; mempool policy
-	// must only be asked to accept transactions that are not already present.
-	scope, err := p.stpRGB11Scope(owner)
-	if err != nil {
-		return "", err
-	}
-	observed := false
-	if status, statusErr := scope.evidence.GetTxStatus(point.Hash.String()); statusErr == nil && status != nil && (status.Confirmed || status.InMempool) {
-		actual, err := scope.evidence.GetRawTx(point.Hash.String())
-		if err != nil || !bytes.Equal(actual, journal.Deposit.SignedTx) {
-			return "", fmt.Errorf("observed native deposit differs from durable signed bytes: %w", err)
-		}
-		observed = true
-	}
-	if !observed {
-		if err := p.l1IndexerClient.TestRawTx_Bitcoin([]string{hex.EncodeToString(journal.Deposit.SignedTx)}); err != nil {
-			return "", err
-		}
-	}
+	// Only the existing RGB broadcast boundary may sign. It persists the ACK
+	// and broadcast intent before signing, verifies the signed spend, and lets
+	// the Bitcoin backend apply mempool policy to those final bytes.
 	txid, err := runRGB11ManagedOperationWithManager(p, ctx, rgb11ManagedOperationContinue,
 		func() (*rgb11Manager, error) { return p.stpRGB11Scope(owner) },
-		func(rgb *rgb11Manager) (string, error) { return rgb.BroadcastRGB11OutOfBand([]string{transferID}) })
+		func(rgb *rgb11Manager) (string, error) {
+			pending, err := rgb.projectionStore.LoadPendingTransfer(transferID)
+			if err != nil {
+				return "", err
+			}
+			fixed, err := decodeRGB11BroadcastTx(journal.Deposit.SignedTx)
+			if err != nil {
+				return "", err
+			}
+			current, err := decodeRGB11BroadcastTx(pending.SignedTx)
+			if err != nil || !sameRGB11UnsignedTx(fixed, current) {
+				return "", fmt.Errorf("native deposit pending transaction changed")
+			}
+			if status, statusErr := rgb.evidence.GetTxStatus(point.Hash.String()); statusErr == nil && status != nil && (status.Confirmed || status.InMempool) {
+				if err := validateObservedNativeContractDeposit(rgb.evidence, &journal.Deposit, false); err != nil {
+					return "", err
+				}
+			}
+			return rgb.BroadcastRGB11OutOfBand([]string{transferID})
+		})
 	if err != nil {
 		return txid, err
 	}
@@ -319,8 +323,9 @@ func (p *Manager) ResumeNativeContractDeposit(ctx context.Context, transferID st
 	return txid, nil
 }
 
-// ReceiveNativeContractDeposit persists the exact prepared transition before
-// acknowledging it. Confirmation is independently required by Materialize.
+// ReceiveNativeContractDeposit acknowledges the exact unsigned transition and
+// proof, not Bitcoin spend authorization. Materialize independently requires
+// the matching confirmed transaction and validates its complete signatures.
 func (p *Manager) ReceiveNativeContractDeposit(ctx context.Context, contract ContractRuntime, deposit *NativeContractDeposit) error {
 	if deposit == nil || deposit.Version != 1 || deposit.Source == nil || deposit.Source.Output == nil ||
 		deposit.Intent.ContractURL != contract.URL() || deposit.Intent.AssetName != contract.GetAssetName().String() {
@@ -341,6 +346,14 @@ func (p *Manager) ReceiveNativeContractDeposit(ctx context.Context, contract Con
 	reader := bytes.NewReader(deposit.SignedTx)
 	if err := tx.Deserialize(reader); err != nil || reader.Len() != 0 {
 		return fmt.Errorf("invalid native deposit Bitcoin transaction")
+	}
+	if tx.HasWitness() {
+		return fmt.Errorf("native deposit preparation must not contain signatures")
+	}
+	for _, input := range tx.TxIn {
+		if len(input.SignatureScript) != 0 {
+			return fmt.Errorf("native deposit preparation must not contain signatures")
+		}
 	}
 	point, err := wire.NewOutPointFromString(deposit.Source.Output.OutPointStr)
 	if err != nil || point.Hash.String() != tx.TxID() || int(point.Index) >= len(tx.TxOut) {
@@ -392,33 +405,20 @@ func (p *Manager) ReceiveNativeContractDeposit(ctx context.Context, contract Con
 	if validated.Asset.Amount.Value.String() != deposit.Intent.Amount {
 		return fmt.Errorf("native deposit amount differs from signed intent")
 	}
-	// Transaction signature validation uses Bitcoin prevouts, independently of
-	// the native assignment proof. All inputs must commit every output.
+	// Preparation checks every input independently of the RGB assignment proof.
+	// Spend authorization is checked against the observed final witness before
+	// any contract input or anchor can be authorized.
 	rgb, err := p.captureRGB11NetworkScope(true)
 	if err != nil {
 		return err
 	}
-	fetcher := txscript.NewMultiPrevOutFetcher(nil)
 	for _, input := range tx.TxIn {
 		prev, err := rgb.evidence.GetUTXO(input.PreviousOutPoint.String())
 		if err != nil || prev == nil {
 			return fmt.Errorf("native deposit input evidence unavailable: %w", err)
 		}
-		if !txscript.IsPayToTaproot(prev.PkScript) || len(input.Witness) != 1 ||
-			(len(input.Witness[0]) != 64 && !(len(input.Witness[0]) == 65 && input.Witness[0][64] == byte(txscript.SigHashAll))) {
-			return fmt.Errorf("native deposit input does not commit all outputs")
-		}
-		fetcher.AddPrevOut(input.PreviousOutPoint, wire.NewTxOut(prev.Value, prev.PkScript))
-	}
-	hashes := txscript.NewTxSigHashes(tx, fetcher)
-	for i, input := range tx.TxIn {
-		prev := fetcher.FetchPrevOutput(input.PreviousOutPoint)
-		engine, err := txscript.NewEngine(prev.PkScript, tx, i, txscript.StandardVerifyFlags, nil, hashes, prev.Value, fetcher)
-		if err != nil {
-			return err
-		}
-		if err := engine.Execute(); err != nil {
-			return err
+		if !txscript.IsPayToTaproot(prev.PkScript) {
+			return fmt.Errorf("native deposit input must use taproot")
 		}
 	}
 	nativeChannelInventoryMu.Lock()
@@ -431,6 +431,69 @@ func (p *Manager) ReceiveNativeContractDeposit(ctx context.Context, contract Con
 		return err
 	}
 	return p.GetDB().Write(key, raw)
+}
+
+// The prepared receipt never authorizes minting. Resolve the final Bitcoin
+// witness and historical prevouts independently, including after those inputs
+// have been spent, before using the receipt as a contract input or anchor.
+func validateObservedNativeContractDeposit(evidence rgb11wallet.BitcoinEvidenceProvider,
+	deposit *NativeContractDeposit, requireConfirmed bool) error {
+	if evidence == nil || deposit == nil {
+		return fmt.Errorf("native deposit evidence unavailable")
+	}
+	fixed, err := decodeRGB11BroadcastTx(deposit.SignedTx)
+	if err != nil {
+		return err
+	}
+	txid := fixed.TxID()
+	status, err := evidence.GetTxStatus(txid)
+	if err != nil {
+		return err
+	}
+	if status == nil || status.TxID != txid || (!status.Confirmed && (requireConfirmed || !status.InMempool)) {
+		return fmt.Errorf("native deposit Bitcoin transaction is not observed at the required confirmation state")
+	}
+	raw, err := evidence.GetRawTx(txid)
+	if err != nil {
+		return err
+	}
+	tx, err := decodeRGB11BroadcastTx(raw)
+	if err != nil || !sameRGB11UnsignedTx(fixed, tx) {
+		return fmt.Errorf("observed native deposit differs from the acknowledged transaction")
+	}
+	var canonical bytes.Buffer
+	if err := tx.Serialize(&canonical); err != nil || !bytes.Equal(canonical.Bytes(), raw) {
+		return fmt.Errorf("invalid observed native deposit transaction encoding")
+	}
+	fetcher := txscript.NewMultiPrevOutFetcher(nil)
+	for _, input := range tx.TxIn {
+		parentRaw, err := evidence.GetRawTx(input.PreviousOutPoint.Hash.String())
+		if err != nil {
+			return err
+		}
+		parent, err := decodeRGB11BroadcastTx(parentRaw)
+		if err != nil || parent.TxHash() != input.PreviousOutPoint.Hash || int(input.PreviousOutPoint.Index) >= len(parent.TxOut) {
+			return fmt.Errorf("native deposit input transaction evidence mismatch")
+		}
+		prev := parent.TxOut[input.PreviousOutPoint.Index]
+		if !txscript.IsPayToTaproot(prev.PkScript) || len(input.SignatureScript) != 0 || len(input.Witness) != 1 ||
+			(len(input.Witness[0]) != 64 && !(len(input.Witness[0]) == 65 && input.Witness[0][64] == byte(txscript.SigHashAll))) {
+			return fmt.Errorf("native deposit input does not commit all outputs")
+		}
+		fetcher.AddPrevOut(input.PreviousOutPoint, prev)
+	}
+	hashes := txscript.NewTxSigHashes(tx, fetcher)
+	for i, input := range tx.TxIn {
+		prev := fetcher.FetchPrevOutput(input.PreviousOutPoint)
+		engine, err := txscript.NewEngine(prev.PkScript, tx, i, txscript.StandardVerifyFlags, nil, hashes, prev.Value, fetcher)
+		if err != nil {
+			return err
+		}
+		if err := engine.Execute(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (p *Manager) MaterializeNativeContractInput(ctx context.Context, contract ContractRuntime, outpoint string) (*NativeContractInput, error) {
@@ -450,6 +513,9 @@ func (p *Manager) MaterializeNativeContractInput(ctx context.Context, contract C
 	}
 	scope, err := p.stpRGB11Scope(contract.GetRuntimeBase().GetLocalWallet())
 	if err != nil {
+		return nil, err
+	}
+	if err := validateObservedNativeContractDeposit(scope.evidence, &deposit, true); err != nil {
 		return nil, err
 	}
 	spent, err := scope.evidence.GetOutspend(outpoint)

@@ -25,6 +25,13 @@ test('stage commands contain one Go test verb before their flags and package', (
   }
 })
 
+test('Transcend aggregate command enables its build tag and exact required selector', () => {
+  const stage = stageCatalog.find(item => item.id === 'transcend-stp')
+  const command = buildCommand(stage, { GO: 'go' })
+  assert.ok(command.includes('-tags=stp_aggregate'))
+  assert.equal(command[command.indexOf('-run') + 1], '^TestRunAll$')
+})
+
 test('default plan is the complete serial catalog and keeps the browser port isolated', () => {
   const plan = buildPlan(stageCatalog, parsePort(undefined))
   assert.equal(plan.length, 9)

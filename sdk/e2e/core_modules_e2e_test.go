@@ -130,7 +130,17 @@ func TestSDKCoreModulesE2E(t *testing.T) {
 		}
 	}
 	command.Env = append(command.Env, "SAT20WALLET_CORE_E2E_CONFIG="+string(config))
-	output, runErr := command.CombinedOutput()
+	// Stream private child diagnostics to disk even on success or parent timeout.
+	// Keep them outside t.TempDir so automatic cleanup cannot erase the evidence.
+	childLog, err := os.CreateTemp("", "sat20wallet-core-e2e-child-*.log")
+	require.NoError(t, err)
+	defer childLog.Close()
+	t.Logf("core-e2e: child diagnostic=%s", childLog.Name())
+	command.Stdout, command.Stderr = childLog, childLog
+	runErr := command.Run()
+	require.NoError(t, childLog.Close())
+	output, err := os.ReadFile(childLog.Name())
+	require.NoError(t, err)
 	type event struct {
 		Action, Test, Output string
 		Elapsed              float64
@@ -193,16 +203,7 @@ func TestSDKCoreModulesE2E(t *testing.T) {
 		t.Log(failure)
 	}
 	if runErr != nil {
-		// Raw child logs can include synthetic secrets; keep them in the test's
-		// private temporary area, outside t.TempDir's automatic cleanup, so the
-		// failure can actually be diagnosed after go test exits.
-		diagnostic := "unavailable"
-		if file, err := os.CreateTemp("", "sat20wallet-core-e2e-child-*.log"); err == nil {
-			diagnostic = file.Name()
-			_, _ = file.Write(output)
-			_ = file.Close()
-		}
-		t.Fatalf("core-e2e: wallet lifecycle suite failed: %v; redacted evidence in review-evidence/core-modules-e2e-latest.json; diagnostic=%s", runErr, diagnostic)
+		t.Fatalf("core-e2e: wallet lifecycle suite failed: %v; redacted evidence in review-evidence/core-modules-e2e-latest.json; diagnostic=%s", runErr, childLog.Name())
 	}
 }
 

@@ -84,7 +84,9 @@ func dkvsNoPluginBuildArtifacts(t *testing.T) satoshinetArtifacts {
 		require.NoError(t, os.WriteFile(target, data, 0600))
 	}
 	editArgs := []string{"mod", "edit", "-modfile=" + transcendMod}
-	for _, module := range []string{"satoshinet", "indexer", "sat20wallet/sdk", "rgb11"} {
+	// Keep RGB11 on the same published module as the host binary. Replacing
+	// it with a local checkout changes Go plugin package fingerprints.
+	for _, module := range []string{"satoshinet", "indexer", "sat20wallet/sdk"} {
 		editArgs = append(editArgs, "-replace=github.com/sat20-labs/"+module+"="+filepath.Join(workspace, module))
 	}
 	cmd = exec.Command("go", editArgs...)

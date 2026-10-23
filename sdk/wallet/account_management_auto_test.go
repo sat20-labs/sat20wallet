@@ -42,6 +42,7 @@ func newAccountManagementAutoTestManager(t *testing.T) *Manager {
 	}
 	manager.ensureDKVSManager()
 	t.Cleanup(func() {
+		manager.stopAccountBackgroundTasks()
 		manager.clearAccountManagementSession()
 		if manager.rgbManager != nil && manager.rgbManager.scopeStates != nil {
 			manager.rgbManager.scopeStates.stopReconciliations()

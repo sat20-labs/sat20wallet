@@ -71,6 +71,13 @@ func (p *Manager) validateNativeContractDepositAnchor(ctx context.Context, contr
 		deposit.Source == nil || deposit.Source.Output == nil || deposit.Source.Output.OutPointStr != data.Utxo {
 		return fmt.Errorf("native anchor has no matching durable customer authorization")
 	}
+	scope, err := p.stpRGB11Scope(contract.GetRuntimeBase().GetLocalWallet())
+	if err != nil {
+		return err
+	}
+	if err := validateObservedNativeContractDeposit(scope.evidence, &deposit, true); err != nil {
+		return err
+	}
 	script, err := GetPkScriptFromAddress(deposit.Intent.Recipient)
 	if err != nil {
 		return err

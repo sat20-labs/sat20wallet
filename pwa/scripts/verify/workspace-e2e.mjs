@@ -104,8 +104,10 @@ function goStage(id, repo, packageName, tests, timeout) {
 }
 
 export function buildCommand(stage, env = process.env) {
-  const args = ['test', ...goFlags, `-timeout=${stage.timeout}`, '-run', exactSelector(stage.tests)]
+  const selector = stage.id === 'transcend-stp' ? '^TestRunAll$' : exactSelector(stage.tests)
+  const args = ['test', ...goFlags, `-timeout=${stage.timeout}`, '-run', selector]
   if (stage.id === 'transcend-stp') {
+    args.push('-tags=stp_aggregate')
     const modfile = env.SAT20_TRANSCEND_E2E_MODFILE
     if (modfile) {
       assert.equal(resolve(modfile), modfile, 'SAT20_TRANSCEND_E2E_MODFILE must be an absolute path')
