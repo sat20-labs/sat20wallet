@@ -17,6 +17,13 @@ import (
 // RGB transition. Bitcoin sat-range allocation cannot describe RGB outputs.
 // This read-only operation neither imports assets nor changes channel state.
 func (p *Manager) RebuildRGB11TxOutput(tx *wire.MsgTx, proof *wwire.RGB11SigningProof) ([]*TxOutput, []*TxOutput, error) {
+	return p.rebuildRGB11TxOutput(tx, proof, false)
+}
+
+// Mixed custody sweeps may carry other protocols on separate inputs. Their
+// assignments must be reconstructed independently, never inferred from RGB.
+// Ordinary single-asset sends retain their stricter preservation boundary.
+func (p *Manager) rebuildRGB11TxOutput(tx *wire.MsgTx, proof *wwire.RGB11SigningProof, mixedSweep bool) ([]*TxOutput, []*TxOutput, error) {
 	if p == nil || p.l1IndexerClient == nil || tx == nil || proof == nil || len(proof.Consignment) == 0 ||
 		len(proof.Consignment) > 4*1024*1024 || len(proof.ChangeSeals) > 1024 {
 		return nil, nil, ErrRGB11Inconsistent
@@ -76,6 +83,7 @@ func (p *Manager) RebuildRGB11TxOutput(tx *wire.MsgTx, proof *wwire.RGB11Signing
 		return nil, nil, fmt.Errorf("RGB11 signing proof has incomplete consumed allocation evidence")
 	}
 	inputs := make([]*TxOutput, 0, len(tx.TxIn))
+	publicInputs := make(map[string]*TxOutput, len(tx.TxIn))
 	knownRGB := make(map[indexer.AssetName]bool)
 	inputTotals := make(map[indexer.AssetName]*indexer.Decimal)
 	for _, input := range tx.TxIn {
@@ -84,10 +92,12 @@ func (p *Manager) RebuildRGB11TxOutput(tx *wire.MsgTx, proof *wwire.RGB11Signing
 			return nil, nil, fmt.Errorf("resolve RGB11 signing input: %w", err)
 		}
 		for _, asset := range output.Assets {
-			if !indexer.IsPlainAsset(&asset.Name) {
+			if !indexer.IsPlainAsset(&asset.Name) &&
+				(!mixedSweep || len(nativeInputs[input.PreviousOutPoint.String()]) != 0 || asset.Name.Protocol == rgb11wallet.Protocol) {
 				return nil, nil, ErrRGB11AssetPreservation
 			}
 		}
+		publicInputs[input.PreviousOutPoint.String()] = output.Clone()
 		// The indexer cannot see RGB allocations. Include the local validated
 		// view so a proof for one contract cannot hide another on its carrier.
 		if p.rgbManager != nil && p.rgbManager.projectionStore != nil {
@@ -170,6 +180,33 @@ func (p *Manager) RebuildRGB11TxOutput(tx *wire.MsgTx, proof *wwire.RGB11Signing
 		if amount.Cmp(outputTotals[name]) != 0 {
 			return nil, nil, ErrRGB11AssetPreservation
 		}
+	}
+	if mixedSweep {
+		publicIn, publicOut, err := p.RebuildTxOutput(tx, publicInputs)
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(publicIn) != len(inputs) || len(publicOut) != len(outputs) {
+			return nil, nil, ErrRGB11AssetPreservation
+		}
+		for i, input := range inputs {
+			if publicIn[i].OutPointStr != input.OutPointStr {
+				return nil, nil, ErrRGB11AssetPreservation
+			}
+			for _, asset := range input.Assets {
+				if err := publicIn[i].Assets.Add(&asset); err != nil {
+					return nil, nil, err
+				}
+			}
+		}
+		for i, output := range outputs {
+			for _, asset := range output.Assets {
+				if err := publicOut[i].Assets.Add(&asset); err != nil {
+					return nil, nil, err
+				}
+			}
+		}
+		return publicIn, publicOut, nil
 	}
 	return inputs, outputs, nil
 }

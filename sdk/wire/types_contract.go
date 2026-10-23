@@ -154,6 +154,9 @@ type RemoteSignMoreData struct {
 	Witness  []byte        `json:"witness"`
 	Action   string        `json:"action"`
 	MoreData []byte        `json:"more"` // 有时候Tx中无法放入足够数据
+	// Only public consignment material belongs in a sweep signing request.
+	// Private channel entropy and alternative recovery branches stay local.
+	RGB11Proof *RGB11SigningProof `json:"rgb11,omitempty"`
 }
 type RemoteSignMoreData_Sweep = RemoteSignMoreData
 type RemoteSignMoreData_Ascend = RemoteSignMoreData
