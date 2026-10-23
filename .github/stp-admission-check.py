@@ -13,8 +13,12 @@ replace('sdk/wallet/channel_splicing_client.go',
         'if err := ValidateSTPAsset(assetName, STPOpSpliceIn); err != nil {',
         'if err := ValidateSTPAssetForChannel(channel, assetName, STPOpSpliceIn); err != nil {')
 replace('sdk/wallet/channel_expanding_client.go',
-        'if err := ValidateSTPAsset(assetName, STPOpExpand); err != nil {',
-        'if err := ValidateSTPAssetForChannel(channel, assetName, STPOpExpand); err != nil {')
+        '''func (p *Manager) FunderInitExpandingProcess(channel *Channel, assetName *swire.AssetName, utxo string,
+	reason string, memo []byte) (string, *Decimal, int64, error) {
+	if err := ValidateSTPAsset(assetName, STPOpExpand); err != nil {''',
+        '''func (p *Manager) FunderInitExpandingProcess(channel *Channel, assetName *swire.AssetName, utxo string,
+	reason string, memo []byte) (string, *Decimal, int64, error) {
+	if err := ValidateSTPAssetForChannel(channel, assetName, STPOpExpand); err != nil {''')
 replace('sdk/wallet/channel_expanding_client.go',
         '''func (p *Manager) AllowExpand(resv *SplicingReservation, utxo string) error {
 	channel := resv.Channel
