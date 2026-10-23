@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"sync"
+	"time"
 
 	indexer "github.com/sat20-labs/indexer/common"
 )
@@ -18,8 +18,6 @@ type nativeContractPendingWithdrawal struct {
 	Deal        *DealInfo `json:"deal"`
 	Settled     bool      `json:"settled,omitempty"`
 }
-
-var nativeContractSettlementMu sync.Mutex
 
 func (p *SwapContractRuntime) nativeWithdrawalPendingKey() []byte {
 	return nativeContractWithdrawKey("pending", nativeContractDealID([]byte(p.URL())))
@@ -66,8 +64,10 @@ func (p *SwapContractRuntime) stageNativeContractWithdrawal(deal *DealInfo) erro
 	copy.ItemIDs = append([]int64(nil), deal.ItemIDs...)
 	sort.Slice(copy.ItemIDs, func(i, j int) bool { return copy.ItemIDs[i] < copy.ItemIDs[j] })
 	pending := nativeContractPendingWithdrawal{Version: 1, ContractURL: p.URL(), Deal: &copy}
-	nativeChannelInventoryMu.Lock()
-	defer nativeChannelInventoryMu.Unlock()
+	// Selection and ledger commit share only this contract's local mutex.
+	// No chain query, peer request or broadcast is allowed in this section.
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
 	if copy.TxId != "" {
 		raw, err := p.stp.GetDB().Read(nativeContractWithdrawKey("settled", copy.TxId))
 		if err == nil {
@@ -122,11 +122,26 @@ func (p *SwapContractRuntime) stageNativeContractWithdrawal(deal *DealInfo) erro
 }
 
 func (p *SwapContractRuntime) reconcileNativeContractWithdrawals() (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return p.reconcileNativeContractWithdrawal(ctx, func(ctx context.Context, txid string) (*ConfirmedNativeContractWithdrawal, error) {
+		manager := p.stp.GetWalletMgr()
+		if err := manager.resumeNativeContractBroadcast(ctx, p.localWallet, p.URL(), txid); err != nil {
+			return nil, err
+		}
+		return manager.LoadConfirmedNativeContractWithdrawal(ctx, p.localWallet, txid)
+	})
+}
+
+// Chain verification runs on an immutable pending snapshot without a mutex.
+// Concurrent monitors may observe the same transaction: exact-byte replay is
+// idempotent, and applyNativeContractWithdrawalAtomic rechecks the selected
+// obligation under the contract mutex before committing its ledger once.
+func (p *SwapContractRuntime) reconcileNativeContractWithdrawal(ctx context.Context,
+	verify func(context.Context, string) (*ConfirmedNativeContractWithdrawal, error)) (bool, error) {
 	if !p.nativePublicContract() {
 		return false, nil
 	}
-	nativeContractSettlementMu.Lock()
-	defer nativeContractSettlementMu.Unlock()
 	pending, err := p.loadNativeContractPending()
 	if err != nil || pending == nil {
 		return pending != nil, err
@@ -134,14 +149,17 @@ func (p *SwapContractRuntime) reconcileNativeContractWithdrawals() (bool, error)
 	if pending.Deal.TxId == "" {
 		return true, nil
 	}
-	if err := p.stp.GetWalletMgr().resumeNativeContractBroadcast(context.Background(), p.localWallet, p.URL(), pending.Deal.TxId); err != nil {
+	if err := ctx.Err(); err != nil {
 		return true, err
 	}
-	confirmed, err := p.stp.GetWalletMgr().LoadConfirmedNativeContractWithdrawal(context.Background(), p.localWallet, pending.Deal.TxId)
+	confirmed, err := verify(ctx, pending.Deal.TxId)
 	if err != nil {
 		return true, err
 	}
-	if confirmed.ContractURL != p.URL() || confirmed.Amount.Cmp(pending.Deal.TotalAmt) != 0 {
+	if err := ctx.Err(); err != nil {
+		return true, err
+	}
+	if confirmed == nil || confirmed.ContractURL != p.URL() || confirmed.Amount.Cmp(pending.Deal.TotalAmt) != 0 {
 		return true, fmt.Errorf("native confirmed pair differs from frozen withdrawal")
 	}
 	pending.Deal.Fee = confirmed.Fee

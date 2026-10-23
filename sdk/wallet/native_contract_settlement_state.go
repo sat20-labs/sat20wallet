@@ -37,9 +37,9 @@ func nativeSettlementAddValue(value, delta int64) (int64, error) {
 }
 
 // applyNativeContractWithdrawalAtomic consumes an already authenticated,
-// confirmed settlement. The caller serializes reconciliation of the two chain
-// monitors and supplies an immutable pending record and its canonical final
-// encoding. No live ledger state changes until the single transaction commits.
+// confirmed settlement. Network verification is performed without locks;
+// this local commit serializes against selection changes and other monitors.
+// No live ledger state changes until the single transaction commits.
 func (p *SwapContractRuntime) applyNativeContractWithdrawalAtomic(deal *DealInfo, pendingKey, settledValue []byte) error {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
@@ -68,10 +68,26 @@ func (p *SwapContractRuntime) applyNativeContractWithdrawalAtomic(deal *DealInfo
 	} else if !errors.Is(err, indexer.ErrKeyNotFound) {
 		return err
 	}
-	if existing, err := database.Read(pendingKey); err != nil {
-		return fmt.Errorf("native withdrawal pending record unavailable: %w", err)
-	} else if len(existing) == 0 {
-		return fmt.Errorf("empty native withdrawal pending record")
+	// A slow chain response must not settle or delete a different pending
+	// selection installed while the network request was in flight.
+	pending, err := p.loadNativeContractPending()
+	if err != nil {
+		return err
+	}
+	if pending == nil || !bytes.Equal(pendingKey, p.nativeWithdrawalPendingKey()) ||
+		pending.Deal.TxId != deal.TxId {
+		return fmt.Errorf("native withdrawal pending identity changed during verification")
+	}
+	expected, err := nativeWithdrawalSelection(pending.Deal)
+	if err != nil {
+		return err
+	}
+	actual, err := nativeWithdrawalSelection(deal)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(expected, actual) {
+		return fmt.Errorf("native withdrawal pending selection changed during verification")
 	}
 	if _, err := database.Read(resultKey); err == nil {
 		return fmt.Errorf("native withdrawal result exists without an atomic settlement")
