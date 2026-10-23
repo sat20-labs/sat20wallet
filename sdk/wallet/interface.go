@@ -647,6 +647,9 @@ func (p *Manager) UnlockWallet(password string) (int64, error) {
 		if recoveryErr := p.rehydratePendingRemoteActionRuntime(); recoveryErr != nil {
 			Log.Warningf("restore pending remote action signers failed: %v", recoveryErr)
 		}
+		if recoveryErr := p.rehydratePendingPaymentRuntime(); recoveryErr != nil {
+			Log.Warningf("restore pending payment channels failed: %v", recoveryErr)
+		}
 		if recoveryErr := p.initializeLocalReadyChannels(); recoveryErr != nil {
 			Log.Warningf("initialize local ready channels failed: %v", recoveryErr)
 		}

@@ -382,7 +382,11 @@ func (p *Manager) HandleChannelReservationStatus(sendTxInL1 bool) {
 		case RS_PAYMENT_STARTED:
 			_ = p.HandlePaymentStarted(resv)
 		case RS_PAYMENT_BROADCASTED:
-			txId := resv.Channel.LastPaymentTxId
+			if resv.PaymentTx == nil {
+				Log.Warnf("payment reservation %d has no persisted transaction", resv.Id)
+				continue
+			}
+			txId := resv.PaymentTx.TxID()
 			if p.GetIndexerRPCClient_SatsNet().IsTxConfirmed(txId) {
 				Log.Infof("L2 Tx confirmed: %s", txId)
 				_ = p.HandlePaymentFinished(resv)
