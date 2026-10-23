@@ -1,5 +1,56 @@
 # SDK 层 E2E 用例清单与评估
 
+### 本机真实链公共准备（2026-10-23）
+
+当前真实 E2E 入口为 `pwa/scripts/verify/workspace-e2e.mjs`。每个独立业务组
+在空目录启动本机 Bitcoin Core 31.0、实际 L1 indexer、提供 Esplora HTTP 的
+Blockstream Electrs，以及既有 Go helper 管理的 SatoshiNet/STP 节点；浏览器
+也在本机运行。旧 attach、SSH 转发、历史钱包和恢复材料配置会被拒绝。
+
+设置本机工具的绝对路径后运行：
+
+```sh
+export SAT20_REAL_BITCOIND=/absolute/path/to/bitcoind
+export SAT20_REAL_BITCOIN_CLI=/absolute/path/to/bitcoin-cli
+export SAT20_REAL_ELECTRS=/absolute/path/to/electrs
+cd pwa
+node scripts/verify/workspace-e2e.mjs --plan
+node scripts/verify/workspace-e2e.mjs --check
+node scripts/verify/workspace-e2e.mjs
+```
+
+当前 x86_64 macOS 可通过
+`pwa/scripts/verify/install-real-regtest-tools.sh /absolute/new/tools-directory`
+重新准备工具。它固定 Core 校验和及 Electrs 源码 revision，在指定目录构建，
+保存完整安装日志并打印上述三个 export；需要本机已有 Cargo/Rust 和 Clang。
+
+工具也可由 PATH 定位。`--plan` 只列计划；`--check` 只核本机依赖能力，
+两者均不是业务通过。每个 Go 步骤默认超时一小时。入口打印本轮日志目录；
+每组保存完整输出及 `manifest.json`，总结果写入 `summary.json`。独立用例
+或依赖组通过后停止自有进程并删除链、钱包等运行数据，异常时保留现场；
+删除前把运行目录内的节点、STP 和浏览器日志归档到该组的 `logs/retained/`，
+数据库 WAL 不作为日志保留。失败后的依赖标为未执行。下一次运行重新生成数据。
+
+固定合成身份位于 `sdk/e2e/testdata/regtest/wallets.json`。资金、资产、账户、
+通道和恢复包由真实 SDK/RPC 路径生成。普通用例独立准备；Runes 发送/返回、
+通道生命周期和激活/扩容等有依赖的流程同组执行，组间只复用构建产物和固定向量。
+
+直接 WASM 29 项、BTC 通道往返及强制关闭/CSV 已接入该真实入口。WASM 的
+PSBT 输入由本组实际发行、扩容、解锁和转账产生；BTC 往返重新执行 Unlock→Lock，
+不读取历史交易 ID；CSV 使用真实 Core 区块与 mempool 预检。它们仍需以实际执行
+日志判定通过，编译检查不计作业务通过。业务前置失败只阻止同组的依赖用例，
+公共节点/账户/资产准备或环境清理失败才停止整个批次。
+
+`pwa-guardian-2of3` 单独准备两台浏览器设备和公开合成身份，执行既有 Guardian
+设置、回执验证、演练及两种材料组合恢复；它不依赖历史恢复包或付费 AUTOPAY。
+这一个场景的接入不代表完整账户用例集已经迁移。账户/Guardian 失败时，在关闭
+设备前尽力保存 IndexedDB 现场至本组私有 runtime；成功时不生成失败快照。
+
+历史文档中使用受控/模拟 L1 的用例归组件集成测试；此前通过记录不计作本轮
+真实双链 E2E。该入口当前覆盖 SDK/PWA 真实 regtest 组，不能据此宣称已经
+覆盖全部 SatoshiNet 或 Transcend 业务。公共准备及业务的实际通过状态以本轮
+日志为准。
+
 ### 后续修复与复验状态（2026-10-09）
 
 用户在后续任务中授权检查另一 session 并解决剩余问题。原六项 SDK 失败加错误守卫已一次定向 **7/7 通过**，安全查询 Promise 与 SNS 提前校验均已实施；新增 PWA 16 项最新逐项证据全部通过，Node 最终 5/5、独立 CSV 强退 3/3 通过。此前“待审核/未实施/not-run”段落保留为该次运行历史。本轮未重新执行 SDK29/PWA90 全量，功能覆盖缺口仍保留。

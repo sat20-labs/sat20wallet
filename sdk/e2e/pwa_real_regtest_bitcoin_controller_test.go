@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +21,7 @@ import (
 	"github.com/sat20-labs/satoshinet/anchortx"
 	"github.com/sat20-labs/satoshinet/blockchain"
 	"github.com/sat20-labs/satoshinet/btcec/ecdsa"
+	"github.com/sat20-labs/satoshinet/btcjson"
 	"github.com/sat20-labs/satoshinet/btcutil"
 	satschaincfg "github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
@@ -67,6 +69,45 @@ func startSDKPWARegtestBitcoinControllerInternal(t *testing.T, address string, m
 		anchorStart = height
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/inspect-psbt" && len(nodes) == 1 {
+			var request struct {
+				PSBT   string `json:"psbt"`
+				Verify bool   `json:"verify"`
+			}
+			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&request); err != nil {
+				http.Error(w, "invalid PSBT request", http.StatusBadRequest)
+				return
+			}
+			result, err := posPWAInspectPSBT(request.PSBT, request.Verify)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(result)
+			return
+		}
+		sdkWasmMine := r.Method == http.MethodPost && r.URL.Path == "/mine" && len(nodes) == 1
+		var sdkWasmConfirmation map[string]any
+		var sdkWasmConfirmedHeight int32
+		if sdkWasmMine {
+			var request struct {
+				TxID           string `json:"txid"`
+				BaselineHeight int32  `json:"baseline_height"`
+				BaselineHash   string `json:"baseline_hash"`
+			}
+			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&request); err != nil {
+				http.Error(w, "invalid SatoshiNet confirmation request", http.StatusBadRequest)
+				return
+			}
+			var err error
+			sdkWasmConfirmation, sdkWasmConfirmedHeight, err = waitForSDKPWARegtestBrowserTx(
+				r.Context(), nodes[0], request.TxID, request.BaselineHeight, request.BaselineHash)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusGatewayTimeout)
+				return
+			}
+		}
 		if r.Method == http.MethodPost && r.URL.Path == "/transaction" && len(nodes) == 1 {
 			var request struct {
 				TxID string `json:"txid"`
@@ -85,8 +126,30 @@ func startSDKPWARegtestBitcoinControllerInternal(t *testing.T, address string, m
 				http.Error(w, "transaction not observed yet", http.StatusNotFound)
 				return
 			}
+			raw, err := hex.DecodeString(transaction.Hex)
+			if err != nil {
+				http.Error(w, "invalid node raw transaction", http.StatusBadGateway)
+				return
+			}
+			var decoded swire.MsgTx
+			if err := decoded.Deserialize(bytes.NewReader(raw)); err != nil {
+				http.Error(w, "invalid node raw transaction", http.StatusBadGateway)
+				return
+			}
+			if decoded.TxHash() != *hash {
+				http.Error(w, "node raw transaction does not match requested txid", http.StatusBadGateway)
+				return
+			}
+			outputSats := make([]int64, len(decoded.TxOut))
+			for i, output := range decoded.TxOut {
+				outputSats[i] = output.Value
+			}
+			result := struct {
+				*btcjson.TxRawResult
+				OutputSats []int64 `json:"output_sats"`
+			}{TxRawResult: transaction, OutputSats: outputSats}
 			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(transaction); err != nil {
+			if err := json.NewEncoder(w).Encode(result); err != nil {
 				t.Error(err)
 			}
 			return
@@ -94,7 +157,8 @@ func startSDKPWARegtestBitcoinControllerInternal(t *testing.T, address string, m
 		activateRequest := r.Method == http.MethodPost && r.URL.Path == "/activate" && activate != nil && len(nodes) == 1
 		posRequest := r.Method == http.MethodPost && pos != nil && (r.URL.Path == "/rotation" ||
 			r.URL.Path == "/miner-offline" || r.URL.Path == "/restore-miner" || r.URL.Path == "/restart-core")
-		if r.Method != http.MethodPost || (r.URL.Path != "/snapshot" && r.URL.Path != "/confirm-l1" && !activateRequest && !posRequest) {
+		if r.Method != http.MethodPost || (r.URL.Path != "/snapshot" && r.URL.Path != "/confirm-l1" &&
+			!activateRequest && !posRequest && !sdkWasmMine) {
 			http.Error(w, "unsupported real regtest control", http.StatusNotFound)
 			return
 		}
@@ -138,18 +202,27 @@ func startSDKPWARegtestBitcoinControllerInternal(t *testing.T, address string, m
 		var anchorTargets []string
 		waitAnchors := false
 		if r.URL.Path == "/confirm-l1" {
+			var request struct {
+				WaitAnchors *bool `json:"wait_anchors"`
+				EmptyBlocks *int  `json:"empty_blocks"`
+			}
+			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&request); err != nil {
+				http.Error(w, "invalid confirmation request", http.StatusBadRequest)
+				return
+			}
+			emptyBlocks := 1
+			if request.EmptyBlocks != nil {
+				emptyBlocks = *request.EmptyBlocks
+			}
+			if emptyBlocks < 1 || emptyBlocks > 257 {
+				http.Error(w, "empty_blocks must be between 1 and 257", http.StatusBadRequest)
+				return
+			}
 			if len(nodes) == 1 {
-				var request struct {
-					WaitAnchors *bool `json:"wait_anchors"`
-				}
-				if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&request); err != nil {
-					http.Error(w, "invalid confirmation request", http.StatusBadRequest)
-					return
-				}
 				waitAnchors = request.WaitAnchors == nil || *request.WaitAnchors
 				require.NoError(t, json.Unmarshal(realRegtestBitcoinCLI(t, "getrawmempool"), &anchorTargets))
 			}
-			mine(address, 1)
+			mine(address, emptyBlocks)
 		}
 		var tip int
 		require.NoError(t, json.Unmarshal(realRegtestBitcoinCLI(t, "getblockcount"), &tip))
@@ -172,14 +245,21 @@ func startSDKPWARegtestBitcoinControllerInternal(t *testing.T, address string, m
 		for txid := range confirmed {
 			settled = append(settled, txid)
 		}
+		sort.Strings(pending)
+		sort.Strings(settled)
+		tipHash := strings.TrimSpace(string(realRegtestBitcoinCLI(t, "getblockhash", strconv.Itoa(tip))))
+		require.Len(t, tipHash, 64, "actual Core tip hash")
 		result := map[string]any{"l1": map[string]any{
-			"height": tip, "pending_txids": pending, "confirmed_txids": settled,
+			"height": tip, "hash": tipHash, "pending_txids": pending, "confirmed_txids": settled,
 		}}
 		if activationEvidence != nil {
 			result["pos_activation"] = activationEvidence
 		}
 		if posEvidence != nil {
 			result["pos_action"] = posEvidence
+		}
+		if sdkWasmConfirmation != nil {
+			result["confirmed_tx"] = sdkWasmConfirmation
 		}
 		if len(nodes) == 1 {
 			ctx, cancel := context.WithTimeout(r.Context(), 180*time.Second)
@@ -196,7 +276,7 @@ func startSDKPWARegtestBitcoinControllerInternal(t *testing.T, address string, m
 					http.Error(w, err.Error(), http.StatusBadGateway)
 					return
 				}
-				ready := true
+				ready := sdkWasmConfirmation == nil || snapshot.Height >= sdkWasmConfirmedHeight
 				for _, state := range snapshot.Nodes {
 					ready = ready && state.Height == snapshot.Height && state.Hash == snapshot.Hash && state.APIHeight == snapshot.Height
 				}
@@ -317,7 +397,8 @@ func activateSDKPWARegtestPOSV2(t *testing.T, ctx context.Context, network *real
 		require.NoError(t, err, "ordinary-1 real SDK self-send for POS activation height %d", expectedHeight)
 		require.NotNil(t, tx)
 		txID := tx.TxID()
-		requireMempoolTx(t, network.Bootstrap, txID)
+		// The scheduled miner may confirm this transaction before SendAssets returns;
+		// the wait below checks its exact canonical block and both indexes directly.
 		blockHash, confirmedHeight, submitToConfirm, blockInterval := waitForScheduledSatsNetTx(t,
 			network, txID, submittedAt, baselineHeight, baselineHash, baselineBlock.Header.Timestamp)
 		require.Equal(t, expectedHeight, confirmedHeight, "one transaction must confirm at its exact scheduled height")
@@ -453,7 +534,75 @@ func readSDKPWARegtestSatoshiNetSnapshot(network *realSatoshiNet, after int32) (
 	for _, id := range mempool {
 		result.MempoolTxIDs = append(result.MempoolTxIDs, id.String())
 	}
+	sort.Strings(result.MempoolTxIDs)
 	return result, nil
+}
+
+// Confirm only the transaction already submitted by the SDK WASM case. The
+// controller's common response path performs the existing node/indexer alignment.
+func waitForSDKPWARegtestBrowserTx(ctx context.Context, network *realSatoshiNet, txid string,
+	baselineHeight int32, baselineHashText string) (map[string]any, int32, error) {
+	hash, err := chainhash.NewHashFromStr(txid)
+	if err != nil || len(txid) != 64 {
+		return nil, 0, fmt.Errorf("invalid SatoshiNet txid")
+	}
+	baselineHash, err := chainhash.NewHashFromStr(baselineHashText)
+	if err != nil || baselineHeight < 0 || len(baselineHashText) != 64 {
+		return nil, 0, fmt.Errorf("invalid pre-submit SatoshiNet baseline")
+	}
+	actualBaseline, err := network.Bootstrap.Client.GetBlockHash(int64(baselineHeight))
+	if err != nil || *actualBaseline != *baselineHash {
+		return nil, 0, fmt.Errorf("pre-submit SatoshiNet baseline is stale")
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, 150*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		verbose, lookupErr := network.Bootstrap.Client.GetRawTransactionVerbose(hash)
+		if lookupErr == nil && verbose.Confirmations > 0 && verbose.BlockHash != "" {
+			confirmedHash, parseErr := chainhash.NewHashFromStr(verbose.BlockHash)
+			if parseErr != nil {
+				return nil, 0, parseErr
+			}
+			if *confirmedHash == *baselineHash {
+				return nil, 0, fmt.Errorf("SatoshiNet transaction did not advance beyond the pre-submit tip")
+			}
+			_, bestHeight, bestErr := network.Bootstrap.Client.GetBestBlock()
+			if bestErr != nil {
+				return nil, 0, bestErr
+			}
+			for height := baselineHeight + 1; height <= bestHeight; height++ {
+				blockHash, hashErr := network.Bootstrap.Client.GetBlockHash(int64(height))
+				if hashErr != nil {
+					return nil, 0, hashErr
+				}
+				block, readErr := network.Bootstrap.Client.GetBlock(blockHash)
+				if readErr != nil {
+					return nil, 0, readErr
+				}
+				if len(block.Transactions) <= 1 {
+					return nil, 0, fmt.Errorf("scheduled SatoshiNet confirmation mined an empty block at height %d", height)
+				}
+				if *blockHash != *confirmedHash {
+					continue
+				}
+				for _, candidate := range block.Transactions {
+					if candidate.TxID() == txid {
+						return map[string]any{"txid": txid, "confirmed_height": height,
+							"confirmed_block_hash": confirmedHash.String()}, height, nil
+					}
+				}
+				return nil, 0, fmt.Errorf("reported transaction is absent from its canonical confirmation block")
+			}
+			return nil, 0, fmt.Errorf("reported transaction confirmation is not in the canonical chain after baseline")
+		}
+		select {
+		case <-waitCtx.Done():
+			return nil, 0, fmt.Errorf("real scheduled miner did not confirm transaction %s: %w", txid, waitCtx.Err())
+		case <-ticker.C:
+		}
+	}
 }
 
 // This controller observes the real registered hierarchy and replays the

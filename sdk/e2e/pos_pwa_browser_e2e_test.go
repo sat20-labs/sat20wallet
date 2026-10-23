@@ -109,7 +109,7 @@ func runSDKWalletBrowserMode(t *testing.T, sdkWASM bool, cases ...string) {
 		ctx, deadlineCancel = context.WithDeadline(ctx, deadline.Add(-30*time.Second))
 		defer deadlineCancel()
 	}
-	artifactDir := t.TempDir()
+	artifactDir := testCaseDirectory(t)
 	// Pick the PWA origin before starting STP, which permits only explicit browser
 	// origins. Strict Vite binding below makes a port collision fail visibly.
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -799,12 +799,29 @@ func posPWAInspectPSBT(encoded string, verify bool) (map[string]any, error) {
 	return result, nil
 }
 
-func posPWASDKPSBTFixture(t *testing.T, seed *wire.MsgTx, owner, recipient map[string]string, asset string) map[string]any {
+func posPWASDKPSBTFixture(t *testing.T, seed *wire.MsgTx, owner, recipient map[string]string, asset string, realIndexers ...wallet.IndexerRPCClient) map[string]any {
 	t.Helper()
 	ownerScript, err := hex.DecodeString(owner["pk_script"])
 	require.NoError(t, err)
 	recipientScript, err := hex.DecodeString(recipient["pk_script"])
 	require.NoError(t, err)
+	require.LessOrEqual(t, len(realIndexers), 1)
+	indexedAssetOutput := func(point string, previous *wire.TxOut, amount string) *indexercommon.AssetsInUtxo {
+		if len(realIndexers) == 1 {
+			indexed, lookupErr := realIndexers[0].GetTxOutput(point)
+			require.NoError(t, lookupErr)
+			require.NotNil(t, indexed)
+			require.Equal(t, previous.Value, indexed.OutValue.Value)
+			require.Equal(t, previous.PkScript, indexed.OutValue.PkScript)
+			require.Equal(t, previous.Assets, indexed.Assets)
+			require.Len(t, indexed.Assets, 1)
+			require.Equal(t, asset, indexed.Assets[0].Name.String())
+			require.Equal(t, amount, indexed.Assets[0].Amount.String())
+			return indexed.ToAssetsInUtxo()
+		}
+		return &indexercommon.AssetsInUtxo{OutPoint: point, Value: previous.Value, PkScript: previous.PkScript,
+			Assets: []*indexercommon.DisplayAsset{displayAssetWithMeta(asset, amount, 0, 0)}}
+	}
 	var indexes []uint32
 	for i, output := range seed.TxOut {
 		if bytes.Equal(output.PkScript, ownerScript) {
@@ -834,8 +851,7 @@ func posPWASDKPSBTFixture(t *testing.T, seed *wire.MsgTx, owner, recipient map[s
 	for i, index := range indexes {
 		prev := seed.TxOut[index]
 		point := fmt.Sprintf("%s:%d", seed.TxID(), index)
-		info := &indexercommon.AssetsInUtxo{OutPoint: point, Value: prev.Value, PkScript: prev.PkScript,
-			Assets: []*indexercommon.DisplayAsset{displayAssetWithMeta(asset, "12500000", 0, 0)}}
+		info := indexedAssetOutput(point, prev, "12500000")
 		order := &wallet.UtxoInfo{AssetsInUtxo: *info, Price: int64((i + 1) * 1000)}
 		orders = append(orders, sdkReviewJSON(t, order))
 		points = append(points, point)
@@ -844,10 +860,8 @@ func posPWASDKPSBTFixture(t *testing.T, seed *wire.MsgTx, owner, recipient map[s
 	var buyerOrder *wallet.UtxoInfo
 	for i, prev := range seed.TxOut {
 		if bytes.Equal(prev.PkScript, recipientScript) {
-			buyerOrder = &wallet.UtxoInfo{AssetsInUtxo: indexercommon.AssetsInUtxo{
-				OutPoint: fmt.Sprintf("%s:%d", seed.TxID(), i), Value: prev.Value, PkScript: prev.PkScript,
-				Assets: []*indexercommon.DisplayAsset{displayAssetWithMeta(asset, "25000000", 0, 0)},
-			}}
+			point := fmt.Sprintf("%s:%d", seed.TxID(), i)
+			buyerOrder = &wallet.UtxoInfo{AssetsInUtxo: *indexedAssetOutput(point, prev, "25000000")}
 		}
 	}
 	require.NotNil(t, buyerOrder)

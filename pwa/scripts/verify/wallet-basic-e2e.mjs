@@ -433,6 +433,11 @@ async function runAssetContextStability(t, fixture, fresh, visit, identity, wall
   const endpoint = fixture.config.IndexerL1
   const base = `${endpoint.Scheme}://${endpoint.Host}/${String(endpoint.Proxy || '').replace(/^\/+|\/+$/g, '')}`.replace(/\/$/, '')
   const summaryURL = address => `${base}/v3/address/summary/${encodeURIComponent(address)}`
+  let l1BroadcastRequests = 0
+  const observeRequest = request => {
+    if (request.method() === 'POST' && [`${base}/btc/tx`, `${base}/btc/txs`].includes(request.url())) l1BroadcastRequests++
+  }
+  page.context().on('request', observeRequest)
   const keyOf = name => name.Protocol ? `${name.Protocol}:${name.Type}:${name.Ticker}` : '::'
   const amountOf = asset => String(asset.Amount?.Value ?? asset.Amount ?? '0')
   const metrics = []
@@ -448,6 +453,13 @@ async function runAssetContextStability(t, fixture, fresh, visit, identity, wall
     assert.ok(response.ok, 'test control snapshot must succeed')
     const result = await response.json()
     assert.ok(!result.error, 'test control snapshot must not return an application error')
+    if (fixture.realBitcoinControl) {
+      assert.ok(Array.isArray(result.l1.pending_txids) && Array.isArray(result.l1.confirmed_txids),
+        'real Bitcoin snapshot must include actual pending and confirmed transactions')
+      assert.ok(Number.isSafeInteger(result.l1.height) && typeof result.l1.hash === 'string')
+      return { ...result.l1, observed_broadcasts: l1BroadcastRequests }
+    }
+    assert.ok(Number.isSafeInteger(result.l1.broadcast_count), 'component snapshot must record broadcasts')
     return result.l1.broadcast_count
   }
   const realSummary = async address => {
@@ -619,6 +631,7 @@ async function runAssetContextStability(t, fixture, fresh, visit, identity, wall
         trigger_to_sdk_observed_ms: observed, trigger_to_B_render_verified_ms: performance.now() - started })
     }
     assert.deepEqual(await snapshot(), beforeBroadcasts, 'refresh and account switching must not broadcast')
+    assert.equal(l1BroadcastRequests, 0, 'read-only asset refreshes must not submit Bitcoin broadcasts')
     assert.deepEqual(await logs(), beforeLogs, 'late asset reads and refreshes must not create operation logs')
     warm.sort((a, b) => a - b)
     metrics.push({ phase: 'warm_B_refresh_SDK_summary', measurement: 'maximum SDK getAssetSummary duration per sequential refresh',
@@ -631,13 +644,14 @@ async function runAssetContextStability(t, fixture, fresh, visit, identity, wall
     error.metrics = metrics
     throw error
   } finally {
+    page.context().off('request', observeRequest)
     releaseHeld()
     if (routeHandler) await page.unroute(summaryURL(fixture.address), routeHandler).catch(() => {})
     await page.evaluate(() => window.__SAT20_ASSET_CONTEXT_PROBE__?.restore()).catch(() => {})
     sample('case_including_wallet_setup', started)
     const environment = { os: process.platform, arch: process.arch, cpu_count: cpus().length, node_version: process.version,
       browser_version: page.context().browser().version(), network: fixture.config.Chain || 'testnet', isolated_fixture: true,
-      fixture_kind: 'temporary SatoshiNet and controlled Bitcoin evidence', workers: 1 }
+      fixture_kind: fixture.realBitcoinControl ? 'local Bitcoin Core and real indexer' : 'temporary SatoshiNet and controlled Bitcoin evidence', workers: 1 }
     for (const metric of metrics) { metric.status = outcome; metric.environment = environment }
   }
 }

@@ -18,7 +18,7 @@ import (
 // The PWA's normal integrity loader verifies these bytes; public/ is untouched.
 func buildPWAWalletRuntime(t *testing.T, ctx context.Context, sdk string, posActivation ...int32) (string, string) {
 	t.Helper()
-	dir := t.TempDir()
+	dir := testCaseDirectory(t)
 	wasmPath := filepath.Join(dir, "wallet.wasm")
 	require.LessOrEqual(t, len(posActivation), 1)
 	args := []string{"build", "-ldflags=-s -w", "-o", wasmPath}

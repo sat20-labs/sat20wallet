@@ -70,13 +70,16 @@ func prepareSDKPWARegtestChannelPrerequisites(t *testing.T, feature string,
 	for _, id := range inventory.Channels {
 		remoteFound = remoteFound || id == derivedID
 	}
+	needsPeerRestore := false
 	if remoteFound {
 		var peer struct {
 			Code    int    `json:"code"`
 			Msg     string `json:"msg"`
 			Channel *struct {
-				ChannelID string               `json:"channelId"`
-				Status    wallet.ChannelStatus `json:"status"`
+				ChannelID    string               `json:"channelId"`
+				Status       wallet.ChannelStatus `json:"status"`
+				Point        string               `json:"chanPoint"`
+				CommitHeight int                  `json:"commitHeight"`
 			} `json:"channel"`
 		}
 		require.NoError(t, posPWAReadJSON(client.GetUrl("/info/channel/"+derivedID).String(), &peer))
@@ -84,11 +87,18 @@ func prepareSDKPWARegtestChannelPrerequisites(t *testing.T, feature string,
 		require.NotNil(t, peer.Channel)
 		require.Equal(t, derivedID, peer.Channel.ChannelID)
 		require.Equal(t, wallet.CS_READY, peer.Channel.Status, "the actual peer must be READY before the UI operation")
+		require.NotEmpty(t, peer.Channel.Point, "a READY peer must expose its real channel point")
+		needsPeerRestore = channel == nil || channel.ChanPoint == nil ||
+			channel.ChanPoint.OutPointStr != peer.Channel.Point || channel.CommitHeight != peer.Channel.CommitHeight
+		if channel != nil && channel.ChanPoint != nil && channel.ChanPoint.OutPointStr == peer.Channel.Point {
+			require.GreaterOrEqual(t, peer.Channel.CommitHeight, channel.CommitHeight,
+				"a peer snapshot must not roll back this funding cycle's local commitment")
+		}
 	}
-	// Restore is for a missing local channel. A cached READY prerequisite must
-	// not call the production rebuild API again at the same commit height;
-	// the fresh PWA context independently restores its authoritative peer state.
-	if remoteFound && channel == nil {
+	// The browser and Go preparation use separate device databases. Restore
+	// after an earlier browser step changed the funding point or commitment;
+	// an already-current READY view must not rebuild the same state again.
+	if remoteFound && needsPeerRestore {
 		require.NoError(t, ordinary2.SyncChannel("restore", server.RPCClient()),
 			"reuse the SDK's authenticated peer synchronization before comparing the old local channel")
 		channel = ordinary2.GetChannel(derivedID)

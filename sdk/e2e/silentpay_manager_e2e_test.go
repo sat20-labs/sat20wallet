@@ -67,7 +67,7 @@ func newSPManagerRegtest(t *testing.T) *spManagerRegtest {
 	port, err := strconv.Atoi(strings.TrimPrefix(core.base, "http://127.0.0.1:"))
 	require.NoError(t, err)
 	require.NoError(t, bitcoin_rpc.InitBitconRpc("127.0.0.1", port, core.user, core.pass, false))
-	database := indexdb.NewKVDBWithCache(filepath.Join(t.TempDir(), "base"), 1)
+	database := indexdb.NewKVDBWithCache(filepath.Join(testCaseDirectory(t), "base"), 1)
 	require.NotNil(t, database)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	base := baseindex.NewBaseIndexer(database, &chaincfg.RegressionNetParams, 0, 1000)
@@ -213,7 +213,7 @@ func (f *spManagerRegtest) ordinaryRead(w http.ResponseWriter, r *http.Request) 
 
 func (f *spManagerRegtest) manager(t *testing.T, mnemonic string) *wallet.Manager {
 	t.Helper()
-	db := wallet.NewKVDB(t.TempDir())
+	db := wallet.NewKVDB(testCaseDirectory(t))
 	require.NotNil(t, db)
 	manager := wallet.NewManager(f.cfg, db)
 	require.NotNil(t, manager)
@@ -299,7 +299,7 @@ func TestSPSilentPayBrowserE2E(t *testing.T) {
 	fixture := map[string]any{"config": f.cfg, "silentPay": sp, "wasmPath": wasm, "wasmRuntimePath": runtimeJS}
 	raw, err := json.Marshal(fixture)
 	require.NoError(t, err)
-	dir := t.TempDir()
+	dir := testCaseDirectory(t)
 	fixturePath := filepath.Join(dir, "sp-fixture.json")
 	require.NoError(t, os.WriteFile(fixturePath, raw, 0600))
 	node, err := exec.LookPath("node")
@@ -318,7 +318,7 @@ func TestSPSilentPayBrowserE2E(t *testing.T) {
 	args := append([]string{"scripts/verify/account-management-e2e.mjs", "--pos-fixture", fixturePath, "--wallet-cases"}, cases...)
 	logDir := os.Getenv("SAT20_SP_EVIDENCE_DIR")
 	if logDir == "" {
-		logDir = t.TempDir()
+		logDir = testCaseDirectory(t)
 	}
 	require.NoError(t, os.MkdirAll(logDir, 0700))
 	log, err := os.OpenFile(filepath.Join(logDir, "sp-pwa.jsonl"), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)

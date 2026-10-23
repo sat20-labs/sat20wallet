@@ -10,6 +10,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Keep failed case data for diagnosis; successful cases own and remove only
+// their fresh directory under the runner's private TMPDIR.
+func testCaseDirectory(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "sat20-e2e-case-")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("failed case data retained: %s", dir)
+			return
+		}
+		require.NoError(t, os.RemoveAll(dir))
+	})
+	return dir
+}
+
 // Exercise the existing real-node fixture without depending on contract or
 // account business rules: restart one node, then reuse all three slots.
 func TestSatoshiNetRuntimeNodeLifecycle(t *testing.T) {

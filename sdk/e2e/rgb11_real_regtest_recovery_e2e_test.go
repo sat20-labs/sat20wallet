@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -362,8 +363,7 @@ func TestSDKPWARealRegtestRGB11StandardRecoveryDirectReturn(t *testing.T) {
 	autopayBudget := ensureRGB11RegtestAutopay(t, ordinaryA, network, defaults,
 		gasQuote, triggerFee+resultFee, !needsDeploy && gasFunding == 0)
 	if aNeedsPayment {
-		aAuth, err = ordinaryA.ConfirmAccountStorage(wallet.AccountStoragePaid, 100)
-		require.NoError(t, err)
+		aAuth = confirmRGB11RegtestPaidStorage(t, ordinaryA, ordinaryA, network)
 	}
 	if bNeedsPayment {
 		if bFundingShortfall > 0 {
@@ -371,8 +371,7 @@ func TestSDKPWARealRegtestRGB11StandardRecoveryDirectReturn(t *testing.T) {
 		}
 		require.GreaterOrEqual(t, rgb11RegtestSgasBalance(t, ordinaryB), bTarget,
 			"B must have its paid-storage principal and the current invoke/result gas before confirming paid storage")
-		bAuth, err = ordinaryB.ConfirmAccountStorage(wallet.AccountStoragePaid, 100)
-		require.NoError(t, err)
+		bAuth = confirmRGB11RegtestPaidStorage(t, ordinaryB, ordinaryA, network)
 	}
 	require.NotNil(t, aAuth)
 	require.NotNil(t, bAuth)
@@ -1053,16 +1052,19 @@ func ensureRGB11RegtestSgas(t *testing.T, manager *wallet.Manager, channel *wall
 	t.Logf("SGAS preparation: wallet=%d target=%d required_unlock=%d existing_channel=%d", current, target, need, inChannel)
 	// A previous run may already have confirmed the splice before its unlock
 	// became spendable. Reuse that committed balance instead of splicing again.
+	var splicingReservationID int64
 	if inChannel < need {
 		additional := need - inChannel
 		l1Balance := manager.GetAssetBalance("", asset)
 		require.NotNil(t, l1Balance, "existing-only ordinary-1 fixture must own real L1 SGAS")
 		require.NotNil(t, l1Balance.Value)
 		require.GreaterOrEqual(t, rgb11RegtestWholeSgas(t, l1Balance), additional)
-		txid, _, err := manager.SplicingIn(channel.ChannelId, rgb11RegtestAsset,
+		txid, reservationID, err := manager.SplicingIn(channel.ChannelId, rgb11RegtestAsset,
 			strconv.FormatInt(additional, 10), nil, nil, nil, nil, 2, wallet.SPLICING_REASON_LOCAL)
 		require.NoError(t, err)
 		require.NotEmpty(t, txid)
+		require.Greater(t, reservationID, int64(0))
+		splicingReservationID = reservationID
 		confirmRGB11RegtestL1Tx(t, manager, txid, manager.GetWallet().GetAddressByIndex(1), mineL1)
 	}
 	require.Eventually(t, func() bool {
@@ -1070,23 +1072,70 @@ func ensureRGB11RegtestSgas(t *testing.T, manager *wallet.Manager, channel *wall
 		return channel != nil && channel.Status == wallet.CS_READY
 	}, rpcReadyTimeout, 200*time.Millisecond, "confirmed SDK splice-in must restore the channel")
 	waitRGB11RegtestPeerChannelReady(t, manager, network, channel.ChannelId)
+	peerEndpoint := "http://" + network.Core.stpAddr + "/regtest/info/channel/" + url.PathEscape(channel.ChannelId)
+	peerClient := &http.Client{Timeout: 10 * time.Second}
 	require.Eventually(t, func() bool {
 		channel = manager.GetChannel(channel.ChannelId)
+		if channel == nil {
+			return false
+		}
 		channel.Mutex.RLock()
 		outputs, err := channel.GetChannelUtxosWithAsset_SatsNet(indexercommon.NewDefaultDecimal(need), name)
 		channel.Mutex.RUnlock()
+		if err != nil || len(outputs) == 0 {
+			return false
+		}
+		if splicingReservationID > 0 {
+			reservation, exists := manager.GetSplicingReservation(splicingReservationID)
+			if exists && reservation != nil && reservation.GetStatus() > wallet.RS_CLOSED {
+				return false
+			}
+		}
+		response, err := peerClient.Get(peerEndpoint)
 		if err != nil {
 			return false
 		}
+		defer response.Body.Close()
+		var peer struct {
+			Code    int                 `json:"code"`
+			Channel *wallet.ChannelInfo `json:"channel"`
+		}
+		if response.StatusCode != http.StatusOK || json.NewDecoder(response.Body).Decode(&peer) != nil ||
+			peer.Code != 0 || peer.Channel == nil {
+			return false
+		}
 		for _, output := range outputs {
+			if output == nil {
+				return false
+			}
 			point := strings.Split(output.OutPointStr, ":")
+			if len(point) != 2 {
+				return false
+			}
 			height, err := manager.GetIndexerRPCClient_SatsNet().GetTxHeight(point[0])
 			if err != nil || height <= 0 {
 				return false
 			}
+			foundSpendable := false
+			for _, peerOutput := range peer.Channel.UtxoL2 {
+				if peerOutput != nil && peerOutput.OutPointStr == output.OutPointStr &&
+					reflect.DeepEqual(peerOutput.OutValue, output.OutValue) {
+					foundSpendable = true
+					break
+				}
+			}
+			if !foundSpendable {
+				return false
+			}
+			for _, pendingOutput := range peer.Channel.PendingUtxoL2 {
+				if pendingOutput != nil && pendingOutput.OutPointStr == output.OutPointStr {
+					return false
+				}
+			}
 		}
-		return len(outputs) > 0
-	}, rpcReadyTimeout, 200*time.Millisecond, "the exact SGAS channel outputs must be confirmed and no longer reserved before unlock")
+		return true
+	}, rpcReadyTimeout, 200*time.Millisecond,
+		"confirmed SGAS channel outputs must be spendable with identical values at the peer and the splice reservation must end before unlock")
 	unlockTxID, _, err := manager.UnlockFromChannel(channel.ChannelId, address,
 		rgb11RegtestAsset, strconv.FormatInt(need, 10), nil, nil)
 	require.NoError(t, err)
@@ -1157,6 +1206,50 @@ func assertRGB11RegtestAutopayReady(t *testing.T, manager *wallet.Manager) {
 	require.NoError(t, err)
 	require.True(t, status.Required)
 	require.True(t, status.Ready)
+}
+
+func confirmRGB11RegtestPaidStorage(t *testing.T, manager, heartbeat *wallet.Manager,
+	network *realSatoshiNet) *wallet.AccountStorageAuthorization {
+	t.Helper()
+	authorization, err := manager.ConfirmAccountStorage(wallet.AccountStoragePaid, 100)
+	if err == nil {
+		return authorization
+	}
+	var pending *wallet.AccountAutopayPendingError
+	require.ErrorAs(t, err, &pending)
+	originalID := pending.TransactionID
+	require.NotEmpty(t, originalID)
+	t.Logf("wait for original AUTOPAY funding txid=%s cause=%v", originalID, pending.Cause)
+	waitRGB11RegtestL2Transaction(t, manager, network, originalID)
+	// POS mines nonempty blocks. A real transfer after the funding block lets
+	// AUTOPAY make its first payment; it never submits another funding intent.
+	tx, err := heartbeat.SendAssets_SatsNet(heartbeat.GetWallet().GetAddress(),
+		wallet.PLAIN_ASSET.String(), "10000", nil)
+	require.NoError(t, err)
+	waitRGB11RegtestL2Transaction(t, heartbeat, network, tx.TxID())
+	require.Eventually(t, func() bool {
+		status, readErr := manager.GetAccountAutopayFundingStatus()
+		require.NoError(t, readErr)
+		require.Empty(t, status.FundingError)
+		require.Equal(t, originalID, status.FundingTransactionID)
+		return status.Ready && !status.FundingPending
+	}, rpcReadyTimeout, 200*time.Millisecond, "original AUTOPAY funding and first payment must confirm")
+	authorization, err = manager.ConfirmAccountStorage(wallet.AccountStoragePaid, 100)
+	require.NoError(t, err)
+	require.NotNil(t, authorization)
+	require.Empty(t, authorization.TransactionID, "reuse the confirmed original payment")
+	logs, err := manager.GetOperationLogs()
+	require.NoError(t, err)
+	fundingCount := 0
+	for _, record := range logs {
+		if record.Action == "account_autopay_fund" {
+			fundingCount++
+			require.Equal(t, originalID, record.TxID)
+			require.Equal(t, wallet.OperationLogSucceeded, record.Status)
+		}
+	}
+	require.Equal(t, 1, fundingCount, "paid setup must submit exactly one funding transaction")
+	return authorization
 }
 
 func ensureRGB11RegtestRecoveryPackage(t *testing.T, manager *wallet.Manager,
@@ -1263,7 +1356,9 @@ func recoverRGB11RegtestPackage(t *testing.T, pkg *account.RecoveryPackage,
 
 func rgb11RegtestUserSharePath(t *testing.T, accountID string) string {
 	t.Helper()
-	root := filepath.Join(os.TempDir(), "sat20wallet-rgb11-recovery-user-shares")
+	runtimeDir := os.Getenv("SAT20_REAL_REGTEST_RUNTIME")
+	require.True(t, filepath.IsAbs(runtimeDir))
+	root := filepath.Join(runtimeDir, "recovery-user-shares")
 	nameDigest := sha256.Sum256([]byte(accountID))
 	dir := filepath.Join(root, hex.EncodeToString(nameDigest[:]))
 	require.NoError(t, os.MkdirAll(dir, 0o700))
@@ -1324,7 +1419,13 @@ func restoreRGB11RegtestAccount(t *testing.T, network *realSatoshiNet,
 			"s@" + network.Core.nodePubKey + "@http://" + network.Core.stpAddr + "/regtest",
 		},
 	}
-	database := indexerdb.NewKVDB(t.TempDir())
+	// A restored device is part of this case's generated state. Retain its DB
+	// on failure, alongside the original devices, instead of t.TempDir cleanup.
+	runtimeDir := os.Getenv("SAT20_REAL_REGTEST_RUNTIME")
+	require.True(t, filepath.IsAbs(runtimeDir))
+	deviceDir, err := os.MkdirTemp(runtimeDir, "rgb-restored-device-")
+	require.NoError(t, err)
+	database := indexerdb.NewKVDB(deviceDir)
 	require.NotNil(t, database)
 	manager := wallet.NewManager(config, database)
 	require.NotNil(t, manager)

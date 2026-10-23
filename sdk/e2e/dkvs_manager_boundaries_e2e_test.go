@@ -102,7 +102,7 @@ func newWalletManagerForNode(t *testing.T, node *testHarness, mnemonic string) (
 	location := wallet.AccountIndexerLocation{
 		Scheme: parsed.Scheme, Host: parsed.Host, Proxy: strings.Trim(parsed.Path, "/"),
 	}
-	database := indexerdb.NewKVDB(t.TempDir())
+	database := indexerdb.NewKVDB(testCaseDirectory(t))
 	require.NotNil(t, database)
 	config := &sdkcommon.Config{
 		Env: "test", Chain: "testnet",
@@ -114,7 +114,10 @@ func newWalletManagerForNode(t *testing.T, node *testHarness, mnemonic string) (
 	}
 	manager := wallet.NewManager(config, database)
 	require.NotNil(t, manager)
-	t.Cleanup(manager.Close)
+	t.Cleanup(func() {
+		manager.Close()
+		require.NoError(t, database.Close())
+	})
 	if mnemonic != "" {
 		_, err = manager.ImportWallet(mnemonic, "123456")
 		require.NoError(t, err)

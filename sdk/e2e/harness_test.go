@@ -479,9 +479,7 @@ func newTestHarness(t *testing.T, exe, nodeDir, p2pAddr, rpcAddr string, args, e
 	t.Cleanup(func() {
 		require.NoError(t, h.TearDown())
 		require.NoError(t, logFile.Close())
-		if t.Failed() {
-			_ = preserveHarnessLog(t, h)
-		}
+		require.NoError(t, preserveHarnessLog(t, h))
 	})
 	h.Client = waitForRPCClient(t, rpcAddr)
 	return h
@@ -493,12 +491,12 @@ func preserveHarnessLog(t *testing.T, h *testHarness) error {
 	if err != nil {
 		return err
 	}
-	dir := filepath.Join(os.TempDir(), "sat20wallet-satoshinet-rpctest-failures", sanitizePathPart(t.Name()))
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	dir := filepath.Join(os.TempDir(), "sat20wallet-satoshinet-rpctest-logs", sanitizePathPart(t.Name()))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 	path := filepath.Join(dir, sanitizePathPart(filepath.Base(h.nodeDir))+"-"+sanitizePathPart(h.p2pAddr)+".log")
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return err
 	}
 	t.Logf("preserved node log: %s", path)
@@ -799,9 +797,22 @@ func prepareSatoshiNetNodeDir(t *testing.T, artifacts satoshinetArtifacts, role 
 		}
 	}
 	t.Cleanup(func() {
+		// Failed slots stay reserved so the next case cannot erase their DB.
+		if t.Failed() {
+			return
+		}
 		satoshinetNodeDirsMu.Lock()
+		defer satoshinetNodeDirsMu.Unlock()
+		// Harness teardown and log preservation run first. Keep only verified
+		// binaries cached; successful case state is deleted immediately.
+		entries, err := os.ReadDir(nodeDir)
+		require.NoError(t, err)
+		for _, entry := range entries {
+			if entry.Name() != filepath.Base(executable) && entry.Name() != filepath.Base(plugin) {
+				require.NoError(t, os.RemoveAll(filepath.Join(nodeDir, entry.Name())))
+			}
+		}
 		delete(activeSatoshiNetNodeDirs, nodeDir)
-		satoshinetNodeDirsMu.Unlock()
 	})
 	require.NoError(t, os.MkdirAll(nodeDir, 0o700))
 	entries, err := os.ReadDir(nodeDir)

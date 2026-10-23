@@ -8,16 +8,17 @@ import { tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { performance } from 'node:perf_hooks'
+import { startLocalRealRegtest, checkLocalRealDependencies } from './local-real-regtest.mjs'
 
 const scriptDir = dirname(fileURLToPath(import.meta.url))
 export const pwaRoot = resolve(scriptDir, '../..')
 export const workspaceRoot = resolve(pwaRoot, '../..')
 
-// The normal path excludes two one-shot historical flows: PrivateBTCRoundTrip
-// relies on a previously created outpoint, and ChannelActivation relies on a
-// reviewed old activation height. Diagnostic/continuation/readback cases stay opt-in.
+// ChannelActivation is a prerequisite of the V2 asset-splice journey.
+// Diagnostic, continuation, and readback cases stay out of the default catalog.
 const pwaCanonicalTests = [
   'TestSDKPWARealRegtestWalletBasicAndBiometricBrowser',
+  'TestSDKPWARealRegtestAssetContextStabilityBrowser',
   'TestSDKPWARealRegtestRGBBrowser',
   'TestSDKPWARealRegtestBRC20ExistingTransferSendBrowser',
   'TestSDKPWARealRegtestRunesDecimalSendBrowser',
@@ -29,6 +30,7 @@ const pwaCanonicalTests = [
   'TestSDKPWARealRegtestChannelOpeningOrReadyBrowser',
   'TestSDKPWARealRegtestChannelSplicingBrowser',
   'TestSDKPWARealRegtestChannelSafetyBrowser',
+  'TestSDKPWARealRegtestPrivateBTCRoundTripBrowser',
   'TestSDKPWARealRegtestPrivateBTCSplicingOutBrowser',
   'TestSDKPWARealRegtestChannelV2AssetSplicingBrowser',
   'TestSDKPWARealRegtestBRC20BalanceSendBrowser',
@@ -38,6 +40,7 @@ const pwaCanonicalTests = [
 ]
 
 const fixedAccountUsageTests = ['TestSDKPWARealRegtestFixedAccountManagementBrowser']
+const forceCloseCSVCase = 'TestSDKPWARealRegtestForceCloseCSVBrowser'
 const sdkRequiredEnv = [
   'SAT20_REAL_BITCOIN_CLI',
   'SAT20_REAL_BITCOIN_DATADIR',
@@ -47,51 +50,6 @@ const sdkRequiredEnv = [
   'SAT20_REAL_ESPLORA',
   'SAT20_REAL_REGTEST_RUNTIME',
 ]
-const silentPayTests = [
-  'TestSilentPayE2EReceiveLiveRecoverAndSpend',
-  'TestSilentPayE2EReorgReloadRestoresLive',
-  'TestSilentPayE2ECheckSelfDetectsCorruptionWithoutRepair',
-  'TestSilentPayE2EDatabaseReopen',
-  'TestSilentPayE2ESameBlockSpendAndFullySpentHistoryAudit',
-  'TestSilentPayE2EBaseBufferedCloneSubtractCommit',
-]
-const posSafetyTests = [
-  'TestPOSMinerStatusRepeatedStartStopAndRestart',
-  'TestPOSMinerQueryConcurrentWithStop',
-  'TestGenerateNBlocksRejectsPOSV2WithoutApproval',
-  'TestPOSMinerCandidateDuringDiscreteGeneration',
-  'TestPOSMinerCandidateConcurrentWithStopAndRestart',
-  'TestPOSMinerShutdownWaitsForScheduledWork',
-]
-const networkContractTests = [
-  'TestNetworkTemplateLimitOrderContract',
-  'TestNetworkTemplateDefaultInvokeLimitOrderBuy',
-  'TestNetworkTemplateExchangeDefaultFundBuyAndClose',
-  'TestNetworkTemplateLimitOrderLargeBuyFilledBySmallSells',
-  'TestNetworkTemplateLimitOrderLargeSellFilledBySmallBuys',
-  'TestNetworkTemplateLimitOrderBuyTakesLowerPricedSells',
-  'TestNetworkTemplateLimitOrderRefundOpenOrders',
-  'TestNetworkTemplateLimitOrderRefundPartiallyFilledSell',
-  'TestNetworkTemplateAMMContract',
-  'TestNetworkTemplateAMMWaitsUntilAddLiquidityMeetsK',
-  'TestNetworkTemplateAMMRejectsBuySlippage',
-  'TestNetworkTemplateAMMSellAddsAssetToPool',
-  'TestNetworkTemplateAMMAddRemoveLiquidity',
-  'TestNetworkTemplateAutopayCloseAcrossOutputLimit',
-  'TestNetworkTemplateAutopaySatoshiResult',
-  'TestNetworkTemplatePartialBindingResultFragments',
-  'TestNetworkTemplateLifecycleMatrix',
-  'TestNetworkTemplateLimitOrderScenarioMatrix',
-  'TestNetworkTemplateAMMLiquidityScenarioMatrix',
-  'TestNetworkTemplateExchangeScenarioMatrix',
-  'TestNetworkTemplateAutopayScenarioMatrix',
-  'TestNetworkTemplateAMMDefaultSwapAndCloseOwners',
-  'TestNetworkTemplateDeploymentRejectsInvalidContent',
-  'TestNetworkTemplateRefundRejectsNonNumericOpcode',
-  'TestNetworkLimitRefundBuy',
-  'TestNetworkAMMSameBlockSequentialPricing',
-]
-
 const exactSelector = names => `^(${names.join('|')})$`
 const goFlags = ['-mod=readonly', '-p=1', '-parallel=1', '-failfast', '-json', '-count=1']
 
@@ -104,35 +62,80 @@ function goStage(id, repo, packageName, tests, timeout) {
 }
 
 export function buildCommand(stage, env = process.env) {
-  const selector = stage.id === 'transcend-stp' ? '^TestRunAll$' : exactSelector(stage.tests)
-  const args = ['test', ...goFlags, `-timeout=${stage.timeout}`, '-run', selector]
-  if (stage.id === 'transcend-stp') {
-    args.push('-tags=stp_aggregate')
-    const modfile = env.SAT20_TRANSCEND_E2E_MODFILE
-    if (modfile) {
-      assert.equal(resolve(modfile), modfile, 'SAT20_TRANSCEND_E2E_MODFILE must be an absolute path')
-      assert.ok(modfile.endsWith('.mod'), 'SAT20_TRANSCEND_E2E_MODFILE must end in .mod')
-      assert.ok(existsSync(modfile), 'configured private Transcend modfile does not exist')
-      const sumfile = `${modfile.slice(0, -4)}.sum`
-      assert.ok(existsSync(sumfile), 'configured private Transcend modfile is missing its matching .sum file')
-      args.push(`-modfile=${modfile}`)
-    }
-  }
-  args.push(stage.packageName)
-  return [env.GO || 'go', ...args]
+  return [env.GO || 'go', 'test', ...goFlags, `-timeout=${stage.timeout}`,
+    '-run', exactSelector(stage.tests), stage.packageName]
 }
 
+// These selectors all use real Bitcoin Core and the real L1 indexer.
+// Fake-L1/component suites remain available through their direct Go commands.
 export const stageCatalog = [
-  goStage('indexer-silentpay', 'indexer', './indexer/base', silentPayTests, '45m'),
-  goStage('satoshinet-pos-safety', 'satoshinet', './mining/posminer', posSafetyTests, '45m'),
-  goStage('satoshinet-contract-e2e', 'satoshinet', './integration/contract_e2e', networkContractTests, '45m'),
+  goStage('sdk-node-readiness', 'sat20wallet/sdk', './e2e', ['TestSDKPWARealRegtestNodeReadiness'], '60m'),
+  goStage('sdk-rgb-closed-loop', 'sat20wallet/sdk', './e2e', ['TestSDKPWARealRegtestRGB11StandardRecoveryDirectReturn'], '60m'),
   goStage('sdk-assets', 'sat20wallet/sdk', './e2e', ['TestSDKPWARealRegtestL1AssetPreparation'], '60m'),
-  goStage('sdk-node-readiness', 'sat20wallet/sdk', './e2e', ['TestSDKPWARealRegtestNodeReadiness'], '90m'),
-  goStage('sdk-rgb-closed-loop', 'sat20wallet/sdk', './e2e', ['TestSDKPWARealRegtestRGB11StandardRecoveryDirectReturn'], '90m'),
-  goStage('pwa-canonical', 'sat20wallet/sdk', './e2e', pwaCanonicalTests, '180m'),
-  goStage('pwa-fixed-account-usage', 'sat20wallet/sdk', './e2e', fixedAccountUsageTests, '90m'),
-  goStage('transcend-stp', 'transcend', './stp', ['TestRunAll'], '45m'),
+  goStage('sdk-wasm-real', 'sat20wallet/sdk', './e2e', ['TestSDKPWARealRegtestSDKWASMInterfacesBrowser'], '60m'),
+  goStage('pwa-canonical', 'sat20wallet/sdk', './e2e', pwaCanonicalTests, '60m'),
+  goStage('pwa-force-close-csv', 'sat20wallet/sdk', './e2e', [forceCloseCSVCase], '60m'),
+  goStage('pwa-fixed-account-usage', 'sat20wallet/sdk', './e2e', fixedAccountUsageTests, '60m'),
+  goStage('pwa-guardian-2of3', 'sat20wallet/sdk', './e2e', ['TestSDKPWARealRegtestGuardianRecoveryBrowser'], '60m'),
 ]
+
+const readiness = stageCatalog[0].tests[0]
+const rgbPreparation = stageCatalog[1].tests[0]
+const assetPreparation = stageCatalog[2].tests[0]
+const activation = 'TestSDKPWARealRegtestChannelActivationBrowser'
+const accountPreparation = 'TestSDKPWARealRegtestFreshAccountPreparation'
+
+export function shouldStopBatchAfterGroup(result) {
+  if (result?.error || result?.cleanupError) return true
+  return Array.isArray(result?.executed) && result.executed.some(event =>
+    event.status === 'fail' && [readiness, accountPreparation, assetPreparation].includes(event.test))
+}
+const dependentJourneys = [
+  ['TestSDKPWARealRegtestRunesDecimalSendBrowser', 'TestSDKPWARealRegtestRunesPremineReturnBrowser'],
+  ['TestSDKPWARealRegtestRunesOpenMintSendBrowser', 'TestSDKPWARealRegtestRunesOpenMintReturnBrowser'],
+  ['TestSDKPWARealRegtestChannelOpeningOrReadyBrowser', 'TestSDKPWARealRegtestChannelSplicingBrowser',
+    'TestSDKPWARealRegtestChannelSafetyBrowser', 'TestSDKPWARealRegtestPrivateBTCRoundTripBrowser',
+    'TestSDKPWARealRegtestPrivateBTCSplicingOutBrowser'],
+  [activation, 'TestSDKPWARealRegtestV2AssetPreparation', 'TestSDKPWARealRegtestChannelV2AssetSplicingBrowser'],
+]
+
+// Each group gets a fresh full chain. Only explicitly dependent journeys share
+// that group's state, including the real preparation steps listed in its log.
+export function buildGroups(stages) {
+  const selected = stages.flatMap(stage => stage.tests)
+  const groups = []
+  const handled = new Set()
+  const sdkWasmCase = 'TestSDKPWARealRegtestSDKWASMInterfacesBrowser'
+  for (const name of selected) {
+    if (handled.has(name)) continue
+    const family = dependentJourneys.find(names => names.includes(name)) ?? [name]
+    const last = Math.max(...family.map((test, i) => selected.includes(test) ? i : -1))
+    const cases = family.slice(0, last + 1)
+    cases.forEach(test => handled.add(test))
+    let prerequisites = [readiness, accountPreparation, assetPreparation]
+    if (cases.some(test => ['TestSDKPWARealRegtestRGBBrowser', ...fixedAccountUsageTests].includes(test))) {
+      prerequisites = [readiness, rgbPreparation, assetPreparation]
+    }
+    if (name === readiness) prerequisites = []
+    else if (name === rgbPreparation) prerequisites = [readiness]
+    else if (name === assetPreparation) prerequisites = [readiness, accountPreparation]
+    if (cases.includes(activation) || cases.includes(sdkWasmCase)) {
+      prerequisites.push('TestSDKPWARealRegtestChannelOpeningOrReadyBrowser')
+    }
+    if (cases.includes(forceCloseCSVCase)) {
+      prerequisites.push('TestSDKPWARealRegtestChannelOpeningOrReadyBrowser',
+        'TestSDKPWARealRegtestChannelSplicingBrowser')
+    }
+    const tests = [...new Set([...prerequisites, ...cases])]
+    groups.push({ id: name.replace(/^TestSDKPWARealRegtest/, ''),
+      selectedTests: cases.filter(test => selected.includes(test)),
+      steps: tests.map(test => ({ ...goStage(test, 'sat20wallet/sdk', './e2e', [test], '60m'),
+        purpose: cases.includes(test) && selected.includes(test) ? 'case' : 'prerequisite' })),
+      isolation: 'fresh local Bitcoin Core, L1 indexer, Electrs, SatoshiNet/STP, wallets and browser storage',
+    })
+  }
+  return groups
+}
 
 export function parsePort(value, fallback = 5189) {
   const text = value === undefined || value === null || value === '' ? String(fallback) : String(value)
@@ -152,10 +155,12 @@ export function selectStages(ids, catalog = stageCatalog) {
 }
 
 export function configureStages(stages, env) {
-  return stages.map(stage => stage.id === 'sdk-node-readiness' && env.SAT20_REAL_SATOSHINET_ATTACH ? {
-    ...stage, tests: ['TestSDKPWARealRegtestAttachedNodeReadback'],
-    boundary: 'attached existing-node readback; initial anchor creation and same-DB restart not executed',
-  } : stage)
+  for (const key of ['SAT20_REAL_SATOSHINET_ATTACH', 'SAT20_REAL_RECOVERY_FIXTURES',
+    'SAT20_REAL_SDK_WALLET_DIR', 'SAT20_REAL_PWA_EXISTING_URL', 'SAT20_REAL_REGTEST_RUNTIME',
+    'SAT20_REAL_L1_INDEXER', 'SAT20_REAL_ESPLORA', 'SAT20_REAL_BITCOIN_DATADIR']) {
+    assert.ok(!env[key], `${key} supplies external or retained state; local E2E creates its own environment`)
+  }
+  return stages
 }
 
 export function selectTests(stages, names) {
@@ -447,7 +452,18 @@ export function spawnStage(stage, env, logPath, { command = buildCommand(stage, 
       settled = true
       clearTimeout(timer)
       try { await stopTree() }
-      catch (error) { result = { ...result, exitCode: null, error: error.message } }
+      catch (error) {
+        // Inspection can fail in restricted environments. The process group
+        // created by this spawn is still ours; stop it before returning the
+        // inspection error, otherwise Node keeps waiting on the live child.
+        if (grouped && child?.pid) {
+          try { process.kill(-child.pid, 'SIGKILL') }
+          catch (killError) {
+            if (killError.code !== 'ESRCH') error = new AggregateError([error, killError], `${error.message}; owned process group cleanup failed`)
+          }
+        } else if (child?.pid) child.kill('SIGKILL')
+        result = { ...result, exitCode: null, error: error.message }
+      }
       if (interrupted) result = { ...result, exitCode: null, error: `interrupted by ${interrupted}` }
       process.off('SIGINT', onSigint)
       process.off('SIGTERM', onSigterm)
@@ -484,10 +500,10 @@ function helpText() {
   return [
     'Usage: node workspace-e2e.mjs [--plan|--check] [--only STAGE... ] [--tests EXACT_TEST... ] [--env-file PRIVATE_FILE]',
     '',
-    'Modes: --plan prints exact serial stages; --check validates current regtest prerequisites; default runs all stages.',
+    'Modes: --plan prints independent groups and ordered prerequisites; --check validates local binaries; default creates fresh real chains.',
     '--only accepts exact stage IDs and runs only those stages, in catalog order; no previous results are reused automatically.',
     '--tests selects exact cases within those stages; omitted cases remain recorded as not selected, never as PASS.',
-    'For Transcend, optional SAT20_TRANSCEND_E2E_MODFILE selects a private .mod/.sum pair; otherwise Go uses the workspace module files.',
+    'External services, SSH forwards, retained wallets and recovery files are rejected. Only immutable binaries and public test vectors are reused.',
     `Stages: ${stageCatalog.map(stage => stage.id).join(', ')}`,
     'The browser runner defaults to SAT20_PWA_E2E_PORT=5189. Standalone PWA commands keep their existing 5179 default.',
   ].join('\n')
@@ -500,71 +516,93 @@ async function main(argv) {
     return 0
   }
   const env = effectiveEnv(options.envFile)
-  const configuredStages = configureStages(options.stages, env)
-  const stages = selectTests(configuredStages, options.tests)
+  const configured = configureStages(options.stages, env)
+  const stages = selectTests(configured, options.tests)
+  const groups = buildGroups(stages)
   const port = parsePort(env.SAT20_PWA_E2E_PORT)
   env.SAT20_PWA_E2E_PORT = String(port)
   if (options.mode === 'plan') {
-    process.stdout.write(`${JSON.stringify({ mode: 'plan', pwaBrowserPort: port, autoReuse: false, stages: buildPlan(stages, port, env) }, null, 2)}\n`)
+    process.stdout.write(`${JSON.stringify({ mode: 'plan', groups, sharedHistoricalState: false }, null, 2)}\n`)
     return 0
   }
-  const needsSDK = stages.some(stage => stage.repo === 'sat20wallet/sdk')
-  const prerequisites = needsSDK ? await checkSDKEnvironment(env, port) : { pwaBrowserPort: port }
-  for (const stage of stages) buildCommand(stage, env)
-  const requiredGo = stages.some(stage => stage.repo !== 'sat20wallet/pwa')
-  if (requiredGo) {
-    const version = spawnSync(env.GO || 'go', ['version'], { encoding: 'utf8', timeout: 10000, env })
-    assert.equal(version.status, 0, `Go toolchain unavailable: ${version.error?.message || version.stderr}`)
-  }
-  const nodeVersion = spawnSync(process.execPath, ['--version'], { encoding: 'utf8', timeout: 10000 })
-  assert.equal(nodeVersion.status, 0, 'Node.js is unavailable')
+  const dependencies = await checkLocalRealDependencies({ env, workspaceRoot })
   if (options.mode === 'check') {
-    process.stdout.write(`${JSON.stringify({ mode: 'check', status: 'ready', prerequisites, selectedStages: stages.map(stage => stage.id) }, null, 2)}\n`)
+    process.stdout.write(`${JSON.stringify({ mode: 'check', dependencies, groups: groups.map(g => g.id) })}\n`)
     return 0
   }
-
   const runDir = mkdtempSync(resolve(tmpdir(), 'sat20-workspace-e2e-'))
   chmodSync(runDir, 0o700)
-  const report = { mode: 'run', runDir, pwaBrowserPort: port, prerequisites,
-    selectedStages: stages.map(stage => stage.id),
-    notSelectedTests: configuredStages.flatMap(stage => stage.tests.filter(name => !stages.some(selectedStage => selectedStage.id === stage.id && selectedStage.tests.includes(name)))
-      .map(test => ({ stage: stage.id, test, reason: 'not selected' }))),
-    executed: [], reused: [], notRun: [], status: 'running' }
   const reportPath = resolve(runDir, 'summary.json')
-  const writeReport = () => {
-    writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 })
-    chmodSync(reportPath, 0o600)
-  }
-  const selected = new Set(stages.map(stage => stage.id))
-  let failed = false
-  for (const stage of stages) {
-    const logPath = resolve(runDir, `${stage.id}.jsonl`)
-    process.stdout.write(`Running ${stage.id}; detailed output is private.\n`)
-    const result = await spawnStage(stage, env, logPath, { command: buildCommand(stage, env) })
-    const summary = summarizeGoJSON(readFileSync(logPath, 'utf8'), stage.tests)
-    const passed = result.exitCode === 0 && !result.timedOut && summary.skipped.length === 0 &&
-      summary.failed.length === 0 && summary.missing.length === 0
-    report.executed.push({ stage: stage.id, status: passed ? 'pass' : 'fail', exitCode: result.exitCode,
-      timedOut: result.timedOut, durationMs: result.durationMs, log: logPath, tests: summary,
-      ...(stage.boundary ? { boundary: stage.boundary } : {}),
-      ...(result.error ? { spawnError: result.error } : {}) })
-    if (!passed) {
-      failed = true
-      const rest = stages.slice(stages.findIndex(item => item.id === stage.id) + 1)
-      report.notRun.push(...rest.map(item => ({ stage: item.id, reason: 'earlier stage failed' })))
-      break
+  const report = { mode: 'local-real', runDir, dependencies, status: 'running', groups: [] }
+  const save = () => writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 })
+  save()
+  process.stdout.write(`Full logs: ${runDir}\n`)
+  let interrupted = false
+  const interrupt = () => { interrupted = true }
+  process.on('SIGINT', interrupt)
+  process.on('SIGTERM', interrupt)
+  try {
+    for (const group of groups) {
+      if (interrupted) break
+      const directory = resolve(runDir, group.id)
+      const result = { id: group.id, selectedTests: group.selectedTests, isolation: group.isolation,
+        directory, status: 'running', executed: [], notRun: [] }
+      report.groups.push(result)
+      save()
+      let environment
+      try {
+        environment = await startLocalRealRegtest({ directory, workspaceRoot, env,
+          artifactsDirectory: resolve(runDir, 'artifacts') })
+        result.environment = environment.manifest
+        const groupEnv = { ...env, ...environment.env, SAT20_E2E_LOCAL_REAL: '1' }
+        result.prerequisites = await checkSDKEnvironment(groupEnv, port)
+        for (const [index, step] of group.steps.entries()) {
+          if (interrupted) {
+            result.notRun.push(...group.steps.slice(index).map(s => s.id))
+            break
+          }
+          const log = resolve(directory, `${step.id}.jsonl`)
+          process.stdout.write(`Running ${group.id}/${step.id}; full output saved.\n`)
+          const execution = await spawnStage(step, groupEnv, log, { command: buildCommand(step, groupEnv) })
+          const tests = summarizeGoJSON(readFileSync(log, 'utf8'), step.tests)
+          const passed = execution.exitCode === 0 && !execution.timedOut &&
+            tests.failed.length === 0 && tests.skipped.length === 0 && tests.missing.length === 0
+          result.executed.push({ test: step.id, purpose: step.purpose, status: passed ? 'pass' : 'fail',
+            ...execution, tests, log })
+          save()
+          if (!passed) {
+            result.status = 'fail'
+            result.notRun.push(...group.steps.slice(index + 1).map(s => s.id))
+            break
+          }
+        }
+        if (result.status === 'running') result.status = interrupted ? 'interrupted' : 'pass'
+      } catch (error) {
+        result.status = 'fail'
+        result.error = error.message
+        result.notRun = group.steps.filter(s => !result.executed.some(e => e.test === s.id)).map(s => s.id)
+      } finally {
+        try { await environment?.close() }
+        catch (error) { result.status = 'fail'; result.cleanupError = error.message }
+        if (result.status === 'pass') {
+          try { await environment.discardData(); result.dataRemoved = true }
+          catch (error) { result.status = 'fail'; result.cleanupError = error.message }
+        }
+        save()
+      }
+      // Shared preparation and environment errors affect every fresh group;
+      // a failed business prerequisite remains local to this group's journey.
+      if (shouldStopBatchAfterGroup(result)) break
     }
-    writeReport()
+  } finally {
+    process.off('SIGINT', interrupt)
+    process.off('SIGTERM', interrupt)
   }
-  if (!failed) report.status = 'pass'
-  else report.status = 'fail'
-  report.notRun.push(...stageCatalog.filter(stage => !selected.has(stage.id)).map(stage => ({ stage: stage.id, reason: 'not selected' })))
-  writeReport()
-  process.stdout.write(`${JSON.stringify({ status: report.status, runDir, summary: reportPath,
-    executed: report.executed.map(({ stage, status, exitCode, durationMs, tests }) => ({ stage, status, exitCode, durationMs,
-      topLevelPassed: tests.passed.length, topLevelSkipped: tests.skipped.length })),
-    notRun: report.notRun.map(item => item.stage), reused: [] })}\n`)
-  return failed ? 1 : 0
+  report.notRun = groups.filter(g => !report.groups.some(r => r.id === g.id)).map(g => g.id)
+  report.status = !interrupted && report.notRun.length === 0 && report.groups.every(g => g.status === 'pass') ? 'pass' : 'fail'
+  save()
+  process.stdout.write(`${JSON.stringify({ status: report.status, summary: reportPath })}\n`)
+  return report.status === 'pass' ? 0 : 1
 }
 
 const invokedPath = process.argv[1] ? resolve(process.argv[1]) : ''

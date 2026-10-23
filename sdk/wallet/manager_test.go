@@ -10,11 +10,13 @@ import (
 
 	"github.com/btcsuite/btcd/btcutil/psbt"
 	"github.com/btcsuite/btcd/txscript"
+	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 	swire "github.com/sat20-labs/satoshinet/wire"
 	"github.com/sirupsen/logrus"
+	"github.com/stretchr/testify/require"
 )
 
 var _test_chain = "testnet"
@@ -387,81 +389,82 @@ func restoreNetwork(backup *Env) {
 	fmt.Println("network restore complete")
 }
 
+// Signing and wallet tests need fresh encrypted wallet state, not the legacy
+// three-node/channel fixture or its shared ../db directory.
+func newManagerTestWallet(t *testing.T, mnemonic string) *Manager {
+	t.Helper()
+	previousChain := _chain
+	_chain = "testnet"
+	t.Cleanup(func() { _chain = previousChain })
+	manager := newAccountManagementAutoTestManager(t)
+	_, err := manager.ImportWallet(mnemonic, "123456")
+	require.NoError(t, err)
+	return manager
+}
+
+func managerTestPSBT(t *testing.T, manager *Manager) (*psbt.Packet, *txscript.MultiPrevOutFetcher) {
+	t.Helper()
+	script, err := GetP2TRpkScript(manager.wallet.GetPaymentPubKey())
+	require.NoError(t, err)
+	previous := wire.NewMsgTx(2)
+	previous.AddTxIn(&wire.TxIn{SignatureScript: []byte("manager-signing-fixture")})
+	previous.AddTxOut(wire.NewTxOut(10000, script))
+	tx := wire.NewMsgTx(2)
+	tx.AddTxIn(wire.NewTxIn(&wire.OutPoint{Hash: previous.TxHash()}, nil, nil))
+	tx.AddTxOut(wire.NewTxOut(9000, script))
+	packet, err := psbt.NewFromUnsignedTx(tx)
+	require.NoError(t, err)
+	packet.Inputs[0].WitnessUtxo = previous.TxOut[0]
+	fetcher := txscript.NewMultiPrevOutFetcher(nil)
+	fetcher.AddPrevOut(tx.TxIn[0].PreviousOutPoint, previous.TxOut[0])
+	return packet, fetcher
+}
+
 func TestPsbt(t *testing.T) {
-	prepare(t)
-
-	// input address: tb1pttjr9292tea2nr28ca9zswgdhz0dasnz6n3v58mtg9cyf9wqr49sv8zjep
-	psbtStr := "70736274ff01005e020000000114fe1543a720f178c472ad179224c268c287438477cba59d76b93e1fec4d68170100000000ffffffff0170170000000000002251205ae432a8aa5e7aa98d47c74a28390db89edec262d4e2ca1f6b41704495c01d4b000000000001012bb80b0000000000002251205ae432a8aa5e7aa98d47c74a28390db89edec262d4e2ca1f6b41704495c01d4b010304830000000000"
-	signed, err := _client.SignPsbt(psbtStr, false)
-	if err != nil {
-		t.Fatal()
-	}
-	fmt.Printf("%s\n", signed)
-
-	packet, err := toPsbt(signed)
-	if err != nil {
-		t.Fatal()
-	}
-	// 014112710444510b91aebabc1c7a01dfb732ddc178cbe9df5aa757667129acdf435801d3c3c5b22e5d536304bab4b4531e26b4c78ed7b31df6449a215cc91df4e4bf83
-	fmt.Printf("%s\n", hex.EncodeToString(packet.Inputs[0].FinalScriptWitness))
-
-	err = psbt.MaybeFinalizeAll(packet)
-	if err != nil {
-		Log.Errorf("MaybeFinalizeAll failed, %v", err)
-		t.Fatal()
-	}
-
-	finalTx, err := psbt.Extract(packet)
-	if err != nil {
-		Log.Errorf("Extract failed, %v", err)
-		t.Fatal()
-	}
-
-	PrintJsonTx(finalTx, "")
+	manager := newManagerTestWallet(t, "inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire")
+	packet, fetcher := managerTestPSBT(t, manager)
+	var unsigned bytes.Buffer
+	require.NoError(t, packet.Serialize(&unsigned))
+	signed, err := manager.SignPsbt(hex.EncodeToString(unsigned.Bytes()), false)
+	require.NoError(t, err)
+	finalPacket, err := toPsbt(signed)
+	require.NoError(t, err)
+	require.True(t, finalPacket.IsComplete())
+	finalTx, err := psbt.Extract(finalPacket)
+	require.NoError(t, err)
+	require.Equal(t, packet.UnsignedTx.TxHash(), finalTx.TxHash())
+	fee, err := VerifySignedTxV2(finalTx, fetcher)
+	require.NoError(t, err)
+	require.Equal(t, int64(1000), fee)
+	extracted, err := manager.SignPsbt(hex.EncodeToString(unsigned.Bytes()), true)
+	require.NoError(t, err)
+	decoded, err := DecodeMsgTx(extracted)
+	require.NoError(t, err)
+	require.Equal(t, finalTx.TxHash(), decoded.TxHash())
+	require.NoError(t, VerifySignedTx(decoded, fetcher))
 }
 
 func TestPsbt_SatsNet(t *testing.T) {
-	prepare(t)
-
-	psbtStr := "70736274ff0100fd1e0101000000042a4b6c10fe9b369817650d222d9d7212abde1c9477b54ffdbd7e3e6626357fee0100000000ffffffff9400974c50a5bb30f389e25696279f388ccf17a3d29a0506f8d8cb86895dcf150100000000ffffffff3f32941e8c34679cae707e31efa5ee8b39a0f4f10b748f70f48eb49c403148ca0100000000ffffffff2a4b6c10fe9b369817650d222d9d7212abde1c9477b54ffdbd7e3e6626357fee0200000000ffffffff02200300000000000000225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb380c0300000000000001046f7264780166097261726570697a7a61053430303a3001225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb380000000000010144900100000000000001046f7264780166097261726570697a7a61053430303a3001225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb380001012ce80300000000000000225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb380001012c640000000000000000225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb380001012c5a0000000000000000225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb38000000"
-	signed, err := _client.SignPsbt_SatsNet(psbtStr, false)
-	if err != nil {
-		t.Fatal()
-	}
-	fmt.Printf("%s\n", signed)
-
-	hexBytes, _ := hex.DecodeString(signed)
-	packet, err := spsbt.NewFromRawBytes(bytes.NewReader(hexBytes), false)
-	if err != nil {
-		t.Fatal()
-	}
-
-	err = spsbt.MaybeFinalizeAll(packet)
-	if err != nil {
-		Log.Errorf("MaybeFinalizeAll failed, %v", err)
-		t.Fatal()
-	}
-
-	finalTx, err := spsbt.Extract(packet)
-	if err != nil {
-		Log.Errorf("Extract failed, %v", err)
-		t.Fatal()
-	}
-	PrintJsonTx_SatsNet(finalTx, "")
-
-	prevFectcher := PsbtPrevOutputFetcher_SatsNet(packet)
-	err = VerifySignedTx_SatsNet(finalTx, prevFectcher)
-	if err != nil {
-		Log.Errorf("VerifySignedTx_SatsNet failed, %v", err)
-		t.Fatal(err)
-	}
-
-	txHex, err := EncodeMsgTx_SatsNet(finalTx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fmt.Printf("TX: %s\n", txHex)
-
+	manager := newManagerTestWallet(t, "inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire")
+	script, err := GetP2TRpkScript(manager.wallet.GetPaymentPubKey())
+	require.NoError(t, err)
+	packet := satsNetPrevoutPacket(script)
+	packet.UnsignedTx.TxOut[0].Value -= 100
+	var unsigned bytes.Buffer
+	require.NoError(t, packet.Serialize(&unsigned))
+	signed, err := manager.SignPsbt_SatsNet(hex.EncodeToString(unsigned.Bytes()), false)
+	require.NoError(t, err)
+	raw, err := hex.DecodeString(signed)
+	require.NoError(t, err)
+	finalPacket, err := spsbt.NewFromRawBytes(bytes.NewReader(raw), false)
+	require.NoError(t, err)
+	require.True(t, finalPacket.IsComplete())
+	finalTx, err := spsbt.Extract(finalPacket)
+	require.NoError(t, err)
+	require.Equal(t, packet.UnsignedTx.TxHash(), finalTx.TxHash())
+	require.Equal(t, packet.Inputs[0].WitnessUtxo.Assets, finalTx.TxOut[0].Assets)
+	require.Equal(t, int64(100), packet.Inputs[0].WitnessUtxo.Value-finalTx.TxOut[0].Value)
+	require.NoError(t, VerifySignedTx_SatsNet(finalTx, PsbtPrevOutputFetcher_SatsNet(finalPacket)))
 }
 
 // 验证挂单的psbt的签名有效
@@ -623,9 +626,10 @@ func TestVerifySignedTx_SatsNet(t *testing.T) {
 }
 
 func TestPsbtFullFlow(t *testing.T) {
-	prepare(t)
+	seller := newManagerTestWallet(t, "inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire")
+	buyer := newManagerTestWallet(t, "uniform bulb body vital later special era tourist build chief devote annual")
 
-	pkScript, _ := GetP2TRpkScript(_client.GetWallet().GetPaymentPubKey())
+	pkScript, _ := GetP2TRpkScript(seller.GetWallet().GetPaymentPubKey())
 	assset := indexer.DisplayAsset{
 		AssetName: indexer.AssetName{
 			Protocol: "ordx",
@@ -660,7 +664,7 @@ func TestPsbtFullFlow(t *testing.T) {
 	utxo, _ := json.Marshal(info)
 	fmt.Printf("%s\n", string(utxo))
 
-	sellerAddr := _client.wallet.GetAddress()
+	sellerAddr := seller.wallet.GetAddress()
 
 	psbt, err := BuildBatchSellOrder_SatsNet([]string{string(utxo)},
 		sellerAddr, "testnet",
@@ -678,17 +682,18 @@ func TestPsbtFullFlow(t *testing.T) {
 		fmt.Printf("SplitBatchSignedPsbt %d: %s\n", i, psbt)
 	}
 
+	require.Len(t, psbts, 1)
 	sellPsbt := psbts[0]
 
-	signedSellPsbt, err := _client.SignPsbt_SatsNet(sellPsbt, false)
+	signedSellPsbt, err := seller.SignPsbt_SatsNet(sellPsbt, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	fmt.Printf("SignPsbt_SatsNet: %s", signedSellPsbt)
 
 	// buyer
-	buyerAddr := _server.wallet.GetAddress()
-	pkScript2, _ := GetP2TRpkScript(_server.GetWallet().GetPaymentPubKey())
+	buyerAddr := buyer.wallet.GetAddress()
+	pkScript2, _ := GetP2TRpkScript(buyer.GetWallet().GetPaymentPubKey())
 	info2 := UtxoInfo{
 		AssetsInUtxo: indexer.AssetsInUtxo{
 			UtxoId:   3985729912833,
@@ -719,7 +724,7 @@ func TestPsbtFullFlow(t *testing.T) {
 	}
 	fmt.Printf("FinalizeSellOrder: %s\n", finalPsbt)
 
-	signedFinalPsbt, err := _server.SignPsbt_SatsNet(finalPsbt, false)
+	signedFinalPsbt, err := buyer.SignPsbt_SatsNet(finalPsbt, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -744,6 +749,16 @@ func TestPsbtFullFlow(t *testing.T) {
 	}
 	PrintJsonTx_SatsNet(finalTx, "")
 
+	require.True(t, finalPacket.IsComplete())
+	require.Equal(t, finalPacket.UnsignedTx.TxHash(), finalTx.TxHash())
+	var receivedAsset bool
+	for _, output := range finalTx.TxOut {
+		if bytes.Equal(output.PkScript, pkScript2) && len(output.Assets) == 1 &&
+			output.Assets[0].Name == assset.AssetName && output.Assets[0].Amount.String() == "100" {
+			receivedAsset = true
+		}
+	}
+	require.True(t, receivedAsset, "buyer must receive the seller's exact asset amount")
 	prevFectcher := PsbtPrevOutputFetcher_SatsNet(finalPacket)
 	err = VerifySignedTx_SatsNet(finalTx, prevFectcher)
 	if err != nil {
@@ -754,18 +769,14 @@ func TestPsbtFullFlow(t *testing.T) {
 }
 
 func TestChangePassword(t *testing.T) {
-	prepare(t)
-
-	oldPS := "123456"
-	newPS := "abcdefgh"
-
-	id := _client.status.CurrentWallet
-	err := _client.ChangePassword(oldPS, newPS)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fmt.Printf("%s\n", _client.GetMnemonic(id, oldPS))
-	fmt.Printf("%s\n", _client.GetMnemonic(id, newPS))
+	const mnemonic = "inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire"
+	manager := newManagerTestWallet(t, mnemonic)
+	id := manager.status.CurrentWallet
+	require.Equal(t, mnemonic, manager.GetMnemonic(id, "123456"))
+	require.Error(t, manager.ChangePassword("wrong-password", "abcdefgh"))
+	require.NoError(t, manager.ChangePassword("123456", "abcdefgh"))
+	require.Empty(t, manager.GetMnemonic(id, "123456"))
+	require.Equal(t, mnemonic, manager.GetMnemonic(id, "abcdefgh"))
 }
 
 func TestSwitchChain(t *testing.T) {
@@ -776,194 +787,137 @@ func TestSwitchChain(t *testing.T) {
 }
 
 func TestGetTxAssetInfoFromPsbt(t *testing.T) {
-	prepare(t)
-
-	// 部分签名的psbt
-	psbtStr := "70736274ff01005e0200000001f18974422078033fbd084167f518ca0bae7d82eac3f492a84117eb94684e9abd0000000000ffffffff017602000000000000225120237771c78df654746be0f191b48c4acc782331cf1756c7b4fde5dd3eac43075d000000000001012bb701000000000000225120237771c78df654746be0f191b48c4acc782331cf1756c7b4fde5dd3eac43075d010304830000000000"
-
-	// 完整的psbt
-	// psbtStr := ""
-
-	info, err := _client.GetTxAssetInfoFromPsbt(psbtStr)
-	if err != nil {
-		t.Fatal(err)
+	manager := newManagerTestWallet(t, "inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire")
+	packet, fetcher := managerTestPSBT(t, manager)
+	point := packet.UnsignedTx.TxIn[0].PreviousOutPoint
+	previous := &TxOutput{UtxoId: 1, OutPointStr: point.String(), OutValue: *fetcher.FetchPrevOutput(point)}
+	client := atomicalsTestConfigure(manager)
+	client.outputs[point.String()] = previous
+	var unsigned bytes.Buffer
+	require.NoError(t, packet.Serialize(&unsigned))
+	for _, complete := range []bool{false, true} {
+		t.Run(fmt.Sprintf("complete=%t", complete), func(t *testing.T) {
+			encoded := hex.EncodeToString(unsigned.Bytes())
+			if complete {
+				var err error
+				encoded, err = manager.SignPsbt(encoded, false)
+				require.NoError(t, err)
+			}
+			info, err := manager.GetTxAssetInfoFromPsbt(encoded)
+			require.NoError(t, err)
+			require.Equal(t, packet.UnsignedTx.TxID(), info.TxId)
+			expectedHex, err := EncodeMsgTx(packet.UnsignedTx)
+			require.NoError(t, err)
+			require.Equal(t, expectedHex, info.TxHex)
+			require.Len(t, info.InputAssets, 1)
+			require.Equal(t, previous.ToAssetsInUtxo(), info.InputAssets[0])
+			require.Len(t, info.OutputAssets, 1)
+			require.Equal(t, int64(9000), info.OutputAssets[0].Value)
+			require.Empty(t, info.OutputAssets[0].Assets)
+		})
 	}
-	fmt.Printf("%v\n", info)
+	delete(client.outputs, point.String())
+	info, err := manager.GetTxAssetInfoFromPsbt(hex.EncodeToString(unsigned.Bytes()))
+	require.Error(t, err, "missing previous outputs must never be silently accepted")
+	require.Nil(t, info)
 }
 
 func TestVerifyTx(t *testing.T) {
-	prepare(t)
-
-	txHex := "010000000001032f84604f0cb0991560925fcbf15c427ffd605a002800f1cd5f320a905904f46a0100000000ffffffff12cf5725e9116b8747c127fe15b4d69495a6f28b406defb7763ec99091d61dd50100000000ffffffff87790051681ed948664dfa6730eda17eae1656fc8ad36d407f6193ffbfa2eea50000000000ffffffff04940200000000000022002080631a064208b6d6df4b3762f59d12fb0f6e0f21bb57370aaa4f8866fba918d34a01000000000000225120237771c78df654746be0f191b48c4acc782331cf1756c7b4fde5dd3eac43075d0c8a00000000000022002080631a064208b6d6df4b3762f59d12fb0f6e0f21bb57370aaa4f8866fba918d30000000000000000106a5d0d00cffc030180c0f0978ef841010140552fd1c2c8ed3f240838f4455d4bee71c25426f0aa489e3628b2916700819d33f86685c1ce49f21bdea2a9f79a7f3d4e6a1d52baa8ed1854ba5712d17fb376c704004730440220418c89fdb2aff1de499e9640993a8986c9aaa0d689f6f2911bcaffd279f7e1eb02206d08fc8b32321fae4abe6329768ef0cf4a9c8d8d12d8371914b97890d442219701483045022100edb67dc62f0a591ee3195ff0625c1b3b09c3b16d16c53bb2a94e9d660c89607e02202433e439959a5ae431f50c30edb78ec3bad46c6ad11561eacdf1f6a6cf900402014752210331f024cdf284a7cc50769f0716c5efa8e37ac494db09f2d20e7008c5413def72210367f26af23dc40fdad06752c38264fe621b7bbafb1d41ab436b87ded192f1336e52ae01401c7d41caccdd0717a633568157787ae39a09e46bbe210563a12d4d587ab2d105aaf85f7f49b4b7781a3920a00e25335c035001533a7d2f3fa095c51bf7c2be4000000000"
-
-	tx, err := DecodeMsgTx(txHex)
-	if err != nil {
-		t.Fatal(err)
+	manager := newManagerTestWallet(t, "inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire")
+	packet, fetcher := managerTestPSBT(t, manager)
+	var unsigned bytes.Buffer
+	require.NoError(t, packet.Serialize(&unsigned))
+	signed, err := manager.SignPsbt(hex.EncodeToString(unsigned.Bytes()), true)
+	require.NoError(t, err)
+	tx, err := DecodeMsgTx(signed)
+	require.NoError(t, err)
+	for _, input := range tx.TxIn {
+		require.NotNil(t, fetcher.FetchPrevOutput(input.PreviousOutPoint))
 	}
-	PrintJsonTx(tx, "tx")
-
-	missingInputs := make([]string, 0)
-	prevFetcher := txscript.NewMultiPrevOutFetcher(nil)
-	for _, txIn := range tx.TxIn {
-		utxo := txIn.PreviousOutPoint.String()
-		txOut, err := _client.GetTxOutFromRawTx(utxo)
-		if err != nil {
-			missingInputs = append(missingInputs, utxo)
-			continue
-		}
-
-		prevFetcher.AddPrevOut(txIn.PreviousOutPoint, &txOut.OutValue)
-	}
-
-	fmt.Printf("missing utxos: %v\n", missingInputs)
-
-	if len(missingInputs) == 0 {
-		fee, err := VerifySignedTxV2(tx, prevFetcher)
-		if err != nil {
-			t.Fatal(err)
-		}
-		fmt.Printf("fee: %d\n", fee)
-		fmt.Printf("tx vsize: %d\n", GetTxVirtualSize2(tx))
-	}
-
+	fee, err := VerifySignedTxV2(tx, fetcher)
+	require.NoError(t, err)
+	require.Equal(t, int64(1000), fee)
+	tx.TxOut[0].Value++
+	require.Error(t, VerifySignedTx(tx, fetcher), "a mutated signed output must fail verification")
 }
 
 func TestImportPrivKeyWallet(t *testing.T) {
-	prepare(t)
-
-	privatekey := "cd8deaf4d6f66edca13370f823de0b36fa7e911d1391f3967479e02e066a7cd3"
-	address := "tb1prfcqz85l0x9r03fnxkfs3r78g2ap6afp5740m0c9h7g6xd0s5xkqgzjh4q"
-	oldPS := "123456"
-	newPS := "abcdefgh"
-
-	id, err := _client.ImportWalletWithPrivateKey(privatekey, oldPS)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fmt.Printf("wallet: %d %s\n", id, _client.wallet.GetAddress())
-
-	if _client.wallet.GetAddress() != address {
-		t.Fatal("different address")
-	}
-
-	err = _client.ChangePassword(oldPS, newPS)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fmt.Printf("%s\n", _client.GetMnemonic(id, oldPS))
-	fmt.Printf("%s\n", _client.GetMnemonic(id, newPS))
+	previousChain := _chain
+	_chain = "testnet"
+	t.Cleanup(func() { _chain = previousChain })
+	manager := newAccountManagementAutoTestManager(t)
+	const privateKey = "cd8deaf4d6f66edca13370f823de0b36fa7e911d1391f3967479e02e066a7cd3"
+	id, err := manager.ImportWalletWithPrivateKey(privateKey, "123456")
+	require.NoError(t, err)
+	require.Equal(t, "tb1prfcqz85l0x9r03fnxkfs3r78g2ap6afp5740m0c9h7g6xd0s5xkqgzjh4q", manager.wallet.GetAddress())
+	require.NoError(t, manager.ChangePassword("123456", "abcdefgh"))
+	require.Empty(t, manager.GetMnemonic(id, "123456"))
+	require.Equal(t, privateKey, manager.GetMnemonic(id, "abcdefgh"))
 }
 
 func TestSend_privKeyWallet(t *testing.T) {
-	prepare(t)
+	manager := newManagerTestWallet(t, "inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire")
+	previousScripts := append([]string(nil), _pkScripts...)
+	previousTesting, previousNotSend := ENABLE_TESTING, NOT_SEND_TX
+	ENABLE_TESTING, NOT_SEND_TX = true, false
+	t.Cleanup(func() {
+		_pkScripts = previousScripts
+		ENABLE_TESTING, NOT_SEND_TX = previousTesting, previousNotSend
+	})
+	script, err := GetP2TRpkScript(manager.wallet.GetPaymentPubKey())
+	require.NoError(t, err)
+	// Reuse the existing component Indexer client with one fresh, owned funding
+	// output. No shared network state, filesystem DB or public endpoint is used.
+	chain := &network{
+		name: "bitcoin", height: 1,
+		blocks: make(map[int][]string), txBroadcasted: make(map[string]string),
+		utxoUsed: make(map[string]string), utxoIndex: make(map[string]int),
+		addrAssetMap: make(map[string]map[swire.AssetName]*Decimal),
+		invalids:     make(map[string]map[swire.AssetName]bool),
+		utxoValue:    []int64{20000}, utxoAssets: []indexer.TxAssets{nil},
+		offsets: []map[swire.AssetName]indexer.AssetOffsets{nil}, utxoOwner: []int{insertPkScript(script)},
+	}
+	client := NewTestIndexerClient(chain)
+	funding, err := CreateGenesisTx(chain)
+	require.NoError(t, err)
+	_, err = client.BroadCastTx(funding)
+	require.NoError(t, err)
+	configure := func(wallet *Manager) {
+		wallet.l1IndexerClient = &IndexerRPCClientMgr{active: client}
+		wallet.utxoLockerL1 = NewUtxoLocker(wallet.db, client, L1_NETWORK_BITCOIN)
+		wallet.utxoLockerL1.Init()
+	}
+	configure(manager)
+	require.NoError(t, manager.SwitchAccount(1))
+	address := manager.wallet.GetAddress()
+	key := manager.wallet.(*InternalWallet).getPaymentPrivKey().Serialize()
+	defer zeroBytes(key)
+	require.NoError(t, manager.SwitchAccount(0))
+	plain := &indexer.AssetName{}
+	_, err = manager.SendAssets(address, plain.String(), "10000", 1, nil)
+	require.NoError(t, err)
+	require.Equal(t, int64(10000), manager.GetAssetBalance(address, plain).Int64())
 
-	_client.SwitchAccount(1)
-	address := _client.wallet.GetAddress()
-	interalWallet, ok := _client.wallet.(*InternalWallet)
-	if !ok {
-		t.Fatal()
+	// A managed mnemonic account cannot import private-key wallets. Use a
+	// separate wallet catalog, as an actual private-key-only user does.
+	privateManager := newAccountManagementAutoTestManager(t)
+	_, err = privateManager.ImportWalletWithPrivateKey(hex.EncodeToString(key), "123456")
+	require.NoError(t, err)
+	require.Equal(t, address, privateManager.wallet.GetAddress())
+	configure(privateManager)
+	recipient := manager.wallet.GetAddress()
+	before := manager.GetAssetBalance(recipient, plain).Int64()
+	previous := txscript.NewMultiPrevOutFetcher(nil)
+	for _, utxo := range client.GetAllUtxosWithAddress(address) {
+		op, err := wire.NewOutPointFromString(utxo.OutPoint)
+		require.NoError(t, err)
+		previous.AddPrevOut(*op, wire.NewTxOut(utxo.Value, utxo.PkScript))
 	}
-	privkey := interalWallet.getPaymentPrivKey().Serialize()
-	privKeyStr := hex.EncodeToString(privkey)
-	fmt.Printf("private key: %s", privKeyStr)
-	fmt.Printf("address: %s", address)
-
-	assetName := &indexer.AssetName{
-		Protocol: "",
-		Type:     "",
-		Ticker:   "",
-	}
-
-	_client.SwitchAccount(0)
-
-	_, err := _client.SendAssets(address, assetName.String(), "10000", 1, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	value11 := _client.GetAssetBalance(address, assetName)
-	if value11.Int64() != 10000 {
-		t.Fatal()
-	}
-
-	id, err := _client.ImportWalletWithPrivateKey(privKeyStr, "123456")
-	if err != nil {
-		t.Fatal(err)
-	}
-	fmt.Printf("private key wallet id: %d", id)
-	fmt.Printf("private key wallet address: %s", _client.wallet.GetAddress())
-	if _client.wallet.GetAddress() != address {
-		t.Fatal()
-	}
-
-	address2 := "tb1pz747l0qfnt3q2w3ppd45u607rzse0ga85l9vvjtcj8qhcajneqsszqg7z9"
-	value21 := _client.GetAssetBalance(address2, assetName)
-	_, err = _client.SendAssets(address2, assetName.String(), "1000", 1, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	value12 := _client.GetAssetBalance(address, assetName)
-	if value12.Int64() >= 9000 { // 扣除fee
-		t.Fatal()
-	}
-	value22 := _client.GetAssetBalance(address2, assetName)
-	if value22.Int64() != value21.Int64()+1000 {
-		t.Fatal()
-	}
-
+	tx, err := privateManager.SendAssets(recipient, plain.String(), "1000", 1, nil)
+	require.NoError(t, err)
+	fee, err := VerifySignedTxV2(tx, previous)
+	require.NoError(t, err)
+	require.Positive(t, fee)
+	require.Equal(t, int64(9000)-fee, privateManager.GetAssetBalance(address, plain).Int64())
+	require.Equal(t, before+1000, manager.GetAssetBalance(recipient, plain).Int64())
 }
-
-// func TestDeployContract_ORDX_Remote(t *testing.T) {
-// 	prepare(t)
-
-// 	supportedContracts, err := _client.GetSupportContractInServer()
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	fmt.Printf("supported contracts: %v\n", supportedContracts)
-
-// 	deployedContracts, err := _client.GetDeployedContractInServer()
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	fmt.Printf("deployed contracts: %v\n", deployedContracts)
-
-// 	assetName := &AssetName{
-// 		AssetName: swire.AssetName{
-// 			Protocol: "ordx",
-// 			Type:     "f",
-// 			Ticker:   "testTicker",
-// 		},
-// 		N: 1000,
-// 	}
-// 	launchPool := NewLaunchPoolContract()
-// 	launchPool.AssetName = assetName.AssetName
-// 	launchPool.BindingSat = assetName.N
-// 	launchPool.MintAmtPerSat = assetName.N
-// 	launchPool.Limit = 10000000
-// 	launchPool.LaunchRatio = 70
-// 	launchPool.MaxSupply = 40000000
-
-// 	fmt.Printf("contract: %s\n", launchPool.Content())
-
-// 	str := `{"contractType":"launchpool.tc","startBlock":0,"endBlock":0,"assetName":{"Protocol":"ordx","Type":"f","Ticker":"round2"},"mintAmtPerSat":100,"limit":100000,"maxSupply":10000000,"launchRation":70,"bindingSat":1000}`
-// 	var launchPool2 LaunchPoolContract
-// 	err = json.Unmarshal([]byte(str), &launchPool2)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	fmt.Printf("contract2: %s\n", launchPool2.Content())
-
-// 	deployFee, err := _client.QueryFeeForDeployContract(TEMPLATE_CONTRACT_LAUNCHPOOL, (launchPool2.Content()), 1)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	fmt.Printf("deploy contract %s need %d sats\n", TEMPLATE_CONTRACT_LAUNCHPOOL, deployFee)
-// 	fmt.Printf("use RemoteDeployContract to deploy a contract on core channel in server node\n")
-
-// 	invokeParam, err := _client.QueryParamForInvokeContract(TEMPLATE_CONTRACT_LAUNCHPOOL, "")
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	fmt.Printf("use %s as template to invoke contract %s\n", invokeParam, TEMPLATE_CONTRACT_LAUNCHPOOL)
-// }

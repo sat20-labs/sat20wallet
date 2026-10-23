@@ -5,7 +5,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { buildCommand, buildPlan, configureStages, isLoopbackPeerAddr, parseArguments, parsePort, selectStages, selectTests, spawnStage, stageCatalog, summarizeGoJSON, workspaceRoot } from './workspace-e2e.mjs'
+import { buildCommand, buildGroups, buildPlan, configureStages, isLoopbackPeerAddr, parseArguments, parsePort, selectStages, selectTests, shouldStopBatchAfterGroup, spawnStage, stageCatalog, summarizeGoJSON, workspaceRoot } from './workspace-e2e.mjs'
 
 const wrapperPath = fileURLToPath(new URL('./workspace-e2e.mjs', import.meta.url))
 const makePrivateDir = () => {
@@ -25,37 +25,174 @@ test('stage commands contain one Go test verb before their flags and package', (
   }
 })
 
-test('Transcend aggregate command enables its build tag and exact required selector', () => {
-  const stage = stageCatalog.find(item => item.id === 'transcend-stp')
-  const command = buildCommand(stage, { GO: 'go' })
-  assert.ok(command.includes('-tags=stp_aggregate'))
-  assert.equal(command[command.indexOf('-run') + 1], '^TestRunAll$')
+test('default catalog contains only real local-chain entry points', () => {
+  assert.equal(stageCatalog.length, 8)
+  assert.ok(stageCatalog.every(stage => stage.tests.every(name => name.startsWith('TestSDKPWARealRegtest'))))
+  assert.ok(selectStages(['pwa-canonical'])[0].tests.includes('TestSDKPWARealRegtestAssetContextStabilityBrowser'))
+  assert.throws(() => selectStages(['indexer-silentpay']), /unknown stage/)
+  assert.throws(() => selectStages(['transcend-stp']), /unknown stage/)
 })
 
-test('default plan is the complete serial catalog and keeps the browser port isolated', () => {
-  const plan = buildPlan(stageCatalog, parsePort(undefined))
-  assert.equal(plan.length, 9)
-  assert.deepEqual(plan.map(item => item.stage), [
-    'indexer-silentpay', 'satoshinet-pos-safety', 'satoshinet-contract-e2e',
-    'sdk-assets', 'sdk-node-readiness', 'sdk-rgb-closed-loop',
-    'pwa-canonical', 'pwa-fixed-account-usage', 'transcend-stp',
+test('only shared setup errors stop later independent groups', () => {
+  const fail = (test, purpose = 'prerequisite') => ({
+    executed: [{ test, purpose, status: 'fail' }],
+  })
+  const sharedPreparation = [
+    'TestSDKPWARealRegtestNodeReadiness',
+    'TestSDKPWARealRegtestFreshAccountPreparation',
+    'TestSDKPWARealRegtestL1AssetPreparation',
+  ]
+  for (const testName of sharedPreparation) {
+    assert.equal(shouldStopBatchAfterGroup(fail(testName)), true, testName + ' failure stops the batch')
+  }
+
+  for (const testName of [
+    'TestSDKPWARealRegtestChannelActivationBrowser',
+    'TestSDKPWARealRegtestChannelOpeningOrReadyBrowser',
+  ]) {
+    assert.equal(shouldStopBatchAfterGroup(fail(testName)), false,
+      testName + ' is a business prerequisite local to its group')
+  }
+
+  const completedSetupThenFailedJourney = {
+    executed: [
+      ...sharedPreparation.map(test => ({ test, purpose: 'prerequisite', status: 'pass' })),
+      { test: 'TestSDKPWARealRegtestChannelActivationBrowser', purpose: 'prerequisite', status: 'fail' },
+    ],
+  }
+  assert.equal(shouldStopBatchAfterGroup(completedSetupThenFailedJourney), false,
+    'already-passed shared preparation does not turn a later journey failure into a batch setup error')
+  assert.equal(shouldStopBatchAfterGroup(fail('TestSDKPWARealRegtestWalletBasicAndBiometricBrowser', 'case')), false,
+    'an ordinary case assertion/exit failure still fails its group without suppressing independent groups')
+  assert.equal(shouldStopBatchAfterGroup({ error: 'environment setup failed' }), true)
+  assert.equal(shouldStopBatchAfterGroup({ cleanupError: 'environment cleanup failed' }), true)
+})
+
+test('dependent return case includes its send; unrelated cases get distinct preparation groups', () => {
+  const stages = selectTests(selectStages(['pwa-canonical']), [
+    'TestSDKPWARealRegtestRunesPremineReturnBrowser', 'TestSDKPWARealRegtestBitcoinFundsSendBrowser',
   ])
-  assert.equal(plan.find(item => item.stage === 'pwa-canonical').pwaBrowserPort, 5189)
-  assert.equal(plan.find(item => item.stage === 'satoshinet-contract-e2e').expectedTopLevelTests.length, 26)
-  assert.ok(!plan.find(item => item.stage === 'pwa-canonical').expectedTopLevelTests.includes('TestSDKPWARealRegtestPrivateBTCRoundTripBrowser'))
-  assert.ok(!plan.find(item => item.stage === 'pwa-canonical').expectedTopLevelTests.includes('TestSDKPWARealRegtestChannelActivationBrowser'))
-  assert.equal(plan.find(item => item.stage === 'pwa-fixed-account-usage').expectedTopLevelTests[0], 'TestSDKPWARealRegtestFixedAccountManagementBrowser')
+  const groups = buildGroups(stages)
+  assert.equal(groups.length, 2)
+  const steps = groups[0].steps.map(step => step.id)
+  assert.deepEqual(steps.slice(0, 3), [
+    'TestSDKPWARealRegtestNodeReadiness', 'TestSDKPWARealRegtestFreshAccountPreparation',
+    'TestSDKPWARealRegtestL1AssetPreparation',
+  ])
+  assert.deepEqual(steps.slice(3), [
+    'TestSDKPWARealRegtestRunesDecimalSendBrowser', 'TestSDKPWARealRegtestRunesPremineReturnBrowser',
+  ])
+  assert.equal(groups[0].steps.at(-2).purpose, 'prerequisite')
+  assert.equal(groups[0].steps.at(-1).purpose, 'case')
+  assert.notEqual(groups[0].id, groups[1].id)
+  assert.deepEqual(groups[1].steps.slice(0, 3).map(step => step.id), steps.slice(0, 3))
+})
+
+test('SDK WASM gets channel preparation without consuming the independent PWA channel case', () => {
+  const opening = 'TestSDKPWARealRegtestChannelOpeningOrReadyBrowser'
+  const sdkCase = 'TestSDKPWARealRegtestSDKWASMInterfacesBrowser'
+  const groups = buildGroups(selectTests(selectStages(['sdk-wasm-real', 'pwa-canonical']), [sdkCase, opening]))
+  assert.equal(groups.length, 2)
+  const sdkGroup = groups.find(group => group.selectedTests.includes(sdkCase))
+  const pwaGroup = groups.find(group => group.selectedTests.includes(opening))
+  assert.ok(sdkGroup)
+  assert.ok(pwaGroup)
+  assert.deepEqual(sdkGroup.selectedTests, [sdkCase])
+  assert.deepEqual(pwaGroup.selectedTests, [opening])
+  const sdkSteps = sdkGroup.steps
+  assert.equal(sdkSteps.at(-2).id, opening)
+  assert.equal(sdkSteps.at(-2).purpose, 'prerequisite')
+  assert.equal(sdkSteps.at(-1).id, sdkCase)
+  assert.equal(sdkSteps.at(-1).purpose, 'case')
+  assert.equal(pwaGroup.steps.at(-1).id, opening)
+  assert.equal(pwaGroup.steps.at(-1).purpose, 'case')
+  assert.equal(groups.flatMap(group => group.steps).filter(step => step.id === opening).length, 2)
+})
+
+test('CSV force close uses its own opening and BTC splice preparation group', () => {
+  const opening = 'TestSDKPWARealRegtestChannelOpeningOrReadyBrowser'
+  const splice = 'TestSDKPWARealRegtestChannelSplicingBrowser'
+  const forceClose = 'TestSDKPWARealRegtestForceCloseCSVBrowser'
+  const groups = buildGroups(selectStages(['pwa-force-close-csv']))
+  assert.equal(groups.length, 1)
+  assert.deepEqual(groups[0].selectedTests, [forceClose])
+  const steps = groups[0].steps
+  assert.deepEqual(steps.slice(-3).map(step => step.id), [opening, splice, forceClose])
+  assert.deepEqual(steps.slice(-3).map(step => step.purpose), ['prerequisite', 'prerequisite', 'case'])
+  assert.match(groups[0].isolation, /fresh local Bitcoin Core/)
+})
+
+test('Guardian 2-of-3 recovery gets a fresh real-regtest group with temporary-storage preparation', () => {
+  const guardian = 'TestSDKPWARealRegtestGuardianRecoveryBrowser'
+  const group = buildGroups(selectStages(['pwa-guardian-2of3']))[0]
+  assert.deepEqual(group.selectedTests, [guardian])
+  assert.deepEqual(group.steps.slice(0, 3).map(step => step.id), [
+    'TestSDKPWARealRegtestNodeReadiness', 'TestSDKPWARealRegtestFreshAccountPreparation',
+    'TestSDKPWARealRegtestL1AssetPreparation',
+  ])
+  assert.deepEqual(group.steps.slice(0, 3).map(step => step.purpose), ['prerequisite', 'prerequisite', 'prerequisite'])
+  assert.equal(group.steps.at(-1).id, guardian)
+  assert.equal(group.steps.at(-1).purpose, 'case')
+  assert.doesNotMatch(group.steps.map(step => step.id).join(' '), /ChannelOpeningOrReady|FixedAccountManagement/)
+  assert.match(group.isolation, /fresh local Bitcoin Core/)
+})
+
+test('private BTC round trip joins the ordered channel journey without swallowing cases', () => {
+  const opening = 'TestSDKPWARealRegtestChannelOpeningOrReadyBrowser'
+  const splice = 'TestSDKPWARealRegtestChannelSplicingBrowser'
+  const safety = 'TestSDKPWARealRegtestChannelSafetyBrowser'
+  const privateBTC = 'TestSDKPWARealRegtestPrivateBTCRoundTripBrowser'
+  const spliceOut = 'TestSDKPWARealRegtestPrivateBTCSplicingOutBrowser'
+  const selectCases = names => selectTests(selectStages(['pwa-canonical']), names)
+
+  const privateOnly = buildGroups(selectCases([privateBTC]))
+  assert.equal(privateOnly.length, 1)
+  assert.deepEqual(privateOnly[0].selectedTests, [privateBTC])
+  assert.deepEqual(privateOnly[0].steps.slice(-4).map(step => step.id), [opening, splice, safety, privateBTC])
+  assert.deepEqual(privateOnly[0].steps.slice(-4).map(step => step.purpose),
+    ['prerequisite', 'prerequisite', 'prerequisite', 'case'])
+
+  const spliceOutOnly = buildGroups(selectCases([spliceOut]))
+  assert.deepEqual(spliceOutOnly[0].steps.slice(-5).map(step => step.id),
+    [opening, splice, safety, privateBTC, spliceOut])
+  assert.deepEqual(spliceOutOnly[0].steps.slice(-5).map(step => step.purpose),
+    ['prerequisite', 'prerequisite', 'prerequisite', 'prerequisite', 'case'])
+
+  const combined = buildGroups(selectCases([opening, safety, privateBTC, spliceOut]))
+  assert.equal(combined.length, 1)
+  assert.deepEqual(combined[0].selectedTests, [opening, safety, privateBTC, spliceOut])
+  assert.deepEqual(combined[0].steps.slice(-5).map(step => step.id),
+    [opening, splice, safety, privateBTC, spliceOut])
+  assert.deepEqual(combined[0].steps.slice(-5).map(step => step.purpose),
+    ['case', 'prerequisite', 'case', 'case', 'case'])
+
+  const withIndependent = buildGroups(selectCases([privateBTC, 'TestSDKPWARealRegtestBitcoinFundsSendBrowser']))
+  assert.equal(withIndependent.length, 2)
+  assert.deepEqual(withIndependent.find(group => group.selectedTests.includes(privateBTC)).selectedTests, [privateBTC])
+  assert.deepEqual(withIndependent.find(group => group.selectedTests.includes('TestSDKPWARealRegtestBitcoinFundsSendBrowser')).selectedTests,
+    ['TestSDKPWARealRegtestBitcoinFundsSendBrowser'])
+})
+
+test('selecting both dependent cases runs their journey once in one group', () => {
+  const stages = selectTests(selectStages(['pwa-canonical']), [
+    'TestSDKPWARealRegtestRunesDecimalSendBrowser', 'TestSDKPWARealRegtestRunesPremineReturnBrowser',
+  ])
+  const groups = buildGroups(stages)
+  assert.equal(groups.length, 1)
+  assert.equal(groups[0].selectedTests.length, 2)
+  assert.equal(groups[0].steps.length, 5)
+  assert.equal(buildGroups(selectStages(['sdk-node-readiness']))[0].steps.length, 1)
 })
 
 test('--only selects exact known stages in dependency order and rejects missing selections', () => {
-  assert.deepEqual(selectStages(['sdk-rgb-closed-loop', 'indexer-silentpay']).map(stage => stage.id), [
-    'indexer-silentpay', 'sdk-rgb-closed-loop',
+  assert.deepEqual(selectStages(['sdk-rgb-closed-loop', 'sdk-node-readiness']).map(stage => stage.id), [
+    'sdk-node-readiness', 'sdk-rgb-closed-loop',
   ])
   assert.throws(() => selectStages(['sdk-rbg-closed-loop']), /unknown stage ID/)
   assert.throws(() => selectStages([]), /at least one exact stage/)
   assert.throws(() => selectStages(['sdk-assets', 'sdk-assets']), /cannot repeat/)
   assert.deepEqual(parseArguments(['--only', 'sdk-assets', 'sdk-node-readiness']).stages.map(stage => stage.id), [
-    'sdk-assets', 'sdk-node-readiness',
+    'sdk-node-readiness', 'sdk-assets',
   ])
 })
 
@@ -73,16 +210,13 @@ test('--tests selects exact cases in catalog order without rerunning their whole
   assert.throws(() => selectTests(selectStages(['sdk-assets']), names), /unknown test/)
 })
 
-test('attach plan selects the existing-node readback and explicitly excludes owned lifecycle coverage', () => {
-  const original = stageCatalog.find(stage => stage.id === 'sdk-node-readiness')
-  const [attached] = configureStages([original], { SAT20_REAL_SATOSHINET_ATTACH: '/private/existing.json' })
-  assert.deepEqual(attached.tests, ['TestSDKPWARealRegtestAttachedNodeReadback'])
-  assert.match(attached.boundary, /same-DB restart not executed/)
-  assert.deepEqual(original.tests, ['TestSDKPWARealRegtestNodeReadiness'])
-  assert.deepEqual(configureStages([original], {})[0], original)
-  const plan = buildPlan([attached], 5179)
-  assert.equal(plan[0].boundary, attached.boundary)
-  assert.ok(plan[0].command.some(arg => arg.includes('TestSDKPWARealRegtestAttachedNodeReadback')))
+test('retained or attached environment is rejected even when its URL is loopback', () => {
+  for (const key of ['SAT20_REAL_SATOSHINET_ATTACH', 'SAT20_REAL_RECOVERY_FIXTURES',
+    'SAT20_REAL_SDK_WALLET_DIR', 'SAT20_REAL_PWA_EXISTING_URL', 'SAT20_REAL_REGTEST_RUNTIME',
+    'SAT20_REAL_L1_INDEXER', 'SAT20_REAL_ESPLORA', 'SAT20_REAL_BITCOIN_DATADIR']) {
+    assert.throws(() => configureStages(stageCatalog, { [key]: '/private/old-state' }), /external or retained state/)
+  }
+  assert.deepEqual(configureStages(stageCatalog, {}), stageCatalog)
 })
 
 test('canonical channel preparation opens only when absent and preserves existing READY channels', () => {
@@ -129,111 +263,20 @@ test('Bitcoin Core readiness accepts only IPv4 or IPv6 loopback peer addresses',
   assert.equal(isLoopbackPeerAddr('[::1]'), false)
 })
 
-test('stage commands use effective GO and the isolated Transcend modfile without changing go.sum', () => {
-  const dir = makePrivateDir()
-  try {
-    const modfile = join(dir, 'transcend-fixture.mod')
-    writeFileSync(modfile, 'module fixture\n', { mode: 0o600 })
-    writeFileSync(join(dir, 'transcend-fixture.sum'), '', { mode: 0o600 })
-    const stage = stageCatalog.find(item => item.id === 'transcend-stp')
-    const command = buildCommand(stage, { GO: '/private/toolchain/go', SAT20_TRANSCEND_E2E_MODFILE: modfile })
+test('plan subprocess expands prerequisites without contacting services or requiring old files', () => {
+  const result = spawnSync(process.execPath, [wrapperPath, '--plan', '--only', 'sdk-rgb-closed-loop'], {
+    cwd: workspaceRoot, env: { PATH: process.env.PATH }, encoding: 'utf8', timeout: 10000,
+  })
+  assert.equal(result.status, 0, result.stderr)
+  const plan = JSON.parse(result.stdout)
+  assert.equal(plan.sharedHistoricalState, false)
+  assert.equal(plan.groups.length, 1)
+  assert.equal(plan.groups[0].steps.length, 2)
+  for (const stage of stageCatalog) {
+    const command = buildCommand(stage, { GO: '/private/toolchain/go' })
     assert.equal(command[0], '/private/toolchain/go')
-    assert.ok(command.includes('-mod=readonly'))
     assert.equal(command.filter(arg => arg === '-mod=readonly').length, 1)
-    assert.ok(command.includes(`-modfile=${modfile}`))
-    assert.equal(command.at(-1), './stp')
-    const defaultStageCommand = buildCommand(stage, { GO: '/private/toolchain/go' })
-    assert.ok(!defaultStageCommand.some(arg => arg.startsWith('-modfile=')))
-    assert.equal(defaultStageCommand.filter(arg => arg === '-mod=readonly').length, 1)
-    for (const catalogStage of stageCatalog) {
-      assert.equal(buildCommand(catalogStage, { GO: '/private/toolchain/go' }).filter(arg => arg === '-mod=readonly').length,
-        1, `${catalogStage.id} must protect the shared module files`)
-    }
-    const plan = buildPlan([stage], 5189, { GO: '/private/toolchain/go', SAT20_TRANSCEND_E2E_MODFILE: modfile })
-    assert.equal(plan[0].command[0], '/private/toolchain/go')
-    assert.ok(plan[0].command.includes(`-modfile=${modfile}`))
-    assert.equal(plan[0].command.filter(arg => arg === '-mod=readonly').length, 1)
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
-})
-
-test('wrapper subprocess writes a private success summary and stops after the first failed stage', () => {
-  const dir = makePrivateDir()
-  try {
-    const marker = join(dir, 'go-test-invocations.txt')
-    const stubGo = join(dir, 'go-stub.mjs')
-    const envFile = join(dir, 'e2e.env')
-    writeFileSync(stubGo, `#!/usr/bin/env node
-import { appendFileSync } from 'node:fs'
-if (process.argv[2] === 'version') {
-  process.stdout.write('go version go1.24.13 test-stub\\n')
-  process.exit(0)
-}
-if (process.argv[2] !== 'test') process.exit(2)
-appendFileSync(process.env.SAT20_TEST_STUB_MARKER, 'test\\n')
-process.stdout.write(process.env.SAT20_TEST_STUB_JSON || '')
-process.exit(Number(process.env.SAT20_TEST_STUB_EXIT || 0))
-`, { mode: 0o700 })
-    chmodSync(stubGo, 0o700)
-    writeFileSync(envFile, `GO=${stubGo}\n`, { mode: 0o600 })
-    const successJSON = [
-      'TestSilentPayE2EReceiveLiveRecoverAndSpend',
-      'TestSilentPayE2EReorgReloadRestoresLive',
-      'TestSilentPayE2ECheckSelfDetectsCorruptionWithoutRepair',
-      'TestSilentPayE2EDatabaseReopen',
-      'TestSilentPayE2ESameBlockSpendAndFullySpentHistoryAudit',
-      'TestSilentPayE2EBaseBufferedCloneSubtractCommit',
-    ].map(Test => JSON.stringify({ Action: 'pass', Test })).join('\n') + '\n'
-    const commonEnv = {
-      PATH: process.env.PATH,
-      SAT20_TEST_STUB_MARKER: marker,
-      SAT20_TEST_STUB_JSON: successJSON,
-      SAT20_TEST_STUB_EXIT: '0',
-    }
-    const success = spawnSync(process.execPath, [wrapperPath, '--only', 'indexer-silentpay', '--env-file', envFile], {
-      cwd: workspaceRoot, env: commonEnv, encoding: 'utf8', timeout: 30000,
-    })
-    assert.equal(success.status, 0, success.stderr)
-    const successSummary = JSON.parse(success.stdout.trim().split(/\r?\n/).at(-1))
-    assert.equal(successSummary.status, 'pass')
-    assert.equal(successSummary.executed[0].topLevelPassed, 6)
-    const successReport = JSON.parse(readFileSync(successSummary.summary, 'utf8'))
-    assert.equal(statSync(successSummary.runDir).mode & 0o777, 0o700)
-    assert.equal(statSync(successSummary.summary).mode & 0o777, 0o600)
-    assert.equal(successReport.executed.length, 1)
-    assert.equal(readFileSync(marker, 'utf8').trim().split(/\r?\n/).length, 1)
-
-    const subsetNames = ['TestSilentPayE2EReceiveLiveRecoverAndSpend', 'TestSilentPayE2EDatabaseReopen']
-    const subset = spawnSync(process.execPath, [wrapperPath, '--only', 'indexer-silentpay', '--tests', ...subsetNames, '--env-file', envFile], {
-      cwd: workspaceRoot,
-      env: { ...commonEnv, SAT20_TEST_STUB_JSON: subsetNames.map(Test => JSON.stringify({ Action: 'pass', Test })).join('\n') + '\n' },
-      encoding: 'utf8', timeout: 30000,
-    })
-    assert.equal(subset.status, 0, subset.stderr)
-    const subsetSummary = JSON.parse(subset.stdout.trim().split(/\r?\n/).at(-1))
-    const subsetReport = JSON.parse(readFileSync(subsetSummary.summary, 'utf8'))
-    assert.equal(subsetReport.executed[0].tests.expected, 2)
-    assert.equal(subsetReport.notSelectedTests.length, 4)
-    assert.ok(subsetReport.notSelectedTests.every(item => !subsetNames.includes(item.test)))
-
-    writeFileSync(marker, '', { mode: 0o600 })
-    const failJSON = JSON.stringify({ Action: 'fail', Test: 'TestSilentPayE2EReceiveLiveRecoverAndSpend' }) + '\n'
-    const failure = spawnSync(process.execPath, [wrapperPath, '--only', 'indexer-silentpay', 'satoshinet-pos-safety', '--env-file', envFile], {
-      cwd: workspaceRoot,
-      env: { ...commonEnv, SAT20_TEST_STUB_JSON: failJSON, SAT20_TEST_STUB_EXIT: '1' },
-      encoding: 'utf8', timeout: 30000,
-    })
-    assert.equal(failure.status, 1, failure.stderr)
-    const failureSummary = JSON.parse(failure.stdout.trim().split(/\r?\n/).at(-1))
-    assert.equal(failureSummary.status, 'fail')
-    const failureReport = JSON.parse(readFileSync(failureSummary.summary, 'utf8'))
-    assert.equal(failureReport.executed.length, 1)
-    assert.equal(failureReport.executed[0].stage, 'indexer-silentpay')
-    assert.ok(failureReport.notRun.some(item => item.stage === 'satoshinet-pos-safety'))
-    assert.equal(readFileSync(marker, 'utf8').trim().split(/\r?\n/).length, 1)
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
+    assert.ok(command.includes('-timeout=60m'))
   }
 })
 
@@ -311,7 +354,34 @@ for (const detached of [false, true]) {
   }
 }
 
-test('interrupting the stage owner waits for its process group to stop', { skip: process.platform === 'win32' }, async () => {
+test('failed process inspection still stops its owned child and reports failure', { skip: process.platform === 'win32' }, async () => {
+  const dir = makePrivateDir(), pidPath = join(dir, 'owned.pid')
+  const previousPath = process.env.PATH
+  let owned
+  try {
+    writeFileSync(join(dir, 'ps'), '#!/bin/sh\nexit 1\n', { mode: 0o700 })
+    process.env.PATH = `${dir}:${previousPath}`
+    const result = await spawnStage({ cwd: dir, timeoutMs: 300 }, process.env, join(dir, 'inspection.log'), {
+      command: [process.execPath, '-e', `require('node:fs').writeFileSync(${JSON.stringify(pidPath)}, String(process.pid)); setInterval(() => {}, 1000)`],
+      graceMs: 0, killGraceMs: 100,
+    })
+    owned = Number(readFileSync(pidPath, 'utf8'))
+    assert.equal(result.exitCode, null)
+    assert.match(result.error, /Unable to inspect/)
+    for (let attempt = 0; attempt < 100; attempt++) {
+      try { process.kill(owned, 0) }
+      catch (error) { if (error.code === 'ESRCH') { owned = null; break } throw error }
+      await new Promise(resolve => setTimeout(resolve, 20))
+    }
+    assert.equal(owned, null, 'inspection failure must not leave its child running')
+  } finally {
+    process.env.PATH = previousPath
+    if (owned) { try { process.kill(owned, 'SIGKILL') } catch (error) { if (error.code !== 'ESRCH') throw error } }
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('interrupting the stage owner waits for its process group to stop', { skip: process.platform === 'win32', timeout: 15000 }, async () => {
   const dir = makePrivateDir(), pidPath = join(dir, 'owned.pid')
   let owned
   const program = `

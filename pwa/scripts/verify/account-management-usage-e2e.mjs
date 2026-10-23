@@ -16,6 +16,18 @@ export const fixedRegtestAccountUsageCaseNames = [
   'usage: fixed regtest ordinary-1 renews paid storage through current AUTOPAY',
 ]
 
+export const regtestAccountUsageCaseNames = [
+  ...fixedRegtestAccountUsageCaseNames,
+  'usage: real 2of3 settings and independent Guardian pages complete setup and rehearsal',
+]
+
+// Public BIP39 test vectors; browser wallet configuration supplies the actual
+// regtest chain parameters and derives both identities for this fresh group.
+const guardianRecoverySyntheticMnemonics = {
+  owner: 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about',
+  guardian: 'legal winner thank year wave sausage worth useful legal winner thank yellow',
+}
+
 export function requireFixedAccountManagementOwner(fixture) {
   const owner = fixture?.owner
   assert.ok(typeof owner?.mnemonic === 'string' && owner.mnemonic.trim() &&
@@ -175,6 +187,33 @@ export async function runPwaUsageCases(t) {
     }, password)
     return page
   }
+  const freshSynthetic = async mnemonic => {
+    const page = await device()
+    try {
+      const expectedIdentity = await walletCall(page, 'validateMnemonic', mnemonic, '')
+      assert.ok(expectedIdentity?.fingerprint && expectedIdentity?.address,
+        'public synthetic mnemonic must derive a configured-chain identity')
+      const importError = await page.evaluate(async ({ mnemonic: phrase, credential }) => {
+        const [error] = await window.__SAT20_PWA_VERIFY__.useWalletStore().importWallet(phrase, credential)
+        return error?.message
+      }, { mnemonic, credential: password })
+      assert.equal(importError, undefined, 'PWA import of the public synthetic identity failed')
+      const rootIdentity = root => ({ fingerprint: root.fingerprint, address: root.accounts?.[0]?.address })
+      const assertImportedRoot = async phase => {
+        const roots = await catalog(page)
+        assert.equal(roots.length, 1, `${phase}: expected one synthetic root, not a newly generated wallet`)
+        assertFixedRootIdentity(expectedIdentity, rootIdentity(roots[0]))
+      }
+      await assertImportedRoot('initial import')
+      await page.reload(); await ready(page); await unlock(page, password)
+      await assertImportedRoot('reload')
+      return page
+    } catch (error) {
+      await t.preserveBrowserFailureState?.()
+      await page.context().close().catch(() => {})
+      throw error
+    }
+  }
   const using = async action => {
     const page = await fresh()
     try { await action(page) } catch (error) {
@@ -186,6 +225,24 @@ export async function runPwaUsageCases(t) {
       throw error
     } finally { await page.context().close() }
   }
+  const usingSynthetic = async (mnemonic, action) => {
+    const page = await freshSynthetic(mnemonic)
+    try { await action(page) } catch (error) {
+      await t.preserveBrowserFailureState?.()
+      const view = await page.evaluate(() => ({
+        headings: [...document.querySelectorAll('h1,h2')].map(element => element.textContent),
+        alerts: [...document.querySelectorAll('[role="alert"]')].map(element => element.textContent),
+      })).catch(() => null)
+      console.error(JSON.stringify({ syntheticIdentityFailureView: view, url: page.url() }))
+      throw error
+    } finally { await page.context().close() }
+  }
+  const usingGuardianOwner = action => t.regtestMode
+    ? usingSynthetic(guardianRecoverySyntheticMnemonics.owner, action)
+    : using(action)
+  const freshGuardian = () => t.regtestMode
+    ? freshSynthetic(guardianRecoverySyntheticMnemonics.guardian)
+    : fresh()
   const setup = async page => {
     await accountCall(page, 'confirmStorage', 'temporary')
     await settled(page)
@@ -258,6 +315,7 @@ export async function runPwaUsageCases(t) {
       assertFixedRootIdentity(expectedIdentity, rootIdentity(restored[0]))
       await action(page, { expectedIdentity, root: restored[0] })
     } catch (error) {
+      await t.preserveBrowserFailureState?.()
       let diagnosticTimer
       const view = await Promise.race([
         page.evaluate(() => ({
@@ -1180,8 +1238,8 @@ export async function runPwaUsageCases(t) {
     await assertNoSecrets(page, [...questions.map(q => q.answer), material.user_share, password])
   }))
 
-  await scenario('usage: real 2of3 settings and independent Guardian pages complete setup and rehearsal', () => using(async page => {
-    const guardian = await fresh()
+  await scenario(regtestAccountUsageCaseNames[2], () => usingGuardianOwner(async page => {
+    const guardian = await freshGuardian()
     try {
       await settings(guardian)
       await guardian.getByRole('button', { name: '生成我的联系信息并发送给好友', exact: true }).click()
@@ -1279,8 +1337,14 @@ export async function runPwaUsageCases(t) {
           await ready(recovery); await unlock(recovery, newPassword)
           assert.deepEqual(normalize(await catalog(recovery)), normalize(expectedCatalog), combination)
           await assertNoSecrets(recovery, [...questions.map(q => q.answer), savedShare, newPassword])
+        } catch (error) {
+          await t.preserveBrowserFailureState?.()
+          throw error
         } finally { await recovery.context().close() }
       }
+    } catch (error) {
+      await t.preserveBrowserFailureState?.()
+      throw error
     } finally { await guardian.context().close() }
   }))
 
@@ -1644,13 +1708,16 @@ export async function runPwaUsageCases(t) {
         const afterQuote = await accountCall(page, 'autopayStatus')
         assert.ok(Number(afterQuote.estimated_expiry_height) > initialExpiry,
           'confirmed AUTOPAY renewal did not increase the estimated expiry height')
-        const expiryPanel = await page.locator('[aria-label="DKVS 付费高度"]').innerText()
         const expiryMessages = [
           `预计从聪网高度 ${afterQuote.estimated_expiry_height} 起余额不足以继续付费`,
           `Estimated insufficient payment balance from SatoshiNet height ${afterQuote.estimated_expiry_height}`,
         ]
-        assert.ok(expiryMessages.some(message => expiryPanel.includes(message)),
-          'PWA paid-height panel does not display the renewed expiry estimate')
+        // The SDK query above does not update the page's reactive quote. Wait
+        // for its normal 30-second refresh to render the confirmed renewal.
+        await expect.poll(async () => {
+          const expiryPanel = await page.locator('[aria-label="DKVS 付费高度"]').innerText()
+          return expiryMessages.some(message => expiryPanel.includes(message))
+        }, { timeout: 90000, message: 'PWA paid-height panel does not display the renewed expiry estimate' }).toBe(true)
         const after = await accountCall(page, 'status')
         assert.equal(after.active, true)
         assert.equal(after.recovery_configured, true)

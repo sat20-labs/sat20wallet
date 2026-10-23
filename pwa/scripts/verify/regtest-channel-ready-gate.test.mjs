@@ -6,10 +6,10 @@ import { readFileSync } from 'node:fs'
 // WASM/browser run. This does not replace the real READY reload UI case.
 const runner = readFileSync(new URL('./account-management-e2e.mjs', import.meta.url), 'utf8')
 const start = runner.indexOf('new Set([...requiredPwaWalletBasicCases')
-const end = runner.indexOf('\n  assert.ok(focusedWalletCases.every', start)
+const end = runner.indexOf('\n  const sdkWASMSelector =', start)
 assert.ok(start >= 0 && end > start)
 const expression = runner.slice(start, end).trim()
-const names = [...new Set(expression.match(/requiredPwa\w+Cases/g))]
+const names = [...new Set(expression.match(/(?:required|optional)Pwa\w+Cases/g))]
 const posSource = readFileSync(new URL('./pos-pwa-e2e.mjs', import.meta.url), 'utf8')
 const posArray = posSource.match(/export const requiredPwaPosCases = (\[[\s\S]*?\n\])/)[1]
 const pos = Function(`return ${posArray}`)()

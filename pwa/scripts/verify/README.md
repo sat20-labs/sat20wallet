@@ -1,6 +1,17 @@
 # SAT20 PWA Verification Scripts
 
-These scripts exercise the SAT20 PWA wallet against the test networks.
+These scripts exercise the SAT20 PWA wallet.
+
+## 本机真实双链 E2E（2026-10-23）
+
+当前真实 E2E 使用 `node scripts/verify/workspace-e2e.mjs`。每个独立 case 或依赖组
+从空目录启动本机 Bitcoin Core、真实 L1 indexer、Electrs、SatoshiNet/STP 和浏览器，
+不连接远程节点，也不复用历史钱包或链数据。工具安装、路径配置和覆盖边界见
+[公共环境说明](../../../docs/sdk-e2e-test-cases.md#本机真实链公共准备2026-10-23)。
+
+每组通过后立即删除生成的链、钱包和恢复材料；失败保留现场。完整测试输出、
+节点和浏览器日志、`manifest.json`、`summary.json` 始终保留。
+下文使用模拟 L1 的历史入口仅作为组件集成测试，不计作本轮真实双链 E2E 通过。
 
 ## 2026-10-09 测试代码更新
 
@@ -8,9 +19,9 @@ These scripts exercise the SAT20 PWA wallet against the test networks.
 
 完整清单、剩余覆盖边界与历史运行快照分别见 [SDK E2E cases](../../../docs/sdk-e2e-test-cases.md) 和 [PWA E2E cases](../../../docs/pwa-e2e-test-cases.md)。正式发布入口为 `npm run verify:release-gate`，独立强退入口为 `npm run verify:wallet-e2e:force-close`；编码阶段未执行这些命令，后续定向验证也不启动完整发布门禁。
 
-## 本地钱包基本功能验收
+## 历史钱包组件集成测试
 
-完整验收入口复用 SDK 的真实临时 Bootstrap、Core、Miner 和真实 SatoshiNet Indexer；只有 L1 Indexer 受控。
+该历史入口复用 SDK 的真实临时 Bootstrap、Core、Miner 和真实 SatoshiNet Indexer，L1 Indexer 使用模拟夹具。
 测试使用真实 PWA、当次编译的 SDK WASM、STP、合约、签名、RGB provider 和浏览器 IndexedDB。完整命令也包含 Guardian 自身换机恢复、temporary 账户的 paid 好友托管续费，以及原 AUTOPAY 交易续传。
 
 L1 HTTP 夹具与 Transcend 的虚拟网络共用 SDK 的 `testutil/fakeindexer` 资产模型，复用 ORDX、BRC20 和 Runes 模拟能力；SDK HTTP 层继续校验真实签名并显式确认交易。模型与边界说明见 [共享 fake indexer](../../../sdk/testutil/fakeindexer/README.md)。迁移后只完成编译检查，尚未重新运行浏览器业务验收。

@@ -815,6 +815,15 @@ func requireBIP9Active(t *testing.T, network *realSatoshiNet) {
 
 func TestSDKPWARealRegtestNodeReadiness(t *testing.T) {
 	network := prepareSDKPWARegtestNodes(t)
+	// H1/H2/H3 are deliberately generated with their expected transactions.
+	// The shared node starter enables scheduled mining for business journeys;
+	// pause it here before preparing or broadcasting the bootstrap transactions.
+	for _, node := range network.Nodes {
+		require.NoError(t, node.Client.SetGenerate(false, 1))
+		mining, err := node.Client.GetGenerate()
+		require.NoError(t, err)
+		require.False(t, mining, "discrete bootstrap generation requires scheduled mining to be stopped")
+	}
 	ordinaryA, _, mineL1 := prepareSDKPWARegtestAssets(t)
 	seeds := readSDKPWARegtestMnemonics(t)
 	bootstrapKey := keyFromMnemonic(t, seeds["bootstrap"], 0)

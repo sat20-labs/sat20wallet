@@ -47,8 +47,9 @@ const messageHash = payload => {
 
 // Each case gets an independent IndexedDB and manager. Signing cases do not
 // broadcast; the final send cases use the real node and controlled L1 ledger.
-export async function runSDKWASMCases({ check, device, pageErrors }, fixture) {
-  const actor = fixture.basicWallet
+export async function runSDKWASMCases({ check, device, pageErrors, preserveBrowserFailureState }, fixture) {
+  const actor = fixture.sdkWasmOwner ?? fixture.basicWallet
+  const bitcoinNetwork = fixture.config.Chain === 'regtest' ? networks.regtest : networks.testnet
   const call = async (page, method, args = [], namespace = 'sat20wallet_wasm', failure = false) => {
     let timer
     let result
@@ -91,18 +92,37 @@ export async function runSDKWASMCases({ check, device, pageErrors }, fixture) {
   }
   const api = async (layer, path) => {
     const endpoint = fixture.config[layer === 'L1' ? 'IndexerL1' : 'IndexerL2']
-    const response = await fetch(`${endpoint.Scheme}://${endpoint.Host}/${String(endpoint.Proxy || 'testnet').replace(/^\/+|\/+$/g, '')}${path}`)
+    const response = await fetch(`${endpoint.Scheme}://${endpoint.Host}/${String(endpoint.Proxy || fixture.config.Chain).replace(/^\/+|\/+$/g, '')}${path}`)
     assert.equal(response.ok, true, `${layer} ${path}: HTTP ${response.status}`)
     const result = await response.json()
     assert.equal(result.code, 0, result.msg)
     return result.data
   }
-  const unchanged = async (page, before, l1) => {
+  const unchanged = async (page, before, snapshot) => {
     assert.deepEqual(await catalog(page), before)
     const after = await control('snapshot')
-    assert.deepEqual(after.l1.broadcast_count, l1.broadcast_count)
-    assert.deepEqual(after.l1.pending_txids, l1.pending_txids)
-    assert.deepEqual(after.mempool_txids, [], 'invalid request must not submit an L2 transaction')
+    const beforeL1 = snapshot.l1 ?? snapshot
+    const afterL1 = after.l1 ?? after
+    if (Object.hasOwn(beforeL1, 'broadcast_count')) {
+      assert.deepEqual(afterL1.broadcast_count, beforeL1.broadcast_count,
+        'invalid request must not broadcast an L1 transaction')
+    }
+    for (const key of ['height', 'hash', 'nodes', 'anchors', 'mempool_txids']) {
+      if (Object.hasOwn(snapshot, key)) {
+        assert.deepEqual(after[key], snapshot[key], `invalid request must not change actual SatoshiNet ${key}`)
+      }
+    }
+    for (const key of ['height', 'hash', 'pending_txids', 'confirmed_txids']) {
+      if (Object.hasOwn(beforeL1, key)) {
+        assert.deepEqual(afterL1[key], beforeL1[key], `invalid request must not change actual Bitcoin ${key}`)
+      }
+    }
+    if (Array.isArray(snapshot.mempool_txids)) {
+      assert.deepEqual(after.mempool_txids, snapshot.mempool_txids,
+        'invalid request must not submit an L2 transaction')
+    } else {
+      assert.deepEqual(after.mempool_txids, [], 'invalid request must not submit an L2 transaction')
+    }
     assert.equal((await call(page, 'getWalletAddress', [0])).address, actor.address)
   }
   const tests = [
@@ -141,7 +161,7 @@ export async function runSDKWASMCases({ check, device, pageErrors }, fixture) {
       const id = await imported(page)
       assert.equal((await call(page, 'getWalletAddress', [0])).address, actor.address)
       const publicKey = Buffer.from((await call(page, 'getWalletPubkey', [0])).pubKey, 'hex')
-      assert.equal(payments.p2tr({ internalPubkey: publicKey.subarray(1), network: networks.testnet }).address, actor.address)
+      assert.equal(payments.p2tr({ internalPubkey: publicKey.subarray(1), network: bitcoinNetwork }).address, actor.address)
       assert.equal((await call(page, 'validateBitcoinAddress', [actor.address])).valid, true)
       assert.equal((await call(page, 'validateBitcoinAddress', ['not-an-address'])).valid, false)
       assert.equal((await call(page, 'getMnemonice', [id, actor.password])).mnemonic, actor.mnemonic)
@@ -192,18 +212,13 @@ export async function runSDKWASMCases({ check, device, pageErrors }, fixture) {
     },
     async page => {
       await imported(page)
-      const endpoint = fixture.config.IndexerL1
-      const api = async path => {
-        const response = await fetch(`${endpoint.Scheme}://${endpoint.Host}/${endpoint.Proxy}${path}`)
-        assert.equal(response.status, 200)
-        const result = await response.json(); assert.equal(result.code, 0); return result.data
-      }
-      const input = (await api(`/v3/address/utxos/${actor.address}`)).find(item => !(item.Assets || []).length && item.Value >= 10000)
+      const input = (await api('L1', `/v3/address/asset/${actor.address}/::`))
+        .find(item => !(item.Assets || []).length && item.Value >= 10000)
       assert.ok(input)
       const [hash, index] = input.Outpoint.split(':')
-      const previous = Transaction.fromHex(await api(`/btc/rawtx/${hash}`)).outs[Number(index)]
+      const previous = Transaction.fromHex(await api('L1', `/btc/rawtx/${hash}`)).outs[Number(index)]
       const publicKey = Buffer.from((await call(page, 'getWalletPubkey', [0])).pubKey, 'hex')
-      const psbt = new Psbt({ network: networks.testnet })
+      const psbt = new Psbt({ network: bitcoinNetwork })
       psbt.addInput({ hash, index: Number(index), sequence: 0xfffffffd,
         witnessUtxo: previous, tapInternalKey: publicKey.subarray(1) })
       psbt.addOutput({ address: fixture.recipient.address, value: 2000 })
@@ -213,7 +228,7 @@ export async function runSDKWASMCases({ check, device, pageErrors }, fixture) {
       const batch = (await call(page, 'signPsbts', [[encoded, encoded], false])).psbts
       assert.equal(batch.length, 2)
       for (const signed of [single, ...batch]) {
-        const parsed = Psbt.fromHex(signed, { network: networks.testnet })
+        const parsed = Psbt.fromHex(signed, { network: bitcoinNetwork })
         assert.deepEqual(parsed.data.globalMap.unsignedTx.toBuffer(), psbt.data.globalMap.unsignedTx.toBuffer())
         const tx = parsed.extractTransaction(); const sig = tx.ins[0].witness[0]
         assert.ok(sig.length === 64 || sig.length === 65)
@@ -228,7 +243,7 @@ export async function runSDKWASMCases({ check, device, pageErrors }, fixture) {
       assert.ok(utxos.length); const outpoint = utxos[0]
       assert.match(outpoint, /^[0-9a-f]{64}:\d+$/)
       const current = (await catalog(page)).wallets[0]
-      const owner = { origin: 'http://127.0.0.1:9001', network: 'testnet', wallet_fingerprint: current.fingerprint, account_index: 0 }
+      const owner = { origin: 'http://127.0.0.1:9001', network: fixture.config.Chain, wallet_fingerprint: current.fingerprint, account_index: 0 }
       await call(page, 'lockUtxoForOwner', [actor.address, outpoint, 'SDK WASM E2E', JSON.stringify(owner)])
       assert.equal(await call(page, 'isUtxoLocked', [actor.address, outpoint]), true)
       await page.reload(); await page.waitForFunction(() => Boolean(window.__SAT20_PWA_VERIFY__))
@@ -281,7 +296,7 @@ export async function runSDKWASMCases({ check, device, pageErrors }, fixture) {
         assert.equal((await catalog(page)).current_account_index, index)
         const address = (await call(page, 'getWalletAddress', [index])).address
         const publicKey = Buffer.from((await call(page, 'getWalletPubkey', [index])).pubKey, 'hex')
-        assert.equal(payments.p2tr({ internalPubkey: publicKey.subarray(1), network: networks.testnet }).address, address)
+        assert.equal(payments.p2tr({ internalPubkey: publicKey.subarray(1), network: bitcoinNetwork }).address, address)
         if (index === 0) assert.equal(address, actor.address)
         else assert.notEqual(address, actor.address)
       }
@@ -309,7 +324,7 @@ export async function runSDKWASMCases({ check, device, pageErrors }, fixture) {
       const publicKey = Buffer.from((await call(page, 'getWalletPubkey', [0])).pubKey, 'hex')
       // This fresh wallet has no channels. Use a valid 2-of-2 P2WSH address
       // to exercise FindChannel's IndexedDB miss rather than a bad argument.
-      const unknownChannel = payments.p2wsh({ network: networks.testnet,
+      const unknownChannel = payments.p2wsh({ network: bitcoinNetwork,
         redeem: { output: script.compile([0x52, publicKey, publicKey, 0x52, 0xae]) } }).address
       assert.ok(unknownChannel)
       let timeout
@@ -329,7 +344,7 @@ export async function runSDKWASMCases({ check, device, pageErrors }, fixture) {
     async page => {
       const password = 'SDK-private-key-local!'
       const keys = [1, 2].map(value => Buffer.from(value.toString(16).padStart(64, '0'), 'hex'))
-      const addresses = keys.map(key => payments.p2tr({ internalPubkey: Buffer.from(secp256k1.pointFromScalar(key, true)).subarray(1), network: networks.testnet }).address)
+      const addresses = keys.map(key => payments.p2tr({ internalPubkey: Buffer.from(secp256k1.pointFromScalar(key, true)).subarray(1), network: bitcoinNetwork }).address)
       const ids = []
       for (const [index, key] of keys.entries()) {
         const imported = await call(page, 'importWalletWithPrivKey', [key.toString('hex'), password])
@@ -383,7 +398,7 @@ export async function runSDKWASMCases({ check, device, pageErrors }, fixture) {
       const snapshot = await control('snapshot')
       for (const address of ['', 'not-an-address', payments.p2tr({ internalPubkey: Buffer.from(secp256k1.pointFromScalar(Buffer.from('1'.padStart(64, '0'), 'hex'), true)).subarray(1), network: networks.bitcoin }).address]) {
         await call(page, 'createMonitorWallet', [address], undefined, true)
-        await unchanged(page, before, snapshot.l1)
+        await unchanged(page, before, snapshot)
       }
     },
     async page => {
@@ -409,7 +424,7 @@ export async function runSDKWASMCases({ check, device, pageErrors }, fixture) {
       await imported(page)
       const outpoint = (await call(page, 'getUtxosWithAsset_SatsNet', [actor.address, '1000', '::'])).utxos[0]
       assert.ok(outpoint)
-      const owner = { origin: 'http://127.0.0.1:9001', network: 'testnet', wallet_fingerprint: (await catalog(page)).wallets[0].fingerprint, account_index: 0 }
+      const owner = { origin: 'http://127.0.0.1:9001', network: fixture.config.Chain, wallet_fingerprint: (await catalog(page)).wallets[0].fingerprint, account_index: 0 }
       await call(page, 'lockUtxoForOwner_SatsNet', [actor.address, outpoint, 'SDK L2 owner', JSON.stringify(owner)])
       await page.reload(); await page.waitForFunction(() => Boolean(window.__SAT20_PWA_VERIFY__))
       await call(page, 'unlockWallet', [actor.password])
@@ -453,20 +468,20 @@ export async function runSDKWASMCases({ check, device, pageErrors }, fixture) {
     async page => {
       await imported(page)
       const sample = fixture.sdkPSBT
-      const built = (await call(page, 'buildBatchSellOrder_SatsNet', [sample.orders, actor.address, 'testnet'])).psbt
+      const built = (await call(page, 'buildBatchSellOrder_SatsNet', [sample.orders, actor.address, fixture.config.Chain])).psbt
       const signed = (await call(page, 'signPsbt_SatsNet', [built, false])).psbt
       const before = await control('inspect-psbt', { psbt: signed, verify: true })
       assert.equal(before.inputs.length, 2)
       assert.deepEqual(before.inputs.map(input => input.outpoint), sample.orderOutpoints)
       assert.deepEqual(before.outputs.map(output => output.value), [1000, 2000])
-      const split = (await call(page, 'splitBatchSignedPsbt_SatsNet', [signed, 'testnet'])).psbts
+      const split = (await call(page, 'splitBatchSignedPsbt_SatsNet', [signed, fixture.config.Chain])).psbts
       assert.equal(split.length, 2)
       for (const [index, piece] of split.entries()) {
         const actual = await control('inspect-psbt', { psbt: piece, verify: true })
         assert.deepEqual(actual.inputs, [before.inputs[index]])
         assert.deepEqual(actual.outputs, [before.outputs[index]])
       }
-      const merged = (await call(page, 'mergeBatchSignedPsbt_SatsNet', [split, 'testnet'])).psbt
+      const merged = (await call(page, 'mergeBatchSignedPsbt_SatsNet', [split, fixture.config.Chain])).psbt
       assert.deepEqual(await control('inspect-psbt', { psbt: merged, verify: true }), before)
       const withInput = (await call(page, 'addInputsToPsbt_SatsNet', [sample.psbt, [sample.additionalInput]])).psbt
       const withOutput = (await call(page, 'addOutputsToPsbt_SatsNet', [withInput, [sample.additionalOutput]])).psbt
@@ -475,7 +490,7 @@ export async function runSDKWASMCases({ check, device, pageErrors }, fixture) {
       assert.deepEqual(appended.outputs.slice(0, 2), sample.outputs)
       assert.equal(appended.inputs.at(-1).outpoint, sample.orderOutpoints[1])
       assert.equal(appended.outputs.at(-1).value, sample.additionalValue)
-      const finalized = (await call(page, 'finalizeSellOrder_SatsNet', [signed, [sample.buyerOrder], fixture.recipient.address, actor.address, 'testnet', 100, 500])).psbt
+      const finalized = (await call(page, 'finalizeSellOrder_SatsNet', [signed, [sample.buyerOrder], fixture.recipient.address, actor.address, fixture.config.Chain, 100, 500])).psbt
       const buyer = await device()
       try {
         await call(buyer, 'importWallet', [fixture.recipient.mnemonic, fixture.recipient.password])
@@ -491,14 +506,14 @@ export async function runSDKWASMCases({ check, device, pageErrors }, fixture) {
         assert.equal(order.outputs[2].assets[0].Amount.Value, '50000000')
         assert.equal(order.signatures_verified, true)
       } finally { await buyer.context().close() }
-      await call(page, 'mergeBatchSignedPsbt_SatsNet', [[split[0], split[0]], 'testnet'], undefined, true)
+      await call(page, 'mergeBatchSignedPsbt_SatsNet', [[split[0], split[0]], fixture.config.Chain], undefined, true)
       await call(page, 'addInputsToPsbt_SatsNet', [sample.psbt, [sample.orders[0]]], undefined, true)
-      for (const method of ['buildBatchSellOrder_SatsNet', 'mergeBatchSignedPsbt_SatsNet']) await call(page, method, [['invalid'], actor.address, 'testnet'], undefined, true)
-      await call(page, 'finalizeSellOrder_SatsNet', ['invalid', [], fixture.recipient.address, actor.address, 'testnet', 100, 100], undefined, true)
+      for (const method of ['buildBatchSellOrder_SatsNet', 'mergeBatchSignedPsbt_SatsNet']) await call(page, method, [['invalid'], actor.address, fixture.config.Chain], undefined, true)
+      await call(page, 'finalizeSellOrder_SatsNet', ['invalid', [], fixture.recipient.address, actor.address, fixture.config.Chain, 100, 100], undefined, true)
     },
     async page => {
       await imported(page); const before = await catalog(page)
-      const l1 = (await control('snapshot')).l1
+      const l1 = await control('snapshot')
       for (const amount of ['0', '-1', '0.1', '18446744073709551616']) {
         for (const suffix of ['', '_SatsNet']) {
           const args = [fixture.recipient.address, '::', amount, 2, '1']
@@ -527,7 +542,7 @@ export async function runSDKWASMCases({ check, device, pageErrors }, fixture) {
     },
     async page => {
       await imported(page); const before = await catalog(page)
-      const l1 = (await control('snapshot')).l1
+      const l1 = await control('snapshot')
       const content = { assetAName: fixture.tools.gasAsset, assetBName: '::', priceMode: 'height', steps: [{ threshold: '0', bPerA: '0.001' }] }
       const encoded = await call(page, 'buildUnifiedContractContent', ['template', 'exchange.tc', JSON.stringify(content)])
       assert.equal(encoded.contentEncoding, 'base64')
@@ -543,7 +558,7 @@ export async function runSDKWASMCases({ check, device, pageErrors }, fixture) {
     },
     async page => {
       await imported(page); const before = await catalog(page)
-      const l1 = (await control('snapshot')).l1
+      const l1 = await control('snapshot')
       for (const [method, args] of [
         ['deployTickerOrdx', ['SDKBAD', '-1', '0', 1, '1']],
         ['deployTickerBrc20', ['BAD', '0', '-1', '19', '1']],
@@ -559,7 +574,7 @@ export async function runSDKWASMCases({ check, device, pageErrors }, fixture) {
       await imported(page); const before = await catalog(page)
       const state = await call(page, 'getRGB11State')
       const locks = await call(page, 'getAllLockedUtxo', [actor.address])
-      const l1 = (await control('snapshot')).l1
+      const l1 = await control('snapshot')
       for (const [method, args] of [
         ['acceptRGB11Consignment', ['missing-request', 'invalid-consignment']],
         ['importRGB11Contract', ['invalid-contract']],
@@ -581,7 +596,7 @@ export async function runSDKWASMCases({ check, device, pageErrors }, fixture) {
       const { txId, fee: reportedFee } = await call(page, 'batchSendAssets', [fixture.recipient.address, '::', '1000', 2, '1'])
       const tx = Transaction.fromHex(await api('L1', `/btc/rawtx/${txId}`))
       assert.equal(tx.getId(), txId)
-      const destination = payments.p2tr({ address: fixture.recipient.address, network: networks.testnet }).output
+      const destination = payments.p2tr({ address: fixture.recipient.address, network: bitcoinNetwork }).output
       assert.deepEqual(tx.outs.filter(output => output.script.equals(destination)).map(output => output.value), [1000, 1000])
       let inputValue = 0
       for (const input of tx.ins) {
@@ -597,8 +612,20 @@ export async function runSDKWASMCases({ check, device, pageErrors }, fixture) {
     async page => {
       await imported(page)
       const before = BigInt((await call(page, 'getAssetAmount_SatsNet', [fixture.recipient.address, '::'])).availableAmt)
+      const baseline = await control('snapshot')
       const { txId } = await call(page, 'batchSendAssetsV2_SatsNet', [[fixture.recipient.address, fixture.recipient.address], '::', ['1000', '2000']])
-      await control('mine')
+      const confirmation = await control('mine', { txid: txId, baseline_height: baseline.height, baseline_hash: baseline.hash })
+      // The real-chain controller returns a transaction-specific mining proof.
+      // The L2 component controller returns its node snapshot; both paths
+      // independently verify the actual transaction and outputs below.
+      if (fixture.realBitcoinControl) {
+        assert.equal(confirmation.confirmed_tx?.txid, txId)
+        assert.ok(confirmation.confirmed_tx.confirmed_height > baseline.height)
+        assert.match(confirmation.confirmed_tx.confirmed_block_hash, /^[0-9a-f]{64}$/)
+      } else {
+        assert.ok(confirmation.height > baseline.height)
+        assert.match(confirmation.hash, /^[0-9a-f]{64}$/)
+      }
       await expect.poll(async () => (await control('transaction', { txid: txId }))?.confirmations ?? 0, poll).toBeGreaterThan(0)
       const tx = await control('transaction', { txid: txId })
       assert.equal(tx.txid, txId)
@@ -615,13 +642,13 @@ export async function runSDKWASMCases({ check, device, pageErrors }, fixture) {
     },
     async page => {
       await imported(page)
-      const outputs = await api('L1', `/v3/address/utxos/${actor.address}`)
+      const outputs = await api('L1', `/v3/address/asset/${actor.address}/::`)
       const selected = outputs.find(output => !output.Assets?.length && output.Value > 10000)
       assert.ok(selected)
-      const before = (await control('snapshot')).l1
+      const before = await control('snapshot')
       await call(page, 'lockUtxo', [actor.address, selected.Outpoint, 'garbage owner guard'])
       await call(page, 'sendGarbage', [fixture.recipient.address, [selected.Outpoint], 1000, '1'], undefined, true)
-      assert.deepEqual((await control('snapshot')).l1.broadcast_count, before.broadcast_count)
+      assert.deepEqual((await control('snapshot')).l1, before.l1)
       assert.equal(await call(page, 'isUtxoLocked', [actor.address, selected.Outpoint]), true)
       await call(page, 'unlockUtxo', [actor.address, selected.Outpoint])
       const freePlain = new Set((await api('L1', `/v3/address/asset/${actor.address}/::`)).map(output => output.Outpoint))
@@ -649,7 +676,7 @@ export async function runSDKWASMCases({ check, device, pageErrors }, fixture) {
         inputValue += previous.value
       }
       assert.ok(tx.ins.every(input => input.witness.length > 0))
-      const script = payments.p2tr({ address: fixture.recipient.address, network: networks.testnet }).output
+      const script = payments.p2tr({ address: fixture.recipient.address, network: bitcoinNetwork }).output
       // Explicit garbage inputs transfer their full selected value. Additional
       // plain inputs pay the fee and return change to this wallet.
       assert.deepEqual(tx.outs.filter(output => output.script.equals(script)).map(output => output.value), [selected.Value])
@@ -666,6 +693,7 @@ export async function runSDKWASMCases({ check, device, pageErrors }, fixture) {
     try {
       await check(requiredSDKWASMCases[index], async () => { page = await device(); await test(page) })
     } catch (error) {
+      await preserveBrowserFailureState?.()
       console.error(JSON.stringify({ suite: 'SDK WASM', case: requiredSDKWASMCases[index], message: error.message }))
       process.exitCode = 1
     } finally { await page?.context().close() }

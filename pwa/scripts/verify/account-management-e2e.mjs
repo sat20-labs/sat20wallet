@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict'
-import { appendFileSync, existsSync, readFileSync, statSync } from 'node:fs'
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import { chromium, expect } from '@playwright/test'
 import { Transaction } from 'bitcoinjs-lib'
 import { createServer } from 'vite'
 import {
-  fixedRegtestAccountUsageCaseNames,
+  regtestAccountUsageCaseNames,
   runPwaUsageCases,
   runRgbPwaCases,
   runAutopayPwaReviewCases,
@@ -46,7 +46,7 @@ const regtestConfigPath = argumentValue('--regtest-config')
 const regtestFixturePath = argumentValue('--regtest-fixture')
 const sdkWASM = process.argv.includes('--sdk-wasm')
 const focusedUsageCases = argumentList('--usage-cases')
-const focusedWalletCases = argumentList('--wallet-cases')
+const focusedWalletCases = argumentList('--wallet-cases') ?? (sdkWASM ? requiredSDKWASMCases : null)
 const focusedRGBCases = argumentList('--rgb-cases')
 if (regtestMode) {
   assert.ok(regtestConfigPath && regtestFixturePath,
@@ -265,8 +265,8 @@ if (regtestMode) {
     assert.ok(fixed?.owner?.mnemonic && fixed?.owner?.password &&
       fixed?.guardian?.mnemonic && fixed?.guardian?.password,
     'fixed-root account cases require the existing ordinary-1 owner and ordinary-2 Guardian fixture')
-    assert.ok(focusedUsageCases.every(name => fixedRegtestAccountUsageCaseNames.includes(name)),
-      'real regtest account management accepts only the fixed-root normal business cases')
+    assert.ok(focusedUsageCases.every(name => regtestAccountUsageCaseNames.includes(name)),
+      'real regtest account management accepts only exact reviewed UI cases')
   } else {
     assert.ok(focusedWalletCases,
       'regtest requires an exact wallet-basic, biometric, or fixed-root account usage group')
@@ -310,6 +310,8 @@ const config = regtestMode
   ? regtestConfig
   : posFixture?.config ?? rgbFixture?.config ?? JSON.parse(process.env.SAT20_ACCOUNT_E2E_CONFIG || 'null')
 const storageWasm = argumentValue('--storage-wasm')
+const storageWasmTests = argumentValue('--storage-wasm-tests')
+assert.ok(!storageWasmTests || storageWasm, '--storage-wasm-tests requires --storage-wasm')
 const expectedNetwork = regtestMode || posFixture?.silentPay ? 'regtest' : 'testnet'
 if (posFixture?.silentPay) {
   assert.ok(focusedWalletCases?.length && focusedWalletCases.every(name => requiredPwaSilentPayCases.includes(name)),
@@ -357,14 +359,28 @@ if (regtestMode && focusedWalletCases) {
     ...(regtestWalletFixture?.realSatoshiNetFunds ? [requiredPwaPosCases[12]] : []),
     ...(regtestWalletFixture?.realChannel ? [requiredPwaPosCases[0], requiredPwaPosCases[1], requiredPwaPosCases[14], requiredPwaPosCases[16], ...requiredPwaPosCases.slice(20, 23)] : []),
     ...(regtestWalletFixture?.realChannel && regtestWalletFixture?.realBitcoinControl ? [requiredPwaPosCases[25]] : []),
+    ...(regtestWalletFixture?.realChannel && regtestWalletFixture?.realBitcoinControl ? [optionalPwaEscapeCases[0]] : []),
     ...(regtestWalletFixture?.realChannel && regtestWalletFixture?.pos_activation_scheduled === true ? [requiredPwaPosCases[2]] : []),
     ...(regtestWalletFixture?.realChannel && regtestWalletFixture?.pos_v2_active === true ? [requiredPwaPosCases[3]] : []),
     ...(regtestWalletFixture?.realChannel && regtestWalletFixture?.realBitcoinControl && regtestWalletFixture?.posProducerRotation === true
       ? requiredPwaPosCases.slice(6, 9) : [])])
-  assert.ok(focusedWalletCases.every(name => currentlyRegtestReadyCases.has(name)),
-    'regtest case requires an existing real-node fixture and a connected real Bitcoin controller')
+  const sdkWASMSelector = sdkWASM && focusedWalletCases.length > 0
+  const sdkWASMFixtureReady = sdkWASMSelector &&
+    [regtestWalletFixture?.sdkWasmOwner, regtestWalletFixture?.recipient].every(actor =>
+      actor?.mnemonic && actor?.address && actor?.pk_script && actor?.password) &&
+    typeof regtestWalletFixture?.sdkPSBT?.psbt === 'string' &&
+    typeof regtestWalletFixture?.sdkPSBT?.unsignedTx === 'string' &&
+    typeof regtestWalletFixture?.control_url === 'string' &&
+    regtestWalletFixture?.realBitcoinControl === true
+  if (sdkWASM) {
+    assert.ok(sdkWASMFixtureReady,
+      '--sdk-wasm requires a nonempty SDK-case selector and complete real owner, buyer, PSBT, and controller fixture')
+  } else {
+    assert.ok(focusedWalletCases.every(name => currentlyRegtestReadyCases.has(name)),
+      'regtest case requires an existing real-node fixture and a connected real Bitcoin controller')
+  }
   const pageDependentBasicCases = new Set(requiredPwaWalletBasicCases.slice(2)
-    .filter(name => name !== requiredPwaWalletBasicCases[12]))
+    .filter(name => name !== requiredPwaWalletBasicCases[12] && name !== requiredPwaWalletBasicCases[14]))
   const needsImportedBasicWallet = focusedWalletCases.some(name => pageDependentBasicCases.has(name))
   assert.ok(!needsImportedBasicWallet || focusedWalletCases.includes(requiredPwaWalletBasicCases[1]),
     'focused wallet-basic cases that reuse the imported page must include the funded-import prerequisite')
@@ -416,6 +432,45 @@ const walletRuntimeManifest = walletWasmPath ? {
   assets: walletRuntimeAssets.map(({ bytes, ...asset }) => ({ ...asset, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') })),
 } : null
 let browser
+let browserFailureSnapshotSequence = 0
+const savedFailureContexts = new WeakSet()
+async function preserveBrowserFailureState() {
+  if (!regtestMode) return
+  try {
+    const runtimeDir = process.env.SAT20_REAL_REGTEST_RUNTIME
+    if (!runtimeDir || !isAbsolute(runtimeDir) || !existsSync(runtimeDir) || !statSync(runtimeDir).isDirectory()) {
+      console.error(JSON.stringify({ diagnostic: 'browser-failure-state', status: 'unavailable',
+        reason: 'real regtest runtime directory is unavailable' }))
+      return
+    }
+    const contexts = browser?.contexts() ?? []
+    if (!contexts.length) {
+      console.error(JSON.stringify({ diagnostic: 'browser-failure-state', status: 'unavailable',
+        reason: 'no browser contexts remained open when a required case failed' }))
+      return
+    }
+    const stateDir = join(runtimeDir, 'browser-failure-state')
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+    chmodSync(stateDir, 0o700)
+    const sequence = ++browserFailureSnapshotSequence
+    for (const [index, context] of contexts.entries()) {
+      if (savedFailureContexts.has(context)) continue
+      try {
+        const state = await context.storageState({ indexedDB: true })
+        const statePath = join(stateDir, `context-${process.pid}-${sequence}-${index + 1}.json`)
+        writeFileSync(statePath, JSON.stringify(state), { flag: 'wx', mode: 0o600 })
+        chmodSync(statePath, 0o600)
+        savedFailureContexts.add(context)
+        console.error(JSON.stringify({ diagnostic: 'browser-failure-state', status: 'saved', context: index + 1 }))
+      } catch (error) {
+        console.error(JSON.stringify({ diagnostic: 'browser-failure-state', status: 'save-failed',
+          context: index + 1, message: error.message }))
+      }
+    }
+  } catch (error) {
+    console.error(JSON.stringify({ diagnostic: 'browser-failure-state', status: 'save-failed', message: error.message }))
+  }
+}
 // Explicit required cases also report later cases as not-run after an early failure.
 const requiredAccountCases = [
 
@@ -501,7 +556,8 @@ const requiredWalletRuntimeCases = ['Wallet PWA: all feature groups finish witho
 if (focusedWalletCases) {
   assert.ok(posFixture && focusedWalletCases.length, 'wallet rerun requires the existing wallet fixture and exact cases')
   const known = sdkWASM ? requiredSDKWASMCases : [...requiredPwaPosCases, ...optionalPwaEscapeCases, ...requiredPwaL1ProtocolCases, ...requiredPwaWalletBasicCases, ...requiredPwaBiometricCases, ...requiredPwaMintCases,
-    ...requiredPwaMiningCases, ...requiredPwaNodeCases, ...requiredPwaIntegrationCases, ...requiredPwaToolsCases, ...requiredPwaSilentPayCases]
+    ...requiredPwaMiningCases, ...requiredPwaNodeCases, ...requiredPwaIntegrationCases, ...requiredPwaToolsCases, ...requiredPwaSilentPayCases,
+    ...requiredWalletRuntimeCases]
   assert.ok(focusedWalletCases.every(name => known.includes(name)), 'unknown wallet case')
   assert.equal(new Set(focusedWalletCases).size, focusedWalletCases.length)
 }
@@ -511,7 +567,7 @@ if (focusedUsageCases) {
   assert.ok(focusedUsageCases.every(name => name.startsWith('usage: ') && [...requiredAccountCases,
     'usage: temporary Guardian renews paid hosting without changing its own recovery',
     'usage: original AUTOPAY resumes after prebroadcast exit and lost acknowledgement',
-    ...(regtestMode ? fixedRegtestAccountUsageCaseNames : [])].includes(name)), 'unknown usage case')
+    ...(regtestMode ? regtestAccountUsageCaseNames : [])].includes(name)), 'unknown usage case')
 }
 if (focusedRGBCases) {
   assert.ok(rgbFixture && focusedRGBCases.length, 'RGB rerun requires the existing RGB fixture and exact cases')
@@ -618,10 +674,10 @@ async function device(sharedContext) {
   const context = sharedContext ?? await browser.newContext()
   context.setDefaultTimeout(30000)
   context.setDefaultNavigationTimeout(90000)
-  // Remote attach keeps the real config module and adjusts connection
-  // addresses and warning logging for this private test build. Network/schema/peer identities stay
-  // checked; local regtest continues to verify its unchanged default ports.
-  if (!sharedContext && regtestMode && regtestFixture?.remoteAttach === true) {
+  // Keep the real config modules and point this private test build at its
+  // group's real services, including freshly assigned loopback ports.
+  // Network, schema and peer identities remain checked below.
+  if (!sharedContext && regtestMode) {
     await context.route('**/config/index.ts*', async route => {
       const response = await route.fetch()
       assert.ok(response.ok(), 'real PWA HTTP config module must load')
@@ -638,7 +694,7 @@ async function device(sharedContext) {
       const response = await route.fetch()
       assert.ok(response.ok(), 'real PWA config module must load')
       // Keep background reconciliation failures observable in private evidence.
-      // Only logging and the existing remote connection addresses are changed.
+      // Only logging and this group's connection addresses are changed.
       const source = await response.text()
       assert.equal((source.match(/\bconst logLevel = 2\b/g) ?? []).length, 1)
       const diagnosticSource = source.replace(/\bconst logLevel = 2\b/, 'const logLevel = 3')
@@ -648,17 +704,17 @@ async function device(sharedContext) {
         peers: config.Peers,
       }
       const body = `${diagnosticSource}
-        const remoteConnections = ${JSON.stringify(connectionConfig)};
-        const remoteConfig = getConfig('dev', 'regtest');
+        const fixtureConnections = ${JSON.stringify(connectionConfig)};
+        const fixtureConfig = getConfig('dev', 'regtest');
         const peerIdentity = value => value.split('@').slice(0, 2).join('@');
-        const basePeers = remoteConfig.Peers.map(peerIdentity).sort();
-        const targetPeers = remoteConnections.peers.map(peerIdentity).sort();
+        const basePeers = fixtureConfig.Peers.map(peerIdentity).sort();
+        const targetPeers = fixtureConnections.peers.map(peerIdentity).sort();
         if (JSON.stringify(basePeers) !== JSON.stringify(targetPeers)) {
-          throw new Error('remote fixture must preserve production regtest peer identities');
+          throw new Error('fixture must preserve production regtest peer identities');
         }
-        remoteConfig.IndexerL1.Host = remoteConnections.l1Host;
-        remoteConfig.IndexerL2.Host = remoteConnections.l2Host;
-        remoteConfig.Peers = remoteConnections.peers;
+        fixtureConfig.IndexerL1.Host = fixtureConnections.l1Host;
+        fixtureConfig.IndexerL2.Host = fixtureConnections.l2Host;
+        fixtureConfig.Peers = fixtureConnections.peers;
       `
       await route.fulfill({ response, body })
     })
@@ -799,16 +855,17 @@ async function runIndexedDBStorageGate() {
   await page.goto(`${server.resolvedUrls.local[0]}__sdk_storage_tests__`)
   await page.addScriptTag({ path: join(dirname(storageWasm), 'wasm_exec.js') })
   await page.route('**/__sdk_storage_tests__.wasm', route => route.fulfill({ contentType: 'application/wasm', body: readFileSync(storageWasm) }))
-  const code = await page.evaluate(async () => {
+  const code = await page.evaluate(async testSelector => {
     const go = new Go()
     go.argv = ['storage.test', '-test.v', '-test.timeout=2m']
+    if (testSelector) go.argv.push(`-test.run=${testSelector}`)
     let exitCode
     go.exit = code => { exitCode = code }
     const bytes = await (await fetch('/__sdk_storage_tests__.wasm')).arrayBuffer()
     const { instance } = await WebAssembly.instantiate(bytes, go.importObject)
     await go.run(instance)
     return exitCode
-  })
+  }, storageWasmTests)
   assert.equal(code, 0, 'Go WASM IndexedDB tests failed')
   assert.deepEqual(pageErrors, [], 'storage tests produced unhandled page errors')
 }
@@ -1388,15 +1445,16 @@ async function runAccountGate() {
   console.log(JSON.stringify({ passed: true, cases: verdicts.length, backend: 'real local SatoshiNet', browser: 'real PWA and WASM' }))
 }
 
+let runFailed = false
 try {
   await server.listen()
   browser = await chromium.launch({ headless: true, ...(executable ? { executablePath: executable } : {}) })
   if (storageWasm) await runIndexedDBStorageGate()
   else if (sdkWASM) {
-    await runSDKWASMCases({ check, device, pageErrors }, posFixture)
+    await runSDKWASMCases({ check, device, pageErrors, preserveBrowserFailureState }, posFixture)
   }
   else if (posFixture) {
-    const helpers = { check, device, ready, unlock, catalog, walletCall, accountCall, questions, answers, nodeAPIOrigins, integrationDapp, selectedCases: focusedWalletCases }
+    const helpers = { check, device, ready, unlock, catalog, walletCall, accountCall, questions, answers, nodeAPIOrigins, integrationDapp, selectedCases: focusedWalletCases, preserveBrowserFailureState }
     // Independent feature groups use fresh browser stores and continue after
     // another group fails; the required-case ledger still fails the whole gate.
     for (const [run, names] of [[runPwaSilentPayCases, requiredPwaSilentPayCases], [runPwaPosCases, [...requiredPwaPosCases, ...optionalPwaEscapeCases]], [runPwaL1ProtocolCases, requiredPwaL1ProtocolCases], [runPwaWalletBasicCases, requiredPwaWalletBasicCases],
@@ -1427,11 +1485,14 @@ try {
   }
   else if (focusedUsageCases) {
     await runPwaUsageCases({ check, device, ready, unlock, catalog, walletCall, accountCall,
-      password, newPassword, questions, answers, nodeAPIOrigins,
+      password, newPassword, questions, answers, nodeAPIOrigins, regtestMode, preserveBrowserFailureState,
       fixedAccountManagement: regtestMode ? regtestWalletFixture?.fixedAccountManagement : undefined })
     assert.deepEqual(pageErrors, [], 'focused account rerun must not produce unhandled page errors')
   }
   else await runAccountGate()
+} catch (error) {
+  runFailed = true
+  throw error
 } finally {
   const required = storageWasm ? [] : sdkWASM ? focusedWalletCases ?? requiredSDKWASMCases : posFixture ? focusedWalletCases ?? [...requiredPwaPosCases, ...requiredPwaL1ProtocolCases, ...requiredPwaWalletBasicCases, ...requiredPwaIntegrationCases, ...requiredPwaToolsCases, ...requiredPwaMintCases, ...requiredPwaMiningCases, ...requiredPwaNodeCases, ...requiredWalletRuntimeCases] : rgbFixture ? focusedRGBCases ?? requiredRGBCases : focusedUsageCases ?? requiredAccountCases
   for (const name of required) {
@@ -1442,6 +1503,9 @@ try {
     fail: [...completedCases.values()].filter(status => status === 'fail').length,
     not_run: required.filter(name => !completedCases.has(name)).length }
   if (required.length) console.log(JSON.stringify({ caseSummary: summary, scope: focusedUsageCases || focusedWalletCases || focusedRGBCases ? 'focused-rerun' : 'full-gate' }))
+  if (regtestMode && required.length && (runFailed || Number(process.exitCode ?? 0) !== 0 || !complete)) {
+    await preserveBrowserFailureState()
+  }
   await browser?.close()
   await server.close()
   await integrationDapp?.close()

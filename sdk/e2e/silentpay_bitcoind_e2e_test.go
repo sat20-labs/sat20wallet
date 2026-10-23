@@ -110,7 +110,7 @@ func spRealBitcoind(t *testing.T) (*spRealCoreRPC, *spRealCoreRPC, func()) {
 		}
 		t.Skip("bitcoind unavailable; install Bitcoin Core to run real L1 E2E")
 	}
-	dir := t.TempDir()
+	dir := testCaseDirectory(t)
 	rpcPort, p2pPort := spRealFreePort(t), spRealFreePort(t)
 	logPath := filepath.Join(dir, "bitcoind.log")
 	if evidence := os.Getenv("SAT20_SP_EVIDENCE_DIR"); evidence != "" {
@@ -234,9 +234,18 @@ func TestSPBitcoinCoreRegtestIndexerE2E(t *testing.T) {
 	if err := miner.call("getnewaddress", nil, &miningAddress); err != nil {
 		t.Fatal(err)
 	}
-	var blocks []string
-	if err := core.call("generatetoaddress", []any{110, miningAddress}, &blocks); err != nil {
-		t.Fatal(err)
+	// Maturity setup writes 110 consensus blocks. Use the same bounded batches
+	// as the Manager fixture instead of the ordinary five-second read timeout.
+	bulkMining := *core
+	bulkMining.client = &http.Client{Timeout: 30 * time.Second}
+	for batch := 0; batch < 11; batch++ {
+		var blocks []string
+		if err := bulkMining.call("generatetoaddress", []any{10, miningAddress}, &blocks); err != nil {
+			t.Fatalf("maturity mining batch %d: %v", batch, err)
+		}
+		if len(blocks) != 10 {
+			t.Fatalf("maturity mining batch %d produced %d blocks, want 10", batch, len(blocks))
+		}
 	}
 
 	payer := spRealEvenYKey(t)
@@ -336,7 +345,7 @@ func TestSPBitcoinCoreRegtestIndexerE2E(t *testing.T) {
 	if err := bitcoin_rpc.InitBitconRpc("127.0.0.1", rpcPort, core.user, core.pass, false); err != nil {
 		t.Fatalf("production Bitcoin RPC could not connect to real Core: %v", err)
 	}
-	db := indexdb.NewKVDBWithCache(filepath.Join(t.TempDir(), "base"), 1)
+	db := indexdb.NewKVDBWithCache(filepath.Join(testCaseDirectory(t), "base"), 1)
 	if db == nil {
 		t.Fatal("open real BaseIndexer database")
 	}

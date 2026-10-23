@@ -32,6 +32,105 @@ import (
 const sdkPWARegtestPOSV2ActivationHeight int32 = 32
 const sdkPWARegtestPOSV2ReviewedStartHeight int32 = 20
 
+const sdkPWARegtestL2PlainFundingAmount int64 = 10_000
+const sdkPWARegtestGuardianRecoveryCase = "usage: real 2of3 settings and independent Guardian pages complete setup and rehearsal"
+const sdkPWARegtestPaidAccountUsageCase = "usage: fixed regtest ordinary-1 renews paid storage through current AUTOPAY"
+
+// Funds a fresh B0 address through the SDK's real L2 send path, then checks
+// the same confirmed output in both the parent transaction and receiver indexer.
+func prepareSDKPWARegtestL2PlainFunding(t *testing.T, sender, receiver *wallet.Manager,
+	network *realSatoshiNet) {
+	t.Helper()
+	plainAsset := wallet.ParseAssetString(wallet.PLAIN_ASSET.String())
+	require.NotNil(t, plainAsset)
+	senderBefore := sender.GetAssetBalance_SatsNet("", plainAsset)
+	require.NotNil(t, senderBefore, "A0 must have indexed L2 plain funds before funding B0")
+	require.GreaterOrEqual(t, senderBefore.Int64(),
+		sdkPWARegtestL2PlainFundingAmount+wallet.DEFAULT_FEE_SATSNET,
+		"A0 must cover the exact B0 amount and the L2 transaction fee")
+
+	tx, err := sender.SendAssets_SatsNet(receiver.GetWallet().GetAddress(),
+		wallet.PLAIN_ASSET.String(), strconv.FormatInt(sdkPWARegtestL2PlainFundingAmount, 10), nil)
+	require.NoError(t, err, "A0 must fund B0 through a real SDK-signed L2 transaction")
+	require.NotNil(t, tx)
+	txid := tx.TxID()
+	waitRGB11RegtestL2Transaction(t, sender, network, txid)
+
+	raw, err := sender.GetIndexerRPCClient_SatsNet().GetRawTx(txid)
+	require.NoError(t, err)
+	parent, err := wallet.DecodeMsgTx_SatsNet(raw)
+	require.NoError(t, err)
+	require.Equal(t, txid, parent.TxID())
+	receiverScript, err := wallet.GetPkScriptFromAddress_SatsNet(receiver.GetWallet().GetAddress())
+	require.NoError(t, err)
+	outputIndex := -1
+	for i, output := range parent.TxOut {
+		if !bytes.Equal(output.PkScript, receiverScript) {
+			continue
+		}
+		require.Equal(t, sdkPWARegtestL2PlainFundingAmount, output.Value)
+		require.Empty(t, output.Assets, "plain sats are carried by TxOut.Value, not token assets")
+		require.Equal(t, -1, outputIndex, "the transfer must create one exact B0 output")
+		outputIndex = i
+	}
+	require.NotEqual(t, -1, outputIndex, "confirmed parent transaction must pay B0 exactly once")
+
+	outpoint := fmt.Sprintf("%s:%d", txid, outputIndex)
+	indexed, err := receiver.GetIndexerRPCClient_SatsNet().GetTxOutput(outpoint)
+	require.NoError(t, err)
+	require.NotNil(t, indexed, "B0 indexer must expose the actual confirmed transfer output")
+	require.Equal(t, outpoint, indexed.OutPointStr)
+	require.Equal(t, sdkPWARegtestL2PlainFundingAmount, indexed.OutValue.Value)
+	require.Equal(t, receiverScript, indexed.OutValue.PkScript)
+	require.Equal(t, parent.TxOut[outputIndex].Assets, indexed.Assets)
+
+	receiverAfter := receiver.GetAssetBalance_SatsNet("", plainAsset)
+	require.NotNil(t, receiverAfter, "B0 plain balance must be indexed after the real transfer")
+	require.GreaterOrEqual(t, receiverAfter.Int64(), sdkPWARegtestL2PlainFundingAmount,
+		"B0 indexed balance must include the confirmed SDK transfer")
+}
+
+func prepareSDKPWARegtestBRC20BalanceAsset(t *testing.T, manager *wallet.Manager, mine func(string, int)) {
+	t.Helper()
+	asset := indexercommon.NewAssetNameFromString("brc20:f:pwbx")
+	require.NotNil(t, asset)
+	if manager.GetTickerInfoV2(asset.String()) == nil {
+		deployed, err := manager.DeployTicker_brc20(asset.Ticker, 20, 20, 0, 2)
+		require.NoError(t, err, "SDK deploy the real BRC20 balance-send test ticker")
+		require.NotNil(t, deployed)
+		require.NotNil(t, deployed.CommitTx)
+		require.NotNil(t, deployed.RevealTx)
+		confirmSDKPWARegtestL1SDKTransaction(t, manager, deployed.CommitTx.TxID(), mine)
+	}
+	require.Eventually(t, func() bool {
+		ticker := manager.GetTickerInfoV2(asset.String())
+		return ticker != nil && ticker.MaxSupply == "20" && ticker.Limit == "20" &&
+			ticker.Divisibility == 0
+	}, rpcReadyTimeout, 200*time.Millisecond, "real L1 indexer must expose the 20-token pwbx deployment")
+	balance := manager.GetAssetBalance("", asset)
+	if balance == nil || balance.Sign() == 0 {
+		ticker := manager.GetTickerInfoV2(asset.String())
+		require.NotNil(t, ticker)
+		require.Equal(t, "0", ticker.TotalMinted, "fresh balance-send ticker must not be pre-minted")
+		minted, err := manager.MintAsset_brc20(manager.GetWallet().GetAddress(), asset,
+			indexercommon.NewDecimal(20, 0), nil, 2)
+		require.NoError(t, err, "SDK mint the real 20-token balance-send fixture")
+		require.NotNil(t, minted)
+		require.NotNil(t, minted.CommitTx)
+		require.NotNil(t, minted.RevealTx)
+		confirmSDKPWARegtestL1SDKTransaction(t, manager, minted.CommitTx.TxID(), mine)
+	} else {
+		require.Equal(t, "20", balance.String(), "reuse only the exact fresh balance-send supply")
+	}
+	require.Eventually(t, func() bool {
+		ticker := manager.GetTickerInfoV2(asset.String())
+		balance := manager.GetAssetBalance("", asset)
+		return ticker != nil && ticker.TotalMinted == "20" && balance != nil && balance.String() == "20"
+	}, rpcReadyTimeout, 200*time.Millisecond, "real L1 indexer must expose exactly 20 minted pwbx units")
+	transfers := manager.GetIndexerClient().GetUtxoListWithTicker(manager.GetWallet().GetAddress(), asset)
+	require.Empty(t, transfers, "balance-send preparation must leave transfer inscriptions for the original UI case")
+}
+
 type sdkPWARegtestEndpoint struct {
 	Scheme string
 	Host   string
@@ -55,7 +154,17 @@ func TestSDKPWARealRegtestWalletBasicAndBiometricBrowser(t *testing.T) {
 	runSDKPWARealRegtestBrowser(t, "basic")
 }
 
+func TestSDKPWARealRegtestAssetContextStabilityBrowser(t *testing.T) {
+	runSDKPWARealRegtestBrowser(t, "asset-context")
+}
+
 func TestSDKPWARealRegtestFixedAccountManagementBrowser(t *testing.T) {
+	runSDKPWARealRegtestBrowser(t, "account-usage")
+}
+
+// Keep Guardian setup/rehearsal in its own local chain and browser-storage group.
+func TestSDKPWARealRegtestGuardianRecoveryBrowser(t *testing.T) {
+	t.Setenv("SAT20_REAL_PWA_USAGE_CASE", sdkPWARegtestGuardianRecoveryCase)
 	runSDKPWARealRegtestBrowser(t, "account-usage")
 }
 
@@ -137,6 +246,10 @@ func TestSDKPWARealRegtestChannelSafetyBrowser(t *testing.T) {
 	runSDKPWARealRegtestBrowser(t, "l2-channel-safety")
 }
 
+func TestSDKPWARealRegtestForceCloseCSVBrowser(t *testing.T) {
+	runSDKPWARealRegtestBrowser(t, "l2-channel-force-close-csv")
+}
+
 func TestSDKPWARealRegtestPrivateBTCRoundTripBrowser(t *testing.T) {
 	runSDKPWARealRegtestBrowser(t, "l2-channel-private-btc")
 }
@@ -145,7 +258,8 @@ func TestSDKPWARealRegtestPrivateBTCSplicingOutBrowser(t *testing.T) {
 	runSDKPWARealRegtestBrowser(t, "l2-channel-splice-out-btc")
 }
 
-func TestSDKPWARealRegtestChannelActivationBrowser(t *testing.T) {
+func configureSDKPWARegtestPOSV2(t *testing.T) {
+	t.Helper()
 	previousRegressionHeight := satschaincfg.RegressionNetParams.POSV2Height
 	previousTestHeight := satschaincfg.TestNetParams.POSV2Height
 	t.Setenv("SATOSHINET_RPCTEST_POS_V2_HEIGHT", strconv.Itoa(int(sdkPWARegtestPOSV2ActivationHeight)))
@@ -155,19 +269,25 @@ func TestSDKPWARealRegtestChannelActivationBrowser(t *testing.T) {
 		satschaincfg.RegressionNetParams.POSV2Height = previousRegressionHeight
 		satschaincfg.TestNetParams.POSV2Height = previousTestHeight
 	})
+}
+
+func TestSDKPWARealRegtestChannelActivationBrowser(t *testing.T) {
+	configureSDKPWARegtestPOSV2(t)
 	runSDKPWARealRegtestBrowser(t, "l2-channel-activation")
 }
 
+func TestSDKPWARealRegtestV2AssetPreparation(t *testing.T) {
+	configureSDKPWARegtestPOSV2(t)
+	prepareSDKPWARegtestNodes(t)
+	a, b, mine := prepareSDKPWARegtestAssets(t, true)
+	active, err := b.AnchorOutputsActive()
+	require.NoError(t, err)
+	require.True(t, active, "the activation case in this group must finish before V2 asset preparation")
+	prepareSDKPWARegtestChannelV2Asset(t, a, b, mine)
+}
+
 func TestSDKPWARealRegtestChannelV2AssetSplicingBrowser(t *testing.T) {
-	previousRegressionHeight := satschaincfg.RegressionNetParams.POSV2Height
-	previousTestHeight := satschaincfg.TestNetParams.POSV2Height
-	t.Setenv("SATOSHINET_RPCTEST_POS_V2_HEIGHT", strconv.Itoa(int(sdkPWARegtestPOSV2ActivationHeight)))
-	satschaincfg.RegressionNetParams.POSV2Height = sdkPWARegtestPOSV2ActivationHeight
-	satschaincfg.TestNetParams.POSV2Height = sdkPWARegtestPOSV2ActivationHeight
-	t.Cleanup(func() {
-		satschaincfg.RegressionNetParams.POSV2Height = previousRegressionHeight
-		satschaincfg.TestNetParams.POSV2Height = previousTestHeight
-	})
+	configureSDKPWARegtestPOSV2(t)
 	runSDKPWARealRegtestBrowser(t, "l2-channel-v2-asset-splice")
 }
 
@@ -228,6 +348,7 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 	}
 	var channelPreparation sdkPWARegtestChannelPrepState
 	posResume := feature == "pos-resume"
+	sdkWASM := feature == "sdk-wasm"
 	v2AssetSplice := feature == "l2-channel-v2-asset-splice" || feature == "l2-channel-v2-asset-splice-diagnostic"
 
 	network := prepareSDKPWARegtestNodes(t)
@@ -235,6 +356,27 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, currentHeight, int32(3), "reuse only the existing H1/H2/H3 regtest chain")
 	if feature == "l2-channel-activation" {
+		if os.Getenv("SAT20_E2E_LOCAL_REAL") == "1" && currentHeight < sdkPWARegtestPOSV2ReviewedStartHeight {
+			// Reproduce the reviewed pre-activation height with real signed
+			// transactions in this group's new chain, not a retained H20 DB.
+			a, b, _, closeWallet := prepareSDKPWARegtestAssetsWithClose(t, true)
+			attachRGB11RegtestWallet(t, a, network)
+			for currentHeight < sdkPWARegtestPOSV2ReviewedStartHeight {
+				baselineHash, baselineHeight, readErr := network.Bootstrap.Client.GetBestBlock()
+				require.NoError(t, readErr)
+				baselineBlock := blockAtHeight(t, network.Bootstrap, baselineHeight)
+				submitted := time.Now()
+				tx, sendErr := a.SendAssets_SatsNet(a.GetWallet().GetAddress(), wallet.PLAIN_ASSET.String(), "10000", nil)
+				require.NoError(t, sendErr)
+				require.NotNil(t, tx)
+				_, confirmed, _, _ := waitForScheduledSatsNetTx(t, network, tx.TxID(), submitted,
+					baselineHeight, baselineHash, baselineBlock.Header.Timestamp)
+				require.Equal(t, baselineHeight+1, confirmed)
+				currentHeight = confirmed
+			}
+			closeWallet(a)
+			closeWallet(b)
+		}
 		require.Equal(t, sdkPWARegtestPOSV2ReviewedStartHeight, currentHeight,
 			"activation must reuse the reviewed nodes-anchor chain without advancing it first")
 		require.Less(t, currentHeight, sdkPWARegtestPOSV2ActivationHeight,
@@ -270,7 +412,7 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 	} else {
 		ordinary1, ordinary2, mine = prepareSDKPWARegtestAssets(t, true)
 	}
-	if feature == "account-usage" {
+	if feature == "account-usage" && os.Getenv("SAT20_REAL_PWA_USAGE_CASE") != sdkPWARegtestGuardianRecoveryCase {
 		prepareSDKPWARegtestAccountUsageFunding(t, ordinary1, network, mine)
 	}
 	baselineHash, baselineHeight, err := network.Bootstrap.Client.GetBestBlock()
@@ -447,21 +589,6 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 	require.Equal(t, anchorData.Value, anchorLedgerEntry.Value)
 
 	address := ordinary1.GetWallet().GetAddress()
-	summary := ordinary1.GetIndexerRPCClient_SatsNet().GetAssetSummaryWithAddress(address)
-	require.NotNil(t, summary, "read the actual current L2 address summary")
-	var plainBalance string
-	for _, asset := range summary.Data {
-		if asset != nil && asset.Name == indexercommon.ASSET_PLAIN_SAT {
-			plainBalance = asset.Amount.String()
-			break
-		}
-	}
-	require.NotEmpty(t, plainBalance)
-	currentBalance := ordinary1.GetAssetBalance_SatsNet("", wallet.ParseAssetString(wallet.PLAIN_ASSET.String()))
-	require.NotNil(t, currentBalance)
-	require.Equal(t, plainBalance, currentBalance.String(), "SDK balance must match the live L2 summary")
-	require.NotEqual(t, strconv.FormatInt(anchorData.Value, 10), plainBalance,
-		"current wallet balance is a separate live summary, not the original H1 anchor principal")
 
 	config := sdkPWARegtestConfig{
 		Env: "dev", Chain: "regtest", Mode: "light", Log: "debug",
@@ -540,6 +667,15 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 		originalConsignment = string(material)
 	}
 	actorA, actorB := actor("ordinary-1", ordinary1), actor("ordinary-2", ordinary2)
+	if feature == "l2-plain-send" && os.Getenv("SAT20_E2E_LOCAL_REAL") == "1" {
+		prepareSDKPWARegtestL2PlainFunding(t, ordinary1, ordinary2, network)
+	}
+	var sdkWASMOwner, sdkWASMBuyer map[string]string
+	var sdkWASMPSBT map[string]any
+	if sdkWASM {
+		sdkWASMOwner, sdkWASMBuyer, sdkWASMPSBT = prepareSDKPWARegtestSDKWASMFixture(t, network,
+			ordinary1, ordinary2, mine, config)
+	}
 	confirmationAddress := ordinary1.GetWallet().GetAddressByIndex(1)
 	if posResume {
 		confirmationAddress = ordinary2.GetWallet().GetAddressByIndex(1)
@@ -604,7 +740,7 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 	brc20Sender, brc20Recipient := actorA, actorB
 	var runeAsset string
 	var runeBalances [2]string
-	if feature == "l1-brc-transfer" || strings.HasPrefix(feature, "l1-runes") || feature == "l1-funds" || feature == "l1-funds-resume" || strings.HasPrefix(feature, "l2-channel-") {
+	if feature == "l1-brc-transfer" || strings.HasPrefix(feature, "l1-runes") || feature == "l1-funds" || feature == "l1-funds-resume" || feature == "asset-context" || strings.HasPrefix(feature, "l2-channel-") {
 		_, err := ordinary1.RecoverAccountManagementFromRootMnemonic(ctx, seeds["ordinary-1"], "regtest-acceptance-only")
 		require.NoError(t, err, "synchronize RGB carrier ownership before SDK inscription coin selection")
 		_, err = ordinary1.RefreshRGB11State(ctx)
@@ -729,6 +865,30 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 		require.NoError(t, err)
 		require.NotEmpty(t, privateChannelID)
 	}
+	if feature == "l2-channel-private-btc" && os.Getenv("SAT20_E2E_LOCAL_REAL") == "1" {
+		prepareSDKPWARegtestL2PlainFunding(t, ordinary1, ordinary2, network)
+		waitRGB11RegtestPeerChannelReady(t, ordinary2, network, privateChannelID)
+	}
+	if feature == "l1-brc-balance" && os.Getenv("SAT20_E2E_LOCAL_REAL") == "1" {
+		prepareSDKPWARegtestBRC20BalanceAsset(t, ordinary1, mine)
+	}
+	// Capture the browser baseline after this case has prepared its real funds.
+	summary := ordinary1.GetIndexerRPCClient_SatsNet().GetAssetSummaryWithAddress(address)
+	require.NotNil(t, summary, "read the actual current L2 address summary")
+	var plainBalance string
+	for _, asset := range summary.Data {
+		if asset != nil && asset.Name == indexercommon.ASSET_PLAIN_SAT {
+			plainBalance = asset.Amount.String()
+			break
+		}
+	}
+	require.NotEmpty(t, plainBalance)
+	currentBalance := ordinary1.GetAssetBalance_SatsNet("", wallet.ParseAssetString(wallet.PLAIN_ASSET.String()))
+	require.NotNil(t, currentBalance)
+	require.Equal(t, plainBalance, currentBalance.String(), "SDK balance must match the live L2 summary")
+	require.NotEqual(t, strconv.FormatInt(anchorData.Value, 10), plainBalance,
+		"current wallet balance is a separate live summary, not the original H1 anchor principal")
+
 	var resumeDeposit map[string]string
 	var posController *sdkPWARegtestPOSController
 	ordinary1Closed := false
@@ -754,7 +914,10 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 	}
 	ordinary2.Stop()
 
-	artifactDir := t.TempDir()
+	// Keep the exact browser inputs with a failed group; the outer runner
+	// removes this runtime directory only after the whole journey passes.
+	artifactDir, err := os.MkdirTemp(os.Getenv("SAT20_REAL_REGTEST_RUNTIME"), "pwa-case-")
+	require.NoError(t, err)
 	configPath := writeSDKPWARegtestPrivateJSON(t, artifactDir, "config.json", config)
 	fixture := map[string]any{
 		"remoteAttach": os.Getenv("SAT20_REAL_SATOSHINET_ATTACH") != "",
@@ -780,6 +943,20 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 			},
 			"wasmPath": wasmPath, "wasmRuntimePath": wasmRuntimePath,
 		},
+	}
+	if sdkWASM {
+		prepared := fixture["walletFixture"].(map[string]any)
+		prepared["sdkWasmOwner"], prepared["recipient"], prepared["sdkPSBT"] = sdkWASMOwner, sdkWASMBuyer, sdkWASMPSBT
+		prepared["tools"] = map[string]string{"gasAsset": sdkPWARegtestWASMAsset}
+		prepared["control_url"] = startSDKPWARegtestBitcoinController(t, confirmationAddress, mine, network)
+		prepared["realBitcoinControl"] = true
+	}
+	if feature == "asset-context" {
+		prepared := fixture["walletFixture"].(map[string]any)
+		prepared["mnemonic"], prepared["password"], prepared["address"] = actorA["mnemonic"], actorA["password"], actorA["address"]
+		prepared["asset"] = map[string]string{"key": "ordx:f:pwapos", "type": "ORDX", "ticker": "pwapos"}
+		prepared["control_url"] = startSDKPWARegtestBitcoinController(t, confirmationAddress, mine)
+		prepared["realBitcoinControl"] = true
 	}
 	if existing := os.Getenv("SAT20_REAL_PWA_EXISTING_URL"); existing != "" {
 		require.NotEmpty(t, os.Getenv("SAT20_REAL_SATOSHINET_ATTACH"))
@@ -962,7 +1139,7 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 				prepared["activation_height"], prepared["pos_activation_scheduled"] = 0, false
 				prepared["control_url"] = startSDKPWARegtestBitcoinController(t, confirmationAddress, mine, network)
 			}
-			if feature == "l2-channel-private-btc" {
+			if feature == "l2-channel-private-btc" && os.Getenv("SAT20_E2E_LOCAL_REAL") != "1" {
 				prepared["privateBTCRoundTripResume"] = map[string]any{
 					"unlock_txid":  "6c5bff0f44bcba2c64d6fe8b53df8f1d4f4b9d8de0c84287117e96e038359878",
 					"lock_txid":    "a414b6e31b059b7e86e5e502799efb711c8157e4a9699212a7d2b1fb49c89b0b",
@@ -977,17 +1154,33 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 	evidenceDir := filepath.Join(os.Getenv("SAT20_REAL_REGTEST_RUNTIME"), "pwa-browser-evidence")
 	require.NoError(t, os.MkdirAll(evidenceDir, 0o700))
 	require.NoError(t, os.Chmod(evidenceDir, 0o700))
+	if sdkWASM {
+		var cases []string
+		if selected := os.Getenv("SAT20_REAL_PWA_SDK_CASES"); selected != "" {
+			require.NoError(t, json.Unmarshal([]byte(selected), &cases),
+				"SAT20_REAL_PWA_SDK_CASES must be a JSON string array")
+			require.NotEmpty(t, cases, "SAT20_REAL_PWA_SDK_CASES must select at least one case")
+		}
+		runSDKPWARegtestBrowserGroup(t, pwa, configPath, fixturePath, evidenceDir, "sdk-wasm",
+			cases, "--sdk-wasm")
+		return
+	}
 	if feature == "account-usage" {
 		cases := []string{
 			"usage: fixed regtest ordinary-1 adds selects renames subaccount and preserves root identity",
-			"usage: fixed regtest ordinary-1 renews paid storage through current AUTOPAY",
+			sdkPWARegtestPaidAccountUsageCase,
 		}
 		if selected := os.Getenv("SAT20_REAL_PWA_USAGE_CASE"); selected != "" {
-			require.Contains(t, cases, selected, "incremental usage selection must name an exact existing UI case")
+			available := append(append([]string(nil), cases...), sdkPWARegtestGuardianRecoveryCase)
+			require.Contains(t, available, selected, "incremental usage selection must name an exact existing UI case")
 			cases = []string{selected}
-			t.Logf("incremental fixed-account UI case: %s; other usage cases not executed", selected)
+			t.Logf("incremental account-management UI case: %s; other usage cases not executed", selected)
 		}
-		runSDKPWARegtestBrowserGroup(t, pwa, configPath, fixturePath, evidenceDir, "fixed-account-management", cases, "--usage-cases")
+		group := "fixed-account-management"
+		if len(cases) == 1 && cases[0] == sdkPWARegtestGuardianRecoveryCase {
+			group = "guardian-2of3"
+		}
+		runSDKPWARegtestBrowserGroup(t, pwa, configPath, fixturePath, evidenceDir, group, cases, "--usage-cases")
 		return
 	}
 
@@ -1006,6 +1199,11 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 		"Wallet PWA: configured inactivity locks signing until password authentication",
 		"Wallet PWA: referrer registration without an owned name cannot broadcast",
 		"Wallet PWA: referrer cancellation and unknown-name rejection preserve funds",
+	}
+	if feature == "asset-context" {
+		runSDKPWARegtestBrowserGroup(t, pwa, configPath, fixturePath, evidenceDir, "asset-context",
+			[]string{"Wallet PWA: late asset response cannot overwrite the selected account"})
+		return
 	}
 	biometricCases := []string{
 		"WebAuthn PWA: real PRF credential creation persists an encrypted wallet binding",
@@ -1106,6 +1304,11 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 	if feature == "l2-channel-splice" {
 		cases := []string{"POS PWA: BTC splicing-in survives closing and reopening the page"}
 		runSDKPWARegtestBrowserGroup(t, pwa, configPath, fixturePath, evidenceDir, "channel-splice", cases)
+		return
+	}
+	if feature == "l2-channel-force-close-csv" {
+		cases := []string{"Escape PWA: confirmed force close waits for CSV and returns exact wallet funds after reload"}
+		runSDKPWARegtestBrowserGroup(t, pwa, configPath, fixturePath, evidenceDir, "channel-force-close-csv", cases)
 		return
 	}
 	if feature == "l2-channel-activation" {
@@ -1334,11 +1537,19 @@ func runSDKPWARegtestBrowserGroup(t *testing.T, pwa, configPath, fixturePath, ev
 	caseSelector := "--wallet-cases"
 	if len(selector) > 0 {
 		require.Len(t, selector, 1)
-		require.Contains(t, []string{"--wallet-cases", "--usage-cases"}, selector[0])
+		require.Contains(t, []string{"--wallet-cases", "--usage-cases", "--sdk-wasm"}, selector[0])
 		caseSelector = selector[0]
 	}
 	args := []string{"scripts/verify/account-management-e2e.mjs", "--regtest",
-		"--regtest-config", configPath, "--regtest-fixture", fixturePath, caseSelector}
+		"--regtest-config", configPath, "--regtest-fixture", fixturePath}
+	if caseSelector == "--sdk-wasm" {
+		args = append(args, caseSelector)
+		if len(cases) > 0 {
+			args = append(args, "--wallet-cases")
+		}
+	} else {
+		args = append(args, caseSelector)
+	}
 	args = append(args, cases...)
 	command := exec.CommandContext(ctx, node, args...)
 	command.Dir = pwa

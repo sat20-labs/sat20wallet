@@ -36,7 +36,7 @@ func runPWAReleaseE2E(t *testing.T, regtest bool) {
 		defer deadlineCancel()
 	}
 	wasm, runtimeJS := buildPWAWalletRuntime(t, ctx, sdk)
-	args := []string{"scripts/verify/pwa-release-e2e.mjs", wasm, runtimeJS, t.TempDir()}
+	args := []string{"scripts/verify/pwa-release-e2e.mjs", wasm, runtimeJS, testCaseDirectory(t)}
 	if regtest {
 		args = append(args, "--regtest")
 		switch os.Getenv("SAT20_PWA_RELEASE_CONTINUE") {

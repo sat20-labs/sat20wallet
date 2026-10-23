@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   assertFixedOwnerMnemonicIdentity,
   fixedRegtestAccountUsageCaseNames,
+  regtestAccountUsageCaseNames,
   requireFixedAccountManagementOwner,
   runPwaUsageCases,
 } from './account-management-usage-e2e.mjs'
@@ -41,7 +42,7 @@ test('regtest fixed-root allowlist contains only the two fixed ordinary-1 busine
   assert.equal(fixedRegtestAccountUsageCaseNames.some(name => /\b2of[23]\b/.test(name)), false)
 })
 
-test('registers both fixed-root regtest account-management UI cases without running handlers', async () => {
+test('registers fixed-root and Guardian regtest UI cases without running handlers', async () => {
   const registered = []
   await runPwaUsageCases({
     ...baseRunner(async (name, handler) => {
@@ -54,6 +55,9 @@ test('registers both fixed-root regtest account-management UI cases without runn
   for (const name of fixedRegtestAccountUsageCaseNames) {
     assert.ok(registered.includes(name), `missing registered UI case: ${name}`)
   }
+  const guardianCase = 'usage: real 2of3 settings and independent Guardian pages complete setup and rehearsal'
+  assert.deepEqual(regtestAccountUsageCaseNames, [...fixedRegtestAccountUsageCaseNames, guardianCase])
+  assert.ok(registered.includes(guardianCase), 'missing independent Guardian setup/rehearsal UI case')
 })
 
 test('does not register fixed-root cases without the explicit fixture', async () => {

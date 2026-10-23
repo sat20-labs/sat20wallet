@@ -202,7 +202,15 @@ export async function runPwaPosCases(t, fixture) {
     await unlockThroughUI()
   }
   const readyChannelUI = async () => {
-    await expect.poll(async () => (await readChannel()).status, pollOptions).toBe(16)
+    // A cold reload restores the authenticated channel asynchronously. Only
+    // the known absent-channel result may wait; other SDK errors still fail.
+    await expect.poll(async () => {
+      try { return (await readChannel()).status } catch (error) {
+        const firstLine = error.message.split(/\r?\n/, 1)[0]
+        if (/getCurrentChannel: (not found|channel is nil|channel not found)$/.test(firstLine)) return null
+        throw error
+      }
+    }, pollOptions).toBe(16)
     const channel = await readChannel()
     assert.equal(channel.channelId, channelId)
     await showTab('Channel')
@@ -653,6 +661,40 @@ export async function runPwaPosCases(t, fixture) {
     await expect.poll(() => readL2Amount(key), pollOptions).toBe(sourceBefore - (token ? 0n : 20n))
     await expect.poll(readL2Total, pollOptions).toBe(satsBefore - 20n)
     await assertWalletBalanceUI('SatoshiNet', token)
+    if (!token && fixture.realBitcoinControl) {
+      const pendingPayments = async () => {
+        const result = await stpRead('allReservations')
+        assert.ok(Array.isArray(result.reservations), 'SDK reservations must be an array')
+        return result.reservations.filter(item => item.type === 'pay' && Number(item.status) > 0 &&
+          JSON.parse(item.json).ChannelId === channelId)
+      }
+      console.log(JSON.stringify({ privateBTCBeforeReload: {
+        payment: locked.lastPaymentId, commitHeight: locked.commitHeight,
+        pendingPayments: (await pendingPayments()).length,
+      } }))
+      await reopen(false)
+      const reloaded = await readyChannelUI()
+      assert.equal(reloaded.lastPaymentId, locked.lastPaymentId)
+      assert.equal(reloaded.commitHeight, locked.commitHeight)
+      assert.deepEqual(channelBalances(reloaded), channelBalances(locked))
+      await expect.poll(readL2Total, pollOptions).toBe(satsBefore - 20n)
+      await assertWalletBalanceUI('SatoshiNet')
+      // Reload before waiting for local completion: this retains the
+      // confirmed-chain / unfinished-browser-reservation recovery window.
+      await expect.poll(async () => (await pendingPayments()).length, pollOptions).toBe(0)
+      await reopen(false)
+      const completed = await readyChannelUI()
+      assert.equal(completed.lastPaymentId, locked.lastPaymentId)
+      assert.equal(completed.commitHeight, locked.commitHeight)
+      assert.deepEqual(channelBalances(completed), channelBalances(locked))
+      await expect.poll(readL2Total, pollOptions).toBe(satsBefore - 20n)
+      await assertWalletBalanceUI('SatoshiNet')
+      assert.equal((await pendingPayments()).length, 0)
+      console.log(JSON.stringify({ privateBTCAfterRecovery: {
+        payment: completed.lastPaymentId, commitHeight: completed.commitHeight,
+        pendingPayments: (await pendingPayments()).length, reloads: 2,
+      } }))
+    }
   }
   const splicingOut = async token => {
     await selectMode('lightning')
@@ -752,6 +794,21 @@ export async function runPwaPosCases(t, fixture) {
     assert.deepEqual(snapshot.l1.broadcast_count, before.l1.broadcast_count)
     assert.deepEqual(snapshot.l1.pending_txids, before.l1.pending_txids)
     assert.deepEqual(snapshot.l1.confirmed_txids, before.l1.confirmed_txids)
+  }
+  const l1TransactionSet = snapshot => new Set([
+    ...(snapshot.l1.pending_txids ?? []), ...(snapshot.l1.confirmed_txids ?? []),
+  ])
+  const assertL1TransactionDelta = (before, after, allowedAdded = [], broadcastDelta = 0, message = 'unexpected L1 transaction change') => {
+    const beforeTxIDs = l1TransactionSet(before)
+    const afterTxIDs = l1TransactionSet(after)
+    const removed = [...beforeTxIDs].filter(txid => !afterTxIDs.has(txid)).sort()
+    const added = [...afterTxIDs].filter(txid => !beforeTxIDs.has(txid)).sort()
+    assert.deepEqual(removed, [], `${message}: existing pending or confirmed transactions disappeared`)
+    assert.deepEqual(added, [...allowedAdded].sort(), `${message}: new pending or confirmed transactions differ`)
+    if (broadcastDelta !== null && before.l1.broadcast_count !== undefined) {
+      assert.equal(after.l1.broadcast_count, before.l1.broadcast_count + broadcastDelta,
+        `${message}: legacy broadcast counter differs`)
+    }
   }
 
   try {
@@ -1256,8 +1313,14 @@ export async function runPwaPosCases(t, fixture) {
       await expect.poll(async () => (await control('snapshot')).l1.pending_txids.includes(plan.commit_txid), pollOptions).toBe(true)
       const pending = await control('snapshot')
       for (const id of expectedIDs) assert.ok(pending.l1.pending_txids.includes(id) || before.l1.confirmed_txids.includes(id))
+      const expectedNewPackage = expectedIDs.filter(txid => !l1TransactionSet(before).has(txid))
+      assertL1TransactionDelta(before, pending, expectedNewPackage, null,
+        'force-close package must be the only new L1 transaction set')
       await reopen(true)
       await expect.poll(() => stpRead('getChannelStatus', channelId), pollOptions).toBe(12)
+      const afterForceCloseReload = await control('snapshot')
+      assertL1TransactionDelta(pending, afterForceCloseReload, [], 0,
+        'reopening after force close must not broadcast again')
       await page.evaluate(() => {
         window.__channelE2EEvents = []
         const ret = window.sat20wallet_wasm.registerCallback((event, value) => window.__channelE2EEvents.push({ event, value }))
@@ -1268,7 +1331,11 @@ export async function runPwaPosCases(t, fixture) {
       const oldEvents = await page.evaluate(() => window.__channelE2EEvents)
       const confirmed = await control('confirm-l1', { wait_anchors: false })
       const closeHeight = confirmed.l1.height
-      await control('mine')
+      assertL1TransactionDelta(afterForceCloseReload, confirmed, [], 0,
+        'confirming the commitment must only move existing transaction IDs')
+      const alignedAfterClose = fixture.realBitcoinControl ? await control('snapshot') : await control('mine')
+      assertL1TransactionDelta(confirmed, alignedAfterClose, [], 0,
+        'post-confirmation node alignment must not mine or broadcast another transaction')
       assert.deepEqual(await page.evaluate(() => window.__channelE2EEvents), oldEvents,
         'the released manager must not dispatch a channel callback after chain confirmation')
       const initialized = await page.evaluate(async config => await window.sat20wallet_wasm.init(config, 2), fixture.config)
@@ -1298,20 +1365,25 @@ export async function runPwaPosCases(t, fixture) {
       const refused = await testSweep(premature.sweep_tx_hex)
       assert.equal(refused.allowed, false, 'an otherwise signed premature sweep must fail relative block maturity')
       assert.match(refused['reject-reason'], /non-BIP68-final/)
-      const broadcasts = (await control('snapshot')).l1.broadcast_count
+      const beforeDirectBroadcast = await control('snapshot')
       const directBroadcast = await page.evaluate(async ({ channelId, txid, height }) =>
         await window.sat20wallet_wasm.sweepBuild(channelId, txid, height, true), { channelId, txid: plan.commit_txid, height: closeHeight })
       assert.notEqual(directBroadcast.code, 0, 'only the existing monitor owns sweep broadcasting')
-      assert.deepEqual((await control('snapshot')).l1.broadcast_count, broadcasts)
+      assertL1TransactionDelta(beforeDirectBroadcast, await control('snapshot'), [], 0,
+        'rejected direct sweep broadcast must not change the actual L1 transaction set')
       // At this tip the next candidate block is exactly the BIP68 boundary.
       // Preflight may admit it, while the SDK monitor retains its own later
       // automatic broadcast threshold. Neither read may mutate the ledger.
+      const beforeBoundary = await control('snapshot')
       const boundary = await control('confirm-l1', { wait_anchors: false, empty_blocks: plan.csv_delay - 1 })
+      assertL1TransactionDelta(beforeBoundary, boundary, [], 0,
+        'mining to the CSV boundary must not add or remove an L1 transaction')
       assert.equal(boundary.l1.height + 1, closeHeight + plan.csv_delay)
       const boundarySweep = JSON.parse((await stpRead('sweepBuild', channelId, plan.commit_txid, boundary.l1.height, false)).json)
       assert.equal((await testSweep(boundarySweep.sweep_tx_hex)).allowed, true, 'the exact relative block boundary must be admissible')
       assert.equal(await stpRead('getChannelStatus', channelId), 13)
-      assert.deepEqual((await control('snapshot')).l1.broadcast_count, broadcasts)
+      assertL1TransactionDelta(boundary, await control('snapshot'), [], 0,
+        'BIP68 boundary preflight must not broadcast a sweep')
       const mature = await control('confirm-l1', { wait_anchors: false, empty_blocks: 2 })
       assert.equal(mature.l1.height, closeHeight + plan.csv_delay + 1)
       await expect.poll(() => stpRead('getChannelStatus', channelId), pollOptions).toBe(14)
@@ -1319,6 +1391,10 @@ export async function runPwaPosCases(t, fixture) {
       const sweep = JSON.parse(sweepValue.json)
       assert.equal(sweep.signed, true); assert.equal(sweep.verified, true); assert.equal(sweep.broadcastable, true)
       assert.equal(sweep.commit_txid, plan.commit_txid)
+      await expect.poll(async () => l1TransactionSet(await control('snapshot')).has(sweep.sweep_txid), pollOptions).toBe(true)
+      const afterMaturity = await control('snapshot')
+      assertL1TransactionDelta(boundary, afterMaturity, [sweep.sweep_txid], 1,
+        'CSV maturity may add only its actual signed sweep transaction')
       const tx = Transaction.fromHex(sweep.sweep_tx_hex)
       assert.equal(tx.getId(), sweep.sweep_txid)
       assert.ok(tx.ins.some(input => Buffer.from(input.hash).reverse().toString('hex') === plan.commit_txid))
@@ -1337,14 +1413,19 @@ export async function runPwaPosCases(t, fixture) {
         'final return must preserve the pre-close wallet entitlement after exact commitment and sweep fees')
       const feeRate = asInteger(await page.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().btcFeeRate))
       assert.ok(asInteger(sweep.fee) >= BigInt(tx.virtualSize()) * feeRate)
-      await control('confirm-l1', { wait_anchors: false })
+      const sweepConfirmed = await control('confirm-l1', { wait_anchors: false })
+      assertL1TransactionDelta(afterMaturity, sweepConfirmed, [], 0,
+        'confirming the sweep must only move the existing sweep transaction')
       await expect.poll(() => stpRead('getChannelStatus', channelId), pollOptions).toBe(-1)
       await expect.poll(() => page.evaluate(txid => window.__channelE2EEvents.some(item => item.event === 'channelswept' && item.value === txid), sweep.sweep_txid), pollOptions).toBe(true)
       await expect.poll(() => addressAmount('Bitcoin', fixture.address, '::'), pollOptions).toBe(beforeAmount + credit)
-      const finalBroadcasts = (await control('snapshot')).l1.broadcast_count
+      const finalSnapshot = await control('snapshot')
+      assertL1TransactionDelta(afterMaturity, finalSnapshot, [], 0,
+        'completed sweep must not create another L1 transaction')
       await reopen(true)
       assert.equal(await addressAmount('Bitcoin', fixture.address, '::'), beforeAmount + credit)
-      assert.deepEqual((await control('snapshot')).l1.broadcast_count, finalBroadcasts, 'completed force close must not replay after reload')
+      assertL1TransactionDelta(finalSnapshot, await control('snapshot'), [], 0,
+        'completed force close must not replay after reload')
       await assertWalletBalanceUI('Bitcoin')
     })
     await check(requiredPwaPosCases[23], async () => {
@@ -1408,6 +1489,9 @@ export async function runPwaPosCases(t, fixture) {
     // Keep the known ORDX Advanced availability regression last. Its happy path
     // remains fully specified and will continue once the production UI is fixed.
     await check(requiredPwaPosCases[24], async () => { await sendL1(true, true) })
+  } catch (error) {
+    await t.preserveBrowserFailureState?.()
+    throw error
   } finally {
     await context.close()
   }

@@ -329,6 +329,16 @@ func prepareSDKPWARegtestAssetsInternal(t *testing.T, existingOnly ...bool) (*wa
 	if reuseExistingWallets {
 		return a, b, mine, closeManager
 	}
+	// Non-mainnet indexer policy marks every sat of rewards at H0..H1000
+	// as Vintage. Splitting those rewards cannot create plain funding sats.
+	// Advance this group's real chain before mining the ordinary root funds;
+	// leave the early special rewards on the separate account-1 mining sink.
+	const firstNonVintageFundingHeight = 1001
+	var fundingHeight int
+	require.NoError(t, json.Unmarshal(rpc("getblockcount"), &fundingHeight))
+	if fundingHeight < firstNonVintageFundingHeight {
+		mine(a.GetWallet().GetAddressByIndex(1), firstNonVintageFundingHeight-fundingHeight)
+	}
 	matureCoinbases := make(map[string][]string)
 	matureFunds := func(address string) int64 {
 		matureCoinbases[address] = nil
@@ -428,6 +438,26 @@ func prepareSDKPWARegtestAssetsInternal(t *testing.T, existingOnly ...bool) (*wa
 	return a, b, mine, closeManager
 }
 
+// The fresh local runner calls this after NodeReadiness. Account profiles are
+// created and published through the SDK in this group's empty databases, never
+// restored from a previous acceptance session. Temporary storage is sufficient
+// here; the paid-storage journey prepares its own AUTOPAY funding separately.
+func TestSDKPWARealRegtestFreshAccountPreparation(t *testing.T) {
+	network := prepareSDKPWARegtestNodes(t)
+	a, b, _ := prepareSDKPWARegtestAssets(t, true)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	for _, manager := range []*wallet.Manager{a, b} {
+		attachRGB11RegtestWallet(t, manager, network)
+		ensureRGB11RegtestAccountManagement(t, manager)
+		authorization, err := manager.ConfirmAccountStorage(wallet.AccountStorageTemporary, 100)
+		require.NoError(t, err)
+		ensureRGB11RegtestRecoveryPackage(t, manager, authorization)
+		require.NoError(t, manager.SyncAccountManagementState(ctx))
+		require.NoError(t, manager.SyncAccountRootWrapper(ctx))
+	}
+}
+
 func TestSDKPWARealRegtestL1AssetPreparation(t *testing.T) {
 	network := prepareSDKPWARegtestNodes(t)
 	var existingOnly []bool
@@ -445,6 +475,10 @@ func TestSDKPWARealRegtestL1AssetPreparation(t *testing.T) {
 		_, err = manager.RefreshRGB11State(ctx)
 		require.NoError(t, err)
 	}
+	// Fresh account-1 mining rewards still carry rare sats. Reuse the real
+	// coinbase split to prepare plain outputs and plain auxiliary change before
+	// channel funding, instead of assuming a previous browser run made them.
+	prepareSDKPWARegtestRGBBrowserCoins(t, a, b, mine)
 	for _, openMint := range []bool{false, true} {
 		asset := prepareSDKPWARegtestRuneAsset(t, a, mine, openMint)
 		t.Logf("unified preparation has indexed pure Rune asset %s", asset)
