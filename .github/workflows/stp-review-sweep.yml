@@ -48,7 +48,16 @@ jobs:
         run: |
           set -eu
           python3 .github/stp-review-sweep.py
-          sed -i '/indexer "github.com\/sat20-labs\/indexer\/common"/d; /_ = indexer.ASSET_PLAIN_SAT/d' sdk/wallet/stp_sweep_verify_test.go
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('sdk/wallet/stp_sweep_verify_test.go')
+          text = p.read_text()
+          old = 'Funding: []rgb11wallet.ChannelFunding{{}},'
+          assert text.count(old) == 1
+          text = text.replace(old, 'Funding: []rgb11wallet.ChannelFunding{{Amount: *indexer.NewDefaultDecimal(1)}},')
+          text = text.replace('\t_ = indexer.ASSET_PLAIN_SAT\n', '')
+          p.write_text(text)
+          PY
           gofmt -w sdk/wire/types_contract.go sdk/wallet/rgb11_channel_proof.go sdk/wallet/stp_sweep_verify.go sdk/wallet/stp_sweep_verify_test.go
           git diff --check
       - name: Test sweep protection and asset reconstruction only
