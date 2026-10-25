@@ -53,6 +53,33 @@ export interface ChannelOpenFeeInfo {
   validationError?: string
 }
 
+export interface ClosedSingleUTXOTopupQuote {
+  quoteId: string
+  walletId: number
+  accountIndex: number
+  channelId: string
+  amount: number
+  walletFee: number
+  requiredInput: number
+  feeRate: number
+  unsignedTx: string
+}
+
+export interface ClosedChannelRecoveryOptions {
+  walletId: number
+  accountIndex: number
+  channelId: string
+  oldParentId: string
+  hasLocalClosedState: boolean
+  canWithdraw: boolean
+  withdrawReason: string
+  withdrawFeeSats: number
+  withdrawTxCount: number
+  withdrawTxIds: string[]
+  withdrawPending: boolean
+  withdrawComplete: boolean
+}
+
 // Channel/STP methods are now exported by sat20wallet.wasm.
 interface StpWasmModule {
   // 基础方法
@@ -72,6 +99,10 @@ interface StpWasmModule {
   isWalletExisting: (...args: any[]) => Promise<WasmResponse<boolean>>;
   hello: (...args: any[]) => Promise<WasmResponse<string>>;
   previewOpenChannel: (...args: any[]) => Promise<WasmResponse<ChannelOpenFeeInfo>>;
+  quoteClosedChannelSingleUTXOTopup: (feeRate: string) => Promise<WasmResponse<string>>;
+  confirmClosedChannelSingleUTXOTopup: (quote: string) => Promise<WasmResponse<string>>;
+  previewClosedChannelRecovery: (channelId: string) => Promise<WasmResponse<string>>;
+  withdrawClosedChannelExact: (channelId: string, parentId: string) => Promise<WasmResponse<{ resvId: string }>>;
   openChannel: (...args: any[]) => Promise<WasmResponse>;
   release: (...args: any[]) => Promise<WasmResponse>;
   getWallet: (...args: any[]) => Promise<WasmResponse>;
@@ -228,6 +259,22 @@ class SatsnetStp {
     amt: string | number
   ): Promise<[Error | undefined, ChannelOpenFeeInfo | undefined]> {
     return this._handleRequest<ChannelOpenFeeInfo>('previewOpenChannel', String(feeRate), String(amt))
+  }
+
+  async previewClosedChannelRecovery(channelId: string): Promise<[Error | undefined, string | undefined]> {
+    return this._handleRequest<string>('previewClosedChannelRecovery', channelId)
+  }
+
+  async withdrawClosedChannelExact(channelId: string, parentId: string): Promise<[Error | undefined, { resvId: string } | undefined]> {
+    return this._handleRequest<{ resvId: string }>('withdrawClosedChannelExact', channelId, parentId)
+  }
+
+  async quoteClosedChannelSingleUTXOTopup(feeRate: number): Promise<[Error | undefined, string | undefined]> {
+    return this._handleRequest<string>('quoteClosedChannelSingleUTXOTopup', String(feeRate))
+  }
+
+  async confirmClosedChannelSingleUTXOTopup(quote: string): Promise<[Error | undefined, string | undefined]> {
+    return this._handleRequest<string>('confirmClosedChannelSingleUTXOTopup', quote)
   }
 
   async openChannel(

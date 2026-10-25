@@ -82,9 +82,12 @@ func (p *Manager) ForcelyCloseChannel(channel *Channel, feeRate int64) (string, 
 	})
 	p.bindOperationLogReservationBestEffort(logID, RESV_TYPE_CLOSE, resv.Id)
 	if nativeForceClose(resv) {
+		// A locally initiated close publishes only this main commitment and
+		// its required Prev/Next chain. Others remain pre-signed client
+		// recovery packages: the client uses them after observing the exact
+		// remote server commitment confirmed, not in this parent broadcast.
 		resv.PreTxs = append(txs, commitTx)
 		resv.PreTxs = append(resv.PreTxs, channel.LocalCommitment.NextTxs...)
-		resv.PreTxs = appendCommitmentOtherTxs(resv.PreTxs, channel.LocalCommitment)
 		// Both transactions and the proof are durable before either chain can
 		// observe a spend. A lost broadcast response leaves this exact package
 		// pending for the same monitor that restores it after a restart.

@@ -1,9 +1,8 @@
 package wallet
 
-// STPAssetMetadataRules supplies the protocol's meaning of the existing
-// AssetName.N field. Legacy protocols keep their stored sat-binding metadata;
-// native protocols may identify quantity precision separately from binding.
-// Reading old ticker records therefore does not require rewriting their N.
+// STPAssetMetadataRules supplies the protocol's sat-binding metadata for
+// AssetName.N. Quantity precision belongs to the ticker/amount, not identity.
+// Legacy protocols retain their existing stored binding metadata.
 type STPAssetMetadataRules interface {
 	AssetNameN(precision, binding int) int
 }

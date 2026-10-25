@@ -9,6 +9,7 @@ import (
 	"time"
 
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
 	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
 	stxscript "github.com/sat20-labs/satoshinet/txscript"
@@ -354,6 +355,14 @@ func (p *Manager) DrainChannelL2BeforeReopen(channelAddr string) (string, []stri
 }
 
 func (p *Manager) RecordChannelL2Drained(channelAddr, txId string) {
+	var w common.Wallet
+	if p.wallet != nil {
+		w = p.wallet.Clone()
+	}
+	p.recordChannelL2DrainedForWallet(w, channelAddr, txId)
+}
+
+func (p *Manager) recordChannelL2DrainedForWallet(w common.Wallet, channelAddr, txId string) {
 	if channelAddr == "" || txId == "" || p.l2IndexerClient == nil {
 		return
 	}
@@ -366,12 +375,20 @@ func (p *Manager) RecordChannelL2Drained(channelAddr, txId string) {
 		Message:        fmt.Sprintf("channel L2 residual assets drained by deAnchor tx %s before open/reopen", txId),
 		CreatedAt:      time.Now().Unix(),
 	}
-	if err := p.RecordChannelStateEvent(event); err != nil {
+	if err := p.recordChannelStateEventForWallet(w, event); err != nil {
 		Log.Warnf("RecordChannelStateEvent L2 drained %s failed: %v", channelAddr, err)
 	}
 }
 
 func (p *Manager) RecordChannelStateEvent(event *sindexer.ChannelStateEvent) error {
+	var w common.Wallet
+	if p.wallet != nil {
+		w = p.wallet.Clone()
+	}
+	return p.recordChannelStateEventForWallet(w, event)
+}
+
+func (p *Manager) recordChannelStateEventForWallet(w common.Wallet, event *sindexer.ChannelStateEvent) error {
 	if event == nil || p.l2IndexerClient == nil {
 		return nil
 	}
@@ -379,15 +396,15 @@ func (p *Manager) RecordChannelStateEvent(event *sindexer.ChannelStateEvent) err
 		Log.Warnf("skip channel state event %s for %s: only core node can record events", event.EventType, event.ChannelId)
 		return nil
 	}
-	if p.wallet == nil {
+	if w == nil {
 		return fmt.Errorf("wallet is not created/unlocked")
 	}
-	pubkey := p.wallet.GetNodePubKey().SerializeCompressed()
+	pubkey := w.GetNodePubKey().SerializeCompressed()
 	msg, err := json.Marshal(event)
 	if err != nil {
 		return err
 	}
-	sig, err := p.wallet.SignMessageWithIndex(msg, 0)
+	sig, err := w.SignMessageWithIndex(msg, 0)
 	if err != nil {
 		return err
 	}

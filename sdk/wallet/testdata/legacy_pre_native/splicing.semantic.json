@@ -1,0 +1,115 @@
+{
+  "Amt": {
+    "Amount": "123",
+    "Precision": 0
+  },
+  "AnchorTx": {
+    "LockTime": 72,
+    "TxIn": [
+      {
+        "PreviousOutPoint": {
+          "Hash": "4800000000000000000000000000000000000000000000000000000000000000",
+          "Index": 0
+        },
+        "Sequence": 144,
+        "SignatureScript": null,
+        "Witness": [
+          "4803"
+        ]
+      }
+    ],
+    "TxOut": [
+      {
+        "Assets": null,
+        "PkScript": "5148",
+        "Value": 2072
+      }
+    ],
+    "Version": 2
+  },
+  "AssetName": {
+    "AssetName": {
+      "Protocol": "ordx",
+      "Ticker": "legacy-fixture",
+      "Type": "f"
+    },
+    "N": 10
+  },
+  "ChannelId": "legacy-ordx-channel",
+  "DestAddr": "old-destination",
+  "FeeChange": 29,
+  "Memo": "6f6c642d70656e64696e672d73706c696365",
+  "NeedSendSplicingTx": true,
+  "OldChanPoint": "1111111111111111111111111111111111111111111111111111111111111111:0",
+  "PreTxs": [
+    {
+      "LockTime": 73,
+      "TxIn": [
+        {
+          "PreviousOutPoint": {
+            "Hash": "4900000000000000000000000000000000000000000000000000000000000000",
+            "Index": 0
+          },
+          "Sequence": 144,
+          "SignatureScript": null,
+          "Witness": [
+            "4901",
+            "4902"
+          ]
+        }
+      ],
+      "TxOut": [
+        {
+          "PkScript": "5149",
+          "Value": 1073
+        }
+      ],
+      "Version": 2
+    }
+  ],
+  "RecoverAscended": true,
+  "RecoveredAnchorOutpoint": "old-recovered-anchor:0",
+  "RecoveredAnchorTxId": "old-recovered-anchor",
+  "RequiredFee": 7,
+  "ReservationBase": {
+    "Id": 701,
+    "IsInitiator": true,
+    "Status": 513,
+    "WalletId": {
+      "Id": 0,
+      "SubAccountId": 0
+    }
+  },
+  "ServiceFee": 8,
+  "SplicingAmt": {
+    "Amount": "120",
+    "Precision": 0
+  },
+  "SplicingChange": 31,
+  "SplicingTx": {
+    "LockTime": 71,
+    "TxIn": [
+      {
+        "PreviousOutPoint": {
+          "Hash": "4700000000000000000000000000000000000000000000000000000000000000",
+          "Index": 0
+        },
+        "Sequence": 144,
+        "SignatureScript": null,
+        "Witness": [
+          "4701",
+          "4702"
+        ]
+      }
+    ],
+    "TxOut": [
+      {
+        "PkScript": "5147",
+        "Value": 1071
+      }
+    ],
+    "Version": 2
+  },
+  "SplicingValue": 1200,
+  "StubIsSet": true
+}

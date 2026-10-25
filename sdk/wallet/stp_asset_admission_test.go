@@ -10,7 +10,7 @@ import (
 
 func TestSTPChannelAdmissionBeforeIO(t *testing.T) {
 	rune := AssetName{AssetName: indexer.AssetName{Protocol: indexer.PROTOCOL_NAME_RUNES, Type: indexer.ASSET_TYPE_FT, Ticker: "TOKEN"}}
-	rgb := AssetName{AssetName: indexer.AssetName{Protocol: "rgb11", Type: indexer.ASSET_TYPE_FT, Ticker: strings.Repeat("a", 64)}, N: 2}
+	rgb := AssetName{AssetName: indexer.AssetName{Protocol: "rgb11", Type: indexer.ASSET_TYPE_FT, Ticker: strings.Repeat("a", 64)}, N: 0}
 	steps := []struct {
 		name string
 		run  func(*Manager, *Channel, *AssetName) error

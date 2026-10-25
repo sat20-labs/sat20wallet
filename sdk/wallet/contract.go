@@ -1189,7 +1189,7 @@ func (p *ContractRuntimeBase) InitFromContent(content []byte, stp ContractManage
 		p.Divisibility = tickInfo.Divisibility
 		p.N = tickInfo.N
 		if p.nativePublicContract() {
-			p.N = tickInfo.Divisibility
+			p.N = 0
 			p.nativeMetadataInitialized = true
 		}
 	} else {

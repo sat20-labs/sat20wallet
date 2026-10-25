@@ -868,10 +868,6 @@ func switchAccount(this js.Value, p []js.Value) any {
 	// return createJsRet(nil, 0, "ok")
 
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
-		status := _mgr.GetStatus()
-		if status != nil && status.CurrentAccount == id {
-			return nil, 0, "ok"
-		}
 		if err := _mgr.SwitchAccount(id); err != nil {
 			return nil, -1, err.Error()
 		}
@@ -1813,7 +1809,7 @@ func expandAll_SatsNet(this js.Value, p []js.Value) any {
 		amt, err := _mgr.ExpandAll_SatsNet(channel, assetName)
 		if err != nil {
 			wallet.Log.Errorf("ExpandAll_SatsNet error: %v", err)
-			return nil, -1, err.Error()
+			return map[string]interface{}{"amount": amt}, -1, err.Error()
 		}
 		return map[string]interface{}{"amount": amt}, 0, "ok"
 	})
@@ -1837,7 +1833,7 @@ func expandAsset(this js.Value, p []js.Value) any {
 		txIds, amt, err := _mgr.ExpandAsset(channel, assetName)
 		if err != nil {
 			wallet.Log.Errorf("ExpandAsset error: %v", err)
-			return nil, -1, err.Error()
+			return map[string]interface{}{"txIds": txIds, "amount": amt}, -1, err.Error()
 		}
 		return map[string]interface{}{"txIds": txIds, "amount": amt}, 0, "ok"
 	})
@@ -5558,6 +5554,10 @@ func main() {
 	obj.Set("getBTCLuckyMiningStatus", js.FuncOf(getBTCLuckyMiningStatus))
 	obj.Set("getChannelAddrByPeerPubkey", js.FuncOf(getChannelAddrByPeerPubkey))
 	obj.Set("previewOpenChannel", js.FuncOf(previewOpenChannel))
+	obj.Set("quoteClosedChannelSingleUTXOTopup", js.FuncOf(quoteClosedChannelSingleUTXOTopup))
+	obj.Set("confirmClosedChannelSingleUTXOTopup", js.FuncOf(confirmClosedChannelSingleUTXOTopup))
+	obj.Set("previewClosedChannelRecovery", js.FuncOf(previewClosedChannelRecovery))
+	obj.Set("withdrawClosedChannelExact", js.FuncOf(withdrawClosedChannelExact))
 	obj.Set("openChannel", js.FuncOf(openChannel))
 	obj.Set("closeChannel", js.FuncOf(closeChannel))
 	obj.Set("getChannel", js.FuncOf(getChannel))

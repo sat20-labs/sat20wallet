@@ -1,14 +1,109 @@
 package wallet
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"time"
 
+	indexer "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
 )
 
 const channelHeartbeatInterval = 30 * time.Second
+
+const channelHeartbeatRebuildReadyEvent = "channelrebuildready"
+
+type closedReopenFundingPolicy uint8
+
+const (
+	closedReopenExplicitFunding closedReopenFundingPolicy = iota
+	closedReopenExistingFundingOnly
+)
+
+var errClosedChannelFundingApprovalRequired = errors.New("closed-channel recovery requires funding approval")
+
+func closedChannelFundingApprovalRequired(channelID string) error {
+	return fmt.Errorf("%w: channel %s cannot proceed using only existing channel BTC; adding account BTC or fees requires your approval",
+		errClosedChannelFundingApprovalRequired, channelID)
+}
+
+// Existing indexers predate typed missing-ascend errors. Recognize only the
+// concrete missing responses, never transport, storage or malformed replies.
+func closedReopenAscendMissing(outpoint string, err error) bool {
+	return errors.Is(err, indexer.ErrKeyNotFound) || err != nil &&
+		(err.Error() == "not found" || err.Error() == fmt.Sprintf("GetAscendData %s not found", outpoint))
+}
+
+func (p *Manager) validateClosedReopenExistingFunding(channelID string, selected *TxOutput, amount int64) (*TxOutput, error) {
+	if selected == nil || selected.OutPointStr == "" {
+		return nil, closedChannelFundingApprovalRequired(channelID)
+	}
+	existing, err := p.l1IndexerClient.GetExistingUtxos([]string{selected.OutPointStr})
+	if err != nil {
+		return nil, fmt.Errorf("cannot revalidate channel funding availability: %w", err)
+	}
+	if len(existing) != 1 || existing[0] != selected.OutPointStr {
+		return nil, fmt.Errorf("selected channel funding %s is no longer unspent", selected.OutPointStr)
+	}
+	actual, err := p.getL1TxOutput(selected.OutPointStr)
+	if err != nil {
+		return nil, err
+	}
+	script, err := GetPkScriptFromAddress(channelID)
+	if err != nil {
+		return nil, err
+	}
+	if actual == nil || actual.OutPointStr != selected.OutPointStr || actual.Value() != amount ||
+		actual.HasAsset() || !bytes.Equal(actual.OutValue.PkScript, script) {
+		return nil, fmt.Errorf("selected channel funding no longer matches its exact plain output, value and payment account")
+	}
+	if _, err := p.l2IndexerClient.GetAscendData(selected.OutPointStr); err == nil {
+		return nil, fmt.Errorf("selected channel funding %s is already ascended", selected.OutPointStr)
+	} else if !closedReopenAscendMissing(selected.OutPointStr, err) {
+		return nil, fmt.Errorf("cannot revalidate channel funding ascend state: %w", err)
+	}
+	return actual, nil
+}
+
+func (p *Manager) notifyClosedChannelFundingApproval(w common.Wallet, channelID string, err error) {
+	if w == nil || !errors.Is(err, errClosedChannelFundingApprovalRequired) {
+		return
+	}
+	identity := w.GetWalletId()
+	notice := fmt.Sprintf("wallet %d account %d channel %s: automatic recovery paused; %v",
+		identity.Id, identity.SubAccountId, channelID, err)
+	p.channelHeartbeatMu.Lock()
+	if p.channelRebuildNotices == nil {
+		p.channelRebuildNotices = make(map[string]string)
+	}
+	if p.channelRebuildNotices[channelID] == notice {
+		p.channelHeartbeatMu.Unlock()
+		return
+	}
+	p.channelRebuildNotices[channelID] = notice
+	p.channelHeartbeatMu.Unlock()
+	// Runtime-only deduplication, not a funding approval, quote or new owner.
+	p.SendMessageToUpper(MSG_OPERATION_FAILED, notice)
+	payload, marshalErr := json.Marshal(struct {
+		WalletID     int64  `json:"walletId"`
+		AccountIndex uint32 `json:"accountIndex"`
+		ChannelID    string `json:"channelId"`
+		Message      string `json:"message"`
+	}{identity.Id, identity.SubAccountId, channelID, notice})
+	if marshalErr == nil {
+		p.SendMessageToUpper("channelrebuildfundingrequired", string(payload))
+	}
+}
+
+func (p *Manager) clearClosedChannelFundingNotice(channelID string) {
+	p.channelHeartbeatMu.Lock()
+	delete(p.channelRebuildNotices, channelID)
+	p.channelHeartbeatMu.Unlock()
+}
 
 func (p *Manager) startChannelHeartbeat() {
 	p.channelHeartbeatMu.Lock()
@@ -173,6 +268,40 @@ func (p *Manager) runChannelHeartbeatTick(contexts ...context.Context) {
 		}
 		return
 	}
+	if result.NextAction != "rebuild" {
+		owner, intent, ownerErr := p.closedChannelAssetRestoreOwnerForWallet(localWallet, channelID)
+		if ownerErr != nil {
+			Log.Warningf("channel asset owner unavailable for %s: %v", channelID, ownerErr)
+			return
+		}
+		if owner != nil && !intent.AssetsComplete {
+			p.runClosedChannelAssetRestoreTick(ctx, localWallet, client, channelID)
+			return
+		}
+	}
+	if result.NextAction == "rebuild" {
+		if result.ActionParam != channelID {
+			Log.Errorf("channel heartbeat refused rebuild for a different payment account")
+			return
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		// Rebuild is a fresh handshake, never a closed peer snapshot. Keep the
+		// signed Ping's captured account and require existing channel BTC only.
+		if _, err := p.reopenClosedChannelForWalletWithFundingPolicy(ctx, localWallet, client, false, closedReopenExistingFundingOnly, channelID); err != nil {
+			Log.Warningf("channel heartbeat rebuild paused for %s: %v", channelID, err)
+			p.notifyClosedChannelFundingApproval(localWallet, channelID, err)
+			return
+		}
+		p.clearClosedChannelFundingNotice(channelID)
+		identity := localWallet.GetWalletId()
+		p.SendMessageToUpper(channelHeartbeatRebuildReadyEvent, fmt.Sprintf("wallet %d account %d channel %s: channel READY; asset restoration pending",
+			identity.Id, identity.SubAccountId, channelID))
+		p.runClosedChannelAssetRestoreTick(ctx, localWallet, client, channelID)
+		return
+	}
+	p.clearClosedChannelFundingNotice(channelID)
 	if result.NextAction != wwire.STP_ACTION_SYNC {
 		return
 	}
@@ -204,4 +333,17 @@ func (p *Manager) runChannelHeartbeatTick(contexts ...context.Context) {
 		return
 	}
 	p.SendMessageToUpper(MSG_CHANNEL_RESTORED, channelID)
+}
+
+func (p *Manager) runClosedChannelAssetRestoreTick(ctx context.Context, w common.Wallet, client NodeRPCClient, channelID string) {
+	done, err := p.driveClosedChannelAssetRestoreForWallet(ctx, w, client, channelID)
+	if err != nil {
+		Log.Warningf("closed-channel asset restoration paused for %s: %v", channelID, err)
+		p.notifyClosedChannelFundingApproval(w, channelID, err)
+		return
+	}
+	if done {
+		p.clearClosedChannelFundingNotice(channelID)
+		p.SendMessageToUpper(MSG_CHANNEL_RESTORED, channelID)
+	}
 }

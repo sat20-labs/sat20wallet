@@ -624,7 +624,8 @@ func (p *LaunchPoolContractRunTime) InitFromContent(content []byte, stp Contract
 	p.Divisibility = 0
 	p.N = p.BindingSat
 	if p.AssetName.Protocol == "rgb11" {
-		p.Divisibility, p.N = p.RGBPrecision, p.RGBPrecision
+		p.Divisibility, p.N = p.RGBPrecision, 0
+		p.nativeMetadataInitialized = true
 	}
 	return nil
 }
@@ -647,7 +648,11 @@ func (p *LaunchPoolContractRunTime) InitFromDB(stp ContractManager, resv Contrac
 	}
 	p.init()
 	if p.AssetName.Protocol == "rgb11" {
-		p.Divisibility, p.N = p.RGBPrecision, p.RGBPrecision
+		if err := p.checkNativeLaunchPoolContent(); err != nil {
+			return err
+		}
+		p.Divisibility, p.N = p.RGBPrecision, 0
+		p.nativeMetadataInitialized = true
 		if err := p.restoreNativePublicMetadata(); err != nil {
 			return err
 		}

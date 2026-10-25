@@ -131,6 +131,7 @@ func (c *ChannelInDB) Clone() *ChannelInDB {
 		LocalCommitment: &ChannelCommitment{
 			ChannelCommitmentV1: ChannelCommitmentV1{
 				RecoveryFeeIndexes: append([]uint32(nil), c.LocalCommitment.RecoveryFeeIndexes...),
+				RGBClientRecovery:  cloneRGBClientRecovery(c.LocalCommitment.RGBClientRecovery),
 				LocalBalance:       make(map[AssetName]*indexer.Decimal),
 				RemoteBalance:      make(map[AssetName]*indexer.Decimal),
 			},
@@ -138,6 +139,7 @@ func (c *ChannelInDB) Clone() *ChannelInDB {
 		RemoteCommitment: &ChannelCommitment{
 			ChannelCommitmentV1: ChannelCommitmentV1{
 				RecoveryFeeIndexes: append([]uint32(nil), c.RemoteCommitment.RecoveryFeeIndexes...),
+				RGBClientRecovery:  cloneRGBClientRecovery(c.RemoteCommitment.RGBClientRecovery),
 				LocalBalance:       make(map[AssetName]*indexer.Decimal),
 				RemoteBalance:      make(map[AssetName]*indexer.Decimal),
 			},

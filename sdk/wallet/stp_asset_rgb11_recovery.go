@@ -54,7 +54,7 @@ func (protocol rgb11STPProtocol) BuildChannelRecovery(p *Manager, req STPAssetRe
 	}
 	inputs := append([]*TxOutput(nil), req.Inputs...)
 	fees := append([]*TxOutput(nil), req.FeeInputs...)
-	if inputs == nil {
+	if req.Inputs == nil {
 		indexes, err := sortedSTPRGB11Indexes(req.OutputIndexes)
 		if err != nil || len(indexes) == 0 {
 			return nil, fmt.Errorf("invalid native recovery selection")
@@ -121,7 +121,7 @@ func (protocol rgb11STPProtocol) BuildChannelRecovery(p *Manager, req STPAssetRe
 		}
 		tx.AddTxIn(&wire.TxIn{PreviousOutPoint: *point, Sequence: sequence})
 		fetcher.AddPrevOut(*point, output.TxOut())
-		if req.Branch == "other-sweep" {
+		if req.Branch == "other-sweep" || req.Branch == rgbClientRecoveryBranch {
 			weight.AddWitnessInput(stpMultisigWitnessSize(req.CommitmentScript))
 		} else {
 			weight.AddWitnessInput(stpRecoveryWitnessSize(req.CommitmentScript, req.Operation, req.CoSignedSweep))
@@ -156,7 +156,16 @@ func (protocol rgb11STPProtocol) BuildChannelRecovery(p *Manager, req STPAssetRe
 		}
 		feeValue += input.Value()
 	}
-	fee, err := addSweepFeeChange(tx, &weight, feeValue, req.FeeRate, req.RecipientScript)
+	feeChangeScript := req.RecipientScript
+	if req.Branch == rgbClientRecoveryBranch {
+		if req.Channel == nil {
+			return nil, fmt.Errorf("RGB client recovery requires its channel fee-change script")
+		}
+		// Only the explicitly selected fee is paid. The rest of the channel's
+		// plain balance stays in its original 2-of-2 script for reopen.
+		feeChangeScript = req.Channel.GetChannelPkScript()
+	}
+	fee, err := addSweepFeeChange(tx, &weight, feeValue, req.FeeRate, feeChangeScript)
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +174,7 @@ func (protocol rgb11STPProtocol) BuildChannelRecovery(p *Manager, req STPAssetRe
 	if channelContext.Branch == "" {
 		channelContext.Branch = "recovery"
 	}
-	evidence, err := stpRGB11Evidence(p)
+	evidence, err := protocol.evidence(p)
 	if err != nil {
 		return nil, err
 	}
@@ -175,10 +184,7 @@ func (protocol rgb11STPProtocol) BuildChannelRecovery(p *Manager, req STPAssetRe
 	}
 	child := &rgb11wallet.ChannelPackage{Version: pkg.Version, Funding: pkg.Funding,
 		Steps: append(append([]rgb11wallet.ChannelStep(nil), pkg.Steps...), *step)}
-	if _, err := rgb11wallet.ValidateChannelPackage(context.Background(), child, tx, evidence); err != nil {
-		return nil, err
-	}
-	proof, err := rgb11wallet.EncodeChannelPackage(child)
+	proof, err := protocol.validateConstructedPackage(child, tx, evidence)
 	if err != nil {
 		return nil, err
 	}

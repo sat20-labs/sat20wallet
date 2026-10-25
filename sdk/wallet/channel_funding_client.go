@@ -339,6 +339,23 @@ func (p *Manager) FunderInitFundingProcess(feeRate, amt int64, utxos []string, m
 
 func (p *Manager) FunderInitReOpenProcess(amt int64, fundingUtxo *TxOutput, memo string, needSendFundingTx bool,
 	skipOpeningAnchorTx bool, fundingFeeCfg *ChannelFeeConfig, l2DrainTxId string) (string, error) {
+	if memo == "reopen" {
+		w, client, err := p.closedRecoveryWalletSnapshot()
+		if err != nil {
+			return "", err
+		}
+		channelID, err := p.channelIDForWallet(w)
+		if err != nil {
+			return "", err
+		}
+		owner, intent, err := p.closedReopenIntentForWallet(w, channelID)
+		if err != nil {
+			return "", err
+		}
+		opts := FundingInitOptions{FeeRate: p.GetFeeRate(), Amount: amt, FundingUtxo: fundingUtxo, Memo: memo,
+			NeedSendFundingTx: needSendFundingTx, SkipOpeningAnchorTx: skipOpeningAnchorTx, L2DrainTxId: l2DrainTxId, InitialCapacity: amt}
+		return p.funderClosedReopenForWallet(w, client, owner, intent, opts, fundingFeeCfg)
+	}
 	channelID, err := p.GetChannelAddress()
 	if err != nil {
 		return "", err
@@ -349,6 +366,11 @@ func (p *Manager) FunderInitReOpenProcess(amt int64, fundingUtxo *TxOutput, memo
 	peerWallet := p.GetServerWalletAddress()
 	if c := p.GetChannelByPeerWallet(peerWallet); c != nil {
 		return "", fmt.Errorf("channel exists")
+	}
+	// Preserve the old signed RGB obligation before any reopen request can
+	// install a fresh channel under the same c- key. Copy, never re-encode.
+	if err := p.preserveSTPRGBClosedChannelSource(channelID); err != nil {
+		return "", err
 	}
 
 	feeRate := p.GetFeeRate()

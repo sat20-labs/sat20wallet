@@ -31,8 +31,28 @@ func (p *Manager) RecoverPaymentChannel(channelId, paymentTxId, reason string) (
 		return "", 0, 0, fmt.Errorf("peer is offline")
 	}
 
+	channel.Mutex.RLock()
+	req := &wwire.RecoverPaymentRequest{
+		MsgHeader: wwire.NewMsgHeader(), ChannelId: channelId,
+		CommitHeight: channel.CommitHeight, PaymentTxId: paymentTxId, Reason: reason,
+	}
+	channel.Mutex.RUnlock()
+	msg, err := json.Marshal(req)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	rgbEvidence, err := p.PrepareSTPRGBSplicingEvidence(channel, &ASSET_PLAIN_SAT, nil, nil, msg, nil)
+	if err != nil {
+		return "", 0, 0, err
+	}
 	channel.Mutex.Lock()
 	defer channel.Mutex.Unlock()
+	if err := rgbEvidence.ValidateForChannel(channel, msg); err != nil {
+		return "", 0, 0, err
+	}
+	if channel.CommitHeight != req.CommitHeight {
+		return "", 0, 0, fmt.Errorf("commit height changed before payment recovery")
+	}
 	if channel.Status != CS_READY {
 		return "", 0, 0, fmt.Errorf("channel %s is not ready", channelId)
 	}
@@ -43,17 +63,6 @@ func (p *Manager) RecoverPaymentChannel(channelId, paymentTxId, reason string) (
 		return "", 0, 0, fmt.Errorf("peer rpc client is not initialized")
 	}
 
-	req := &wwire.RecoverPaymentRequest{
-		MsgHeader:    wwire.NewMsgHeader(),
-		ChannelId:    channelId,
-		CommitHeight: channel.CommitHeight,
-		PaymentTxId:  paymentTxId,
-		Reason:       reason,
-	}
-	msg, err := json.Marshal(req)
-	if err != nil {
-		return "", 0, 0, err
-	}
 	sig, err := channel.LocalWallet().SignMessage(msg)
 	if err != nil {
 		return "", 0, 0, err
@@ -69,8 +78,9 @@ func (p *Manager) RecoverPaymentChannel(channelId, paymentTxId, reason string) (
 			Reason:          reason,
 		},
 		RevocationInfo: RevocationInfo{
-			Channel: channel,
-			FeeRate: p.GetFeeRate(),
+			RGBEvidence: rgbEvidence,
+			Channel:     channel,
+			FeeRate:     p.GetFeeRate(),
 		},
 		RecoverPaymentReq: req,
 		ReqSig:            sig,

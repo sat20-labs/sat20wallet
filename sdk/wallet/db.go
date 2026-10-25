@@ -1515,6 +1515,9 @@ func (p *Manager) rehydratePendingClosingRuntime() {
 // active lock-with-expand action. Peer snapshots remain gated while the action
 // is pending, so restart recovery must use only the wallet's persisted channel.
 func (p *Manager) rehydratePendingLocalActionRuntime() error {
+	if err := p.rehydrateClosedChannelIntents(); err != nil {
+		return err
+	}
 	p.mutex.RLock()
 	reservations := make(map[int64]*LocalActionPerformData, len(p.localActionPerformMap))
 	for id, reservation := range p.localActionPerformMap {

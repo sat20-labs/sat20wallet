@@ -22,11 +22,18 @@ type nativePunishRecord struct {
 }
 
 func (p *WatchTower) nativePunishProofs(channel *Channel, commit *wire.MsgTx, txs []*wire.MsgTx) (map[string]map[string][]byte, error) {
+	return p.nativePunishProofsWithRGBView(channel, commit, txs, nil)
+}
+
+func (p *WatchTower) nativePunishProofsWithRGBView(channel *Channel, commit *wire.MsgTx, txs []*wire.MsgTx, view *stpRGBEvidenceView) (map[string]map[string][]byte, error) {
 	if channel == nil || commit == nil {
 		return nil, fmt.Errorf("missing punishment context")
 	}
 	old := channel.RemoteCommitment
 	if old == nil || len(old.AssetProofs) == 0 {
+		if old != nil && old.RGBClientRecovery != nil {
+			return nil, fmt.Errorf("RGB punishment is missing its old commitment proof")
+		}
 		for _, protocol := range stpAssetProtocols.ordered {
 			if _, native := protocol.(STPAssetChannelProtocol); native && channel.HasProtocolAsset(protocol.Protocol()) {
 				return nil, fmt.Errorf("native punishment is missing its old commitment proof")
@@ -41,7 +48,7 @@ func (p *WatchTower) nativePunishProofs(channel *Channel, commit *wire.MsgTx, tx
 	candidates := append([]*wire.MsgTx{commit}, txs...)
 	add := func(bundle map[string][]byte) error {
 		for name, raw := range bundle {
-			protocol, ok := stpAssetProtocols.byName[name].(STPAssetChannelProtocol)
+			protocol, ok := stpProtocolWithRGBView(stpAssetProtocols.byName[name], view).(STPAssetChannelProtocol)
 			if !ok || len(raw) == 0 {
 				return fmt.Errorf("unknown native punishment proof %s", name)
 			}
@@ -87,6 +94,27 @@ func (p *WatchTower) nativePunishProofs(channel *Channel, commit *wire.MsgTx, tx
 		if err := add(other.RecoveryProofs); err != nil {
 			return nil, err
 		}
+	}
+	if old.RGBClientRecovery != nil {
+		child, err := p.manager.verifiedPunishRGBClientRecovery(channel, view)
+		if err != nil {
+			return nil, err
+		}
+		matches := 0
+		for _, tx := range txs {
+			if equalSTPBitcoinTx(tx, child) {
+				matches++
+			}
+		}
+		if matches != 1 {
+			return nil, fmt.Errorf("native punishment omitted or duplicated its exact signed RGB client recovery")
+		}
+		if err := add(old.RGBClientRecovery.AssetProofs); err != nil {
+			return nil, err
+		}
+	}
+	if err := completeSTPRGBView(view); err != nil {
+		return nil, err
 	}
 	return proofs, nil
 }

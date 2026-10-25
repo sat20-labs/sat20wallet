@@ -126,11 +126,16 @@ type STPAssetRecoveryPlan struct {
 }
 
 func (p *Manager) buildSTPChannelRecovery(req STPAssetRecoveryRequest) (*STPAssetRecoveryPlan, error) {
+	return p.buildSTPChannelRecoveryWithRGBView(req, nil)
+}
+
+func (p *Manager) buildSTPChannelRecoveryWithRGBView(req STPAssetRecoveryRequest, view *stpRGBEvidenceView) (*STPAssetRecoveryPlan, error) {
 	if req.Commitment == nil {
 		return nil, fmt.Errorf("missing recovery commitment")
 	}
 	var result *STPAssetRecoveryPlan
-	for _, protocol := range stpAssetProtocols.ordered {
+	for _, registered := range stpAssetProtocols.ordered {
+		protocol := stpProtocolWithRGBView(registered, view)
 		builder, native := protocol.(STPAssetChannelProtocol)
 		if !native {
 			continue
@@ -164,6 +169,9 @@ func (p *Manager) buildSTPChannelRecovery(req STPAssetRecoveryRequest) (*STPAsse
 		}
 		result = plan
 	}
+	if err := completeSTPRGBView(view); err != nil {
+		return nil, err
+	}
 	if result != nil {
 		req.Commitment.RecoveryProofs = cloneSTPAssetProofs(result.NativeProofs)
 	}
@@ -195,6 +203,10 @@ func needsSTPNativeCommitmentJournal(channel *Channel, commitment *ChannelCommit
 }
 
 func (p *Manager) verifySTPNativeJournalContext(channel *Channel, commitment *ChannelCommitment) error {
+	return p.verifySTPNativeJournalContextWithRGBView(channel, commitment, nil)
+}
+
+func (p *Manager) verifySTPNativeJournalContextWithRGBView(channel *Channel, commitment *ChannelCommitment, view *stpRGBEvidenceView) error {
 	if channel == nil || commitment == nil {
 		return fmt.Errorf("missing native journal context")
 	}
@@ -202,7 +214,7 @@ func (p *Manager) verifySTPNativeJournalContext(channel *Channel, commitment *Ch
 		if len(inventory) == 0 {
 			return fmt.Errorf("missing %s native channel inventory", protocol)
 		}
-		if verifier, ok := stpAssetProtocols.byName[protocol].(STPAssetJournalProtocol); ok {
+		if verifier, ok := stpProtocolWithRGBView(stpAssetProtocols.byName[protocol], view).(STPAssetJournalProtocol); ok {
 			if err := verifier.VerifyChannelJournalContext(p, channel); err != nil {
 				return err
 			}
@@ -210,12 +222,19 @@ func (p *Manager) verifySTPNativeJournalContext(channel *Channel, commitment *Ch
 			return fmt.Errorf("missing %s native lifecycle verifier", protocol)
 		}
 	}
-	return nil
+	return completeSTPRGBView(view)
 }
 
 func (p *Manager) persistSTPNativeCommitment(channel *Channel, commitment *ChannelCommitment, role string) error {
-	key, value, err := p.prepareSTPNativeCommitmentWrite(channel, commitment, role)
+	return p.persistSTPNativeCommitmentWithRGBView(channel, commitment, role, nil)
+}
+
+func (p *Manager) persistSTPNativeCommitmentWithRGBView(channel *Channel, commitment *ChannelCommitment, role string, view *stpRGBEvidenceView) error {
+	key, value, err := p.prepareSTPNativeCommitmentWriteWithRGBView(channel, commitment, role, view)
 	if err != nil || len(key) == 0 {
+		return err
+	}
+	if err := completeSTPRGBView(view); err != nil {
 		return err
 	}
 	return p.db.Write(key, value)
@@ -225,6 +244,13 @@ func (p *Manager) persistSTPNativeCommitment(channel *Channel, commitment *Chann
 // one recovery snapshot can preserve the same validation and revocation rules
 // while committing all of their values in a single database transaction.
 func (p *Manager) prepareSTPNativeCommitmentWrite(channel *Channel, commitment *ChannelCommitment, role string) ([]byte, []byte, error) {
+	return p.prepareSTPNativeCommitmentWriteWithRGBView(channel, commitment, role, nil)
+}
+
+func (p *Manager) prepareSTPNativeCommitmentWriteWithRGBView(channel *Channel, commitment *ChannelCommitment, role string, view *stpRGBEvidenceView) ([]byte, []byte, error) {
+	if err := completeSTPRGBView(view); err != nil {
+		return nil, nil, err
+	}
 	if !needsSTPNativeCommitmentJournal(channel, commitment) {
 		return nil, nil, nil
 	}
@@ -232,7 +258,7 @@ func (p *Manager) prepareSTPNativeCommitmentWrite(channel *Channel, commitment *
 		commitment.DeAnchorTx == nil || (role != "local" && role != "remote") {
 		return nil, nil, fmt.Errorf("native channel commitment has no complete durable signing context")
 	}
-	if err := p.verifySTPNativeJournalContext(channel, commitment); err != nil {
+	if err := p.verifySTPNativeJournalContextWithRGBView(channel, commitment, view); err != nil {
 		return nil, nil, err
 	}
 	record := stpNativeCommitmentRecord{Version: 1, ChannelID: channel.ChannelId,
@@ -254,6 +280,9 @@ func (p *Manager) prepareSTPNativeCommitmentWrite(channel *Channel, commitment *
 			record.RevokedPrevious = true
 		}
 	} else if !errors.Is(err, indexer.ErrKeyNotFound) {
+		return nil, nil, err
+	}
+	if err := completeSTPRGBView(view); err != nil {
 		return nil, nil, err
 	}
 	raw, err := EncodeToBytes(&record)
@@ -599,7 +628,8 @@ func equalSTPCommitmentPackage(a, b *ChannelCommitment) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
-	if !equalSTPBitcoinTx(a.CommitTx, b.CommitTx) ||
+	if !equalRGBClientRecovery(a.RGBClientRecovery, b.RGBClientRecovery) ||
+		!equalSTPBitcoinTx(a.CommitTx, b.CommitTx) ||
 		!equalSTPBitcoinChain(a.PrevTxs, b.PrevTxs) ||
 		!equalSTPBitcoinChain(a.NextTxs, b.NextTxs) ||
 		!equalSTPAssetProofs(a.AssetProofs, b.AssetProofs) ||
@@ -644,6 +674,10 @@ func equalSTPCommitmentPackage(a, b *ChannelCommitment) bool {
 // PrepareSTPChannelFunding proves selected native carriers before any signed
 // request is sent. Inputs receive only the asset view established by that proof.
 func (p *Manager) PrepareSTPChannelFunding(channel *Channel, asset *AssetName, inputs []*TxOutput) (map[string][]byte, error) {
+	return p.prepareSTPChannelFundingWithRGBView(channel, asset, inputs, nil)
+}
+
+func (p *Manager) prepareSTPChannelFundingWithRGBView(channel *Channel, asset *AssetName, inputs []*TxOutput, view *stpRGBEvidenceView) (map[string][]byte, error) {
 	if channel == nil || asset == nil {
 		return nil, fmt.Errorf("missing channel funding context")
 	}
@@ -654,6 +688,7 @@ func (p *Manager) PrepareSTPChannelFunding(channel *Channel, asset *AssetName, i
 	if err != nil {
 		return nil, err
 	}
+	protocol = stpProtocolWithRGBView(protocol, view)
 	funder, native := protocol.(STPAssetFundingProtocol)
 	if !native {
 		return nil, nil
@@ -664,6 +699,11 @@ func (p *Manager) PrepareSTPChannelFunding(channel *Channel, asset *AssetName, i
 	candidate, candidateInputs := stpFundingValidationContext(channel, inputs)
 	if candidate.AssetEntropy == ([32]byte{}) {
 		if _, err := rand.Read(candidate.AssetEntropy[:]); err != nil {
+			return nil, err
+		}
+	}
+	if view != nil {
+		if err := view.bindConstructedChannel(candidate); err != nil {
 			return nil, err
 		}
 	}
@@ -680,6 +720,9 @@ func (p *Manager) PrepareSTPChannelFunding(channel *Channel, asset *AssetName, i
 	}
 	if len(proof) == 0 {
 		return nil, fmt.Errorf("missing validated %s funding proof", protocol.Protocol())
+	}
+	if err := completeSTPRGBView(view); err != nil {
+		return nil, err
 	}
 	if channel.AssetFunding == nil {
 		channel.AssetFunding = make(map[string][]byte)
@@ -722,6 +765,10 @@ func applySTPValidatedFundingInputs(inputs, validated []*TxOutput) {
 // AcceptSTPChannelFunding checks the peer's evidence against independently read
 // Bitcoin outputs. Peers cannot supply invented indexer balances in this path.
 func (p *Manager) AcceptSTPChannelFunding(channel *Channel, asset *AssetName, inputs []*TxOutput, proofs map[string][]byte, entropy [32]byte) error {
+	return p.acceptSTPChannelFundingWithRGBView(channel, asset, inputs, proofs, entropy, nil)
+}
+
+func (p *Manager) acceptSTPChannelFundingWithRGBView(channel *Channel, asset *AssetName, inputs []*TxOutput, proofs map[string][]byte, entropy [32]byte, view *stpRGBEvidenceView) error {
 	if channel == nil || asset == nil {
 		return fmt.Errorf("missing channel funding context")
 	}
@@ -732,6 +779,7 @@ func (p *Manager) AcceptSTPChannelFunding(channel *Channel, asset *AssetName, in
 	if err != nil {
 		return err
 	}
+	protocol = stpProtocolWithRGBView(protocol, view)
 	funder, native := protocol.(STPAssetFundingProtocol)
 	if !native {
 		if len(proofs) != 0 {
@@ -752,6 +800,11 @@ func (p *Manager) AcceptSTPChannelFunding(channel *Channel, asset *AssetName, in
 	}
 	candidate, candidateInputs := stpFundingValidationContext(channel, inputs)
 	candidate.AssetEntropy = entropy
+	if view != nil {
+		if err := view.bindConstructedChannel(candidate); err != nil {
+			return err
+		}
+	}
 	proof, err := funder.ValidateChannelFunding(p, candidate, asset, candidateInputs, proofs[protocol.Protocol()])
 	if err != nil {
 		return err
@@ -767,6 +820,9 @@ func (p *Manager) AcceptSTPChannelFunding(channel *Channel, asset *AssetName, in
 		if info == nil || info.AssetName != asset.AssetName {
 			return fmt.Errorf("native funding metadata identity mismatch")
 		}
+		if err := completeSTPRGBView(view); err != nil {
+			return err
+		}
 		if err := saveTickerInfo(p.db, info); err != nil {
 			return err
 		}
@@ -776,6 +832,9 @@ func (p *Manager) AcceptSTPChannelFunding(channel *Channel, asset *AssetName, in
 		}
 		p.tickerInfoMap[info.AssetName.String()] = info
 		p.mutex.Unlock()
+	}
+	if err := completeSTPRGBView(view); err != nil {
+		return err
 	}
 	if channel.AssetFunding == nil {
 		channel.AssetFunding = make(map[string][]byte)
@@ -787,10 +846,15 @@ func (p *Manager) AcceptSTPChannelFunding(channel *Channel, asset *AssetName, in
 }
 
 func (p *Manager) verifySTPChannelProofs(channel *Channel, tx *wire.MsgTx, proofs map[string][]byte, operation STPAssetOperation) error {
+	return p.verifySTPChannelProofsWithRGBView(channel, tx, proofs, operation, nil)
+}
+
+func (p *Manager) verifySTPChannelProofsWithRGBView(channel *Channel, tx *wire.MsgTx, proofs map[string][]byte, operation STPAssetOperation, view *stpRGBEvidenceView) error {
 	if channel == nil || tx == nil {
 		return fmt.Errorf("missing channel proof context")
 	}
-	for _, protocol := range stpAssetProtocols.ordered {
+	for _, registered := range stpAssetProtocols.ordered {
+		protocol := stpProtocolWithRGBView(registered, view)
 		proof := proofs[protocol.Protocol()]
 		verifier, native := protocol.(STPAssetChannelProtocol)
 		if !native {
@@ -828,7 +892,7 @@ func (p *Manager) verifySTPChannelProofs(channel *Channel, tx *wire.MsgTx, proof
 			return fmt.Errorf("unknown channel proof protocol %s", protocol)
 		}
 	}
-	return nil
+	return completeSTPRGBView(view)
 }
 
 // VerifySTPChannelProofs is also used by the serving node before co-signing or

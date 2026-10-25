@@ -140,13 +140,20 @@ func (p *WatchTower) HasBroadcastedCommitTx(commitTxId string) bool {
 
 // 只有撤销的commitTx才需要发给watchTower
 func (p *WatchTower) AddCommitTx(channel *Channel, commitTx *wire.MsgTx, signedPunishTx []*wire.MsgTx) error {
+	return p.addCommitTxWithRGBView(channel, commitTx, signedPunishTx, nil)
+}
+
+func (p *WatchTower) addCommitTxWithRGBView(channel *Channel, commitTx *wire.MsgTx, signedPunishTx []*wire.MsgTx, view *stpRGBEvidenceView) error {
 	if channel == nil || commitTx == nil || len(signedPunishTx) == 0 {
 		return fmt.Errorf("at least one signed punish transaction is required")
 	}
 
 	txId := commitTx.TxID()
-	proofs, err := p.nativePunishProofs(channel, commitTx, signedPunishTx)
+	proofs, err := p.nativePunishProofsWithRGBView(channel, commitTx, signedPunishTx, view)
 	if err != nil {
+		return err
+	}
+	if err := completeSTPRGBView(view); err != nil {
 		return err
 	}
 	if len(proofs) != 0 {

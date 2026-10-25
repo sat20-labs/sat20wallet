@@ -102,6 +102,8 @@ type Manager struct {
 	mutex             sync.RWMutex
 	rgbOperationMu    sync.RWMutex
 	channelIdentityMu sync.RWMutex
+	// Exact returned FundingCreated results, scoped to live recovery owners only.
+	closedFundingCreatedReturns sync.Map
 	// Serializes L1 wallet coin selection through broadcast or input reservation.
 	// UtxoLocker protects recorded inputs, but cannot cover concurrent selectors.
 	l1SendMu sync.Mutex
@@ -203,6 +205,7 @@ type Manager struct {
 	channelHeartbeatCancel    context.CancelFunc
 	channelHeartbeatWG        sync.WaitGroup
 	channelHeartbeatRunning   bool
+	channelRebuildNotices     map[string]string
 	statusBootstrapMu         sync.Mutex
 	statusBootstrapGeneration uint64
 
@@ -510,6 +513,7 @@ func (p *Manager) ResetResvMaps() {
 }
 
 func (p *Manager) resetResvMapsLocked() {
+	p.closedFundingCreatedReturns.Clear()
 	p.inscibeMap = make(map[int64]*InscribeResv)
 	p.paymentChannelMap = make(map[int64]*PaymentReservation)
 	p.fundingChannelMap = make(map[int64]*FundingReservation)
@@ -813,11 +817,15 @@ func (p *Manager) getBindingSatNum(name *swire.AssetName, amt *Decimal) int64 {
 }
 
 func newAssetInfo(name *AssetName, amt *Decimal) *swire.AssetInfo {
-	return &swire.AssetInfo{
+	info := &swire.AssetInfo{
 		Name:       name.AssetName,
 		Amount:     *amt.Clone(),
 		BindingSat: uint32(name.N),
 	}
+	if name.Protocol == rgb11wallet.Protocol {
+		info.BindingSat = 0
+	}
+	return info
 }
 
 func (p *Manager) GetMaxSupplyWithRune(name *swire.AssetName) (uint128.Uint128, int, error) {

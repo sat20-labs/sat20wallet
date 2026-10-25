@@ -24,7 +24,7 @@ func (protocol rgb11STPProtocol) BuildExpansionAnchorProof(p *Manager, channel *
 	if err != nil {
 		return nil, err
 	}
-	evidence, err := stpRGB11Evidence(p)
+	evidence, err := protocol.evidence(p)
 	if err != nil {
 		return nil, err
 	}
@@ -32,17 +32,21 @@ func (protocol rgb11STPProtocol) BuildExpansionAnchorProof(p *Manager, channel *
 		if source.OutPoint != output.OutPointStr {
 			continue
 		}
-		if source.AssetName != asset.AssetName || source.Amount.Precision != asset.N || source.Value != output.Value() ||
+		if source.AssetName != asset.AssetName || source.Value != output.Value() ||
 			!bytes.Equal(source.PkScript, output.OutValue.PkScript) || len(output.Assets) != 1 ||
-			output.Assets[0].BindingSat != 0 || source.Amount.Cmp(output.GetAsset(&asset.AssetName)) != 0 {
+			output.Assets[0].BindingSat != 0 || source.Amount.Precision != output.Assets[0].Amount.Precision ||
+			source.Amount.Cmp(output.GetAsset(&asset.AssetName)) != 0 {
 			return nil, fmt.Errorf("RGB11 expansion changed its full native source")
 		}
 		validated, err := rgb11wallet.ValidateChannelFunding(context.Background(), source, evidence, nativeproof.Current, GetChainParam().Name)
 		if err != nil {
 			return nil, err
 		}
+		if err := completeSTPRGBView(protocol.view); err != nil {
+			return nil, err
+		}
 		if validated.Value != output.Value() || validated.Asset.Name != asset.AssetName ||
-			validated.Asset.Amount.Cmp(&source.Amount) != 0 || validated.Asset.Amount.Precision != asset.N {
+			validated.Asset.Amount.Cmp(&source.Amount) != 0 || validated.Asset.Amount.Precision != source.Amount.Precision {
 			return nil, fmt.Errorf("RGB11 expansion source differs from its validated allocation")
 		}
 		return source.NativeProof()

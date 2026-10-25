@@ -68,9 +68,17 @@ func (p *Manager) newNativeSettlementChains(ctx context.Context, owner common.Wa
 	if err != nil {
 		return nil, err
 	}
+	return p.newNativeSettlementChainsWithEvidence(ctx, scope.evidence)
+}
+
+// The canonical chain reader is shared; selecting a Bitcoin evidence source
+// does not create an RGB scope or turn an indexed asset into an RGB receipt.
+func (p *Manager) newNativeSettlementChainsWithEvidence(ctx context.Context, evidence rgb11wallet.BitcoinEvidenceProvider) (*nativeSettlementChains, error) {
+	if p == nil || p.l1IndexerClient == nil || evidence == nil {
+		return nil, fmt.Errorf("native settlement evidence is unavailable")
+	}
 	client := p.l1IndexerClient.getActiveIndexer()
 	headers := nativeSettlementBitcoinHeaders{client: client}
-	evidence := scope.evidence
 	tip, err := evidence.GetTip()
 	if err != nil || tip == nil || tip.Height <= 0 || tip.BlockHash == "" {
 		return nil, fmt.Errorf("native settlement Bitcoin tip unavailable: %w", err)

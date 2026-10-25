@@ -253,32 +253,10 @@ func (p *Manager) nativeForceCloseCompletedLocked(resv *ClosingReservation) erro
 // pool. Never broadcast that partial transaction or treat mempool presence as
 // proof that the mapped supply was actually burnt.
 func (p *Manager) importPeerNativeForceCloseLocked(resv *ClosingReservation, actual *wire.MsgTx) error {
-	remote := resv.Channel.RemoteCommitment
-	if remote == nil || remote.CommitTx == nil || remote.CommitTx.TxID() != actual.TxID() {
-		return fmt.Errorf("peer native force-close commitment changed")
-	}
-	if remote.DeAnchorTx != nil {
-		rpc := p.GetIndexerRPCClient_SatsNet()
-		if rpc == nil || !rpc.IsTxConfirmed(remote.DeAnchorTx.TxID()) {
-			return fmt.Errorf("peer native force-close descending transaction is awaiting confirmation")
-		}
-		raw, err := rpc.GetRawTx(remote.DeAnchorTx.TxID())
-		if err != nil {
-			return err
-		}
-		confirmed, err := DecodeMsgTx_SatsNet(raw)
-		if err != nil || confirmed.TxID() != remote.DeAnchorTx.TxID() {
-			return fmt.Errorf("peer native force-close descending transaction is unavailable")
-		}
-		next := resv.ClosingDataInDB
-		next.DeAnchorTx = confirmed
-		if err := p.persistNativeForceCloseLocked(resv, next, resv.Channel.Status); err != nil {
-			return err
-		}
-	}
-	if err := p.ImportSTPChannelSettlement(actual, remote.AssetProofs); err != nil {
+	if err := p.importPeerNativeForceCloseMainLocked(resv, actual); err != nil {
 		return err
 	}
+	remote := resv.Channel.RemoteCommitment
 	// Server commitments can return client assets through a distinct signed
 	// other-sweep. Its actual confirmed witness and proof are a separate receipt;
 	// importing the commitment alone must not complete the client's recovery.
@@ -304,6 +282,170 @@ func (p *Manager) importPeerNativeForceCloseLocked(resv *ClosingReservation, act
 	return nil
 }
 
+// Importing the current peer main and its paired burn is distinct from
+// completing a client-selected withdrawal of the separate Other receipts.
+func (p *Manager) importPeerNativeForceCloseMainLocked(resv *ClosingReservation, actual *wire.MsgTx) error {
+	remote := resv.Channel.RemoteCommitment
+	if remote == nil || remote.CommitTx == nil || remote.CommitTx.TxID() != actual.TxID() {
+		return fmt.Errorf("peer native force-close commitment changed")
+	}
+	if remote.DeAnchorTx != nil {
+		rpc := p.GetIndexerRPCClient_SatsNet()
+		if rpc == nil || !rpc.IsTxConfirmed(remote.DeAnchorTx.TxID()) {
+			return fmt.Errorf("peer native force-close descending transaction is awaiting confirmation")
+		}
+		raw, err := rpc.GetRawTx(remote.DeAnchorTx.TxID())
+		if err != nil {
+			return err
+		}
+		confirmed, err := DecodeMsgTx_SatsNet(raw)
+		if err != nil || confirmed.TxID() != remote.DeAnchorTx.TxID() {
+			return fmt.Errorf("peer native force-close descending transaction is unavailable")
+		}
+		next := resv.ClosingDataInDB
+		next.DeAnchorTx = confirmed
+		if err := p.persistNativeForceCloseLocked(resv, next, resv.Channel.Status); err != nil {
+			return err
+		}
+	}
+	return p.ImportSTPChannelSettlement(actual, remote.AssetProofs)
+}
+
+// Old observations may already contain Others, including an earlier broadcast
+// with an unknown outcome. Keep that durable record unchanged, but never grant
+// it withdrawal authority merely because its phase says SWEEP_BROADCASTED.
+func peerNativeObservationPackageLocked(resv *ClosingReservation) ([]*wire.MsgTx, bool, error) {
+	channel, w := resv.Channel, resv.LocalWallet()
+	remote := channel.RemoteCommitment
+	if resv.Id == 0 || resv.ChannelId != channel.ChannelId || channel.UpdateTime != resv.Id ||
+		w == nil || resv.WalletId != w.GetWalletId() || channel.LocalWalletId != w.GetId() ||
+		channel.LocalChanCfg.WalletId != w.GetSubAccount() || channel.LocalChanCfg.PaymentKey == nil ||
+		w.GetPaymentPubKey() == nil || !channel.LocalChanCfg.PaymentKey.IsEqual(w.GetPaymentPubKey()) ||
+		remote == nil || remote.CommitTx == nil || resv.CloseTx == nil ||
+		remote.CommitTx.TxID() != resv.CloseTx.TxID() || !equalSTPAssetProofs(resv.AssetProofs, remote.AssetProofs) {
+		return nil, false, fmt.Errorf("peer native observation changed channel, account or current server parent")
+	}
+	frozen, err := nativeForceClosePackage(&resv.ClosingDataInDB)
+	if err != nil {
+		return nil, false, err
+	}
+	main := resv.ClosingDataInDB
+	main.PreTxs = append([]*wire.MsgTx{resv.CloseTx}, remote.NextTxs...)
+	txs, err := nativeForceClosePackage(&main)
+	if err != nil {
+		return nil, false, err
+	}
+	if equalSTPBitcoinChain(frozen, txs) {
+		return txs, false, nil
+	}
+	legacy := main
+	legacy.PreTxs = appendCommitmentOtherTxs(append([]*wire.MsgTx(nil), txs...), remote)
+	old, err := nativeForceClosePackage(&legacy)
+	if err != nil || !equalSTPBitcoinChain(frozen, old) {
+		return nil, false, fmt.Errorf("peer native observation has an unknown durable package")
+	}
+	return txs, true, nil
+}
+
+func (p *Manager) retryPeerNativeObservationLocked(resv *ClosingReservation) error {
+	txs, legacyWithdrawal, err := peerNativeObservationPackageLocked(resv)
+	if err != nil {
+		return err
+	}
+	actual, err := p.confirmedNativeCloseTransaction(resv)
+	if err != nil {
+		return err // Do not publish any successor before this exact parent confirms.
+	}
+	if !equalSTPBitcoinChain([]*wire.MsgTx{actual}, []*wire.MsgTx{resv.CloseTx}) {
+		return fmt.Errorf("peer native observation canonical server witness changed")
+	}
+	fetcher := resv.Channel.GetCommitmentPrefetchor()
+	AddTxOutputsToPrevFetcher(fetcher, actual)
+	for _, tx := range txs[1:] {
+		if err := VerifySignedTx(tx, fetcher); err != nil {
+			return fmt.Errorf("peer native protocol successor is not fully signed: %w", err)
+		}
+		AddTxOutputsToPrevFetcher(fetcher, tx)
+	}
+	if _, err := p.broadcastPunishPackage(txs, "peer native protocol successors"); err != nil {
+		return err
+	}
+	confirmed := txs
+	if legacyWithdrawal {
+		// Never infer that an old child did not execute from a missing lookup.
+		// Until every original dependency is confirmed, retaining this pending
+		// phase also keeps the existing C1 closed-channel gate from rebuilding.
+		confirmed, err = nativeForceClosePackage(&resv.ClosingDataInDB)
+		if err != nil {
+			return err
+		}
+	}
+	for _, tx := range confirmed {
+		if !p.GetIndexerRPCClient().IsTxConfirmed(tx.TxID()) {
+			if legacyWithdrawal {
+				// A different spender is a conflict, not permission to rebuild or
+				// publish the old recovery again. An unavailable query stays pending.
+				for _, input := range tx.TxIn {
+					if input == nil {
+						return fmt.Errorf("previous peer client recovery has a nil input")
+					}
+					spender, lookupErr := p.GetIndexerRPCClient().GetUtxoSpentTx(input.PreviousOutPoint.String())
+					if lookupErr != nil {
+						return fmt.Errorf("previous peer client recovery outcome is unresolved: %w", lookupErr)
+					}
+					if spender != "" && spender != tx.TxID() {
+						return fmt.Errorf("previous peer client recovery conflicts with spender %s", spender)
+					}
+				}
+				if raw, lookupErr := p.GetIndexerRPCClient().GetRawTx(tx.TxID()); lookupErr == nil {
+					canonical, decodeErr := DecodeMsgTx(raw)
+					if decodeErr != nil || !equalSTPBitcoinChain([]*wire.MsgTx{canonical}, []*wire.MsgTx{tx}) {
+						return fmt.Errorf("previous peer client recovery canonical witness changed")
+					}
+					return fmt.Errorf("previous peer client recovery is visible but awaiting confirmation and receipt validation")
+				}
+			}
+			return fmt.Errorf("peer native observation dependency is unresolved; original package retained")
+		}
+		raw, err := p.GetIndexerRPCClient().GetRawTx(tx.TxID())
+		if err != nil {
+			return err
+		}
+		canonical, err := DecodeMsgTx(raw)
+		if err != nil || !equalSTPBitcoinChain([]*wire.MsgTx{canonical}, []*wire.MsgTx{tx}) {
+			return fmt.Errorf("peer native observation canonical dependency changed")
+		}
+	}
+	if err := p.importSTPNativePreparedFunding(resv.Channel); err != nil {
+		return err
+	}
+	if legacyWithdrawal {
+		err = p.importPeerNativeForceCloseLocked(resv, actual)
+	} else {
+		err = p.importPeerNativeForceCloseMainLocked(resv, actual)
+	}
+	if err != nil {
+		return err
+	}
+	if err := p.persistNativeForceCloseLocked(resv, resv.ClosingDataInDB, CS_CLOSED_FORCELY); err != nil {
+		return err
+	}
+	p.SendMessageToUpper(MSG_CHANNEL_FORCELY_CLOSED, actual.TxID())
+	message := "Peer force-close observed; no client withdrawal was requested"
+	if legacyWithdrawal {
+		message = "Peer force-close and previously published recovery confirmed; no new withdrawal was broadcast"
+	}
+	p.updateOperationLogByReservationBestEffort(RESV_TYPE_CLOSE, resv.Id, OperationLogUpdate{
+		Status: OperationLogSucceeded, Message: message, TxID: actual.TxID(),
+		Result: map[string]string{"channel_id": resv.ChannelId, "txid": actual.TxID()},
+	})
+	p.DelResvWithId(resv.Id)
+	if tower := p.GetWatchTower(); tower != nil {
+		return tower.CleanAllCommitTx(resv.ChannelId)
+	}
+	return nil
+}
+
 // RetryNativeForceClose resumes only the exact durable package. It never
 // recreates a broadcast sweep with a new locktime. Server CSV signing remains
 // with the server/bootstrap signer; its completed package must then be handed
@@ -312,10 +454,19 @@ func (p *Manager) RetryNativeForceClose(resv *ClosingReservation) (bool, error) 
 	if !nativeForceClose(resv) {
 		return false, nil
 	}
+	// This entrypoint is also called directly by peer-close observation. Route
+	// the explicit owner before taking locks, just as the ordinary monitor does.
+	if handled, err := p.retryClosedWithdrawalChild(resv); handled {
+		return true, err
+	}
 	resv.Lock()
 	defer resv.Unlock()
 	resv.Channel.Mutex.Lock()
 	defer resv.Channel.Mutex.Unlock()
+	if !resv.IsInitiator && resv.Channel.IsInitiator &&
+		resv.Channel.Status >= CS_CLOSE_FORCELY_BROADCASTED && resv.Channel.Status <= CS_CLOSE_FORCELY_SWEEP_CONFIRMED {
+		return true, p.retryPeerNativeObservationLocked(resv)
+	}
 	switch resv.Channel.Status {
 	case CS_CLOSE_FORCELY_BROADCASTED:
 		err := p.broadcastNativeForceCloseLocked(resv)

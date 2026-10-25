@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/rgb11/anchors"
 	coreconsignment "github.com/sat20-labs/rgb11/consignment"
@@ -19,12 +20,79 @@ import (
 
 // RGB quantities are client validated. A Bitcoin/indexer output without an
 // RGB entry is not a proof that the carrier has no RGB state.
-type rgb11STPProtocol struct{ stpUTXORecovery }
+type rgb11STPProtocol struct {
+	stpUTXORecovery
+	view *stpRGBEvidenceView
+}
+
+// Bind only a value copy for this reservation. Registered protocols and the
+// manager's network provider never acquire reservation-local mutable state.
+func stpProtocolWithRGBView(protocol STPAssetProtocol, view *stpRGBEvidenceView) STPAssetProtocol {
+	if rgb, ok := protocol.(rgb11STPProtocol); ok {
+		rgb.view = view
+		return rgb
+	}
+	return protocol
+}
+
+func (protocol rgb11STPProtocol) evidence(p *Manager) (rgb11wallet.BitcoinEvidenceProvider, error) {
+	if protocol.view != nil {
+		return protocol.view, nil
+	}
+	return stpRGB11Evidence(p)
+}
+
+// Only internal construction reaches this helper. Peer proof receipt must
+// independently rebuild the transaction rather than grant Prepared status.
+func (protocol rgb11STPProtocol) validateConstructedPackage(pkg *rgb11wallet.ChannelPackage, tx *wire.MsgTx,
+	evidence rgb11wallet.BitcoinEvidenceProvider) ([]byte, error) {
+	if err := completeSTPRGBView(protocol.view); err != nil {
+		return nil, err
+	}
+	raw, err := rgb11wallet.EncodeChannelPackage(pkg)
+	if err != nil {
+		return nil, err
+	}
+	if protocol.view != nil {
+		if err := protocol.view.addLocallyConstructed(tx, raw); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := rgb11wallet.ValidateChannelPackage(context.Background(), pkg, tx, evidence); err != nil {
+		return nil, err
+	}
+	if err := completeSTPRGBView(protocol.view); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+func completeSTPRGBView(view *stpRGBEvidenceView) error {
+	if view != nil {
+		return view.complete()
+	}
+	return nil
+}
+
+func rgbReservationView(info *RevocationInfo) (*stpRGBEvidenceView, error) {
+	if info == nil || info.Channel == nil {
+		return nil, fmt.Errorf("missing reservation RGB evidence context")
+	}
+	if info.RGBEvidence != nil {
+		view := info.RGBEvidence.useView()
+		return view, view.complete()
+	}
+	if hasSTPRGBClientRecoveryContext(info.Channel, info.Channel.LocalCommitment) ||
+		hasSTPRGBClientRecoveryContext(info.Channel, info.Channel.RemoteCommitment) || info.Channel.HasProtocolAsset("rgb11") {
+		return nil, errSTPRGBEvidenceMissing
+	}
+	return nil, nil
+}
 
 func (rgb11STPProtocol) Protocol() string             { return rgb11wallet.Protocol }
 func (rgb11STPProtocol) BindingSat(*AssetName) uint32 { return 0 }
 
-func (rgb11STPProtocol) AssetNameN(precision, _ int) int { return precision }
+func (rgb11STPProtocol) AssetNameN(_, _ int) int { return 0 }
 
 func (rgb11STPProtocol) ValidateAsset(name *indexer.AssetName, operation STPAssetOperation) error {
 	if err := validateSTPFungibleAsset(name, rgb11wallet.Protocol, operation); err != nil {
@@ -139,8 +207,15 @@ func (protocol rgb11STPProtocol) PrepareInputs(p *Manager, req STPAssetInputRequ
 		if err != nil {
 			return nil, err
 		}
-		validated, err := rgb11wallet.ValidateChannelFunding(context.Background(), source, manager.evidence, nativeproof.Current, GetChainParam().Name)
+		evidence := manager.evidence
+		if protocol.view != nil {
+			evidence = protocol.view
+		}
+		validated, err := rgb11wallet.ValidateChannelFunding(context.Background(), source, evidence, nativeproof.Current, GetChainParam().Name)
 		if err != nil {
+			return nil, err
+		}
+		if err := completeSTPRGBView(protocol.view); err != nil {
 			return nil, err
 		}
 		if validated.Value != source.Value || validated.Asset.Amount.Precision != req.Amount.Precision {
@@ -247,9 +322,15 @@ func (protocol rgb11STPProtocol) PrepareChannelFunding(p *Manager, channel *Chan
 		if _, exists := byPoint[input.OutPointStr]; exists {
 			continue
 		}
-		source, err := manager.stpRGB11Funding(input, &asset.AssetName)
+		source, captured, err := protocol.closedChannelFunding(input, &asset.AssetName)
 		if err != nil {
 			return nil, err
+		}
+		if !captured {
+			source, err = manager.stpRGB11Funding(input, &asset.AssetName)
+			if err != nil {
+				return nil, err
+			}
 		}
 		byPoint[source.OutPoint] = source
 	}
@@ -278,7 +359,7 @@ func (protocol rgb11STPProtocol) ValidateChannelFunding(p *Manager, channel *Cha
 	if !bytes.Equal(old.LastPackage, incoming.LastPackage) {
 		return nil, fmt.Errorf("RGB11 funding changed the previous lifecycle obligation")
 	}
-	evidence, err := stpRGB11Evidence(p)
+	evidence, err := protocol.evidence(p)
 	if err != nil {
 		return nil, err
 	}
@@ -326,7 +407,10 @@ func (protocol rgb11STPProtocol) ValidateChannelFunding(p *Manager, channel *Cha
 			if err != nil {
 				return nil, err
 			}
-			if validated.Value != source.Value || validated.Asset.Amount.Precision != asset.N {
+			if err := completeSTPRGBView(protocol.view); err != nil {
+				return nil, err
+			}
+			if validated.Value != source.Value || validated.Asset.Amount.Precision != source.Amount.Precision {
 				return nil, fmt.Errorf("RGB11 funding value or precision mismatch")
 			}
 			input.Assets = indexer.TxAssets{validated.Asset}
@@ -345,33 +429,84 @@ func (protocol rgb11STPProtocol) ValidateChannelFunding(p *Manager, channel *Cha
 // contract carried by the same Bitcoin output. Check every local account;
 // peers' public indexers cannot establish the absence of native allocations.
 func verifySTPRGB11KnownCoassets(p *Manager, sources map[string]indexer.AssetName) error {
-	for _, account := range p.localRGB11Accounts() {
+	accounts := p.localRGB11Accounts()
+	managers := make([]*rgb11Manager, 0, len(accounts))
+	for _, account := range accounts {
 		manager, err := p.newScopedRGB11Manager(account)
 		if err != nil {
 			return err
 		}
-		proofs, err := manager.projectionStore.ListProofs()
-		if err != nil {
-			return err
-		}
-		for _, proof := range proofs {
-			if proof == nil {
-				continue
+		managers = append(managers, manager)
+	}
+	// Scope construction may read other local state. Only the coherent proof
+	// read itself belongs under this short real-owner reservation gate.
+	owner := p
+	if p.rgbManager != nil {
+		owner = p.rgbManager.rgb11ReservationOwner()
+	}
+	err := func() error {
+		owner.rgbReservationMu.RLock()
+		defer owner.rgbReservationMu.RUnlock()
+		for _, manager := range managers {
+			proofs, err := manager.projectionStore.ListProofs()
+			if err != nil {
+				return err
 			}
-			if expected, exists := sources[proof.OutPoint]; exists && expected != proof.AssetName {
-				return ErrRGB11AssetPreservation
+			for _, proof := range proofs {
+				if proof == nil {
+					continue
+				}
+				if expected, exists := sources[proof.OutPoint]; exists && expected != proof.AssetName {
+					return ErrRGB11AssetPreservation
+				}
 			}
 		}
+		return nil
+	}()
+	if err != nil {
+		return err
+	}
+	if !sameSTPRGB11AccountKeys(accounts, p.localRGB11Accounts()) {
+		return fmt.Errorf("RGB11 local coasset account set changed during validation")
 	}
 	return nil
 }
 
-func (rgb11STPProtocol) TickerFromFunding(p *Manager, name *indexer.AssetName, raw []byte) (*indexer.TickerInfo, error) {
+func sameSTPRGB11AccountKeys(left, right []localRGB11Account) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	keys := make(map[string]bool, len(left))
+	key := func(account localRGB11Account) string {
+		if account.Wallet == nil || account.Wallet.GetPubKey() == nil || account.Wallet.GetPaymentPubKey() == nil {
+			return ""
+		}
+		return fmt.Sprintf("%d/%d/%s/%x/%x", account.WalletID, account.AccountIndex, account.Address,
+			account.Wallet.GetPubKey().SerializeCompressed(), account.Wallet.GetPaymentPubKey().SerializeCompressed())
+	}
+	for _, account := range left {
+		identity := key(account)
+		if identity == "" || keys[identity] {
+			return false
+		}
+		keys[identity] = true
+	}
+	for _, account := range right {
+		identity := key(account)
+		if !keys[identity] {
+			return false
+		}
+		delete(keys, identity)
+	}
+	return len(keys) == 0
+}
+
+func (protocol rgb11STPProtocol) TickerFromFunding(p *Manager, name *indexer.AssetName, raw []byte) (*indexer.TickerInfo, error) {
 	inventory, err := rgb11wallet.DecodeChannelInventory(raw)
 	if err != nil {
 		return nil, err
 	}
-	evidence, err := stpRGB11Evidence(p)
+	evidence, err := protocol.evidence(p)
 	if err != nil {
 		return nil, err
 	}
@@ -397,6 +532,9 @@ func (rgb11STPProtocol) TickerFromFunding(p *Manager, name *indexer.AssetName, r
 		}
 		history, err := rgb11wallet.NewNativeConsensusValidatorWithReveals(reveals...).ValidateHistoricalConsignmentReport(context.Background(), source.Consignment, evidence)
 		if err != nil {
+			return nil, err
+		}
+		if err := completeSTPRGBView(protocol.view); err != nil {
 			return nil, err
 		}
 		info, err := rgb11TickerInfoFromValidatedContract(container, history.MaterialReceipt)
@@ -425,7 +563,8 @@ func (rgb11STPProtocol) VerifyInput(asset *AssetName, input *TxOutput) error {
 		return fmt.Errorf("RGB11 input has no proven positive allocation")
 	}
 	for _, allocation := range input.Assets {
-		if allocation.Name != asset.AssetName || allocation.BindingSat != 0 || allocation.Amount.Precision != asset.N {
+		if allocation.Name != asset.AssetName || allocation.BindingSat != 0 || allocation.Amount.Validate() != nil ||
+			allocation.Amount.Sign() <= 0 {
 			return fmt.Errorf("invalid RGB11 input asset view")
 		}
 	}
@@ -433,7 +572,7 @@ func (rgb11STPProtocol) VerifyInput(asset *AssetName, input *TxOutput) error {
 }
 
 func (rgb11STPProtocol) SplitOutputs(inputs []*TxOutput, asset *AssetName, value int64, amount *Decimal) (*TxOutput, *TxOutput, error) {
-	if asset == nil || amount == nil || amount.Validate() != nil || amount.Sign() <= 0 || amount.Precision != asset.N {
+	if asset == nil || amount == nil || amount.Validate() != nil || amount.Sign() <= 0 {
 		return nil, nil, fmt.Errorf("invalid RGB11 split amount")
 	}
 	total := indexer.NewDecimal(0, amount.Precision)
@@ -442,8 +581,23 @@ func (rgb11STPProtocol) SplitOutputs(inputs []*TxOutput, asset *AssetName, value
 		if input == nil || HasMultiAsset(input, &asset.AssetName) {
 			return nil, nil, ErrRGB11AssetPreservation
 		}
+		// Plain BTC contributes sats only; metadata does not prove RGB absence.
+		// Existing SDK input composition and locker protections remain required.
+		if len(input.Assets) == 0 {
+			if len(input.Invalids) != 0 || len(input.Offsets) != 0 || len(input.SatBindingMap) != 0 {
+				return nil, nil, ErrRGB11AssetPreservation
+			}
+			sats += input.Value()
+			continue
+		}
+		allocation, err := input.Assets.Find(&asset.AssetName)
+		inputAmount := input.GetAsset(&asset.AssetName)
+		if err != nil || allocation.BindingSat != 0 || inputAmount.Validate() != nil ||
+			inputAmount.Sign() <= 0 || inputAmount.Precision != amount.Precision {
+			return nil, nil, fmt.Errorf("RGB11 split input has a different quantity precision or binding")
+		}
 		sats += input.Value()
-		total = total.Add(input.GetAsset(&asset.AssetName))
+		total = total.Add(inputAmount)
 	}
 	if total.Cmp(amount) < 0 || value < 330 || sats < value {
 		return nil, nil, fmt.Errorf("insufficient RGB11 split inputs")

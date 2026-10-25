@@ -25,7 +25,8 @@ func (p *NodeClient) prepareNativeCommitmentRecovery(info *RevocationInfo,
 	if info == nil || info.Channel == nil {
 		return fmt.Errorf("missing commitment recovery context")
 	}
-	if !needsSTPNativeOtherExchange(info.Channel, info.Channel.RemoteCommitment) {
+	if !needsSTPNativeOtherExchange(info.Channel, info.Channel.RemoteCommitment) &&
+		!hasSTPRGBClientRecoveryContext(info.Channel, info.Channel.RemoteCommitment) {
 		return nil
 	}
 	manager := info.Channel.manager
@@ -254,7 +255,8 @@ func (p *NodeClient) SendLockCommitSigAndRevokeReservationReq(info *PaymentReser
 		if resp.Id != info.Id || resp.Rev != nil || len(resp.LockSig) != 0 {
 			return nil, fmt.Errorf("invalid recovery-only lock response")
 		}
-		return &wwire.CommitSigInfo{RecoveryOnly: resp.RecoveryOnly, RecoveryCommitTxID: resp.RecoveryCommitTxID, NativeOtherTxs: resp.NativeOtherTxs}, nil
+		return &wwire.CommitSigInfo{RecoveryOnly: resp.RecoveryOnly, RecoveryCommitTxID: resp.RecoveryCommitTxID,
+			NativeOtherTxs: resp.NativeOtherTxs, RGBRecoveryTxs: resp.RGBRecoveryTxs}, nil
 	}); err != nil {
 		return err
 	}

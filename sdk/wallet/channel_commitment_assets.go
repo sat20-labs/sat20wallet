@@ -35,6 +35,16 @@ func (p *Manager) CreateCommitTxWithOthers(whoseCommit int, channel *Channel, ke
 
 func (p *Manager) CreateCommitTx3(whoseCommit int, channel *Channel, keyRing *CommitmentKeyRing,
 	bootstrapKey *secp256k1.PublicKey, feeRate int64) (*wire.MsgTx, []*InscribeResv, []*InscribeResv, []*CommitmentTx, error) {
+	return p.createCommitTxWithRGBView(whoseCommit, channel, keyRing, bootstrapKey, feeRate, nil)
+}
+
+func (p *Manager) createCommitTxWithRGBView(whoseCommit int, channel *Channel, keyRing *CommitmentKeyRing,
+	bootstrapKey *secp256k1.PublicKey, feeRate int64, view *stpRGBEvidenceView) (*wire.MsgTx, []*InscribeResv, []*InscribeResv, []*CommitmentTx, error) {
+	if view != nil {
+		if err := view.bindConstructedChannel(channel); err != nil {
+			return nil, nil, nil, nil, err
+		}
+	}
 	serverCommit := IsServerCommitment(whoseCommit, channel)
 
 	// serverCommit determines script shape, while SelectCommitBalances maps
@@ -62,7 +72,7 @@ func (p *Manager) CreateCommitTx3(whoseCommit int, channel *Channel, keyRing *Co
 		WitnessScript: delayScript.WitnessScriptToSign(), RevealKey: keyRing.GetRevealKey(),
 		KeyRing: keyRing, FeeRate: feeRate, Weight: &weightEstimate, ServerCommit: serverCommit,
 	}
-	assetPlans, err := p.planSTPCommitmentAssets(assetReq)
+	assetPlans, err := p.planSTPCommitmentAssetsWithRGBView(assetReq, view)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
@@ -151,27 +161,55 @@ func (p *Manager) CreateCommitTx3(whoseCommit int, channel *Channel, keyRing *Co
 		next = append(next, item.plan.NextTxs...)
 		others = append(others, item.plan.OtherTxs...)
 	}
-	if serverCommit {
-		// STP chooses the recovery branch and spending script; each protocol
-		// materializes the assets required by that branch.
-		sweeps, err := p.createServerCommitmentOtherSweeps(channel, commitTx, assetPlans, recoveryFeeIndexes, keyRing.GetRevealKey(), feeRate)
-		if err != nil {
-			return nil, nil, nil, nil, err
-		}
-		others = append(others, sweeps...)
-	}
-	if err := verifySTPCommitmentAssets(assetReq, assetPlans); err != nil {
-		return nil, nil, nil, nil, err
-	}
 	proofs, err := collectSTPAssetProofs(assetPlans)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
+	var rgbRecovery *CommitmentTx
+	if serverCommit {
+		if len(proofs["rgb11"]) != 0 || len(channel.AssetFunding["rgb11"]) != 0 {
+			// RGB keeps its separately signed client recovery child in the
+			// RGB-only field; it must not sweep other protocols implicitly.
+			rgbRecovery, err = p.createRGBClientRecoveryWithView(channel, commitTx, assetPlans, recoveryFeeIndexes, proofs, feeRate, view)
+			if err != nil {
+				return nil, nil, nil, nil, err
+			}
+		} else {
+			// Pre-sign the client recovery version for this server parent.
+			// Its storage does not authorize adding it to the parent's local
+			// force-close broadcast; peer-confirmed recovery uses it later.
+			sweeps, err := p.createServerCommitmentOtherSweeps(channel, commitTx, assetPlans, recoveryFeeIndexes, keyRing.GetRevealKey(), feeRate)
+			if err != nil {
+				return nil, nil, nil, nil, err
+			}
+			others = append(others, sweeps...)
+		}
+	}
+	if err := verifySTPCommitmentAssets(assetReq, assetPlans); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if err := completeSTPRGBView(view); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if serverCommit && len(proofs["rgb11"]) != 0 {
+		// Adopted private funding has no new Bitcoin splice package. Retain
+		// this independently verified fresh server branch as its journal in
+		// the same successful publication as the commitment sidecars below.
+		journal, err := initialSTPRGBChannelJournal(channel, proofs["rgb11"])
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
+		if len(journal) != 0 {
+			channel.AssetFunding["rgb11"] = journal
+		}
+	}
 	if whoseCommit == 0 {
 		channel.LocalCommitment.AssetProofs = proofs
+		channel.LocalCommitment.RGBClientRecovery = rgbRecovery
 		channel.LocalCommitment.RecoveryFeeIndexes = append([]uint32(nil), recoveryFeeIndexes...)
 	} else {
 		channel.RemoteCommitment.AssetProofs = proofs
+		channel.RemoteCommitment.RGBClientRecovery = rgbRecovery
 		channel.RemoteCommitment.RecoveryFeeIndexes = append([]uint32(nil), recoveryFeeIndexes...)
 	}
 
@@ -181,9 +219,14 @@ func (p *Manager) CreateCommitTx3(whoseCommit int, channel *Channel, keyRing *Co
 func (p *Manager) createServerCommitmentOtherSweeps(channel *Channel, commitTx *wire.MsgTx,
 	assetPlans []stpPlannedAsset, recoveryFeeIndexes []uint32, revealPrivKey []byte, feeRate int64) ([]*CommitmentTx, error) {
 
-	// When a server commitment pays client-owned assets to the channel script,
-	// client recovery needs an additional sweep chain. This keeps the client
-	// independent from DKVS/server backup when recovering those assets.
+	// A server commitment keeps client assets at the channel script. Build
+	// their pre-signed recovery to the client payment key from this exact
+	// commitTx's outputs, not from the original funding inputs. The topology
+	// is main commit -> [Other.PrevTxs] -> Other.CommitTx: Prev is local to
+	// that package and can itself follow the main parent. The client uses it
+	// after observing the server parent confirmed, not in a local main-close
+	// broadcast. Construction, signatures and durable storage remain separate
+	// from that later recovery trigger.
 	channelPkScript := channel.GetChannelPkScript()
 	channelAddr, err := AddrFromPkScript(channelPkScript)
 	if err != nil {

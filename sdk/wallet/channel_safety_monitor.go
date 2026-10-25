@@ -210,7 +210,12 @@ func (p *Manager) finalizePeerForceClose(channel *Channel, generation channelSaf
 		}
 		packageTxs := []*wire.MsgTx{actual}
 		packageTxs = append(packageTxs, channel.RemoteCommitment.NextTxs...)
-		packageTxs = appendCommitmentOtherTxs(packageTxs, channel.RemoteCommitment)
+		// Observing the server's current main is not the client's choice to
+		// withdraw. Protocol successors remain automatic; signed Others and
+		// RGBClientRecovery stay intact on the commitment for an explicit choice.
+		if !channel.IsInitiator {
+			packageTxs = appendCommitmentOtherTxs(packageTxs, channel.RemoteCommitment)
+		}
 		fetcher := channel.GetCommitmentPrefetchor()
 		AddTxOutputsToPrevFetcher(fetcher, actual)
 		for _, successor := range packageTxs[1:] {

@@ -36,7 +36,10 @@ func stpOtherTransactions(other *CommitmentTx) ([]*wire.MsgTx, error) {
 // client assets locked behind a second signature that it can withhold.
 func encodeSTPNativeOtherTransactions(channel *Channel) ([][]string, error) {
 	commitment := channel.LocalCommitment
-	if !needsSTPNativeOtherExchange(channel, commitment) {
+	// Every constructed Other needs its complete peer signatures. The native
+	// journal and close classification remain separately protocol-gated.
+	if !needsSTPNativeOtherExchange(channel, commitment) &&
+		(commitment == nil || len(commitment.Others) == 0) {
 		return nil, nil
 	}
 	if commitment == nil || commitment.CommitTx == nil {
@@ -74,8 +77,16 @@ func (p *Manager) acceptSTPNativeOtherTransactions(channel *Channel, packages []
 
 func (p *Manager) acceptSTPNativeOtherTransactionsWithJournal(channel *Channel, packages [][]string,
 	prepare func(*Channel) ([]byte, []byte, error)) error {
+	return p.acceptSTPNativeOtherTransactionsWithJournalAndRGBView(channel, packages, prepare, nil)
+}
+
+func (p *Manager) acceptSTPNativeOtherTransactionsWithJournalAndRGBView(channel *Channel, packages [][]string,
+	prepare func(*Channel) ([]byte, []byte, error), view *stpRGBEvidenceView) error {
 	commitment := channel.RemoteCommitment
-	if !needsSTPNativeOtherExchange(channel, commitment) {
+	// Share exact package/signature validation with legacy Others without
+	// enabling native journal storage or native force-close for those assets.
+	if !needsSTPNativeOtherExchange(channel, commitment) &&
+		(commitment == nil || len(commitment.Others) == 0) {
 		if len(packages) != 0 {
 			return fmt.Errorf("unexpected native other-sweep package")
 		}
@@ -118,7 +129,7 @@ func (p *Manager) acceptSTPNativeOtherTransactionsWithJournal(channel *Channel, 
 	remote := *commitment
 	remote.Others = updated
 	candidate.RemoteCommitment = &remote
-	remoteKey, remoteValue, err := p.prepareSTPNativeCommitmentWrite(candidate, &remote, "remote")
+	remoteKey, remoteValue, err := p.prepareSTPNativeCommitmentWriteWithRGBView(candidate, &remote, "remote", view)
 	if err != nil {
 		return err
 	}
@@ -147,7 +158,7 @@ func (p *Manager) acceptSTPNativeOtherTransactionsWithJournal(channel *Channel, 
 				if err := p.verifySTPNativeCommitmentPersisted(candidate, candidate.LocalCommitment); err != nil {
 					return err
 				}
-				localKey, localValue, err = p.prepareSTPNativeCommitmentWrite(candidate, candidate.LocalCommitment, "local")
+				localKey, localValue, err = p.prepareSTPNativeCommitmentWriteWithRGBView(candidate, candidate.LocalCommitment, "local", view)
 				if err != nil {
 					return err
 				}
@@ -155,6 +166,9 @@ func (p *Manager) acceptSTPNativeOtherTransactionsWithJournal(channel *Channel, 
 		} else if !errors.Is(err, indexer.ErrKeyNotFound) {
 			return err
 		}
+	}
+	if err := completeSTPRGBView(view); err != nil {
+		return err
 	}
 	if len(remoteKey) != 0 || len(extraKey) != 0 {
 		// Recovery loads the local journal's channel snapshot. Publishing the

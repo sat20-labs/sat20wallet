@@ -2,10 +2,20 @@ package wallet
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
 )
+
+var errChannelProtocolRejected = errors.New("channel protocol request rejected")
+
+// Classify only a parsed Open rejection while preserving its historical text.
+// Other existing channel operations keep their original error behavior.
+type channelOpenRejectedError string
+
+func (e channelOpenRejectedError) Error() string        { return string(e) }
+func (e channelOpenRejectedError) Is(target error) bool { return target == errChannelProtocolRejected }
 
 func (p *NodeClient) postChannelProtocolReq(path string, req any, resp any, op string) error {
 	buff, err := json.Marshal(req)
@@ -31,6 +41,9 @@ func (p *NodeClient) postChannelProtocolReq(path string, req any, resp any, op s
 	}
 	if base.Code != 0 {
 		Log.Errorf("%s failed, %s", op, base.Msg)
+		if path == wwire.STP_FUNDING_REQ {
+			return channelOpenRejectedError(base.Msg)
+		}
 		return fmt.Errorf("%s", base.Msg)
 	}
 

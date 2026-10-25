@@ -85,14 +85,20 @@ func (rgb11STPProtocol) BuildCommitment(_ *Manager, req STPAssetCommitmentReques
 	if asset == nil {
 		return nil, fmt.Errorf("missing RGB11 funding asset identity")
 	}
-	total := indexer.NewDecimal(0, asset.N)
+	if len(inventory.Sources) == 0 {
+		return nil, fmt.Errorf("RGB11 funding has no native quantity metadata")
+	}
+	precision := inventory.Sources[0].Amount.Precision
+	total := indexer.NewDecimal(0, precision)
 	for _, input := range funding[0].Outputs {
 		if input == nil {
 			return nil, fmt.Errorf("nil RGB11 channel source")
 		}
 		source, exists := byPoint[input.OutPointStr]
-		if !exists || source.AssetName != asset.AssetName || source.Amount.Precision != asset.N ||
-			source.Amount.Cmp(input.GetAsset(&asset.AssetName)) != 0 || source.Value != input.Value() ||
+		inputAmount := input.GetAsset(&asset.AssetName)
+		if !exists || source.AssetName != asset.AssetName || source.Amount.Precision != precision ||
+			inputAmount.Validate() != nil || inputAmount.Precision != precision ||
+			source.Amount.Cmp(inputAmount) != 0 || source.Value != input.Value() ||
 			!bytes.Equal(source.PkScript, input.OutValue.PkScript) || !bytes.Equal(source.PkScript, req.Channel.GetChannelPkScript()) {
 			return nil, fmt.Errorf("RGB11 channel funding differs from its proof inventory")
 		}
@@ -105,7 +111,7 @@ func (rgb11STPProtocol) BuildCommitment(_ *Manager, req STPAssetCommitmentReques
 	if len(byPoint) != 0 || len(state.Sources) == 0 {
 		return nil, fmt.Errorf("RGB11 inventory contains unaccounted sources")
 	}
-	assigned := indexer.NewDecimal(0, asset.N)
+	assigned := indexer.NewDecimal(0, precision)
 	for i, side := range []struct {
 		balance map[AssetName]*Decimal
 		script  []byte
@@ -116,7 +122,7 @@ func (rgb11STPProtocol) BuildCommitment(_ *Manager, req STPAssetCommitmentReques
 		if amount == nil || amount.Sign() == 0 {
 			continue
 		}
-		if amount.Validate() != nil || amount.Precision != asset.N || amount.Sign() < 0 || len(side.script) == 0 {
+		if amount.Validate() != nil || amount.Precision != precision || amount.Sign() < 0 || len(side.script) == 0 {
 			return nil, fmt.Errorf("invalid RGB11 commitment balance")
 		}
 		output := wire.NewTxOut(330, append([]byte(nil), side.script...))
@@ -145,12 +151,12 @@ func (rgb11STPProtocol) BuildCommitment(_ *Manager, req STPAssetCommitmentReques
 	return plan, nil
 }
 
-func (rgb11STPProtocol) CompleteRecovery(p *Manager, req STPAssetCommitmentRequest, plan *STPAssetPlan) error {
+func (protocol rgb11STPProtocol) CompleteRecovery(p *Manager, req STPAssetCommitmentRequest, plan *STPAssetPlan) error {
 	state, ok := plan.ProtocolData.(*stpRGB11CommitPlan)
 	if !ok {
 		return nil
 	}
-	evidence, err := stpRGB11Evidence(p)
+	evidence, err := protocol.evidence(p)
 	if err != nil {
 		return err
 	}
@@ -172,10 +178,7 @@ func (rgb11STPProtocol) CompleteRecovery(p *Manager, req STPAssetCommitmentReque
 		return fmt.Errorf("build native RGB11 commitment: %w", err)
 	}
 	pkg := &rgb11wallet.ChannelPackage{Version: 1, Funding: state.Sources, Steps: []rgb11wallet.ChannelStep{*step}}
-	if _, err := rgb11wallet.ValidateChannelPackage(context.Background(), pkg, req.Tx, evidence); err != nil {
-		return err
-	}
-	raw, err := rgb11wallet.EncodeChannelPackage(pkg)
+	raw, err := protocol.validateConstructedPackage(pkg, req.Tx, evidence)
 	if err != nil {
 		return err
 	}
@@ -205,7 +208,7 @@ func (rgb11STPProtocol) Verify(req STPAssetVerification) error {
 	return nil
 }
 
-func (rgb11STPProtocol) BindSplice(p *Manager, req STPAssetSpliceRequest) error {
+func (protocol rgb11STPProtocol) BindSplice(p *Manager, req STPAssetSpliceRequest) error {
 	resv := req.Reservation
 	if resv == nil || resv.Channel == nil || req.Tx == nil || len(req.Tx.TxOut) == 0 || resv.AssetName == nil ||
 		resv.SplicingAmt == nil || resv.SplicingAmt.Sign() <= 0 {
@@ -214,7 +217,7 @@ func (rgb11STPProtocol) BindSplice(p *Manager, req STPAssetSpliceRequest) error 
 	if req.Operation != STPOpSpliceIn && req.Operation != STPOpSpliceOut {
 		return fmt.Errorf("invalid RGB11 splice operation")
 	}
-	evidence, err := stpRGB11Evidence(p)
+	evidence, err := protocol.evidence(p)
 	if err != nil {
 		return err
 	}
@@ -276,10 +279,7 @@ func (rgb11STPProtocol) BindSplice(p *Manager, req STPAssetSpliceRequest) error 
 		return err
 	}
 	pkg := &rgb11wallet.ChannelPackage{Version: 1, Funding: sources, Steps: []rgb11wallet.ChannelStep{*step}}
-	if _, err := rgb11wallet.ValidateChannelPackage(context.Background(), pkg, req.Tx, evidence); err != nil {
-		return err
-	}
-	raw, err := rgb11wallet.EncodeChannelPackage(pkg)
+	raw, err := protocol.validateConstructedPackage(pkg, req.Tx, evidence)
 	if err != nil {
 		return err
 	}
@@ -323,12 +323,12 @@ func (rgb11STPProtocol) BindSplice(p *Manager, req STPAssetSpliceRequest) error 
 	return nil
 }
 
-func (rgb11STPProtocol) VerifyChannelProof(p *Manager, channel *Channel, tx *wire.MsgTx, raw []byte, operation STPAssetOperation) ([]*TxOutput, error) {
+func (protocol rgb11STPProtocol) VerifyChannelProof(p *Manager, channel *Channel, tx *wire.MsgTx, raw []byte, operation STPAssetOperation) ([]*TxOutput, error) {
 	pkg, err := rgb11wallet.DecodeChannelPackage(raw)
 	if err != nil {
 		return nil, err
 	}
-	evidence, err := stpRGB11Evidence(p)
+	evidence, err := protocol.evidence(p)
 	if err != nil {
 		return nil, err
 	}
@@ -360,6 +360,9 @@ func (rgb11STPProtocol) VerifyChannelProof(p *Manager, channel *Channel, tx *wir
 	}
 	report, err := rgb11wallet.ValidateChannelPackage(context.Background(), pkg, tx, evidence)
 	if err != nil {
+		return nil, err
+	}
+	if err := completeSTPRGBView(protocol.view); err != nil {
 		return nil, err
 	}
 	outputs := make([]*TxOutput, len(tx.TxOut))
@@ -433,6 +436,12 @@ func (protocol rgb11STPProtocol) VerifyChannelJournalContext(p *Manager, channel
 	if err != nil {
 		return err
 	}
+	if last.Context.Operation == string(STPOpCommit) {
+		// An expansion can retain the current unbroadcast server sidecar as
+		// its lifecycle journal. Its inputs remain the active funding; its
+		// candidate outputs are not balances or spendable channel sources.
+		return protocol.validateSTPRGBCommitmentJournal(channel, inventory, pkg, tx, inventory.LastPackage)
+	}
 	// Every current source produced by that step must retain its exact public
 	// history. The final exit has none, but its last complete step stays here.
 	byPoint := make(map[string]rgb11wallet.ChannelFunding)
@@ -490,4 +499,110 @@ func sortedSTPRGB11Indexes(indexes []int) ([]int, error) {
 		}
 	}
 	return result, nil
+}
+
+// initialSTPRGBChannelJournal retains a newly validated server commitment when
+// expansion adopts an already confirmed private carrier without a new L1
+// splice. Both peers select the same server branch. A real funding/splice
+// journal remains immutable; only a journal that exactly names the current
+// server sidecar advances with its replacement, preserving local Prepared
+// provenance instead of retaining an obsolete unbroadcast commitment forever.
+// The caller publishes this result only after all protocol/layout checks pass.
+func initialSTPRGBChannelJournal(channel *Channel, raw []byte) ([]byte, error) {
+	inventory, err := stpRGB11Inventory(channel)
+	if err != nil {
+		return nil, err
+	}
+	if len(inventory.LastPackage) != 0 {
+		previous, err := rgb11wallet.DecodeChannelPackage(inventory.LastPackage)
+		if err != nil {
+			return nil, err
+		}
+		last := previous.Steps[len(previous.Steps)-1]
+		if last.Context.Branch != "server" || last.Context.Operation != string(STPOpCommit) {
+			return nil, nil // Preserve the actual funding/splice lifecycle.
+		}
+		current := channel.LocalCommitment
+		if channel.IsInitiator {
+			current = channel.RemoteCommitment
+		}
+		if current == nil || !bytes.Equal(inventory.LastPackage, current.AssetProofs[rgb11wallet.Protocol]) {
+			return nil, fmt.Errorf("RGB commitment journal differs from its current server sidecar")
+		}
+		if err := verifySTPRGB11PackageContext(channel, previous); err != nil {
+			return nil, err
+		}
+	}
+	pkg, err := rgb11wallet.DecodeChannelPackage(raw)
+	if err != nil {
+		return nil, err
+	}
+	if err := verifySTPRGB11PackageContext(channel, pkg); err != nil {
+		return nil, err
+	}
+	last := pkg.Steps[len(pkg.Steps)-1]
+	if last.Context.Branch != "server" || last.Context.Operation != string(STPOpCommit) ||
+		last.Context.Height != uint64(channel.CommitHeight)+1 {
+		return nil, fmt.Errorf("RGB expansion journal changed its fresh server commitment context")
+	}
+	roots, err := rgb11wallet.EncodeChannelInventory(pkg.Funding)
+	if err != nil {
+		return nil, err
+	}
+	current, err := rgb11wallet.EncodeChannelInventory(inventory.Sources)
+	if err != nil || !bytes.Equal(roots, current) {
+		return nil, fmt.Errorf("RGB expansion journal changed its authenticated current funding")
+	}
+	return rgb11wallet.EncodeChannelInventoryWithLast(inventory.Sources, raw)
+}
+
+// validateSTPRGBCommitmentJournal is only the context/identity half of journal
+// verification. Its caller has already run VerifyChannelProof with complete
+// evidence. It grants no Bitcoin funding, signature or revocation authority.
+func (protocol rgb11STPProtocol) validateSTPRGBCommitmentJournal(channel *Channel, inventory *rgb11wallet.ChannelInventory,
+	pkg *rgb11wallet.ChannelPackage, tx *wire.MsgTx, raw []byte) error {
+	if channel == nil || inventory == nil || pkg == nil || len(pkg.Steps) != 1 || tx == nil {
+		return fmt.Errorf("incomplete RGB commitment-backed journal")
+	}
+	var declared bytes.Buffer
+	if tx.SerializeNoWitness(&declared) != nil || !bytes.Equal(declared.Bytes(), pkg.Steps[0].Tx) ||
+		!bytes.Equal(raw, inventory.LastPackage) {
+		return fmt.Errorf("RGB commitment journal changed its exact package transaction")
+	}
+	last := pkg.Steps[0]
+	if last.Context.Operation != string(STPOpCommit) || last.Context.Branch != "server" ||
+		last.Context.ChannelID != channel.ChannelId || last.Context.Entropy != channel.AssetEntropy {
+		return fmt.Errorf("RGB commitment journal changed its current server context")
+	}
+	server := channel.LocalCommitment
+	if channel.IsInitiator {
+		server = channel.RemoteCommitment
+	}
+	if server == nil || !bytes.Equal(raw, server.AssetProofs[rgb11wallet.Protocol]) {
+		return fmt.Errorf("RGB commitment journal is not its exact current server sidecar")
+	}
+	var current bytes.Buffer
+	bound := server.CommitTx != nil && server.CommitTx.SerializeNoWitness(&current) == nil && bytes.Equal(current.Bytes(), last.Tx)
+	if !bound {
+		// The core has just published the independently built sidecar, while
+		// SignNext/ReceiveNewCommitment has not yet assigned CommitTx. Only
+		// that same operation's explicit locally constructed bytes can bind
+		// this transient preparation phase. They do not authorize signing;
+		// the existing signed durable journal barrier still follows.
+		view := protocol.view
+		if view == nil || view.context.ChannelID != last.Context.ChannelID ||
+			view.context.BitcoinNetwork != last.Context.BitcoinNetwork || view.context.Height != last.Context.Height ||
+			view.context.Entropy != last.Context.Entropy || !bytes.Equal(view.prepared[tx.TxID()], last.Tx) {
+			return fmt.Errorf("RGB commitment journal changed its exact server transaction")
+		}
+	}
+	roots, err := rgb11wallet.EncodeChannelInventory(pkg.Funding)
+	if err != nil {
+		return err
+	}
+	active, err := rgb11wallet.EncodeChannelInventory(inventory.Sources)
+	if err != nil || !bytes.Equal(roots, active) {
+		return fmt.Errorf("RGB commitment journal changed its active funding roots")
+	}
+	return completeSTPRGBView(protocol.view)
 }

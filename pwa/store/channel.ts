@@ -3,6 +3,16 @@ import walletManager from '@/utils/sat20'
 import { defineStore } from 'pinia'
 import { computed, nextTick, ref, watch } from 'vue'
 import { parallel } from 'radash'
+export interface ClosedRebuildFundingNotice {
+  walletId: number
+  accountIndex: number
+  channelId: string
+  message: string
+  // Derived from this PWA current-channel read, not an expanded SDK payload.
+  assetRestorationOnly?: boolean
+  identityGeneration?: number
+}
+
 interface OutPoint {
   hash: string
   index: number
@@ -95,6 +105,13 @@ interface Channel {
 export const useChannelStore = defineStore('channel', () => {
 
   const channel = ref<Channel | null>(null)
+  const closedRebuildFundingNotice = ref<ClosedRebuildFundingNotice | null>(null)
+  const setClosedRebuildFundingNotice = (notice: ClosedRebuildFundingNotice) => {
+    closedRebuildFundingNotice.value = notice
+  }
+  const clearClosedRebuildFundingNotice = () => {
+    closedRebuildFundingNotice.value = null
+  }
   const allAssetList = ref<any[]>([])
   const plainBalance = ref(0)
   const totalSats = ref(0)
@@ -174,6 +191,9 @@ export const useChannelStore = defineStore('channel', () => {
           if (c.status === 0) {
             clearChannelState()
             return
+          }
+          if (c.status === 16 && !closedRebuildFundingNotice.value?.assetRestorationOnly && c.channelId === closedRebuildFundingNotice.value?.channelId) {
+            clearClosedRebuildFundingNotice()
           }
           if (c.localbalanceL1) {
             channel.value = c
@@ -336,6 +356,9 @@ export const useChannelStore = defineStore('channel', () => {
   )
 
   return {
+    closedRebuildFundingNotice,
+    setClosedRebuildFundingNotice,
+    clearClosedRebuildFundingNotice,
     uniqueAssetList,
     sat20List,
     runesList,

@@ -38,6 +38,12 @@ func (p *Manager) getTxOutputFromIndexerOrInscribe(utxo string, inscribe *Inscri
 func (p *Manager) FunderInitSplicingInProcess(channel *Channel, assetName *swire.AssetName,
 	amt *Decimal, feeRate int64, utxos, fees []*TxOutput, inscribe *InscribeResv,
 	revealPrivKey []byte, reason string) (string, int64, error) {
+	return p.funderInitSplicingInProcessWithRGBEvidence(channel, assetName, amt, feeRate, utxos, fees, inscribe, revealPrivKey, reason, nil)
+}
+
+func (p *Manager) funderInitSplicingInProcessWithRGBEvidence(channel *Channel, assetName *swire.AssetName,
+	amt *Decimal, feeRate int64, utxos, fees []*TxOutput, inscribe *InscribeResv,
+	revealPrivKey []byte, reason string, evidence *STPRGBReservationEvidence) (string, int64, error) {
 	if err := ValidateSTPAssetForChannel(channel, assetName, STPOpSpliceIn); err != nil {
 		return "", 0, err
 	}
@@ -64,6 +70,7 @@ func (p *Manager) FunderInitSplicingInProcess(channel *Channel, assetName *swire
 	}
 
 	resv := SplicingReservation{}
+	resv.RGBEvidence = evidence
 	resv.InitRuntime()
 	resv.Status = RS_INIT
 	resv.IsInitiator = reason != SPLICING_REASON_REMOTE
@@ -80,7 +87,11 @@ func (p *Manager) FunderInitSplicingInProcess(channel *Channel, assetName *swire
 	resv.FeeRate = feeRate
 	resv.RevealPrivKey = revealPrivKey
 	resv.Inscribe = inscribe
-	resv.AssetFunding, err = p.PrepareSTPChannelFunding(channel, resv.AssetName, utxos)
+	view, viewErr := rgbReservationView(&resv.RevocationInfo)
+	if viewErr != nil {
+		return "", 0, viewErr
+	}
+	resv.AssetFunding, err = p.prepareSTPChannelFundingWithRGBView(channel, resv.AssetName, utxos, view)
 	if err != nil {
 		return "", 0, err
 	}
@@ -270,7 +281,19 @@ func (p *Manager) FunderInitSplicingInProcess(channel *Channel, assetName *swire
 func (p *Manager) FunderInitSplicingOutProcess(channel *Channel, destAddr string,
 	assetName *AssetName, feeRate int64, amt *Decimal, utxos, fees []*TxOutput,
 	inscribe *InscribeResv, revealPrivKey []byte, reason string, moreData []byte) (string, int64, error) {
+	return p.funderInitSplicingOutProcessWithRGBEvidence(channel, destAddr, assetName, feeRate, amt,
+		utxos, fees, inscribe, revealPrivKey, reason, moreData, nil)
+}
+
+func (p *Manager) funderInitSplicingOutProcessWithRGBEvidence(channel *Channel, destAddr string,
+	assetName *AssetName, feeRate int64, amt *Decimal, utxos, fees []*TxOutput,
+	inscribe *InscribeResv, revealPrivKey []byte, reason string, moreData []byte,
+	evidence *STPRGBReservationEvidence) (string, int64, error) {
 	if err := ValidateSTPAsset(&assetName.AssetName, STPOpSpliceOut); err != nil {
+		return "", 0, err
+	}
+
+	if _, err := rgbReservationView(&RevocationInfo{Channel: channel, RGBEvidence: evidence}); err != nil {
 		return "", 0, err
 	}
 
@@ -298,6 +321,7 @@ func (p *Manager) FunderInitSplicingOutProcess(channel *Channel, destAddr string
 	}
 
 	resv := SplicingReservation{}
+	resv.RGBEvidence = evidence
 	resv.InitRuntime()
 	resv.Status = RS_INIT
 	resv.IsInitiator = reason != SPLICING_REASON_REMOTE
@@ -492,7 +516,11 @@ func (p *Manager) AllowSplicingIn(resv *SplicingReservation, utxos, fees []strin
 		feeInputs = append(feeInputs, info)
 	}
 
-	if err := p.AcceptSTPChannelFunding(resv.Channel, resv.AssetName, assetInputs, resv.AssetFunding, resv.AssetEntropy); err != nil {
+	view, err := rgbReservationView(&resv.RevocationInfo)
+	if err != nil {
+		return err
+	}
+	if err := p.acceptSTPChannelFundingWithRGBView(resv.Channel, resv.AssetName, assetInputs, resv.AssetFunding, resv.AssetEntropy, view); err != nil {
 		return err
 	}
 	return p.AllowSplicingInV2(resv, assetInputs, feeInputs, needStub, stubValue)
@@ -503,6 +531,15 @@ func (p *Manager) AllowSplicingInV2(resv *SplicingReservation, utxos, fees []*Tx
 	protocol, err := STPAssetProtocolFor(&assetName.AssetName, STPOpSpliceIn)
 	if err != nil {
 		return err
+	}
+	// Pure legacy planners can operate without a runtime channel. They do
+	// not acquire an RGB evidence requirement.
+	if protocol.Protocol() == "rgb11" || resv.RGBEvidence != nil {
+		view, viewErr := rgbReservationView(&resv.RevocationInfo)
+		if viewErr != nil {
+			return viewErr
+		}
+		protocol = stpProtocolWithRGBView(protocol, view)
 	}
 	if planner, ok := protocol.(STPAssetSplicePlanner); ok {
 		return planner.PlanSplice(p, resv, utxos, fees, needStub, stubValue, STPOpSpliceIn)

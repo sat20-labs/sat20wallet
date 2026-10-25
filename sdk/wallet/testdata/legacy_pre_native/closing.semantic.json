@@ -1,0 +1,90 @@
+{
+  "ChannelId": "legacy-plain-channel",
+  "CloseHeight": 144,
+  "CloseTx": {
+    "LockTime": 62,
+    "TxIn": [
+      {
+        "PreviousOutPoint": {
+          "Hash": "3e00000000000000000000000000000000000000000000000000000000000000",
+          "Index": 0
+        },
+        "Sequence": 144,
+        "SignatureScript": null,
+        "Witness": [
+          "3e01",
+          "3e02"
+        ]
+      }
+    ],
+    "TxOut": [
+      {
+        "PkScript": "513e",
+        "Value": 1062
+      }
+    ],
+    "Version": 2
+  },
+  "DeAnchorTx": {
+    "LockTime": 63,
+    "TxIn": [
+      {
+        "PreviousOutPoint": {
+          "Hash": "3f00000000000000000000000000000000000000000000000000000000000000",
+          "Index": 0
+        },
+        "Sequence": 144,
+        "SignatureScript": null,
+        "Witness": [
+          "3f03"
+        ]
+      }
+    ],
+    "TxOut": [
+      {
+        "Assets": null,
+        "PkScript": "513f",
+        "Value": 2063
+      }
+    ],
+    "Version": 2
+  },
+  "FeeRate": 3,
+  "PreTxs": [
+    {
+      "LockTime": 61,
+      "TxIn": [
+        {
+          "PreviousOutPoint": {
+            "Hash": "3d00000000000000000000000000000000000000000000000000000000000000",
+            "Index": 0
+          },
+          "Sequence": 144,
+          "SignatureScript": null,
+          "Witness": [
+            "3d01",
+            "3d02"
+          ]
+        }
+      ],
+      "TxOut": [
+        {
+          "PkScript": "513d",
+          "Value": 1061
+        }
+      ],
+      "Version": 2
+    }
+  ],
+  "ReservationBase": {
+    "Id": 601,
+    "IsInitiator": true,
+    "Status": 10,
+    "WalletId": {
+      "Id": 0,
+      "SubAccountId": 0
+    }
+  },
+  "SplicingOutTxId": "old-splice-out-id",
+  "SplicingResvId": 501
+}

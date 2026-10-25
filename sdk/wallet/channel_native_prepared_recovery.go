@@ -61,6 +61,11 @@ func (p *Manager) readSTPNativePreparedRecovery(channel *Channel) (*stpNativePre
 	if _, err := encodeSTPNativeOtherTransactions(&check); err != nil {
 		return nil, err
 	}
+	// Validate the separate dormant RGB obligation alongside, without changing
+	// which legacy Other packages the existing ARC reader accepts or consumes.
+	if _, err := encodeRGBClientRecovery(&check, check.LocalCommitment); err != nil {
+		return nil, err
+	}
 	return &record, nil
 }
 

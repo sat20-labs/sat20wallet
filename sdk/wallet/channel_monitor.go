@@ -295,6 +295,12 @@ func (p *Manager) HandleChannelReservationStatus(sendTxInL1 bool) {
 				p.handleChannelActionTimeout(resv.Id, RESV_TYPE_CLOSE)
 				continue
 			}
+			if handled, err := p.retryClosedWithdrawalChild(resv); handled {
+				if err != nil {
+					Log.Warnf("client-selected Other recovery %s: %v", resv.ChannelId, err)
+				}
+				continue
+			}
 			if handled, err := p.RetryNativeForceClose(resv); handled {
 				if err != nil {
 					Log.Warnf("native force close retry %s: %v", resv.Channel.ChannelId, err)
@@ -511,6 +517,9 @@ func (p *Manager) finalizeOpenChannelReady(resv *FundingReservation) error {
 			channel.ChannelId, channel.FundingTime, resv.Id)
 	}
 	if err := p.SaveChannelToDB(channel); err != nil {
+		return err
+	}
+	if err := p.completeClosedReopenIntent(resv); err != nil {
 		return err
 	}
 	if err := p.EnableChannel(channel); err != nil {

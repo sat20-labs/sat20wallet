@@ -200,6 +200,9 @@ func (p *Manager) HandleLocalActionStatus(sendTxInL1 bool) ([]*LocalActionPerfor
 	completed := make([]*LocalActionPerformData, 0)
 	failed := make([]*LocalActionPerformData, 0)
 	for _, resv := range localActionMap {
+		if resv != nil && resv.Action == localActionClosedChannelRecovery {
+			continue
+		}
 		if resv == nil || resv.Status <= RS_CLOSED {
 			continue
 		}
@@ -273,6 +276,9 @@ func (p *Manager) localActionBelongsToCurrentWallet(resv *LocalActionPerformData
 }
 
 func (p *Manager) handleLocalActionStatus(resv *LocalActionPerformData, sendTxInL1 bool) error {
+	if resv != nil && resv.Action == localActionClosedChannelRecovery {
+		return nil
+	}
 	resv.Mutex().RLock()
 	expectedStatus := resv.Status
 	expectedTxID := resv.TxId

@@ -359,6 +359,10 @@ type stpPlannedAsset struct {
 }
 
 func (p *Manager) planSTPCommitmentAssets(req STPAssetCommitmentRequest) ([]stpPlannedAsset, error) {
+	return p.planSTPCommitmentAssetsWithRGBView(req, nil)
+}
+
+func (p *Manager) planSTPCommitmentAssetsWithRGBView(req STPAssetCommitmentRequest, view *stpRGBEvidenceView) ([]stpPlannedAsset, error) {
 	for name, inputs := range req.Channel.FundingUtxos {
 		protocol, err := STPAssetProtocolFor(&name.AssetName, req.Operation)
 		if err != nil {
@@ -380,7 +384,8 @@ func (p *Manager) planSTPCommitmentAssets(req STPAssetCommitmentRequest) ([]stpP
 		}
 	}
 	var plans []stpPlannedAsset
-	for _, protocol := range stpAssetProtocols.ordered {
+	for _, registered := range stpAssetProtocols.ordered {
+		protocol := stpProtocolWithRGBView(registered, view)
 		if preparer, ok := protocol.(STPAssetLayoutPreparer); ok {
 			if err := preparer.PrepareLayout(p, req); err != nil {
 				return nil, err
@@ -397,7 +402,8 @@ func (p *Manager) planSTPCommitmentAssets(req STPAssetCommitmentRequest) ([]stpP
 		return nil, fmt.Errorf("asset layout preparation added inputs")
 	}
 	req.PrefixOutputs = len(req.Tx.TxOut)
-	for _, protocol := range stpAssetProtocols.ordered {
+	for _, registered := range stpAssetProtocols.ordered {
+		protocol := stpProtocolWithRGBView(registered, view)
 		beforeInputs := append([]*wire.TxIn(nil), req.Tx.TxIn...)
 		beforeOutputs := append([]*wire.TxOut(nil), req.Tx.TxOut...)
 		plan, err := protocol.BuildCommitment(p, req)

@@ -299,6 +299,11 @@ func (p *Manager) CreateSplicingInTx(resv *SplicingReservation) (*wire.MsgTx, tx
 	if err != nil {
 		return nil, nil, err
 	}
+	view, viewErr := rgbReservationView(&resv.RevocationInfo)
+	if viewErr != nil {
+		return nil, nil, viewErr
+	}
+	protocol = stpProtocolWithRGBView(protocol, view)
 	mainTxOut := splicingTx.TxOut[0]
 	var changeTxOut *wire.TxOut
 	if hasSplicingChangeAsset {
@@ -444,6 +449,11 @@ func (p *Manager) CreateSplicingOutTx(resv *SplicingReservation) (*wire.MsgTx, t
 	if err != nil {
 		return nil, nil, err
 	}
+	view, viewErr := rgbReservationView(&resv.RevocationInfo)
+	if viewErr != nil {
+		return nil, nil, viewErr
+	}
+	protocol = stpProtocolWithRGBView(protocol, view)
 	mainTxOut := splicingTx.TxOut[0]
 	var changeTxOut *wire.TxOut
 	if resv.SplicingChangeOutput != nil {

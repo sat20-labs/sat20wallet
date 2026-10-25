@@ -64,88 +64,8 @@ func (p *Manager) ValidateNativeChannelReceipt(ctx context.Context, local common
 		}
 		graph.requiredPrivate = string(script)
 	}
-	if len(validated.History.HistoricalStates) == 0 || len(validated.History.HistoricalStates) > 4096 || len(source.DescendTxIDs) > 4096 {
-		return fmt.Errorf("native settlement graph exceeds its bounded history")
-	}
-	opWitness := make(map[[32]byte]string)
-	for _, edge := range validated.History.ValidatedConsumers {
-		id := chainhash.Hash(edge.WitnessTxID).String()
-		if old := opWitness[edge.ConsumerOperationID]; old != "" && old != id {
-			return fmt.Errorf("native operation has conflicting Bitcoin witnesses")
-		}
-		opWitness[edge.ConsumerOperationID] = id
-		if graph.steps[id] == nil {
-			graph.steps[id] = &nativeReceiptStep{id: id}
-		}
-	}
-	for _, historical := range validated.History.HistoricalStates {
-		if historical.Reference.AssignmentType != 4000 || historical.State.Class != "fungible" {
-			continue // Core has validated issuance/control states independently.
-		}
-		if graph.states[historical.Reference] != nil {
-			return fmt.Errorf("native receipt repeats an exact allocation")
-		}
-		point := wire.OutPoint{Hash: historical.Outpoint.TxID, Index: historical.Outpoint.Vout}.String()
-		output, err := chains.bitcoinOutput(point)
-		if err != nil {
-			return err
-		}
-		allocation := &nativeReceiptAllocation{ref: historical.Reference, point: point, output: output,
-			amount: new(big.Int).SetUint64(historical.State.Amount)}
-		graph.states[historical.Reference] = allocation
-		graph.points[point] = append(graph.points[point], allocation)
-		if id := opWitness[historical.Reference.OperationID]; id != "" {
-			if point != fmt.Sprintf("%s:%d", id, historical.Outpoint.Vout) {
-				return fmt.Errorf("native output differs from its validated witness")
-			}
-			allocation.producer = id
-			graph.steps[id].outputs = append(graph.steps[id].outputs, allocation)
-		}
-	}
-	for _, edge := range validated.History.ValidatedConsumers {
-		allocation := graph.states[edge.Input]
-		if allocation == nil {
-			continue
-		}
-		id := chainhash.Hash(edge.WitnessTxID).String()
-		if allocation.consumer != "" {
-			return fmt.Errorf("native receipt has duplicate allocation consumers")
-		}
-		allocation.consumer = id
-		graph.steps[id].inputs = append(graph.steps[id].inputs, allocation)
-	}
-	for _, id := range source.DescendTxIDs {
-		if _, exists := graph.usedDescends[id]; !canonicalNativeTxID(id) || exists {
-			return fmt.Errorf("invalid or duplicate native descending locator")
-		}
-		graph.usedDescends[id] = false
-		if err := graph.loadDescend(id); err != nil {
-			return err
-		}
-	}
-	// A deterministic topological walk never lets a proof attach a later
-	// mapping to an earlier, already consumed allocation.
-	var roots []string
-	for point, allocations := range graph.points {
-		if allocations[0].producer == "" {
-			roots = append(roots, point)
-		}
-	}
-	sort.Strings(roots)
-	for _, point := range roots {
-		if err := graph.applyAnchor(point); err != nil {
-			return err
-		}
-	}
-	var ids []string
-	for id := range graph.steps {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	for _, id := range ids {
-		if err := graph.walk(id); err != nil {
-			return err
-		}
+	if err := graph.walkValidatedHistory(validated, source.DescendTxIDs); err != nil {
+		return err
 	}
 	terminal := graph.points[source.Output.OutPointStr]
 	if len(terminal) == 0 {
@@ -211,6 +131,98 @@ type nativeReceiptGraph struct {
 	delayedPools        map[string]bool
 	requiredPrivate     string
 	seenRequiredPrivate bool
+	// Set only by the account-bound closed-private source validator. This
+	// ephemeral graph is never returned as a public receipt or inventory.
+	closedPrivateProducer string
+}
+
+// walkValidatedHistory applies only the shared, independently observed graph
+// facts. Public-pool and closed-private sources keep distinct terminal rules.
+func (graph *nativeReceiptGraph) walkValidatedHistory(validated *nativeproof.Result, descendTxIDs []string) error {
+	if len(validated.History.HistoricalStates) == 0 || len(validated.History.HistoricalStates) > 4096 || len(descendTxIDs) > 4096 {
+		return fmt.Errorf("native settlement graph exceeds its bounded history")
+	}
+	opWitness := make(map[[32]byte]string)
+	for _, edge := range validated.History.ValidatedConsumers {
+		id := chainhash.Hash(edge.WitnessTxID).String()
+		if old := opWitness[edge.ConsumerOperationID]; old != "" && old != id {
+			return fmt.Errorf("native operation has conflicting Bitcoin witnesses")
+		}
+		opWitness[edge.ConsumerOperationID] = id
+		if graph.steps[id] == nil {
+			graph.steps[id] = &nativeReceiptStep{id: id}
+		}
+	}
+	for _, historical := range validated.History.HistoricalStates {
+		if historical.Reference.AssignmentType != 4000 || historical.State.Class != "fungible" {
+			continue // Core has validated issuance/control states independently.
+		}
+		if graph.states[historical.Reference] != nil {
+			return fmt.Errorf("native receipt repeats an exact allocation")
+		}
+		point := wire.OutPoint{Hash: historical.Outpoint.TxID, Index: historical.Outpoint.Vout}.String()
+		output, err := graph.chains.bitcoinOutput(point)
+		if err != nil {
+			return err
+		}
+		allocation := &nativeReceiptAllocation{ref: historical.Reference, point: point, output: output,
+			amount: new(big.Int).SetUint64(historical.State.Amount)}
+		graph.states[historical.Reference] = allocation
+		graph.points[point] = append(graph.points[point], allocation)
+		if id := opWitness[historical.Reference.OperationID]; id != "" {
+			if point != fmt.Sprintf("%s:%d", id, historical.Outpoint.Vout) {
+				return fmt.Errorf("native output differs from its validated witness")
+			}
+			allocation.producer = id
+			graph.steps[id].outputs = append(graph.steps[id].outputs, allocation)
+		}
+	}
+	for _, edge := range validated.History.ValidatedConsumers {
+		allocation := graph.states[edge.Input]
+		if allocation == nil {
+			continue
+		}
+		id := chainhash.Hash(edge.WitnessTxID).String()
+		if allocation.consumer != "" {
+			return fmt.Errorf("native receipt has duplicate allocation consumers")
+		}
+		allocation.consumer = id
+		graph.steps[id].inputs = append(graph.steps[id].inputs, allocation)
+	}
+	for _, id := range descendTxIDs {
+		if _, exists := graph.usedDescends[id]; !canonicalNativeTxID(id) || exists {
+			return fmt.Errorf("invalid or duplicate native descending locator")
+		}
+		graph.usedDescends[id] = false
+		if err := graph.loadDescend(id); err != nil {
+			return err
+		}
+	}
+	// A deterministic topological walk never lets a proof attach a later
+	// mapping to an earlier, already consumed allocation.
+	var roots []string
+	for point, allocations := range graph.points {
+		if allocations[0].producer == "" {
+			roots = append(roots, point)
+		}
+	}
+	sort.Strings(roots)
+	for _, point := range roots {
+		if err := graph.applyAnchor(point); err != nil {
+			return err
+		}
+	}
+	var ids []string
+	for id := range graph.steps {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		if err := graph.walk(id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func nativeReceiptMultisigKeys(witness []byte) ([][]byte, error) {
@@ -410,6 +422,9 @@ func (g *nativeReceiptGraph) walk(id string) error {
 }
 
 func (g *nativeReceiptGraph) applyMappedStep(step *nativeReceiptStep, tx *wire.MsgTx, mapping *nativeReceiptMapping, mappedIn *big.Int) error {
+	if g.closedPrivateProducer != "" && step.id == g.closedPrivateProducer {
+		return g.applyClosedPrivateStep(step, mapping)
+	}
 	descend := g.descends[step.id]
 	mappedOut := new(big.Int)
 	var nextPool *nativeReceiptMapping
@@ -496,6 +511,44 @@ func (g *nativeReceiptGraph) applyMappedStep(step *nativeReceiptStep, tx *wire.M
 	}
 	if err := g.verifyDescend(descend, mapping, burned); err != nil {
 		return err
+	}
+	g.usedDescends[descend.id] = true
+	return nil
+}
+
+// Only the exact old server-main step in the closed-private validator can
+// release its fixed-client allocations independently of the sibling's future
+// CSV spend. The shared walk has already checked the complete RGB flow,
+// identical input authority, canonical confirmed Bitcoin transaction and spend.
+func (g *nativeReceiptGraph) applyClosedPrivateStep(step *nativeReceiptStep, mapping *nativeReceiptMapping) error {
+	descend := g.descends[step.id]
+	if step.id != g.closedPrivateProducer || mapping == nil || mapping.public || g.requiredPrivate == "" ||
+		string(mapping.script) != g.requiredPrivate || descend == nil || descend.payload.Version != 2 ||
+		descend.payload.L1TxId != step.id || (descend.payload.Operation != sindexer.DESCEND_OP_CLOSE &&
+		descend.payload.Operation != sindexer.DESCEND_OP_FORCE_CLOSE) || len(descend.payload.ReturnedOutputVouts) != 0 {
+		return fmt.Errorf("RGB closed source has no exact private server-main exit")
+	}
+	// Derive the burn from every validated allocation of this asset paid to
+	// the fixed client script, never from the selected carrier's amount.
+	burned := new(big.Int)
+	for _, output := range step.outputs {
+		if bytes.Equal(output.output.PkScript, mapping.script) {
+			burned.Add(burned, output.amount)
+		}
+	}
+	if burned.Sign() <= 0 {
+		return fmt.Errorf("RGB closed source has no fixed-client allocation")
+	}
+	if err := g.verifyDescend(descend, mapping, burned); err != nil {
+		return err
+	}
+	for _, output := range step.outputs {
+		if !bytes.Equal(output.output.PkScript, mapping.script) {
+			// Conservative, graph-local non-release only. This does not prove
+			// the sibling's destination or spendable mapping, claim its assets,
+			// or export it as a public receipt/current inventory source.
+			output.mapping = mapping
+		}
 	}
 	g.usedDescends[descend.id] = true
 	return nil

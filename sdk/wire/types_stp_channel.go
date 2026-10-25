@@ -195,6 +195,10 @@ type CommitSigInfo struct {
 	CommitNextTxSig      [][][]byte        `json:"commitNextTxSig"`
 	CommitOtherPrevTxSig [][][][]byte      `json:"commitOtherPrevTxSig,omitempty"`
 	CommitOtherTxSig     [][][]byte        `json:"commitOtherTxSig,omitempty"`
+	// RGB recovery is a distinct, optional client package, never a legacy Other.
+	CommitRGBRecoveryPrevTxSig [][][]byte `json:"commitRGBRecoveryPrevTxSig,omitempty"`
+	CommitRGBRecoveryTxSig     [][]byte   `json:"commitRGBRecoveryTxSig,omitempty"`
+	RGBRecoveryTxs             []string   `json:"rgbRecoveryTxs,omitempty"`
 }
 
 type LockResp struct {
@@ -222,6 +226,7 @@ type LockCommitSigAndRevokeResp struct { // RevokeAndAck
 	RecoveryOnly       bool          `json:"recoveryOnly,omitempty"`
 	RecoveryCommitTxID string        `json:"recoveryCommitTxId,omitempty"`
 	NativeOtherTxs     [][]string    `json:"nativeOtherTxs,omitempty"`
+	RGBRecoveryTxs     []string      `json:"rgbRecoveryTxs,omitempty"`
 	Id                 int64         `json:"id"`
 	Rev                *RevokeAndAck `json:"rev"`
 	LockSig            [][]byte      `json:"lockSig"` // 拿到对方的rev后才能生成
@@ -274,6 +279,7 @@ type RevokeAndAck struct {
 	// Fully signed recovery packages for the sender's new commitment. Each
 	// group is ordered as previous transactions, the sweep, then successors.
 	NativeOtherTxs [][]string `json:"nativeOtherTxs,omitempty"`
+	RGBRecoveryTxs []string   `json:"rgbRecoveryTxs,omitempty"`
 }
 
 type UnlockCommitSigReq struct { // CommitSig

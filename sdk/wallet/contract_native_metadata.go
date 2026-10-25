@@ -91,7 +91,7 @@ func (p *ContractRuntimeBase) applyNativePublicMetadata(metadata *nativePublicMe
 	if err := p.checkNativePublicLedgerPrecision(metadata.Precision); err != nil {
 		return err
 	}
-	p.N, p.Divisibility = metadata.Precision, metadata.Precision
+	p.N, p.Divisibility = 0, metadata.Precision
 	p.dealDivisibility = min(metadata.Precision, DEAL_DIVISIBILITY)
 	p.nativeMetadataInitialized = true
 	return nil

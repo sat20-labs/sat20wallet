@@ -1,0 +1,389 @@
+{
+  "Address": "legacy-plain-channel",
+  "Capacity": 60000,
+  "ChanPoint": {
+    "Assets": null,
+    "Invalids": null,
+    "Offsets": null,
+    "OutPointStr": "1111111111111111111111111111111111111111111111111111111111111111:0",
+    "OutValue": {
+      "PkScript": "0020754065fafb2255538f975aa315bc51719f4e529d233e11b2d86bdd19cc8ad9df",
+      "Value": 10000
+    },
+    "SatBindingMap": null,
+    "UtxoId": 100
+  },
+  "ChannelHash": "1482dc7b47a24ee1e1559538f6fd15c50d539c98b7eaef02a29d0d272dba8a08",
+  "ChannelId": "legacy-plain-channel",
+  "ChannelType": 0,
+  "ClosingTx": null,
+  "CommitHeight": 9,
+  "Contract": "6f6c642d636f6e74726163742d6279746573",
+  "CsvDelay": 144,
+  "DeAnchorTx": null,
+  "FeeCfg": {
+    "CommitmentFee": 10000,
+    "CommitmentFeeRate": 10,
+    "ManageFee": 10000,
+    "MinReserveSats": 0,
+    "MortgageFee": 0,
+    "SplicingInFee": 0,
+    "SplicingOutFee": 2000
+  },
+  "FundingTime": 1600000000000000,
+  "FundingUtxos": [
+    {
+      "Key": {
+        "AssetName": {
+          "Protocol": "",
+          "Ticker": "",
+          "Type": ""
+        },
+        "N": 1
+      },
+      "Value": [
+        {
+          "Assets": null,
+          "Invalids": null,
+          "Offsets": null,
+          "OutPointStr": "2222222222222222222222222222222222222222222222222222222222222222:1",
+          "OutValue": {
+            "PkScript": "0020754065fafb2255538f975aa315bc51719f4e529d233e11b2d86bdd19cc8ad9df",
+            "Value": 50000
+          },
+          "SatBindingMap": null,
+          "UtxoId": 101
+        }
+      ]
+    }
+  ],
+  "IsInitiator": true,
+  "LastPaymentTxId": "old-payment-tx",
+  "LocalAssetsMerkleRoot": "9960f4417fa9e72d0d4106517b382c2b6648e1639b8cc26bfa3a86ced5656771",
+  "LocalChanCfg": {
+    "InitialBalance": 40000,
+    "PaymentKey": {
+      "PublicKey": "03ab606f4dffd65965b4a9db957361800f8b03ed16acac11d5a4672801554596d0"
+    },
+    "RevocationBasePoint": {
+      "PublicKey": "03ab606f4dffd65965b4a9db957361800f8b03ed16acac11d5a4672801554596d0"
+    },
+    "WalletId": 2
+  },
+  "LocalCommitment": {
+    "ChannelCommitmentV1": {
+      "CommitSig": [
+        "0b05",
+        "0b06"
+      ],
+      "CommitTx": {
+        "LockTime": 11,
+        "TxIn": [
+          {
+            "PreviousOutPoint": {
+              "Hash": "0b00000000000000000000000000000000000000000000000000000000000000",
+              "Index": 0
+            },
+            "Sequence": 144,
+            "SignatureScript": null,
+            "Witness": [
+              "0b01",
+              "0b02"
+            ]
+          }
+        ],
+        "TxOut": [
+          {
+            "PkScript": "510b",
+            "Value": 1011
+          }
+        ],
+        "Version": 2
+      },
+      "DeAnchorSig": [
+        "0b07"
+      ],
+      "DeAnchorTx": {
+        "LockTime": 12,
+        "TxIn": [
+          {
+            "PreviousOutPoint": {
+              "Hash": "0c00000000000000000000000000000000000000000000000000000000000000",
+              "Index": 0
+            },
+            "Sequence": 144,
+            "SignatureScript": null,
+            "Witness": [
+              "0c03"
+            ]
+          }
+        ],
+        "TxOut": [
+          {
+            "Assets": null,
+            "PkScript": "510c",
+            "Value": 2012
+          }
+        ],
+        "Version": 2
+      },
+      "LocalBalance": [
+        {
+          "Key": {
+            "AssetName": {
+              "Protocol": "",
+              "Ticker": "",
+              "Type": ""
+            },
+            "N": 1
+          },
+          "Value": {
+            "Amount": "40000",
+            "Precision": 0
+          }
+        }
+      ],
+      "NextTxs": [
+        {
+          "LockTime": 14,
+          "TxIn": [
+            {
+              "PreviousOutPoint": {
+                "Hash": "0e00000000000000000000000000000000000000000000000000000000000000",
+                "Index": 0
+              },
+              "Sequence": 144,
+              "SignatureScript": null,
+              "Witness": [
+                "0e01",
+                "0e02"
+              ]
+            }
+          ],
+          "TxOut": [
+            {
+              "PkScript": "510e",
+              "Value": 1014
+            }
+          ],
+          "Version": 2
+        }
+      ],
+      "PrevTxs": [
+        {
+          "LockTime": 13,
+          "TxIn": [
+            {
+              "PreviousOutPoint": {
+                "Hash": "0d00000000000000000000000000000000000000000000000000000000000000",
+                "Index": 0
+              },
+              "Sequence": 144,
+              "SignatureScript": null,
+              "Witness": [
+                "0d01",
+                "0d02"
+              ]
+            }
+          ],
+          "TxOut": [
+            {
+              "PkScript": "510d",
+              "Value": 1013
+            }
+          ],
+          "Version": 2
+        }
+      ],
+      "RemoteBalance": [
+        {
+          "Key": {
+            "AssetName": {
+              "Protocol": "",
+              "Ticker": "",
+              "Type": ""
+            },
+            "N": 1
+          },
+          "Value": {
+            "Amount": "20000",
+            "Precision": 0
+          }
+        }
+      ],
+      "Revocation": "0b04"
+    },
+    "Others": null
+  },
+  "LocalWalletId": 71,
+  "Memo": "genuine-pre-native-fixture",
+  "PeerNodeId": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+  "PendingUtxos": null,
+  "PendingUtxosL2": null,
+  "RedeemScript": "512152",
+  "RemoteAssetsMerkleRoot": "60af159494466d68327861659d75f958f2a9362f151699a291a5e31b1a47eb23",
+  "RemoteChanCfg": {
+    "InitialBalance": 20000,
+    "PaymentKey": {
+      "PublicKey": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+    },
+    "RevocationBasePoint": {
+      "PublicKey": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+    },
+    "WalletId": 3
+  },
+  "RemoteCommitment": {
+    "ChannelCommitmentV1": {
+      "CommitSig": [
+        "1f05",
+        "1f06"
+      ],
+      "CommitTx": {
+        "LockTime": 31,
+        "TxIn": [
+          {
+            "PreviousOutPoint": {
+              "Hash": "1f00000000000000000000000000000000000000000000000000000000000000",
+              "Index": 0
+            },
+            "Sequence": 144,
+            "SignatureScript": null,
+            "Witness": [
+              "1f01",
+              "1f02"
+            ]
+          }
+        ],
+        "TxOut": [
+          {
+            "PkScript": "511f",
+            "Value": 1031
+          }
+        ],
+        "Version": 2
+      },
+      "DeAnchorSig": [
+        "1f07"
+      ],
+      "DeAnchorTx": {
+        "LockTime": 32,
+        "TxIn": [
+          {
+            "PreviousOutPoint": {
+              "Hash": "2000000000000000000000000000000000000000000000000000000000000000",
+              "Index": 0
+            },
+            "Sequence": 144,
+            "SignatureScript": null,
+            "Witness": [
+              "2003"
+            ]
+          }
+        ],
+        "TxOut": [
+          {
+            "Assets": null,
+            "PkScript": "5120",
+            "Value": 2032
+          }
+        ],
+        "Version": 2
+      },
+      "LocalBalance": [
+        {
+          "Key": {
+            "AssetName": {
+              "Protocol": "",
+              "Ticker": "",
+              "Type": ""
+            },
+            "N": 1
+          },
+          "Value": {
+            "Amount": "20000",
+            "Precision": 0
+          }
+        }
+      ],
+      "NextTxs": [
+        {
+          "LockTime": 34,
+          "TxIn": [
+            {
+              "PreviousOutPoint": {
+                "Hash": "2200000000000000000000000000000000000000000000000000000000000000",
+                "Index": 0
+              },
+              "Sequence": 144,
+              "SignatureScript": null,
+              "Witness": [
+                "2201",
+                "2202"
+              ]
+            }
+          ],
+          "TxOut": [
+            {
+              "PkScript": "5122",
+              "Value": 1034
+            }
+          ],
+          "Version": 2
+        }
+      ],
+      "PrevTxs": [
+        {
+          "LockTime": 33,
+          "TxIn": [
+            {
+              "PreviousOutPoint": {
+                "Hash": "2100000000000000000000000000000000000000000000000000000000000000",
+                "Index": 0
+              },
+              "Sequence": 144,
+              "SignatureScript": null,
+              "Witness": [
+                "2101",
+                "2102"
+              ]
+            }
+          ],
+          "TxOut": [
+            {
+              "PkScript": "5121",
+              "Value": 1033
+            }
+          ],
+          "Version": 2
+        }
+      ],
+      "RemoteBalance": [
+        {
+          "Key": {
+            "AssetName": {
+              "Protocol": "",
+              "Ticker": "",
+              "Type": ""
+            },
+            "N": 1
+          },
+          "Value": {
+            "Amount": "40000",
+            "Precision": 0
+          }
+        }
+      ],
+      "Revocation": "1f04"
+    },
+    "Others": null
+  },
+  "ShortChannelID": 144,
+  "StaticMerkleRoot": "2f335aae81ed85bd05a0b4668fd85f70b6c97902d9a04915b616e2d898392897",
+  "Status": 16,
+  "StubUtxos": null,
+  "TotalSatReceived": 202,
+  "TotalSatSent": 101,
+  "UpdateTime": 1600000000000099,
+  "UtxosL2": null,
+  "Version": 0
+}

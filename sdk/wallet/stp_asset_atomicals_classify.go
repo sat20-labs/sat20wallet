@@ -18,6 +18,12 @@ func (atomicalsSTPProtocol) ClassifyOutputs(p *Manager, tx *wire.MsgTx, inputs, 
 // must be retained in transaction input order; token quantities are never
 // reconstructed from ordinal offsets or from output Bitcoin values alone.
 func (p *Manager) ClassifySTPAtomicalsOutputs(tx *wire.MsgTx, inputs, outputs []*TxOutput) error {
+	return p.classifySTPAtomicalsOutputsAtHeight(tx, inputs, outputs, 0)
+}
+
+// A confirmed recovery is replayed under its actual consensus height. Zero
+// retains the existing public classifier's prospective next-block behavior.
+func (p *Manager) classifySTPAtomicalsOutputsAtHeight(tx *wire.MsgTx, inputs, outputs []*TxOutput, height int) error {
 	hasAtomicals := false
 	for _, input := range inputs {
 		if input == nil {
@@ -35,7 +41,17 @@ func (p *Manager) ClassifySTPAtomicalsOutputs(tx *wire.MsgTx, inputs, outputs []
 	if tx == nil || len(inputs) != len(tx.TxIn) || len(outputs) != len(tx.TxOut) {
 		return fmt.Errorf("ARC20 classification requires complete transaction facts")
 	}
-	evidence, err := p.newAtomicalsEvidence()
+	var evidence *atomicalsPlanEvidence
+	var err error
+	if height == 0 {
+		evidence, err = p.newAtomicalsEvidence()
+	} else {
+		heights, heightErr := coloring.HeightsForNetwork(GetChainParam().Net)
+		if heightErr != nil || height < heights.Activation {
+			return fmt.Errorf("ARC20 is not active at confirmed height %d: %v", height, heightErr)
+		}
+		evidence = &atomicalsPlanEvidence{height: height, heights: heights}
+	}
 	if err != nil {
 		return err
 	}

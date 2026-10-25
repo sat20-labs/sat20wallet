@@ -87,6 +87,9 @@ type CommitInfo struct {
 }
 
 type RevocationInfo struct {
+	// RGBEvidence is a runtime, phase-local set of prequeried Bitcoin facts.
+	// It is not part of reservation DataInDB or any wire message.
+	RGBEvidence *STPRGBReservationEvidence
 	// LocalRevKey is the current local revocation public key known by the peer;
 	// LocalNextRevKey is the next point sent with RevokeAndAck.
 	LocalRevKey     []byte

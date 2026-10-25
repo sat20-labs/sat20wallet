@@ -24,6 +24,10 @@ type ChannelCommitmentV1 struct {
 	CommitTx       *wire.MsgTx
 	AssetProofs    map[string][]byte
 	RecoveryProofs map[string][]byte
+	// RGBClientRecovery is an optional, pre-authorized RGB-only client exit
+	// from this exact server commitment. It is never part of the default
+	// PrevTxs/NextTxs broadcast. Non-RGB commitments leave it nil.
+	RGBClientRecovery *CommitmentTx
 	// RecoveryFeeIndexes identifies the plain reserve outputs created by STP.
 	// Asset carriers and protocol-specific follow-up reserves are never fees.
 	RecoveryFeeIndexes []uint32
@@ -59,14 +63,21 @@ type CommitmentTx struct {
 	DeAnchorTx  *swire.MsgTx
 	DeAnchorSig [][]byte
 
-	PrevTxs []*wire.MsgTx // 在CommitTx之前需要广播的tx，已经签名
-	NextTxs []*wire.MsgTx // 在CommitTx之后需要广播的tx，已经签名
+	// PrevTxs are already signed and precede this package's CommitTx. In
+	// Others, they can consume the main commitment's outputs and therefore
+	// follow that main parent.
+	PrevTxs []*wire.MsgTx
+	NextTxs []*wire.MsgTx // 在本包CommitTx之后需要广播的tx，已经签名
 }
 
 type ChannelCommitment struct {
 	ChannelCommitmentV1
 
-	// 其他可能的版本，用于不同的用途
+	// Additional pre-signed commitment packages for other channel uses.
+	// The current server-commit producer builds client recovery children of
+	// this exact CommitTx, not competing spends of its funding inputs. Keep
+	// them stored for recovery after the server parent is observed confirmed;
+	// do not append them to a locally initiated main force-close broadcast.
 	Others []*CommitmentTx
 }
 

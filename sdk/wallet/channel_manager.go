@@ -323,6 +323,24 @@ func (p *Manager) rejectUnfinishedChannelLifecycleLocked(channelID string, walle
 		}
 	}
 	for _, reservation := range p.localActionPerformMap {
+		owner, ok := reservation.(*LocalActionPerformData)
+		if !ok || owner == nil || owner.Action != localActionClosedChannelRecovery || owner.WalletId != walletID || !bytes.Equal(owner.ReqPubKey, paymentPubKey) {
+			continue
+		}
+		owner.RLock()
+		intent, err := loadClosedChannelIntent(owner)
+		pending := owner.Status != closedIntentReopened && owner.Status != closedIntentWithdrawn && owner.Status > RS_CLOSED
+		pending = pending || err == nil && intent.AssetRestore != nil &&
+			(intent.AssetRestore.Step == "request_prepared" || intent.AssetRestore.Step == "child_accepted")
+		owner.RUnlock()
+		if err != nil {
+			return err
+		}
+		if pending && intent.ChannelID == channelID {
+			return fmt.Errorf("closed-channel recovery is already in progress")
+		}
+	}
+	for _, reservation := range p.localActionPerformMap {
 		resv, ok := reservation.(*LocalActionPerformData)
 		if !ok || resv == nil || resv.Status <= RS_CLOSED || resv.Status == RS_PERFORM_ACTION_COMPLETED ||
 			resv.Action != LOCAL_ACTION_LOCK_WITH_EXPAND {

@@ -3,6 +3,7 @@
     <WalletHeader />
 
     <AccountAutopayReminder />
+    <ClosedChannelRecovery />
 
 
     <!-- 没有名字时的提醒区域 -->
@@ -74,6 +75,8 @@ import { Input } from '@/components/ui/input'
 import LayoutHome from '@/components/layout/LayoutHome.vue'
 import WalletHeader from '@/components/wallet/HomeHeader.vue'
 import AccountAutopayReminder from '@/components/account/AccountAutopayReminder.vue'
+import ClosedChannelRecovery from '@/components/wallet/ClosedChannelRecovery.vue'
+import { assertWalletIdentityReady } from '@/lib/identity-boundary'
 import L1Card from '@/components/wallet/L1Card.vue'
 import L2Card from '@/components/wallet/L2Card.vue'
 
@@ -294,13 +297,29 @@ const handleSubWalletCreated = async (wallet: any) => {
 }
 
 // 处理通道回调
-const channelCallback = async (e: any) => {
+const channelCallback = async (e: any, value?: unknown) => {
   console.log('channel callback')
   let msg = ''
   const channelHandler = async () => {
     await channelStore.getCurrentChannel()
   }
   switch (e) {
+    case 'channelrebuildfundingrequired': {
+      try {
+        const notificationGeneration = assertWalletIdentityReady()
+        const notice: unknown = typeof value === 'string' ? JSON.parse(value) : value
+        if (!notice || typeof notice !== 'object' || !('walletId' in notice) || !('accountIndex' in notice) ||
+          !('channelId' in notice) || !('message' in notice) || notice.walletId !== walletId.value ||
+          notice.accountIndex !== accountIndex.value || typeof notice.channelId !== 'string' || typeof notice.message !== 'string') return
+        await channelStore.getCurrentChannel()
+        assertWalletIdentityReady(notificationGeneration)
+        if (notice.walletId !== walletId.value || notice.accountIndex !== accountIndex.value) return
+        channelStore.setClosedRebuildFundingNotice({ walletId: notice.walletId, accountIndex: notice.accountIndex,
+          channelId: notice.channelId, message: notice.message, assetRestorationOnly: channelStore.channel?.status === 16, identityGeneration: notificationGeneration })
+        toast({ title: 'Channel recovery paused', description: notice.message })
+      } catch { /* A malformed or stale notice never authorizes a transfer. */ }
+      return
+    }
     case 'splicingin':
       msg = 'splicing in success'
       await channelHandler()

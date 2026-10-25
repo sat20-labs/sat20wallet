@@ -6,10 +6,15 @@ import (
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
 )
 
 func (p *Manager) SignNextCommitment(info *RevocationInfo) error {
+	view, err := rgbReservationView(info)
+	if err != nil {
+		return err
+	}
 	channel := info.Channel
 
 	// 本地先用对端给出的下一版 revocation point 构造对端视角的下一版
@@ -30,9 +35,24 @@ func (p *Manager) SignNextCommitment(info *RevocationInfo) error {
 	bootstrapKey := p.GetBootstrapNodePaymentPubKey()
 	keyRing := DeriveCommitmentKeys(commitPoint, 1, bootstrapKey, revealKey, channel)
 
-	commitTx, inscribes, next, others, err := p.CreateCommitTxWithOthers(1, channel, keyRing, bootstrapKey, info.FeeRate)
+	commitTx, inscribes, next, others, err := p.createCommitTxWithRGBView(1, channel, keyRing, bootstrapKey, info.FeeRate, view)
 	if err != nil {
 		Log.Errorf("CreateCommitTx failed. %v", err)
+		return err
+	}
+	if view != nil {
+		if err := p.verifySTPChannelProofsWithRGBView(channel, commitTx, channel.RemoteCommitment.AssetProofs, STPOpCommit, view); err != nil {
+			return err
+		}
+		if err := p.verifySTPNativeJournalContextWithRGBView(channel, channel.RemoteCommitment, view); err != nil {
+			return err
+		}
+	}
+	if err := completeSTPRGBView(view); err != nil {
+		return err
+	}
+	rgbPrevTxSigs, rgbTxSigs, err := partialSignRGBClientRecovery(channel, commitTx, channel.RemoteCommitment.RGBClientRecovery)
+	if err != nil {
 		return err
 	}
 	sigs, preTxSigs, nextTxSigs, otherPrevTxSigs, otherTxSigs, err := PartialSignCommitTxWithOthers(channel, commitTx, inscribes, next, others)
@@ -51,6 +71,9 @@ func (p *Manager) SignNextCommitment(info *RevocationInfo) error {
 	info.RemoteCommitInfo.CommitOthers = nil
 	info.RemoteCommitInfo.CommitOtherPrevTxSig = nil
 	info.RemoteCommitInfo.CommitOtherTxSig = nil
+	info.RemoteCommitInfo.CommitRGBRecoveryPrevTxSig = rgbPrevTxSigs
+	info.RemoteCommitInfo.CommitRGBRecoveryTxSig = rgbTxSigs
+	info.RemoteCommitInfo.RGBRecoveryTxs = nil
 
 	channel.RemoteCommitment.CommitTx = commitTx
 	channel.RemoteCommitment.CommitSig = sigs
@@ -93,18 +116,35 @@ func (p *Manager) SignNextCommitment(info *RevocationInfo) error {
 	info.RemoteCommitInfo.CommitDeAnchorSig = deAnchorSig
 	info.Channel.RemoteCommitment.DeAnchorTx = deAnchorTx
 	info.Channel.RemoteCommitment.DeAnchorSig = deAnchorSig
-	if err := p.verifySTPChannelProofs(channel, commitTx, channel.RemoteCommitment.AssetProofs, STPOpCommit); err != nil {
+	if err := p.verifySTPChannelProofsWithRGBView(channel, commitTx, channel.RemoteCommitment.AssetProofs, STPOpCommit, view); err != nil {
 		return err
 	}
-	return p.persistSTPNativeCommitment(channel, channel.RemoteCommitment, "remote")
+	return p.persistSTPNativeCommitmentWithRGBView(channel, channel.RemoteCommitment, "remote", view)
 }
 
 func (p *Manager) ReceiveNewCommitment(info *RevocationInfo, commitSig *wwire.CommitSigInfo, prevSignedTx []*wire.MsgTx) error {
+	return p.receiveNewCommitmentForWallet(info, commitSig, prevSignedTx, nil)
+}
+
+func (p *Manager) receiveNewCommitmentForWallet(info *RevocationInfo, commitSig *wwire.CommitSigInfo, prevSignedTx []*wire.MsgTx, captured common.Wallet) error {
+	view, err := rgbReservationView(info)
+	if err != nil {
+		return err
+	}
 	channel := info.Channel
 	if err := acceptSTPSignedNativeParents(channel, prevSignedTx); err != nil {
 		return err
 	}
-	localWallet := p.GetWallet()
+	localWallet := captured
+	if localWallet == nil {
+		localWallet = p.GetWallet()
+	}
+	if view != nil {
+		localWallet = channel.LocalWallet()
+	}
+	if captured != nil && !closedChannelAssetWalletMatches(channel, captured) {
+		return fmt.Errorf("closed-channel asset commitment wallet mismatch")
+	}
 
 	// 对端发来的是本地视角的下一版 commitment tx 签名。本地用下一版
 	// commitment secret 重新构造同一笔交易并验签，避免接受无法广播或脚本无效
@@ -126,7 +166,7 @@ func (p *Manager) ReceiveNewCommitment(info *RevocationInfo, commitSig *wwire.Co
 	commitPoint := commitSecret.PubKey()
 	keyRing := DeriveCommitmentKeys(commitPoint, 0, bootstrapKey, revealKey, info.Channel)
 
-	commitTx, inscribes, next, others, err := p.CreateCommitTxWithOthers(0, channel, keyRing, bootstrapKey, info.FeeRate)
+	commitTx, inscribes, next, others, err := p.createCommitTxWithRGBView(0, channel, keyRing, bootstrapKey, info.FeeRate, view)
 	if err != nil {
 		Log.Errorf("CreateCommitTx failed. %v", err)
 		return err
@@ -134,7 +174,19 @@ func (p *Manager) ReceiveNewCommitment(info *RevocationInfo, commitSig *wwire.Co
 	if !equalSTPAssetProofs(channel.LocalCommitment.AssetProofs, commitSig.CommitAssetProofs) {
 		return fmt.Errorf("commitment native proof differs from the independently built transaction")
 	}
-	if err := p.verifySTPChannelProofs(channel, commitTx, channel.LocalCommitment.AssetProofs, STPOpCommit); err != nil {
+	if err := p.verifySTPChannelProofsWithRGBView(channel, commitTx, channel.LocalCommitment.AssetProofs, STPOpCommit, view); err != nil {
+		return err
+	}
+	if view != nil {
+		if err := p.verifySTPNativeJournalContextWithRGBView(channel, channel.LocalCommitment, view); err != nil {
+			return err
+		}
+	}
+	if err := completeSTPRGBView(view); err != nil {
+		return err
+	}
+	if err := p.signAndVerifyRGBClientRecovery(channel, commitTx, channel.LocalCommitment.RGBClientRecovery,
+		commitSig.CommitRGBRecoveryPrevTxSig, commitSig.CommitRGBRecoveryTxSig); err != nil {
 		return err
 	}
 	err = p.SignAndVerifyCommitTxWithOthers(info.Channel, prevSignedTx, commitTx, commitSig.CommitSig,
@@ -192,13 +244,28 @@ func (p *Manager) ReceiveNewCommitment(info *RevocationInfo, commitSig *wwire.Co
 	info.LocalCommitInfo.CommitSigInfo = *commitSig
 	info.Channel.LocalCommitment.DeAnchorSig = commitSig.CommitDeAnchorSig
 	info.Channel.LocalCommitment.DeAnchorTx = deAnchorTx
-	return p.persistSTPNativeCommitment(channel, channel.LocalCommitment, "local")
+	return p.persistSTPNativeCommitmentWithRGBView(channel, channel.LocalCommitment, "local", view)
 }
 
 func (p *Manager) RevokeCurrentCommitment(info *RevocationInfo) (*wwire.RevokeAndAck, error) {
+	return p.revokeCurrentCommitmentForWallet(info, nil)
+}
+
+func (p *Manager) revokeCurrentCommitmentForWallet(info *RevocationInfo, captured common.Wallet) (*wwire.RevokeAndAck, error) {
+	view, err := rgbReservationView(info)
+	if err != nil {
+		return nil, err
+	}
 	channel := info.Channel
 	otherTxs, err := encodeSTPNativeOtherTransactions(channel)
 	if err != nil {
+		return nil, err
+	}
+	rgbTxs, err := encodeRGBClientRecovery(channel, channel.LocalCommitment)
+	if err != nil {
+		return nil, err
+	}
+	if err := completeSTPRGBView(view); err != nil {
 		return nil, err
 	}
 	if needsSTPNativeCommitmentJournal(channel, channel.LocalCommitment) {
@@ -206,11 +273,20 @@ func (p *Manager) RevokeCurrentCommitment(info *RevocationInfo) (*wwire.RevokeAn
 			return nil, err
 		}
 	}
-	localWallet := p.GetWallet()
+	localWallet := captured
+	if localWallet == nil {
+		localWallet = p.GetWallet()
+	}
+	if view != nil {
+		localWallet = channel.LocalWallet()
+	}
+	if captured != nil && !closedChannelAssetWalletMatches(channel, captured) {
+		return nil, fmt.Errorf("closed-channel asset revocation wallet mismatch")
+	}
 
 	// 只有在对端的新 commitment 已经验证通过后，才释放当前 commitment secret。
 	// 这个 secret 会让对端具备惩罚本方旧 commitment tx 的能力。
-	revocationMsg := &wwire.RevokeAndAck{NativeOtherTxs: otherTxs}
+	revocationMsg := &wwire.RevokeAndAck{NativeOtherTxs: otherTxs, RGBRecoveryTxs: rgbTxs}
 	commitSecret := localWallet.GetCommitSecret(info.Channel.PeerNodeId, uint32(channel.CommitHeight))
 	if commitSecret == nil {
 		return nil, fmt.Errorf("GetRevocationSecret failed")
@@ -223,7 +299,18 @@ func (p *Manager) RevokeCurrentCommitment(info *RevocationInfo) (*wwire.RevokeAn
 }
 
 func (p *Manager) ReceiveRevocation(info *RevocationInfo, revMsg *wwire.RevokeAndAck) error {
-	_, err := secp256k1.ParsePubKey(revMsg.NextRevKey)
+	view, err := rgbReservationView(info)
+	if err != nil {
+		return err
+	}
+	var oldView *stpRGBEvidenceView
+	if view != nil && info.OldChannel != nil && hasSTPRGBClientRecoveryContext(info.OldChannel, info.OldChannel.RemoteCommitment) {
+		oldView, err = info.RGBEvidence.oldRemoteView(info.OldChannel)
+		if err != nil {
+			return err
+		}
+	}
+	_, err = secp256k1.ParsePubKey(revMsg.NextRevKey)
 	if err != nil {
 		return err
 	}
@@ -238,7 +325,60 @@ func (p *Manager) ReceiveRevocation(info *RevocationInfo, revMsg *wwire.RevokeAn
 		Log.Errorf("revocation key mismatch")
 		return fmt.Errorf("revocation key mismatch")
 	}
-	if err := p.acceptSTPNativeOtherTransactions(info.Channel, revMsg.NativeOtherTxs); err != nil {
+	var signedPunishTx, oldRGBChild *wire.MsgTx
+	// Resolve the dedicated old obligation before accepting the new peer
+	// journal. This validates existing bytes only, after the old secret matches.
+	verifyOldRGBChild := func() error {
+		if signedPunishTx == nil || info.OldChannel.RemoteCommitment.RGBClientRecovery == nil {
+			return nil
+		}
+		old := info.OldChannel.RemoteCommitment
+		if info.OldChannel.ChannelId != info.Channel.ChannelId || old.CommitTx == nil ||
+			info.Channel.RemoteCommitment == nil || info.Channel.RemoteCommitment.CommitTx == nil ||
+			old.CommitTx.TxID() == info.Channel.RemoteCommitment.CommitTx.TxID() {
+			return fmt.Errorf("RGB punishment requires a distinct revoked remote commitment")
+		}
+		var err error
+		oldRGBChild, err = p.verifiedPunishRGBClientRecovery(info.OldChannel, oldView)
+		if err != nil {
+			return err
+		}
+		punishTxs := append([]*wire.MsgTx{}, old.NextTxs...)
+		punishTxs = append(punishTxs, signedPunishTx)
+		punishTxs = appendCommitmentOtherTxs(punishTxs, old)
+		for _, tx := range punishTxs {
+			if tx == nil {
+				return fmt.Errorf("nil RGB punishment dependency")
+			}
+			for _, input := range tx.TxIn {
+				if input == nil {
+					return fmt.Errorf("nil RGB punishment dependency input")
+				}
+				for _, childInput := range oldRGBChild.TxIn {
+					if input.PreviousOutPoint == childInput.PreviousOutPoint {
+						return fmt.Errorf("RGB client recovery conflicts with the punishment chain")
+					}
+				}
+			}
+		}
+		return nil
+	}
+	if view != nil {
+		// Resolve every old-obligation dependency before publishing the new
+		// peer package. The bound old view shares this reservation's sticky
+		// missing-evidence barrier without accepting arbitrary old contexts.
+		signedPunishTx, err = p.createAndVerifyPunishTxWithRGBView(info.OldChannel, revMsg.Revocation[:], p.GetFeeRate(), oldView)
+		if err != nil {
+			return err
+		}
+		if err := verifyOldRGBChild(); err != nil {
+			return err
+		}
+		if err := completeSTPRGBView(view); err != nil {
+			return err
+		}
+	}
+	if err := p.acceptSTPRecoveryTransactionsWithJournalAndRGBView(info.Channel, revMsg.NativeOtherTxs, revMsg.RGBRecoveryTxs, nil, view); err != nil {
 		return err
 	}
 
@@ -246,10 +386,15 @@ func (p *Manager) ReceiveRevocation(info *RevocationInfo, revMsg *wwire.RevokeAn
 
 	// 收到对端旧 secret 后，立即构造并验签 punish tx。这样如果对端之后广播
 	// 已撤销的 remote commitment，watchtower 已经有可直接使用的惩罚交易链。
-	signedPunishTx, err := p.CreateAndVerifyPunishTx(info.OldChannel, revMsg.Revocation[:], p.GetFeeRate())
-	if err != nil {
-		Log.Errorf("VerifyPunishTx failed. %v", err)
-		return err
+	if view == nil {
+		signedPunishTx, err = p.CreateAndVerifyPunishTx(info.OldChannel, revMsg.Revocation[:], p.GetFeeRate())
+		if err != nil {
+			Log.Errorf("VerifyPunishTx failed. %v", err)
+			return err
+		}
+		if err := verifyOldRGBChild(); err != nil {
+			return err
+		}
 	}
 
 	info.SignedPunishTx = signedPunishTx
@@ -260,7 +405,12 @@ func (p *Manager) ReceiveRevocation(info *RevocationInfo, revMsg *wwire.RevokeAn
 		punishTxs := append([]*wire.MsgTx{}, info.OldChannel.RemoteCommitment.NextTxs...)
 		punishTxs = append(punishTxs, signedPunishTx)
 		punishTxs = appendCommitmentOtherTxs(punishTxs, info.OldChannel.RemoteCommitment)
-		if err := p.GetWatchTower().AddCommitTx(info.OldChannel, info.OldChannel.RemoteCommitment.CommitTx, punishTxs); err != nil {
+		// Only this verified old-secret punishment branch may activate the
+		// separately signed RGB child. Ordinary current-main close keeps it dormant.
+		if oldRGBChild != nil {
+			punishTxs = append(punishTxs, oldRGBChild)
+		}
+		if err := p.GetWatchTower().addCommitTxWithRGBView(info.OldChannel, info.OldChannel.RemoteCommitment.CommitTx, punishTxs, oldView); err != nil {
 			return err
 		}
 	}

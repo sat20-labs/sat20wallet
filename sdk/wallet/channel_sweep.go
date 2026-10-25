@@ -111,6 +111,10 @@ func FindOutputIndexes(commitTx *wire.MsgTx, ourPkScript, theirPkScript []byte) 
 }
 
 func (p *Manager) CreateAndVerifyPunishTx(channel *Channel, rev []byte, feeRate int64) (*wire.MsgTx, error) {
+	return p.createAndVerifyPunishTxWithRGBView(channel, rev, feeRate, nil)
+}
+
+func (p *Manager) createAndVerifyPunishTxWithRGBView(channel *Channel, rev []byte, feeRate int64, view *stpRGBEvidenceView) (*wire.MsgTx, error) {
 	// punish tx 花费的是对端已经撤销的 remote commitment 的 delayed output。
 	// rev 是对端刚释放的旧 commitment secret，本地用它派生 revocation 私钥。
 	bootstrapKey := p.GetBootstrapNodePaymentPubKey()
@@ -140,12 +144,15 @@ func (p *Manager) CreateAndVerifyPunishTx(channel *Channel, rev []byte, feeRate 
 	if err != nil {
 		return nil, err
 	}
-	native, err := p.buildSTPChannelRecovery(STPAssetRecoveryRequest{
+	native, err := p.buildSTPChannelRecoveryWithRGBView(STPAssetRecoveryRequest{
 		Channel: channel, Commitment: channel.RemoteCommitment, Operation: STPOpPunish,
 		Branch: "punish", OutputIndexes: remoteIndex, RecipientScript: recvScript,
 		CommitmentScript: toLocalScript.WitnessScriptToSign(), ScriptType: SCRIPT_TYPE_PUNISH, FeeRate: feeRate,
-	})
+	}, view)
 	if err != nil {
+		return nil, err
+	}
+	if err := completeSTPRGBView(view); err != nil {
 		return nil, err
 	}
 	var punishTx *wire.MsgTx

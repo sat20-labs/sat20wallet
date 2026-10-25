@@ -6,6 +6,7 @@ import (
 
 	"github.com/btcsuite/btcd/txscript"
 	indexer "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
 )
@@ -30,7 +31,17 @@ func (p *Manager) GetServerWalletAddress() string {
 }
 
 func (p *Manager) SelectWalletFundingOutpoints(feeRate, amt int64, feeCfg *ChannelFeeConfig) ([]string, error) {
-	address := p.wallet.GetAddress()
+	if p.wallet == nil {
+		return nil, fmt.Errorf("wallet is not created/unlocked")
+	}
+	return p.selectWalletFundingOutpointsForWallet(p.wallet.Clone(), feeRate, amt, feeCfg)
+}
+
+func (p *Manager) selectWalletFundingOutpointsForWallet(w common.Wallet, feeRate, amt int64, feeCfg *ChannelFeeConfig) ([]string, error) {
+	if w == nil {
+		return nil, fmt.Errorf("wallet is not created/unlocked")
+	}
+	address := w.GetAddress()
 	outputs := p.GetIndexerClient().GetUtxoListWithTicker(address, &indexer.ASSET_PLAIN_SAT)
 	if len(outputs) == 0 {
 		Log.Errorf("no plain sats")
@@ -165,6 +176,13 @@ func (p *Manager) InitInitiatorFundingReservation(opts FundingInitOptions) (*Fun
 	if p.wallet == nil {
 		return nil, fmt.Errorf("wallet is not created/unlocked")
 	}
+	return p.initInitiatorFundingReservationForWallet(p.wallet.Clone(), opts)
+}
+
+func (p *Manager) initInitiatorFundingReservationForWallet(w common.Wallet, opts FundingInitOptions) (*FundingReservation, error) {
+	if w == nil {
+		return nil, fmt.Errorf("wallet is not created/unlocked")
+	}
 	if p.serverNode == nil || p.serverNode.NodeId == nil || p.serverNode.Pubkey == nil {
 		return nil, fmt.Errorf("server node is not configured")
 	}
@@ -173,7 +191,7 @@ func (p *Manager) InitInitiatorFundingReservation(opts FundingInitOptions) (*Fun
 	resv.InitRuntime()
 	resv.Status = RS_INIT
 	resv.IsInitiator = true
-	resv.SetLocalWallet(p.wallet.Clone())
+	resv.SetLocalWallet(w.Clone())
 	resv.WalletId = resv.LocalWallet().GetWalletId()
 	resv.NeedSendFundingTx = opts.NeedSendFundingTx
 	resv.SkipOpeningAnchorTx = opts.SkipOpeningAnchorTx
@@ -214,7 +232,8 @@ func (p *Manager) InitInitiatorFundingReservation(opts FundingInitOptions) (*Fun
 	revBaseKey := resv.LocalWallet().GetRevocationBaseKey()
 	paymentKey := resv.LocalWallet().GetPaymentPubKey()
 
-	resv.Channel = NewChannel(nil, p)
+	resv.Channel = &Channel{ChannelInDB: *NewChannelInDB(), manager: p, localWallet: w.Clone(), PeerRPC: p.serverNode.client}
+	resv.Channel.LocalWalletId = w.GetId()
 	resv.Channel.PeerNodeId = p.serverNode.NodeId.SerializeCompressed()
 	resv.Channel.IsInitiator = true
 	resv.Channel.LocalChanCfg.PaymentKey = paymentKey
