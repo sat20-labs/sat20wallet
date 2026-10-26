@@ -1,3 +1,4 @@
+import { assertBroadcastCounts } from './l1-snapshot-assertions.mjs'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { cpus } from 'node:os'
@@ -459,8 +460,7 @@ async function runAssetContextStability(t, fixture, fresh, visit, identity, wall
       assert.ok(Number.isSafeInteger(result.l1.height) && typeof result.l1.hash === 'string')
       return { ...result.l1, observed_broadcasts: l1BroadcastRequests }
     }
-    assert.ok(Number.isSafeInteger(result.l1.broadcast_count), 'component snapshot must record broadcasts')
-    return result.l1.broadcast_count
+    return assertBroadcastCounts(result.l1.broadcast_count)
   }
   const realSummary = async address => {
     const response = await fetch(summaryURL(address), { signal: AbortSignal.timeout(30000) })

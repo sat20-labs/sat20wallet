@@ -142,11 +142,9 @@ func TestSDKCoreModulesE2E(t *testing.T) {
 	output, err := os.ReadFile(childLog.Name())
 	require.NoError(t, err)
 	type event struct {
-		Action, Test, Output string
-		Elapsed              float64
+		Output string
 	}
-	var verdicts []event
-	var failures []string
+	childSummary, childScanErr := collectCoreE2EChildEvents(bytes.NewReader(output))
 	var browserVerdicts []map[string]any
 	var metrics []map[string]any
 	var browserOutput strings.Builder
@@ -157,16 +155,9 @@ func TestSDKCoreModulesE2E(t *testing.T) {
 		if json.Unmarshal(scanner.Bytes(), &entry) != nil {
 			continue
 		}
-		if entry.Test != "" && (entry.Action == "pass" || entry.Action == "fail" || entry.Action == "skip") {
-			entry.Output = ""
-			verdicts = append(verdicts, entry)
-		}
 		// go test -json can split one long output line across several events.
 		// Reassemble the stream before parsing the browser's JSON lines.
 		browserOutput.WriteString(entry.Output)
-		if strings.Contains(entry.Output, "core-e2e:") {
-			failures = append(failures, strings.TrimSpace(entry.Output))
-		}
 	}
 	// Preserve only structured browser verdicts. Raw child diagnostics can
 	// contain synthetic secrets and must not be copied into shared evidence.
@@ -190,7 +181,14 @@ func TestSDKCoreModulesE2E(t *testing.T) {
 		"controlled_boundary": "Bitcoin UTXO/transaction confirmation evidence; no public network transactions",
 		"browser_verdicts":    browserVerdicts,
 		"metrics":             metrics,
-		"passed":              runErr == nil, "timed_out": ctx.Err() != nil, "verdicts": verdicts, "failures": failures,
+	}
+	var childExitCode *int
+	if command.ProcessState != nil {
+		code := command.ProcessState.ExitCode()
+		childExitCode = &code
+	}
+	for key, value := range childSummary.reportFields(runErr, childExitCode, ctx.Err()) {
+		report[key] = value
 	}
 	raw, err := json.MarshalIndent(report, "", "  ")
 	require.NoError(t, err)
@@ -198,10 +196,8 @@ func TestSDKCoreModulesE2E(t *testing.T) {
 	require.NoError(t, os.MkdirAll(dir, 0700))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "core-modules-e2e-latest.json"), append(raw, '\n'), 0600))
 	require.NoError(t, scanner.Err())
-	require.NotEmpty(t, verdicts, "child must execute tests, not merely compile")
-	for _, failure := range failures {
-		t.Log(failure)
-	}
+	require.NoError(t, childScanErr)
+	require.NotEmpty(t, childSummary.Verdicts, "child must execute tests, not merely compile")
 	if runErr != nil {
 		t.Fatalf("core-e2e: wallet lifecycle suite failed: %v; redacted evidence in review-evidence/core-modules-e2e-latest.json; diagnostic=%s", runErr, childLog.Name())
 	}

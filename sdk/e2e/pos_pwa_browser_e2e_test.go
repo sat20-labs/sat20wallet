@@ -58,7 +58,78 @@ func TestSDKWalletPWAConnectedBrowser(t *testing.T) {
 		require.NoError(t, json.Unmarshal([]byte(selection), &cases))
 		require.NotEmpty(t, cases, "an explicit case selection must not run an empty gate")
 	}
-	runSDKWalletPWABrowser(t, cases...)
+	runSDKWalletPWAIsolatedGroups(t, cases)
+}
+
+// Each subtest invokes the existing complete fixture constructor. Go's normal
+// cleanup stops that group's nodes before another group can reuse a slot.
+// Only existing immutable build artifacts are shared across these serial runs.
+func failUnexpectedPWASkip(t *testing.T) {
+	t.Helper()
+	if t.Skipped() {
+		t.Error("PWA group unexpectedly skipped")
+	}
+}
+
+func runSDKWalletPWAIsolatedGroups(t *testing.T, selected []string) {
+	t.Helper()
+	_, source, _, ok := runtime.Caller(0)
+	require.True(t, ok)
+	pwa := filepath.Clean(filepath.Join(filepath.Dir(source), "..", "..", "pwa"))
+	cmd := exec.Command("node", "--input-type=module", "-e", "import {walletPWAGroups,walletPWARuntimeCases} from './scripts/verify/wallet-pwa-groups.mjs'; process.stdout.write(JSON.stringify({groups:walletPWAGroups,runtime:walletPWARuntimeCases}))")
+	cmd.Dir = pwa
+	output, err := cmd.Output()
+	require.NoError(t, err, "read existing PWA group registry")
+	type pwaGroup struct {
+		Name     string   `json:"name"`
+		Cases    []string `json:"cases"`
+		Optional []string `json:"optional"`
+	}
+	var registry struct {
+		Groups  []pwaGroup `json:"groups"`
+		Runtime []string   `json:"runtime"`
+	}
+	require.NoError(t, json.Unmarshal(output, &registry))
+	groups := registry.Groups
+	require.NotEmpty(t, groups, "zero PWA groups must fail")
+	known := make(map[string]bool)
+	for _, group := range groups {
+		for _, name := range append(append([]string{}, group.Cases...), group.Optional...) {
+			require.False(t, known[name], "duplicate registered case: %s", name)
+			known[name] = true
+		}
+	}
+	for _, name := range selected {
+		require.True(t, known[name], "unknown selected case: %s", name)
+	}
+	executed := 0
+	for _, group := range groups {
+		cases := append([]string{}, group.Cases...)
+		if len(selected) != 0 {
+			cases = nil
+			for _, name := range append(append([]string{}, group.Cases...), group.Optional...) {
+				for _, requested := range selected {
+					if name == requested {
+						cases = append(cases, name)
+					}
+				}
+			}
+		}
+		if len(cases) == 0 {
+			continue
+		}
+		t.Run(group.Name, func(t *testing.T) {
+			executed++
+			defer failUnexpectedPWASkip(t)
+			started := time.Now()
+			defer func() { t.Logf("PWA isolated group %s elapsed=%s", group.Name, time.Since(started)) }()
+			if group.Name == "pos" && len(selected) == 0 {
+				t.Setenv("SAT20_PWA_COMPLETE_POS_GROUP", "1")
+			}
+			runSDKWalletPWABrowser(t, append(cases, registry.Runtime...)...)
+		})
+	}
+	require.Positive(t, executed, "zero selected PWA groups must fail")
 }
 
 func TestSDKWalletPWAAssetContextStability(t *testing.T) {
@@ -84,6 +155,19 @@ func TestSDKWalletPWAForceCloseCSV(t *testing.T) {
 
 func runSDKWalletBrowserMode(t *testing.T, sdkWASM bool, cases ...string) {
 	t.Helper()
+	fixtureStarted := time.Now()
+	var teardownStarted time.Time
+	var ownedNetwork *realSatoshiNet
+	t.Cleanup(func() {
+		if ownedNetwork != nil {
+			for _, node := range ownedNetwork.Nodes {
+				require.Nil(t, node.cmd, "owned node command must be waited before group cleanup")
+				require.Nil(t, node.Client, "owned RPC client must close")
+			}
+		}
+		t.Logf("PWA phase cleanup=%s", time.Since(teardownStarted))
+	})
+	defer func() { teardownStarted = time.Now() }()
 	t.Setenv("SATOSHINET_RPCTEST_POS_V2_HEIGHT", strconv.Itoa(int(posPWAActivationHeight)))
 	if os.Getenv("SATOSHINET_POS_MINER_INTERVAL") == "" {
 		t.Setenv("SATOSHINET_POS_MINER_INTERVAL", "3")
@@ -230,6 +314,7 @@ func runSDKWalletBrowserMode(t *testing.T, sdkWASM bool, cases ...string) {
 	core := startDKVSNoPluginNodeWithArgs(t, l1.NodeFixture(), "core", coreMnemonic, nil, stpConfig(bootstrapPeer))
 	require.NoError(t, connectNode(core, boot))
 	network := &realSatoshiNet{Bootstrap: boot, Core: core, Nodes: []*testHarness{boot, core}, fakeL1: l1.NodeFixture()}
+	ownedNetwork = network
 	require.NoError(t, joinBlocks(network.Nodes))
 	stake := indexercommon.GetStakeAssetNameWithHeightL2(1)
 	stakeAmount := indexercommon.GetStakeAssetAmtWithHeightL2(1)
@@ -390,16 +475,25 @@ func runSDKWalletBrowserMode(t *testing.T, sdkWASM bool, cases ...string) {
 		args = append(args, cases...)
 	}
 	command := exec.CommandContext(ctx, "node", args...)
+	closeCancellation := configurePWACancellation(t, command)
+	defer func() {
+		if err := closeCancellation(); err != nil {
+			t.Errorf("PWA cleanup: %v", err)
+		}
+	}()
 	command.Dir = pwa
 	var output bytes.Buffer
 	command.Stdout = io.MultiWriter(&output, os.Stdout)
 	command.Stderr = command.Stdout
+	t.Logf("PWA phase setup=%s", time.Since(fixtureStarted))
+	businessStarted := time.Now()
 	err = command.Run()
+	t.Logf("PWA phase browser=%s", time.Since(businessStarted))
 	require.NoError(t, err, "PWA wallet gate failed:\n%s", output.String())
 	control.mu.Lock()
 	defer control.mu.Unlock()
 	require.Empty(t, control.failures, "node-side acceptance checks failed")
-	if sdkWASM || len(cases) > 0 {
+	if sdkWASM || (len(cases) > 0 && os.Getenv("SAT20_PWA_COMPLETE_POS_GROUP") != "1") {
 		return
 	}
 	require.True(t, control.activationChecked, "H-1/H/H+1 activation scenario was not run")
@@ -1407,4 +1501,12 @@ func posPWARestartNode(ctx context.Context, node *testHarness) error {
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
+}
+
+// Keep Playwright's graceful signal handling; the platform helper owns only
+// browser groups explicitly registered by this command.
+func configurePWACancellation(t *testing.T, command *exec.Cmd) func() error {
+	command.Cancel = func() error { return command.Process.Signal(os.Interrupt) }
+	command.WaitDelay = 5 * time.Second
+	return configureOwnedPWACancellation(t, command)
 }

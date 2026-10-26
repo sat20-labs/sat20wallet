@@ -55,7 +55,12 @@ function privateTmpPath(path, label) {
   assert.ok(isAbsolute(path), `${label} must be an absolute path`)
   const fullPath = resolve(path)
   const canonical = canonicalWithMissingSuffix(fullPath)
-  const tempRoots = new Set([realpathSync(PRIVATE_TMP_ROOT), realpathSync(tmpdir())])
+  const tempRoots = new Set([realpathSync(tmpdir())])
+  try {
+    tempRoots.add(realpathSync(PRIVATE_TMP_ROOT))
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error
+  }
   assert.ok([...tempRoots].some(root => canonical.startsWith(`${root}${sep}`)),
     `${label} must be below the system temporary directory or ${PRIVATE_TMP_ROOT}`)
   return fullPath

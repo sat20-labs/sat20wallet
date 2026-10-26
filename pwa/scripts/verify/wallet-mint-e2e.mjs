@@ -62,10 +62,18 @@ export async function runPwaMintCases(t, fixture) {
     const original = sdk[method].bind(sdk)
     window.__PWA_MINT_E2E_CALLS__ ||= {}
     sdk[method] = async (...args) => {
-      const response = await original(...args)
-      const [error, result] = response
-      window.__PWA_MINT_E2E_CALLS__[method] = { args, error: error?.message || '', result }
-      return response
+      const note = phase => window.__SAT20_E2E_NOTE__?.(method, phase, {
+        same_global_instance: sdk === window.sat20,
+        same_verify_instance: sdk === window.__SAT20_PWA_VERIFY__?.sat20,
+      })
+      note('enter')
+      try {
+        const response = await original(...args)
+        const [error, result] = response
+        note(error ? 'returned-error' : 'returned')
+        window.__PWA_MINT_E2E_CALLS__[method] = { args, error: error?.message || '', result }
+        return response
+      } catch (error) { note('threw'); throw error }
     }
   }, method)
   const indexerL1 = fixture.config.IndexerL1

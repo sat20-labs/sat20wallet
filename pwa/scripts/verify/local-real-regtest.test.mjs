@@ -1,13 +1,15 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, parse, sep } from 'node:path'
 import { checkLocalRealDependencies, discardLocalRealRegtestData, startLocalRealRegtest } from './local-real-regtest.mjs'
 
 const workspaceRoot = new URL('../../../..', import.meta.url).pathname
 
 function privateDir() {
-  const directory = mkdtempSync('/private/tmp/local-real-regtest-test-')
+  const directory = mkdtempSync(join(tmpdir(), 'local-real-regtest-test-'))
   chmodSync(directory, 0o700)
   return directory
 }
@@ -38,9 +40,9 @@ test('dependency check accepts Bitcoin Core 31.0 and Blockstream Electrs HTTP CL
   })
   assert.equal(dependencies.bitcoinCoreVersion, '31.0')
   assert.equal(dependencies.electrsHTTP, true)
-  assert.equal(dependencies.bitcoind, bitcoind)
-  assert.equal(dependencies.bitcoinCli, bitcoinCli)
-  assert.equal(dependencies.electrs, electrs)
+  assert.equal(dependencies.bitcoind, realpathSync(bitcoind))
+  assert.equal(dependencies.bitcoinCli, realpathSync(bitcoinCli))
+  assert.equal(dependencies.electrs, realpathSync(electrs))
   assert.match(dependencies.initialMiningAddress, /^bcrt1p[0-9a-z]+$/)
   const wallets = JSON.parse(readFileSync(join(workspaceRoot, 'sat20wallet/sdk/e2e/testdata/regtest/wallets.json'), 'utf8'))
   const ordinary = wallets.find(item => item.role === 'ordinary-1')
@@ -77,7 +79,54 @@ test('start rejects a non-empty run directory before checking or starting depend
 })
 
 test('start rejects runtime directories outside private tmp before resolving toolchains', async () => {
-  await assert.rejects(startLocalRealRegtest({ directory: workspaceRoot, workspaceRoot, env: {} }), /below the system temporary directory or \/private\/tmp/)
+  await assert.rejects(startLocalRealRegtest({ directory: parse(workspaceRoot).root, workspaceRoot, env: {} }),
+    /below the system temporary directory or \/private\/tmp/)
+})
+
+test('start rejects the temporary root itself and a prefix sibling', async () => {
+  const roots = new Set([realpathSync(tmpdir())])
+  try {
+    roots.add(realpathSync('/private/tmp'))
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error
+  }
+  const boundaryRoot = [...roots].find(root => [...roots].every(other =>
+    root === other || !root.startsWith(`${other}${sep}`)))
+  assert.ok(boundaryRoot, 'test needs an outermost temporary root')
+  const sibling = `${boundaryRoot}-outside-${randomUUID()}`
+  assert.equal(existsSync(sibling), false)
+  for (const directory of [boundaryRoot, sibling]) {
+    assert.ok([...roots].every(root => !directory.startsWith(`${root}${sep}`)),
+      'test target must be outside every allowed temporary root')
+    await assert.rejects(startLocalRealRegtest({ directory, workspaceRoot, env: {} }),
+      /below the system temporary directory or \/private\/tmp/)
+  }
+})
+
+test('start rejects a temporary symlink to outside and a symlink run directory', async t => {
+  const base = privateDir()
+  t.after(() => rmSync(base, { recursive: true, force: true }))
+  const outsideLink = join(base, 'outside-link')
+  symlinkSync(parse(workspaceRoot).root, outsideLink)
+  await assert.rejects(startLocalRealRegtest({ directory: join(outsideLink, 'run'), workspaceRoot, env: {} }),
+    /below the system temporary directory or \/private\/tmp/)
+
+  const realRun = join(base, 'real-run')
+  mkdirSync(realRun, { mode: 0o700 })
+  const runLink = join(base, 'run-link')
+  symlinkSync(realRun, runLink)
+  await assert.rejects(startLocalRealRegtest({ directory: runLink, workspaceRoot, env: {} }),
+    /run directory must be a real directory/)
+})
+
+test('start rejects an existing non-private run directory', async t => {
+  const base = privateDir()
+  t.after(() => rmSync(base, { recursive: true, force: true }))
+  const directory = join(base, 'run')
+  mkdirSync(directory)
+  chmodSync(directory, 0o755)
+  await assert.rejects(startLocalRealRegtest({ directory, workspaceRoot, env: {} }),
+    /existing run directory must already be private/)
 })
 
 test('discard removes only a closed group data set and preserves logs, manifest, and shared artifacts', () => {
@@ -166,6 +215,47 @@ test('discard preserves all data until the group is closed and every owned proce
     assert.ok(dataDirectories.every(existsSync))
     assert.equal(existsSync(walletFixture), true)
     assert.equal(manifest.dataRemovedAt, null)
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
+})
+
+test('discard rejects symlinked and outside data or wallet paths without deleting anything', () => {
+  const base = privateDir()
+  try {
+    const runDirectory = join(base, 'run')
+    const dataDirectory = join(runDirectory, 'data')
+    const outsideDirectory = join(base, 'outside-data')
+    mkdirSync(runDirectory, { mode: 0o700 })
+    mkdirSync(dataDirectory, { mode: 0o700 })
+    mkdirSync(outsideDirectory, { mode: 0o700 })
+    const walletFixture = join(runDirectory, 'wallets.json')
+    const outsideWallet = join(base, 'outside-wallets.json')
+    writeFileSync(walletFixture, '{}', { mode: 0o600 })
+    writeFileSync(outsideWallet, '{}', { mode: 0o600 })
+    const dataLink = join(runDirectory, 'data-link')
+    const walletLink = join(runDirectory, 'wallet-link')
+    symlinkSync(dataDirectory, dataLink)
+    symlinkSync(walletFixture, walletLink)
+    const manifest = { dataRemovedAt: null }
+    const args = {
+      runDirectory, closed: true, processes: [], manifest,
+      persist: () => assert.fail('must not persist a failed discard'),
+    }
+
+    for (const [dataDirectories, fixture, message] of [
+      [[dataLink], walletFixture, /refusing to discard non-owned data path/],
+      [[outsideDirectory], walletFixture, /refusing to discard data outside this run directory/],
+      [[dataDirectory], walletLink, /refusing to discard non-owned wallet fixture/],
+      [[dataDirectory], outsideWallet, /refusing to discard a wallet fixture outside this run directory/],
+    ]) {
+      assert.throws(() => discardLocalRealRegtestData({ ...args, dataDirectories, walletFixture: fixture }), message)
+      assert.ok(existsSync(dataDirectory))
+      assert.ok(existsSync(walletFixture))
+      assert.ok(existsSync(outsideDirectory))
+      assert.ok(existsSync(outsideWallet))
+      assert.equal(manifest.dataRemovedAt, null)
+    }
   } finally {
     rmSync(base, { recursive: true, force: true })
   }

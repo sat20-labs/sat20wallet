@@ -77,6 +77,7 @@ import WalletHeader from '@/components/wallet/HomeHeader.vue'
 import AccountAutopayReminder from '@/components/account/AccountAutopayReminder.vue'
 import ClosedChannelRecovery from '@/components/wallet/ClosedChannelRecovery.vue'
 import { assertWalletIdentityReady } from '@/lib/identity-boundary'
+import { wireWalletIdToStoreId } from '@/lib/wire-wallet-id'
 import L1Card from '@/components/wallet/L1Card.vue'
 import L2Card from '@/components/wallet/L2Card.vue'
 
@@ -309,14 +310,22 @@ const channelCallback = async (e: any, value?: unknown) => {
         const notificationGeneration = assertWalletIdentityReady()
         const notice: unknown = typeof value === 'string' ? JSON.parse(value) : value
         if (!notice || typeof notice !== 'object' || !('walletId' in notice) || !('accountIndex' in notice) ||
-          !('channelId' in notice) || !('message' in notice) || notice.walletId !== walletId.value ||
-          notice.accountIndex !== accountIndex.value || typeof notice.channelId !== 'string' || typeof notice.message !== 'string') return
+          !('channelId' in notice) || !('message' in notice)) return
+        // Capture primitive fields before awaiting: an object callback payload
+        // can otherwise change under us even without a wallet transition.
+        const noticeWalletId = wireWalletIdToStoreId(notice.walletId)
+        const noticeAccountIndex = notice.accountIndex
+        const noticeChannelId = notice.channelId
+        const noticeMessage = notice.message
+        if (noticeWalletId === null || noticeWalletId !== walletId.value ||
+          typeof noticeAccountIndex !== 'number' || !Number.isSafeInteger(noticeAccountIndex) || noticeAccountIndex < 0 ||
+          noticeAccountIndex !== accountIndex.value || typeof noticeChannelId !== 'string' || typeof noticeMessage !== 'string') return
         await channelStore.getCurrentChannel()
         assertWalletIdentityReady(notificationGeneration)
-        if (notice.walletId !== walletId.value || notice.accountIndex !== accountIndex.value) return
-        channelStore.setClosedRebuildFundingNotice({ walletId: notice.walletId, accountIndex: notice.accountIndex,
-          channelId: notice.channelId, message: notice.message, assetRestorationOnly: channelStore.channel?.status === 16, identityGeneration: notificationGeneration })
-        toast({ title: 'Channel recovery paused', description: notice.message })
+        if (noticeWalletId !== walletId.value || noticeAccountIndex !== accountIndex.value) return
+        channelStore.setClosedRebuildFundingNotice({ walletId: noticeWalletId, accountIndex: noticeAccountIndex,
+          channelId: noticeChannelId, message: noticeMessage, assetRestorationOnly: channelStore.channel?.status === 16, identityGeneration: notificationGeneration })
+        toast({ title: 'Channel recovery paused', description: noticeMessage })
       } catch { /* A malformed or stale notice never authorizes a transfer. */ }
       return
     }

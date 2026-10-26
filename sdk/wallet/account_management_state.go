@@ -759,6 +759,18 @@ func (p *Manager) activateAccountManagement(secret []byte, password string,
 				hash = values[key].Hash
 			}
 			if hash != captured[key] {
+				kind := "data"
+				if key == wrapperKey {
+					kind = "wrapper"
+				} else if key == stateKey {
+					kind = "state"
+				}
+				seq := uint64(0)
+				if values[key] != nil {
+					seq = values[key].Seq
+				}
+				capturedHash := captured[key]
+				Log.Warningf("activation_baseline_mismatch phase=local_builder_compare key_class=%s captured_present=%t current_present=%t captured_hash=%s current_hash=%s current_seq=%d", kind, capturedHash != "", values[key] != nil, capturedHash[:min(16, len(capturedHash))], hash[:min(16, len(hash))], seq)
 				return nil, dkvsindexer.ErrWriteConflict
 			}
 		}

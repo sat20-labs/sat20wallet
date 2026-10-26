@@ -42,21 +42,21 @@ const Button = V.defineComponent({ inheritAttrs: false, props: { disabled: Boole
 const Dialog = V.defineComponent({ props: { open: Boolean }, setup(props, { slots }) { return () => props.open ? V.h('div', { 'data-dialog-adapter': true }, slots.default?.()) : null } })
 const AssetList = V.defineComponent({ setup() { return () => V.h('div', { 'data-testid': 'l1-assets-page' }, 'L1 assets stay selected') } })
 
-async function fixture({ offline = false, native = false, ready = false, deferQuote = false, noLocal = false, deferActions = false, nativeWithdraw = false } = {}) {
+async function fixture({ offline = false, native = false, ready = false, deferQuote = false, deferChannel = false, noLocal = false, deferActions = false, nativeWithdraw = false, optionsWalletId = 11, quoteWalletId = 11, optionsAccountIndex = null, quoteAccountIndex = null } = {}) {
   const pinia = P.createPinia(); P.setActivePinia(pinia)
   const calls = [], notices = [], errors = [], callbacks = { current: null }, cache = new Map()
   const route = V.reactive({ query: { tab: 'l1' } })
   const root = { type: 'root', props: {}, children: [], parent: null }
   const sandbox = vm.createContext({ console: { log() {}, warn() {}, error() {} }, setTimeout, clearTimeout, crypto: globalThis.crypto })
-  const useWalletStore = P.defineStore('wallet', () => ({ walletId: V.ref(11), accountIndex: V.ref(0), network: V.ref('testnet'), btcFeeRate: V.ref(5), address: V.ref('fixture-address') }))
+  const useWalletStore = P.defineStore('wallet', () => ({ walletId: V.ref('11'), accountIndex: V.ref(0), network: V.ref('testnet'), btcFeeRate: V.ref(5), address: V.ref('fixture-address') }))
   const emptyStore = name => P.defineStore(name, () => ({ plainList: V.ref([]), sat20List: V.ref([]), runesList: V.ref([]), brc20List: V.ref([]), reset() {} }))
   const useL1Store = emptyStore('l1'), useL2Store = emptyStore('l2')
   const useGlobalStore = P.defineStore('global', () => ({ env: V.ref('prd') }))
   const useTranscendingModeStore = P.defineStore('transcending', () => ({ selectedTranscendingMode: V.ref('lightning') }))
   const wallet = useWalletStore()
-  const state = { offline, native, ready, noLocal, parentId: '1'.repeat(64), acceptedTopups: 0, acceptedWithdrawals: 0, quoteRelease: null, actionQueue: [] }
+  const state = { offline, native, ready, noLocal, deferChannel, parentId: '1'.repeat(64), noticeWalletId: 11, optionsWalletId, quoteWalletId, optionsAccountIndex, quoteAccountIndex, lastQuote: null, acceptedTopups: 0, acceptedWithdrawals: 0, channelRelease: null, quoteRelease: null, actionQueue: [] }
   const channelId = () => `closed-channel-${wallet.accountIndex}`
-  const rawQuote = account => JSON.stringify({ quoteId: '2'.repeat(64), walletId: wallet.walletId, accountIndex: account, channelId: `closed-channel-${account}`, amount: 40000, walletFee: 770, requiredInput: 40770, feeRate: wallet.btcFeeRate, unsignedTx: 'exact-unsigned-fixture' })
+  const rawQuote = account => ` { "quoteId":"${'2'.repeat(64)}", "walletId":${JSON.stringify(state.quoteWalletId)}, "accountIndex":${state.quoteAccountIndex ?? account}, "channelId":"closed-channel-${account}", "amount":40000, "walletFee":770, "requiredInput":40770, "feeRate":${wallet.btcFeeRate}, "unsignedTx":"exact-unsigned-fixture" } `
   const record = (method, fn) => async (...args) => { calls.push({ method, args, accountAtCall: wallet.accountIndex, generationAtCall: identity.getWalletIdentityState().generation }); return fn(...args) }
   const actionResponse = (method, args, response) => {
     if (!deferActions) return response
@@ -74,14 +74,18 @@ async function fixture({ offline = false, native = false, ready = false, deferQu
   }
   sandbox.sat20wallet_wasm = {
     registerCallback: record('registerCallback', callback => { callbacks.current = callback; return { code: 0 } }),
-    getCurrentChannel: record('getCurrentChannel', () => ({ code: 0, data: state.ready ? { json: JSON.stringify({ channelId: channelId(), status: 16, localbalanceL1: [], capacity: 40000 }) } : undefined })),
+    getCurrentChannel: record('getCurrentChannel', async () => {
+      if (state.deferChannel) await new Promise(resolve => { state.channelRelease = resolve })
+      return { code: 0, data: state.ready ? { json: JSON.stringify({ channelId: channelId(), status: 16, localbalanceL1: [], capacity: 40000 }) } : undefined }
+    }),
     allReservations: record('allReservations', () => ({ code: 0, data: { reservations: [] } })),
     switchAccount: record('switchAccount', account => { wallet.accountIndex = account; return { code: 0 } }),
-    previewClosedChannelRecovery: record('previewClosedChannelRecovery', requested => ({ code: 0, data: JSON.stringify({ walletId: wallet.walletId, accountIndex: wallet.accountIndex, channelId: requested || channelId(), oldParentId: state.noLocal ? '' : state.parentId, hasLocalClosedState: !state.noLocal && !state.ready, canWithdraw: (!state.native || nativeWithdraw) && !state.ready && !state.noLocal, withdrawReason: state.noLocal ? 'Local recovery material is unavailable; connect online to rebuild or restore the required material' : state.native && !nativeWithdraw ? 'RGB/ARC/native withdrawal is not supported by this action' : '', withdrawFeeSats: 500, withdrawTxCount: 1, withdrawTxIds: ['3'.repeat(64)], withdrawPending: false, withdrawComplete: false }) })),
+    previewClosedChannelRecovery: record('previewClosedChannelRecovery', requested => ({ code: 0, data: JSON.stringify({ walletId: state.optionsWalletId, accountIndex: state.optionsAccountIndex ?? wallet.accountIndex, channelId: requested || channelId(), oldParentId: state.noLocal ? '' : state.parentId, hasLocalClosedState: !state.noLocal && !state.ready, canWithdraw: (!state.native || nativeWithdraw) && !state.ready && !state.noLocal, withdrawReason: state.noLocal ? 'Local recovery material is unavailable; connect online to rebuild or restore the required material' : state.native && !nativeWithdraw ? 'RGB/ARC/native withdrawal is not supported by this action' : '', withdrawFeeSats: 500, withdrawTxCount: 1, withdrawTxIds: ['3'.repeat(64)], withdrawPending: false, withdrawComplete: false }) })),
     quoteClosedChannelSingleUTXOTopup: record('quoteClosedChannelSingleUTXOTopup', async () => {
       const account = wallet.accountIndex
       if (deferQuote) await new Promise(resolve => { state.quoteRelease = resolve })
-      return state.offline ? { code: -1, msg: 'server is offline; you may explicitly broadcast your local Others' } : { code: 0, data: rawQuote(account) }
+      state.lastQuote = rawQuote(account)
+      return state.offline ? { code: -1, msg: 'server is offline; you may explicitly broadcast your local Others' } : { code: 0, data: state.lastQuote }
     }),
     confirmClosedChannelSingleUTXOTopup: record('confirmClosedChannelSingleUTXOTopup', quote => {
       const reviewed = JSON.parse(quote)
@@ -102,6 +106,7 @@ async function fixture({ offline = false, native = false, ready = false, deferQu
     if (name === 'pinia') return P
     if (name === 'radash') return { tryit, parallel }
     if (name === '@/lib/identity-boundary' || name === './identity-boundary') return loadTS('lib/identity-boundary.ts')
+    if (name === '@/lib/wire-wallet-id') return loadTS('lib/wire-wallet-id.ts')
     if (name === '@/lib/walletSession') return loadTS('lib/walletSession.ts')
     if (name === '@/utils/stp') return loadTS('utils/stp.ts')
     if (name === '@/utils/sat20') return { default: walletManager, __esModule: true }
@@ -151,10 +156,13 @@ async function fixture({ offline = false, native = false, ready = false, deferQu
   app.use(pinia); app.config.globalProperties.$t = key => key; app.config.errorHandler = error => errors.push(error); app.config.warnHandler = () => {}
   app.mount(root); await flush()
   const financialCalls = () => calls.filter(call => ['confirmClosedChannelSingleUTXOTopup', 'withdrawClosedChannelExact'].includes(call.method))
-  const emit = async (account = wallet.accountIndex, owner = wallet.walletId) => {
+  const emitRaw = async payload => {
     assert.equal(typeof callbacks.current, 'function', 'actual wallet page must register the SDK callback')
-    await callbacks.current('channelrebuildfundingrequired', JSON.stringify({ walletId: owner, accountIndex: account, channelId: `closed-channel-${account}`, message: state.ready ? 'channel READY; asset restoration paused for separate stub approval' : 'rebuild funding requires approval' }))
+    await callbacks.current('channelrebuildfundingrequired', payload)
     await flush()
+  }
+  const emit = async (account = wallet.accountIndex, owner = state.noticeWalletId) => {
+    await emitRaw(JSON.stringify({ walletId: owner, accountIndex: account, channelId: `closed-channel-${account}`, message: state.ready ? 'channel READY; asset restoration paused for separate stub approval' : 'rebuild funding requires approval' }))
   }
   const switchAccount = async account => {
     const generation = identity.beginWalletIdentityTransition()
@@ -165,7 +173,8 @@ async function fixture({ offline = false, native = false, ready = false, deferQu
     identity.completeWalletIdentityTransition(generation)
     await flush()
   }
-  return { root, wallet, state, calls, notices, errors, facade, identity, emit, switchAccount, financialCalls,
+  return { root, wallet, state, calls, notices, errors, facade, identity, emit, emitRaw, switchAccount, financialCalls,
+    channelStore: useChannelStore(), wireWalletIdToStoreId: existsSync('lib/wire-wallet-id.ts') ? loadTS('lib/wire-wallet-id.ts').wireWalletIdToStoreId : null,
     node: id => find(root, id), text: () => textOf(root),
     async click(id) { await clickNode(find(root, id)); assert.deepEqual(errors, [], 'render/event execution must not hide Vue errors') },
     dispose() { app.unmount(); if (typeof P.disposePinia === 'function') P.disposePinia(pinia) },
@@ -201,7 +210,74 @@ assert.equal(rebuild.financialCalls().length, 0, 'notification/preview must not 
 const rebuildButton = rebuild.node('rebuild-confirm'); await Promise.all([clickNode(rebuildButton), clickNode(rebuildButton)])
 assert.equal(rebuild.state.acceptedTopups, 1); assert.equal(rebuild.state.acceptedWithdrawals, 0)
 assert.equal(rebuild.financialCalls().length, 1); assert.equal(rebuild.financialCalls()[0].method, 'confirmClosedChannelSingleUTXOTopup')
+assert.equal(rebuild.financialCalls()[0].args[0], rebuild.state.lastQuote, 'confirm must forward the exact quoted bytes, including spaces and property order')
 rebuild.dispose()
+
+// The PWA store holds string IDs, while all three SDK JSON entry points hold
+// numeric IDs. A string disguised as a wire ID, or a rounded/invalid number,
+// must never pass the common identity boundary.
+const invalidWireIds = ['11', -1, -0, 1.5, NaN, Infinity, 9007199254740992, null, {}]
+const boundary = await fixture()
+assert.equal(boundary.wireWalletIdToStoreId(0), '0')
+assert.equal(boundary.wireWalletIdToStoreId(11), '11')
+for (const id of invalidWireIds) assert.equal(boundary.wireWalletIdToStoreId(id), null, `invalid wire wallet ID ${String(id)} must fail closed`)
+boundary.dispose()
+for (const invalid of ['11', -1, 1.5, NaN, 9007199254740992, null]) {
+  const noticeCase = await fixture()
+  await noticeCase.emit(0, invalid)
+  assert.equal(noticeCase.channelStore.closedRebuildFundingNotice, null, 'invalid numeric SDK notice cannot enter the UI store')
+  assert.equal(noticeCase.calls.some(call => call.method === 'getCurrentChannel'), false, 'invalid notice cannot start a channel refresh')
+  assert.equal(noticeCase.financialCalls().length, 0); noticeCase.dispose()
+
+  const optionsCase = await fixture({ optionsWalletId: invalid })
+  await optionsCase.emit()
+  assert.equal(optionsCase.calls.some(call => call.method === 'quoteClosedChannelSingleUTXOTopup'), false, 'invalid SDK options cannot request a funding quote')
+  assert.ok(optionsCase.node('closed-recovery-dialog'), 'invalid options may be explained in an error dialog')
+  assert.equal(Boolean(optionsCase.node('rebuild-confirm')?.props.disabled), true)
+  assert.equal(Boolean(optionsCase.node('withdraw-choice')?.props.disabled), true)
+  assert.equal(optionsCase.financialCalls().length, 0); optionsCase.dispose()
+
+  const quoteCase = await fixture({ quoteWalletId: invalid })
+  await quoteCase.emit()
+  assert.equal(Boolean(quoteCase.node('rebuild-confirm')?.props.disabled), true, 'invalid SDK quote cannot enable rebuild')
+  assert.equal(quoteCase.financialCalls().length, 0); quoteCase.dispose()
+}
+const wrongOptionsAccount = await fixture({ optionsAccountIndex: 1 })
+await wrongOptionsAccount.emit()
+assert.equal(wrongOptionsAccount.calls.some(call => call.method === 'quoteClosedChannelSingleUTXOTopup'), false)
+assert.equal(wrongOptionsAccount.financialCalls().length, 0); wrongOptionsAccount.dispose()
+const wrongQuoteAccount = await fixture({ quoteAccountIndex: 1 })
+await wrongQuoteAccount.emit()
+assert.equal(Boolean(wrongQuoteAccount.node('rebuild-confirm')?.props.disabled), true)
+assert.equal(wrongQuoteAccount.financialCalls().length, 0); wrongQuoteAccount.dispose()
+const wrongNoticeWallet = await fixture()
+await wrongNoticeWallet.emit(0, 22)
+assert.equal(wrongNoticeWallet.channelStore.closedRebuildFundingNotice, null)
+assert.equal(wrongNoticeWallet.financialCalls().length, 0); wrongNoticeWallet.dispose()
+for (const route of ['AB', 'ABA', 'generation-only']) {
+  const staleNotice = await fixture({ deferChannel: true })
+  const pendingNotice = staleNotice.emit()
+  await flush()
+  assert.equal(typeof staleNotice.state.channelRelease, 'function', 'notification must be suspended during the channel refresh')
+  if (route === 'AB' || route === 'ABA') await staleNotice.switchAccount(1)
+  if (route === 'ABA' || route === 'generation-only') await staleNotice.switchAccount(0)
+  staleNotice.state.channelRelease(); await pendingNotice
+  assert.equal(staleNotice.channelStore.closedRebuildFundingNotice, null, 'stale notification cannot enter the current account after an identity transition')
+  assert.equal(staleNotice.node('closed-recovery-dialog'), undefined)
+  assert.equal(staleNotice.financialCalls().length, 0); staleNotice.dispose()
+}
+const mutableNotice = await fixture({ deferChannel: true })
+const callbackObject = { walletId: 11, accountIndex: 0, channelId: 'closed-channel-0', message: 'original notice' }
+const pendingMutableNotice = mutableNotice.emitRaw(callbackObject)
+await flush()
+assert.equal(typeof mutableNotice.state.channelRelease, 'function')
+callbackObject.walletId = 22; callbackObject.accountIndex = 1; callbackObject.channelId = 'other'; callbackObject.message = 'mutated notice'
+mutableNotice.state.channelRelease(); await pendingMutableNotice
+assert.equal(mutableNotice.channelStore.closedRebuildFundingNotice?.walletId, '11')
+assert.equal(mutableNotice.channelStore.closedRebuildFundingNotice?.accountIndex, 0)
+assert.equal(mutableNotice.channelStore.closedRebuildFundingNotice?.channelId, 'closed-channel-0')
+assert.equal(mutableNotice.channelStore.closedRebuildFundingNotice?.message, 'original notice')
+assert.equal(mutableNotice.financialCalls().length, 0); mutableNotice.dispose()
 
 const withdraw = await fixture({ offline: true }); await withdraw.emit()
 assert.ok(withdraw.node('closed-recovery-dialog')); assert.match(withdraw.text(), /offline/i)
@@ -225,7 +301,7 @@ await routed.emit(1); assert.ok(routed.node('closed-recovery-dialog')); assert.m
 await routed.switchAccount(2); assert.equal(routed.node('closed-recovery-dialog'), undefined)
 assert.equal(routed.financialCalls().length, 0); routed.dispose()
 
-for (const change of [f => { f.wallet.btcFeeRate++ }, f => { f.wallet.network = 'mainnet' }, f => { f.wallet.walletId = 22 }]) {
+for (const change of [f => { f.wallet.btcFeeRate++ }, f => { f.wallet.network = 'mainnet' }, f => { f.wallet.walletId = '22' }]) {
   const f = await fixture(); await f.emit(); const stale = f.node('rebuild-confirm'); change(f); await flush()
   assert.equal(f.node('closed-recovery-dialog'), undefined, 'changed context must close old approval')
   await clickNode(stale); assert.equal(f.financialCalls().length, 0); f.dispose()
@@ -401,6 +477,7 @@ for (const kind of actionKinds) for (const field of ['btcFeeRate', 'network', 'w
       await f.emit()
       const old = await beginAction(f, kind)
       if (field === 'network') f.wallet.network = 'mainnet'
+      else if (field === 'walletId') f.wallet.walletId = '22'
       else f.wallet[field]++
       await flush()
       const busyAfterChange = Boolean(f.node('recovery-choices-open')?.props.disabled)

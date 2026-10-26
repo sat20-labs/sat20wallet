@@ -1,3 +1,6 @@
+import { registerOwnedBrowser } from './pwa-owned-browser.mjs'
+import { createRunnerResources } from './pwa-runner-resources.mjs'
+import { walletPWARuntimeCases as requiredWalletRuntimeCases } from './wallet-pwa-groups.mjs'
 import assert from 'node:assert/strict'
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -387,7 +390,10 @@ if (regtestMode && focusedWalletCases) {
   assert.ok(!focusedWalletCases.includes(requiredPwaWalletBasicCases[12]) || focusedWalletCases.includes(requiredPwaWalletBasicCases[0]),
     'the no-owned-name negative case must include its page-created wallet prerequisite')
 }
-const integrationDapp = posFixture ? await createPwaIntegrationDapp(expectedNetwork) : null
+const runnerResources = createRunnerResources()
+let runnerPrimaryError
+try {
+const integrationDapp = posFixture ? runnerResources.own('dapp', await createPwaIntegrationDapp(expectedNetwork)) : null
 const existingPwaURL = regtestWalletFixture?.existingPwaURL
 let existingReleaseId
 if (existingPwaURL) {
@@ -404,7 +410,8 @@ if (existingPwaURL) {
 const server = existingPwaURL ? {
   resolvedUrls: { local: [existingPwaURL] },
   listen: async () => {}, close: async () => {},
-} : await createServer({
+} : runnerResources.own('vite', await createServer({
+  cacheDir: runnerResources.cacheDir,
   ...(regtestMode || posFixture?.silentPay ? { mode: 'regtest' } : {}),
   server: {
     host: '127.0.0.1',
@@ -416,7 +423,7 @@ const server = existingPwaURL ? {
     'import.meta.env.VITE_SAT20_MARKET_URL': JSON.stringify(integrationDapp.url),
     'import.meta.env.VITE_SAT20_DAPP_ALLOWED_ORIGINS': JSON.stringify(integrationDapp.origin),
   } } : {}),
-})
+}))
 // SDK browser tests use the current SDK compiled into Go's temporary directory. The
 // production loader still verifies the actual bytes, MIME, size and SHA-256.
 const walletWasmPath = storageWasm ? null : (regtestWalletFixture?.wasmPath ?? posFixture?.wasmPath ?? process.env.SAT20_PWA_E2E_WASM)
@@ -550,7 +557,7 @@ const requiredRGBCases = [
   "RGB PWA: page restores nonempty issued multiwallet ownership proofs and locks"
 ]
 const completedCases = new Map()
-const requiredWalletRuntimeCases = ['Wallet PWA: all feature groups finish without unhandled browser errors']
+
 // Explicit local reruns use the same browser, WASM and node fixture. The
 // ordinary Go gate remains the complete required-case ledger above.
 if (focusedWalletCases) {
@@ -670,8 +677,53 @@ async function ready(page) {
   const continueButton = page.getByRole('button', { name: 'Continue in browser', exact: true })
   if (await continueButton.isVisible()) await continueButton.click()
 }
+// Optional test-only metadata audit. Never log signed values, credentials,
+// account keys, signatures, or full response bodies; do not alter traffic.
+let diagnosticContextSequence = 0
+function auditAccountCAS(context) {
+  const writer = ++diagnosticContextSequence
+  const requests = new WeakMap()
+  let sequence = 0
+  const digest = value => createHash('sha256').update(String(value ?? '')).digest('hex').slice(0, 16)
+  const keyClass = key => /account\/root-key-wrapper\/current$/.test(key) ? 'root-wrapper'
+    : /account\/state$/.test(key) ? 'account-state'
+    : /account-managed-data$/.test(key) ? 'managed-data'
+    : /account\/recovery\//.test(key) ? 'recovery-package'
+    : /\/account\//.test(key) ? 'account-binding' : 'other'
+  const record = r => ({ key_class: keyClass(r?.Key ?? r?.key ?? ''),
+    key_digest: digest(r?.Key ?? r?.key), seq: r?.Seq ?? r?.seq,
+    value_digest: digest(r?.Value ?? r?.value), issue_height: r?.IssueHeight ?? r?.issue_height })
+  const emit = data => console.error(JSON.stringify({ event: 'test-cas-diagnostic', writer, at: Date.now(), ...data }))
+  context.on('request', request => {
+    if (request.method() !== 'POST' || !new URL(request.url()).pathname.endsWith('/records/batch-cas')) return
+    try {
+      const body = request.postDataJSON()
+      const id = ++sequence
+      requests.set(request, id)
+      emit({ id, phase: 'request', endpoint_digest: digest(body.endpoint_id),
+        rows: (body.mutations ?? []).map(m => ({ ...record(m.record),
+          expected_etag: m.expected_etag?.slice(0, 16) ?? null, expect_absent: m.expect_absent === true })) })
+    } catch { emit({ phase: 'request-unreadable' }) }
+  })
+  context.on('response', async response => {
+    const id = requests.get(response.request())
+    if (!id) return
+    try {
+      const body = await response.json()
+      const data = body.data ?? {}
+      const message = String(body.msg ?? body.message ?? '')
+      emit({ id, phase: 'response', http_status: response.status(), code: body.code,
+        error_class: /write conflict/i.test(message) ? 'write-conflict' : /stale generation/i.test(message) ? 'stale-generation' : message && body.code ? 'other' : null,
+        applied: data.applied, rows: (data.records ?? []).map(record),
+        etags: (data.hashes ?? data.etags ?? []).map(value => String(value).slice(0, 16)),
+        prefix_states: (data.prefix_states ?? []).map(item => ({ prefix_digest: digest(item.prefix), generation: item.generation })) })
+    } catch { emit({ id, phase: 'response-unreadable', http_status: response.status() }) }
+  })
+}
+
 async function device(sharedContext) {
   const context = sharedContext ?? await browser.newContext()
+  if (!sharedContext && posFixture && process.env.SAT20_PWA_DIAGNOSTIC === '1') auditAccountCAS(context)
   context.setDefaultTimeout(30000)
   context.setDefaultNavigationTimeout(90000)
   // Keep the real config modules and point this private test build at its
@@ -726,7 +778,7 @@ async function device(sharedContext) {
     body: `import { walletStorage } from '/lib/walletStorage.ts';
       await walletStorage.initializeState();
       await walletStorage.setValue('network', '${expectedNetwork}');
-      export const logLevel = 2; export const getConfig = () => (${JSON.stringify(config)});`,
+      export const logLevel = ${process.env.SAT20_PWA_DIAGNOSTIC === '1' ? 3 : 2}; export const getConfig = () => (${JSON.stringify(config)});`,
   }))
   if (!sharedContext) await context.route('**/*', route => {
     const url = new URL(route.request().url())
@@ -774,6 +826,20 @@ async function device(sharedContext) {
     })
   }
   const page = await context.newPage()
+  await page.addInitScript(() => {
+    const documentId = crypto.randomUUID()
+    window.__SAT20_E2E_NOTE__ = (method, phase, details = {}) => {
+      console.log(JSON.stringify({ event: 'test-call-diagnostic', document_id: documentId,
+        method, phase, at: Date.now(), ready: document.readyState, ...details }))
+    }
+    for (const event of ['DOMContentLoaded', 'pageshow', 'pagehide']) {
+      window.addEventListener(event, () => window.__SAT20_E2E_NOTE__('document', event))
+    }
+    window.__SAT20_E2E_NOTE__('document', 'created')
+  })
+  page.on('console', message => {
+    if (message.type() === 'log' && message.text().startsWith('{"event":"test-call-diagnostic"')) console.log(message.text())
+  })
   page.on('pageerror', error => {
     pageErrors.push(error.message)
     console.error(`[PWA page error] ${error.message}`)
@@ -827,13 +893,30 @@ async function device(sharedContext) {
 }
 async function walletCall(page, method, ...args) {
   return page.evaluate(async ({ method, args }) => {
-    const [error, result] = await window.sat20[method](...args)
-    if (error) throw new Error(`${method}: ${error.message}`)
-    return result
+    const note = phase => window.__SAT20_E2E_NOTE__?.(method, phase, {
+      has_global: Boolean(window.sat20),
+      has_method: typeof window.sat20?.[method] === 'function',
+      same_verify_instance: window.sat20 === window.__SAT20_PWA_VERIFY__?.sat20,
+    })
+    note('enter')
+    try {
+      const [error, result] = await window.sat20[method](...args)
+      note(error ? 'returned-error' : 'returned')
+      if (error) throw new Error(`${method}: ${error.message}`)
+      return result
+    } catch (error) { note('threw'); throw error }
   }, { method, args })
 }
 async function accountCall(page, method, ...args) {
-  return page.evaluate(({ method, args }) => window.accountE2E[method](...args), { method, args })
+  return page.evaluate(async ({ method, args, diagnostic }) => {
+    const note = phase => { if (diagnostic) window.__SAT20_E2E_NOTE__?.(`account.${method}`, phase) }
+    note('enter')
+    try {
+      const result = await window.accountE2E[method](...args)
+      note('returned')
+      return result
+    } catch (error) { note('threw'); throw error }
+  }, { method, args, diagnostic: process.env.SAT20_PWA_DIAGNOSTIC === '1' })
 }
 async function unlock(page, credential = password) {
   await page.evaluate(async credential => {
@@ -1448,7 +1531,8 @@ async function runAccountGate() {
 let runFailed = false
 try {
   await server.listen()
-  browser = await chromium.launch({ headless: true, ...(executable ? { executablePath: executable } : {}) })
+  browser = runnerResources.own('browser', await chromium.launch({ headless: true, ...(executable ? { executablePath: executable } : {}) }))
+  await registerOwnedBrowser(browser)
   if (storageWasm) await runIndexedDBStorageGate()
   else if (sdkWASM) {
     await runSDKWASMCases({ check, device, pageErrors, preserveBrowserFailureState }, posFixture)
@@ -1506,10 +1590,14 @@ try {
   if (regtestMode && required.length && (runFailed || Number(process.exitCode ?? 0) !== 0 || !complete)) {
     await preserveBrowserFailureState()
   }
-  await browser?.close()
-  await server.close()
-  await integrationDapp?.close()
   if (required.length && !complete) process.exitCode = 1
   assert.equal(new Set(required).size, required.length, 'required case names must be unique')
   assert.ok([...completedCases.keys()].every(name => required.includes(name)), 'required case registry is incomplete')
+}
+
+} catch (error) {
+  runnerPrimaryError = error
+  throw error
+} finally {
+  await runnerResources.close(runnerPrimaryError)
 }

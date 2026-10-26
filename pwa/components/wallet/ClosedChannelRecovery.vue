@@ -55,6 +55,7 @@ import { useToast } from '@/components/ui/toast-new'
 import satsnetStp from '@/utils/stp'
 import type { ClosedSingleUTXOTopupQuote, ClosedChannelRecoveryOptions } from '@/utils/stp'
 import { assertWalletIdentityReady, getWalletIdentityState, subscribeWalletIdentity } from '@/lib/identity-boundary'
+import { wireWalletIdToStoreId } from '@/lib/wire-wallet-id'
 
 const walletStore = useWalletStore()
 const channelStore = useChannelStore()
@@ -71,8 +72,8 @@ const accountNotice = computed(() => {
 const matchingNotice = computed(() => {
   if (accountNotice.value) return accountNotice.value
   const local = localRecovery.value
-  if (channel.value || !local || local.walletId !== walletId.value || local.accountIndex !== accountIndex.value) return null
-  return { walletId: local.walletId, accountIndex: local.accountIndex, channelId: local.channelId,
+  if (channel.value || !local || wireWalletIdToStoreId(local.walletId) !== walletId.value || local.accountIndex !== accountIndex.value) return null
+  return { walletId: walletId.value, accountIndex: local.accountIndex, channelId: local.channelId,
     message: local.hasLocalClosedState ? 'Local closed-channel recovery is available. Review your choices without sending money.' : local.withdrawReason, assetRestorationOnly: false }
 })
 const localReviewUnavailable = computed(() => !accountNotice.value && !localRecovery.value?.hasLocalClosedState)
@@ -127,7 +128,7 @@ const requestClosedTopup = async () => {
     if (token !== request || !current(reviewContext)) return
     if (capabilityError || !rawOptions) throw capabilityError || new Error('Local recovery capability is unavailable')
     const options = JSON.parse(rawOptions) as ClosedChannelRecoveryOptions
-    if (!options || options.walletId !== walletId.value || options.accountIndex !== accountIndex.value || options.channelId !== channelId || typeof options.canWithdraw !== 'boolean') throw new Error('Invalid account-bound recovery capability')
+    if (!options || wireWalletIdToStoreId(options.walletId) !== walletId.value || options.accountIndex !== accountIndex.value || options.channelId !== channelId || typeof options.canWithdraw !== 'boolean') throw new Error('Invalid account-bound recovery capability')
     if (options.canWithdraw && (!options.oldParentId || !Number.isSafeInteger(options.withdrawFeeSats) || options.withdrawFeeSats < 0 || !Number.isSafeInteger(options.withdrawTxCount) || options.withdrawTxCount <= 0)) throw new Error('Incomplete local withdrawal capability')
     optionsReview.value = Object.freeze({ ...reviewContext, options: Object.freeze(options) })
     if (options.withdrawComplete) { recoveryError.value = options.withdrawReason; showDialog.value = true; return }
@@ -136,7 +137,7 @@ const requestClosedTopup = async () => {
     if (quoteError || !quote) recoveryError.value = quoteError?.message || 'Rebuild funding is currently unavailable'
     else {
       const details = JSON.parse(quote) as ClosedSingleUTXOTopupQuote
-      if (!details || details.walletId !== walletId.value || details.accountIndex !== accountIndex.value || details.channelId !== channelId || details.feeRate !== btcFeeRate.value || !Number.isSafeInteger(details.amount) || details.amount <= 0 || !Number.isSafeInteger(details.walletFee) || details.walletFee < 0 || !Number.isSafeInteger(details.requiredInput) || details.requiredInput !== details.amount + details.walletFee || !details.quoteId || !details.unsignedTx) throw new Error('Invalid exact funding quote')
+      if (!details || wireWalletIdToStoreId(details.walletId) !== walletId.value || details.accountIndex !== accountIndex.value || details.channelId !== channelId || details.feeRate !== btcFeeRate.value || !Number.isSafeInteger(details.amount) || details.amount <= 0 || !Number.isSafeInteger(details.walletFee) || details.walletFee < 0 || !Number.isSafeInteger(details.requiredInput) || details.requiredInput !== details.amount + details.walletFee || !details.quoteId || !details.unsignedTx) throw new Error('Invalid exact funding quote')
       closedTopupReview.value = Object.freeze({ ...reviewContext, quote, details: Object.freeze(details) })
     }
     showDialog.value = true
@@ -197,7 +198,7 @@ async function loadLocalRecovery() {
     if (disposed || token !== localRequest || context !== JSON.stringify([walletId.value, accountIndex.value, network.value])) return
     if (error || !raw) throw error || new Error('Local recovery capability is unavailable; connect online or restore the required local material')
     const options = JSON.parse(raw) as ClosedChannelRecoveryOptions
-    if (options.walletId !== walletId.value || options.accountIndex !== accountIndex.value || typeof options.channelId !== 'string' || typeof options.hasLocalClosedState !== 'boolean' || typeof options.canWithdraw !== 'boolean') throw new Error('Local recovery capability does not match this account')
+    if (!options || wireWalletIdToStoreId(options.walletId) !== walletId.value || options.accountIndex !== accountIndex.value || typeof options.channelId !== 'string' || typeof options.hasLocalClosedState !== 'boolean' || typeof options.canWithdraw !== 'boolean') throw new Error('Local recovery capability does not match this account')
     localRecovery.value = Object.freeze(options)
   } catch (error) {
     if (!disposed && token === localRequest && context === JSON.stringify([walletId.value, accountIndex.value, network.value])) localCapabilityError.value = error instanceof Error ? error.message : String(error)

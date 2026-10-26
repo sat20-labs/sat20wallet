@@ -99,8 +99,9 @@ func (e *rgbNetworkAuditEvidence) Broadcast([]byte) (string, error) {
 	return "", errRGBNetworkAuditBoundary
 }
 
-// No test acquires the mutexes being audited. Production entrypoints own any
-// observed lock; the existing transport fixtures stop before external I/O.
+// Audit only the foreground operation. Account activation and issuance in these
+// fixtures can start readiness workers that read the same manager mutex; those
+// workers are not part of the transport operation being checked.
 func TestRGBNetworkBoundariesHoldNoWalletLocks(t *testing.T) {
 	for _, entry := range []string{"public-refresh-dkvs", "background-mailbox-dkvs", "background-enable-dkvs", "read-only-resolve-dkvs"} {
 		t.Run(entry, func(t *testing.T) {
@@ -109,6 +110,7 @@ func TestRGBNetworkBoundariesHoldNoWalletLocks(t *testing.T) {
 			defer func() { _chain = old }()
 			manager, _, secret := buildRootWrapperSource(t)
 			defer zeroBytes(secret)
+			manager.stopAccountBackgroundTasks()
 			probe := &rgbNetworkAuditProbe{owner: manager}
 			remote := newRGB11MemoryDKVSHTTP()
 			manager.http = &rgbNetworkAuditHTTP{rgb11MemoryDKVSHTTP: remote, probe: probe}
@@ -136,6 +138,7 @@ func TestRGBNetworkBoundariesHoldNoWalletLocks(t *testing.T) {
 		t.Run(entry, func(t *testing.T) {
 			manager, _, imported, evidence, _ := newRGB11GenericSendFixture(t)
 			manager.rgbManager.scopeStates.stopReconciliations()
+			manager.stopAccountBackgroundTasks()
 			proofs, err := manager.rgbManager.projectionStore.ListProofs()
 			if err != nil || len(proofs) == 0 {
 				t.Fatalf("setup: proof: %v", err)
@@ -175,15 +178,29 @@ func TestRGBNetworkBoundariesHoldNoWalletLocks(t *testing.T) {
 	t.Run("probe-unlocked-control", func(t *testing.T) {
 		manager, _, secret := buildRootWrapperSource(t)
 		defer zeroBytes(secret)
+		manager.stopAccountBackgroundTasks()
 		probe := &rgbNetworkAuditProbe{owner: manager}
 		probe.record()
 		probe.assertUnlocked(t)
+	})
+	t.Run("probe-held-control", func(t *testing.T) {
+		manager, _, secret := buildRootWrapperSource(t)
+		defer zeroBytes(secret)
+		manager.stopAccountBackgroundTasks()
+		probe := &rgbNetworkAuditProbe{owner: manager}
+		manager.mutex.Lock()
+		probe.record()
+		manager.mutex.Unlock()
+		if probe.calls != 1 || len(probe.held) != 1 || probe.held[0] != "manager-data" {
+			t.Fatalf("probe did not detect an explicitly held foreground lock: calls=%d held=%v", probe.calls, probe.held)
+		}
 	})
 }
 
 func TestRGB11ProxyReceiveTransportHoldsNoWalletLocks(t *testing.T) {
 	manager, _, imported, _, _ := newRGB11GenericSendFixture(t)
 	manager.rgbManager.scopeStates.stopReconciliations()
+	manager.stopAccountBackgroundTasks()
 	probe := &rgbNetworkAuditProbe{owner: manager}
 	proxy := &rgb11ProxyTestServer{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { probe.record(); proxy.serveHTTP(w, r) }))
@@ -199,6 +216,7 @@ func TestRGB11ProxyReceiveTransportHoldsNoWalletLocks(t *testing.T) {
 func TestRGB11AccountRecoveryTransportHoldsNoWalletLocks(t *testing.T) {
 	manager, _, _, evidence, _ := newRGB11GenericSendFixture(t)
 	manager.rgbManager.scopeStates.stopReconciliations()
+	manager.stopAccountBackgroundTasks()
 	catalog, err := manager.accountManagedDataCatalog()
 	if err != nil {
 		t.Fatal(err)
@@ -217,6 +235,7 @@ func TestRGB11AccountRecoveryTransportHoldsNoWalletLocks(t *testing.T) {
 func TestRGB11ExactRestoreNamingTransportHoldsNoWalletLocks(t *testing.T) {
 	manager, _, imported, evidence, _ := newRGB11GenericSendFixture(t)
 	manager.rgbManager.scopeStates.stopReconciliations()
+	manager.stopAccountBackgroundTasks()
 	walletID, err := manager.rgbManager.RGB11WalletID()
 	if err != nil {
 		t.Fatal(err)

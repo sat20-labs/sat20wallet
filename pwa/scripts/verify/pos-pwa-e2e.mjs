@@ -1,3 +1,4 @@
+import { assertSnapshotTransactionDelta } from './l1-snapshot-assertions.mjs'
 import assert from 'node:assert/strict'
 import { expect } from '@playwright/test'
 import { address as bitcoinAddress, networks, Transaction, initEccLib } from 'bitcoinjs-lib'
@@ -798,18 +799,8 @@ export async function runPwaPosCases(t, fixture) {
   const l1TransactionSet = snapshot => new Set([
     ...(snapshot.l1.pending_txids ?? []), ...(snapshot.l1.confirmed_txids ?? []),
   ])
-  const assertL1TransactionDelta = (before, after, allowedAdded = [], broadcastDelta = 0, message = 'unexpected L1 transaction change') => {
-    const beforeTxIDs = l1TransactionSet(before)
-    const afterTxIDs = l1TransactionSet(after)
-    const removed = [...beforeTxIDs].filter(txid => !afterTxIDs.has(txid)).sort()
-    const added = [...afterTxIDs].filter(txid => !beforeTxIDs.has(txid)).sort()
-    assert.deepEqual(removed, [], `${message}: existing pending or confirmed transactions disappeared`)
-    assert.deepEqual(added, [...allowedAdded].sort(), `${message}: new pending or confirmed transactions differ`)
-    if (broadcastDelta !== null && before.l1.broadcast_count !== undefined) {
-      assert.equal(after.l1.broadcast_count, before.l1.broadcast_count + broadcastDelta,
-        `${message}: legacy broadcast counter differs`)
-    }
-  }
+  const assertL1TransactionDelta = (...args) => assertSnapshotTransactionDelta(
+    args[0], args[1], args[2], args[3], args[4], fixture.realBitcoinControl === true)
 
   try {
     // Test wallet import is fixture setup. Every movement of its funds below

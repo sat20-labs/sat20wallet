@@ -4,7 +4,7 @@ import { defineStore } from 'pinia'
 import { computed, nextTick, ref, watch } from 'vue'
 import { parallel } from 'radash'
 export interface ClosedRebuildFundingNotice {
-  walletId: number
+  walletId: string
   accountIndex: number
   channelId: string
   message: string

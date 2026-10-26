@@ -120,7 +120,8 @@ async function runPwaRgbCaseGroup(t, fixture, udaOnly) {
     page.on('console', message => {
       let value = message.text()
       if (!/^(?:fatal error:|panic:|goroutine \d|TypeError:|\[Vue warn\]|\s*(?:runtime\.|sync\.|github\.com\/sat20-labs\/|\/Users\/.*\.go:))/.test(value)
-        && !/RGB11 (?:chain reconciliation .*|L1 monitor tick) failed:/.test(value)) return
+        && !/RGB11 (?:chain reconciliation .*|L1 monitor tick) failed:/.test(value)
+        && !/activation_baseline_mismatch phase=local_builder_compare/.test(value)) return
       for (const fixtureActor of [senderActor, receiverActor]) {
         for (const secret of [fixtureActor.mnemonic, fixtureActor.password]) value = value.replaceAll(secret, '[redacted]')
       }
@@ -405,9 +406,17 @@ async function runPwaRgbCaseGroup(t, fixture, udaOnly) {
           const { default: manager } = await import('/utils/sat20.ts')
           const create = manager.createRGB11Invoice.bind(manager)
           manager.createRGB11Invoice = async (...args) => {
-            const result = await create(...args)
-            if (!result[0]) window.__rgbUDAReceiveRequest = result[1]
-            return result
+            const note = phase => window.__SAT20_E2E_NOTE__?.('createRGB11Invoice', phase, {
+              same_global_instance: manager === window.sat20,
+              same_verify_instance: manager === window.__SAT20_PWA_VERIFY__?.sat20,
+            })
+            note('enter')
+            try {
+              const result = await create(...args)
+              note(result[0] ? 'returned-error' : 'returned')
+              if (!result[0]) window.__rgbUDAReceiveRequest = result[1]
+              return result
+            } catch (error) { note('threw'); throw error }
           }
         })
         await receive.getByRole('button', { name: 'Generate Invoice', exact: true }).click()
@@ -850,9 +859,17 @@ async function runPwaRgbCaseGroup(t, fixture, udaOnly) {
         const { default: manager } = await import('/utils/sat20.ts')
         const cancel = manager.cancelRGB11OutOfBandTransfer.bind(manager)
         manager.cancelRGB11OutOfBandTransfer = async (...args) => {
-          const result = await cancel(...args)
-          window.__observedRGB11Cancellation = { finished: true, error: result[0]?.message ?? null, cancelled: result[1]?.cancelled }
-          return result
+          const note = phase => window.__SAT20_E2E_NOTE__?.('cancelRGB11OutOfBandTransfer', phase, {
+            same_global_instance: manager === window.sat20,
+            same_verify_instance: manager === window.__SAT20_PWA_VERIFY__?.sat20,
+          })
+          note('enter')
+          try {
+            const result = await cancel(...args)
+            note(result[0] ? 'returned-error' : 'returned')
+            window.__observedRGB11Cancellation = { finished: true, error: result[0]?.message ?? null, cancelled: result[1]?.cancelled }
+            return result
+          } catch (error) { note('threw'); throw error }
         }
       })
       await sender.getByRole('button', { name: 'Cancel and release reservation', exact: true }).click()
