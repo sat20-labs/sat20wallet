@@ -9,6 +9,7 @@ import (
 	indexer "github.com/sat20-labs/indexer/common"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
+	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -49,8 +50,8 @@ func TestClosedAssetRestoreInventoryPreservesBRCFirstOrder(t *testing.T) {
 	manager, channel, asset, output, _, base := closedAssetPipelineFixture(t, true)
 	brc := indexer.AssetName{Protocol: indexer.PROTOCOL_NAME_BRC20, Type: indexer.ASSET_TYPE_FT, Ticker: "ordi"}
 	brcOutput := output.Clone()
-	brcOutput.OutPointStr = output.OutPointStr[:64] + ":1"
 	brcOutput.Assets = indexer.TxAssets{{Name: brc, Amount: *indexer.NewDefaultDecimal(10)}}
+	addClosedAssetPipelineOutput(t, base, brcOutput, 3, false)
 	rpc := &closedAssetInventoryIndexer{closedAssetPipelineIndexer: base, summary: &indexerwire.AssetSummary{Data: []*indexer.AssetInfo{
 		{Name: asset.AssetName, Amount: *indexer.NewDefaultDecimal(100)}, {Name: brc, Amount: *indexer.NewDefaultDecimal(10)},
 	}}, byAsset: map[string][]*indexerwire.TxOutputInfo{asset.String(): {output.ToAssetsInUtxo()}, brc.String(): {brcOutput.ToAssetsInUtxo()}}}
@@ -58,6 +59,75 @@ func TestClosedAssetRestoreInventoryPreservesBRCFirstOrder(t *testing.T) {
 	name, point, err := closedAssetDriverAPI(t, manager).nextClosedChannelAssetRestoreSource(context.Background(), channel.LocalWallet(), channel.ChannelId)
 	if err != nil || name != brc.String() || point != brcOutput.OutPointStr {
 		t.Fatalf("BRC-first exact selection: asset=%s point=%s err=%v", name, point, err)
+	}
+}
+
+func TestClosedAssetRestoreInventorySkipsLuckyAndSelectsOrdinary(t *testing.T) {
+	manager, channel, asset, output, peer, base := closedAssetPipelineFixture(t, true)
+	lucky := output.Clone()
+	lucky.Assets = indexer.TxAssets{{Name: asset.AssetName, Amount: *indexer.NewDefaultDecimal(50), BindingSat: 1}}
+	addClosedAssetPipelineOutput(t, base, lucky, 4, true)
+	rpc := &closedAssetInventoryIndexer{
+		closedAssetPipelineIndexer: base,
+		summary:                    &indexerwire.AssetSummary{Data: []*indexer.AssetInfo{{Name: asset.AssetName, Amount: *indexer.NewDefaultDecimal(150)}}},
+		byAsset:                    map[string][]*indexerwire.TxOutputInfo{asset.String(): {lucky.ToAssetsInUtxo(), output.ToAssetsInUtxo()}},
+	}
+	manager.l1IndexerClient.SetMaster(rpc)
+	name, point, err := closedAssetDriverAPI(t, manager).nextClosedChannelAssetRestoreSource(context.Background(), peer.captured, channel.ChannelId)
+	if err != nil || name != asset.String() || point != output.OutPointStr || point == lucky.OutPointStr {
+		t.Fatalf("Lucky source blocked ordinary restoration candidate: asset=%s point=%s err=%v", name, point, err)
+	}
+	if peer.requests != 0 || base.walletQueries != 0 || base.broadcasts != 0 {
+		t.Fatal("source discovery performed a signing or funding action")
+	}
+}
+
+func TestClosedAssetRestoreInventoryCompletesWhenOnlyLuckyRemains(t *testing.T) {
+	manager, channel, asset, output, peer, base := closedAssetPipelineFixture(t, true)
+	channel.SetCommitLocalValue(asset, indexer.NewDefaultDecimal(100))
+	if err := channel.AddFundingOutput(output, asset); err != nil {
+		t.Fatal(err)
+	}
+	anchor := swire.NewMsgTx(2)
+	anchor.AddTxOut(swire.NewTxOut(1000, swire.TxAssets{{Name: asset.AssetName, Amount: *indexer.NewDefaultDecimal(100), BindingSat: 1}}, channel.GetChannelPkScript()))
+	channel.AddUtxo_SatsNet(sindexer.GenerateTxOutput(anchor, 0))
+	channel.StaticMerkleRoot = channel.CalcStaticMerkleRoot()
+	if err := manager.SaveChannelToDB(channel); err != nil {
+		t.Fatal(err)
+	}
+	lucky := output.Clone()
+	lucky.Assets = indexer.TxAssets{{Name: asset.AssetName, Amount: *indexer.NewDefaultDecimal(50), BindingSat: 1}}
+	addClosedAssetPipelineOutput(t, base, lucky, 5, true)
+	rpc := &closedAssetInventoryIndexer{
+		closedAssetPipelineIndexer: base,
+		summary:                    &indexerwire.AssetSummary{Data: []*indexer.AssetInfo{{Name: asset.AssetName, Amount: *indexer.NewDefaultDecimal(150)}}},
+		byAsset:                    map[string][]*indexerwire.TxOutputInfo{asset.String(): {lucky.ToAssetsInUtxo()}},
+	}
+	manager.l1IndexerClient.SetMaster(rpc)
+	done, err := closedAssetDriverAPI(t, manager).driveClosedChannelAssetRestoreForWallet(context.Background(), peer.captured, peer, channel.ChannelId)
+	if err != nil || !done {
+		t.Fatalf("Lucky-only residual blocked terminal inventory: done=%t err=%v", done, err)
+	}
+	if peer.requests != 0 || base.walletQueries != 0 || base.broadcasts != 0 {
+		t.Fatal("terminal inventory performed a signing or funding action")
+	}
+}
+
+func TestClosedAssetRestoreInventoryRejectsUnreadableSource(t *testing.T) {
+	manager, channel, asset, output, peer, base := closedAssetPipelineFixture(t, true)
+	base.raw = nil
+	rpc := &closedAssetInventoryIndexer{
+		closedAssetPipelineIndexer: base,
+		summary:                    &indexerwire.AssetSummary{Data: []*indexer.AssetInfo{{Name: asset.AssetName, Amount: *indexer.NewDefaultDecimal(100)}}},
+		byAsset:                    map[string][]*indexerwire.TxOutputInfo{asset.String(): {output.ToAssetsInUtxo()}},
+	}
+	manager.l1IndexerClient.SetMaster(rpc)
+	name, point, err := closedAssetDriverAPI(t, manager).nextClosedChannelAssetRestoreSource(context.Background(), peer.captured, channel.ChannelId)
+	if err == nil || name != "" || point != "" {
+		t.Fatalf("unreadable L1 source was treated as ordinary or complete: asset=%s point=%s err=%v", name, point, err)
+	}
+	if peer.requests != 0 || base.walletQueries != 0 || base.broadcasts != 0 {
+		t.Fatal("source read failure performed a signing or funding action")
 	}
 }
 

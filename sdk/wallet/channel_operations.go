@@ -385,17 +385,10 @@ func (p *Manager) LockToChannelWithExpand(channelId string, assetName string, am
 		return "", 0, fmt.Errorf("invalid amt")
 	}
 
-	url, err := p.GetTranscendContractWithAssetNameInServer(assetName)
-	if err != nil {
-		Log.Errorf("can't find transcend contract by asset %s", assetName)
-		return "", 0, err
-	}
-
 	return p.PerformLocalAction(LOCAL_ACTION_LOCK_WITH_EXPAND, &LocalActionParam_Expand{
-		ChannelId:   channelId,
-		AssetName:   name,
-		Amt:         dAmt,
-		ContractURL: url,
+		ChannelId: channelId,
+		AssetName: name,
+		Amt:       dAmt,
 	}, feeRate)
 }
 
@@ -1148,7 +1141,15 @@ func (p *Manager) prepareClosedReopenFunding(w common.Wallet, address string, st
 	sort.Slice(utxos, func(i, j int) bool { return utxos[i].Value > utxos[j].Value })
 	var readErr error
 	output := selectReopenFundingOutput(utxos, feeCfg.MinCapacity(), func(outpoint string) bool {
-		_, err := p.l2IndexerClient.GetAscendData(outpoint)
+		lucky, err := p.isBTCLuckyL1Output(outpoint, nil)
+		if err != nil {
+			readErr = err
+			return true
+		}
+		if lucky {
+			return true
+		}
+		_, err = p.l2IndexerClient.GetAscendData(outpoint)
 		if policy == closedReopenExistingFundingOnly && err != nil && !closedReopenAscendMissing(outpoint, err) {
 			readErr = err
 			return true
@@ -1247,6 +1248,14 @@ func (p *Manager) RebuildChannelWithUtxo(fundingUtxo string) (string, error) {
 		})
 
 		for _, utxo := range utxos {
+			lucky, err := p.isBTCLuckyL1Output(utxo.OutPoint, nil)
+			if err != nil {
+				return "", err
+			}
+			if lucky {
+				continue
+			}
+
 			reason, ok := classifyRebuildFundingUtxo(ledger, utxo.OutPoint)
 			if !ok {
 				Log.Warnf("skip rebuild candidate %s: %s", utxo.OutPoint, reason)

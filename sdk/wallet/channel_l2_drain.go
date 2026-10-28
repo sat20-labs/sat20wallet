@@ -3,11 +3,12 @@ package wallet
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
+	indexer "github.com/sat20-labs/indexer/common"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
@@ -31,70 +32,76 @@ func (r *channelL2Residual) Empty() bool {
 	return r == nil || (len(r.Assets) == 0 && len(r.Utxos) == 0)
 }
 
+// An address balance is not evidence of a closed channel. Only an absent
+// local channel AND absent indexed history permit a first opening.
+func (p *Manager) channelL2FirstOpening(channel string) (bool, error) {
+	if p.db == nil || p.l2IndexerClient == nil {
+		return false, fmt.Errorf("channel history unavailable")
+	}
+	old, err := p.LoadChannelInDB(channel)
+	if err != nil && !errors.Is(err, indexer.ErrKeyNotFound) {
+		return false, err
+	}
+	ledger, err := p.l2IndexerClient.GetChannelLedger(channel)
+	if err != nil {
+		return false, err
+	}
+	events, err := p.l2IndexerClient.GetChannelStateEvents(channel)
+	if err != nil {
+		return false, err
+	}
+	if old == nil {
+		if len(events) != 0 {
+			return false, fmt.Errorf("channel history exists without local recovery material")
+		}
+		for _, entry := range ledger {
+			if entry == nil || entry.Direction != "ascending" || entry.L2TxId == "" {
+				return false, fmt.Errorf("channel history exists without local recovery material")
+			}
+			err := p.rejectBTCLuckyOutput(entry.L2TxId+":0", nil)
+			if errors.Is(err, errBTCLuckyChannelInput) {
+				continue
+			}
+			if err != nil {
+				return false, fmt.Errorf("channel history cannot be classified: %w", err)
+			}
+			return false, fmt.Errorf("channel history exists without local recovery material")
+		}
+	}
+	return old == nil, nil
+}
+
 func (p *Manager) EnsureChannelL2DrainedBeforeOpen(channelAddr, pendingDrainTxId string) error {
-	if channelAddr == "" {
-		return fmt.Errorf("channel address is required")
-	}
-	if p.getChannel(channelAddr) != nil {
-		return nil
-	}
-	hasResidual, residualAssets, err := p.hasChannelL2Residual(channelAddr)
+	first, err := p.channelL2FirstOpening(channelAddr)
 	if err != nil {
 		return err
 	}
-	if !hasResidual {
+	if first {
+		if pendingDrainTxId != "" {
+			return fmt.Errorf("first opening must not declare a drain")
+		}
 		return nil
 	}
-	if pendingDrainTxId != "" {
-		expectedTxId, err := p.expectedChannelL2DrainTxId(channelAddr)
-		if err != nil {
-			return err
-		}
-		if expectedTxId == "" {
-			return nil
-		}
-		if expectedTxId != pendingDrainTxId {
-			return fmt.Errorf("CHANNEL_L2_DRAIN_REQUIRED channel %s pending drain tx %s mismatch expected %s",
-				channelAddr, pendingDrainTxId, expectedTxId)
-		}
-		Log.Warnf("channel %s still reports L2 residual assets after verified drain tx %s broadcasted; allow open to continue",
-			channelAddr, pendingDrainTxId)
-		return nil
-	}
-	return fmt.Errorf("CHANNEL_L2_DRAIN_REQUIRED channel %s has L2 residual assets (%s); call DrainChannelL2BeforeReopen before open/reopen",
-		channelAddr, strings.Join(residualAssets, ","))
-}
-
-func (p *Manager) expectedChannelL2DrainTxId(channelAddr string) (string, error) {
 	tx, _, _, err := p.buildChannelL2DrainDeAnchorTx(channelAddr)
 	if err != nil {
-		return "", err
+		return err
 	}
 	if tx == nil {
-		return "", nil
+		return nil
 	}
-	return tx.TxID(), nil
+	if pendingDrainTxId != "" && pendingDrainTxId == tx.TxID() {
+		return nil
+	}
+	return fmt.Errorf("CHANNEL_L2_DRAIN_REQUIRED channel %s has verified closing inputs to drain", channelAddr)
 }
 
 func (p *Manager) DrainChannelL2BeforeOpenIfNeeded(channelAddr string) (string, error) {
-	hasResidual, residualAssets, err := p.hasChannelL2Residual(channelAddr)
-	if err != nil {
+	first, err := p.channelL2FirstOpening(channelAddr)
+	if err != nil || first {
 		return "", err
 	}
-	if !hasResidual {
-		return "", nil
-	}
-	txId, drainedUtxos, err := p.DrainChannelL2BeforeReopen(channelAddr)
-	if err != nil {
-		return "", err
-	}
-	if txId == "" {
-		return "", fmt.Errorf("CHANNEL_L2_DRAIN_REQUIRED channel %s has L2 residual assets (%s) but no drain tx was broadcasted",
-			channelAddr, strings.Join(residualAssets, ","))
-	}
-	Log.Infof("channel %s L2 residual assets drained by tx %s before open/reopen, utxos %v",
-		channelAddr, txId, drainedUtxos)
-	return txId, nil
+	txId, _, err := p.DrainChannelL2BeforeReopen(channelAddr)
+	return txId, err
 }
 
 func (p *Manager) hasChannelL2Residual(channelAddr string) (bool, []string, error) {
@@ -185,16 +192,25 @@ func (p *Manager) buildChannelL2DrainDeAnchorTx(channelAddr string) (*swire.MsgT
 	if residual.Empty() {
 		return nil, nil, nil, nil
 	}
+	l1TxId, allowed, err := p.channelL2DrainEvidence(channelAddr)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 
 	tx := swire.NewMsgTx(swire.TxVersion)
 	prevFetcher := stxscript.NewMultiPrevOutFetcher(nil)
 	total := sindexer.NewTxOutput(0)
+	var drained []string
 
 	for _, output := range residual.Outputs {
+		if !allowed[output.OutPointStr] {
+			continue
+		}
 		outpoint := output.OutPointStr
 		if p.GetUtxoLocker_SatsNet().IsLocked(outpoint) {
 			return nil, nil, nil, fmt.Errorf("L2 channel residual utxo %s is locked", outpoint)
 		}
+		drained = append(drained, outpoint)
 		out := output.OutPoint()
 		tx.AddTxIn(swire.NewTxIn(out, nil, nil))
 		prevFetcher.AddPrevOut(*out, &output.OutValue)
@@ -206,10 +222,6 @@ func (p *Manager) buildChannelL2DrainDeAnchorTx(channelAddr string) (*swire.MsgT
 		return nil, nil, nil, nil
 	}
 
-	l1TxId := p.latestObservedRevokedCommitmentTxId(channelAddr)
-	if l1TxId == "" {
-		l1TxId = zeroL1TxId
-	}
 	payload, err := sindexer.EncodeDescendPayloadV2(l1TxId, sindexer.DESCEND_OP_FORCE_CLOSE, nil)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("EncodeDescendPayloadV2 failed: %v", err)
@@ -227,28 +239,131 @@ func (p *Manager) buildChannelL2DrainDeAnchorTx(channelAddr string) (*swire.MsgT
 	tx.AddTxOut(swire.NewTxOut(0, nil, channelScript))
 
 	PrintJsonTx_SatsNet(tx, "channel l2 drain deAnchor")
-	return tx, prevFetcher, residual.Utxos, nil
+	return tx, prevFetcher, drained, nil
 }
 
-func (p *Manager) latestObservedRevokedCommitmentTxId(channelAddr string) string {
-	events, err := p.l2IndexerClient.GetChannelStateEvents(channelAddr)
-	if err != nil {
-		Log.Warnf("GetChannelStateEvents %s failed: %v", channelAddr, err)
-		return ""
+// Use an exact locally retained settlement, never an address-wide balance or
+// an unverified event. Missing material requires recovery, not a synthetic burn.
+func (p *Manager) channelL2DrainEvidence(channel string) (string, map[string]bool, error) {
+	if p.db == nil || p.l1IndexerClient == nil {
+		return "", nil, fmt.Errorf("closing evidence unavailable")
 	}
-	var latest *sindexer.ChannelStateEvent
-	for _, event := range events {
-		if event == nil || event.EventType != sindexer.CHANNEL_EVENT_REVOKED_COMMITMENT_BROADCASTED {
+	// This validator also runs inside an existing recovery owner. Do not
+	// invoke the entry-point lifecycle gate, which would reject that owner.
+	stored, err := p.LoadChannelInDB(channel)
+	if err != nil {
+		return "", nil, err
+	}
+	if stored == nil || stored.ChannelId != channel || stored.Status > CS_CLOSED {
+		return "", nil, fmt.Errorf("closed channel evidence unavailable for %s", channel)
+	}
+	if recovered, err := p.loadSTPNativeRevocationRecovery(stored); err != nil {
+		return "", nil, err
+	} else if recovered != nil {
+		return "", nil, fmt.Errorf("unresolved revoked commitment")
+	}
+	if prepared, err := p.readSTPNativePreparedRecovery(&Channel{ChannelInDB: *stored}); err != nil {
+		return "", nil, err
+	} else if prepared != nil {
+		return "", nil, fmt.Errorf("unresolved prepared commitment")
+	}
+	type settlement struct {
+		id   string
+		burn *swire.MsgTx
+	}
+	var candidates []settlement
+	if stored.ClosingTx != nil {
+		candidates = append(candidates, settlement{stored.ClosingTx.TxID(), stored.DeAnchorTx})
+	}
+	// ClosingTx advances to the sweep transaction after force-close. The
+	// original confirmed commitment and its paired burn remain authoritative.
+	for _, c := range []*ChannelCommitment{stored.LocalCommitment, stored.RemoteCommitment} {
+		if c != nil && c.CommitTx != nil {
+			candidates = append(candidates, settlement{c.CommitTx.TxID(), c.DeAnchorTx})
+		}
+	}
+	rpc := p.l1IndexerClient.getActiveIndexer()
+	if rpc == nil {
+		return "", nil, fmt.Errorf("closing indexer unavailable")
+	}
+	tip, err := readChannelChainTip(rpc)
+	if err != nil {
+		return "", nil, err
+	}
+	for _, c := range candidates {
+		if c.burn == nil || len(c.burn.TxIn) == 0 || c.id == zeroL1TxId {
 			continue
 		}
-		if latest == nil || event.CreatedAt > latest.CreatedAt {
-			latest = event
+		bound := false
+		for _, out := range c.burn.TxOut {
+			kind, data, err := sindexer.ReadDataFromNullDataScript(out.PkScript)
+			if err != nil || kind != sindexer.CONTENT_TYPE_DESCENDING {
+				continue
+			}
+			payload, err := sindexer.ParseDescendPayload(data)
+			if err == nil && payload.L1TxId == c.id {
+				bound = true
+			}
 		}
+		if !bound {
+			continue
+		}
+		info, err := rpc.GetTxInfo(c.id)
+		if err != nil || info == nil || info.Confirmations <= 0 || info.BlockHeight < 0 || info.BlockHeight > int64(tip.height) {
+			continue
+		}
+		raw, err := rpc.GetRawTx(c.id)
+		if err != nil {
+			return "", nil, err
+		}
+		actual, err := DecodeMsgTx(raw)
+		if err != nil || actual.TxID() != c.id {
+			return "", nil, fmt.Errorf("closing transaction mismatch")
+		}
+		end, err := readChannelChainTip(rpc)
+		if err != nil || end != tip {
+			return "", nil, fmt.Errorf("closing chain changed during validation")
+		}
+		inputs := make(map[string]bool)
+		for _, in := range c.burn.TxIn {
+			inputs[in.PreviousOutPoint.String()] = true
+		}
+		return c.id, inputs, nil
 	}
-	if latest == nil {
-		return ""
+	return "", nil, fmt.Errorf("confirmed closing transaction and matching L2 inputs required for %s", channel)
+}
+
+// ValidateChannelL2DrainEvidence is shared by the signer and every broadcast
+// path, including recovery of an already signed transaction.
+func (p *Manager) ValidateChannelL2DrainEvidence(channel string, tx *swire.MsgTx) error {
+	id, allowed, err := p.channelL2DrainEvidence(channel)
+	if err != nil {
+		return err
 	}
-	return latest.ObservedL1TxId
+	if tx == nil || len(tx.TxIn) == 0 || len(tx.TxOut) != 2 {
+		return fmt.Errorf("invalid closing drain")
+	}
+	seen := make(map[string]bool)
+	for _, in := range tx.TxIn {
+		point := in.PreviousOutPoint.String()
+		if !allowed[point] || seen[point] {
+			return fmt.Errorf("drain input %s is outside closing material", point)
+		}
+		seen[point] = true
+	}
+	kind, data, err := sindexer.ReadDataFromNullDataScript(tx.TxOut[0].PkScript)
+	if err != nil || kind != sindexer.CONTENT_TYPE_DESCENDING {
+		return fmt.Errorf("invalid closing drain output")
+	}
+	payload, err := sindexer.ParseDescendPayload(data)
+	if err != nil || payload.L1TxId != id || payload.Operation != sindexer.DESCEND_OP_FORCE_CLOSE || len(payload.ReturnedOutputVouts) != 0 {
+		return fmt.Errorf("drain does not match confirmed closing transaction")
+	}
+	kind, data, err = sindexer.ReadDataFromNullDataScript(tx.TxOut[1].PkScript)
+	if err != nil || kind != sindexer.CONTENT_TYPE_CHANNELID || string(data) != channel || tx.TxOut[1].Value != 0 || len(tx.TxOut[1].Assets) != 0 {
+		return fmt.Errorf("invalid closing drain channel marker")
+	}
+	return nil
 }
 
 func (p *Manager) DrainChannelL2BeforeReopen(channelAddr string) (string, []string, error) {
@@ -344,6 +459,9 @@ func (p *Manager) DrainChannelL2BeforeReopen(channelAddr string) (string, []stri
 		return "", nil, err
 	}
 	if err := p.TestAcceptance_SatsNet([]*swire.MsgTx{tx}); err != nil {
+		return "", nil, err
+	}
+	if err := p.ValidateChannelL2DrainEvidence(channelAddr, tx); err != nil {
 		return "", nil, err
 	}
 	txId, err := p.BroadcastTx_SatsNet(tx)

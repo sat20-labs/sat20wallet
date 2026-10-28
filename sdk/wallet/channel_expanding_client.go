@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	indexer "github.com/sat20-labs/indexer/common"
-	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
 	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
@@ -28,6 +28,9 @@ func isIndexerNotFoundErr(err error) bool {
 func (p *Manager) markRecoverAscended(resv *SplicingReservation, ascendData *sindexer.AscendData, utxo string) error {
 	if ascendData == nil {
 		return nil
+	}
+	if ascendData.BTCLucky != nil {
+		return fmt.Errorf("BTC lucky reward requires btc-lucky-claim before channel admission")
 	}
 	if ascendData.FundingUtxo != "" && ascendData.FundingUtxo != utxo {
 		return fmt.Errorf("ascend funding utxo mismatch %s != %s", ascendData.FundingUtxo, utxo)
@@ -76,6 +79,9 @@ func (p *Manager) AllowExpand(resv *SplicingReservation, utxo string) error {
 
 	ascendData, err := p.GetIndexerRPCClient_SatsNet().GetAscendData(utxo)
 	if err != nil && !isIndexerNotFoundErr(err) {
+		return err
+	}
+	if err := p.rejectBTCLuckyChannelFunding(utxo, channel.RedeemScript); err != nil {
 		return err
 	}
 
@@ -146,6 +152,9 @@ func (p *Manager) AllowExpandSatsNet(payment *PaymentReservation, utxos []string
 		if !bytes.Equal(channel.ChanPoint.OutValue.PkScript, info.OutValue.PkScript) {
 			return fmt.Errorf("utxo %s is not in channel address", utxo)
 		}
+		if err := p.rejectBTCLuckyOutput(utxo, nil); err != nil {
+			return err
+		}
 		result = append(result, OutputToSatsNet(info))
 		amt = indexer.DecimalAdd(amt, v)
 	}
@@ -166,23 +175,49 @@ func isPeerChannelPendingError(err error) bool {
 	return strings.Contains(msg, "can't find channel") || strings.Contains(msg, "is not ready")
 }
 
-func (p *Manager) getAllUnmanagedUtxos(channel *Channel, assetName *swire.AssetName) ([]string, error) {
-	var utxomap []*indexerwire.TxOutputInfo
-	if STPPolicyFor(&AssetName{AssetName: *assetName}).AccountBased {
-		utxomap = p.GetIndexerClient().GetUtxoListWithBRC20Ticker(channel.Address, assetName, true)
-	} else {
-		utxomap = p.GetIndexerClient().GetUtxoListWithTicker(channel.Address, assetName)
+// Read current UTXOs, not an address total: channel commitments already own
+// their funding, pending and stub inputs. Lucky backing is never surplus.
+func (p *Manager) unmanagedChannelExpansionInputs(channel *Channel, assetName *swire.AssetName) ([]string, error) {
+	rpc := p.GetIndexerRPCClient()
+	outputs, err := rpc.GetUtxosWithAddress(channel.Address)
+	if err != nil {
+		return nil, err
 	}
-
-	utxos := make([]string, 0)
-	for _, v := range utxomap {
-		if indexer.IsPlainAsset(assetName) && len(v.Assets) != 0 {
+	controlled := channel.UtxosInControl()
+	result := make([]string, 0)
+	for point := range outputs {
+		if controlled[point] || (p.utxoLockerL1 != nil && p.utxoLockerL1.IsLocked(point)) {
 			continue
 		}
-		utxos = append(utxos, v.OutPoint)
+		output, err := rpc.GetTxOutput(point)
+		if err != nil {
+			return nil, err
+		}
+		if output == nil {
+			return nil, fmt.Errorf("missing expansion output %s", point)
+		}
+		amount, invalid := output.GetAssetV2(assetName)
+		if (invalid && !STPPolicyFor(&AssetName{AssetName: *assetName}).AccountBased) || amount == nil || amount.Sign() <= 0 || (indexer.IsPlainAsset(assetName) && len(output.Assets) != 0) {
+			continue
+		}
+		lucky, err := p.isBTCLuckyL1Output(point, nil)
+		if err != nil {
+			return nil, err
+		}
+		if lucky {
+			continue
+		}
+		result = append(result, point)
 	}
+	sort.Strings(result)
+	return result, nil
+}
 
-	utxos = channel.NotInControl(utxos)
+func (p *Manager) getAllUnmanagedUtxos(channel *Channel, assetName *swire.AssetName) ([]string, error) {
+	utxos, err := p.unmanagedChannelExpansionInputs(channel, assetName)
+	if err != nil {
+		return nil, err
+	}
 	if len(utxos) == 0 {
 		return nil, fmt.Errorf("no new utxo")
 	}
@@ -197,6 +232,12 @@ func (p *Manager) getAllUnmanagedUtxosSatsNet(channel *Channel) ([]string, error
 	}
 	utxos := make([]string, 0, len(utxomap))
 	for k := range utxomap {
+		if err := p.rejectBTCLuckyOutput(k, nil); err != nil {
+			if errors.Is(err, errBTCLuckyChannelInput) {
+				continue
+			}
+			return nil, err
+		}
 		utxos = append(utxos, k)
 	}
 	utxos = channel.NotInControl_SatsNet(utxos)
@@ -221,6 +262,13 @@ func (p *Manager) getUtxosWithChannelAddress(channel *Channel, value int64, num 
 			continue
 		}
 		if p.GetUtxoLocker().IsLocked(utxo) {
+			continue
+		}
+		lucky, err := p.isBTCLuckyL1Output(utxo, nil)
+		if err != nil {
+			return nil, err
+		}
+		if lucky {
 			continue
 		}
 		if u.Value == value {

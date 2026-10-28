@@ -211,7 +211,6 @@ type Manager struct {
 
 	btcLuckyMiner        *btclucky.Miner
 	btcLuckyLastL1Height int
-	btcLuckyRewardAddr   string
 }
 
 // captureWalletIdentity freezes the currently selected signing identity.  A

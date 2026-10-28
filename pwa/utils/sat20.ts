@@ -494,6 +494,14 @@ class WalletManager {
     return this._handleRequest('getBTCLuckyMiningStatus')
   }
 
+  async getBTCLuckyRewards(): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('getBTCLuckyRewards')
+  }
+
+  async claimBTCLuckyReward(utxo: string): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('claimBTCLuckyReward', utxo)
+  }
+
   async registerCallback(
     callback: Function
   ): Promise<[Error | undefined, void | undefined]> {

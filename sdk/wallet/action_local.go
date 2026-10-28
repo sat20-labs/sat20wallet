@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 )
 
@@ -396,24 +397,68 @@ func (p *Manager) localActionLockWithExpandStart(resv *LocalActionPerformData) e
 	}
 	param.ChannelId = channel.ChannelId
 
+	return p.localActionLockWithExpandRemaining(resv, channel, param.Amt)
+}
+
+// Each confirmed expansion resumes through the existing local-action record.
+// MoreData contains the remaining requested amount, not a second balance.
+func (p *Manager) localActionLockWithExpandRemaining(resv *LocalActionPerformData, channel *Channel, remaining *Decimal) error {
+	param := resv.ActionParam.(*LocalActionParam_Expand)
+	if remaining.Sign() <= 0 {
+		resv.Status = RS_PERFORM_ACTION_COMPLETED
+		return nil
+	}
+	channel.Mutex.RLock()
+	sources, err := p.unmanagedChannelExpansionInputs(channel, &param.AssetName.AssetName)
 	remoteAmt := channel.GetCommitRemoteValue(param.AssetName)
-	if remoteAmt.Cmp(param.Amt) >= 0 {
-		return fmt.Errorf("no need to expand channel")
+	if remoteAmt == nil {
+		remoteAmt = indexer.NewDecimal(0, remaining.Precision)
 	}
-
+	channel.Mutex.RUnlock()
+	if err != nil {
+		return err
+	}
+	if len(sources) != 0 {
+		txid, amount, id, err := p.ExpandChannel(channel.ChannelId, param.AssetName.String(), sources[0], "", nil)
+		if err != nil {
+			return err
+		}
+		expanded, err := indexer.NewDecimalFromString(amount, param.Amt.Precision)
+		if err != nil {
+			return err
+		}
+		next := remaining.Sub(expanded)
+		if next.Sign() < 0 {
+			next = indexer.NewDecimal(0, remaining.Precision)
+		}
+		resv.ActionResvs = append(resv.ActionResvs, &SubActionInfo{ActionType: "expand_local", ResvId: id, TxId: txid, MoreData: next})
+		resv.TxId = txid
+		resv.IsL1Tx = false
+		resv.Status = RS_PERFORM_ACTION_TX_BROADCASTED
+		return nil
+	}
 	amtToLock := remoteAmt.Clone()
-	amtToExpand := param.Amt.Sub(remoteAmt)
-
-	tickInfo := p.GetTickerInfo(&param.AssetName.AssetName)
-	if tickInfo == nil {
-		return fmt.Errorf("can't find ticker info %s", param.AssetName.String())
+	if amtToLock.Cmp(remaining) > 0 {
+		amtToLock = remaining.Clone()
 	}
+	amtToExpand := remaining.Sub(amtToLock)
 
-	contractAddr := ExtractChannelId(param.ContractURL)
-	total := p.GetAssetBalance(contractAddr, &param.AssetName.AssetName)
-	if total.Cmp(amtToExpand) < 0 {
-		return fmt.Errorf("no enough asset %s in contract %s, require %s but only %s",
-			param.AssetName.String(), param.ContractURL, amtToExpand, total.String())
+	if amtToExpand.Sign() > 0 {
+		if param.ContractURL == "" {
+			url, err := p.GetTranscendContractWithAssetNameInServer(param.AssetName.String())
+			if err != nil {
+				return err
+			}
+			param.ContractURL = url
+		}
+		contractAddr := ExtractChannelId(param.ContractURL)
+		total, err := p.channelAssetBalanceWithoutLucky(contractAddr, &param.AssetName.AssetName, false)
+		if err != nil {
+			return err
+		}
+		if total.Cmp(amtToExpand) < 0 {
+			return fmt.Errorf("no enough asset %s in contract %s, require %s but only %s", param.AssetName.String(), param.ContractURL, amtToExpand, total.String())
+		}
 	}
 
 	// When the peer has no balance for this asset there is nothing to lock
@@ -539,10 +584,20 @@ func (p *Manager) localActionInnerStatusLockWithExpand(resv *LocalActionPerformD
 	}
 
 	switch currResv.ActionType {
+	case "expand_local":
+		remaining, err := localActionExpandAmount(currResv.MoreData)
+		if err != nil {
+			return err
+		}
+		return p.localActionLockWithExpandRemaining(resv, channel, remaining)
 	case "lock":
 		amtToExpand, err := localActionExpandAmount(currResv.MoreData)
 		if err != nil {
 			return err
+		}
+		if amtToExpand.Sign() <= 0 {
+			resv.Status = RS_PERFORM_ACTION_COMPLETED
+			return nil
 		}
 		txId, err := p.withdrawWithContract(channel.ChannelId,
 			param.AssetName.String(), amtToExpand.String(), resv.FeeRate, param.ContractURL)

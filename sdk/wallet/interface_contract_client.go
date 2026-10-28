@@ -728,11 +728,16 @@ func (p *Manager) withdrawWithContract(destAddr string, assetName string, amt st
 	if dAmt.Sign() <= 0 {
 		return "", fmt.Errorf("withdrawal amount must be positive")
 	}
-	total := p.GetAssetBalance(coreChannelId, indexer.NewAssetNameFromString(assetName))
+	var total *Decimal
 	if name.Protocol == "rgb11" {
 		// The user pays the L2 withdrawal from its L2 balance. Public native
 		// pool solvency comes from revalidated proof inventory at settlement.
 		total = p.GetAssetBalance_SatsNet("", name)
+	} else {
+		total, err = p.channelAssetBalanceWithoutLucky(coreChannelId, name, false)
+		if err != nil {
+			return "", err
+		}
 	}
 	if total.Cmp(dAmt) < 0 {
 		return "", fmt.Errorf("no enough asset %s in channel %s, require %s but only %s",

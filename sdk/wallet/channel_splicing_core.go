@@ -514,6 +514,9 @@ func (p *Manager) getRecoveredAscendedOutput(resv *SplicingReservation) (*TxOutp
 	if !bytes.Equal(resv.Channel.GetChannelPkScript(), output.OutValue.PkScript) {
 		return nil, fmt.Errorf("recovered anchor output %s is not in channel address", outpoint)
 	}
+	if err := p.rejectBTCLuckyOutput(outpoint, nil); err != nil {
+		return nil, err
+	}
 	amt, invalid := output.GetAssetV2(&resv.AssetName.AssetName)
 	if invalid {
 		return nil, fmt.Errorf("recovered anchor output %s asset %s is invalid", outpoint, resv.AssetName.String())

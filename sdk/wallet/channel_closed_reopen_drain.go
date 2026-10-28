@@ -3,7 +3,6 @@ package wallet
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
@@ -27,6 +26,9 @@ func (p *Manager) drainClosedChannelBeforeReopen(w common.Wallet, client NodeRPC
 		if err != nil {
 			return "", err
 		}
+		if err := p.ValidateChannelL2DrainEvidence(intent.ChannelID, tx); err != nil {
+			return "", err
+		}
 		intent.Step = "drain_broadcast_inflight"
 		if err := p.persistClosedChannelIntent(owner, intent, RS_PERFORM_ACTION_RUN_STARTED); err != nil {
 			return "", err
@@ -45,7 +47,7 @@ func (p *Manager) drainClosedChannelBeforeReopen(w common.Wallet, client NodeRPC
 	if intent.Step != "prepared" && intent.Step != "open_rejected" {
 		return "", closedChannelRecoveryPending(owner, intent.Step, nil)
 	}
-	hasResidual, residualAssets, err := p.hasChannelL2Residual(intent.ChannelID)
+	hasResidual, _, err := p.hasChannelL2Residual(intent.ChannelID)
 	if err != nil {
 		return "", err
 	}
@@ -57,8 +59,7 @@ func (p *Manager) drainClosedChannelBeforeReopen(w common.Wallet, client NodeRPC
 		return "", err
 	}
 	if tx == nil {
-		return "", fmt.Errorf("CHANNEL_L2_DRAIN_REQUIRED channel %s has L2 residual assets (%s) but no drain tx was broadcasted",
-			intent.ChannelID, strings.Join(residualAssets, ","))
+		return "", nil // Remaining address assets are outside the closing material.
 	}
 	peerKey := append([]byte(nil), p.serverNode.Pubkey.SerializeCompressed()...)
 	localKey := w.GetPaymentPubKey().SerializeCompressed()

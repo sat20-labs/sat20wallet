@@ -56,7 +56,7 @@
               </div>
               <div>
                 <div class="font-medium">10%</div>
-                <div class="mt-1 text-muted-foreground">服务节点</div>
+                <div class="mt-1 text-muted-foreground">索引器数据服务节点</div>
               </div>
               <div>
                 <div class="font-medium">5%</div>
@@ -155,6 +155,27 @@
           </div>
         </CardContent>
       </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle class="text-base">奖励提取</CardTitle>
+          <CardDescription>奖励在 L1 成熟后自动进入聪网，再共签提取；扣除网络费后按 85% / 10% / 5% 分账。核心节点使用自己的索引器时，前两项均归自己。</CardDescription>
+        </CardHeader>
+        <CardContent class="space-y-3">
+          <div v-if="rewardError" class="break-all text-xs text-destructive">{{ rewardError }}</div>
+          <div v-if="claimResult" class="break-all text-xs">提取交易：{{ claimResult }}</div>
+          <div v-if="!rewards.length" class="text-sm text-muted-foreground">暂无奖励</div>
+          <div v-for="reward in rewards" :key="reward.fundingUtxo" class="space-y-2 rounded-sm border border-border p-3 text-xs">
+            <div class="break-all">{{ reward.fundingUtxo }}</div>
+            <div v-if="reward.status !== 'error'" class="text-muted-foreground">{{ reward.amount }} sats · L1 确认 {{ reward.confirmations }} / {{ reward.maturity }}</div>
+            <div v-if="reward.error" class="break-all text-destructive">{{ reward.error }}</div>
+            <div v-if="reward.anchorTxId" class="break-all text-muted-foreground">Ascend：{{ reward.anchorTxId }}</div>
+            <Button size="sm" :disabled="reward.status !== 'claimable' || !!claiming" @click="claimReward(reward.fundingUtxo)">
+              {{ claiming === reward.fundingUtxo ? '正在共签' : rewardState(reward.status) }}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   </LayoutHome>
 </template>
@@ -183,6 +204,10 @@ const storageKey = 'btcLuckyMiningConfig'
 const loading = ref(false)
 const networkStatsLoading = ref(false)
 const networkStatsFetchedAt = ref(0)
+const rewards = ref<any[]>([])
+const rewardError = ref('')
+const claiming = ref('')
+const claimResult = ref('')
 const status = reactive<any>({
   enabled: false,
   running: false,
@@ -231,6 +256,26 @@ const refreshStatus = async () => {
   if (!err) applyStatus(data)
   if (!status.rewardAddress) refreshRewardAddress()
   refreshNetworkStats()
+  const [rewardsErr, nextRewards] = await walletManager.getBTCLuckyRewards()
+  rewardError.value = rewardsErr?.message || ''
+  if (!rewardsErr) rewards.value = Array.isArray(nextRewards) ? nextRewards : []
+}
+
+const rewardState = (state: string) => ({
+  unascended: '等待 Ascend', immature: '等待成熟', claimable: '提取', spent: '已花费', error: '来源异常',
+}[state] || state)
+
+const claimReward = async (utxo: string) => {
+  if (claiming.value) return
+  claiming.value = utxo
+  claimResult.value = ''
+  const [err, txid] = await walletManager.claimBTCLuckyReward(utxo)
+  claiming.value = ''
+  if (err) rewardError.value = err.message
+  else {
+    claimResult.value = typeof txid === 'string' ? txid : String(txid?.txid || txid)
+    await refreshStatus()
+  }
 }
 
 const startMining = async () => {

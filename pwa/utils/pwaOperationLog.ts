@@ -220,6 +220,10 @@ const operationSpecs: Record<string, OperationSpec> = {
   stopBTCLuckyMining: {
     category: 'mining', action: 'stop_lucky_mining', title: 'Stop BTC lucky mining', summary: 'Stopping local BTC lucky mining',
   },
+  claimBTCLuckyReward: {
+    category: 'mining', action: 'claim_lucky_reward', title: '提取挖矿奖励', summary: '共签并分配 BTC Lucky Mining 奖励',
+    parameters: args => safeRecord({ funding_utxo: args[0] }),
+  },
   lockUtxo: {
     category: 'utxo', action: 'lock_utxo_l1', title: 'Lock L1 UTXO', summary: 'Locking a Bitcoin UTXO for local wallet use',
     parameters: args => safeRecord({ address: args[0], reason: args[2] }),

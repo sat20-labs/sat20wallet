@@ -28,11 +28,11 @@ func TestClosedAssetRestoreSummaryOrderCannotChangeAssetPriority(t *testing.T) {
 				items[n] = &indexer.AssetInfo{Name: name, Amount: *indexer.NewDefaultDecimal(amount)}
 				if n != 0 {
 					out := source.Clone()
-					out.OutPointStr = fmt.Sprintf("%s:%d", source.OutPointStr[:64], n)
 					out.Assets[0].Name = name
 					if n != 1 {
 						out.Assets[0].BindingSat = 0
 					}
+					addClosedAssetPipelineOutput(t, base, out, byte(10+n), false)
 					outputs[name.String()] = []*indexerwire.TxOutputInfo{out.ToAssetsInUtxo()}
 				}
 			}

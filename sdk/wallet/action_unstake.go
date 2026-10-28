@@ -157,12 +157,12 @@ func (p *Manager) localActionUnstakeMinerStartUnstake(resv *LocalActionPerformDa
 	if param.MinerInfo == nil {
 		return false, fmt.Errorf("invalid parameter LocalActionParam_UnstakeMiner")
 	}
-	summary := p.l1IndexerClient.GetAssetSummaryWithAddress(param.MinerInfo.ChannelAddr)
-	if summary == nil {
-		return false, fmt.Errorf("can't get channel asset summary %s", param.MinerInfo.ChannelAddr)
+	assets, err := p.channelAssetSummaryWithoutLucky(param.MinerInfo.ChannelAddr, false)
+	if err != nil {
+		return false, err
 	}
 	var amt *Decimal
-	for _, asset := range summary.Data {
+	for _, asset := range assets {
 		if asset.Amount.Sign() == 0 {
 			continue
 		}
@@ -204,7 +204,10 @@ func (p *Manager) localActionUnstakeMinerStartUnstake(resv *LocalActionPerformDa
 			AssetAmt:  amt.Clone(),
 		}}
 
-		amtL2 := p.GetAssetBalance_SatsNet(param.MinerInfo.ChannelAddr, &param.AssetName.AssetName)
+		amtL2, err := p.channelAssetBalanceWithoutLucky(param.MinerInfo.ChannelAddr, &param.AssetName.AssetName, true)
+		if err != nil {
+			return false, err
+		}
 		if amtL2 == nil || amtL2.Sign() == 0 {
 			return false, fmt.Errorf("no staking asset")
 		}
@@ -259,7 +262,10 @@ func (p *Manager) getStakeMinerInfo(pubkey []byte) (*sindexerwire.MinerInfo, err
 }
 
 func (p *Manager) checkUnstakeChannelAssets(channelId string, stakeAsset *AssetName, stakeAmt *Decimal) (int64, error) {
-	l1Stake := p.GetAssetBalance(channelId, &stakeAsset.AssetName)
+	l1Stake, err := p.channelAssetBalanceWithoutLucky(channelId, &stakeAsset.AssetName, false)
+	if err != nil {
+		return 0, err
+	}
 	if l1Stake == nil || l1Stake.Cmp(stakeAmt) < 0 {
 		have := "0"
 		if l1Stake != nil {
@@ -269,13 +275,13 @@ func (p *Manager) checkUnstakeChannelAssets(channelId string, stakeAsset *AssetN
 			stakeAsset.String(), stakeAmt.String(), have)
 	}
 
-	assets := p.l2IndexerClient.GetAssetSummaryWithAddress(channelId)
-	if assets == nil {
-		return 0, fmt.Errorf("can't get channel asset summary %s on L2", channelId)
+	assets, err := p.channelAssetSummaryWithoutLucky(channelId, true)
+	if err != nil {
+		return 0, err
 	}
 	var l2Stake *Decimal
 	var value int64
-	for _, u := range assets.Data {
+	for _, u := range assets {
 		if u.Name.String() == stakeAsset.String() {
 			l2Stake = &u.Amount
 		}

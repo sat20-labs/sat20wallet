@@ -1,11 +1,13 @@
 package wallet
 
 import (
+	"bytes"
 	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
 
+	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/indexer/share/btclucky"
 )
 
@@ -18,6 +20,9 @@ type BTCLuckyMiningConfig struct {
 func (p *Manager) StartBTCLuckyMining(req BTCLuckyMiningConfig) (*btclucky.MinerStatus, error) {
 	if p == nil || p.wallet == nil {
 		return nil, fmt.Errorf("wallet is not initialized")
+	}
+	if hex.EncodeToString(p.wallet.GetPubKey().SerializeCompressed()) == indexer.GetBootstrapPubKey() {
+		return nil, fmt.Errorf("bootstrap does not participate in BTC lucky mining")
 	}
 	if p.btcLuckyMiner != nil && p.btcLuckyMiner.IsMining() {
 		return nil, fmt.Errorf("btc lucky mining is already running")
@@ -104,32 +109,46 @@ func (p *Manager) btcLuckyRewardAddress(walletPubKey []byte) (string, error) {
 	if p == nil || p.wallet == nil {
 		return "", fmt.Errorf("wallet is not initialized")
 	}
-	p.mutex.Lock()
-	rewardAddr := p.btcLuckyRewardAddr
-	p.mutex.Unlock()
-	if rewardAddr != "" {
-		return rewardAddr, nil
-	}
 	if len(walletPubKey) == 0 {
 		walletPubKey = p.wallet.GetPubKey().SerializeCompressed()
 	}
-	corePubKey, err := p.GetIndexerRPCClient().GetIndexerPubKey()
+	indexerKey, err := p.GetIndexerRPCClient().GetIndexerPubKey()
 	if err != nil {
 		return "", err
 	}
-	rewardAddr, err = GetP2WSHaddress(walletPubKey, corePubKey)
+	core, err := p.GetIndexerClient_SatsNet().IsCoreNode(walletPubKey)
 	if err != nil {
 		return "", err
 	}
-	p.mutex.Lock()
-	p.btcLuckyRewardAddr = rewardAddr
-	p.mutex.Unlock()
-	return rewardAddr, nil
+	signer := indexerKey
+	if core {
+		if !bytes.Equal(indexerKey, walletPubKey) {
+			return "", fmt.Errorf("core BTC lucky mining requires its own indexer")
+		}
+		signer, err = hex.DecodeString(indexer.GetBootstrapPubKey())
+		if err != nil {
+			return "", err
+		}
+	}
+	return GetP2WSHaddress(walletPubKey, signer)
 }
 
 func (p *Manager) handleBTCLuckyMonitorTick(sendTxInL1 bool) {
 	if p == nil || !sendTxInL1 {
 		return
+	}
+	if p.wallet != nil && hex.EncodeToString(p.wallet.GetPubKey().SerializeCompressed()) != indexer.GetBootstrapPubKey() {
+		rewards, err := p.GetBTCLuckyRewards()
+		if err == nil {
+			for _, reward := range rewards {
+				if reward.Status != "unascended" {
+					continue
+				}
+				if _, err := p.AscendBTCLuckyReward(reward.FundingUtxo); err != nil {
+					Log.Warningf("BTC lucky reward ascend %s failed: %v", reward.FundingUtxo, err)
+				}
+			}
+		}
 	}
 	p.mutex.Lock()
 	miner := p.btcLuckyMiner

@@ -25,6 +25,7 @@ type closedAssetPipelineIndexer struct {
 	IndexerRPCClient
 	channelID, walletAddress  string
 	outputs                   map[string]*TxOutput
+	raw                       map[string]string
 	stubs                     []*TxOutput
 	walletQueries, broadcasts int
 	badStub                   bool
@@ -48,6 +49,25 @@ func (c *closedAssetPipelineIndexer) GetTxOutput(point string) (*TxOutput, error
 		copy.OutValue.Value++
 	}
 	return copy, nil
+}
+func (c *closedAssetPipelineIndexer) GetRawTx(txid string) (string, error) {
+	if raw := c.raw[txid]; raw != "" {
+		return raw, nil
+	}
+	return "", fmt.Errorf("unknown raw transaction %s", txid)
+}
+func (c *closedAssetPipelineIndexer) GetUtxosWithAddress(address string) (map[string]*wire.TxOut, error) {
+	utxos := make(map[string]*wire.TxOut)
+	if address != c.channelID {
+		return utxos, nil
+	}
+	for point, output := range c.outputs {
+		if output == nil {
+			continue
+		}
+		utxos[point] = &wire.TxOut{Value: output.Value(), PkScript: append([]byte(nil), output.OutValue.PkScript...)}
+	}
+	return utxos, nil
 }
 func (c *closedAssetPipelineIndexer) GetUtxoListWithTicker(address string, asset *swire.AssetName) []*indexerwire.TxOutputInfo {
 	if address == c.walletAddress {
@@ -126,6 +146,30 @@ func (c *closedAssetPipelinePeer) SendSplicingInReq(resv *SplicingReservation) e
 	return errClosedAssetPipelineObserved
 }
 
+func addClosedAssetPipelineOutput(t *testing.T, rpc *closedAssetPipelineIndexer, output *TxOutput, seed byte, coinbase bool) {
+	t.Helper()
+	tx := wire.NewMsgTx(2)
+	previous := &wire.OutPoint{}
+	script := []byte("ordinary closed-channel source")
+	if coinbase {
+		previous.Index = ^uint32(0)
+		script = []byte("height1-satoshinet")
+	} else {
+		previous.Hash[0] = seed
+		previous.Index = uint32(seed)
+	}
+	tx.AddTxIn(wire.NewTxIn(previous, script, nil))
+	tx.AddTxOut(&wire.TxOut{Value: output.Value(), PkScript: append([]byte(nil), output.OutValue.PkScript...)})
+	raw, err := EncodeMsgTx(tx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output.OutPointStr = tx.TxID() + ":0"
+	output.OutValue = *tx.TxOut[0]
+	rpc.outputs[output.OutPointStr] = output
+	rpc.raw[tx.TxID()] = raw
+}
+
 func closedAssetPipelineFixture(t *testing.T, enoughStubs bool) (*Manager, *Channel, *AssetName, *TxOutput, *closedAssetPipelinePeer, *closedAssetPipelineIndexer) {
 	t.Helper()
 	manager, channel, asset, output := closedAssetRestoreFixture(t)
@@ -148,14 +192,14 @@ func closedAssetPipelineFixture(t *testing.T, enoughStubs bool) (*Manager, *Chan
 	peer := &closedAssetPipelinePeer{manager: manager, owner: owner, captured: captured}
 	channel.PeerRPC = peer
 	manager.serverNode.SetRPCClient(peer)
-	rpc := &closedAssetPipelineIndexer{channelID: channel.ChannelId, walletAddress: captured.GetAddress(), outputs: map[string]*TxOutput{output.OutPointStr: output}}
+	rpc := &closedAssetPipelineIndexer{channelID: channel.ChannelId, walletAddress: captured.GetAddress(), outputs: make(map[string]*TxOutput), raw: make(map[string]string)}
+	addClosedAssetPipelineOutput(t, rpc, output, 1, false)
 	if enoughStubs {
 		for i := 0; i < 2; i++ {
 			stub := channel.ChanPoint.Clone()
-			stub.OutPointStr = fmt.Sprintf("%064x:0", 8510+i)
 			stub.OutValue.Value, stub.Assets, stub.Offsets = 330, nil, nil
+			addClosedAssetPipelineOutput(t, rpc, stub, byte(2+i), false)
 			rpc.stubs = append(rpc.stubs, stub)
-			rpc.outputs[stub.OutPointStr] = stub
 		}
 	}
 	manager.l1IndexerClient = NewIndexerRPCClientMgr()

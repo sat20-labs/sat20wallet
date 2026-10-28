@@ -423,14 +423,14 @@ func (p *Manager) nextClosedChannelAssetRestoreSource(ctx context.Context, w com
 	if owner == nil || intent.AssetExpectations == nil {
 		return "", "", fmt.Errorf("prior channel asset inventory is unknown; asset restoration remains pending")
 	}
-	assets := p.l1IndexerClient.GetAssetSummaryWithAddress(address)
-	if assets == nil {
-		return "", "", fmt.Errorf("cannot read closed-channel asset inventory")
+	assets, err := p.channelAssetSummaryWithoutLucky(address, false)
+	if err != nil {
+		return "", "", fmt.Errorf("cannot read closed-channel asset inventory: %w", err)
 	}
 	// Public summaries may omit already-ascended/invalid BRC20 carriers.
 	// Old metadata only forces ticker discovery and an exact quantity floor;
 	// every actual source still comes from the current invalid-inclusive list.
-	candidates := append([]*indexer.AssetInfo(nil), assets.Data...)
+	candidates := append([]*indexer.AssetInfo(nil), assets...)
 	seen := make(map[string]bool)
 	for _, asset := range candidates {
 		if asset != nil {
@@ -518,6 +518,13 @@ func (p *Manager) nextClosedChannelAssetRestoreSource(ctx context.Context, w com
 					listedPlainPoints[output.OutPoint] = true
 					listedPlain = listedPlain.Add(indexer.NewDefaultDecimal(output.Value))
 				}
+				continue
+			}
+			lucky, err := p.isBTCLuckyL1Output(output.OutPoint, nil)
+			if err != nil {
+				return "", "", err
+			}
+			if lucky {
 				continue
 			}
 			if err := ValidateSTPAsset(&asset.Name, STPOpExpand); err != nil {

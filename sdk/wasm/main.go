@@ -349,6 +349,46 @@ func getBTCLuckyMiningStatus(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(handler)
 }
 
+func getBTCLuckyRewards(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		rewards, err := _mgr.GetBTCLuckyRewards()
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		encoded, err := json.Marshal(rewards)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		var data any
+		if err := json.Unmarshal(encoded, &data); err != nil {
+			return nil, -1, err.Error()
+		}
+		return data, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
+func claimBTCLuckyReward(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) != 1 || p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "reward outpoint required")
+	}
+	utxo := p[0].String()
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		txid, err := _mgr.ClaimBTCLuckyReward(utxo)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return txid, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
 func jsSafeData(v any) map[string]any {
 	raw, err := json.Marshal(v)
 	if err != nil {
@@ -5552,6 +5592,8 @@ func main() {
 	obj.Set("startBTCLuckyMining", js.FuncOf(startBTCLuckyMining))
 	obj.Set("stopBTCLuckyMining", js.FuncOf(stopBTCLuckyMining))
 	obj.Set("getBTCLuckyMiningStatus", js.FuncOf(getBTCLuckyMiningStatus))
+	obj.Set("getBTCLuckyRewards", js.FuncOf(getBTCLuckyRewards))
+	obj.Set("claimBTCLuckyReward", js.FuncOf(claimBTCLuckyReward))
 	obj.Set("getChannelAddrByPeerPubkey", js.FuncOf(getChannelAddrByPeerPubkey))
 	obj.Set("previewOpenChannel", js.FuncOf(previewOpenChannel))
 	obj.Set("quoteClosedChannelSingleUTXOTopup", js.FuncOf(quoteClosedChannelSingleUTXOTopup))

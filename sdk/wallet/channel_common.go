@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -148,6 +149,12 @@ func (p *Manager) addExistingOpeningAnchorOutput(resv *FundingReservation) error
 			!bytes.Equal(outputSatsNet.OutValue.PkScript, channelPkScript) {
 			Log.Warnf("skip invalid opening anchor candidate %s for channel %s", outpoint, channelId)
 			continue
+		}
+		if err := p.rejectBTCLuckyOutput(outpoint, nil); err != nil {
+			if errors.Is(err, errBTCLuckyChannelInput) {
+				continue
+			}
+			return err
 		}
 		resv.Channel.AddUtxo_SatsNet(outputSatsNet)
 		Log.Infof("reuse L2 opening anchor output %s for channel %s, value %d", outpoint, channelId, target)

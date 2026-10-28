@@ -73,6 +73,9 @@ func (p *Manager) CoBatchSendAssetsV3FromAddress(localWallet common.Wallet, dest
 			localWallet = channel.LocalWallet()
 		}
 	}
+	if err := p.excludeBTCLuckyL1Outputs(channelId, excluded); err != nil {
+		return "", 0, err
+	}
 	if name.Protocol == "rgb11" {
 		md, err := json.Marshal(wwire.RemoteSignMoreData{Action: action, MoreData: memo})
 		if err != nil {
@@ -187,6 +190,10 @@ func (p *Manager) CoBatchSendV4(localWallet common.Wallet, dest []*SendAssetInfo
 	}
 
 	excluded := make(map[string]bool)
+	if err := p.excludeBTCLuckyL1Outputs(channelId, excluded); err != nil {
+		return "", 0, err
+	}
+
 	var tx *wire.MsgTx
 	var prevFetcher *txscript.MultiPrevOutFetcher
 	var fee int64
@@ -301,7 +308,11 @@ func (p *Manager) CoBatchSendV4_SatsNet(localWallet common.Wallet, dest []*SendA
 		return "", err
 	}
 
-	utxos, fees, err := p.GetUtxosWithAssetV2_SatsNet(channelId, totalValue, totalAmt, asset, nil)
+	excluded := make(map[string]bool)
+	if err := p.excludeBTCLuckyL2Outputs(channelId, excluded); err != nil {
+		return "", err
+	}
+	utxos, fees, err := p.GetUtxosWithAssetV2_SatsNet(channelId, totalValue, totalAmt, asset, excluded)
 	if err != nil {
 		return "", err
 	}
@@ -381,7 +392,11 @@ func (p *Manager) CreateDeAnchorTx(channelAddr string, splicingOutTxId string,
 	if err != nil {
 		return nil, nil, err
 	}
-	utxos, fees, err := p.GetUtxosWithAssetV2_SatsNet(channelAddr, totalValue, totalAmt, &assetName.AssetName, nil)
+	excluded := make(map[string]bool)
+	if err := p.excludeBTCLuckyL2Outputs(channelAddr, excluded); err != nil {
+		return nil, nil, err
+	}
+	utxos, fees, err := p.GetUtxosWithAssetV2_SatsNet(channelAddr, totalValue, totalAmt, &assetName.AssetName, excluded)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -619,6 +634,19 @@ func (p *Manager) reqRemoteSignAndBroadcast(localWallet common.Wallet, witness, 
 		return nil, 0, fmt.Errorf("can't find main tx")
 	}
 
+	if reason == "unstake" {
+		pending := make([]*swire.MsgTx, 0, len(txs2))
+		for _, tx2 := range txs2 {
+			_, indexed, err := p.ChannelDeanchorInputs(channelId, mainTx.TxID(), tx2)
+			if err != nil {
+				return nil, 0, err
+			}
+			if !indexed {
+				pending = append(pending, tx2)
+			}
+		}
+		txs2 = pending
+	}
 	if err := p.BroadcastTxs_SatsNet(txs2); err != nil {
 		return nil, 0, err
 	}

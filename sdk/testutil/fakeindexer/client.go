@@ -469,10 +469,6 @@ func (p *Client) GetAscendData(utxo string) (*sindexer.AscendData, error) {
 	return nil, fmt.Errorf("not found")
 }
 
-func (p *Client) GetChannelLedger(channel string) ([]*sindexer.ChannelLedgerEntry, error) {
-	return []*sindexer.ChannelLedgerEntry{}, nil
-}
-
 func (p *Client) GetChannelStateEvents(channel string) ([]*sindexer.ChannelStateEvent, error) {
 	return []*sindexer.ChannelStateEvent{}, nil
 }
@@ -586,7 +582,7 @@ func (p *Client) GetTxInfo(tx string) (*indexerwire.TxSimpleInfo, error) {
 	defer p.Network.Mutex.RUnlock()
 	_, ok := p.Network.TxBroadcasted[tx]
 	if !ok {
-		return nil, fmt.Errorf("not found")
+		return nil, fmt.Errorf("-5: No such mempool or blockchain transaction. Use gettransaction for wallet transactions.")
 	}
 
 	var height int
@@ -1015,7 +1011,7 @@ func (p *Client) GetUtxosWithAddress(address string) (map[string]*wire.TxOut, er
 	pkScript, err := wallet.AddrToPkScript(address, wallet.GetChainParam())
 	if err != nil {
 		wallet.Log.Errorf("invalid address %s, %v", address, err)
-		return nil, nil
+		return nil, err
 	}
 
 	outputs := make(map[string]*wire.TxOut, 0)
@@ -1024,13 +1020,13 @@ func (p *Client) GetUtxosWithAddress(address string) (map[string]*wire.TxOut, er
 			continue
 		}
 
-		assets := p.Network.UtxoAssets[i]
-		if len(assets) == 0 {
-			pkScript2, _ := hex.DecodeString(p.Network.State.PkScripts[p.Network.UtxoOwner[i]])
-
-			if bytes.Equal(pkScript, pkScript2) {
-				outputs[utxo] = &wire.TxOut{Value: p.Network.UtxoValue[i], PkScript: pkScript}
-			}
+		// Match the real address inventory: include both plain and asset UTXOs.
+		pkScript2, err := hex.DecodeString(p.Network.State.PkScripts[p.Network.UtxoOwner[i]])
+		if err != nil {
+			return nil, err
+		}
+		if bytes.Equal(pkScript, pkScript2) {
+			outputs[utxo] = &wire.TxOut{Value: p.Network.UtxoValue[i], PkScript: pkScript}
 		}
 	}
 	return outputs, nil
