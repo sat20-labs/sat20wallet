@@ -297,6 +297,59 @@ func (p *jsDB) View(fn func(common.ReadBatch) error) error {
 	return fn(snapshot)
 }
 
+// NewReadView captures every key in one IndexedDB readonly transaction, using
+// the same snapshot collection as View. Later reads and pages consult only
+// these owned bytes, so a concurrent transaction cannot mix cache generations.
+// This is intentionally a read capability, not SnapshotDB: IndexedDB has no
+// cross-browser equivalent of that interface's disk-durability Sync contract.
+func (p *jsDB) NewReadView() (common.DBReadView, error) {
+	entries, err := p.snapshot(nil)
+	if err != nil {
+		return nil, err
+	}
+	view := &jsPinnedReadView{entries: entries, values: make(map[string][]byte, len(entries))}
+	for _, entry := range entries {
+		view.values[string(entry.key)] = entry.value
+	}
+	return view, nil
+}
+
+type jsPinnedReadView struct {
+	mu      sync.Mutex
+	entries []scanEntry
+	values  map[string][]byte
+}
+
+func (v *jsPinnedReadView) Read(key []byte) ([]byte, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.values == nil {
+		return nil, fmt.Errorf("IndexedDB read view is closed")
+	}
+	value, ok := v.values[string(key)]
+	if !ok {
+		return nil, common.ErrKeyNotFound
+	}
+	return bytes.Clone(value), nil
+}
+
+func (v *jsPinnedReadView) Scan(options common.ScanOptions, visit func([]byte, []byte) error) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.values == nil {
+		return fmt.Errorf("IndexedDB read view is closed")
+	}
+	return scanSnapshot(v.entries, options, visit)
+}
+
+func (v *jsPinnedReadView) Close() error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.entries = nil
+	v.values = nil
+	return nil
+}
+
 type jsBatchWrite struct {
 	db        *jsDB
 	batch     map[string]string

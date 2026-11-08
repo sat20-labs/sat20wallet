@@ -2,103 +2,104 @@
   <LayoutScroll>
     <div class="p-4 space-y-5 max-w-xl mx-auto">
       <div class="text-center space-y-1">
-        <h1 class="text-2xl font-semibold">{{ rehearsalOnly ? '只读恢复演练' : '恢复自托管账户' }}</h1>
-        <p v-if="rehearsalOnly" class="text-sm text-muted-foreground">验证两份恢复材料并预览备份，不覆盖当前钱包，也不修改本地密码。</p>
+        <h1 class="text-2xl font-semibold">{{ rehearsalOnly ? t('accountManagement.ui.rehearsalTitle') : t('accountManagement.ui.restoreTitle') }}</h1>
+        <p v-if="rehearsalOnly" class="text-sm text-muted-foreground">{{ t('accountManagement.ui.rehearsalIntro') }}</p>
         <template v-else>
-          <p class="text-sm text-muted-foreground">通过公开恢复码及两份恢复材料恢复全部钱包。</p>
-          <p class="text-sm text-muted-foreground">如上次恢复中断，请使用同一恢复码和原恢复时设置的本地密码继续。</p>
+          <p class="text-sm text-muted-foreground">{{ t('accountManagement.ui.restoreIntro') }}</p>
+          <p class="text-sm text-muted-foreground">{{ t('accountManagement.ui.resumeHint') }}</p>
         </template>
       </div>
 
       <section v-if="step === 1" class="space-y-3">
-        <label class="font-medium">账户恢复码</label>
-        <Textarea v-model="locator" rows="6" placeholder="粘贴 sat20account1:..." />
+        <label class="font-medium">{{ t('accountManagement.ui.recoveryCode') }}</label>
+        <Textarea v-model="locator" rows="6" :placeholder="t('accountManagement.ui.pasteLocator')" />
         <Button class="w-full" :disabled="busy || !locator" @click="loadRecovery">
           <Icon v-if="busy" icon="lucide:loader-2" class="mr-2 h-4 w-4 animate-spin" />
-          加载加密账户备份
+          {{ t('accountManagement.ui.loadBackup') }}
         </Button>
       </section>
 
       <section v-else-if="step === 2" class="space-y-4">
-        <h2 class="font-medium">回答私人知识问题</h2>
+        <h2 class="font-medium">{{ t('accountManagement.ui.answerQuestions') }}</h2>
         <div v-for="(question, index) in loaded.questions" :key="question.id" class="space-y-1">
           <label class="text-sm">{{ question.prompt }}</label>
           <Input v-model="answers[index]" type="password" autocomplete="off" />
         </div>
         <Button class="w-full" :disabled="busy" @click="recoverKnowledge">
-          恢复加密分片
+          {{ t('accountManagement.ui.recoverShare') }}
         </Button>
         <Button v-if="loaded.locator.recovery_mode === '2of3' && loaded.has_guardian_location"
           variant="outline" class="w-full" :disabled="busy" @click="step = 3">
-          使用用户分片和 Guardian
+          {{ t('accountManagement.ui.shareAndGuardian') }}
         </Button>
       </section>
 
       <section v-else-if="step === 3" class="space-y-4">
-        <h2 class="font-medium">提供恢复材料</h2>
-        <p class="text-sm text-muted-foreground">{{ knowledgeReady ? '可以粘贴用户分片，或者使用 Guardian 恢复。' : '需要同时提供用户分片和 Guardian 响应。' }}</p>
-        <Textarea v-model="userShare" rows="5" placeholder="可选：粘贴 sat20share1:..." />
-        <Button variant="outline" class="w-full" :disabled="busy || !userShare" @click="acceptUserShare">使用用户分片</Button>
+        <h2 class="font-medium">{{ t('accountManagement.ui.provideFactors') }}</h2>
+        <p class="text-sm text-muted-foreground">{{ knowledgeReady ? t('accountManagement.ui.chooseCompanion') : t('accountManagement.ui.requireCompanions') }}</p>
+        <Textarea v-model="userShare" rows="5" :placeholder="t('accountManagement.ui.pasteOptionalShare')" />
+        <Button variant="outline" class="w-full" :disabled="busy || !userShare" @click="acceptUserShare">{{ t('accountManagement.ui.useShare') }}</Button>
 
         <div v-if="loaded.guardian && loaded.has_guardian_location" class="rounded-lg border p-3 space-y-2">
-          <Button variant="outline" class="w-full" :disabled="busy" @click="createGuardianRequest">生成 Guardian 恢复请求</Button>
+          <Button variant="outline" class="w-full" :disabled="busy" @click="createGuardianRequest">{{ t('accountManagement.ui.createGuardianRequest') }}</Button>
           <Textarea v-if="guardianRequest" :model-value="guardianRequest" readonly rows="6" />
-          <Button v-if="guardianRequest" variant="ghost" class="w-full" @click="copyText(guardianRequest)">复制请求</Button>
-          <Textarea v-model="guardianResponse" rows="6" placeholder="粘贴 Guardian 返回的加密响应" />
-          <Button variant="outline" class="w-full" :disabled="busy || !guardianResponse" @click="acceptGuardianResponse">使用 Guardian 响应</Button>
+          <Button v-if="guardianRequest" variant="ghost" class="w-full" @click="copyText(guardianRequest)">{{ t('accountManagement.ui.copyRequest') }}</Button>
+          <Textarea v-model="guardianResponse" rows="6" :placeholder="t('accountManagement.ui.pasteGuardianResponse')" />
+          <Button variant="outline" class="w-full" :disabled="busy || !guardianResponse" @click="acceptGuardianResponse">{{ t('accountManagement.ui.useGuardianResponse') }}</Button>
         </div>
 
-        <Button class="w-full" :disabled="busy || !companionReady" @click="previewRecovery">预览恢复内容</Button>
+        <Button class="w-full" :disabled="busy || !companionReady" @click="previewRecovery">{{ t('accountManagement.ui.previewRecovery') }}</Button>
       </section>
 
       <section v-else-if="step === 4 && preview" class="space-y-4">
-        <h2 class="font-medium">{{ rehearsalOnly ? '恢复材料验证通过' : '确认恢复账户' }}</h2>
+        <h2 class="font-medium">{{ rehearsalOnly ? t('accountManagement.ui.factorsVerified') : t('accountManagement.ui.confirmRecovery') }}</h2>
         <div v-for="wallet in preview.wallets" :key="wallet.name" class="rounded-lg border p-3">
           <div class="font-medium">{{ wallet.name }}</div>
-          <div class="text-sm text-muted-foreground">{{ wallet.account_count }} 个子账户</div>
-          <div class="text-xs mt-1">DID：{{ wallet.dids.join('、') }}</div>
+          <div class="text-sm text-muted-foreground">{{ t('accountManagement.ui.subaccountCount', { value: wallet.account_count }) }}</div>
+          <div class="text-xs mt-1">{{ t('accountManagement.ui.didList', { value: wallet.dids.join(t('accountManagement.ui.listSeparator')) }) }}</div>
         </div>
         <template v-if="rehearsalOnly">
-          <p class="text-sm text-muted-foreground">已成功解密并读取备份。请核对钱包与子账户是否完整；本次只读演练不会更新配置时的演练时间。</p>
-          <Button class="w-full" :disabled="busy" @click="cancelRecovery">完成演练并返回</Button>
+          <p class="text-sm text-muted-foreground">{{ t('accountManagement.ui.rehearsalVerified') }}</p>
+          <Button class="w-full" :disabled="busy" @click="cancelRecovery">{{ t('accountManagement.ui.finishRehearsal') }}</Button>
         </template>
         <template v-else>
           <p id="restore-password-help" class="text-sm text-muted-foreground">
-            用于在此设备解锁恢复的钱包，至少 6 个字符，两次输入须一致。如继续中断的恢复，请使用上次恢复时设置的密码。
+            {{ t('accountManagement.ui.passwordHelp') }}
           </p>
           <div class="space-y-2">
-            <label for="restore-local-password" class="block text-sm font-medium">新设备解锁密码</label>
-            <Input id="restore-local-password" v-model="password" type="password" placeholder="设置新的本地钱包密码"
+            <label for="restore-local-password" class="block text-sm font-medium">{{ t('accountManagement.ui.newDevicePassword') }}</label>
+            <Input id="restore-local-password" v-model="password" type="password" :placeholder="t('accountManagement.ui.setPassword')"
               autocomplete="new-password" aria-describedby="restore-password-help" />
           </div>
           <div class="space-y-2">
-            <label for="restore-confirm-password" class="block text-sm font-medium">再次输入解锁密码</label>
-            <Input id="restore-confirm-password" v-model="confirmPassword" type="password" placeholder="再次输入密码"
+            <label for="restore-confirm-password" class="block text-sm font-medium">{{ t('accountManagement.ui.repeatUnlockPassword') }}</label>
+            <Input id="restore-confirm-password" v-model="confirmPassword" type="password" :placeholder="t('accountManagement.ui.repeatPassword')"
               autocomplete="new-password" aria-describedby="restore-password-help" />
           </div>
-          <Button class="w-full" :disabled="busy" @click="commitRecovery">恢复全部钱包</Button>
+          <Button class="w-full" :disabled="busy" @click="commitRecovery">{{ t('accountManagement.ui.restoreAll') }}</Button>
         </template>
       </section>
 
       <section v-else-if="step === 5" class="text-center space-y-3 py-10">
         <Icon icon="lucide:badge-check" class="h-14 w-14 text-green-500 mx-auto" />
-        <h2 class="text-xl font-semibold">账户恢复成功</h2>
-        <p class="text-sm text-muted-foreground">正在重新载入钱包。</p>
+        <h2 class="text-xl font-semibold">{{ t('accountManagement.ui.restoreSuccess') }}</h2>
+        <p class="text-sm text-muted-foreground">{{ t('accountManagement.ui.reloading') }}</p>
       </section>
 
       <section v-else-if="step === 6" class="space-y-3">
-        <h2 class="font-medium">账户已恢复，界面更新未完成</h2>
-        <p class="text-sm text-muted-foreground">钱包数据已保存。重新载入后可使用刚设置的密码解锁，无需再次恢复。</p>
-        <Button class="w-full" :disabled="busy" @click="reloadWallet">重新载入钱包</Button>
+        <h2 class="font-medium">{{ t('accountManagement.ui.uiReconcileFailed') }}</h2>
+        <p class="text-sm text-muted-foreground">{{ t('accountManagement.ui.savedReloadHint') }}</p>
+        <Button class="w-full" :disabled="busy" @click="reloadWallet">{{ t('accountManagement.ui.reloadWallet') }}</Button>
       </section>
 
       <Alert v-if="error" variant="destructive"><AlertDescription>{{ error }}</AlertDescription></Alert>
-      <Button v-if="step < 5" variant="ghost" class="w-full" :disabled="busy && step === 4" @click="cancelRecovery">取消</Button>
+      <Button v-if="step < 5" variant="ghost" class="w-full" :disabled="busy && step === 4" @click="cancelRecovery">{{ t('accountManagement.ui.cancel') }}</Button>
     </div>
   </LayoutScroll>
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Icon } from '@iconify/vue'
@@ -107,8 +108,9 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import accountSDK, { type AccountRecoverySummary } from '@/utils/accountManagement'
+import accountSDK, { accountDisplayMessage, type AccountRecoverySummary } from '@/utils/accountManagement'
 
+const { t } = useI18n()
 const router = useRouter()
 const route = useRoute()
 const rehearsalOnly = route.query.mode === 'rehearsal'
@@ -156,8 +158,8 @@ onMounted(async () => {
     if (disposed) return
     expectedAccountId.value = status.account_id || ''
     locator.value = status.public_locator || ''
-    if (!expectedAccountId.value || !locator.value) error.value = '当前账户尚未配置恢复材料'
-  } catch (e: any) { if (!disposed) error.value = e?.message || '读取当前恢复配置失败' }
+    if (!expectedAccountId.value || !locator.value) error.value = t('accountManagement.ui.recoveryNotConfigured')
+  } catch (e: any) { if (!disposed) error.value = accountDisplayMessage(t, e?.message) || t('accountManagement.ui.readRecoveryFailed') }
 })
 
 const run = async (task: () => Promise<void>) => {
@@ -166,9 +168,9 @@ const run = async (task: () => Promise<void>) => {
   try { await task() } catch (e: any) {
     if (e?.message === 'recovery session expired') {
       await clearRecovery()
-      error.value = '恢复会话已失效，请重新加载账户备份并验证恢复材料。'
+      error.value = t('accountManagement.ui.sessionExpired')
     } else {
-      error.value = e?.message || '恢复失败'
+      error.value = accountDisplayMessage(t, e?.message) || t('accountManagement.ui.recoveryFailed')
     }
   } finally { busy.value = false }
 }
@@ -186,7 +188,7 @@ const loadRecovery = () => run(async () => {
 
 const recoverKnowledge = () => run(async () => {
   const attempts = answers.value.map((answer, index) => ({ question_id: loaded.value.questions[index].id, answer })).filter(item => item.answer)
-  if (attempts.length < 2) throw new Error('至少回答两个问题')
+  if (attempts.length < 2) throw new Error(t('accountManagement.ui.answerAtLeastTwo'))
   await accountSDK.recoverKnowledge(sessionId.value, attempts)
   knowledgeReady.value = true
   step.value = 3
@@ -209,15 +211,15 @@ const acceptGuardianResponse = () => run(async () => {
 const previewRecovery = () => run(async () => {
   const summary = (await accountSDK.previewRecovery(sessionId.value)).summary
   if (rehearsalOnly && (!expectedAccountId.value || summary.account_id !== expectedAccountId.value)) {
-    throw new Error('恢复码不属于当前账户，请使用当前账户的恢复材料演练')
+    throw new Error(t('accountManagement.ui.wrongAccount'))
   }
   preview.value = summary
   step.value = 4
 })
 
 const commitRecovery = () => run(async () => {
-  if (rehearsalOnly) throw new Error('只读演练不能提交恢复')
-  if (password.value.length < 6 || password.value !== confirmPassword.value) throw new Error('密码至少 6 个字符且两次输入必须一致')
+  if (rehearsalOnly) throw new Error(t('accountManagement.ui.readOnlyCannotCommit'))
+  if (password.value.length < 6 || password.value !== confirmPassword.value) throw new Error(t('accountManagement.ui.passwordMismatch'))
 	await accountSDK.commitRecovery(sessionId.value, password.value)
   // The SDK has consumed the session and committed the authoritative database.
   // Every subsequent failure is UI reconciliation; never offer commit again.

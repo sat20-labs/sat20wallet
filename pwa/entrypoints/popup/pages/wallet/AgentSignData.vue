@@ -1,44 +1,44 @@
 <template>
   <main class="min-h-screen bg-background p-4 text-foreground">
-    <h1 class="mb-4 text-xl font-semibold">Agent Sign Data</h1>
-    <p class="mb-3 text-sm text-muted-foreground">Review the active account and every payload field before signing.</p>
+    <h1 class="mb-4 text-xl font-semibold">{{ $t('pwaUi.agentSign.title') }}</h1>
+    <p class="mb-3 text-sm text-muted-foreground">{{ $t('pwaUi.agentSign.reviewHint') }}</p>
     <textarea
       v-model="message"
       class="mb-3 h-36 w-full rounded border border-border bg-background p-2 text-sm"
-      placeholder="Raw protocol JSON"
+      :placeholder="$t('pwaUi.agentSign.rawJson')"
     />
-    <Button class="mb-3" :disabled="!message.trim() || signing" @click="reviewSignature">Review signature</Button>
+    <Button class="mb-3" :disabled="!message.trim() || signing" @click="reviewSignature">{{ $t('pwaUi.agentSign.review') }}</Button>
 
-    <section v-if="review" class="mb-3 space-y-3 rounded border border-border p-3" aria-label="Signature confirmation">
+    <section v-if="review" class="mb-3 space-y-3 rounded border border-border p-3" :aria-label="$t('pwaUi.agentSign.confirmation')">
       <div>
-        <h2 class="font-medium">Active account</h2>
+        <h2 class="font-medium">{{ $t('pwaUi.agentSign.activeAccount') }}</h2>
         <dl class="mt-2 grid gap-2 text-xs">
-          <div><dt class="text-muted-foreground">Wallet</dt><dd>{{ review.walletName }}</dd></div>
-          <div><dt class="text-muted-foreground">Account</dt><dd>{{ review.accountName }} (index {{ review.accountIndex }})</dd></div>
-          <div><dt class="text-muted-foreground">Address</dt><dd class="break-all font-mono">{{ review.address }}</dd></div>
-          <div><dt class="text-muted-foreground">Network</dt><dd>{{ review.network }}</dd></div>
+          <div><dt class="text-muted-foreground">{{ $t('pwaUi.agentSign.wallet') }}</dt><dd>{{ review.walletName }}</dd></div>
+          <div><dt class="text-muted-foreground">{{ $t('pwaUi.agentSign.account') }}</dt><dd>{{ $t('pwaUi.agentSign.accountIndex', { name: review.accountName, index: review.accountIndex }) }}</dd></div>
+          <div><dt class="text-muted-foreground">{{ $t('pwaUi.agentSign.address') }}</dt><dd class="break-all font-mono">{{ review.address }}</dd></div>
+          <div><dt class="text-muted-foreground">{{ $t('pwaUi.agentSign.network') }}</dt><dd>{{ review.network }}</dd></div>
         </dl>
       </div>
 
       <div>
-        <h2 class="font-medium">{{ review.summary.title }}</h2>
-        <p v-if="review.summary.warning" class="mt-1 text-xs text-destructive">{{ review.summary.warning }}</p>
+        <h2 class="font-medium">{{ $t(review.summary.kind === 'structured' ? 'approvalUi.structuredSignature' : 'approvalUi.rawSignature') }}</h2>
+        <p v-if="review.summary.warning" class="mt-1 text-xs text-destructive">{{ $t('approvalUi.opaqueWarning') }}</p>
         <dl v-if="review.summary.rows.length" class="mt-2 grid gap-2 text-xs">
           <div v-for="row in review.summary.rows" :key="row.key">
-            <dt class="text-muted-foreground">{{ row.key }}</dt>
+            <dt class="text-muted-foreground">{{ $t(`approvalUi.fields.${row.key}`) }}</dt>
             <dd class="break-all font-mono">{{ row.value }}</dd>
           </div>
         </dl>
       </div>
 
       <div>
-        <h2 class="font-medium">Complete payload</h2>
+        <h2 class="font-medium">{{ $t('pwaUi.agentSign.payload') }}</h2>
         <pre class="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/40 p-2 text-xs">{{ review.message }}</pre>
       </div>
 
       <div class="flex gap-2">
-        <Button variant="outline" :disabled="signing" @click="cancelReview">Cancel</Button>
-        <Button :disabled="signing" @click="confirmSignature">{{ signing ? 'Signing…' : 'Confirm and sign' }}</Button>
+        <Button variant="outline" :disabled="signing" @click="cancelReview">{{ $t('pwaUi.agentSign.cancel') }}</Button>
+        <Button :disabled="signing" @click="confirmSignature">{{ signing ? $t('pwaUi.agentSign.signing') : $t('pwaUi.agentSign.sign') }}</Button>
       </div>
     </section>
 
@@ -47,11 +47,14 @@
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import { ref } from 'vue'
 import { Button } from '@/components/ui/button'
 import { useWalletStore } from '@/store'
 import { summarizeSignaturePayload, type AgentSignatureSummary } from '@/composables/usePwaAgentRiskPolicy'
 import walletManager from '@/utils/sat20'
+
+const { t } = useI18n()
 
 interface SignatureReview {
   fingerprint: string
@@ -86,10 +89,10 @@ const reviewSignature = () => {
     fingerprint: JSON.stringify(context),
     message: context.message,
     summary: summarizeSignaturePayload(context.message),
-    walletName: walletStore.wallet?.name || walletStore.walletId || 'Unknown wallet',
-    accountName: walletStore.accounts?.find((account) => account.index === walletStore.accountIndex)?.name || 'Account',
+    walletName: walletStore.wallet?.name || walletStore.walletId || t('pwaUi.agentSign.unknownWallet'),
+    accountName: walletStore.accounts?.find((account) => account.index === walletStore.accountIndex)?.name || t('pwaUi.agentSign.account'),
     accountIndex: walletStore.accountIndex ?? 'unknown',
-    address: walletStore.address || 'Unavailable',
+    address: walletStore.address || t('pwaUi.agentSign.unavailable'),
     network: String(walletStore.network || 'unknown'),
   }
   output.value = ''
@@ -103,7 +106,7 @@ const confirmSignature = async () => {
   const snapshot = review.value
   if (!snapshot || signing.value) return
   if (snapshot.fingerprint !== fingerprint()) {
-    output.value = 'Payload or active wallet context changed. Review the signature again.'
+    output.value = t('pwaUi.agentSign.contextChanged')
     review.value = null
     return
   }

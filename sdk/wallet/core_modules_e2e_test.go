@@ -18,10 +18,13 @@ func TestSDKCoreModulesConnectedE2E(t *testing.T) {
 	t.Run("dkvs_real_paid_cross_instance_prefix_and_CAS", func(t *testing.T) {
 		coreDKVSE2E(t, cfg, chain)
 	})
-	sender := coreNewE2EManager(t, cfg, chain, coreE2ESenderMnemonic)
+	observer := &coreCommittedACKLossHTTP{HttpClient: NewHTTPClient()}
+	sender := coreNewE2EManager(t, cfg, chain, coreE2ESenderMnemonic, observer)
 	receiver := coreNewE2EManager(t, cfg, chain, coreE2EReceiverMnemonic)
 	senderMaterial := coreActivateE2E(t, sender, account.RecoveryMode2Of2, nil)
 	receiverMaterial := coreActivateE2E(t, receiver, account.RecoveryMode2Of2, nil)
+	coreRGBManagerRole(t, "original-sender", sender)
+	coreRGBManagerRole(t, "original-receiver", receiver)
 	rootID := sender.GetAccountManagementStatus().RootWalletID
 	chain.fund(t, sender.GetWallet().GetAddress(), 16)
 	chain.fund(t, receiver.GetWallet().GetAddress(), 6)
@@ -38,7 +41,7 @@ func TestSDKCoreModulesConnectedE2E(t *testing.T) {
 		coreAssert(t, len(sender.GetWalletCatalog()) == 2, "multi-wallet fixture missing wallet")
 		coreCheckpoint(t, "catalog_before_RGB_control", sender, cfg, chain, senderMaterial)
 		t.Run("committed_batch_CAS_lost_ACK_converges_once", func(t *testing.T) {
-			coreCommittedCASLostACKE2E(t, sender, cfg, chain, senderMaterial)
+			coreCommittedCASLostACKE2E(t, sender, cfg, chain, senderMaterial, observer)
 		})
 	}) {
 		// A failed publication fault test can leave this shared sender dirty.
@@ -51,7 +54,7 @@ func TestSDKCoreModulesConnectedE2E(t *testing.T) {
 	// Mixed fault/retry and concurrency flows remain explicit later groups.
 	t.Run("RGB11_self_send_cold_restore_and_respend", func(t *testing.T) {
 		coreRGB11SelfSendColdRestoreE2E(
-			t, cfg, chain, senderMaterial, receiverMaterial)
+			t, cfg, chain, sender, receiver, senderMaterial, receiverMaterial)
 	})
 
 	t.Run("RGB11_asset_name_and_transcend_registration_descriptor", func(t *testing.T) {
@@ -121,7 +124,7 @@ func TestSDKCoreModulesConnectedE2E(t *testing.T) {
 	})
 
 	t.Run("RGB11_R11_stable_only_cold_restore_ignores_valid_and_corrupt_legacy_cache", func(t *testing.T) {
-		coreRGB11StableOnlyColdRestoreE2E(t, cfg, chain, senderMaterial, receiverMaterial)
+		coreRGB11StableOnlyColdRestoreE2E(t, cfg, chain, sender, receiver, senderMaterial, receiverMaterial)
 	})
 
 	t.Run("RGB11_R23_temporary_TTL_expiry_cold_restore_and_respend", func(t *testing.T) {
@@ -145,6 +148,7 @@ func TestSDKCoreModulesConnectedE2E(t *testing.T) {
 	t.Run("guardian_two_of_three_and_wrong_knowledge", func(t *testing.T) {
 		// The browser may have advanced the shared account even if its gate failed.
 		coreRequire(t, "sync current account before guardian reconfiguration", sender.SyncAccountManagementState(context.Background()))
+		corePrepRGBFailureScopes(t, sender, cfg, chain)
 		material := coreActivateE2E(t, sender, account.RecoveryMode2Of3, receiver)
 		coreCheckpoint(t, "guardian_and_knowledge_restore_catalog_and_RGB", sender, cfg, chain, material)
 		blank := coreNewE2EManager(t, cfg, chain, "")

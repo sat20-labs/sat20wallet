@@ -8,8 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sync"
 	"testing"
+	"time"
 
 	indexercommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/btcec"
@@ -19,21 +19,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var (
-	dkvsNoPluginBuildMu       sync.Mutex
-	dkvsNoPluginTestArtifacts satoshinetArtifacts
-)
+var dkvsNoPluginTestArtifacts satoshinetArtifacts
 
 // dkvsNoPluginBuildArtifacts builds the DKVS test runtime in the same role
 // configuration as the production scripts: bootstrap/core use stp_plugin and
 // stpd.so, while the ordinary miner uses wallet_plugin and wallet.so.
 func dkvsNoPluginBuildArtifacts(t *testing.T) satoshinetArtifacts {
 	t.Helper()
-	dkvsNoPluginBuildMu.Lock()
-	defer dkvsNoPluginBuildMu.Unlock()
-	if dkvsNoPluginTestArtifacts.coreExecutable != "" {
+	satoshinetBuildMu.Lock()
+	defer satoshinetBuildMu.Unlock()
+	if dkvsNoPluginTestArtifacts.coreExecutable != "" && dkvsNoPluginTestArtifacts.corePlugin != "" &&
+		dkvsNoPluginTestArtifacts.minerExecutable != "" && dkvsNoPluginTestArtifacts.minerPlugin != "" {
 		return dkvsNoPluginTestArtifacts
 	}
+	if artifacts, prebuilt := stagePrebuiltSatoshiNetArtifacts(t, "dkvs", false); prebuilt {
+		dkvsNoPluginTestArtifacts = artifacts
+		return artifacts
+	}
+	defer e2ePhase(t, "dkvs_node_plugin_build")()
 
 	_, file, _, ok := runtime.Caller(0)
 	require.True(t, ok)
@@ -45,7 +48,7 @@ func dkvsNoPluginBuildArtifacts(t *testing.T) satoshinetArtifacts {
 	transcendPluginDir := filepath.Join(workspace, "transcend", "plugin")
 	require.FileExists(t, filepath.Join(transcendPluginDir, "main.go"))
 
-	outputDir := filepath.Join(os.TempDir(), "sat20wallet-satoshinet-dkvs-rpctest")
+	outputDir := filepath.Join(e2eRuntimeDirectory(t), "dkvs")
 	require.NoError(t, os.MkdirAll(outputDir, 0o755))
 
 	artifacts := satoshinetArtifacts{
@@ -59,16 +62,29 @@ func dkvsNoPluginBuildArtifacts(t *testing.T) satoshinetArtifacts {
 		artifacts.minerExecutable += ".exe"
 	}
 
-	cmd := exec.Command("go", "build", "-buildmode=plugin", "-o", artifacts.minerPlugin, "main.go")
-	cmd.Dir = sdkPluginDir
-	output, err := cmd.CombinedOutput()
-	require.NoError(t, err, string(output))
+	// A successful normal coreOnly cache can donate Core; the miner plugin
+	// and executable are reused only as a fully published pair.
+	normalCoreReady := satoshinetTestArtifacts.coreExecutable != "" && satoshinetTestArtifacts.corePlugin != ""
+	started := time.Now()
+	if normalCoreReady && satoshinetTestArtifacts.minerExecutable != "" && satoshinetTestArtifacts.minerPlugin != "" {
+		copySatoshiNetRuntimeFile(t, satoshinetTestArtifacts.minerPlugin, artifacts.minerPlugin)
+		copySatoshiNetRuntimeFile(t, satoshinetTestArtifacts.minerExecutable, artifacts.minerExecutable)
+		t.Logf("artifact: variant=dkvs files=wallet.so,miner source=normal elapsed_seconds=%.3f", time.Since(started).Seconds())
+	} else {
+		cmd := exec.Command("go", "build", "-buildmode=plugin", "-o", artifacts.minerPlugin, "main.go")
+		cmd.Dir = sdkPluginDir
+		output, err := cmd.CombinedOutput()
+		require.NoError(t, err, string(output))
+		t.Logf("artifact: variant=dkvs file=wallet.so source=build elapsed_seconds=%.3f", time.Since(started).Seconds())
 
-	cmd = exec.Command("go", "build", "-tags=rpctest,wallet_plugin", "-o", artifacts.minerExecutable,
-		"github.com/sat20-labs/satoshinet")
-	cmd.Dir = satoshinetDir
-	output, err = cmd.CombinedOutput()
-	require.NoError(t, err, string(output))
+		started = time.Now()
+		cmd = exec.Command("go", "build", "-tags=rpctest,wallet_plugin", "-o", artifacts.minerExecutable,
+			"github.com/sat20-labs/satoshinet")
+		cmd.Dir = satoshinetDir
+		output, err = cmd.CombinedOutput()
+		require.NoError(t, err, string(output))
+		t.Logf("artifact: variant=dkvs file=miner source=build elapsed_seconds=%.3f", time.Since(started).Seconds())
+	}
 
 	// Keep plugin builds reproducible without modifying a sibling repository's
 	// module files or relying on a modfile left by an earlier test run.
@@ -89,21 +105,30 @@ func dkvsNoPluginBuildArtifacts(t *testing.T) satoshinetArtifacts {
 	for _, module := range []string{"satoshinet", "indexer", "sat20wallet/sdk"} {
 		editArgs = append(editArgs, "-replace=github.com/sat20-labs/"+module+"="+filepath.Join(workspace, module))
 	}
-	cmd = exec.Command("go", editArgs...)
+	cmd := exec.Command("go", editArgs...)
 	cmd.Dir = transcendPluginDir
-	output, err = cmd.CombinedOutput()
+	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
 
+	started = time.Now()
 	cmd = exec.Command("go", "build", "-mod=mod", "-modfile="+transcendMod, "-buildmode=plugin", "-o", artifacts.corePlugin, "main.go")
 	cmd.Dir = transcendPluginDir
 	output, err = cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
+	t.Logf("artifact: variant=dkvs file=stpd.so source=build elapsed_seconds=%.3f", time.Since(started).Seconds())
 
-	cmd = exec.Command("go", "build", "-tags=rpctest,stp_plugin", "-o", artifacts.coreExecutable,
-		"github.com/sat20-labs/satoshinet")
-	cmd.Dir = satoshinetDir
-	output, err = cmd.CombinedOutput()
-	require.NoError(t, err, string(output))
+	started = time.Now()
+	if normalCoreReady {
+		copySatoshiNetRuntimeFile(t, satoshinetTestArtifacts.coreExecutable, artifacts.coreExecutable)
+		t.Logf("artifact: variant=dkvs file=core source=normal elapsed_seconds=%.3f", time.Since(started).Seconds())
+	} else {
+		cmd = exec.Command("go", "build", "-tags=rpctest,stp_plugin", "-o", artifacts.coreExecutable,
+			"github.com/sat20-labs/satoshinet")
+		cmd.Dir = satoshinetDir
+		output, err = cmd.CombinedOutput()
+		require.NoError(t, err, string(output))
+		t.Logf("artifact: variant=dkvs file=core source=build elapsed_seconds=%.3f", time.Since(started).Seconds())
+	}
 
 	dkvsNoPluginTestArtifacts = artifacts
 	return dkvsNoPluginTestArtifacts
@@ -201,6 +226,27 @@ func newDKVSNoPluginNetworkWithArgs(t *testing.T, fakeL1 *fakeL1Indexer, bootstr
 	nodes := []*testHarness{bootstrap, core, miner}
 	require.NoError(t, joinBlocks(nodes))
 	return &realSatoshiNet{Bootstrap: bootstrap, Core: core, Miner: miner, Nodes: nodes, fakeL1: fakeL1}
+}
+
+// Account-only cases need the real DKVS network, not template asset funding.
+// Keep the same indexer identity and DID fixtures without anchoring unused gas.
+func newDKVSNoPluginUnfundedNetwork(t *testing.T) *realSatoshiNet {
+	t.Helper()
+	oldEnableTesting := indexercommon.ENABLE_TESTING
+	indexercommon.ENABLE_TESTING = true
+	t.Cleanup(func() { indexercommon.ENABLE_TESTING = oldEnableTesting })
+
+	bootstrapKey := keyFromMnemonic(t, bootstrapMnemonic, 0)
+	coreKey := keyFromMnemonic(t, coreMnemonic, 0)
+	_, lockedPkScript, err := getP2WSHScript(bootstrapKey.PubKey().SerializeCompressed(),
+		coreKey.PubKey().SerializeCompressed())
+	require.NoError(t, err)
+	fakeL1 := newFakeL1Indexer(t, hex.EncodeToString(bootstrapKey.PubKey().SerializeCompressed()),
+		lockedPkScript, nil)
+	primaryDIDOwner := newDKVSKeyPathActor(t, keyFromMnemonic(t, dkvsClientMnemonic, 0))
+	fakeL1.setNameOwner("alice", primaryDIDOwner.Address)
+	fakeL1.setNameOwner("company", primaryDIDOwner.Address)
+	return newDKVSNoPluginNetworkWithArgs(t, fakeL1, nil, nil, dkvsMinerArgs(t))
 }
 
 func newDKVSNoPluginTemplateFixtureWithArgs(t *testing.T, assets map[string]int64, bootstrapArgs,

@@ -6,7 +6,6 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -16,22 +15,22 @@ import (
 )
 
 const (
-	ManagedStateVersion   = uint32(2)
+	ManagedStateVersion   = uint32(1)
 	MaxManagedStateItems  = 1024
 	MaxManagedStateString = 4096
 )
 
 var (
-	managedStatePlainMagic    = []byte{'A', 'M', 'S', '2'}
-	managedStateEnvelopeMagic = []byte{'A', 'M', 'E', '2'}
+	managedStatePlainMagic    = []byte{'A', 'M', 'S', '1'}
+	managedStateEnvelopeMagic = []byte{'A', 'M', 'E', '1'}
 )
 
 type ManagedWallet struct {
 	Fingerprint  string
-	Revision     uint64
 	Deleted      bool
 	Name         string
-	Mnemonic     string
+	Type         WalletType
+	Secret       []byte
 	AccountCount uint32
 	SubAccounts  []SubAccount
 }
@@ -39,9 +38,6 @@ type ManagedWallet struct {
 type ManagedState struct {
 	Version         uint32
 	RootFingerprint string
-	Revision        uint64
-	DataRevision    uint64
-	DataHash        string
 	Wallets         []ManagedWallet
 }
 
@@ -58,6 +54,27 @@ func writeStateString(buf *bytes.Buffer, value string) error {
 	writeStateUvarint(buf, uint64(len(value)))
 	buf.WriteString(value)
 	return nil
+}
+
+func writeStateBytes(buf *bytes.Buffer, value []byte) error {
+	if len(value) > MaxManagedStateString {
+		return ErrInvalidBackup
+	}
+	writeStateUvarint(buf, uint64(len(value)))
+	buf.Write(value)
+	return nil
+}
+
+func readStateBytes(reader *bytes.Reader) ([]byte, error) {
+	size, err := readStateUvarint(reader)
+	if err != nil || size > MaxManagedStateString || size > uint64(reader.Len()) {
+		return nil, ErrRecoveryFailed
+	}
+	value := make([]byte, int(size))
+	if _, err := io.ReadFull(reader, value); err != nil {
+		return nil, ErrRecoveryFailed
+	}
+	return value, nil
 }
 
 func readStateUvarint(reader *bytes.Reader) (uint64, error) {
@@ -81,7 +98,7 @@ func readStateString(reader *bytes.Reader) (string, error) {
 }
 
 func normalizedManagedState(value ManagedState) (ManagedState, error) {
-	if value.Version != ManagedStateVersion || value.Revision == 0 {
+	if value.Version != ManagedStateVersion {
 		return ManagedState{}, ErrInvalidBackup
 	}
 	root, err := hex.DecodeString(strings.TrimSpace(value.RootFingerprint))
@@ -90,20 +107,8 @@ func normalizedManagedState(value ManagedState) (ManagedState, error) {
 	}
 	out := ManagedState{
 		Version: ManagedStateVersion, RootFingerprint: hex.EncodeToString(root),
-		Revision: value.Revision, DataRevision: value.DataRevision,
-		DataHash: strings.ToLower(strings.TrimSpace(value.DataHash)),
-		Wallets:  append([]ManagedWallet(nil), value.Wallets...),
-	}
-	if out.DataRevision == 0 {
-		if out.DataHash != "" {
-			return ManagedState{}, ErrInvalidBackup
-		}
-	} else {
-		hash, err := hex.DecodeString(out.DataHash)
-		if err != nil || len(hash) != sha256.Size {
-			return ManagedState{}, ErrInvalidBackup
-		}
-		out.DataHash = hex.EncodeToString(hash)
+
+		Wallets: append([]ManagedWallet(nil), value.Wallets...),
 	}
 	if len(out.Wallets) == 0 || len(out.Wallets) > MaxManagedStateItems {
 		return ManagedState{}, ErrInvalidBackup
@@ -122,8 +127,9 @@ func normalizedManagedState(value ManagedState) (ManagedState, error) {
 	rootPresent := false
 	for index := range out.Wallets {
 		item := &out.Wallets[index]
+		item.Secret = append([]byte(nil), item.Secret...)
 		fingerprint, err := hex.DecodeString(strings.TrimSpace(item.Fingerprint))
-		if err != nil || len(fingerprint) != 32 || item.Revision == 0 {
+		if err != nil || len(fingerprint) != 32 {
 			return ManagedState{}, ErrInvalidBackup
 		}
 		item.Fingerprint = hex.EncodeToString(fingerprint)
@@ -131,12 +137,14 @@ func normalizedManagedState(value ManagedState) (ManagedState, error) {
 			return ManagedState{}, ErrInvalidBackup
 		}
 		seen[item.Fingerprint] = struct{}{}
-		if item.Fingerprint == out.RootFingerprint && !item.Deleted {
+		if item.Fingerprint == out.RootFingerprint && !item.Deleted && item.Type == WalletMnemonic {
 			rootPresent = true
 		}
 		if item.Deleted {
 			item.Name = ""
-			item.Mnemonic = ""
+			zero(item.Secret)
+			item.Secret = nil
+			item.Type = WalletMnemonic
 			item.AccountCount = 0
 			item.SubAccounts = nil
 			continue
@@ -144,8 +152,8 @@ func normalizedManagedState(value ManagedState) (ManagedState, error) {
 		if item.AccountCount > MaxManagedStateItems {
 			return ManagedState{}, ErrInvalidBackup
 		}
-		backup, err := NormalizeBackup(Backup{Version: Version, Wallets: []WalletBackup{{
-			Name: item.Name, Mnemonic: item.Mnemonic, AccountCount: item.AccountCount,
+		backup, err := NormalizeBackup(Backup{Version: BackupVersion, Wallets: []WalletBackup{{
+			Name: item.Name, Type: item.Type, Secret: item.Secret, AccountCount: item.AccountCount,
 			SubAccounts: item.SubAccounts,
 		}}})
 		if err != nil {
@@ -156,7 +164,9 @@ func normalizedManagedState(value ManagedState) (ManagedState, error) {
 			return ManagedState{}, fmt.Errorf("%w: duplicate wallet name", ErrInvalidBackup)
 		}
 		names[item.Name] = struct{}{}
-		item.Mnemonic = backup.Wallets[0].Mnemonic
+		zero(item.Secret)
+		item.Type = backup.Wallets[0].Type
+		item.Secret = backup.Wallets[0].Secret
 		item.AccountCount = backup.Wallets[0].AccountCount
 		item.SubAccounts = backup.Wallets[0].SubAccounts
 		sort.Slice(item.SubAccounts, func(i, j int) bool {
@@ -174,13 +184,13 @@ func BackupFromManagedState(value ManagedState) (Backup, error) {
 	if err != nil {
 		return Backup{}, err
 	}
-	result := Backup{Version: Version, Wallets: make([]WalletBackup, 0, len(state.Wallets))}
+	result := Backup{Version: BackupVersion, Wallets: make([]WalletBackup, 0, len(state.Wallets))}
 	for _, item := range state.Wallets {
 		if item.Deleted {
 			continue
 		}
 		result.Wallets = append(result.Wallets, WalletBackup{
-			Name: item.Name, Mnemonic: item.Mnemonic, AccountCount: item.AccountCount,
+			Name: item.Name, Type: item.Type, Secret: item.Secret, AccountCount: item.AccountCount,
 			SubAccounts: append([]SubAccount(nil), item.SubAccounts...),
 		})
 	}
@@ -197,16 +207,10 @@ func encodeManagedState(value ManagedState) ([]byte, error) {
 	writeStateUvarint(&raw, uint64(state.Version))
 	root, _ := hex.DecodeString(state.RootFingerprint)
 	raw.Write(root)
-	writeStateUvarint(&raw, state.Revision)
-	writeStateUvarint(&raw, state.DataRevision)
-	if err := writeStateString(&raw, state.DataHash); err != nil {
-		return nil, err
-	}
 	writeStateUvarint(&raw, uint64(len(state.Wallets)))
 	for _, wallet := range state.Wallets {
 		fingerprint, _ := hex.DecodeString(wallet.Fingerprint)
 		raw.Write(fingerprint)
-		writeStateUvarint(&raw, wallet.Revision)
 		if wallet.Deleted {
 			raw.WriteByte(1)
 			continue
@@ -215,7 +219,8 @@ func encodeManagedState(value ManagedState) ([]byte, error) {
 		if err := writeStateString(&raw, wallet.Name); err != nil {
 			return nil, err
 		}
-		if err := writeStateString(&raw, wallet.Mnemonic); err != nil {
+		raw.WriteByte(byte(wallet.Type))
+		if err := writeStateBytes(&raw, wallet.Secret); err != nil {
 			return nil, err
 		}
 		writeStateUvarint(&raw, uint64(wallet.AccountCount))
@@ -260,6 +265,16 @@ func ValidateManagedState(value ManagedState) error {
 	return nil
 }
 
+// EncodeManagedState exposes the canonical wallet payload for SDK three-way
+// comparison. The same codec remains inside the authenticated state envelope.
+func EncodeManagedState(value ManagedState) ([]byte, error) {
+	return encodeManagedState(value)
+}
+
+func DecodeManagedState(value []byte) (ManagedState, error) {
+	return decodeManagedState(value)
+}
+
 func decodeManagedState(value []byte) (ManagedState, error) {
 	reader := flate.NewReader(bytes.NewReader(value))
 	raw, err := io.ReadAll(io.LimitReader(reader, MaxRecoveryObjectSize+1))
@@ -273,24 +288,12 @@ func decodeManagedState(value []byte) (ManagedState, error) {
 		return ManagedState{}, ErrRecoveryFailed
 	}
 	version, err := readStateUvarint(stream)
-	if err != nil || uint32(version) != ManagedStateVersion {
+	if err != nil || version != uint64(ManagedStateVersion) {
 		return ManagedState{}, ErrRecoveryFailed
 	}
 	root := make([]byte, 32)
 	if _, err := io.ReadFull(stream, root); err != nil {
 		return ManagedState{}, ErrRecoveryFailed
-	}
-	revision, err := readStateUvarint(stream)
-	if err != nil {
-		return ManagedState{}, err
-	}
-	dataRevision, err := readStateUvarint(stream)
-	if err != nil {
-		return ManagedState{}, err
-	}
-	dataHash, err := readStateString(stream)
-	if err != nil {
-		return ManagedState{}, err
 	}
 	count, err := readStateUvarint(stream)
 	if err != nil || count == 0 || count > MaxManagedStateItems {
@@ -298,7 +301,6 @@ func decodeManagedState(value []byte) (ManagedState, error) {
 	}
 	state := ManagedState{
 		Version: ManagedStateVersion, RootFingerprint: hex.EncodeToString(root),
-		Revision: revision, DataRevision: dataRevision, DataHash: dataHash,
 		Wallets: make([]ManagedWallet, 0, count),
 	}
 	for index := uint64(0); index < count; index++ {
@@ -306,23 +308,24 @@ func decodeManagedState(value []byte) (ManagedState, error) {
 		if _, err := io.ReadFull(stream, fingerprint); err != nil {
 			return ManagedState{}, ErrRecoveryFailed
 		}
-		itemRevision, err := readStateUvarint(stream)
-		if err != nil {
-			return ManagedState{}, err
-		}
 		flag, err := stream.ReadByte()
 		if err != nil || flag > 1 {
 			return ManagedState{}, ErrRecoveryFailed
 		}
 		item := ManagedWallet{
-			Fingerprint: hex.EncodeToString(fingerprint), Revision: itemRevision, Deleted: flag == 1,
+			Fingerprint: hex.EncodeToString(fingerprint), Deleted: flag == 1,
 		}
 		if !item.Deleted {
 			item.Name, err = readStateString(stream)
 			if err != nil {
 				return ManagedState{}, err
 			}
-			item.Mnemonic, err = readStateString(stream)
+			kind, kindErr := stream.ReadByte()
+			if kindErr != nil || kind > byte(WalletPrivateKey) {
+				return ManagedState{}, ErrRecoveryFailed
+			}
+			item.Type = WalletType(kind)
+			item.Secret, err = readStateBytes(stream)
 			if err != nil {
 				return ManagedState{}, err
 			}
@@ -361,11 +364,11 @@ func managedStateKey(secret []byte, accountID string) ([]byte, error) {
 	if err != nil || len(accountIDBytes) != 32 || len(secret) != accountSecretSize {
 		return nil, ErrInvalidAccountID
 	}
-	return hkdfSHA256(secret, accountIDBytes, []byte("sat20-account-managed-state-v2"), 32), nil
+	return hkdfSHA256(secret, accountIDBytes, []byte("sat20-account-managed-state-v1"), 32), nil
 }
 
 func managedStateAAD(accountID string) []byte {
-	return []byte("sat20-account-managed-state-aad-v2|" + accountID)
+	return []byte("sat20-account-managed-state-aad-v1|" + accountID)
 }
 
 func SealManagedState(secret []byte, accountID string, state ManagedState, randomSource io.Reader) ([]byte, error) {

@@ -69,6 +69,12 @@ func (e *DKVSError) Unwrap() error {
 		return dkvsindexer.ErrStaleGeneration
 	case dkvsindexer.ErrorCodeStaleEndpoint:
 		return dkvsindexer.ErrStaleEndpoint
+	case dkvsindexer.ErrorCodeInvalidBlockHeight:
+		return dkvsindexer.ErrInvalidBlockHeight
+	case dkvsindexer.ErrorCodeHeightTooLow:
+		return dkvsindexer.ErrHeightTooLow
+	case dkvsindexer.ErrorCodeStorageUnavailable:
+		return dkvsindexer.ErrStorageUnavailable
 	case dkvsindexer.ErrorCodeEndpointMismatch:
 		return dkvsindexer.ErrEndpointMismatch
 	case dkvsindexer.ErrorCodeResetRequired:

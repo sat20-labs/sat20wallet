@@ -28,7 +28,15 @@ type rgb11ResolvedRecoveryProjection struct {
 	tickerInfos   []*indexer.TickerInfo
 	complete      bool
 	checkEvidence func() error
+	faults        []rgb11wallet.ProofFault
+	ready         map[string]bool
 }
+
+// Only errors tied to a decoded, key-bound proof may be localized.
+type rgb11CarrierFault struct{ fault rgb11wallet.ProofFault }
+
+func (e *rgb11CarrierFault) Error() string { return e.fault.Error() }
+func (e *rgb11CarrierFault) Unwrap() error { return e.fault.Cause }
 
 type rgb11RecoveryProofCandidate struct {
 	proof           *rgb11wallet.AllocationProof
@@ -188,7 +196,7 @@ func cloneRGB11UTXO(value *rgb11wallet.BitcoinUTXO) *rgb11wallet.BitcoinUTXO {
 }
 
 func (p *rgb11Manager) rgb11SnapshotLockPlan(current, candidate *RGB11WalletSnapshot,
-	reasons map[string]string) (rgb11LockPlan, error) {
+	reasons map[string]string, faults ...rgb11wallet.ProofFault) (rgb11LockPlan, error) {
 	plan := rgb11LockPlan{
 		ReplacedOwners: make(map[string]struct{}),
 		DesiredOwners:  make(map[string]rgb11ReservationLockTarget),
@@ -201,6 +209,18 @@ func (p *rgb11Manager) rgb11SnapshotLockPlan(current, candidate *RGB11WalletSnap
 	if current == nil || candidate == nil {
 		return plan, ErrRGB11Inconsistent
 	}
+	oldView, err := rgb11wallet.SplitLocalProjection(current.ProjectionRecords, faults...)
+	if err != nil {
+		return plan, err
+	}
+	nextView, err := rgb11wallet.SplitLocalProjection(candidate.ProjectionRecords, faults...)
+	if err != nil {
+		return plan, err
+	}
+	oldWork, nextWork := *current, *candidate
+	oldWork.ProjectionRecords = oldView.Records
+	nextWork.ProjectionRecords = nextView.Records
+	current, candidate = &oldWork, &nextWork
 	oldPending, err := rgb11wallet.PendingTransfersFromProjectionSnapshot(current.ProjectionRecords)
 	if err != nil {
 		return plan, err
@@ -228,7 +248,15 @@ func (p *rgb11Manager) rgb11SnapshotLockPlan(current, candidate *RGB11WalletSnap
 	}
 	for _, reservation := range oldReservations {
 		if reservation != nil && reservation.LockOwner != "" {
-			plan.ReplacedOwners[reservation.LockOwner] = struct{}{}
+			frozen := nextView.Requests[reservation.RequestID] || nextView.Points[reservation.LockOutpoint]
+			if reservation.State != nil {
+				for _, point := range append(append([]string(nil), reservation.State.InputOutPoints...), reservation.State.OutputOutPoints...) {
+					frozen = frozen || nextView.Points[point]
+				}
+			}
+			if !frozen {
+				plan.ReplacedOwners[reservation.LockOwner] = struct{}{}
+			}
 		}
 	}
 
@@ -332,6 +360,12 @@ func (p *rgb11Manager) rgb11SnapshotLockPlan(current, candidate *RGB11WalletSnap
 			group.changeOutpoints[outpoint] = struct{}{}
 			if state.Status != "settled" {
 				group.outpoints[outpoint] = struct{}{}
+				if _, hasProof := proofOutpoints[outpoint]; hasProof {
+					// Confirmation loss can reopen change already protected by
+					// its own RGB proof after recovery. Preserve that reason when
+					// assigning the operation owner; unrelated locks still conflict.
+					group.previousReasons[outpoint] = rgb11wallet.LockReasonRGB
+				}
 			}
 		}
 	}
@@ -626,7 +660,7 @@ func (p *rgb11Manager) resolveRGB11RecoveryProjection(ctx context.Context,
 		if err != nil {
 			return nil, err
 		}
-		current, _, err := p.exportRGB11WalletSnapshot(walletID)
+		current, err := p.readRGB11Local(walletID)
 		if err != nil {
 			return nil, err
 		}
@@ -788,7 +822,7 @@ func (p *rgb11Manager) resolveRGB11RecoveryProjection(ctx context.Context,
 	for _, proof := range proofs {
 		seal, sealErr := seals.DecodeGraphBlindSeal(proof.SealDisclosure)
 		if sealErr != nil {
-			return nil, fmt.Errorf("decode RGB11 recovery seal: %w", sealErr)
+			return nil, &rgb11CarrierFault{fault: rgb11wallet.ProofFault{OutPoint: proof.OutPoint, AssetName: proof.AssetName, Cause: fmt.Errorf("decode RGB11 recovery seal: %w", sealErr)}}
 		}
 		reveals = append(reveals, seal)
 	}
@@ -1031,7 +1065,7 @@ func (p *rgb11Manager) resolveRGB11RecoveryProjection(ctx context.Context,
 
 	proofStates := make(map[string]*rgb11RecoveryProofCandidate, len(proofs))
 	orderedProofs := append([]*rgb11wallet.AllocationProof(nil), proofs...)
-	for _, proof := range orderedProofs {
+	checkProof := func(proof *rgb11wallet.AllocationProof) (*rgb11RecoveryProofCandidate, error) {
 		if err := validateStoredProof(proof); err != nil {
 			return nil, err
 		}
@@ -1155,8 +1189,7 @@ func (p *rgb11Manager) resolveRGB11RecoveryProjection(ctx context.Context,
 					}
 					// This is unavailable ownership, not proof of irreversible burn.
 					state.currentStatus, state.confirmations = "inconsistent", status.Confirmations
-					proofStates[proof.OutPoint+"|"+proof.AssetName.String()] = state
-					continue
+					return state, nil
 				}
 				for hash := range hashes {
 					if _, err := validateHistoricalConsignment(hash); err != nil {
@@ -1267,6 +1300,13 @@ func (p *rgb11Manager) resolveRGB11RecoveryProjection(ctx context.Context,
 			state.currentStatus = "orphaned"
 			state.prepared = true
 		}
+		return state, nil
+	}
+	for _, proof := range orderedProofs {
+		state, err := checkProof(proof)
+		if err != nil {
+			return nil, &rgb11CarrierFault{fault: rgb11wallet.ProofFault{OutPoint: proof.OutPoint, AssetName: proof.AssetName, Cause: err}}
+		}
 		proofStates[proof.OutPoint+"|"+proof.AssetName.String()] = state
 	}
 
@@ -1274,14 +1314,14 @@ func (p *rgb11Manager) resolveRGB11RecoveryProjection(ctx context.Context,
 	// embedded prepared branch and every exact parent Opout has positive current
 	// unspent or replacement-consumer evidence above. An absent issuance has no
 	// such parent evidence and remains unknown.
-	for _, state := range proofStates {
+	checkParents := func(state *rgb11RecoveryProofCandidate) error {
 		if !state.prepared {
-			continue
+			return nil
 		}
 		proof := state.proof
 		prepared := preparedHistories[proof.ConsignmentHash]
 		if prepared == nil {
-			return nil, fmt.Errorf("absent RGB11 producer %s has no prepared history report", proof.OperationID)
+			return fmt.Errorf("absent RGB11 producer %s has no prepared history report", proof.OperationID)
 		}
 		var parentRows []rgb11wallet.ValidatedConsumer
 		for _, row := range prepared.Consumers {
@@ -1291,26 +1331,26 @@ func (p *rgb11Manager) resolveRGB11RecoveryProjection(ctx context.Context,
 			}
 		}
 		if len(parentRows) == 0 {
-			return nil, fmt.Errorf("absent RGB11 transition %s has no bound parent inputs", proof.OperationID)
+			return fmt.Errorf("absent RGB11 transition %s has no bound parent inputs", proof.OperationID)
 		}
 		for _, row := range parentRows {
 			assetKey, keyErr := rgb11wallet.NewContractAssetKey(row.ContractID, indexer.ASSET_TYPE_FT)
 			if keyErr != nil {
-				return nil, keyErr
+				return keyErr
 			}
 			parentKey := rgb11ProofIndexKey(assetKey.Ticker, row.InputOperationID,
 				row.AssignmentType, row.AssignmentIndex)
 			parent := proofsByIdentity[parentKey]
 			if parent == nil {
 				if err := validateForeignPreparedParent(row, prepared.HistoricalAllocations); err != nil {
-					return nil, fmt.Errorf("absent RGB11 transition %s foreign parent %s is not positively verified: %w",
+					return fmt.Errorf("absent RGB11 transition %s foreign parent %s is not positively verified: %w",
 						proof.OperationID, parentKey, err)
 				}
 				continue
 			}
 			parentState := proofStates[parent.OutPoint+"|"+parent.AssetName.String()]
 			if parentState == nil {
-				return nil, fmt.Errorf("absent RGB11 transition %s has an unverified parent %s", proof.OperationID, parent.OutPoint)
+				return fmt.Errorf("absent RGB11 transition %s has an unverified parent %s", proof.OperationID, parent.OutPoint)
 			}
 			confirmedUnspent := (parentState.currentStatus == "valid" || parentState.currentStatus == "settled") &&
 				parentState.producerStatus != nil && parentState.producerStatus.Confirmed &&
@@ -1322,9 +1362,15 @@ func (p *rgb11Manager) resolveRGB11RecoveryProjection(ctx context.Context,
 			// Every prepared parent's own bound parents are checked in this loop;
 			// core full-Opout validation above authenticates the dependency edges.
 			if !confirmedUnspent && !validatedReplacement && !quarantinedParent && !parentState.prepared {
-				return nil, fmt.Errorf("absent RGB11 transition %s lacks positive parent chain evidence for %s",
+				return fmt.Errorf("absent RGB11 transition %s lacks positive parent chain evidence for %s",
 					proof.OperationID, parent.OutPoint)
 			}
+		}
+		return nil
+	}
+	for _, state := range proofStates {
+		if err := checkParents(state); err != nil {
+			return nil, &rgb11CarrierFault{fault: rgb11wallet.ProofFault{OutPoint: state.proof.OutPoint, AssetName: state.proof.AssetName, Cause: err}}
 		}
 	}
 
@@ -1502,11 +1548,18 @@ func errRGB11ProjectionEvidence(err error) error {
 }
 
 func rgb11SnapshotInconsistentOutpoints(snapshot *RGB11WalletSnapshot) ([]string, error) {
-	proofs, err := rgb11wallet.ProofsFromProjectionSnapshot(snapshot.ProjectionRecords)
+	view, err := rgb11wallet.SplitLocalProjection(snapshot.ProjectionRecords)
+	if err != nil {
+		return nil, err
+	}
+	proofs, err := rgb11wallet.ProofsFromProjectionSnapshot(view.Records)
 	if err != nil {
 		return nil, err
 	}
 	points := make(map[string]bool)
+	for point := range view.Points {
+		points[point] = true
+	}
 	for _, proof := range proofs {
 		if proof.Status == "inconsistent" {
 			points[proof.OutPoint] = true

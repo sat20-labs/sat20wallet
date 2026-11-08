@@ -1,0 +1,9 @@
+{
+  "state": "EXITED",
+  "pid": 85671,
+  "started_utc": "2026-10-31T13:49:56+00:00",
+  "ended_utc": "2026-10-31T13:50:30+00:00",
+  "exit_code": 0,
+  "summary": "/Users/yingfeng/github/sat20wallet/pwa/data/final-20261031T1348Z/pwa-node-serial/summary.json",
+  "log": "/Users/yingfeng/github/sat20wallet/pwa/data/final-20261031T1348Z/pwa-node-serial/test.log"
+}

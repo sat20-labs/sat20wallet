@@ -225,7 +225,7 @@ func (p *rgb11Manager) buildRGB11AcceptedConsignmentCandidateWithID(ctx context.
 			return nil, nil, nil, hashErr
 		}
 		if oldHash != newHash {
-			projectionRecords, err = rgb11wallet.RebindValidatedConsignmentReceiptSnapshot(
+			projectionRecords, err = rgb11wallet.RebindLocalReceipt(
 				projectionRecords, existingReceipt, selectedReceipt,
 			)
 			if err != nil {
@@ -259,7 +259,7 @@ func (p *rgb11Manager) buildRGB11AcceptedConsignmentCandidateWithID(ctx context.
 	output.OutValue.PkScript = append([]byte(nil), matched.UTXO.PkScript...)
 	candidate := *snapshot
 	candidate.ProjectionRecords = projectionRecords
-	candidate.ProjectionRecords, err = rgb11wallet.AddValidatedConsignmentProjectionSnapshot(
+	candidate.ProjectionRecords, err = rgb11wallet.AddLocalConsignment(
 		candidate.ProjectionRecords, raw, receipt,
 		[]rgb11wallet.ProjectionReplacement{{Output: output, Asset: asset, Proof: proof}},
 	)
@@ -270,7 +270,7 @@ func (p *rgb11Manager) buildRGB11AcceptedConsignmentCandidateWithID(ctx context.
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("derive accepted RGB11 contract object: %w", err)
 	}
-	candidate.ProjectionRecords, err = rgb11wallet.AddContractObjectSnapshotReference(
+	candidate.ProjectionRecords, err = rgb11wallet.AddLocalContract(
 		candidate.ProjectionRecords, receipt.ContractID, contractFile,
 	)
 	if err != nil {
@@ -295,9 +295,14 @@ func (p *rgb11Manager) buildRGB11AcceptedConsignmentCandidateWithID(ctx context.
 			previousState.ConsignmentHash != state.ConsignmentHash || previousState.WitnessTxID != state.WitnessTxID {
 			return nil, nil, nil, ErrRGB11InvoiceMismatch
 		}
-		// Keep durable transport identity from the prior receive, but retain
-		// the accepted lifecycle stage constructed above. AckStatus is mutable
-		// phase data and is not part of the stable transfer identity.
+		// New witness evidence advances the receive lifecycle, but cannot undo
+		// an ACK already sent for this same validated transfer and request.
+		if previousState.AckStatus == "ack-sent" {
+			state.AckStatus = previousState.AckStatus
+			Log.Infof("RGB receive ACK preserved: manager=%d transfer_tag=%s previous_ack=ack-sent candidate_ack=accepted result_ack=ack-sent previous_status=%s candidate_status=%s",
+				p.accountManagementOwner().debugID, accountTraceScope(state.TransferID), previousState.Status, state.Status)
+		}
+		// Preserve the prior receive's durable transport identity as well.
 		state.TransportMode, state.Invoice = previousState.TransportMode, previousState.Invoice
 		state.RelayRecordKey, state.AckRecordKey = previousState.RelayRecordKey, previousState.AckRecordKey
 		state.RelayDurability, state.RelayExpiry = previousState.RelayDurability, previousState.RelayExpiry
@@ -323,11 +328,11 @@ func (p *rgb11Manager) buildRGB11AcceptedConsignmentCandidateWithID(ctx context.
 	if state.WitnessTxID == "" {
 		state.WitnessTxID = allocationOutpointTxID(allocation.OutPoint)
 	}
-	candidate.ProjectionRecords, err = rgb11wallet.UpsertProjectionSnapshotTransfer(candidate.ProjectionRecords, state)
+	candidate.ProjectionRecords, err = rgb11wallet.UpsertLocalTransfer(candidate.ProjectionRecords, state)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("upsert accepted RGB11 transfer state: %w", err)
 	}
-	candidate.ProjectionRecords, err = rgb11wallet.RemoveProjectionSnapshotKeys(candidate.ProjectionRecords,
+	candidate.ProjectionRecords, err = rgb11wallet.RemoveLocalKeys(candidate.ProjectionRecords,
 		"prepared-receive-"+transferID, "receive-reservation-"+requestID)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("remove prepared RGB11 receive records: %w", err)
@@ -444,7 +449,7 @@ func (p *rgb11Manager) buildRGB11PreparedReceiveCandidate(ctx context.Context,
 		return snapshot, receipt, nil
 	}
 	candidate := *snapshot
-	candidate.ProjectionRecords, err = rgb11wallet.AddPreparedConsignmentObjectSnapshot(
+	candidate.ProjectionRecords, err = rgb11wallet.AddLocalPrepared(
 		candidate.ProjectionRecords, raw,
 	)
 	if err != nil {
@@ -473,11 +478,11 @@ func (p *rgb11Manager) buildRGB11PreparedReceiveCandidate(ctx context.Context,
 		AckRecordKey: request.AckKey, RelayDurability: relayDurability, RelayExpiry: expiry,
 		TransportMode: receiveTransport,
 	}
-	candidate.ProjectionRecords, err = rgb11wallet.UpsertProjectionSnapshotTransfer(candidate.ProjectionRecords, state)
+	candidate.ProjectionRecords, err = rgb11wallet.UpsertLocalTransfer(candidate.ProjectionRecords, state)
 	if err != nil {
 		return nil, nil, err
 	}
-	candidate.ProjectionRecords, err = rgb11wallet.UpsertProjectionSnapshotPreparedReceive(
+	candidate.ProjectionRecords, err = rgb11wallet.UpsertLocalPrepared(
 		candidate.ProjectionRecords, transferID, requestID,
 	)
 	if err != nil {
@@ -500,25 +505,42 @@ func rgb11LocalChangeAllocations(allocations []rgb11wallet.ValidatedAllocation,
 		return nil, rgb11wallet.ErrInvalidProof
 	}
 	wanted := make(map[string]seals.GraphBlindSeal, len(pending.ChangeSeals))
+	changeOutpoints := make(map[string]struct{}, len(pending.ChangeSeals))
 	for _, seal := range pending.ChangeSeals {
-		outpoint := fmt.Sprintf("%s:%d", pending.State.WitnessTxID, seal.Vout)
-		if _, duplicate := wanted[outpoint]; duplicate {
-			return nil, fmt.Errorf("%w: duplicate local change seal outpoint %s", rgb11wallet.ErrInvalidProof, outpoint)
+		strict, err := seal.StrictBytes()
+		if err != nil {
+			return nil, rgb11wallet.ErrInvalidProof
 		}
-		wanted[outpoint] = seal
+		if _, duplicate := wanted[string(strict)]; duplicate {
+			return nil, fmt.Errorf("%w: duplicate local change seal", rgb11wallet.ErrInvalidProof)
+		}
+		wanted[string(strict)] = seal
+		changeOutpoints[fmt.Sprintf("%s:%d", pending.State.WitnessTxID, seal.Vout)] = struct{}{}
 	}
 	matched := make(map[string]rgb11wallet.ValidatedAllocation, len(wanted))
+	matchedSeals := make(map[string]bool, len(wanted))
 	for _, allocation := range allocations {
-		seal, expected := wanted[allocation.OutPoint]
+		seal, expected := wanted[string(allocation.SealDisclosure)]
 		if !expected {
+			// Other carriers can hold unrelated allocations, but every
+			// allocation on a declared local change output needs a known seal.
+			// Otherwise a partial projection could silently omit local value.
+			if _, localChange := changeOutpoints[allocation.OutPoint]; localChange {
+				return nil, fmt.Errorf("%w: undeclared allocation on local change output %s",
+					rgb11wallet.ErrInvalidProof, allocation.OutPoint)
+			}
 			continue
 		}
-		strict, err := seal.StrictBytes()
-		if err != nil || !allocation.WitnessTxPtr || allocation.WitnessTxID != pending.State.WitnessTxID ||
-			allocation.SealBlinding != seal.Blinding || !bytes.Equal(strict, allocation.SealDisclosure) {
+		expectedOutpoint := fmt.Sprintf("%s:%d", pending.State.WitnessTxID, seal.Vout)
+		if allocation.OutPoint != expectedOutpoint || !allocation.WitnessTxPtr ||
+			allocation.WitnessTxID != pending.State.WitnessTxID || allocation.SealBlinding != seal.Blinding {
 			return nil, fmt.Errorf("RGB11 local change %s does not match its exact seal: %w",
 				allocation.OutPoint, rgb11wallet.ErrInvalidProof)
 		}
+		if matchedSeals[string(allocation.SealDisclosure)] {
+			return nil, fmt.Errorf("%w: duplicate local change allocation seal", rgb11wallet.ErrInvalidProof)
+		}
+		matchedSeals[string(allocation.SealDisclosure)] = true
 		key := allocation.OutPoint + "|" + allocation.AssetName.String()
 		if _, duplicate := matched[key]; duplicate {
 			return nil, fmt.Errorf("%w: same-asset multiple Opouts cannot share projection key %s",
@@ -526,7 +548,7 @@ func rgb11LocalChangeAllocations(allocations []rgb11wallet.ValidatedAllocation,
 		}
 		matched[key] = allocation
 	}
-	if len(matched) != len(wanted) {
+	if len(matchedSeals) != len(wanted) {
 		return nil, fmt.Errorf("%w: core history does not contain every local change seal", rgb11wallet.ErrInvalidProof)
 	}
 	return matched, nil
@@ -653,7 +675,7 @@ func (p *rgb11Manager) addRGB11LocalChangeCandidate(ctx context.Context,
 		return nil, err
 	}
 	if existingReceipt != nil && selectedHash != existingReceiptHash {
-		projectionRecords, err = rgb11wallet.RebindValidatedConsignmentReceiptSnapshot(
+		projectionRecords, err = rgb11wallet.RebindLocalReceipt(
 			projectionRecords, existingReceipt, selectedReceipt,
 		)
 		if err != nil {
@@ -679,7 +701,7 @@ func (p *rgb11Manager) addRGB11LocalChangeCandidate(ctx context.Context,
 		output.OutValue.PkScript = append([]byte(nil), change.utxo.PkScript...)
 		replacements = append(replacements, rgb11wallet.ProjectionReplacement{Output: output, Asset: asset, Proof: newProof})
 	}
-	return rgb11wallet.AddValidatedConsignmentProjectionSnapshot(
+	return rgb11wallet.AddLocalConsignment(
 		projectionRecords, pending.LocalConsignment, selectedReceipt, replacements,
 	)
 }
@@ -735,7 +757,7 @@ func (p *rgb11Manager) addRGB11PreparedChangeCapacityPreview(ctx context.Context
 			return nil, hashErr
 		}
 		if oldHash != receiptHash {
-			candidate.ProjectionRecords, err = rgb11wallet.RebindValidatedConsignmentReceiptSnapshot(
+			candidate.ProjectionRecords, err = rgb11wallet.RebindLocalReceipt(
 				candidate.ProjectionRecords, existingReceipt, receipt,
 			)
 			if err != nil {
@@ -778,7 +800,7 @@ func (p *rgb11Manager) addRGB11PreparedChangeCapacityPreview(ctx context.Context
 	if len(replacements) == 0 {
 		return snapshot, nil
 	}
-	candidate.ProjectionRecords, err = rgb11wallet.AddValidatedConsignmentProjectionSnapshot(
+	candidate.ProjectionRecords, err = rgb11wallet.AddLocalConsignment(
 		candidate.ProjectionRecords, pending.LocalConsignment, receipt, replacements,
 	)
 	if err != nil {
@@ -849,7 +871,7 @@ func (p *rgb11Manager) buildRGB11RefreshCandidate(ctx context.Context,
 		if used {
 			continue
 		}
-		candidate.ProjectionRecords, err = rgb11wallet.RemoveProjectionSnapshotKeys(
+		candidate.ProjectionRecords, err = rgb11wallet.RemoveLocalKeys(
 			candidate.ProjectionRecords, "receive-reservation-"+reservation.RequestID,
 		)
 		if err != nil {
@@ -939,7 +961,7 @@ func (p *rgb11Manager) buildRGB11RefreshCandidate(ctx context.Context,
 				state.Status = "pending"
 				result.Pending++
 			}
-			candidate.ProjectionRecords, err = rgb11wallet.UpsertProjectionSnapshotTransfer(
+			candidate.ProjectionRecords, err = rgb11wallet.UpsertLocalTransfer(
 				candidate.ProjectionRecords, state,
 			)
 			if err != nil {
@@ -1003,7 +1025,7 @@ func (p *rgb11Manager) buildRGB11RefreshCandidate(ctx context.Context,
 				pending.State.Status = "pending"
 				result.Pending++
 			}
-			candidate.ProjectionRecords, err = rgb11wallet.UpsertProjectionSnapshotPending(
+			candidate.ProjectionRecords, err = rgb11wallet.UpsertLocalPending(
 				candidate.ProjectionRecords, pending,
 			)
 			if err != nil {
@@ -1051,7 +1073,7 @@ func (p *rgb11Manager) buildRGB11RefreshCandidate(ctx context.Context,
 			candidate.ProjectionRecords = updatedRecords
 			pending.State.Status = "pending"
 			result.Pending++
-			candidate.ProjectionRecords, err = rgb11wallet.UpsertProjectionSnapshotPending(candidate.ProjectionRecords, pending)
+			candidate.ProjectionRecords, err = rgb11wallet.UpsertLocalPending(candidate.ProjectionRecords, pending)
 			if err != nil {
 				return nil, nil, fmt.Errorf("update pending RGB11 transfer %s: %w", state.TransferID, err)
 			}
@@ -1070,7 +1092,7 @@ func (p *rgb11Manager) buildRGB11RefreshCandidate(ctx context.Context,
 			if positiveParents {
 				pending.State.Status = "orphaned"
 				result.Reorged++
-				candidate.ProjectionRecords, err = rgb11wallet.UpsertProjectionSnapshotPending(candidate.ProjectionRecords, pending)
+				candidate.ProjectionRecords, err = rgb11wallet.UpsertLocalPending(candidate.ProjectionRecords, pending)
 				if err != nil {
 					return nil, nil, err
 				}

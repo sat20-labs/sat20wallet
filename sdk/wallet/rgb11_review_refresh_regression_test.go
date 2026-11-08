@@ -44,14 +44,17 @@ func TestRGB11RefreshBuildFailureRevokesVerifiedProjection(t *testing.T) {
 		t.Fatalf("positive control has no available receive: %v", err)
 	}
 	failure := errors.New("receive witness lookup unavailable")
-	manager.rgbManager.evidence = &reviewRGB11StatusFailure{
-		BitcoinEvidenceProvider: evidence, failure: failure,
+	targetOutpoint := fmt.Sprintf("%s:%d", pending.State.WitnessTxID, pending.State.RecipientVout)
+	fault := &reviewRGB11StatusFailure{
+		BitcoinEvidenceProvider: evidence, targetTxID: pending.State.WitnessTxID,
+		targetOutpoint: targetOutpoint, failure: failure,
 	}
+	manager.rgbManager.evidence = fault
 	manager.rgbManager.markRGB11ProjectionVerified()
 	before := snapshotRGB11ProjectionDB(t, manager.db)
 	_, err = manager.rgbManager.refreshRGB11State(context.Background())
-	if !errors.Is(err, failure) || !strings.Contains(err.Error(), "build RGB11 refresh candidate") {
-		t.Fatalf("did not exercise receive build failure: %v", err)
+	if !errors.Is(err, failure) || !strings.Contains(err.Error(), "build RGB11 refresh candidate") || fault.hits != 1 {
+		t.Fatalf("did not exercise receive build failure: hits=%d err=%v", fault.hits, err)
 	}
 	if manager.rgbManager.rgb11ProjectionAvailable() || manager.rgbManager.rgb11ProjectionStableConfirmed() {
 		t.Fatal("failed candidate build retained verified ownership")
@@ -67,34 +70,66 @@ func TestRGB11RefreshBuildFailureRevokesVerifiedProjection(t *testing.T) {
 
 type reviewRGB11StatusFailure struct {
 	rgb11wallet.BitcoinEvidenceProvider
-	failure error
+	targetTxID, targetOutpoint string
+	failure                    error
+	carrierVerified            bool
+	hits                       int
 }
 
-func (e *reviewRGB11StatusFailure) GetTxStatus(string) (*rgb11wallet.BitcoinTxStatus, error) {
-	return nil, e.failure
+func (e *reviewRGB11StatusFailure) GetUTXO(outpoint string) (*rgb11wallet.BitcoinUTXO, error) {
+	utxo, err := e.BitcoinEvidenceProvider.GetUTXO(outpoint)
+	if outpoint == e.targetOutpoint && err == nil && utxo != nil {
+		e.carrierVerified = true
+	}
+	return utxo, err
+}
+
+func (e *reviewRGB11StatusFailure) GetTxStatus(txid string) (*rgb11wallet.BitcoinTxStatus, error) {
+	if txid == e.targetTxID && e.carrierVerified {
+		e.hits++
+		return nil, e.failure
+	}
+	return e.BitcoinEvidenceProvider.GetTxStatus(txid)
 }
 
 type reviewRGB11EvidenceReads struct {
 	rgb11wallet.BitcoinEvidenceProvider
-	utxos, statuses, outspends, raw int
-	spent                           bool
+	utxos, statuses, outspends, raw, tips int
+	spent                                 bool
 }
 
 func (e *reviewRGB11EvidenceReads) GetUTXO(point string) (*rgb11wallet.BitcoinUTXO, error) {
 	e.utxos++
+	if e.BitcoinEvidenceProvider != nil {
+		return e.BitcoinEvidenceProvider.GetUTXO(point)
+	}
 	return &rgb11wallet.BitcoinUTXO{OutPoint: point, PkScript: []byte{1}, Confirmations: 2}, nil
 }
 func (e *reviewRGB11EvidenceReads) GetTxStatus(txid string) (*rgb11wallet.BitcoinTxStatus, error) {
 	e.statuses++
+	if e.BitcoinEvidenceProvider != nil {
+		return e.BitcoinEvidenceProvider.GetTxStatus(txid)
+	}
 	return &rgb11wallet.BitcoinTxStatus{TxID: txid, Confirmed: true, Confirmations: 2}, nil
 }
-func (e *reviewRGB11EvidenceReads) GetOutspend(string) (*rgb11wallet.BitcoinOutspend, error) {
+func (e *reviewRGB11EvidenceReads) GetOutspend(point string) (*rgb11wallet.BitcoinOutspend, error) {
 	e.outspends++
+	if e.BitcoinEvidenceProvider != nil {
+		return e.BitcoinEvidenceProvider.GetOutspend(point)
+	}
 	return &rgb11wallet.BitcoinOutspend{Spent: e.spent}, nil
 }
-func (e *reviewRGB11EvidenceReads) GetRawTx(string) ([]byte, error) {
+func (e *reviewRGB11EvidenceReads) GetRawTx(txid string) ([]byte, error) {
 	e.raw++
+	if e.BitcoinEvidenceProvider != nil {
+		return e.BitcoinEvidenceProvider.GetRawTx(txid)
+	}
 	return []byte{1, 2, 3}, nil
+}
+
+func (e *reviewRGB11EvidenceReads) GetTip() (*rgb11wallet.BitcoinTip, error) {
+	e.tips++
+	return e.BitcoinEvidenceProvider.GetTip()
 }
 
 func TestRGB11CandidateEvidenceReusesReadsAndRechecksBeforePublish(t *testing.T) {
@@ -190,7 +225,9 @@ func observeReviewRGB11Writes(t *testing.T, manager *Manager) *reviewRGB11Writes
 }
 
 func TestRGB11UnchangedRefreshDoesNotRewriteSnapshot(t *testing.T) {
-	sender, recipient, _, _, _ := newRGB11GenericSendFixture(t)
+	sender, recipient, imported, evidence, _ := newRGB11GenericSendFixture(t)
+	sender.StopDKVSSync()
+	recipient.StopDKVSSync()
 	recipient.rgbManager.scopeStates.stopReconciliations()
 	database := observeReviewRGB11Writes(t, sender)
 	if _, err := sender.rgbManager.RefreshRGB11State(context.Background()); err != nil {
@@ -206,8 +243,22 @@ func TestRGB11UnchangedRefreshDoesNotRewriteSnapshot(t *testing.T) {
 	}
 	beforeLocks := sender.utxoLockerL1.GetLockedUtxoList()
 	database.snapshotWrites = 0
-	if _, err := sender.rgbManager.RefreshRGB11State(context.Background()); err != nil {
-		t.Fatal(err)
+	reads := &reviewRGB11EvidenceReads{BitcoinEvidenceProvider: sender.rgbManager.evidence}
+	sender.rgbManager.evidence = reads
+	const iterations = 3
+	started := time.Now()
+	for i := 0; i < iterations; i++ {
+		iterationStarted := time.Now()
+		if _, err := sender.rgbManager.RefreshRGB11State(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("unchanged RGB refresh sample=%d elapsed=%s", i+1, time.Since(iterationStarted))
+	}
+	t.Logf("unchanged RGB refresh iterations=%d elapsed=%s tips=%d utxos=%d statuses=%d outspends=%d raw=%d snapshot_writes=%d",
+		iterations, time.Since(started), reads.tips, reads.utxos, reads.statuses, reads.outspends, reads.raw, database.snapshotWrites)
+	if reads.tips != 3*iterations || reads.utxos != 2*iterations || reads.statuses != 2*iterations ||
+		reads.outspends != 2*iterations || reads.raw != iterations {
+		t.Fatalf("unchanged refresh must resolve once and recheck mutable evidence before publication: %+v", reads)
 	}
 	if database.snapshotWrites != 0 {
 		t.Fatalf("unchanged refresh wrote %d engine/projection records", database.snapshotWrites)
@@ -219,6 +270,50 @@ func TestRGB11UnchangedRefreshDoesNotRewriteSnapshot(t *testing.T) {
 	if !sender.rgbManager.rgb11ProjectionAvailable() {
 		t.Fatal("verified unchanged refresh lost readiness")
 	}
+	beforeLocal, err := sender.rgbManager.readRGB11Local(walletID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRejected := func(t *testing.T, err error, message string) {
+		t.Helper()
+		if err == nil || !strings.Contains(err.Error(), message) {
+			t.Fatalf("publication accepted changed chain evidence: %v", err)
+		}
+		local, readErr := sender.rgbManager.readRGB11Local(walletID)
+		if readErr != nil || !reflect.DeepEqual(beforeLocal, local) ||
+			!reflect.DeepEqual(beforeLocks, sender.utxoLockerL1.GetLockedUtxoList()) {
+			t.Fatalf("rejected publication changed durable snapshot or locks: %v", readErr)
+		}
+		if sender.rgbManager.rgb11ProjectionAvailable() {
+			t.Fatal("rejected publication retained verified ownership")
+		}
+	}
+	t.Run("final_tip_rechecked", func(t *testing.T) {
+		fault := &rgb11ProjectionFinalTipChangeEvidence{BitcoinEvidenceProvider: evidence}
+		sender.rgbManager.evidence = fault
+		defer func() { sender.rgbManager.evidence = evidence }()
+		_, err := sender.rgbManager.RefreshRGB11State(context.Background())
+		assertRejected(t, err, "chain tip changed before projection commit")
+		if fault.callCount() != 3 {
+			t.Fatalf("tip reads=%d, want first resolution plus publication recheck", fault.callCount())
+		}
+	})
+	if _, err := sender.rgbManager.RefreshRGB11State(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Run("same_tip_outspend_rechecked", func(t *testing.T) {
+		fault := &rgb11ProjectionSameTipOutspendEvidence{
+			BitcoinEvidenceProvider: evidence, target: rgb11GenericFixtureSource(t, sender, imported),
+			changeAt: 2, spendingTx: strings.Repeat("a", 64),
+		}
+		sender.rgbManager.evidence = fault
+		defer func() { sender.rgbManager.evidence = evidence }()
+		_, err := sender.rgbManager.RefreshRGB11State(context.Background())
+		assertRejected(t, err, "Bitcoin evidence changed while building RGB11 projection")
+		if fault.callCount() != 2 {
+			t.Fatalf("outspend reads=%d, want initial resolution and publication recheck", fault.callCount())
+		}
+	})
 }
 
 func TestRGB11AddressMetadataIncludedInFirstAtomicCommit(t *testing.T) {
@@ -298,10 +393,12 @@ func TestRGB11AddressMetadataIncludedInFirstAtomicCommit(t *testing.T) {
 	}
 }
 
+// Capacity belongs to each module KV. An unrelated oversized provider must
+// not disable any of the existing send/receive operations or release their locks.
 func TestRGB11AddressCapacityFailureKeepsLocalRecoveryAndLocks(t *testing.T) {
 	for _, path := range []string{"single_send", "batch_send", "receive"} {
 		t.Run(path, func(t *testing.T) {
-			sender, recipient, imported, _, _ := newRGB11GenericSendFixture(t)
+			sender, recipient, imported, evidence, _ := newRGB11GenericSendFixture(t)
 			sender.rgbManager.scopeStates.stopReconciliations()
 			recipient.rgbManager.scopeStates.stopReconciliations()
 			request := RGB11AddressSendRequest{ReceiverAddress: recipient.wallet.GetAddress(), AssetName: imported.AssetName,
@@ -317,31 +414,17 @@ func TestRGB11AddressCapacityFailureKeepsLocalRecoveryAndLocks(t *testing.T) {
 				}
 				manager = recipient
 			}
-			if _, err := manager.rgbManager.RefreshRGB11State(context.Background()); err != nil {
+			if _, err := manager.RefreshRGB11State(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			// Establish the ordinary policy result before measuring the recovery
-			// boundary; a policy refresh is independent of transfer persistence.
-			if path != "receive" {
-				if _, _, _, _, _, _, err := manager.rgbManager.selectRGB11Allocations(imported.ContractID, 10000, 1); err != nil {
-					t.Fatal(err)
-				}
+			if err := manager.SyncAccountManagementState(context.Background()); err != nil {
+				t.Fatal(err)
 			}
-			catalog, err := manager.accountManagedDataCatalog()
-			if err != nil || len(catalog.Scopes) != 1 {
-				t.Fatalf("catalog: %v", err)
-			}
-			bundle, err := coreNextManagedBundle(manager, catalog)
+			scope, err := manager.rgbManager.rgb11AccountManagedScopeID()
 			if err != nil {
 				t.Fatal(err)
 			}
-			payload := accountManagedPayloadForEnvelopeSize(t, manager.accountSecret, manager.accountProfile.AccountID,
-				bundle, "zz-capacity", catalog.Scopes[0].ID(), swire.MaxDKVSBlobValueSize-8)
-			defer zeroBytes(payload)
-			if err := manager.RegisterAccountManagedDataProvider(&accountManagedCapacityProvider{scope: catalog.Scopes[0].ID(), payload: payload}); err != nil {
-				t.Fatal(err)
-			}
-			walletID, err := manager.rgbManager.RGB11WalletID()
+			walletID, err := manager.RGB11WalletID()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -349,37 +432,119 @@ func TestRGB11AddressCapacityFailureKeepsLocalRecoveryAndLocks(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := manager.preflightRGB11TerminalRecovery(catalog.Scopes[0].ID(), before); err != nil {
-				t.Fatalf("boundary baseline must fit: %v", err)
+			capacityBefore, err := manager.preflightRGB11TerminalRecovery(scope, before)
+			if err != nil {
+				t.Fatal(err)
+			}
+			provider := &accountManagedCapacityProvider{scope: scope, payload: make([]byte, swire.MaxDKVSBlobValueSize+1)}
+			if err := manager.RegisterAccountManagedDataProvider(provider); err != nil {
+				t.Fatal(err)
+			}
+			if err := manager.SyncAccountManagementState(context.Background()); err == nil {
+				t.Fatal("independent oversized module did not reach its real backup failure")
+			}
+			failed, err := manager.readAccountLocal(manager.accountProfile.AccountID, provider.ID(), scope)
+			if err != nil || failed == nil || failed.LastError == "" || failed.Generation <= failed.Confirmed {
+				t.Fatalf("oversized provider lost its scoped pending/error marker: %v", err)
+			}
+			if err := manager.CheckAccountWrite(rgb11AccountManagedProviderID, scope); err != nil {
+				t.Fatalf("independent capacity failure blocked healthy RGB business: %v", err)
+			}
+			capacityAfter, err := manager.preflightRGB11TerminalRecovery(scope, before)
+			if err != nil || capacityAfter != capacityBefore {
+				t.Fatalf("unrelated provider inflated RGB capacity: %v", err)
 			}
 			locks := manager.utxoLockerL1.GetLockedUtxoList()
 			reservations, err := manager.rgbManager.loadRGB11Reservations()
 			if err != nil {
 				t.Fatal(err)
 			}
+			beforeBroadcasts := evidence.broadcastCount
 			if path == "receive" {
-				result, err := recipient.rgbManager.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
-				if err != nil || result.Received != 0 || result.Invalid != 1 || !strings.Contains(strings.Join(result.ErrorDetails, " "), "limit") {
-					t.Fatalf("expected capacity-rejected receive: %+v err=%v", result, err)
+				result, err := manager.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+				if err != nil || result == nil || result.Received != 1 || result.Invalid != 0 {
+					t.Fatalf("independent failure blocked receive: %+v err=%v", result, err)
 				}
-			} else {
-				if path == "single_send" {
-					_, _, err = sender.rgbManager.PrepareConfiguredRGB11AddressTransfer(context.Background(), request, dkvsindexer.RecordVerificationOptions{})
-				} else {
-					_, err = sender.rgbManager.prepareRGB11AddressBatch(context.Background(), []RGB11AddressSendRequest{request, request}, dkvsindexer.RecordVerificationOptions{})
+			} else if path == "single_send" {
+				if _, _, err := sender.PrepareConfiguredRGB11AddressTransfer(context.Background(), request, dkvsindexer.RecordVerificationOptions{}); err != nil {
+					t.Fatal(err)
 				}
-				if err == nil || !strings.Contains(err.Error(), "limit") {
-					t.Fatalf("expected send capacity rejection: %v", err)
-				}
+			} else if _, err := sender.rgbManager.prepareRGB11AddressBatch(context.Background(), []RGB11AddressSendRequest{request, request}, dkvsindexer.RecordVerificationOptions{}); err != nil {
+				t.Fatal(err)
 			}
 			after, _, err := manager.rgbManager.exportRGB11WalletSnapshot(walletID)
-			if err != nil || rgb11SnapshotChanged(before, after) {
-				t.Fatalf("capacity rejection changed recovery state: %v", err)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := rgb11wallet.RecoveryPackageFromSnapshot(after, 0); err != nil {
+				t.Fatalf("local operation lost complete recovery: %v", err)
+			}
+			if !rgb11SnapshotChanged(before, after) || !rgb11LocalModulePendingForTest(t, manager) {
+				t.Fatal("business operation did not retain its durable pending recovery change")
 			}
 			afterReservations, err := manager.rgbManager.loadRGB11Reservations()
-			if err != nil || !reflect.DeepEqual(reservations, afterReservations) || !reflect.DeepEqual(locks, manager.utxoLockerL1.GetLockedUtxoList()) {
-				t.Fatalf("capacity rejection changed reservations or locks: %v", err)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, prior := range reservations {
+				found := false
+				for _, current := range afterReservations {
+					found = found || reflect.DeepEqual(prior, current)
+				}
+				if !found {
+					t.Fatal("unrelated reservation changed during capacity-isolated business")
+				}
+			}
+			pending, err := rgb11wallet.PendingTransfersFromProjectionSnapshot(after.ProjectionRecords)
+			if err != nil {
+				t.Fatal(err)
+			}
+			inputs := make(map[string]bool)
+			for _, value := range pending {
+				for _, point := range value.State.InputOutPoints {
+					inputs[point] = true
+				}
+				if value.State.Direction == "send" && !rgb11TransferKeepsInputsLocked(&value.State) {
+					t.Fatal("prepared send lost its input protection")
+				}
+			}
+			afterLocks := manager.utxoLockerL1.GetLockedUtxoList()
+			for point := range inputs {
+				lock := afterLocks[point]
+				if lock == nil || lock.Reason != rgb11wallet.LockReasonPending || !manager.isL1SendInputProtected(point) {
+					t.Fatal("prepared send lost its actual input lock")
+				}
+			}
+			for point, prior := range locks {
+				if !inputs[point] && !reflect.DeepEqual(prior, afterLocks[point]) {
+					t.Fatal("independent capacity failure changed an unrelated lock")
+				}
+			}
+			afterRows := make(map[string][]byte, len(after.ProjectionRecords))
+			for _, record := range after.ProjectionRecords {
+				afterRows[record.Key] = record.Value
+			}
+			for _, record := range before.ProjectionRecords {
+				if strings.HasPrefix(record.Key, "object-") &&
+					!bytes.Equal(record.Value, afterRows[record.Key]) {
+					t.Fatal("capacity-isolated business changed an existing consignment")
+				}
+			}
+			if evidence.broadcastCount != beforeBroadcasts {
+				t.Fatal("prepare/receive crossed the sender broadcast boundary")
+			}
+			balance, err := manager.GetRGB11AssetBalance(&imported.AssetName)
+			want := uint64(50000)
+			if path == "receive" {
+				want = 0
+			}
+			if err != nil || want == 0 && balance.Sign() != 0 || want != 0 && (balance == nil || balance.Value.Uint64() != want) {
+				t.Fatalf("prepare/receive changed asset ownership: %v", err)
 			}
 		})
 	}
+}
+
+func (d *reviewRGB11WritesDB) NewAtomicWriteBatch() indexer.WriteBatch {
+	return &reviewRGB11WritesBatch{WriteBatch: d.KVDB.(indexer.AtomicWriteBatchDB).NewAtomicWriteBatch(), owner: d}
 }

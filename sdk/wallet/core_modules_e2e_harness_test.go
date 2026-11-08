@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	indexercommon "github.com/sat20-labs/indexer/common"
 	indexerdb "github.com/sat20-labs/indexer/indexer/db"
@@ -72,10 +73,10 @@ func coreLoadE2EConfig(t *testing.T) coreE2EConfig {
 	return cfg
 }
 
-func coreNewE2EManager(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain, mnemonic string) *Manager {
+func coreNewE2EManager(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain, mnemonic string, dkvsHTTP ...HttpClient) *Manager {
 	t.Helper()
 	db := indexerdb.NewKVDB(t.TempDir())
-	manager := coreNewE2EManagerWithDB(t, cfg, chain, db, mnemonic)
+	manager := coreNewE2EManagerWithDB(t, cfg, chain, db, mnemonic, dkvsHTTP...)
 	t.Cleanup(manager.Close)
 	return manager
 }
@@ -83,7 +84,7 @@ func coreNewE2EManager(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain, mne
 // The restart case owns the DB handle so it can close and reopen the same
 // directory. All other fixtures keep their existing independent databases.
 func coreNewE2EManagerWithDB(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
-	db indexercommon.KVDB, mnemonic string) *Manager {
+	db indexercommon.KVDB, mnemonic string, dkvsHTTP ...HttpClient) *Manager {
 	t.Helper()
 	config := &sdkcommon.Config{Env: "test", Chain: "testnet",
 		IndexerL1: &sdkcommon.Indexer{Scheme: cfg.Core.Scheme, Host: cfg.Core.Host, Proxy: cfg.Core.Proxy},
@@ -92,15 +93,19 @@ func coreNewE2EManagerWithDB(t *testing.T, cfg coreE2EConfig, chain *coreE2EChai
 	}
 	manager := NewManager(config, db)
 	coreAssert(t, manager != nil, "construct SDK manager")
+	if len(dkvsHTTP) != 0 {
+		// Mock-harness callers must inject before any worker creates a client.
+		manager.http = dkvsHTTP[0]
+		manager.SetDKVSHttpClient(dkvsHTTP[0])
+	}
 	constructed := false
 	defer func() {
 		if !constructed {
 			manager.Close()
 		}
 	}()
-	// No Start: one business writer per root. Explicit SDK operations establish
-	// checkpoint timing. Keep the scope registry needed by explicit Refresh,
-	// but stop only its automatic workers so observation cannot race settlement.
+	// Run the real account discovery/backup worker. RGB settlement timing stays
+	// explicit in this fixture, independently of private backup completion.
 	manager.SetIndexerHttpClient(&coreE2EL1Indexer{chain: chain})
 	if manager.rgbManager.scopeStates != nil {
 		manager.rgbManager.scopeStates.stopReconciliations()
@@ -112,6 +117,10 @@ func coreNewE2EManagerWithDB(t *testing.T, cfg coreE2EConfig, chain *coreE2EChai
 	if mnemonic != "" {
 		_, err := manager.ImportWallet(mnemonic, coreE2EPassword)
 		coreRequire(t, "import isolated mnemonic", err)
+	}
+	coreRequire(t, "start real account backup worker", manager.StartDKVSSync())
+	if mnemonic != "" {
+		coreWaitAccountOnline(t, manager)
 	}
 	constructed = true
 	return manager
@@ -201,12 +210,19 @@ func coreActivateE2E(t *testing.T, manager *Manager, mode account.RecoveryMode, 
 	})
 	coreRequire(t, "publish/rehearse/activate paid account", err)
 	coreAssert(t, manager.GetAccountManagementStatus().RecoveryConfigured, "recovery activation did not commit")
+	coreWaitPrivateBackup(t, manager)
 	return material
 }
 
-func coreRestoreE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain, material *coreRecoveryMaterial) *Manager {
+func coreRestoreE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain, material *coreRecoveryMaterial,
+	autoSync ...bool) *Manager {
 	t.Helper()
 	target := coreNewE2EManager(t, cfg, chain, "")
+	if len(autoSync) != 0 && !autoSync[0] {
+		// The empty device has no account/mailbox identity yet. Restore its
+		// actual data before the caller exposes it to automatic receive jobs.
+		target.StopDKVSSync()
+	}
 	pkg, err := target.LoadAccountRecoveryPackage(material.auth.Location, material.locator)
 	coreRequire(t, "load recovery package from real DKVS", err)
 	share, err := account.RecoverDKVSShare(pkg.DKVSShareCapsule, pkg.KnowledgeBundle, coreAnswers())
@@ -227,10 +243,32 @@ func coreRestoreE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain, materi
 	defer zeroBytes(secret)
 	defer clearAccountBackup(&backup)
 	coreAssert(t, len(backup.Wallets) > 0, "recovery package omitted root")
-	state, err := target.LoadAccountManagementStateForRecovery(material.auth.Location, material.locator, secret, backup.Wallets[0].Mnemonic)
+	state, err := target.LoadAccountManagementStateForRecovery(material.auth.Location, material.locator, secret, string(backup.Wallets[0].Secret))
 	coreRequire(t, "load latest managed state and RGB bundle", err)
 	_, err = target.RestoreAccountManagementState(*state, secret, coreE2EPassword, material.locator,
 		AccountManagementRestoreOptions{Location: material.auth.Location, StorageMode: AccountStoragePaid, AutopayContract: material.auth.Autopay.PoolContract})
 	coreRequire(t, "restore independent SDK instance", err)
 	return target
+}
+
+// A checkpoint proves remote recovery, so wait for the actual independent
+// public registration and private snapshot ACK instead of reading stale data.
+func coreWaitPrivateBackup(t *testing.T, manager *Manager) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	coreRequire(t, "complete real background recovery backup", manager.WaitAccountManagedDataReady(ctx))
+}
+
+func coreWaitAccountOnline(t *testing.T, manager *Manager) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		status := manager.GetAccountManagementStatus()
+		if status.LocalOnly || status.RecoveryConfigured && status.DKVSWriteAllowed {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("core-e2e: account discovery did not establish online authorization")
 }

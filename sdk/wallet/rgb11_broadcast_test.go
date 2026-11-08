@@ -22,13 +22,21 @@ type controlledRGB11BroadcastEvidence struct {
 	txID        string
 	err         error
 	broadcast   int
+	accepted    int
 	onBroadcast func()
+	onAccepted  func([]byte, string) error
 }
 
-func (e *controlledRGB11BroadcastEvidence) Broadcast([]byte) (string, error) {
+func (e *controlledRGB11BroadcastEvidence) Broadcast(raw []byte) (string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.broadcast++
+	if e.err == nil && e.txID != "" && e.onAccepted != nil {
+		e.accepted++
+		if err := e.onAccepted(raw, e.txID); err != nil {
+			return e.txID, err
+		}
+	}
 	if e.onBroadcast != nil {
 		e.onBroadcast()
 	}
@@ -46,6 +54,7 @@ type failNthFlushDB struct {
 	mu     sync.Mutex
 	count  int
 	failAt int
+	hits   int
 }
 
 type failNthFlushBatch struct {
@@ -61,6 +70,9 @@ func (batch *failNthFlushBatch) Flush() error {
 	batch.owner.mu.Lock()
 	batch.owner.count++
 	fail := batch.owner.count == batch.owner.failAt
+	if fail {
+		batch.owner.hits++
+	}
 	batch.owner.mu.Unlock()
 	if fail {
 		return errors.New("injected RGB11 post-broadcast persistence failure")
@@ -82,7 +94,36 @@ func setRGB11BroadcastTestStore(t testing.TB, manager *Manager, db indexer.KVDB)
 // Bitcoin signature. The expired-cancel fixture itself remains unsigned.
 func newRGB11BroadcastFixture(t *testing.T) *expiredCancelFixture {
 	t.Helper()
-	fixture := newExpiredCancelFixture(t, 1)
+	return signRGBBroadcastFixture(t, newExpiredCancelFixture(t, 1))
+}
+
+// Only these broadcast-response groups establish an account baseline. The
+// original fixture remains unchanged for callers testing another boundary.
+func newRGBBroadcastGroup(t *testing.T, state accountGroupState) *expiredCancelFixture {
+	t.Helper()
+	oldChain := _chain
+	_chain = "testnet"
+	t.Cleanup(func() { _chain = oldChain })
+	fixture, seeds := buildExpiredCancelFixture(t, 1)
+	if state == accountGroupReady {
+		info := fixture.manager.walletInfoMap[fixture.manager.status.CurrentWallet]
+		if info == nil {
+			t.Fatal("active broadcast group has no original wallet metadata")
+		}
+		if info.Name == "" {
+			info.Name = "RGB broadcast"
+		}
+		prepareRGBGroup(t, fixture.manager, state,
+			"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", "password")
+	} else {
+		prepareRGBGroup(t, fixture.manager, state)
+	}
+	seedExpiredCancelFixture(t, fixture, seeds)
+	return signRGBBroadcastFixture(t, fixture)
+}
+
+func signRGBBroadcastFixture(t *testing.T, fixture *expiredCancelFixture) *expiredCancelFixture {
+	t.Helper()
 	runtime := fixture.manager.rgbManager
 	pending, err := runtime.projectionStore.LoadPendingTransfer(fixture.transferIDs[0])
 	if err != nil {
@@ -126,7 +167,7 @@ func newRGB11BroadcastFixture(t *testing.T) *expiredCancelFixture {
 }
 
 func TestRGB11BroadcastUnknownPersistsIrreversibleIntent(t *testing.T) {
-	fixture := newRGB11BroadcastFixture(t)
+	fixture := newRGBBroadcastGroup(t, accountGroupInactive)
 	evidence := &controlledRGB11BroadcastEvidence{
 		BitcoinEvidenceProvider: fixture.evidence,
 		err:                     context.DeadlineExceeded,
@@ -164,7 +205,7 @@ func TestRGB11BroadcastUnknownPersistsIrreversibleIntent(t *testing.T) {
 }
 
 func TestRGB11BroadcastEmptyBackendTxIDRemainsUnknown(t *testing.T) {
-	fixture := newRGB11BroadcastFixture(t)
+	fixture := newRGBBroadcastGroup(t, accountGroupInactive)
 	evidence := &controlledRGB11BroadcastEvidence{
 		BitcoinEvidenceProvider: fixture.evidence,
 		// A successful response without the expected txid is not proof that
@@ -201,6 +242,7 @@ func TestRGB11BroadcastEmptyBackendTxIDRemainsUnknown(t *testing.T) {
 
 func TestRGB11BroadcastPersistenceFailureRecoversFromBitcoinEvidence(t *testing.T) {
 	sender, recipient, imported, bitcoinEvidence, rpc := newRGB11GenericSendFixture(t)
+	sourceOutpoint := rgb11GenericFixtureSource(t, sender, imported)
 	request, err := recipient.CreateRGB11Invoice(RGB11InvoiceRequest{
 		Mode: "witness", TransportMode: "out-of-band", ContractID: imported.ContractID,
 		AmountRaw: "20000", WitnessVout: 1, Expiry: time.Now().Add(time.Hour).Unix(),
@@ -214,13 +256,24 @@ func TestRGB11BroadcastPersistenceFailureRecoversFromBitcoinEvidence(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	observed := newRGB11AcceptedEvidence(bitcoinEvidence, rpc)
 	evidence := &controlledRGB11BroadcastEvidence{
-		BitcoinEvidenceProvider: bitcoinEvidence,
+		BitcoinEvidenceProvider: observed,
 		txID:                    prepared.TxID,
+		onAccepted: func(raw []byte, txid string) error {
+			return acceptRGB11FlowTx(bitcoinEvidence, rpc, raw, txid)
+		},
 	}
 	runtime := sender.rgbManager
 	runtime.evidence = evidence
-	runtime.scopeStates = nil
+	// Keep the real verified source frontier; stop only this test's workers so
+	// the armed post-broadcast flush is not consumed by background activity.
+	runtime.scopeStates.stopReconciliations()
+	sourceProof, err := runtime.projectionStore.LoadProof(sourceOutpoint, imported.AssetName)
+	if err != nil || sourceProof == nil || sourceProof.OutPoint != sourceOutpoint ||
+		!runtime.rgb11CarrierAvailable(sourceOutpoint) {
+		t.Fatalf("prepared original source is not verified: proof_present=%t err=%v", sourceProof != nil, err)
+	}
 	failingDB := &failNthFlushDB{KVDB: sender.db}
 	evidence.onBroadcast = func() {
 		failingDB.mu.Lock()
@@ -239,12 +292,29 @@ func TestRGB11BroadcastPersistenceFailureRecoversFromBitcoinEvidence(t *testing.
 		t.Fatal(err)
 	}
 
+	logRGB11BroadcastState(t, "before-persistence", sender, prepared.State.TransferID, observed)
 	txID, err := runtime.broadcastRGB11PendingBatch([]*rgb11wallet.PendingTransfer{pending}, nil)
+	logRGB11BroadcastState(t, "after-persistence", sender, prepared.State.TransferID, observed)
+	evidence.mu.Lock()
+	calls, acceptedCalls := evidence.broadcast, evidence.accepted
+	evidence.mu.Unlock()
+	failingDB.mu.Lock()
+	armed, hit, flushes := failingDB.failAt > 0, failingDB.hits, failingDB.count
+	failingDB.mu.Unlock()
+	t.Logf("rgb-broadcast-diag controlled_calls=%d accepted_entries=%d fault_armed=%t fault_hits=%d flushes=%d unknown=%t persistence=%t inconsistent=%t",
+		calls, acceptedCalls, armed, hit, flushes, errors.Is(err, ErrRGB11BroadcastResultUnknown),
+		errors.Is(err, ErrRGB11BroadcastPersistence), errors.Is(err, ErrRGB11Inconsistent))
 	if !errors.Is(err, ErrRGB11BroadcastPersistence) || txID != prepared.TxID {
 		t.Fatalf("unexpected persistence result: txid=%s err=%v", txID, err)
 	}
 	if evidence.calls() != 1 {
 		t.Fatalf("broadcast calls=%d, want 1", evidence.calls())
+	}
+	failingDB.mu.Lock()
+	failedFlush := failingDB.failAt > 0 && failingDB.count == failingDB.failAt
+	failingDB.mu.Unlock()
+	if !failedFlush {
+		t.Fatal("post-broadcast local persistence fault did not hit its armed flush")
 	}
 
 	// Re-open the durable projection view as a restarted process would. The
@@ -298,14 +368,14 @@ func TestRGB11BroadcastPersistenceFailureRecoversFromBitcoinEvidence(t *testing.
 }
 
 func TestRGB11AddressBroadcastUsesDurableIntent(t *testing.T) {
-	fixture := newRGB11BroadcastFixture(t)
+	fixture := newRGBBroadcastGroup(t, accountGroupInactive)
 	evidence := &controlledRGB11BroadcastEvidence{
 		BitcoinEvidenceProvider: fixture.evidence,
 		err:                     context.DeadlineExceeded,
 	}
 	runtime := fixture.manager.rgbManager
 	runtime.evidence = evidence
-	runtime.scopeStates = nil
+	runtime.scopeStates.stopReconciliations()
 	pending, err := runtime.projectionStore.LoadPendingTransfer(fixture.transferIDs[0])
 	if err != nil {
 		t.Fatal(err)
@@ -338,7 +408,7 @@ func TestRGB11BroadcastResultPreservesNewerLocalState(t *testing.T) {
 			name = "newer-settled-state"
 		}
 		t.Run(name, func(t *testing.T) {
-			fixture := newRGB11BroadcastFixture(t)
+			fixture := newRGBBroadcastGroup(t, accountGroupInactive)
 			manager := fixture.manager.rgbManager
 			evidence := &controlledRGB11BroadcastEvidence{BitcoinEvidenceProvider: fixture.evidence, txID: fixture.witnessTxID}
 			manager.evidence = evidence
@@ -379,4 +449,9 @@ func TestRGB11BroadcastResultPreservesNewerLocalState(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Preserve the real atomic backend while retaining this fixture's fault hook.
+func (db *failNthFlushDB) NewAtomicWriteBatch() indexer.WriteBatch {
+	return &failNthFlushBatch{WriteBatch: db.KVDB.(indexer.AtomicWriteBatchDB).NewAtomicWriteBatch(), owner: db}
 }

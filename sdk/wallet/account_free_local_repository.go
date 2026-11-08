@@ -54,6 +54,9 @@ func (r *FreeLocalAccountDKVSRepository) SaveRecoveryPackage(_ context.Context,
 	if err != nil {
 		return err
 	}
+	if err := r.store.saveAccountKV(r.accountID, key, encoded); err != nil {
+		return err
+	}
 	_, err = r.store.Put(dkvsValueMutation{
 		Key: key, Value: encoded, Owner: r.owner, Signature: dkvsSignatureAccount,
 		Policy: dkvsStoragePolicy{

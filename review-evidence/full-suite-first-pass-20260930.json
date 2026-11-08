@@ -1,0 +1,27 @@
+{
+  "failed_tests": [
+    "TestAccountStorageAuthorizationOwnedByRootSDKSession",
+    "TestPendingAccountStorageAuthorizationIsRootBoundNotSelectionBound"
+  ],
+  "package_verdicts": [
+    "?   \tgithub.com/sat20-labs/sat20wallet/sdk\t[no test files]",
+    "ok  \tgithub.com/sat20-labs/sat20wallet/sdk/account\t14.538s",
+    "ok  \tgithub.com/sat20-labs/sat20wallet/sdk/account/fuzzy\t3.223s",
+    "ok  \tgithub.com/sat20-labs/sat20wallet/sdk/account/internal/shamir\t2.826s",
+    "?   \tgithub.com/sat20-labs/sat20wallet/sdk/common\t[no test files]",
+    "?   \tgithub.com/sat20-labs/sat20wallet/sdk/config\t[no test files]",
+    "ok  \tgithub.com/sat20-labs/sat20wallet/sdk/e2e\t1233.676s",
+    "?   \tgithub.com/sat20-labs/sat20wallet/sdk/e2e/cmd/solidity-compile\t[no test files]",
+    "?   \tgithub.com/sat20-labs/sat20wallet/sdk/plugin\t[no test files]",
+    "FAIL\tgithub.com/sat20-labs/sat20wallet/sdk/wallet\t606.696s",
+    "ok  \tgithub.com/sat20-labs/sat20wallet/sdk/wallet/dkvs\t7.643s",
+    "ok  \tgithub.com/sat20-labs/sat20wallet/sdk/wallet/lightnode\t5.781s",
+    "ok  \tgithub.com/sat20-labs/sat20wallet/sdk/wallet/rgb11\t8.542s",
+    "?   \tgithub.com/sat20-labs/sat20wallet/sdk/wallet/supernode\t[no test files]",
+    "?   \tgithub.com/sat20-labs/sat20wallet/sdk/wallet/utils\t[no test files]",
+    "ok  \tgithub.com/sat20-labs/sat20wallet/sdk/wasm\t4.221s",
+    "?   \tgithub.com/sat20-labs/sat20wallet/sdk/wire\t[no test files]"
+  ],
+  "run_id": "20260930T222301-19054-all",
+  "status": "state=FAILED\nsuite=sat20wallet-sdk-test\nvariant=all\nrun_id=20260930T222301-19054-all\npid=19060\nworking_directory=/Users/yingfeng/github/sat20wallet/sdk\ntimeout_ms=6000000\nstarted_at=2026-09-30T22:23:01+0800\nstarted_epoch=1790778181\nended_at=2026-09-30T22:43:55+0800\nended_epoch=1790779435\nduration_seconds=1254\nexit_code=1\nlog_file=/Users/yingfeng/mcp/local_access/logs/test-runs/sat20wallet-sdk-test/20260930T222301-19054-all.log\ntail_file=/Users/yingfeng/mcp/local_access/logs/test-runs/sat20wallet-sdk-test/20260930T222301-19054-all.tail\nstatus_file=/Users/yingfeng/mcp/local_access/logs/test-runs/sat20wallet-sdk-test/20260930T222301-19054-all.status\n"
+}

@@ -9,7 +9,7 @@ import (
 )
 
 func TestDKVSDeferredJobDoesNotStarveIndependentJobs(t *testing.T) {
-	manager := &dkvsManager{jobs: make(map[string]func(*dkvsStore) error)}
+	manager := newDKVSManager(&Manager{})
 	store := &dkvsStore{}
 	runs := make([]string, 0, 2)
 	manager.schedule(accountRootWrapperJobID, func(*dkvsStore) error {

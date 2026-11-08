@@ -1,11 +1,15 @@
 package wallet
 
+import rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
+
 // RGB11 projection readiness is deliberately RAM-only. A restarted manager
 // starts with no verified scope state, so restored ownership is unavailable
 // until fresh Bitcoin evidence has produced and committed a complete candidate.
 func (p *rgb11Manager) markRGB11ProjectionUnverified() {
 	p.updateRGB11ScopeState(func(state *rgb11ScopeBackupState) {
 		state.ProjectionVerified = false
+		state.ReadyCarriers = nil
+		state.ProofFaults = nil
 	})
 }
 
@@ -14,6 +18,8 @@ func (p *rgb11Manager) markRGB11ProjectionUnverified() {
 func (p *rgb11Manager) markRGB11ProjectionUnavailable() {
 	p.updateRGB11ScopeState(func(state *rgb11ScopeBackupState) {
 		state.ProjectionVerified = false
+		state.ReadyCarriers = nil
+		state.ProofFaults = nil
 	})
 }
 
@@ -23,6 +29,22 @@ func (p *rgb11Manager) markRGB11ProjectionUnavailable() {
 func (p *rgb11Manager) markRGB11ProjectionVerified() {
 	p.updateRGB11ScopeState(func(state *rgb11ScopeBackupState) {
 		state.ProjectionVerified = true
+		state.ReadyCarriers = nil
+		state.ProofFaults = nil
+	})
+}
+
+func (p *rgb11Manager) rgb11CarrierAvailable(point string) bool {
+	state := p.rgb11ScopeState()
+	return state.ProjectionVerified || state.ReadyCarriers[point]
+}
+
+// Called in the reservation commit completion; maps are immutable thereafter.
+func (p *rgb11Manager) publishRGB11Readiness(complete bool, ready map[string]bool, faults []rgb11wallet.ProofFault) {
+	p.updateRGB11ScopeState(func(state *rgb11ScopeBackupState) {
+		state.ProjectionVerified = complete
+		state.ReadyCarriers = ready
+		state.ProofFaults = append([]rgb11wallet.ProofFault(nil), faults...)
 	})
 }
 
@@ -70,4 +92,43 @@ func (p *rgb11Manager) rgb11ProjectionStableConfirmed() bool {
 		}
 	}
 	return true
+}
+
+// Retain only readiness already established in RAM. A cold/restored scope
+// cannot acquire readiness merely because the remaining records decode.
+func (p *rgb11Manager) noteRGB11ProofFaults(view *rgb11wallet.LocalProjection) {
+	if view == nil || len(view.Faults) == 0 {
+		return
+	}
+	proofs, err := rgb11wallet.ProofsFromProjectionSnapshot(view.Records)
+	if err != nil {
+		return
+	}
+	p.updateRGB11ScopeState(func(state *rgb11ScopeBackupState) {
+		ready := make(map[string]bool)
+		for point, ok := range state.ReadyCarriers {
+			if ok && !view.Points[point] {
+				ready[point] = true
+			}
+		}
+		if state.ProjectionVerified {
+			for _, proof := range proofs {
+				ready[proof.OutPoint] = true
+			}
+		}
+		state.ProjectionVerified = false
+		state.ReadyCarriers = ready
+		faults := append([]rgb11wallet.ProofFault(nil), state.ProofFaults...)
+		seen := make(map[string]bool)
+		for _, f := range faults {
+			seen[f.OutPoint] = true
+		}
+		for _, f := range view.Faults {
+			if !seen[f.OutPoint] {
+				faults = append(faults, f)
+				seen[f.OutPoint] = true
+			}
+		}
+		state.ProofFaults = faults
+	})
 }

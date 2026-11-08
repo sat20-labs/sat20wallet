@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,12 +14,13 @@ import (
 	"time"
 
 	indexer "github.com/sat20-labs/indexer/common"
-	corewallet "github.com/sat20-labs/rgb11/wallet"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
 func coreInvoiceTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 	sender, receiver *Manager, senderMaterial, receiverMaterial *coreRecoveryMaterial) {
+	originalSender, originalReceiver := sender, receiver
+	coreTransferDeviceCleanup(t, originalSender, originalReceiver)
 	proxy := &rgb11ProxyTestServer{}
 	proxyHTTP := httptest.NewServer(http.HandlerFunc(proxy.serveHTTP))
 	defer proxyHTTP.Close()
@@ -41,76 +43,30 @@ func coreInvoiceTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain
 	coreAssert(t, balance.Sign() == 0, "contract import incorrectly created ownership")
 	coreRequire(t, "synchronize receiver before invoice barrier fault",
 		receiver.SyncAccountManagementState(context.Background()))
-	// An invoice is a public commitment only after the account bundle CAS is
-	// confirmed. Fail just the dirty bundle CAS after allowing the real CoreNode
-	// baseline reads; the local request/reveal must remain resumable while the
-	// public result and authoritative remote revision stay unchanged.
-	remoteBeforeInvoiceFault := coreManagedRemoteRecords(t, receiver, cfg)
-	profileBeforeInvoiceFault := coreCaptureManagedProfile(receiver)
-	coreAssert(t, !profileBeforeInvoiceFault.dirty,
-		"invoice CAS fault did not start from a confirmed clean account baseline")
+	// A new invoice is durably local before its independent backup. Keep the
+	// real outage active through the worker attempt, then recover before new work.
 	walletID, err := receiver.rgbManager.RGB11WalletID()
-	coreRequire(t, "identify receiver scope before invoice barrier fault", err)
-	snapshotBeforeInvoiceFault, _, err := receiver.rgbManager.exportRGB11WalletSnapshot(walletID)
-	coreRequire(t, "snapshot receiver before invoice barrier fault", err)
-	engineKeysBeforeFault := make(map[string]struct{}, len(snapshotBeforeInvoiceFault.EngineRecords))
-	projectionKeysBeforeFault := make(map[string]struct{}, len(snapshotBeforeInvoiceFault.ProjectionRecords))
-	for _, record := range snapshotBeforeInvoiceFault.EngineRecords {
-		engineKeysBeforeFault[record.Key] = struct{}{}
-	}
-	for _, record := range snapshotBeforeInvoiceFault.ProjectionRecords {
-		projectionKeysBeforeFault[record.Key] = struct{}{}
-	}
-	store, err := receiver.accountDKVSStore()
-	coreRequire(t, "open receiver's real account DKVS client for invoice CAS fault", err)
-	oldHTTP := store.client.Http
-	fault := &coreRejectDirtyManagedCASHTTP{HttpClient: oldHTTP, owner: receiver}
-	store.client.Http = fault
-	blockedInvoice, blockedInvoiceErr := receiver.CreateRGB11Invoice(RGB11InvoiceRequest{
+	coreRequire(t, "identify receiver scope before invoice backup fault", err)
+	beforeInvoice, _, err := receiver.rgbManager.exportRGB11WalletSnapshot(walletID)
+	coreRequire(t, "snapshot receiver before invoice backup fault", err)
+	finishInvoiceBackup := coreRGBBackupOutage(t, receiver, cfg, issued.ContractID)
+	localInvoice, err := receiver.CreateRGB11Invoice(RGB11InvoiceRequest{
 		Mode: "witness", TransportMode: RGB11ProxyTransport,
 		TransportEndpoints: []string{proxyEndpoint}, ContractID: issued.ContractID,
 		AmountRaw: "1", WitnessVout: 1, Expiry: time.Now().Add(time.Hour).Unix(),
 	})
-	store.client.Http = oldHTTP
-	coreAssert(t, blockedInvoiceErr != nil && blockedInvoice == nil,
-		"invoice escaped while the real account recovery CAS was rejected")
-	fault.mu.Lock()
-	rejectedInvoiceCAS := fault.rejected
-	fault.mu.Unlock()
-	coreAssert(t, rejectedInvoiceCAS > 0, "invoice fault did not reach the dirty account-data CAS")
-	coreAssertManagedRemoteEqual(t, "rejected invoice barrier", remoteBeforeInvoiceFault,
-		coreManagedRemoteRecords(t, receiver, cfg))
-	profileAfterInvoiceFault := coreCaptureManagedProfile(receiver)
-	coreAssert(t, profileAfterInvoiceFault.dirty &&
-		profileAfterInvoiceFault.revision == profileBeforeInvoiceFault.revision &&
-		profileAfterInvoiceFault.hash == profileBeforeInvoiceFault.hash,
-		"failed invoice CAS advanced or cleared the last-confirmed local account revision")
-	snapshotAfterInvoiceFault, _, err := receiver.rgbManager.exportRGB11WalletSnapshot(walletID)
-	coreRequire(t, "snapshot locally retained invoice request", err)
-	newReceiveRequests, newReceiveKeys := 0, 0
-	for _, record := range snapshotAfterInvoiceFault.EngineRecords {
-		if _, existed := engineKeysBeforeFault[record.Key]; existed {
-			continue
-		}
-		request, decodeErr := corewallet.DecodeReceiveRequest(record.Value)
-		coreRequire(t, "decode locally retained receive request", decodeErr)
-		coreAssert(t, request.RequestID != "" && request.Invoice != "",
-			"failed invoice barrier left no resumable receive identity")
-		newReceiveRequests++
-	}
-	for _, record := range snapshotAfterInvoiceFault.ProjectionRecords {
-		if strings.HasPrefix(record.Key, "receive-key-") {
-			if _, existed := projectionKeysBeforeFault[record.Key]; !existed {
-				newReceiveKeys++
-			}
-		}
-	}
-	coreAssert(t, newReceiveRequests == 1 && newReceiveKeys == 1,
-		"failed invoice barrier did not retain exactly its private request and witness receive key")
-	// This fixture has no background transport worker. Recover the original
-	// durable outbox before asking the SDK to create another public invoice.
-	coreReplayManagedOutbox(t, receiver)
-	coreAssertMapEqual(t, "replayed invoice barrier local/confirmed recovery",
+	coreRequire(t, "persist invoice independently of its backup", err)
+	coreAssert(t, localInvoice != nil, "local invoice result is absent")
+	afterInvoice, _, err := receiver.rgbManager.exportRGB11WalletSnapshot(walletID)
+	coreRequire(t, "snapshot locally persisted invoice", err)
+	coreAssert(t, len(afterInvoice.EngineRecords) == len(beforeInvoice.EngineRecords)+1,
+		"invoice did not persist exactly one receive request")
+	localRequest, err := receiver.rgbManager.engine.LoadReceive(localInvoice.RequestID)
+	coreRequire(t, "read exact persisted invoice", err)
+	coreAssert(t, localRequest.Invoice == localInvoice.Invoice && len(localRequest.WitnessScript) != 0,
+		"local invoice omitted its exact invoice or witness recovery material")
+	finishInvoiceBackup()
+	coreAssertMapEqual(t, "recovered invoice backup local/confirmed recovery",
 		coreLocalRGBBundleDigests(t, receiver), coreRemoteStableRGB(t, receiver, cfg))
 	invoice, err := receiver.CreateRGB11Invoice(RGB11InvoiceRequest{
 		Mode: "witness", TransportMode: RGB11ProxyTransport,
@@ -133,10 +89,12 @@ func coreInvoiceTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain
 	// Inject a CoreNode outage before the external proxy delivery. This keeps
 	// the real account CAS and proxy fixture in place while proving that an
 	// unavailable recovery barrier cannot leak the consignment or broadcast.
-	store, err = sender.accountDKVSStore()
+	store, err := sender.accountDKVSStore()
 	coreRequire(t, "open sender's real account DKVS client for outage injection", err)
-	oldHTTP = store.client.Http
+	oldHTTP := store.client.Http
 	store.client.Http = coreOfflineHTTP{HttpClient: oldHTTP}
+	coreAssert(t, sender.SyncAccountManagementState(context.Background()) != nil,
+		"controlled offline transport did not fail a real synchronization")
 	blocked, blockedErr := sender.DeliverAndBroadcastRGB11ProxyTransfer(
 		context.Background(), []string{prepared.State.TransferID})
 	store.client.Http = oldHTTP
@@ -153,6 +111,8 @@ func coreInvoiceTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain
 	coreRequire(t, "read prepared transfer after rejected offline delivery", err)
 	coreAssert(t, preparedPending.State.Status == "prepared" && preparedPending.State.WitnessTxID == prepared.TxID,
 		"rejected offline delivery discarded or changed the resumable prepared transaction")
+
+	coreReplayManagedOutbox(t, sender)
 
 	t.Run("malformed_consignment_cannot_create_ownership", func(t *testing.T) {
 		_, err := receiver.ValidateRGB11Consignment(context.Background(), []byte("not an RGB consignment"))
@@ -176,44 +136,26 @@ func coreInvoiceTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain
 	coreAssert(t, postedTxID == prepared.TxID && bytes.HasPrefix(postedConsignment, []byte("RGB\x00TFR")),
 		"standard proxy did not receive the prepared RGB transfer and txid")
 	receiver = corePendingCheckpoint(t, "04_proxy_consignment_waiting_receiver", receiver, cfg, chain, receiverMaterial)
-	// A receiver must not publish a positive Standard ACK until its accepted
-	// consignment, receive request, key and reservation are in the confirmed
-	// account bundle. Reject the real dirty CAS after the local accept, then
-	// retry the same request ID once the CoreNode accepts writes again.
-	remoteBeforeStandardACKFault := coreManagedRemoteRecords(t, receiver, cfg)
-	profileBeforeStandardACKFault := coreCaptureManagedProfile(receiver)
+	// The positive Standard ACK requires complete local recovery material;
+	// remote backup failure is observed separately and cannot undo that ACK.
 	localBeforeStandardACKFault := coreLocalRGBBundleDigests(t, receiver)
-	store, err = receiver.accountDKVSStore()
-	coreRequire(t, "open receiver account client for Standard ACK barrier fault", err)
-	oldHTTP = store.client.Http
-	fault = &coreRejectDirtyManagedCASHTTP{HttpClient: oldHTTP, owner: receiver}
-	store.client.Http = fault
-	blockedReceive, blockedReceiveErr := receiver.ReceiveRGB11ProxyConsignment(
-		context.Background(), invoice.RequestID)
-	store.client.Http = oldHTTP
-	coreAssert(t, blockedReceiveErr != nil &&
-		(blockedReceive == nil || !blockedReceive.AckPosted),
-		"Standard receiver acknowledged before its account recovery CAS was confirmed")
-	fault.mu.Lock()
-	rejectedStandardACKCAS := fault.rejected
-	fault.mu.Unlock()
-	coreAssert(t, rejectedStandardACKCAS > 0,
-		"Standard ACK fault did not reach the dirty account-data CAS")
+	finishStandardACK := coreRGBBackupOutage(t, receiver, cfg, issued.ContractID)
 	proxy.mu.Lock()
-	standardACKEscaped := proxy.ack != nil && *proxy.ack
+	proxy.ackPostHTTPStatus = http.StatusBadGateway // persist the first ACK, then lose its response
 	proxy.mu.Unlock()
-	coreAssert(t, !standardACKEscaped && chain.broadcastCount() == before,
-		"Standard ACK barrier failure reached the proxy or Bitcoin backend")
-	coreAssertManagedRemoteEqual(t, "rejected Standard receiver ACK barrier",
-		remoteBeforeStandardACKFault, coreManagedRemoteRecords(t, receiver, cfg))
-	profileAfterStandardACKFault := coreCaptureManagedProfile(receiver)
-	coreAssert(t, profileAfterStandardACKFault.dirty &&
-		profileAfterStandardACKFault.revision == profileBeforeStandardACKFault.revision &&
-		profileAfterStandardACKFault.hash == profileBeforeStandardACKFault.hash,
-		"failed Standard ACK barrier advanced the last-confirmed receiver account revision")
+	acceptedReceive, err := receiver.ReceiveRGB11ProxyConsignment(context.Background(), invoice.RequestID)
+	coreRequire(t, "locally accept and ACK Standard consignment", err)
+	coreAssert(t, acceptedReceive != nil && acceptedReceive.AckPosted && acceptedReceive.AwaitingBroadcast,
+		"Standard receive omitted its locally durable ACK")
+	proxy.mu.Lock()
+	standardACK := proxy.ack != nil && *proxy.ack
+	proxy.mu.Unlock()
+	coreAssert(t, standardACK && chain.broadcastCount() == before,
+		"receiver ACK was missing or broadcast the sender transaction")
 	localAfterStandardACKFault := coreLocalRGBBundleDigests(t, receiver)
 	coreAssert(t, coreDigest(localAfterStandardACKFault) != coreDigest(localBeforeStandardACKFault),
-		"failed Standard ACK barrier discarded its locally accepted receive material")
+		"Standard receive did not persist the accepted material")
+	finishStandardACK()
 	requestAfterStandardACKFault, err := receiver.rgbManager.engine.LoadReceive(invoice.RequestID)
 	coreRequire(t, "reload retained Standard receive request after rejected ACK", err)
 	// Standard Proxy delivers the strict TFR file; the prepared send hashes
@@ -229,9 +171,6 @@ func coreInvoiceTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain
 		retainedStandardReceive.ConsignmentHash == standardObjectHash,
 		"failed Standard ACK barrier changed or discarded the original receive transition")
 
-	proxy.mu.Lock()
-	proxy.ackPostHTTPStatus = http.StatusBadGateway // persist the retry ACK, then lose its response
-	proxy.mu.Unlock()
 	coreReplayManagedOutbox(t, receiver)
 	proxyReceived, err := receiver.ReceiveRGB11ProxyConsignment(context.Background(), invoice.RequestID)
 	coreRequire(t, "receiver prepares and ACKs standard-proxy consignment", err)
@@ -248,43 +187,22 @@ func coreInvoiceTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain
 	coreRequire(t, "pre-broadcast balance", err)
 	coreAssert(t, balance.Sign() == 0, "receiver credited an unbroadcast witness")
 
-	// The sender must durably record the positive ACK and broadcast intent
-	// before calling the Bitcoin backend. A real account-CAS failure at that
-	// boundary must leave the exact signed transaction and input lock resumable.
-	remoteBeforeStandardBroadcastFault := coreManagedRemoteRecords(t, sender, cfg)
-	profileBeforeStandardBroadcastFault := coreCaptureManagedProfile(sender)
-	store, err = sender.accountDKVSStore()
-	coreRequire(t, "open sender account client for Standard broadcast barrier fault", err)
-	oldHTTP = store.client.Http
-	fault = &coreRejectDirtyManagedCASHTTP{HttpClient: oldHTTP, owner: sender}
-	store.client.Http = fault
-	blockedDelivery, blockedDeliveryErr := sender.DeliverAndBroadcastRGB11ProxyTransfer(
+	// The exact signed transaction and intent are local before broadcast;
+	// a subsequent asynchronous backup outage cannot turn that result unknown.
+	finishStandardBroadcast := coreRGBBackupOutage(t, sender, cfg, issued.ContractID)
+	firstBroadcast, err := sender.DeliverAndBroadcastRGB11ProxyTransfer(
 		context.Background(), []string{prepared.State.TransferID})
-	store.client.Http = oldHTTP
-	coreAssert(t, blockedDeliveryErr != nil &&
-		(blockedDelivery == nil || !blockedDelivery.Broadcast),
-		"Standard sender reported broadcast success before its account recovery CAS was confirmed")
-	fault.mu.Lock()
-	rejectedStandardBroadcastCAS := fault.rejected
-	fault.mu.Unlock()
-	coreAssert(t, rejectedStandardBroadcastCAS > 0,
-		"Standard broadcast fault did not reach the dirty account-data CAS")
-	coreAssert(t, chain.broadcastCount() == before,
-		"Standard broadcast barrier failure reached the Bitcoin backend")
-	coreAssertManagedRemoteEqual(t, "rejected Standard sender broadcast barrier",
-		remoteBeforeStandardBroadcastFault, coreManagedRemoteRecords(t, sender, cfg))
-	profileAfterStandardBroadcastFault := coreCaptureManagedProfile(sender)
-	coreAssert(t, profileAfterStandardBroadcastFault.dirty &&
-		profileAfterStandardBroadcastFault.revision == profileBeforeStandardBroadcastFault.revision &&
-		profileAfterStandardBroadcastFault.hash == profileBeforeStandardBroadcastFault.hash,
-		"failed Standard broadcast barrier advanced the last-confirmed sender account revision")
+	coreRequire(t, "broadcast the locally committed Standard transaction", err)
+	coreAssert(t, firstBroadcast != nil && firstBroadcast.Broadcast && firstBroadcast.TxID == prepared.TxID &&
+		chain.broadcastCount() == before+1, "Standard ACK did not authorize exactly the signed transaction")
 	retainedStandardPending, err := sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
-	coreRequire(t, "reload retained Standard sender transaction after rejected broadcast", err)
+	coreRequire(t, "reload exact sender transaction before backup recovery", err)
 	coreAssert(t, retainedStandardPending.State.WitnessTxID == prepared.TxID &&
 		retainedStandardPending.State.AckStatus == "accepted" &&
 		rgb11TransferKeepsInputsLocked(&retainedStandardPending.State),
-		"failed Standard broadcast barrier lost the accepted transaction identity or input lock")
+		"asynchronous backup lost the accepted transaction identity or input lock")
 	coreAssertRGB11Reservation(t, sender, prepared.State.TransferID, true)
+	finishStandardBroadcast()
 
 	coreReplayManagedOutbox(t, sender)
 	delivered, err = sender.DeliverAndBroadcastRGB11ProxyTransfer(
@@ -315,6 +233,8 @@ func coreInvoiceTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain
 	// Reopen the witness recipient from its account recovery package and spend
 	// part of that received allocation through the ACK-gated Direct path.
 	beforeColdRestore := chain.broadcastCount()
+	coreWaitPrivateBackup(t, receiver)
+	receiver.StopDKVSSync()
 	coldWitnessReceiver := coreRestoreE2E(t, cfg, chain, receiverMaterial)
 	coreSynchronizeRestoredAccount(t, coldWitnessReceiver)
 	_, err = coldWitnessReceiver.RefreshRGB11State(context.Background())
@@ -434,6 +354,8 @@ func coreInvoiceTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain
 
 	// A second independent cold restore proves the accepted blind allocation is
 	// not only displayed but can fund a real, acknowledged follow-up transfer.
+	coreWaitPrivateBackup(t, receiver)
+	receiver.StopDKVSSync()
 	coldBlindReceiver := coreRestoreE2E(t, cfg, chain, receiverMaterial)
 	coreSynchronizeRestoredAccount(t, coldBlindReceiver)
 	_, err = coldBlindReceiver.RefreshRGB11State(context.Background())
@@ -451,6 +373,24 @@ func coreInvoiceTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain
 	coreRequire(t, "cold blind receiver balance after re-spend", err)
 	coreAssert(t, left.Value.Uint64() == 500 && right.Value.Uint64() == 500,
 		"cold blind re-spend did not preserve the expected allocations")
+	coreWaitPrivateBackup(t, sender)
+	coreWaitPrivateBackup(t, coldBlindReceiver)
+}
+
+// Register before any checkpoint creates cold participants. Their Close
+// cleanups run first; the outer groups then reuse the original online devices.
+func coreTransferDeviceCleanup(t *testing.T, sender, receiver *Manager) {
+	t.Helper()
+	t.Cleanup(func() {
+		senderErr := sender.StartDKVSSync()
+		receiverErr := receiver.StartDKVSSync()
+		coreRequire(t, "resume original transfer sender", senderErr)
+		coreRequire(t, "resume original transfer receiver", receiverErr)
+		coreSynchronizeRestoredAccount(t, sender)
+		coreSynchronizeRestoredAccount(t, receiver)
+		coreWaitPrivateBackup(t, sender)
+		coreWaitPrivateBackup(t, receiver)
+	})
 }
 
 func coreSendRGB11AddressAmountAndSettle(t *testing.T, chain *coreE2EChain,
@@ -463,50 +403,91 @@ func coreSendRGB11AddressAmountAndSettle(t *testing.T, chain *coreE2EChain,
 	coreRequire(t, "prepare cold-recovered allocation re-spend", err)
 	coreAssert(t, chain.broadcastCount() == beforeBroadcast,
 		"cold-recovered allocation prepare broadcast before delivery/ACK")
-	delivery, err := source.DeliverAndBroadcastConfiguredRGB11AddressTransfer(
-		prepared.State.TransferID, RGB11AddressDeliveryOptions{})
-	coreRequire(t, "deliver cold-recovered allocation to Direct mailbox", err)
-	coreAssert(t, delivery.AwaitingACK && !delivery.Broadcast,
-		"cold-recovered allocation crossed the Direct ACK barrier")
-	coreWaitRGB11MailboxACK(t, chain, destination, prepared, beforeBroadcast)
-	coreAssertRGB11ACKRecoveryPublished(t, destination, prepared)
-	coreWaitRGB11MailboxBroadcast(t, chain, source, prepared, beforeBroadcast)
+	coreDeliverRGB11OfflineACK(t, chain, source, destination, prepared, beforeBroadcast)
 	chain.confirm(prepared.TxID)
 	_, err = source.RefreshRGB11State(context.Background())
 	coreRequire(t, "settle cold-recovered spend source", err)
 	_, err = destination.RefreshRGB11State(context.Background())
 	coreRequire(t, "settle cold-recovered spend destination", err)
+	coreSyncRGBCheckpoint(t, source, destination)
 }
 
-// coreRejectDirtyManagedCASHTTP keeps reads and clean baseline requests on the
-// real CoreNode, then fails a CAS only after the local account bundle becomes
-// dirty. This exercises the post-mutation publication barrier without a
-// replacement CAS server or a modified CoreModules fixture.
+// Reject only the selected RGB module's real asynchronous CAS. All other
+// requests continue to use the existing CoreNode and authorization checks.
 type coreRejectDirtyManagedCASHTTP struct {
 	HttpClient
-	owner        *Manager
-	mu           sync.Mutex
-	rejected     int
-	beforeReject func()
-	rejectWhen   func() bool
+	owner          *Manager
+	mu             sync.Mutex
+	rejected       int
+	key            string
+	failed         chan struct{}
+	requestID      string
+	recordHash     string
+	changedRequest bool
+}
+
+// Gate export before it acquires local RGB read gates or enters the transport
+// coordinator. Holding a CAS instead would block Direct's later Core binding.
+// All actual export/validation/import methods remain the production provider's.
+type coreRGBBackupExport struct {
+	*rgb11AccountManagedDataProvider
+	scope   string
+	release chan struct{}
+	entered chan struct{}
+}
+
+func (p *coreRGBBackupExport) Export(catalog AccountManagedDataCatalog) ([]AccountManagedDataPayload, error) {
+	for _, scope := range catalog.Scopes {
+		if scope.ID() == p.scope {
+			select {
+			case p.entered <- struct{}{}:
+			default:
+			}
+			<-p.release
+			break
+		}
+	}
+	return p.rgb11AccountManagedDataProvider.Export(catalog)
+}
+
+var _ ContextHttpClient = (*coreRejectDirtyManagedCASHTTP)(nil)
+
+func (h *coreRejectDirtyManagedCASHTTP) SendGetRequestContext(ctx context.Context, url *URL) ([]byte, error) {
+	return h.HttpClient.(ContextHttpClient).SendGetRequestContext(ctx, url)
 }
 
 func (h *coreRejectDirtyManagedCASHTTP) SendPostRequest(url *URL, body []byte) ([]byte, error) {
+	return h.SendPostRequestContext(context.Background(), url, body)
+}
+
+func (h *coreRejectDirtyManagedCASHTTP) SendPostRequestContext(ctx context.Context, url *URL, body []byte) ([]byte, error) {
 	if h != nil && h.owner != nil && url != nil &&
 		strings.HasSuffix(url.Path, "/v3/dkvs/records/batch-cas") {
-		h.owner.mutex.RLock()
-		dirty := h.owner.accountProfile != nil && h.owner.accountProfile.ManagedDataDirty
-		h.owner.mutex.RUnlock()
-		if h.rejectWhen != nil {
-			dirty = h.rejectWhen()
+		var request DKVSBatchCASRequest
+		if err := json.Unmarshal(body, &request); err != nil {
+			return nil, err
+		}
+		dirty := false
+		recordHash := ""
+		for _, mutation := range request.Mutations {
+			dirty = dirty || mutation.Record != nil && mutation.Record.Key == h.key
+			if mutation.Record != nil && mutation.Record.Key == h.key {
+				recordHash = dkvsindexer.RecordHash(mutation.Record).String()
+			}
 		}
 		if dirty {
 			h.mu.Lock()
-			first := h.rejected == 0
 			h.rejected++
+			if h.requestID == "" {
+				h.requestID = request.RequestID
+				h.recordHash = recordHash
+			} else if h.requestID != request.RequestID || h.recordHash != recordHash {
+				h.changedRequest = true
+			}
 			h.mu.Unlock()
-			if first && h.beforeReject != nil {
-				h.beforeReject()
+			select {
+			case h.failed <- struct{}{}:
+			default:
 			}
 			return nil, &HTTPResponseError{
 				StatusCode: http.StatusServiceUnavailable,
@@ -514,12 +495,172 @@ func (h *coreRejectDirtyManagedCASHTTP) SendPostRequest(url *URL, body []byte) (
 			}
 		}
 	}
-	return h.HttpClient.SendPostRequest(url, body)
+	return h.HttpClient.(ContextHttpClient).SendPostRequestContext(ctx, url, body)
+}
+
+// Keep one real account module outage across the local business operation and
+// the existing worker's attempted publication. Neither this fixture nor its
+// assertions replace the node, signer, local transaction or backup payload.
+func coreRGBBackupOutage(t *testing.T, manager *Manager, cfg coreE2EConfig, contractID string) func() {
+	t.Helper()
+	// A device can resume through a foreground operation before its automatic
+	// receiver starts. Establish real account qualification without polling RGB.
+	readyCtx, cancelReady := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancelReady()
+	coreRequire(t, "synchronize account before local business backup fault", manager.SyncAccountManagementState(readyCtx))
+	coreRequire(t, "confirm original module baseline before backup fault", manager.WaitAccountManagedDataReady(readyCtx))
+	cancelReady()
+	scope := coreSelectedRGBScope(manager)
+	accountID := manager.GetAccountManagementStatus().AccountID
+	before, err := manager.readAccountLocal(accountID, rgb11AccountManagedProviderID, scope)
+	coreRequire(t, "read healthy RGB module before backup outage", err)
+	coreAssert(t, before != nil && before.Baseline != nil && before.Generation == before.Confirmed,
+		"backup outage requires a confirmed module baseline")
+	remote := coreManagedRemoteRecords(t, manager, cfg)
+	store, err := manager.accountDKVSStore()
+	coreRequire(t, "open actual Core backup transport", err)
+	oldHTTP := store.client.Http
+	_, contextOK := oldHTTP.(ContextHttpClient)
+	coreAssert(t, contextOK, "backup fault requires context-aware Core transport")
+	provider, ok := manager.accountProvider(rgb11AccountManagedProviderID).(*rgb11AccountManagedDataProvider)
+	coreAssert(t, ok && provider != nil, "backup window requires the actual RGB provider")
+	gate := &coreRGBBackupExport{rgb11AccountManagedDataProvider: provider, scope: scope,
+		release: make(chan struct{}), entered: make(chan struct{}, 1)}
+	manager.managedDataMu.Lock()
+	manager.managedDataProviders[rgb11AccountManagedProviderID] = gate
+	manager.managedDataMu.Unlock()
+	var releaseOnce sync.Once
+	releaseExport := func() {
+		releaseOnce.Do(func() {
+			close(gate.release)
+			manager.managedDataMu.Lock()
+			manager.managedDataProviders[rgb11AccountManagedProviderID] = provider
+			manager.managedDataMu.Unlock()
+		})
+	}
+	fault := &coreRejectDirtyManagedCASHTTP{HttpClient: oldHTTP, owner: manager, key: before.Key, failed: make(chan struct{}, 1)}
+	store.client.Http = fault
+	t.Cleanup(func() {
+		releaseExport()
+		store.client.Http = oldHTTP
+	})
+	return func() {
+		// Bound only the worker observation, not the local business operation and
+		// its snapshot checks. The export gate itself stays open until cleanup or
+		// until the real worker enters this provider after the business commit.
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		defer releaseExport()
+		manager.dkvs.mu.Lock()
+		running := manager.dkvs.stop != nil
+		manager.dkvs.mu.Unlock()
+		if !running {
+			coreRequire(t, "resume this device backup worker after local business", manager.StartDKVSSync())
+		}
+		select {
+		case <-gate.entered:
+		case <-ctx.Done():
+			t.Fatal("existing background worker did not enter this RGB module export")
+		}
+		// Release only after observing the real worker call. The normal
+		// coalesced notification remains the trigger; this does not fake readiness
+		// or bypass the provider/export path.
+		releaseExport()
+		select {
+		case <-fault.failed:
+		case <-ctx.Done():
+			t.Fatal("existing background worker did not attempt this RGB module backup")
+		}
+		// Observe completion through the real account coordinator; a channel
+		// notification alone occurs before the HTTP failure is persisted.
+		backupErr := manager.SyncAccountManagementState(ctx)
+		fault.mu.Lock()
+		hits := fault.rejected
+		requestID, changedRequest := fault.requestID, fault.changedRequest
+		recordHash := fault.recordHash
+		fault.mu.Unlock()
+		var httpFailure *HTTPResponseError
+		asHTTP := errors.As(backupErr, &httpFailure)
+		httpStatus := 0
+		if asHTTP {
+			httpStatus = httpFailure.StatusCode
+		}
+		var pendingRequest *DKVSRequestPendingError
+		asPending := errors.As(backupErr, &pendingRequest)
+		sameRequest := asPending && requestID != "" && pendingRequest.RequestID == requestID
+		isPending := errors.Is(backupErr, ErrDKVSPathNotSynced)
+		if !sameRequest || !isPending || hits == 0 || changedRequest {
+			t.Logf("core backup failure: type=%T unsynced=%t deadline=%t http=%t status=%d pending=%t same_request=%t changed_request=%t hits=%d",
+				backupErr, isPending, errors.Is(backupErr, context.DeadlineExceeded), asHTTP, httpStatus, asPending, sameRequest, changedRequest, hits)
+		}
+		coreAssert(t, sameRequest && isPending && hits > 0 && !changedRequest,
+			"controlled HTTP503 did not retain its exact request as a pending backup")
+		pending, err := manager.readAccountLocal(accountID, rgb11AccountManagedProviderID, scope)
+		coreRequire(t, "read durable pending RGB module", err)
+		coreAssert(t, pending != nil && pending.Generation > before.Generation && pending.Generation > pending.Confirmed &&
+			pending.Baseline != nil && dkvsindexer.RecordHash(pending.Baseline) == dkvsindexer.RecordHash(before.Baseline),
+			"failed backup lost local changes or advanced their confirmed baseline")
+		replica := newDKVSReplicaStore(manager.db)
+		entries, err := replica.LoadOutbox(store.client.replicaNamespace)
+		coreRequire(t, "read retained signed backup request", err)
+		var frozen *DKVSBatchOutboxEntry
+		for _, entry := range entries {
+			if entry.OriginDomain == accountKVOutboxDomain && entry.OriginKey == before.Key {
+				coreAssert(t, frozen == nil, "backup outage created duplicate module intents")
+				frozen = entry
+			}
+		}
+		coreAssert(t, frozen != nil && frozen.RequestID == requestID &&
+			(frozen.State == DKVSOutboxPending || frozen.State == DKVSOutboxInflight) &&
+			frozen.OriginGeneration > before.Generation && frozen.OriginGeneration <= pending.Generation,
+			"response-unknown backup lost its original frozen request")
+		mutations, err := frozen.DecodeMutations()
+		coreRequire(t, "decode original signed backup request", err)
+		coreAssert(t, len(mutations) == 1 && mutations[0].Record != nil && mutations[0].Record.Key == before.Key,
+			"retained request changed its exact module identity")
+		frozenHash := dkvsindexer.RecordHash(mutations[0].Record).String()
+		coreAssert(t, frozenHash == recordHash, "pending backup replaced the actual observed signed record")
+		frozenSeq := mutations[0].Record.Seq
+		coreAssertManagedRemoteEqual(t, "failed asynchronous RGB backup", remote, coreManagedRemoteRecords(t, manager, cfg))
+		local := coreLocalRGBBundleDigests(t, manager)
+		coreAssert(t, contractID != "" && errors.Is(manager.CheckAccountWrite(rgb11AccountManagedProviderID, scope), ErrDKVSPathNotSynced),
+			"negative control did not establish the actual account write gate failure")
+		rejected, err := manager.CreateRGB11Invoice(RGB11InvoiceRequest{
+			Mode: "witness", TransportMode: "out-of-band", ContractID: contractID,
+			AmountRaw: "1", WitnessVout: 1, Expiry: time.Now().Add(time.Hour).Unix(),
+		})
+		coreAssert(t, rejected == nil && errors.Is(err, ErrDKVSPathNotSynced),
+			"new business bypassed the actual failed online synchronization")
+		coreAssertMapEqual(t, "rejected new business retained local recovery", local, coreLocalRGBBundleDigests(t, manager))
+		unchanged, err := manager.readAccountLocal(accountID, rgb11AccountManagedProviderID, scope)
+		coreRequire(t, "read module after rejected new business", err)
+		coreAssert(t, unchanged.Generation == pending.Generation,
+			"rejected business advanced the durable module generation")
+		store.client.Http = oldHTTP
+		coreReplayManagedOutbox(t, manager)
+		coreWaitPrivateBackup(t, manager)
+		confirmed := coreManagedRemoteRecords(t, manager, cfg)
+		// One operation can commit another local generation while N is queued.
+		// The node enforces seq+1; recovery may already have published that exact
+		// newer local closure after completing N, but may never roll back N.
+		coreAssert(t, confirmed[before.Key].seq >= frozenSeq &&
+			(confirmed[before.Key].seq != frozenSeq || confirmed[before.Key].hash == frozenHash),
+			"recovered backup rolled back or replaced the exact accepted sequence")
+		entries, err = replica.LoadOutbox(store.client.replicaNamespace)
+		coreRequire(t, "read outbox after original backup completes", err)
+		for _, entry := range entries {
+			coreAssert(t, entry.RequestID != frozen.RequestID && entry.OriginKey != before.Key,
+				"recovered module still has an unresolved original request")
+		}
+		coreAssertMapEqual(t, "backup recovery retained exact local materials", local, coreLocalRGBBundleDigests(t, manager))
+		coreAssertMapEqual(t, "backup recovery confirmed complete local materials", local, coreRemoteStableRGB(t, manager, cfg))
+	}
 }
 
 func coreDirectTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 	sender, receiver *Manager, senderMaterial, receiverMaterial *coreRecoveryMaterial) {
-	originalSender := sender
+	originalSender, originalReceiver := sender, receiver
+	coreTransferDeviceCleanup(t, originalSender, originalReceiver)
 	issued, err := sender.IssueRGB11Asset(context.Background(), RGB11IssueRequest{
 		Schema: "NIA", Ticker: "E2ED", Name: "E2E direct asset", Amounts: []uint64{1200},
 	})
@@ -528,6 +669,9 @@ func coreDirectTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 	endpoint, err := receiver.EnableConfiguredRGB11AddressReceive(RGB11ReceiveCapabilityOptions{})
 	coreRequire(t, "publish Direct receive capability", err)
 	coreAssert(t, !endpoint.Temporary, "paid Direct capability downgraded to temporary")
+	// The recipient device is offline until the sender's delivered, unACKed
+	// recovery checkpoint is complete. Its registered public endpoint remains.
+	coreSuspendRGBDevice(t, receiver)
 	before := chain.broadcastCount()
 	prepared, _, err := sender.PrepareConfiguredRGB11AddressTransfer(context.Background(), RGB11AddressSendRequest{
 		ReceiverAddress: receiver.GetWallet().GetAddress(), AssetName: issued.AssetName,
@@ -539,61 +683,27 @@ func coreDirectTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 	coreRequire(t, "deliver Direct consignment via real CoreNode", err)
 	coreAssert(t, result.AwaitingACK && !result.Broadcast && chain.broadcastCount() == before, "Direct broadcast crossed receiver ACK boundary")
 	sender = corePendingCheckpoint(t, "03_delivered_waiting_ACK_sender", sender, cfg, chain, senderMaterial)
+	// Join this sender before the recipient goes online and publishes its ACK.
+	// It resumes only after its own broadcast-backup fault has been installed.
+	coreSuspendRGBDevice(t, sender)
 
-	// The accepted Direct consignment must be committed to the receiver's
-	// stable recovery bundle before a positive mailbox ACK is sent. Reject the
-	// real recovery CAS after the exact candidate is applied, then retry the
-	// same mailbox ID. This barrier exports the candidate before the later ACK
-	// mutation sets the profile dirty flag. Compare the first rejected boundary.
-	var remoteBeforeDirectACKFault map[string]coreManagedRecordFingerprint
-	var profileBeforeDirectACKFault coreManagedProfileFingerprint
+	// Direct receive has the same local commit/ACK boundary as Standard.
 	localBeforeDirectACKFault := coreLocalRGBBundleDigests(t, receiver)
-	receiverStore, err := receiver.accountDKVSStore()
-	coreRequire(t, "open receiver account client for Direct ACK barrier fault", err)
-	oldReceiverHTTP := receiverStore.client.Http
-	receiverACKFault := &coreRejectDirtyManagedCASHTTP{HttpClient: oldReceiverHTTP, owner: receiver}
-	receiverACKFault.rejectWhen = func() bool {
-		state, err := receiver.rgbManager.projectionStore.LoadTransferState(prepared.State.TransferID)
-		return err == nil && state.Direction == "receive" && state.AckStatus == "persisted" &&
-			state.Status == "awaiting_broadcast" && state.WitnessTxID == prepared.TxID
-	}
-	receiverACKFault.beforeReject = func() {
-		remoteBeforeDirectACKFault = coreManagedRemoteRecords(t, receiver, cfg)
-		profileBeforeDirectACKFault = coreCaptureManagedProfile(receiver)
-	}
-	receiverStore.client.Http = receiverACKFault
-	blockedDirectACK, blockedDirectACKErr := receiver.SyncConfiguredRGB11AddressMailbox(
-		context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
-	receiverStore.client.Http = oldReceiverHTTP
-	coreAssert(t, blockedDirectACKErr != nil || (blockedDirectACK != nil &&
-		blockedDirectACK.Received == 0 && blockedDirectACK.Invalid > 0),
-		"Direct receiver did not report its rejected ACK recovery barrier")
-	receiverACKFault.mu.Lock()
-	rejectedDirectACKCAS := receiverACKFault.rejected
-	receiverACKFault.mu.Unlock()
-	coreAssert(t, rejectedDirectACKCAS > 0,
-		"Direct ACK fault did not reach the accepted receive recovery CAS")
-	coreAssert(t, chain.broadcastCount() == before,
-		"Direct receiver ACK barrier failure reached the Bitcoin backend")
-	coreAssertManagedRemoteEqual(t, "rejected Direct receiver ACK barrier",
-		remoteBeforeDirectACKFault, coreManagedRemoteRecords(t, receiver, cfg))
-	profileAfterDirectACKFault := coreCaptureManagedProfile(receiver)
-	coreAssert(t, profileAfterDirectACKFault.dirty == profileBeforeDirectACKFault.dirty &&
-		profileAfterDirectACKFault.revision == profileBeforeDirectACKFault.revision &&
-		profileAfterDirectACKFault.hash == profileBeforeDirectACKFault.hash,
-		"failed Direct ACK barrier advanced the last-confirmed receiver account revision")
+	finishDirectACK := coreRGBBackupOutage(t, receiver, cfg, issued.ContractID)
+	directACK, err := receiver.SyncConfiguredRGB11AddressMailbox(context.Background(),
+		dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+	coreRequire(t, "locally accept and ACK Direct consignment", err)
+	coreAssert(t, directACK != nil && directACK.Received == 1 && chain.broadcastCount() == before,
+		"Direct receive did not commit exactly once ahead of Bitcoin broadcast")
 	localAfterDirectACKFault := coreLocalRGBBundleDigests(t, receiver)
 	coreAssert(t, coreDigest(localAfterDirectACKFault) != coreDigest(localBeforeDirectACKFault),
-		"failed Direct ACK barrier discarded its locally accepted receive material")
-	coreAssert(t, coreDigest(localAfterDirectACKFault) != coreDigest(coreRemoteStableRGB(t, receiver, cfg)),
-		"failed Direct ACK barrier unexpectedly confirmed its locally accepted receive material")
+		"Direct receive discarded its locally accepted material")
 	directReceiveState, err := receiver.rgbManager.projectionStore.LoadTransferState(prepared.State.TransferID)
-	coreRequire(t, "load retained Direct receive state after rejected ACK", err)
-	coreAssert(t, directReceiveState.Direction == "receive" &&
-		directReceiveState.Status == "awaiting_broadcast" &&
-		directReceiveState.AckStatus == "persisted" &&
+	coreRequire(t, "load locally durable Direct ACK", err)
+	coreAssert(t, directReceiveState.Direction == "receive" && directReceiveState.Status == "awaiting_broadcast" &&
+		directReceiveState.AckStatus == "ack-sent" && directReceiveState.DeliveryAcknowledged &&
 		directReceiveState.WitnessTxID == prepared.TxID,
-		"failed Direct ACK barrier lost its exact accepted receive transition")
+		"Direct ACK lost the exact accepted transition")
 	directRequestID, err := receiver.rgbManager.projectionStore.LoadPreparedReceive(prepared.State.TransferID)
 	coreRequire(t, "load retained Direct prepared receive request", err)
 	directRequest, err := receiver.rgbManager.engine.LoadReceive(directRequestID)
@@ -604,120 +714,39 @@ func coreDirectTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 	ackMessageID, err := rgb11AddressMessageID(prepared.State.TransferID)
 	coreRequire(t, "derive Direct ACK mailbox identity", err)
 	senderRoot, err := sender.accountManagementRootWallet()
-	coreRequire(t, "resolve sender root to verify no Direct ACK escaped", err)
+	coreRequire(t, "resolve sender root to read actual Direct ACK", err)
 	senderMailbox, err := sender.freshDirectMessages(senderRoot)
-	coreRequire(t, "read sender mailbox before Direct ACK retry", err)
+	coreRequire(t, "read sender mailbox after local Direct ACK", err)
+	ackCount := 0
 	for _, message := range senderMailbox {
-		if message != nil && message.Payload != nil &&
-			message.Payload.Kind == AccountMessageKindRGB11ACK &&
+		if message != nil && message.Payload != nil && message.Payload.Kind == AccountMessageKindRGB11ACK &&
 			message.Payload.ApplicationID == ackMessageID {
-			t.Fatal("core-e2e: Direct positive ACK escaped before receiver recovery CAS")
+			ackCount++
 		}
 	}
-
-	// These deterministic managers do not start background workers. Replay the
-	// original signed outbox through the existing worker stage before retrying
-	// the public mailbox operation that owns the recovery barrier.
-	plan, err := receiver.currentAccountManagedOutboxPlan()
-	coreRequire(t, "read rejected Direct receive outbox", err)
-	coreAssert(t, plan.Pending, "rejected Direct receive CAS lost its original outbox")
-	var submittedDirectACK bool
-	var remainingDirectACK int
-	err = receiver.dkvs.runTransport(func() error {
-		client, err := receiver.dkvs.primaryClient()
-		if err != nil {
-			return err
-		}
-		store := newDKVSReplicaStore(receiver.db)
-		submittedDirectACK, err = receiver.flushDKVSOutbox(client, store)
-		if err != nil {
-			return err
-		}
-		entries, err := store.LoadOutbox(client.replicaNamespace)
-		remainingDirectACK = len(entries)
-		return err
-	})
-	coreRequire(t, "replay original Direct receive outbox", err)
-	coreAssert(t, submittedDirectACK && remainingDirectACK == 0,
-		"original Direct receive outbox did not commit completely")
+	coreAssert(t, ackCount == 1, "Direct receive did not publish exactly one identity-bound ACK")
+	finishDirectACK()
 	coreWaitRGB11MailboxACK(t, chain, receiver, prepared, before)
 	coreAssertRGB11ACKRecoveryPublished(t, receiver, prepared)
 	receiver = corePendingCheckpoint(t, "04_receiver_ACK_committed", receiver, cfg, chain, receiverMaterial)
 	coreAssert(t, chain.broadcastCount() == before, "passive receiver recovery broadcast sender transaction")
-	// The sender must publish its ACK-accepted/broadcast-attempted state before
-	// crossing the Bitcoin backend. A rejected dirty CAS retains the same txid
-	// and reservation, and a later retry resumes that exact operation.
-	var remoteBeforeDirectBroadcastFault map[string]coreManagedRecordFingerprint
-	var profileBeforeDirectBroadcastFault coreManagedProfileFingerprint
-	senderStore, err := sender.accountDKVSStore()
-	coreRequire(t, "open sender account client for Direct broadcast barrier fault", err)
-	oldSenderHTTP := senderStore.client.Http
+	// Backup runs after the locally recorded ACK and actual broadcast. Keep
+	// the same reservation and transaction across its controlled outage.
 	senderRootView, err := sender.captureRGB11NetworkScope(true)
-	coreRequire(t, "capture Direct sender root scope for broadcast barrier", err)
-	senderBroadcastFault := &coreRejectDirtyManagedCASHTTP{HttpClient: oldSenderHTTP, owner: sender}
-	senderBroadcastFault.rejectWhen = func() bool {
-		pending, err := senderRootView.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
-		return err == nil && pending.State.Direction == "send" &&
-			pending.State.Status == rgb11StatusBroadcastAttempted &&
-			pending.State.AckStatus == "accepted" && pending.State.DeliveryAcknowledged &&
-			pending.State.WitnessTxID == prepared.TxID
-	}
-	senderBroadcastFault.beforeReject = func() {
-		remoteBeforeDirectBroadcastFault = coreManagedRemoteRecords(t, sender, cfg)
-		profileBeforeDirectBroadcastFault = coreCaptureManagedProfile(sender)
-	}
-	senderStore.client.Http = senderBroadcastFault
-	_, blockedDirectBroadcastErr := sender.SyncConfiguredRGB11AddressMailbox(
-		context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
-	senderStore.client.Http = oldSenderHTTP
-	coreAssert(t, blockedDirectBroadcastErr != nil,
-		"Direct sender reported broadcast success before its account recovery CAS was confirmed")
-	senderBroadcastFault.mu.Lock()
-	rejectedDirectBroadcastCAS := senderBroadcastFault.rejected
-	senderBroadcastFault.mu.Unlock()
-	coreAssert(t, rejectedDirectBroadcastCAS > 0,
-		"Direct sender broadcast fault did not reach the exact broadcast-intent recovery CAS")
-	coreAssert(t, chain.broadcastCount() == before,
-		"Direct sender broadcast barrier failure reached the Bitcoin backend")
-	coreAssertManagedRemoteEqual(t, "rejected Direct sender broadcast barrier",
-		remoteBeforeDirectBroadcastFault, coreManagedRemoteRecords(t, sender, cfg))
-	profileAfterDirectBroadcastFault := coreCaptureManagedProfile(sender)
-	coreAssert(t, profileAfterDirectBroadcastFault.dirty == profileBeforeDirectBroadcastFault.dirty &&
-		profileAfterDirectBroadcastFault.revision == profileBeforeDirectBroadcastFault.revision &&
-		profileAfterDirectBroadcastFault.hash == profileBeforeDirectBroadcastFault.hash,
-		"failed Direct broadcast barrier advanced the last-confirmed sender account revision")
+	coreRequire(t, "capture Direct sender scope", err)
+	finishDirectBroadcast := coreRGBBackupOutage(t, sender, cfg, issued.ContractID)
+	_, err = sender.SyncConfiguredRGB11AddressMailbox(context.Background(),
+		dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+	coreRequire(t, "consume Direct ACK and broadcast local transaction", err)
+	coreAssert(t, chain.broadcastCount() == before+1, "Direct ACK did not broadcast exactly once")
 	retainedDirectPending, err := senderRootView.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
-	coreRequire(t, "load retained Direct sender transaction after rejected broadcast", err)
+	coreRequire(t, "load locally retained Direct transaction", err)
 	coreAssert(t, retainedDirectPending.State.WitnessTxID == prepared.TxID &&
 		retainedDirectPending.State.AckStatus == "accepted" &&
 		rgb11TransferKeepsInputsLocked(&retainedDirectPending.State),
-		"failed Direct broadcast barrier lost the accepted transaction identity or input lock")
+		"Direct backup outage lost the accepted identity or input lock")
 	coreAssertRGB11Reservation(t, sender, prepared.State.TransferID, true)
-	coreAssert(t, coreDigest(coreLocalRGBBundleDigests(t, sender)) != coreDigest(coreRemoteStableRGB(t, sender, cfg)),
-		"failed Direct broadcast barrier unexpectedly confirmed its ACK-accepted state")
-
-	plan, err = sender.currentAccountManagedOutboxPlan()
-	coreRequire(t, "read rejected Direct sender outbox", err)
-	coreAssert(t, plan.Pending, "rejected Direct broadcast CAS lost its original outbox")
-	var submittedDirectBroadcast bool
-	var remainingDirectBroadcast int
-	err = sender.dkvs.runTransport(func() error {
-		client, err := sender.dkvs.primaryClient()
-		if err != nil {
-			return err
-		}
-		store := newDKVSReplicaStore(sender.db)
-		submittedDirectBroadcast, err = sender.flushDKVSOutbox(client, store)
-		if err != nil {
-			return err
-		}
-		entries, err := store.LoadOutbox(client.replicaNamespace)
-		remainingDirectBroadcast = len(entries)
-		return err
-	})
-	coreRequire(t, "replay original Direct sender outbox", err)
-	coreAssert(t, submittedDirectBroadcast && remainingDirectBroadcast == 0,
-		"original Direct sender outbox did not commit completely")
+	finishDirectBroadcast()
 	coreWaitRGB11MailboxBroadcast(t, chain, sender, prepared, before)
 	sender = corePendingCheckpoint(t, "05_ACK_and_broadcast_sender", sender, cfg, chain, senderMaterial)
 	_, err = receiver.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
@@ -746,18 +775,25 @@ func coreDirectTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 
 	// The parent still owns the prepared device. Its normal account sync must
 	// adopt the confirmed cold writer's complete recovery closure.
+	coreWaitPrivateBackup(t, sender)
 	coreRequire(t, "verify cold sender confirmed closure before original-device sync",
 		sender.verifyCurrentRGB11RecoveryClosure())
+	// This cold sender has finished its business. Join it before the original
+	// device comes online, so only one device can consume this root's mailbox.
+	sender.StopDKVSSync()
+	coreRequire(t, "resume original prepared sender for recovery comparison", originalSender.StartDKVSSync())
+	coreRequire(t, "synchronize original prepared sender after cold Direct settlement",
+		originalSender.SyncAccountManagementState(context.Background()))
 	originalPending, err := originalSender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
 	coreRequire(t, "read original prepared pending for recovery diagnosis", err)
 	selectedPending, err := sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
 	coreRequire(t, "read cold settled pending for recovery diagnosis", err)
 	coreAssert(t, originalPending != nil && selectedPending != nil,
 		"original/cold sender lost the shared Direct pending identity")
-	coreRequire(t, "synchronize original prepared sender after cold Direct settlement",
-		originalSender.SyncAccountManagementState(context.Background()))
 	coreAssertMapEqual(t, "original sender converged to confirmed Direct recovery closure",
 		coreLocalRGBBundleDigests(t, originalSender), coreRemoteStableRGB(t, sender, cfg))
 	coreAssert(t, chain.broadcastCount() == before+1,
 		"original-device synchronization rebroadcast the settled Direct transaction")
+	coreWaitPrivateBackup(t, originalSender)
+	coreWaitPrivateBackup(t, receiver)
 }

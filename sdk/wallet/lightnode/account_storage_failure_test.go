@@ -251,6 +251,55 @@ func TestIndexedDBTransactionBoundaries(t *testing.T) {
 	})
 }
 
+func TestIndexedDBReadViewPinsOneTransactionAcrossReadsAndPages(t *testing.T) {
+	database := storageReviewDB(t)
+	for key, value := range map[string]string{"snapshot/a": "old-a", "snapshot/b": "old-b"} {
+		if err := database.Write([]byte(key), []byte(value)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	storageReviewFault(t, `const proto=IDBDatabase.prototype;const original=proto.transaction;
+globalThis.snapshotReadTransactions=0;
+proto.transaction=function(...args){if(args[1]==='readonly')globalThis.snapshotReadTransactions++;return original.apply(this,args)};
+globalThis.restoreStorageFault=()=>{proto.transaction=original;delete globalThis.snapshotReadTransactions}`)
+	viewDB, ok := database.(interface {
+		NewReadView() (common.DBReadView, error)
+	})
+	if !ok {
+		t.Fatal("WASM IndexedDB has no pinned read view")
+	}
+	view, err := viewDB.NewReadView()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer view.Close()
+	if count := js.Global().Get("snapshotReadTransactions").Int(); count != 1 {
+		t.Fatalf("read view used %d IndexedDB transactions, want one", count)
+	}
+	for key, value := range map[string]string{"snapshot/a": "new-a", "snapshot/b": "new-b"} {
+		if err := database.Write([]byte(key), []byte(value)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for key, want := range map[string]string{"snapshot/a": "old-a", "snapshot/b": "old-b"} {
+		value, err := view.Read([]byte(key))
+		if err != nil || string(value) != want {
+			t.Fatalf("pinned read %s=%q, want %q: %v", key, value, want, err)
+		}
+	}
+	got := make(map[string]string)
+	if err := view.Scan(common.ScanOptions{Prefix: []byte("snapshot/"), CopyKey: true, CopyValue: true},
+		func(key, value []byte) error { got[string(key)] = string(value); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, map[string]string{"snapshot/a": "old-a", "snapshot/b": "old-b"}) {
+		t.Fatalf("pinned page mixed generations: %v", got)
+	}
+	if count := js.Global().Get("snapshotReadTransactions").Int(); count != 1 {
+		t.Fatalf("pinned reads opened another IndexedDB transaction: %d", count)
+	}
+}
+
 // This review regression checks that a prefix scan visits only matching
 // IndexedDB cursor rows as unrelated keys are added. It is intentionally
 // timing-independent and records only a row count.

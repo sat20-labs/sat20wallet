@@ -16,11 +16,18 @@ import (
 func TestSDKAccountGuardianIdentitySurvivesAccountRecovery(t *testing.T) {
 	network := newDKVSNoPluginTemplateFixtureWithArgs(t, map[string]int64{}, nil, nil, dkvsMinerArgs(t)).Network
 	waitForDKVSPeerReady(t, network)
-	g := prepareAccountReviewWithMnemonic(t, network, accountSyncMnemonic(t, 217), true)
+	runSDKAccountGuardianIdentitySurvivesAccountRecovery(t, network,
+		accountSyncMnemonic(t, 217), accountSyncMnemonic(t, 218))
+}
+
+func runSDKAccountGuardianIdentitySurvivesAccountRecovery(t *testing.T, network *realSatoshiNet,
+	guardianMnemonic, userMnemonic string) {
+	t.Helper()
+	g := prepareAccountReviewWithMnemonic(t, network, guardianMnemonic, true)
 	identity, err := g.manager.GetOrCreateAccountGuardianIdentity(accountReviewPassword)
 	require.NoError(t, err)
 	g.activate(t)
-	u := prepareAccountReviewWithMnemonic(t, network, accountSyncMnemonic(t, 218), true)
+	u := prepareAccountReviewWithMnemonic(t, network, userMnemonic, true)
 	publicKey, err := base64.RawURLEncoding.DecodeString(identity.PublicKey)
 	require.NoError(t, err)
 	backup, err := u.manager.ExportAccountBackupForPWA(accountReviewPassword, nil)
@@ -57,7 +64,7 @@ func TestSDKAccountGuardianIdentitySurvivesAccountRecovery(t *testing.T) {
 				backup, secret, err := account.RecoverAccount(loaded.Envelope, g.pkg.UserShare, knowledge)
 				require.NoError(t, err)
 				defer clearBytes(secret)
-				state, err := fresh.LoadAccountManagementStateForRecovery(g.location, loaded.Envelope.Locator, secret, backup.Wallets[0].Mnemonic)
+				state, err := fresh.LoadAccountManagementStateForRecovery(g.location, loaded.Envelope.Locator, secret, string(backup.Wallets[0].Secret))
 				require.NoError(t, err)
 				_, err = fresh.RestoreAccountManagementState(*state, secret, newPassword, loaded.Envelope.Locator, g.restoreOptions())
 				require.NoError(t, err)

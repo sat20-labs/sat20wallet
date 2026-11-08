@@ -2,6 +2,7 @@ export interface AgentRiskFlag {
   code: string
   label: string
   detail: string
+  detailValues?: Record<string, number>
   severity: 'info' | 'warning' | 'critical'
 }
 
@@ -77,12 +78,12 @@ export const assessAgentOperationRisk = (
       ))
     }
     if (amount >= threshold) {
-      flags.push(flag(
+      flags.push({ ...flag(
         'LARGE_TRANSFER',
         'Large transfer',
         `The requested amount ${amount} meets or exceeds the review threshold ${threshold}.`,
         'critical'
-      ))
+      ), detailValues: { amount, threshold } })
     }
     if (chain.includes('mainnet') || params.mainnet === true) {
       flags.push(flag(

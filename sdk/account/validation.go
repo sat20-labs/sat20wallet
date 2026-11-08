@@ -37,15 +37,32 @@ func normalizeSpace(value string) string {
 }
 
 func NormalizeBackup(value Backup) (Backup, error) {
-	if value.Version != Version || len(value.Wallets) == 0 {
+	if value.Version != BackupVersion || len(value.Wallets) == 0 {
 		return Backup{}, ErrInvalidBackup
 	}
-	out := Backup{Version: Version, Wallets: make([]WalletBackup, len(value.Wallets))}
+	out := Backup{Version: BackupVersion, Wallets: make([]WalletBackup, len(value.Wallets))}
 	walletNames := map[string]struct{}{}
 	for walletIndex, wallet := range value.Wallets {
 		name := normalizeSpace(wallet.Name)
-		mnemonic := normalizeSpace(wallet.Mnemonic)
-		if name == "" || !bip39.IsMnemonicValid(mnemonic) || wallet.AccountCount == 0 || int(wallet.AccountCount) != len(wallet.SubAccounts) {
+		secret := append([]byte(nil), wallet.Secret...)
+		switch wallet.Type {
+		case WalletMnemonic:
+			mnemonic := normalizeSpace(string(secret))
+			zero(secret)
+			if !bip39.IsMnemonicValid(mnemonic) {
+				return Backup{}, ErrInvalidBackup
+			}
+			secret = []byte(mnemonic)
+		case WalletPrivateKey:
+			if ValidatePrivateKey(secret) != nil || wallet.AccountCount != 1 || len(wallet.SubAccounts) != 1 || wallet.SubAccounts[0].Index != 0 || len(wallet.SPEnabled) != 0 {
+				zero(secret)
+				return Backup{}, ErrInvalidBackup
+			}
+		default:
+			zero(secret)
+			return Backup{}, ErrInvalidBackup
+		}
+		if name == "" || wallet.AccountCount == 0 || int(wallet.AccountCount) != len(wallet.SubAccounts) {
 			return Backup{}, ErrInvalidBackup
 		}
 		if _, ok := walletNames[name]; ok {
@@ -87,7 +104,7 @@ func NormalizeBackup(value Backup) (Backup, error) {
 				return Backup{}, fmt.Errorf("%w: invalid SP subaccount", ErrInvalidBackup)
 			}
 		}
-		out.Wallets[walletIndex] = WalletBackup{Name: name, Mnemonic: mnemonic, AccountCount: wallet.AccountCount, SubAccounts: subAccounts, SPEnabled: spEnabled}
+		out.Wallets[walletIndex] = WalletBackup{Name: name, Type: wallet.Type, Secret: secret, AccountCount: wallet.AccountCount, SubAccounts: subAccounts, SPEnabled: spEnabled}
 	}
 	return out, nil
 }
@@ -101,6 +118,12 @@ func RootBootstrapBackup(value Backup) (Backup, error) {
 		return Backup{}, err
 	}
 	root := normalized.Wallets[0]
+	if root.Type != WalletMnemonic {
+		return Backup{}, ErrInvalidBackup
+	}
+	for index := 1; index < len(normalized.Wallets); index++ {
+		zero(normalized.Wallets[index].Secret)
+	}
 	var rootAccount SubAccount
 	for _, subAccount := range root.SubAccounts {
 		if subAccount.Index == 0 {
@@ -117,7 +140,7 @@ func RootBootstrapBackup(value Backup) (Backup, error) {
 			break
 		}
 	}
-	return Backup{Version: Version, Wallets: []WalletBackup{root}}, nil
+	return Backup{Version: BackupVersion, Wallets: []WalletBackup{root}}, nil
 }
 
 func validateEncryptedBlob(value EncryptedBlob) error {
@@ -181,7 +204,7 @@ func SummarizeBackup(locator Locator, backup Backup) RecoverySummary {
 		for j, subAccount := range wallet.SubAccounts {
 			dids[j] = subAccount.DID
 		}
-		summary.Wallets[i] = WalletSummary{Name: wallet.Name, AccountCount: wallet.AccountCount, DIDs: dids}
+		summary.Wallets[i] = WalletSummary{Type: wallet.Type, Name: wallet.Name, AccountCount: wallet.AccountCount, DIDs: dids}
 	}
 	return summary
 }

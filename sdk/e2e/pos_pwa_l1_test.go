@@ -2,12 +2,14 @@ package e2e
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -825,7 +827,24 @@ func (f *posPWAL1Indexer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			posPWAL1Error(w, fmt.Errorf("empty transaction package"))
 			return
 		}
+		var diagHashes []string
+		if os.Getenv("SAT20_PWA_DIAGNOSTIC") == "debug" && path != "/btc/tx/test" {
+			for _, raw := range raws {
+				tx, parseErr := decodePOSPWAL1Tx(raw)
+				if parseErr != nil {
+					fmt.Println("RGB backend diagnostic: phase=decode-failed tx_known=false")
+					continue
+				}
+				digest := sha256.Sum256([]byte(tx.TxID()))
+				target := hex.EncodeToString(digest[:8])
+				diagHashes = append(diagHashes, target)
+				fmt.Printf("RGB backend diagnostic: tx=%s phase=entered\n", target)
+			}
+		}
 		results, err := f.submit(raws, path != "/btc/tx/test")
+		for _, target := range diagHashes {
+			fmt.Printf("RGB backend diagnostic: tx=%s phase=returned response_ok=%t\n", target, err == nil)
+		}
 		if err != nil {
 			posPWAL1Error(w, err)
 			return

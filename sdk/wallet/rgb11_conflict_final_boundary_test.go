@@ -81,11 +81,11 @@ func TestRGB11ConflictCandidateInterruptedBeforeDirtyReload(t *testing.T) {
 	f := newRGB11ConflictFixture(t, false)
 	// Confirm the genuine current account closure before reproducing the exact
 	// prefix of public refresh ending after apply and before dirty persistence.
-	if err := f.sender.syncRGB11RecoveryBarrier(context.Background()); err != nil {
+	if err := f.sender.SyncAccountManagementState(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	f.publish(t, true)
-	current := f.snapshot(t)
+	current := localConflictSnap(t, f)
 	candidate, _, err := f.sender.rgbManager.buildRGB11RefreshCandidate(context.Background(), current, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -116,7 +116,7 @@ func TestRGB11ConflictCandidateInterruptedBeforeDirtyReload(t *testing.T) {
 	if f.journal(t).State.Status != "conflicted" {
 		t.Fatal("local committed journal lost on runtime reload")
 	}
-	if err = f.sender.syncRGB11RecoveryBarrier(context.Background()); err != nil {
+	if err = f.sender.SyncAccountManagementState(context.Background()); err != nil {
 		t.Fatalf("existing restart barrier cannot reconcile local closure: %v", err)
 	}
 	if err = f.sender.verifyCurrentRGB11RecoveryClosure(); err != nil {

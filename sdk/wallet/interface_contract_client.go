@@ -148,6 +148,11 @@ func (p *Manager) DeployContract_Remote(templateName, contractContent string,
 	if err != nil {
 		return "", 0, "", err
 	}
+	if templateName == TEMPLATE_CONTRACT_TRANSCEND {
+		if err := p.requireRGB11PublicRegistration(contract.GetAssetName()); err != nil {
+			return "", 0, "", err
+		}
+	}
 	buf, err := contract.Encode()
 	if err != nil {
 		return "", 0, "", err

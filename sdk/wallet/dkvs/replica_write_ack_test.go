@@ -82,6 +82,9 @@ func TestApplyWriteResultAndAckDoesNotMaterializeOrAdvancePrefixToken(t *testing
 	if err := store.ApplyWriteResultAndAck(entry, &valid); err != nil {
 		t.Fatal(err)
 	}
+	if entry.State != DKVSOutboxAcknowledged {
+		t.Fatal("verified ACK must remain durable until installation")
+	}
 	updated, err := store.LoadSubscriptionState(namespace)
 	if err != nil {
 		t.Fatal(err)
@@ -96,7 +99,7 @@ func TestApplyWriteResultAndAckDoesNotMaterializeOrAdvancePrefixToken(t *testing
 		t.Fatalf("ACK materialized local key state: %v", err)
 	}
 	pending, err = store.HasPendingOutbox(namespace)
-	if err != nil || pending {
+	if err != nil || !pending {
 		t.Fatalf("outbox pending=%v err=%v", pending, err)
 	}
 
@@ -133,7 +136,7 @@ func TestApplyWriteResultAndAckDoesNotMaterializeOrAdvancePrefixToken(t *testing
 		t.Fatalf("update ACK materialized state: %v", err)
 	}
 	pending, err = store.HasPendingOutbox(namespace)
-	if err != nil || pending {
+	if err != nil || !pending {
 		t.Fatalf("update ACK failed to complete outbox: pending=%v err=%v", pending, err)
 	}
 }
@@ -181,7 +184,7 @@ func TestApplyWriteResultAndAckUnmanagedWriteDoesNotRequireReplica(t *testing.T)
 		t.Fatalf("unmanaged ACK created record: %v", err)
 	}
 	pending, err := store.HasPendingOutbox(namespace)
-	if err != nil || pending {
+	if err != nil || !pending {
 		t.Fatalf("unmanaged outbox pending=%v err=%v", pending, err)
 	}
 }

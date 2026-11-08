@@ -6,11 +6,14 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/sat20-labs/sat20wallet/sdk/account"
 	dkvs "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -65,6 +68,8 @@ func TestDKVSReviewKnownEndpointSwitchCannotReadPreviousReplica(t *testing.T) {
 	assert.False(t, builderCalled, "a write builder must not receive another source's local state")
 	after, err := manager.GetDKVSSubscriptionStatus()
 	require.NoError(t, err)
+	assert.Equal(t, DKVSSubscriptionSyncing, after.Status, "the selected source has no session write qualification")
+	after.Status = before.Status
 	assert.Equal(t, before, after, "rejecting a different source must preserve the original replica")
 	releaseDKVSManagerRuntime(manager.dkvs)
 	manager.dkvs = nil
@@ -154,7 +159,7 @@ func TestDKVSReviewConfirmedReplicaReadBoundaries(t *testing.T) {
 				return nil, &net.DNSError{Err: "offline", IsTimeout: true}
 			}
 			store := &dkvsStore{manager: manager.dkvs, client: client}
-			assert.True(t, store.IsReady(key))
+			assert.Equal(t, scenario == "known-height-wins", store.IsReady(key), "a new runtime or selected URL must first establish its session")
 			read, readErr := client.GetRecord(key)
 			values, verifiedErr := store.List(prefix)
 			listed, total, listErr := client.ListRecords(prefix, 0, 0)
@@ -180,10 +185,23 @@ func TestDKVSReviewConfirmedReplicaReadBoundaries(t *testing.T) {
 			} else {
 				assert.Equal(t, before.ViewHeight, height)
 			}
-			assert.Zero(t, requests, "confirmed local reads must not require transport")
+			if scenario == "known-height-wins" {
+				assert.Zero(t, requests, "the continuing session reads its confirmed local replica")
+			} else {
+				assert.Equal(t, 1, requests, "startup must attempt synchronization before falling back to confirmed cache")
+				cached, cacheErr := client.GetRecord(key)
+				assert.NoError(t, cacheErr)
+				assert.Equal(t, dkvs.RecordHash(record), dkvs.RecordHash(cached))
+				assert.Equal(t, 1, requests, "subsequent offline cache reads must not repeatedly require transport")
+				assert.Error(t, manager.dkvs.requireOnlinePaths(client, []string{key}), "offline cached reads must not grant writes")
+			}
 			after, err := manager.GetDKVSSubscriptionStatus()
 			require.NoError(t, err)
-			assert.Equal(t, before, after)
+			if scenario != "known-height-wins" {
+				assert.Equal(t, DKVSSubscriptionOfflineReady, after.Status)
+				after.Status = before.Status
+			}
+			assert.Equal(t, before, after, "offline fallback preserves the confirmed source, generations, and verification height")
 		})
 	}
 }
@@ -212,19 +230,43 @@ func TestDKVSReviewRememberedPrefixCannotUsePreviousReadinessOrHeight(t *testing
 	assert.False(t, known, "an incomplete replica cannot restore verification authority")
 }
 
+func accountDKVSReviewKeys(t *testing.T, manager *Manager) ([]string, []string) {
+	t.Helper()
+	localKeys := accountLocalRecordKeys(t, manager)
+	require.Contains(t, localKeys, accountWalletModuleKey(t, manager))
+	indexKey, err := account.ManagedIndexKey(manager.accountProfile.AccountID)
+	require.NoError(t, err)
+	require.Contains(t, localKeys, indexKey)
+	manager.mutex.RLock()
+	controls, err := manager.accountControlKeysLocked()
+	manager.mutex.RUnlock()
+	require.NoError(t, err)
+	all := make(map[string]bool, len(localKeys)+len(controls))
+	for _, key := range localKeys {
+		all[key] = true
+	}
+	for key := range controls {
+		all[key] = true
+	}
+	keys := make([]string, 0, len(all))
+	for key := range all {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return localKeys, keys
+}
+
 func TestDKVSReviewAccountReadinessCheckUsesOnlyConfirmedReplica(t *testing.T) {
+	oldChain := _chain
+	_chain = "testnet"
+	t.Cleanup(func() { _chain = oldChain })
 	manager, _, secret := buildRootWrapperSource(t)
 	defer zeroBytes(secret)
 	remote := newRGB11MemoryDKVSHTTP()
 	http := &reviewAcceptanceHTTP{rgb11MemoryDKVSHTTP: remote}
 	configureRGB11DKVSTestManager(manager, http)
-	root, err := manager.accountManagementRootWallet()
-	require.NoError(t, err)
-	stateKey, err := manager.accountManagedStateKey(root)
-	require.NoError(t, err)
-	dataKey, err := manager.accountManagedDataBlobKey(root)
-	require.NoError(t, err)
-	for _, key := range []string{stateKey, dataKey} {
+	_, keys := accountDKVSReviewKeys(t, manager)
+	for _, key := range keys {
 		prefix, err := dkvs.CollectionPathForKey(key)
 		require.NoError(t, err)
 		require.NoError(t, manager.SubscribeDKVSPrefix(prefix))
@@ -239,46 +281,72 @@ func TestDKVSReviewAccountReadinessCheckUsesOnlyConfirmedReplica(t *testing.T) {
 }
 
 func TestDKVSReviewAccountReadyCancellationPreservesReceivingWorker(t *testing.T) {
-	manager, source, secret := buildRootWrapperSource(t)
-	defer zeroBytes(secret)
+	oldChain := _chain
+	_chain = "testnet"
+	t.Cleanup(func() { _chain = oldChain })
 	remote := newRGB11MemoryDKVSHTTP()
 	http := &reviewAcceptanceHTTP{rgb11MemoryDKVSHTTP: remote}
+	service := newRGB11MessageNodeClient(remote)
+	manager := newAccountManagementAutoTestManager(t)
+	manager.serverNode = NewNode(service, "message.test", SERVER_NODE,
+		service.CoreNodePubKey(), service.CoreNodePubKey())
 	configureRGB11DKVSTestManager(manager, http)
-	root, err := manager.accountManagementRootWallet()
+	_, err := manager.ImportWallet(accountRootWrapperTestMnemonic, "password")
 	require.NoError(t, err)
-	for key, value := range source.records {
-		record, err := newDKVSAccountSignedRecordWithFreeLocal(root, key, value.Value,
-			dkvs.RecordOptions{Seq: value.Seq, IssueHeight: 1, TTL: 144})
-		require.NoError(t, err)
-		_, err = finalDKVSSeedClient(manager, remote).PutRecord(record)
-		require.NoError(t, err)
-		prefix, err := dkvs.CollectionPathForKey(key)
-		require.NoError(t, err)
-		require.NoError(t, manager.SubscribeDKVSPrefix(prefix))
-	}
+	require.NoError(t, manager.InitializeAccountManagement("password"))
+	require.NoError(t, manager.refreshDKVSRegistrations())
+	_, err = manager.syncDKVSOnce()
+	require.NoError(t, err)
+	pkg, auth, secret := rereviewRecoveryPackage(t, manager)
+	defer zeroBytes(secret)
+	require.NoError(t, manager.ActivateAccountManagement(secret, "password", *auth,
+		pkg.Envelope.Locator, ""))
+	require.NoError(t, manager.SyncAccountManagementState(context.Background()))
+	require.True(t, manager.GetAccountManagementStatus().DKVSWriteAllowed,
+		"the original endpoint must establish a verified account baseline before worker restart")
+	endpointBefore, err := manager.GetDKVSSubscriptionStatus()
+	require.NoError(t, err)
+	require.NotEmpty(t, endpointBefore.EndpointID)
 	started, release := make(chan struct{}), make(chan struct{})
 	var blockOnce, releaseOnce sync.Once
+	var hold atomic.Bool
+	var requestCanceled atomic.Bool
 	releaseTransport := func() { releaseOnce.Do(func() { close(release) }) }
 	defer releaseTransport()
 	http.post = func(ctx context.Context, path string, body []byte) ([]byte, error) {
-		if path == "/v3/dkvs/active/sync" {
+		if path == "/v3/dkvs/active/sync" && hold.Load() {
 			blockOnce.Do(func() {
 				close(started)
 				select {
 				case <-release:
 				case <-ctx.Done():
+					requestCanceled.Store(true)
 				}
 			})
 		}
 		return remote.SendDKVSPostContext(ctx, path, body)
 	}
+	// Keep the same endpoint from initial discovery through the receiving
+	// worker. Requalification after Start must come from that real worker.
+	t.Cleanup(manager.StopDKVSSync)
 	require.NoError(t, manager.StartDKVSSync())
-	defer manager.StopDKVSSync()
+	require.NoError(t, manager.RetryDKVSSync())
+	require.Eventually(t, func() bool {
+		return manager.GetAccountManagementStatus().DKVSWriteAllowed
+	}, 5*time.Second, 10*time.Millisecond, "the original endpoint must restore real write qualification")
+	qualifiedEndpoint, err := manager.GetDKVSSubscriptionStatus()
+	require.NoError(t, err)
+	require.Equal(t, endpointBefore.EndpointID, qualifiedEndpoint.EndpointID,
+		"worker requalification must use the same endpoint that established the original baseline")
+	hold.Store(true)
+	require.NoError(t, manager.RetryDKVSSync())
 	select {
 	case <-started:
 	case <-time.After(2 * time.Second):
 		t.Fatal("the existing receiving worker did not start")
 	}
+	require.NoError(t, manager.UpdateWalletName(manager.GetCurrentWalletId(), "pending backup"),
+		"a verified endpoint can accept a local edit while its shared receive worker is in flight")
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	start := time.Now()
@@ -289,10 +357,28 @@ func TestDKVSReviewAccountReadyCancellationPreservesReceivingWorker(t *testing.T
 	busy := manager.dkvs.runActive
 	manager.dkvs.runMu.Unlock()
 	assert.True(t, busy, "the worker's blocked transport remains owned by that worker")
+	assert.False(t, requestCanceled.Load(), "canceling the readiness waiter must not cancel the shared request")
 	releaseTransport()
 	ctx, cancel = context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	require.NoError(t, manager.WaitAccountManagedDataReady(ctx), "the original worker must complete reception after the cancelled waiter leaves")
+	status := manager.GetAccountManagementStatus()
+	assert.True(t, status.DKVSWriteAllowed)
+	assert.False(t, status.ManagedDataDirty)
+	assert.Zero(t, status.PendingChanges)
+	store, err := manager.accountDKVSStore()
+	require.NoError(t, err)
+	module, err := store.GetAuthoritative(accountWalletModuleKey(t, manager))
+	require.NoError(t, err)
+	require.NotNil(t, module)
+	manager.mutex.RLock()
+	secretCopy := append([]byte(nil), manager.accountSecret...)
+	manager.mutex.RUnlock()
+	defer zeroBytes(secretCopy)
+	state, err := account.OpenManagedState(secretCopy, status.AccountID, module.Value)
+	require.NoError(t, err)
+	require.Equal(t, "pending backup", state.Wallets[0].Name,
+		"the original receiving worker must publish the pending local edit after the waiter cancels")
 }
 
 func TestDKVSReviewAnotherExistingRootCannotBeReportedAsAbsent(t *testing.T) {
@@ -303,6 +389,8 @@ func TestDKVSReviewAnotherExistingRootCannotBeReportedAsAbsent(t *testing.T) {
 	defer zeroBytes(secret)
 	require.NoError(t, source.syncAccountRootWrapper(sourceValues))
 	sourceRoot, err := source.accountManagementRootWallet()
+	require.NoError(t, err)
+	wrapperKey, err := accountRootWrapperKey(sourceRoot)
 	require.NoError(t, err)
 	remote := newRGB11MemoryDKVSHTTP()
 	for key, value := range sourceValues.records {
@@ -319,40 +407,66 @@ func TestDKVSReviewAnotherExistingRootCannotBeReportedAsAbsent(t *testing.T) {
 	require.NoError(t, target.InitializeAccountManagement("password"))
 	client, err := target.GetDKVSClient()
 	require.NoError(t, err)
-	key := accountTestKey(t, target, "sixth-discovery/current")
-	_, err = finalDKVSSeedClient(target, remote).PutRecord(freeLocalRecord(t, target, key, 1, "confirmed"))
+	sourceStatus := source.GetAccountManagementStatus()
+	packageKey, err := dkvs.AccountPersonalKey(sourceStatus.AccountID, accountPackagePath(sourceStatus.PackageID))
 	require.NoError(t, err)
-	prefix, err := dkvs.CollectionPathForKey(key)
+	accountPrefixes := make([]string, 0, 2)
+	for _, key := range []string{wrapperKey, packageKey} {
+		prefix, prefixErr := dkvs.CollectionPathForKey(key)
+		require.NoError(t, prefixErr)
+		alreadyAdded := false
+		for _, current := range accountPrefixes {
+			if current == prefix {
+				alreadyAdded = true
+				break
+			}
+		}
+		if !alreadyAdded {
+			accountPrefixes = append(accountPrefixes, prefix)
+			require.NoError(t, target.SubscribeDKVSPrefix(prefix))
+		}
+	}
+	require.NoError(t, target.dkvs.forceCurrentPrefixes(client, accountPrefixes))
+	remoteStore, err := target.accountDKVSStore()
 	require.NoError(t, err)
-	require.NoError(t, target.SubscribeDKVSPrefix(prefix))
-	require.NoError(t, target.dkvs.forceCurrentPrefixes(client, []string{prefix}))
+	observedWrapper, err := remoteStore.Get(wrapperKey)
+	require.NoError(t, err)
+	require.NotNil(t, observedWrapper, "the foreign root wrapper must be present in this synchronized non-empty DB")
+	observedPackage, err := remoteStore.Get(packageKey)
+	require.NoError(t, err)
+	require.NotNil(t, observedPackage, "the recovery package must be readable before testing the root-identity guard")
 	before := target.GetWalletCatalog()
+	require.NotEmpty(t, before, "the target database must contain its own wallet before root recovery")
 	identity := target.GetAccountManagementStatus().AccountID
-	require.NotEqual(t, identity, source.GetAccountManagementStatus().AccountID)
-	wrapperKey, err := accountRootWrapperKey(sourceRoot)
+	require.NotEqual(t, identity, sourceStatus.AccountID)
+	profileBefore, err := target.db.Read(accountManagementProfileKey())
 	require.NoError(t, err)
 	_, err = NewSatsNetDKVSClient("http", "dkvs.test", "testnet", remote).GetRecordDirect(wrapperKey)
 	require.NoError(t, err, "control: the other root exists at the same source")
 	_, err = target.RecoverAccountManagementFromRootMnemonic(context.Background(), accountRootWrapperTestMnemonic, "password")
-	assert.ErrorIs(t, err, ErrRootAccountWrapperInvalid, "reject replacing the active account after confirming the other root, rather than claiming it is absent")
+	require.ErrorContains(t, err, "account restore requires an empty wallet database",
+		"the request must reach the non-empty-database guard for the different root")
 	assert.NotErrorIs(t, err, ErrRootAccountNotFound)
 	assert.Equal(t, identity, target.GetAccountManagementStatus().AccountID)
 	assert.Equal(t, before, target.GetWalletCatalog())
+	profileAfter, readErr := target.db.Read(accountManagementProfileKey())
+	assert.NoError(t, readErr)
+	assert.Equal(t, profileBefore, profileAfter, "rejected root selection must not change the persisted active account")
 }
 
 func TestDKVSReviewAccountReadyWaitCancelsDuringInitialSync(t *testing.T) {
+	oldChain := _chain
+	_chain = "testnet"
+	t.Cleanup(func() { _chain = oldChain })
 	manager, _, secret := buildRootWrapperSource(t)
 	defer zeroBytes(secret)
 	require.False(t, manager.accountProfile.ManagedDataDirty)
-	require.NotZero(t, manager.accountProfile.StateSeq)
-	require.NotZero(t, manager.accountProfile.ManagedDataRevision)
-	root, err := manager.accountManagementRootWallet()
-	require.NoError(t, err)
-	stateKey, err := manager.accountManagedStateKey(root)
-	require.NoError(t, err)
-	dataKey, err := manager.accountManagedDataBlobKey(root)
-	require.NoError(t, err)
-	for _, key := range []string{stateKey, dataKey} {
+	localKeys, _ := accountDKVSReviewKeys(t, manager)
+	for _, key := range localKeys {
+		value, keyErr := manager.accountLocalForKey(manager.accountProfile.AccountID, key)
+		require.NoError(t, keyErr)
+		require.NotNil(t, value)
+		require.NotNil(t, value.Baseline, "the cancellation fixture starts from a confirmed per-key record")
 		prefix, err := dkvs.CollectionPathForKey(key)
 		require.NoError(t, err)
 		require.NoError(t, manager.SubscribeDKVSPrefix(prefix))
@@ -416,7 +530,10 @@ func TestDKVSReviewAccountReadyWaitCancelsDuringInitialSync(t *testing.T) {
 	}
 }
 
-func TestDKVSReviewAccountReadyDefaultDeadlineSurvivesWalletUnavailable(t *testing.T) {
+func TestDKVSReadyNeedsWallet(t *testing.T) {
+	oldChain := _chain
+	_chain = "testnet"
+	t.Cleanup(func() { _chain = oldChain })
 	manager, _, secret := buildRootWrapperSource(t)
 	defer zeroBytes(secret)
 	// Startup may have the durable account profile before its root wallet is
@@ -428,22 +545,12 @@ func TestDKVSReviewAccountReadyDefaultDeadlineSurvivesWalletUnavailable(t *testi
 	manager.wallet = nil
 	manager.mutex.Unlock()
 	require.ErrorIs(t, manager.requireCurrentAccountManagedData(), ErrAccountManagementWalletUnavailable)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	done := make(chan error, 1)
-	go func() { done <- manager.WaitAccountManagedDataReady(ctx) }()
-	select {
-	case err := <-done:
-		assert.ErrorIs(t, err, context.DeadlineExceeded, "the existing default timeout must bound the whole wait")
-	case <-time.After(accountManagedDataReadyTimeout + time.Second):
-		cancel()
-		select {
-		case err := <-done:
-			t.Errorf("the wait outlived its %s default deadline and only caller cancellation released it: %v", accountManagedDataReadyTimeout, err)
-		case <-time.After(2 * time.Second):
-			t.Fatal("the default-deadline wait did not respond to cleanup cancellation")
-		}
-	}
+	started := time.Now()
+	err := manager.WaitAccountManagedDataReady(context.Background())
+	assert.ErrorIs(t, err, ErrAccountManagementWalletUnavailable,
+		"a locked wallet is a fail-fast preparation condition, not a waitable network state")
+	assert.Less(t, time.Since(started), 500*time.Millisecond,
+		"wallet unavailability should be reported without consuming the default network wait deadline")
 }
 
 func TestDKVSReviewConfirmedOfflineReplicaReadableAfterManagerRestart(t *testing.T) {

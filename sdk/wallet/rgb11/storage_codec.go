@@ -14,7 +14,7 @@ import (
 
 const (
 	rgb11StoreMagic        = "R11R"
-	rgb11StoreCodecVersion = uint8(2)
+	rgb11StoreCodecVersion = uint8(1)
 	rgb11StoreMaxText      = 64 * 1024
 	rgb11StoreMaxBytes     = 4 * 1024 * 1024
 	rgb11StoreMaxRecords   = 16 * 1024

@@ -23,9 +23,14 @@ import (
 func TestSDKDKVSModuleLocal(t *testing.T) {
 	f := newDKVSNoPluginTemplateFixtureWithArgs(t, map[string]int64{}, nil, nil, dkvsMinerArgs(t))
 	waitForDKVSPeerReady(t, f.Network)
-	bindDKVSReviewWallet(t, f.Network.Core, dkvsClientMnemonic)
+	runSDKDKVSModuleLocal(t, f, dkvsClientMnemonic, minerMnemonic)
+}
+
+func runSDKDKVSModuleLocal(t *testing.T, f *templateFixture, mnemonic, quotaMnemonic string) {
+	t.Helper()
+	bindDKVSReviewWallet(t, f.Network.Core, mnemonic)
 	client := dkvsClientForNode(t, f.Network.Core)
-	owner := newDKVSKeyPathActor(t, keyFromMnemonic(t, dkvsClientMnemonic, 0))
+	owner := newDKVSKeyPathActor(t, keyFromMnemonic(t, mnemonic, 0))
 	ownerWriter := client.WithWriteSigner(owner.Wallet)
 	other := newDKVSKeyPathActor(t, keyFromMnemonic(t, bootstrapMnemonic, 2))
 	key := func(t *testing.T, path string) string {
@@ -35,6 +40,7 @@ func TestSDKDKVSModuleLocal(t *testing.T) {
 		return k
 	}
 	heartbeatPrevious := f.gasAnchor
+	heartbeatValueBefore := f.gasAnchor.TxOut[0].Value
 	advanceHeightTo := func(t *testing.T, target uint64) {
 		t.Helper()
 		const heartbeatFee = int64(10000)
@@ -282,8 +288,8 @@ func TestSDKDKVSModuleLocal(t *testing.T) {
 	})
 
 	t.Run("QuotaFailureIsAtomic", func(t *testing.T) {
-		bindDKVSReviewWallet(t, f.Network.Core, minerMnemonic)
-		quotaOwner := newDKVSKeyPathActor(t, keyFromMnemonic(t, minerMnemonic, 0))
+		bindDKVSReviewWallet(t, f.Network.Core, quotaMnemonic)
+		quotaOwner := newDKVSKeyPathActor(t, keyFromMnemonic(t, quotaMnemonic, 0))
 		quotaWriter := client.WithWriteSigner(quotaOwner.Wallet)
 		config, err := client.GetDKVSClientConfig()
 		require.NoError(t, err)
@@ -432,6 +438,9 @@ func TestSDKDKVSModuleLocal(t *testing.T) {
 		require.Equal(t, uint64(1), recreated.Seq)
 		sdkDKVSReviewUnchanged(t, fresh, recreated)
 	})
+	t.Logf("dkvs-module-local-utxo: namespace=ModuleLocal outpoint=%s:0->%s:0 satoshi_value=%d->%d delta=%d",
+		f.gasAnchor.TxHash().String(), heartbeatPrevious.TxHash().String(), heartbeatValueBefore,
+		heartbeatPrevious.TxOut[0].Value, heartbeatPrevious.TxOut[0].Value-heartbeatValueBefore)
 }
 
 func sdkDKVSReviewHeight(t *testing.T, client *wallet.SatsNetDKVSClient) uint64 {

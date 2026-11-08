@@ -18,7 +18,7 @@ if (applyToken !== 'APPLY-LOCAL-TESTNET-ACCOUNT-148CBE-SEQ2') {
 chmodSync(patchPath, 0o600)
 const patch = JSON.parse(readFileSync(patchPath, 'utf8'))
 if (patch.origin !== origin || typeof patch.key !== 'string' ||
-    !patch.key.endsWith('account-management-profile-v2') ||
+    !patch.key.endsWith('account-management-profile-v1') ||
     typeof patch.expected_sha256 !== 'string' || typeof patch.value !== 'string' ||
     typeof patch.remote_state_hash !== 'string' || typeof patch.remote_blob_hash !== 'string') {
   throw new Error('invalid account repair patch')

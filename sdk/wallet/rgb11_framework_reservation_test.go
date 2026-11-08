@@ -502,3 +502,8 @@ func TestRGB11ExpiredUsedInvoiceMissingReservationFailsClosed(t *testing.T) {
 		t.Fatalf("expired used receive without reservation was accepted: %v", err)
 	}
 }
+
+// Preserve the real atomic backend while retaining this fixture's fault hook.
+func (d *rgb11FailReceiveKeyDB) NewAtomicWriteBatch() indexer.WriteBatch {
+	return &rgb11FailReceiveKeyBatch{WriteBatch: d.KVDB.(indexer.AtomicWriteBatchDB).NewAtomicWriteBatch(), owner: d}
+}

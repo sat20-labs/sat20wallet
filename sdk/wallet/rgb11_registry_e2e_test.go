@@ -36,6 +36,8 @@ func newRGB11RegistryE2ESource(t *testing.T) (*satoshinetDKVSTestTransport, rgb1
 	transport.indexer.SetSystemVerifier(dkvsindexer.StaticSystemVerifier{Keys: [][]byte{core.GetPubKey().SerializeCompressed()}})
 	makeRecord := func(provider, ticker, kind string, ordinal uint64, seed int) *swire.DKVSRecord {
 		t.Helper()
+		_ = provider // technical registration does not bind a DID
+		_ = ordinal  // ticker ordinal belongs to a separate naming registry
 		schema := schemas.NIA
 		if kind == indexer.ASSET_TYPE_NFT {
 			schema = schemas.UDA
@@ -50,9 +52,7 @@ func newRGB11RegistryE2ESource(t *testing.T) (*satoshinetDKVSTestTransport, rgb1
 		require.NoError(t, err)
 		path, err := rgb11wallet.RGB11RegistryKey(hex.EncodeToString(id[:]))
 		require.NoError(t, err)
-		base, err := rgb11wallet.NormalizeRGB11Ticker(ticker)
-		require.NoError(t, err)
-		value, err := rgb11wallet.EncodeRGB11RegistryValue(rgb11wallet.RGB11ContractValue{ProviderDID: provider, Ticker: base, Ordinal: ordinal, ContractContent: raw})
+		value, err := rgb11wallet.EncodeRGB11RegistryValue(rgb11wallet.RGB11ContractValue{ContractContent: raw})
 		require.NoError(t, err)
 		record, err := NewDKVSSignedRecord(core, path, value, dkvsindexer.RecordOptions{Seq: 1, IssueHeight: 100})
 		require.NoError(t, err)
@@ -69,8 +69,8 @@ type rgb11RegistryE2EClient struct {
 	verifier dkvsindexer.SystemVerifier
 }
 
-func (c *rgb11RegistryE2EClient) GetRGB11Registration(provider, ticker, id string) (*rgb11wallet.RGB11Registration, error) {
-	return c.GetRGB11RegistrationWithVerifier(provider, ticker, id, c.verifier)
+func (c *rgb11RegistryE2EClient) GetRGB11Registration(id string) (*rgb11wallet.RGB11Registration, error) {
+	return c.GetRGB11RegistrationWithVerifier(id, c.verifier)
 }
 
 // Serve the current single-record application HTTP API with a genuine signed
@@ -110,7 +110,7 @@ func newRGB11RegistryE2EHTTPClient(t *testing.T, transport *satoshinetDKVSTestTr
 
 func TestRGB11RegistrySDKDKVSE2E(t *testing.T) {
 	t.Run("HTTPRoundTripAndSnapshotRecovery", rgb11RegistryHTTPRoundTripE2E)
-	t.Run("SDKAssetTypeCompatibility", rgb11RegistrySDKAssetTypesE2E)
+	t.Run("SDKAssetTypes", rgb11RegistrySDKAssetTypesE2E)
 	t.Run("RejectUntrustedHTTPResponses", rgb11RegistryHTTPValidationE2E)
 	t.Run("AuthorityPolicyFailsClosed", rgb11RegistryAuthorityPolicyE2E)
 }
@@ -118,9 +118,12 @@ func TestRGB11RegistrySDKDKVSE2E(t *testing.T) {
 func rgb11RegistryHTTPRoundTripE2E(t *testing.T) {
 	source, makeRecord := newRGB11RegistryE2ESource(t)
 	client, reads := newRGB11RegistryE2EHTTPClient(t, source, nil)
+	// The public contract path is never an account-managed subscription. A
+	// coordinated client must still read it directly and verify the signature.
+	client.SatsNetDKVSClient.manager = &dkvsManager{}
 	records := make([]*swire.DKVSRecord, 0, 12)
-	for ordinal := uint64(1); ordinal <= 12; ordinal++ {
-		record := makeRecord("alice", "USD", "f", ordinal, int(400+ordinal))
+	for n := 1; n <= 12; n++ {
+		record := makeRecord("", "USD", "f", 0, 400+n)
 		changed, err := source.indexer.PutInternalContract(record)
 		require.NoError(t, err)
 		require.True(t, changed)
@@ -129,18 +132,17 @@ func rgb11RegistryHTTPRoundTripE2E(t *testing.T) {
 	changed, err := source.indexer.PutInternalContract(records[11])
 	require.NoError(t, err)
 	require.False(t, changed)
-	for ordinal, record := range records {
-		got, err := client.GetRGB11Registration("alice", " USD ", rgb11RegistryRecordID(record))
+	for _, record := range records {
+		id := rgb11RegistryRecordID(record)
+		got, err := client.GetRGB11Registration(id)
 		require.NoError(t, err)
-		expected, err := rgb11wallet.BuildRegisteredAssetName("USD", "f", "alice", uint64(ordinal+1))
-		require.NoError(t, err)
-		require.Equal(t, expected.String(), got.AssetName)
-		byName, err := rgb11wallet.LookupRGB11AssetName(records[:ordinal+1], got.AssetName, client.verifier)
-		require.NoError(t, err)
-		require.Equal(t, got, byName)
+		require.Equal(t, id, got.ContractID)
+		require.Equal(t, "usd", got.BaseTicker)
+		require.Equal(t, "f", got.AssetType)
+		require.NotEmpty(t, got.SchemaID)
 	}
-	_, err = client.GetRGB11Registration("alice", "USD", strings.Repeat("f", 64))
-	require.Error(t, err)
+	_, err = client.GetRGB11Registration(strings.Repeat("f", 64))
+	require.ErrorIs(t, err, dkvsindexer.ErrRecordNotFound)
 	require.EqualValues(t, 13, reads.Load())
 	snapshot, err := source.indexer.GetPathSnapshot(rgb11wallet.RGB11RegistryPath)
 	require.NoError(t, err)
@@ -149,10 +151,10 @@ func rgb11RegistryHTTPRoundTripE2E(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 12, applied)
 	recovered, _ := newRGB11RegistryE2EHTTPClient(t, target, nil)
-	got, err := recovered.GetRGB11Registration("alice", "USD", rgb11RegistryRecordID(records[11]))
+	got, err := recovered.GetRGB11Registration(rgb11RegistryRecordID(records[11]))
 	require.NoError(t, err)
-	require.Equal(t, "rgb11:f:usd_12@alice", got.AssetName)
-	next := makeRecord("alice", "USD", "o", 13, 413)
+	require.Equal(t, rgb11RegistryRecordID(records[11]), got.ContractID)
+	next := makeRecord("", "USD", "f", 0, 413)
 	_, err = source.indexer.PutInternalContract(next)
 	require.NoError(t, err)
 	appended, err := source.indexer.GetPathSnapshot(rgb11wallet.RGB11RegistryPath)
@@ -165,33 +167,32 @@ func rgb11RegistryHTTPRoundTripE2E(t *testing.T) {
 	require.NoError(t, err)
 	_, err = target.indexer.ApplyPathSnapshotFrom(snapshot, baseline)
 	require.ErrorIs(t, err, dkvsindexer.ErrWriteConflict)
-	got, err = recovered.GetRGB11Registration("alice", "USD", rgb11RegistryRecordID(next))
+	got, err = recovered.GetRGB11Registration(rgb11RegistryRecordID(next))
 	require.NoError(t, err)
-	require.Equal(t, "rgb11:o:usd_13@alice", got.AssetName)
+	require.Equal(t, rgb11RegistryRecordID(next), got.ContractID)
 }
 
 func rgb11RegistrySDKAssetTypesE2E(t *testing.T) {
 	source, makeRecord := newRGB11RegistryE2ESource(t)
 	client, _ := newRGB11RegistryE2EHTTPClient(t, source, nil)
 	for i, kind := range []string{indexer.ASSET_TYPE_FT, indexer.ASSET_TYPE_NFT} {
-		record := makeRecord("alice", "USD", kind, uint64(i+1), 800+i)
+		record := makeRecord("", "USD", kind, 0, 800+i)
 		_, err := source.indexer.PutInternalContract(record)
 		require.NoError(t, err)
-		got, err := client.GetRGB11Registration("alice", "USD", rgb11RegistryRecordID(record))
+		got, err := client.GetRGB11Registration(rgb11RegistryRecordID(record))
 		require.NoError(t, err)
 		require.Equal(t, kind, got.AssetType)
-		require.EqualValues(t, i+1, got.Ordinal)
 	}
 }
 
 func rgb11RegistryHTTPValidationE2E(t *testing.T) {
 	source, makeRecord := newRGB11RegistryE2ESource(t)
-	original := makeRecord("alice", "USD", "f", 1, 901)
+	original := makeRecord("", "USD", "f", 0, 901)
 	_, err := source.indexer.PutInternalContract(original)
 	require.NoError(t, err)
 	core := NewInternalWalletWithMnemonic(rgb11RegistryTestMnemonic, "", &chaincfg.TestNet4Params)
 	attacker := NewInternalWalletWithMnemonic("comfort very add tuition senior run eight snap burst appear exile dutch", "", &chaincfg.TestNet4Params)
-	for _, attack := range []string{"unsigned", "untrusted_signer", "tampered_value", "truncated", "wrong_provider", "wrong_contract_key", "mutable_sequence", "TTL"} {
+	for _, attack := range []string{"unsigned", "untrusted_signer", "tampered_value", "truncated", "old_codec", "wrong_contract_key", "mutable_sequence", "TTL"} {
 		t.Run(attack, func(t *testing.T) {
 			client, reads := newRGB11RegistryE2EHTTPClient(t, source, func(record *swire.DKVSRecord) {
 				switch attack {
@@ -205,12 +206,8 @@ func rgb11RegistryHTTPValidationE2E(t *testing.T) {
 				case "truncated":
 					record.Value = record.Value[:12]
 					require.NoError(t, SignDKVSRecord(core, record))
-				case "wrong_provider":
-					value, err := rgb11wallet.DecodeRGB11RegistryValue(record.Value)
-					require.NoError(t, err)
-					value.ProviderDID = "company"
-					record.Value, err = rgb11wallet.EncodeRGB11RegistryValue(*value)
-					require.NoError(t, err)
+				case "old_codec":
+					record.Value[0] = 1
 					require.NoError(t, SignDKVSRecord(core, record))
 				case "wrong_contract_key":
 					record.Key = rgb11wallet.RGB11RegistryPath + "/" + strings.Repeat("f", 64)
@@ -223,18 +220,16 @@ func rgb11RegistryHTTPValidationE2E(t *testing.T) {
 					require.NoError(t, SignDKVSRecord(core, record))
 				}
 			})
-			got, err := client.GetRGB11Registration("alice", "USD", rgb11RegistryRecordID(original))
+			got, err := client.GetRGB11Registration(rgb11RegistryRecordID(original))
 			require.Error(t, err)
 			require.Nil(t, got)
 			require.EqualValues(t, 1, reads.Load())
 		})
 	}
 	clean, _ := newRGB11RegistryE2EHTTPClient(t, source, nil)
-	got, err := clean.GetRGB11Registration("alice", "USD", rgb11RegistryRecordID(original))
+	got, err := clean.GetRGB11Registration(rgb11RegistryRecordID(original))
 	require.NoError(t, err)
-	require.Equal(t, "rgb11:f:usd@alice", got.AssetName)
-	_, err = clean.GetRGB11Registration("alice", "EUR", rgb11RegistryRecordID(original))
-	require.Error(t, err)
+	require.Equal(t, rgb11RegistryRecordID(original), got.ContractID)
 	stored, err := source.indexer.Get(original.Key)
 	require.NoError(t, err)
 	require.Equal(t, dkvsindexer.RecordHash(original), dkvsindexer.RecordHash(stored))
@@ -242,26 +237,20 @@ func rgb11RegistryHTTPValidationE2E(t *testing.T) {
 
 func rgb11RegistryAuthorityPolicyE2E(t *testing.T) {
 	source, makeRecord := newRGB11RegistryE2ESource(t)
-	record := makeRecord("alice", "USD", "f", 1, 950)
+	record := makeRecord("", "USD", "f", 0, 950)
 	_, err := source.indexer.PutInternalContract(record)
 	require.NoError(t, err)
 	client, reads := newRGB11RegistryE2EHTTPClient(t, source, nil)
 	id := rgb11RegistryRecordID(record)
-	got, err := client.GetRGB11Registration("alice", "USD", id)
+	got, err := client.GetRGB11Registration(id)
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	got, err = client.SatsNetDKVSClient.GetRGB11Registration("alice", "USD", id)
+	got, err = client.SatsNetDKVSClient.GetRGB11Registration(id)
 	require.ErrorIs(t, err, dkvsindexer.ErrPermissionDenied)
 	require.Nil(t, got)
 	require.EqualValues(t, 2, reads.Load())
-	got, err = client.GetRGB11RegistrationWithVerifier("alice", "USD", id, nil)
+	got, err = client.GetRGB11RegistrationWithVerifier(id, nil)
 	require.ErrorIs(t, err, dkvsindexer.ErrPermissionDenied)
 	require.Nil(t, got)
 	require.EqualValues(t, 2, reads.Load())
-	for _, encoded := range []string{indexer.GetCoreNodePubKey()} {
-		pub, err := hex.DecodeString(encoded)
-		require.NoError(t, err)
-		require.NoError(t, (rgb11NetworkRegistryVerifier{}).CanWriteSystem(record.Key, pub))
-		require.Error(t, (rgb11NetworkRegistryVerifier{}).CanWriteSystem("/personal/alice/primary_did", pub))
-	}
 }

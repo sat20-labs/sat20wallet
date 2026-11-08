@@ -27,19 +27,20 @@ export const decorateRGB11AssetItems = (items: any[], state: RGB11StateDTO) => i
     Ticker: item.ticker,
   }
   const tickerInfo = tickerInfoFor(state, name)
-  // Balance keys contain the complete ContractID. Neither an editable SDK
-  // label nor a registered display name may change selection/transfer identity.
+  // Keep the SDK balance key separate from editable and registered labels.
   const assetKey = `${name.Protocol || 'rgb11'}:${name.Type || 'f'}:${name.Ticker || ''}`
   const canonicalName = String(tickerInfo?.canonical_name || tickerInfo?.CanonicalName || '')
   const contractId = String(tickerInfo?.contract_id || tickerInfo?.ContractID || '')
   const displayName = String(tickerInfo?.displayname || tickerInfo?.DisplayName || '').trim()
   const symbol = String(tickerInfo?.ticker || tickerInfo?.Ticker || '').trim()
+  const rawContractID = contractId.replace(/^rgb:/, '')
+  const readableSymbol = symbol && symbol !== contractId && symbol !== rawContractID ? symbol : ''
   const verified = canonicalName !== '' && Boolean(tickerInfo?.verified ?? tickerInfo?.Verified ?? false)
   return {
     ...item,
     id: assetKey,
     key: assetKey,
-    label: symbol || canonicalName || contractId || displayName || assetKey,
+    label: readableSymbol || canonicalName || displayName || symbol || contractId || assetKey,
     symbol,
     asset_key: assetKey,
     canonical_name: canonicalName,

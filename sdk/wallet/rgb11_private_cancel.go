@@ -37,15 +37,32 @@ func (p *Manager) cancelUnpublishedRGB11Transfer(transferID string) error {
 			return ErrDKVSPathNotSynced
 		}
 		defer zeroBytes(snapshot.secret)
-		base, err := openProfileManagedDataBundle(snapshot.profile, snapshot.secret)
-		if err != nil {
-			return err
-		}
 		scopeID, err := manager.rgb11AccountManagedScopeID()
 		if err != nil {
 			return err
 		}
-		baseRecovery, err := rgb11RecoveryForManagedScope(base, scopeID)
+		if err := p.CheckAccountRestore(rgb11AccountManagedProviderID, scopeID); err != nil {
+			return err
+		}
+		module, err := accountEntry(snapshot.profile.AccountID, rgb11AccountManagedProviderID, scopeID)
+		if err != nil {
+			return err
+		}
+		p.mutex.RLock()
+		local, err := p.readAccountLocal(snapshot.profile.AccountID, module.Provider, module.Scope)
+		p.mutex.RUnlock()
+		if err != nil {
+			return err
+		}
+		if local == nil || local.Deleted || local.Restoring || local.Baseline == nil {
+			return ErrDKVSPathNotSynced
+		}
+		basePayload, err := openAccountPayload(snapshot.secret, snapshot.profile.AccountID, snapshot.network, module, local.Baseline.Value)
+		if err != nil {
+			return err
+		}
+		defer zeroBytes(basePayload)
+		baseRecovery, err := rgb11wallet.DecodeRecoveryPackage(basePayload)
 		if err != nil {
 			return err
 		}
@@ -53,11 +70,13 @@ func (p *Manager) cancelUnpublishedRGB11Transfer(transferID string) error {
 		if err != nil {
 			return err
 		}
-		current, _, err := manager.exportRGB11WalletSnapshot(walletID)
+		current, backup, err := manager.readRGB11StrictViews(walletID, true)
 		if err != nil {
 			return err
 		}
-		localRecovery, err := rgb11wallet.RecoveryPackageFromSnapshot(current, 0)
+		// Match the confirmed backup's representation when proving the private
+		// delta. Keep current's exact raw bytes for the final atomic comparison.
+		localRecovery, err := rgb11wallet.RecoveryPackageFromSnapshot(backup, 0)
 		if err != nil {
 			return err
 		}
@@ -72,45 +91,51 @@ func (p *Manager) cancelUnpublishedRGB11Transfer(transferID string) error {
 		if err != nil {
 			return err
 		}
-		stateKey, err := p.accountManagedStateKey(snapshot.root)
-		if err != nil {
-			return err
-		}
-		dataKey, err := p.accountManagedDataBlobKey(snapshot.root)
-		if err != nil {
-			return err
-		}
-		// A response loss may leave a publication in flight. Even an unrelated
-		// generation cannot be ignored here: its signed payload may contain this batch.
+		// Only this independent module can contain the private batch. An
+		// unrelated account/module publication cannot block cancellation.
 		entries, err := newDKVSReplicaStore(p.db).LoadOutbox(store.client.replicaNamespace)
 		if err != nil {
 			return err
 		}
 		for _, entry := range entries {
-			if _, matches := accountManagedEntryRecords(entry, stateKey, dataKey); matches {
-				return ErrDKVSPathNotSynced
+			mutations, err := entry.DecodeMutations()
+			if err != nil {
+				return err
+			}
+			for _, mutation := range mutations {
+				if mutation.Record != nil && mutation.Record.Key == module.Key {
+					return ErrDKVSPathNotSynced
+				}
 			}
 		}
-		stateValue, err := store.GetAuthoritative(stateKey)
+		indexKey, err := account.ManagedIndexKey(snapshot.profile.AccountID)
 		if err != nil {
 			return err
 		}
-		remoteState, err := account.OpenManagedState(snapshot.secret, snapshot.profile.AccountID, stateValue.Value)
+		indexValue, err := store.GetAuthoritative(indexKey)
 		if err != nil {
 			return err
 		}
-		if remoteState.Revision < snapshot.profile.StateSeq || remoteState.DataRevision < snapshot.profile.ManagedDataRevision {
+		index, err := account.OpenManagedIndex(snapshot.secret, snapshot.profile.AccountID, snapshot.network, indexValue.Value)
+		if err != nil {
+			return err
+		}
+		if selected, ok := accountEntryMap(index)[module.Provider+"\x00"+module.Scope]; !ok || selected != module {
+			return ErrRGB11OperationScopeChanged
+		}
+		dataValue, err := store.GetAuthoritative(module.Key)
+		if err != nil {
+			return err
+		}
+		if dataValue.record == nil || dataValue.record.Seq < local.Baseline.Seq {
 			return ErrRGB11Inconsistent
 		}
-		dataValue, err := store.GetAuthoritative(dataKey)
+		payload, err := openAccountPayload(snapshot.secret, snapshot.profile.AccountID, snapshot.network, module, dataValue.Value)
 		if err != nil {
 			return err
 		}
-		remote, err := openAccountManagedDataValue(snapshot.secret, snapshot.profile.AccountID, dataValue, remoteState)
-		if err != nil {
-			return err
-		}
-		selected, err := rgb11RecoveryForManagedScope(remote.Bundle, scopeID)
+		defer zeroBytes(payload)
+		selected, err := rgb11wallet.DecodeRecoveryPackage(payload)
 		if err != nil {
 			return err
 		}
@@ -131,13 +156,19 @@ func (p *Manager) cancelUnpublishedRGB11Transfer(transferID string) error {
 				}
 			}
 		}
-		// A coherent authenticated state/blob pair, followed by another state
-		// read, excludes a concurrent account CAS during the observation.
-		latest, err := store.GetAuthoritative(stateKey)
+		// Re-read both the directory and this module after validation.
+		latest, err := store.GetAuthoritative(module.Key)
 		if err != nil {
 			return err
 		}
-		if latest.Hash != stateValue.Hash {
+		if latest.Hash != dataValue.Hash {
+			return errAccountSnapshotChanged
+		}
+		latestIndex, err := store.GetAuthoritative(indexKey)
+		if err != nil {
+			return err
+		}
+		if latestIndex.Hash != indexValue.Hash {
 			return errAccountSnapshotChanged
 		}
 		baseSnapshot, err := baseRecovery.WalletSnapshot()
@@ -153,7 +184,9 @@ func (p *Manager) cancelUnpublishedRGB11Transfer(transferID string) error {
 			return err
 		}
 		p.mutex.RLock()
-		unchanged := p.accountSyncSnapshotCurrentLocked(snapshot)
+		live, readErr := p.readAccountLocal(snapshot.profile.AccountID, module.Provider, module.Scope)
+		unchanged := readErr == nil && live != nil && live.Generation == local.Generation &&
+			!live.Restoring && !live.Deleted && p.accountSyncSnapshotCurrentLocked(snapshot)
 		p.mutex.RUnlock()
 		if !unchanged {
 			return errAccountSnapshotChanged
@@ -165,17 +198,8 @@ func (p *Manager) cancelUnpublishedRGB11Transfer(transferID string) error {
 		if _, err := manager.applyRGB11CandidateSnapshot(ctx, current, baseSnapshot); err != nil {
 			return err
 		}
-		return p.syncAccountManagementStateMode(ctx, 0, true, false)
+		return nil
 	})
-}
-
-func rgb11RecoveryForManagedScope(bundle account.ManagedDataBundle, scope string) (*rgb11wallet.RecoveryPackage, error) {
-	for _, item := range bundle.Items {
-		if item.Provider == rgb11AccountManagedProviderID && item.Scope == scope {
-			return rgb11wallet.DecodeRecoveryPackage(item.Payload)
-		}
-	}
-	return nil, ErrRGB11Inconsistent
 }
 
 func unpublishedRGB11Batch(local, base *rgb11wallet.RecoveryPackage, transferID string) ([]*rgb11wallet.PendingTransfer, error) {

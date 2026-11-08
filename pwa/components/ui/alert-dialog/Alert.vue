@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 import {
   Dialog,
   DialogContent,
@@ -20,8 +23,6 @@ interface AlertProps {
 }
 
 const props = withDefaults(defineProps<AlertProps>(), {
-  title: '提示',
-  confirmText: '确定',
   type: 'info',
 })
 
@@ -68,7 +69,7 @@ const getIconAndColor = (type: string) => {
             :class="getIconAndColor(props.type).colorClass"
             class="h-6 w-6"
           />
-          <DialogTitle>{{ props.title }}</DialogTitle>
+          <DialogTitle>{{ props.title ?? t('settingsUi.notice') }}</DialogTitle>
         </div>
       </DialogHeader>
 
@@ -80,7 +81,7 @@ const getIconAndColor = (type: string) => {
 
       <DialogFooter>
         <Button @click="handleConfirm" class="w-full">
-          {{ props.confirmText }}
+          {{ props.confirmText ?? t('common.confirm') }}
         </Button>
       </DialogFooter>
     </DialogContent>

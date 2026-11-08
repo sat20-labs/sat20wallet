@@ -246,7 +246,6 @@ func (p *Manager) finalizePeerForceClose(channel *Channel, generation channelSaf
 	if err := p.persistTerminalTransition(channel, generation, CS_CLOSED_FORCELY); err != nil {
 		return err
 	}
-	p.DisableChannel(channel)
 	p.SendMessageToUpper(MSG_CHANNEL_FORCELY_CLOSED, txid)
 	if tower := p.GetWatchTower(); tower != nil {
 		return tower.CleanAllCommitTx(channel.ChannelId)
@@ -275,7 +274,6 @@ func (p *Manager) handleRevokedCommitment(channel *Channel, generation channelSa
 		_ = tower.SetBroadcastedFlag(commitTxID)
 		return err
 	}
-	p.DisableChannel(channel)
 	p.SendMessageToUpper(MSG_CHANNEL_UNEXPECTEDLY_CLOSED, commitTxID)
 
 	broadcasted, err := p.broadcastPunishPackage(txs, "punish")
@@ -321,7 +319,6 @@ func (p *Manager) completePunishBroadcastState(channelID, commitTxID string) err
 	if err := p.persistTerminalTransition(channel, generation, CS_CLOSED_UNEXPECTED); err != nil {
 		return err
 	}
-	p.DisableChannel(channel)
 	if err := tower.completePunishCleanup(channelID, commitTxID); err != nil {
 		return err
 	}
@@ -329,49 +326,55 @@ func (p *Manager) completePunishBroadcastState(channelID, commitTxID string) err
 }
 
 func (p *Manager) persistTerminalTransition(channel *Channel, expected channelSafetyGeneration, status ChannelStatus) error {
-	channel.Mutex.Lock()
-	if !channelSafetyTransitionMatches(channel, expected) {
-		channel.Mutex.Unlock()
-		return fmt.Errorf("channel %s changed during safety handling", expected.channelID)
-	}
-	previousStatus := channel.Status
-	channel.Status = status
-	buf, encodeErr := EncodeToBytes(&channel.ChannelInDB)
-	channel.Mutex.Unlock()
-	if encodeErr != nil {
-		p.revertTerminalTransition(channel, expected, status, previousStatus)
-		return encodeErr
-	}
-
-	var snapshot ChannelInDB
-	if err := DecodeFromBytes(buf, &snapshot); err != nil {
-		p.revertTerminalTransition(channel, expected, status, previousStatus)
+	var buf []byte
+	var backupHandler ChannelBackupHandler
+	if err := func() error {
+		channel.Mutex.Lock()
+		defer channel.Mutex.Unlock()
+		if !channelSafetyTransitionMatches(channel, expected) {
+			return fmt.Errorf("channel %s changed during safety handling", expected.channelID)
+		}
+		// Prepare detached bytes. A failed local write never publishes a new RAM state.
+		candidate := channel.ChannelInDB
+		candidate.Status = status
+		encoded, err := EncodeToBytes(&candidate)
+		if err != nil {
+			return err
+		}
+		var snapshot ChannelInDB
+		if err := DecodeFromBytes(encoded, &snapshot); err != nil {
+			return err
+		}
+		p.mutex.Lock()
+		defer p.mutex.Unlock()
+		current := p.channelMap[expected.channelID]
+		if current != nil && current != channel {
+			return fmt.Errorf("channel %s runtime generation changed during safety handling", expected.channelID)
+		}
+		// Only a local DB write is inside this publication boundary. Readers of
+		// the active index cannot observe the durable terminal with the old map.
+		if err := p.SaveChannelInDB(&snapshot); err != nil {
+			stored, loadErr := p.LoadChannelInDB(expected.channelID)
+			if loadErr != nil || stored.Status != status || !channelSafetyGenerationMatches(&Channel{ChannelInDB: *stored}, expected) {
+				return fmt.Errorf("persist terminal channel %s failed: %w", expected.channelID, err)
+			}
+		}
+		channel.Status = status
+		if current == channel {
+			p.removeChannelLocked(channel)
+		}
+		buf, backupHandler = encoded, p.channelBackupHandler
+		return nil
+	}(); err != nil {
 		return err
 	}
-	if err := p.SaveChannelInDB(&snapshot); err != nil {
-		stored, loadErr := p.LoadChannelInDB(expected.channelID)
-		if loadErr != nil || stored.Status != status {
-			p.revertTerminalTransition(channel, expected, status, previousStatus)
-			return fmt.Errorf("persist terminal channel %s failed: %w", expected.channelID, err)
-		}
-	}
-	p.mutex.RLock()
-	backupHandler := p.channelBackupHandler
-	p.mutex.RUnlock()
+	// Optional backup and all caller notifications are outside local locks.
 	if backupHandler != nil {
 		if err := backupHandler.BackupChannel(channel, buf); err != nil {
 			Log.Warningf("backup terminal channel %s failed. %v", expected.channelID, err)
 		}
 	}
 	return nil
-}
-
-func (p *Manager) revertTerminalTransition(channel *Channel, expected channelSafetyGeneration, status, previous ChannelStatus) {
-	channel.Mutex.Lock()
-	defer channel.Mutex.Unlock()
-	if channelSafetyGenerationMatches(channel, expected) && channel.Status == status {
-		channel.Status = previous
-	}
 }
 
 func (p *Manager) broadcastPunishPackage(txs []*wire.MsgTx, action string) (bool, error) {

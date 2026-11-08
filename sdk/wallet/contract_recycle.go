@@ -1575,6 +1575,10 @@ func (p *RecycleContractRunTime) updateWithDealInfo_reward(dealInfo *DealInfo) {
 	p.AssetMerkleRoot = dealInfo.RuntimeMerkleRoot
 	p.CheckPointBlockL1 = dealInfo.Height
 
+	p.CurrAssetMerkleRoot = p.CalcRuntimeMerkleRoot()
+	if _, exists := p.assetMerkleRootMap[p.InvokeCount]; exists {
+		p.assetMerkleRootMap[p.InvokeCount] = p.CurrAssetMerkleRoot
+	}
 	p.refreshTime = 0
 }
 

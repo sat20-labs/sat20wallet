@@ -124,7 +124,7 @@ VERSION_DATADIR="$WORK_DIR/version-probe"
 mkdir -m 700 "$VERSION_DATADIR"
 "$BIN_DIR/bitcoind" -datadir="$VERSION_DATADIR" -version
 "$BIN_DIR/bitcoin-cli" -datadir="$VERSION_DATADIR" -version
-rmdir "$VERSION_DATADIR"
+rm -r "$VERSION_DATADIR"
 ELECTRS_HELP="$WORK_DIR/electrs-help.txt"
 "$BIN_DIR/electrs" --help > "$ELECTRS_HELP" 2>&1
 for option in --network --jsonrpc-import --daemon-dir --daemon-rpc-addr \

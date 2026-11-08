@@ -9,16 +9,15 @@ import (
 func managedStateFixture() ManagedState {
 	root := strings.Repeat("1", 64)
 	return ManagedState{
-		Version: ManagedStateVersion, RootFingerprint: root, Revision: 4,
-		Wallets: []ManagedWallet{
+		Version: ManagedStateVersion, RootFingerprint: root, Wallets: []ManagedWallet{
 			{
-				Fingerprint: strings.Repeat("2", 64), Revision: 3, Name: "Second",
-				Mnemonic:     "legal winner thank year wave sausage worth useful legal winner thank yellow",
+				Fingerprint: strings.Repeat("2", 64), Name: "Second",
+				Type: WalletMnemonic, Secret: []byte("legal winner thank year wave sausage worth useful legal winner thank yellow"),
 				AccountCount: 1, SubAccounts: []SubAccount{{Index: 0, Name: "Account 1"}},
 			},
 			{
-				Fingerprint: root, Revision: 4, Name: "Root",
-				Mnemonic:     "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+				Fingerprint: root, Name: "Root",
+				Type: WalletMnemonic, Secret: []byte("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"),
 				AccountCount: 2, SubAccounts: []SubAccount{
 					{Index: 1, Name: "Account 2"},
 					{Index: 0, Name: "Account 1"},

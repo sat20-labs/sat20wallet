@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { expect } from '@playwright/test'
 import { Transaction } from 'bitcoinjs-lib'
+import { waitForAccountWrite } from './account-management-usage-e2e.mjs'
 
 export const requiredPwaRgbCases = [
   'RGB PWA: issue a real NIA contract and protect its confirmed carrier',
@@ -81,11 +82,26 @@ async function runPwaRgbCaseGroup(t, fixture, udaOnly) {
     return result.data
   }
   const dialog = (page, title) => page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: title, exact: true }) })
-  const visitRGB = async page => {
+  const visitRGB = async (page, preparedTransferId) => {
     await page.evaluate(() => { location.hash = '#/wallet' })
     await page.getByRole('tab', { name: 'Bitcoin', exact: true }).click()
     await page.getByRole('button', { name: 'RGB', exact: true }).click()
-    await expect(page.getByText('Consistency: ok', { exact: true })).toBeVisible({ timeout: 120000 })
+    if (preparedTransferId) {
+      // An unbroadcast prepared witness is unresolved on-chain. Verify this
+      // exact recoverable intent and its confirmed carrier, not a global ok.
+      const current = await state(page)
+      const pending = current.transfers.find(item => item.transfer_id === preparedTransferId)
+      assert.equal(pending?.direction, 'send')
+      assert.equal(pending.status, 'prepared')
+      assert.equal(pending.ack_status, 'awaiting')
+      assert.equal(current.proofs.length, 1)
+      assert.equal(current.proofs[0].status, 'settled')
+      assert.ok(current.proofs[0].confirmations >= 1)
+      assert.ok(pending.input_outpoints.includes(current.proofs[0].outpoint))
+      await expect(page.getByText(/^Consistency: (ok|warning)$/)).toBeVisible({ timeout: 120000 })
+    } else {
+      await expect(page.getByText('Consistency: ok', { exact: true })).toBeVisible({ timeout: 120000 })
+    }
   }
   const refreshRGB = async page => {
     const typeButton = page.getByRole('button', { name: 'RGB', exact: true })
@@ -95,7 +111,8 @@ async function runPwaRgbCaseGroup(t, fixture, udaOnly) {
   const assetCard = (page, id = contractId) => page.locator('div.flex.min-w-0.overflow-hidden')
     .filter({ has: page.locator(`[title=${JSON.stringify(id)}]`) })
   const fresh = async actor => {
-    const page = await device()
+    const diagnosticRole = actor === senderActor ? 'rgb-sender' : actor === receiverActor ? 'rgb-receiver' : 'rgb-other'
+    const page = await device(undefined, true, undefined, diagnosticRole)
     contexts.push(page.context())
     if (fixture.realBitcoinControl) {
       page.context().on('response', response => {
@@ -120,7 +137,7 @@ async function runPwaRgbCaseGroup(t, fixture, udaOnly) {
     page.on('console', message => {
       let value = message.text()
       if (!/^(?:fatal error:|panic:|goroutine \d|TypeError:|\[Vue warn\]|\s*(?:runtime\.|sync\.|github\.com\/sat20-labs\/|\/Users\/.*\.go:))/.test(value)
-        && !/RGB11 (?:chain reconciliation .*|L1 monitor tick) failed:/.test(value)
+        && !/RGB11 (?:chain reconciliation .*|L1 (?:monitor tick|startup reconciliation)) failed:/.test(value)
         && !/activation_baseline_mismatch phase=local_builder_compare/.test(value)) return
       for (const fixtureActor of [senderActor, receiverActor]) {
         for (const secret of [fixtureActor.mnemonic, fixtureActor.password]) value = value.replaceAll(secret, '[redacted]')
@@ -176,7 +193,7 @@ async function runPwaRgbCaseGroup(t, fixture, udaOnly) {
     await visitRGB(page)
     return page
   }
-  const reload = async (page, actor) => {
+  const reload = async (page, actor, preparedTransferId) => {
     await page.reload()
     await ready(page)
     await expect.poll(() => new URL(page.url()).hash.startsWith('#/unlock'), poll).toBe(true)
@@ -212,7 +229,8 @@ async function runPwaRgbCaseGroup(t, fixture, udaOnly) {
       return { index: Number(store.accountIndex), address: store.address }
     }), { index: accountIndex, address: actor.address }, 'authenticated reload must preserve the selected RGB actor')
     assert.equal((await walletCall(page, 'getWalletAddress', accountIndex)).address, actor.address)
-    await visitRGB(page)
+    await waitForAccountWrite(page, accountCall)
+    await visitRGB(page, preparedTransferId)
   }
   const downloadBytes = async (page, button) => {
     const waiting = page.waitForEvent('download')
@@ -688,7 +706,7 @@ async function runPwaRgbCaseGroup(t, fixture, udaOnly) {
         assert.equal(submitted.l1.broadcast_count[witnessTxid] ?? 0, 0, 'continuation must not broadcast again')
         sameTxIDs(beforePrepare, submitted)
       } else {
-      await reload(sender, senderActor)
+      await reload(sender, senderActor, transferId)
       await sender.getByRole('button', { name: 'Match summary fields', exact: true }).click()
       const send = dialog(sender, 'Send RGB Asset')
       await expect(send).toContainText(transferId)
@@ -701,8 +719,22 @@ async function runPwaRgbCaseGroup(t, fixture, udaOnly) {
       await expect(send.getByText('Fields match this recipient. Confirm the external message before broadcasting.', { exact: true })).toBeVisible()
       await expect(broadcast).toBeDisabled()
       await send.locator('input[type="checkbox"]').check()
-      await broadcast.click()
-      await expect(send.getByText(`Transaction broadcast: ${witnessTxid}`, { exact: true })).toBeVisible({ timeout: 180000 })
+      try {
+        await broadcast.click()
+        await expect(send.getByText(`Transaction broadcast: ${witnessTxid}`, { exact: true })).toBeVisible({ timeout: 180000 })
+      } catch (error) {
+        if (process.env.SAT20_PWA_DIAGNOSTIC === 'debug') {
+          try {
+            const observed = await control('snapshot')
+            console.log(JSON.stringify({ observation: 'RGB original broadcast failure',
+              tx_hash: sha256(witnessTxid).slice(0, 16),
+              accepted_count: observed.l1.broadcast_count[witnessTxid] ?? 0,
+              in_pending: observed.l1.pending_txids.includes(witnessTxid),
+              confirmed: observed.l1.confirmed_txids.includes(witnessTxid) }))
+          } catch { console.log(JSON.stringify({ observation: 'RGB broadcast snapshot unavailable' })) }
+        }
+        throw error
+      }
       submitted = await control('snapshot')
       assert.ok(submitted.l1.pending_txids.includes(witnessTxid))
       assert.equal(submitted.l1.broadcast_count[witnessTxid], 1)
@@ -723,6 +755,19 @@ async function runPwaRgbCaseGroup(t, fixture, udaOnly) {
     })
 
     await check(requiredPwaRgbCases[6], async () => {
+      const observePhase = async label => {
+        const sample = async page => {
+          try {
+            const status = await accountCall(page, 'status')
+            return { state_seq: status.state_seq, managed_data_revision: status.managed_data_revision,
+              pending_changes: status.pending_changes, dkvs_pending_requests: status.dkvs_pending_requests,
+              dkvs_status: status.dkvs_status, dkvs_write_allowed: status.dkvs_write_allowed,
+              last_dkvs_sync_error_code: status.last_dkvs_sync_error_code }
+          } catch (error) { return { error: error?.message ?? String(error) } }
+        }
+        console.log(JSON.stringify({ rgbReceivePhase: label, sender: await sample(sender), receiver: await sample(receiver) }))
+      }
+      await observePhase('before-confirm')
       const [statusBefore] = await evidence('/v3/bitcoin/tx/status/batch', { txids: [witnessTxid] })
       if (!statusBefore.confirmed) {
         const confirmed = await control('confirm-l1', { wait_anchors: false })
@@ -730,6 +775,7 @@ async function runPwaRgbCaseGroup(t, fixture, udaOnly) {
       }
       const [statusAfter] = await evidence('/v3/bitcoin/tx/status/batch', { txids: [witnessTxid] })
       assert.ok(statusAfter.confirmed && statusAfter.confirmations >= 1)
+      await observePhase('after-confirm')
       if (!receiveAlreadySettled) {
       const receive = dialog(receiver, 'Receive RGB Asset')
       await receive.getByRole('button', { name: 'Complete receive after broadcast', exact: true }).click()
@@ -740,7 +786,9 @@ async function runPwaRgbCaseGroup(t, fixture, udaOnly) {
         .toBeVisible({ timeout: 180000 })
       await receiver.keyboard.press('Escape')
       }
+      await observePhase('after-receive')
       await refreshRGB(sender)
+      await observePhase('after-sender-refresh')
       await expect.poll(async () => sum((await state(sender)).available_assets, canonicalName), poll).toBe(975n)
       await expect.poll(async () => sum((await state(receiver)).available_assets, canonicalName), poll).toBe(25n)
       const sent = await state(sender), received = await state(receiver)

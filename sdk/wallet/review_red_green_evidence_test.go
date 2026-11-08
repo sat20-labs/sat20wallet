@@ -28,36 +28,38 @@ import (
 // count as successful red evidence. Ordinary regression tests remain enabled
 // in go test ./...; only this deliberately expensive control experiment is opt-in.
 type reviewEvidenceRun struct {
-	Expected string `json:"expected"`
-	ExitCode int `json:"exit_code"`
-	Seconds float64 `json:"seconds"`
-	TestsPassed int `json:"tests_passed"`
-	TestsFailed int `json:"tests_failed"`
+	Expected          string   `json:"expected"`
+	ExitCode          int      `json:"exit_code"`
+	Seconds           float64  `json:"seconds"`
+	TestsPassed       int      `json:"tests_passed"`
+	TestsFailed       int      `json:"tests_failed"`
 	AssertionEvidence []string `json:"assertion_evidence,omitempty"`
-	RootPassed bool `json:"root_passed"`
+	RootPassed        bool     `json:"root_passed"`
 }
 
 type reviewEvidenceCase struct {
-	Test string `json:"test"`
-	Control string `json:"control"`
-	Red reviewEvidenceRun `json:"red"`
-	Green reviewEvidenceRun `json:"green"`
-	Verified bool `json:"verified"`
+	Test     string            `json:"test"`
+	Control  string            `json:"control"`
+	Red      reviewEvidenceRun `json:"red"`
+	Green    reviewEvidenceRun `json:"green"`
+	Verified bool              `json:"verified"`
 }
 
 type reviewEvidenceReport struct {
-	GeneratedAt string `json:"generated_at"`
-	Scope string `json:"scope"`
-	Sources map[string]string `json:"source_sha256"`
-	Cases []reviewEvidenceCase `json:"cases"`
-	WorktreeUnchanged bool `json:"worktree_sources_unchanged"`
+	GeneratedAt       string               `json:"generated_at"`
+	Scope             string               `json:"scope"`
+	Sources           map[string]string    `json:"source_sha256"`
+	Cases             []reviewEvidenceCase `json:"cases"`
+	WorktreeUnchanged bool                 `json:"worktree_sources_unchanged"`
 }
 
 func reviewReplaceFunction(t *testing.T, source, name, replacement string) string {
 	t.Helper()
 	set := token.NewFileSet()
 	file, err := parser.ParseFile(set, "overlay.go", source, 0)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, declaration := range file.Decls {
 		function, ok := declaration.(*ast.FuncDecl)
 		if ok && function.Name.Name == name {
@@ -73,11 +75,15 @@ func reviewReplaceIf(t *testing.T, source, condition, bodyNeedle, replacement st
 	t.Helper()
 	set := token.NewFileSet()
 	file, err := parser.ParseFile(set, "overlay.go", source, 0)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	start, end, count := 0, 0, 0
 	ast.Inspect(file, func(node ast.Node) bool {
 		statement, ok := node.(*ast.IfStmt)
-		if !ok { return true }
+		if !ok {
+			return true
+		}
 		conditionText := source[set.Position(statement.Cond.Pos()).Offset:set.Position(statement.Cond.End()).Offset]
 		body := source[set.Position(statement.Body.Pos()).Offset:set.Position(statement.Body.End()).Offset]
 		if strings.Contains(conditionText, condition) && strings.Contains(body, bodyNeedle) {
@@ -87,7 +93,9 @@ func reviewReplaceIf(t *testing.T, source, condition, bodyNeedle, replacement st
 		}
 		return true
 	})
-	if count != 1 { t.Fatalf("negative control requires one matching branch, found %d (%s)", count, condition) }
+	if count != 1 {
+		t.Fatalf("negative control requires one matching branch, found %d (%s)", count, condition)
+	}
 	return source[:start] + replacement + source[end:]
 }
 
@@ -96,7 +104,9 @@ func reviewRunEvidenceChild(t *testing.T, moduleDir, testName, overlay string, m
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	args := []string{"test", "-json", "-count=1", "-timeout=90s"}
-	if overlay != "" { args = append(args, "-overlay="+overlay) }
+	if overlay != "" {
+		args = append(args, "-overlay="+overlay)
+	}
 	args = append(args, "./wallet", "-run", "^"+testName+"$")
 	command := exec.CommandContext(ctx, filepath.Join(runtime.GOROOT(), "bin", "go"), args...)
 	command.Dir = moduleDir
@@ -105,21 +115,33 @@ func reviewRunEvidenceChild(t *testing.T, moduleDir, testName, overlay string, m
 	result := reviewEvidenceRun{Seconds: time.Since(started).Seconds()}
 	if err != nil {
 		exit, ok := err.(*exec.ExitError)
-		if !ok { t.Fatalf("cannot execute regression child: %v", err) }
+		if !ok {
+			t.Fatalf("cannot execute regression child: %v", err)
+		}
 		result.ExitCode = exit.ExitCode()
 	}
-	if ctx.Err() != nil { t.Fatalf("regression child timed out; this is not red evidence: %s", testName) }
+	if ctx.Err() != nil {
+		t.Fatalf("regression child timed out; this is not red evidence: %s", testName)
+	}
 	text := string(output)
 	if strings.Contains(text, "[build failed]") || strings.Contains(text, "panic: test timed out") {
 		t.Fatalf("regression control failed outside the asserted behavior:\n%s", text)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(output))
 	for decoder.More() {
-		var event struct { Action, Test, Output string }
-		if err := decoder.Decode(&event); err != nil { t.Fatalf("invalid go test JSON: %v\n%s", err, text) }
-		if event.Test != "" && event.Action == "pass" { result.TestsPassed++ }
-		if event.Test != "" && event.Action == "fail" { result.TestsFailed++ }
-		if event.Test == testName && event.Action == "pass" { result.RootPassed = true }
+		var event struct{ Action, Test, Output string }
+		if err := decoder.Decode(&event); err != nil {
+			t.Fatalf("invalid go test JSON: %v\n%s", err, text)
+		}
+		if event.Test != "" && event.Action == "pass" {
+			result.TestsPassed++
+		}
+		if event.Test != "" && event.Action == "fail" {
+			result.TestsFailed++
+		}
+		if event.Test == testName && event.Action == "pass" {
+			result.RootPassed = true
+		}
 		if event.Test != "" {
 			for _, marker := range markers {
 				if strings.Contains(event.Output, marker) {
@@ -137,13 +159,15 @@ func TestReviewRedGreenEvidence(t *testing.T) {
 		t.Skip("explicit negative-control experiment; run -run '^TestReviewRedGreenEvidence$'")
 	}
 	walletDir, err := os.Getwd()
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	moduleDir := filepath.Dir(walletDir)
 	sources := make(map[string]string)
 	report := reviewEvidenceReport{
 		GeneratedAt: time.Now().Format(time.RFC3339),
-		Scope: "Synthetic wallet/network fixtures only. Negative controls reinstate reviewed pre-fix behavior in temporary Go overlays; no worktree/index rollback, live wallet or chain transaction.",
-		Sources: make(map[string]string), WorktreeUnchanged: true,
+		Scope:       "Synthetic wallet/network fixtures only. Negative controls reinstate reviewed pre-fix behavior in temporary Go overlays; no worktree/index rollback, live wallet or chain transaction.",
+		Sources:     make(map[string]string), WorktreeUnchanged: true,
 	}
 	for _, name := range []string{
 		"account_management_state.go", "account_management_rebase.go", "rgb11_managed_operation.go",
@@ -152,7 +176,9 @@ func TestReviewRedGreenEvidence(t *testing.T) {
 		"../wasm/account_management.go",
 	} {
 		raw, err := os.ReadFile(filepath.Join(walletDir, name))
-		if err != nil { t.Fatal(err) }
+		if err != nil {
+			t.Fatal(err)
+		}
 		sources[name] = string(raw)
 		digest := sha256.Sum256(raw)
 		report.Sources[name] = hex.EncodeToString(digest[:])
@@ -166,16 +192,24 @@ func TestReviewRedGreenEvidence(t *testing.T) {
 			}
 		}
 		raw, err := json.MarshalIndent(report, "", "  ")
-		if err != nil { t.Error(err); return }
+		if err != nil {
+			t.Error(err)
+			return
+		}
 		directory := filepath.Join(moduleDir, "review-evidence")
-		if err := os.MkdirAll(directory, 0700); err != nil { t.Error(err); return }
-		if err := os.WriteFile(filepath.Join(directory, "red-green-20260930.json"), append(raw, '\n'), 0600); err != nil { t.Error(err) }
+		if err := os.MkdirAll(directory, 0700); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := os.WriteFile(filepath.Join(directory, "red-green-20260930.json"), append(raw, '\n'), 0600); err != nil {
+			t.Error(err)
+		}
 	}()
 
 	cases := []struct {
 		test, file, control string
-		markers []string
-		patch func(*testing.T, string) string
+		markers             []string
+		patch               func(*testing.T, string) string
 	}{
 		{
 			test: "TestReviewAccountMergeAppliesRemoteIncrement", file: "account_management_state.go",
@@ -195,7 +229,9 @@ func TestReviewRedGreenEvidence(t *testing.T) {
 					"\t\trequestedFingerprint := walletFingerprint(manager.wallet)\n",
 					"\t\trequestedNetwork := _chain\n",
 				} {
-					if strings.Count(source, line) != 1 { t.Fatalf("cannot identify captured source field: %q", line) }
+					if strings.Count(source, line) != 1 {
+						t.Fatalf("cannot identify captured source field: %q", line)
+					}
 					source = strings.Replace(source, line, "", 1)
 				}
 				return reviewReplaceIf(t, source, "!activeBefore", "requestedScope", `if !activeBefore {
@@ -278,13 +314,21 @@ func TestReviewRedGreenEvidence(t *testing.T) {
 			defer func() { report.Cases = append(report.Cases, entry) }()
 			directory := t.TempDir()
 			modified := testCase.patch(t, sources[testCase.file])
-			if modified == sources[testCase.file] { t.Fatal("negative control did not modify compilation input") }
+			if modified == sources[testCase.file] {
+				t.Fatal("negative control did not modify compilation input")
+			}
 			backing := filepath.Join(directory, "control.go")
-			if err := os.WriteFile(backing, []byte(modified), 0600); err != nil { t.Fatal(err) }
+			if err := os.WriteFile(backing, []byte(modified), 0600); err != nil {
+				t.Fatal(err)
+			}
 			overlayBytes, err := json.Marshal(map[string]any{"Replace": map[string]string{filepath.Join(walletDir, testCase.file): backing}})
-			if err != nil { t.Fatal(err) }
+			if err != nil {
+				t.Fatal(err)
+			}
 			overlay := filepath.Join(directory, "overlay.json")
-			if err := os.WriteFile(overlay, overlayBytes, 0600); err != nil { t.Fatal(err) }
+			if err := os.WriteFile(overlay, overlayBytes, 0600); err != nil {
+				t.Fatal(err)
+			}
 			entry.Red = reviewRunEvidenceChild(t, moduleDir, testCase.test, overlay, testCase.markers)
 			entry.Red.Expected = "behavioral failure"
 			if entry.Red.ExitCode == 0 || entry.Red.TestsFailed == 0 || len(entry.Red.AssertionEvidence) == 0 {
@@ -299,5 +343,7 @@ func TestReviewRedGreenEvidence(t *testing.T) {
 			t.Logf("RED behavioral assertions=%d; GREEN tests=%d", len(entry.Red.AssertionEvidence), entry.Green.TestsPassed)
 		})
 	}
-	if len(report.Cases) != len(cases) { t.Error(fmt.Errorf("incomplete red/green case execution")) }
+	if len(report.Cases) != len(cases) {
+		t.Error(fmt.Errorf("incomplete red/green case execution"))
+	}
 }

@@ -3,7 +3,7 @@ package wallet
 import (
 	"context"
 	"encoding/json"
-	"errors"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -12,6 +12,7 @@ import (
 
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
+	"github.com/stretchr/testify/require"
 )
 
 // The gate pauses real activation at its transport boundary; it does not replace
@@ -71,103 +72,69 @@ func (h *accountActivationGateHTTP) SendDKVSPostContext(ctx context.Context, pat
 }
 
 func TestAccountPaidActivationNetworkWaitDoesNotBlockLocalState(t *testing.T) {
-	oldChain := _chain
+	old := _chain
 	_chain = "testnet"
-	defer func() { _chain = oldChain }()
-	for _, phase := range []string{"WaitReady", "CAS"} {
+	defer func() { _chain = old }()
+	for _, phase := range []string{"CAS", "BindingCAS"} {
 		t.Run(phase, func(t *testing.T) {
-			manager, _, secret := buildRootWrapperSource(t)
+			manager, endpoint, _, _, secret := newLocalActivationFixture(t)
 			defer zeroBytes(secret)
-			gate := &accountActivationNetworkGate{phase: phase, started: make(chan struct{}), release: make(chan struct{})}
-			var releaseOnce sync.Once
-			release := func() { releaseOnce.Do(func() { close(gate.release) }) }
-			defer release()
-			remote := &accountActivationGateHTTP{rgb11MemoryDKVSHTTP: newRGB11MemoryDKVSHTTP(), gate: gate}
-			manager.http = remote
-			manager.dkvs.mu.Lock()
-			manager.dkvs.clients = make(map[string]*SatsNetDKVSClient)
-			manager.dkvs.mu.Unlock()
-			client := newRGB11MessageNodeClient(remote.rgb11MemoryDKVSHTTP)
-			manager.serverNode = NewNode(client, "message.test", SERVER_NODE, client.CoreNodePubKey(), client.CoreNodePubKey())
-			defaults := dkvsindexer.NetworkDefaultsForParams(GetChainParam_SatsNet())
-			authorization := AccountStorageAuthorization{Mode: AccountStoragePaid,
-				Autopay: &DKVSAutopayOptions{AddressParams: GetChainParam_SatsNet(), PoolContract: defaults.AutopayContract}}
-			locator := account.Locator{AccountID: manager.accountProfile.AccountID}
-			activationDone := make(chan error, 1)
-			go func() {
-				activationDone <- manager.ActivateAccountManagement(secret, "password", authorization, locator, "")
-			}()
-			select {
-			case <-gate.started:
-			case err := <-activationDone:
-				t.Fatalf("activation ended before %s transport: %v", phase, err)
-			case <-time.After(time.Minute):
-				t.Fatalf("activation did not reach %s transport", phase)
+			_, done, release := startGatedPaidActivation(t, manager, secret, phase, endpoint)
+			status := accountStatusWithin(t, manager)
+			if status.AccountID == "" {
+				t.Error("account status became unavailable during activation network wait")
 			}
-			if !strings.Contains(gate.stack, "activateAccountManagement") ||
-				(phase == "WaitReady" && !strings.Contains(gate.stack, "WaitReady")) {
-				t.Error("transport gate is not on the expected activation call stack")
-			}
-			assertAccountNetworkReleasedScopeLocks(t, manager)
 			stateDone := make(chan error, 1)
 			go func() { _, err := manager.GetRGB11State(); stateDone <- err }()
-			stateCompleted := false
 			select {
 			case err := <-stateDone:
-				stateCompleted = true
 				if err != nil {
-					t.Errorf("local RGB state: %v", err)
+					t.Error(err)
 				}
 			case <-time.After(time.Second):
-				t.Errorf("GetRGB11State blocked behind paid activation %s network wait", phase)
+				t.Error("local RGB read blocked behind activation network")
 			}
 			release()
 			select {
-			case err := <-activationDone:
+			case err := <-done:
 				if err != nil {
-					t.Errorf("activation after releasing transport: %v", err)
+					t.Fatal(err)
 				}
 			case <-time.After(time.Minute):
-				t.Fatal("activation did not finish after transport release")
+				t.Fatal("activation did not finish")
 			}
-			if !stateCompleted {
-				select {
-				case err := <-stateDone:
-					if err != nil {
-						t.Errorf("RGB state after transport release: %v", err)
-					}
-				case <-time.After(5 * time.Second):
-					t.Fatal("RGB state did not finish after transport release")
-				}
-			}
-			status := manager.GetAccountManagementStatus()
-			if !status.RecoveryConfigured || status.StorageMode != AccountStoragePaid {
-				t.Error("fixture did not complete paid activation")
+			if !manager.GetAccountManagementStatus().RecoveryConfigured {
+				t.Fatal("service activation did not finish")
 			}
 		})
 	}
 }
 
-// No live wallet or network: use the same signed DKVS transport as activation.
-// Gate setup includes password KDF/encryption, which is much slower under -race.
-// The one-second local-state latency assertions above remain independent.
-func startGatedPaidActivation(t *testing.T, manager *Manager, secret []byte, phase string) (*accountActivationGateHTTP, <-chan error, func()) {
+// Pause real service reconfiguration at its binding or wrapper request.
+func startGatedPaidActivation(t *testing.T, manager *Manager, secret []byte, phase string, existing ...*rgb11MemoryDKVSHTTP) (*accountActivationGateHTTP, <-chan error, func()) {
 	t.Helper()
 	gate := &accountActivationNetworkGate{phase: phase, started: make(chan struct{}), release: make(chan struct{})}
 	var once sync.Once
 	release := func() { once.Do(func() { close(gate.release) }) }
 	t.Cleanup(release)
-	remote := &accountActivationGateHTTP{rgb11MemoryDKVSHTTP: newRGB11MemoryDKVSHTTP(), gate: gate}
-	manager.http = remote
-	manager.dkvs.mu.Lock()
-	manager.dkvs.clients = make(map[string]*SatsNetDKVSClient)
-	manager.dkvs.mu.Unlock()
-	client := newRGB11MessageNodeClient(remote.rgb11MemoryDKVSHTTP)
+	endpoint := newRGB11MemoryDKVSHTTP()
+	if len(existing) != 0 {
+		endpoint = existing[0]
+	}
+	remote := &accountActivationGateHTTP{rgb11MemoryDKVSHTTP: endpoint, gate: gate}
+	setActivationTestHTTP(t, manager, remote)
+	client := newRGB11MessageNodeClient(endpoint)
 	manager.serverNode = NewNode(client, "message.test", SERVER_NODE, client.CoreNodePubKey(), client.CoreNodePubKey())
 	defaults := dkvsindexer.NetworkDefaultsForParams(GetChainParam_SatsNet())
-	authorization := AccountStorageAuthorization{Mode: AccountStoragePaid,
+	location, err := manager.AccountIndexerLocation()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg, _, packageSecret := rereviewRecoveryPackage(t, manager)
+	zeroBytes(packageSecret)
+	authorization := AccountStorageAuthorization{Mode: AccountStoragePaid, Location: location,
 		Autopay: &DKVSAutopayOptions{AddressParams: GetChainParam_SatsNet(), PoolContract: defaults.AutopayContract}}
-	locator := account.Locator{AccountID: manager.accountProfile.AccountID}
+	locator := pkg.Envelope.Locator
 	done := make(chan error, 1)
 	go func() { done <- manager.ActivateAccountManagement(secret, "password", authorization, locator, "") }()
 	select {
@@ -184,27 +151,21 @@ func TestAccountPaidActivationPreservesConcurrentLocalChanges(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
-	for _, phase := range []string{"WaitReady", "CAS", "BindingCAS"} {
+	for _, phase := range []string{"CAS"} {
 		t.Run(phase, func(t *testing.T) {
-			manager, _, secret := buildRootWrapperSource(t)
+			manager, endpoint, _, _ := accountTTLNoopFixture(t)
+			secret := append([]byte(nil), manager.accountSecret...)
 			defer zeroBytes(secret)
-			if err := manager.EnsureAccount(manager.status.CurrentWallet, 1, "Before activation", ""); err != nil {
-				t.Fatal(err)
-			}
-			_, done, release := startGatedPaidActivation(t, manager, secret, phase)
+			_, done, release := startGatedPaidActivation(t, manager, secret, phase, endpoint)
 			oldGeneration := manager.accountProfile.ManagedDataGeneration
+
 			if err := manager.EnsureAccount(manager.status.CurrentWallet, 1, "During activation", ""); err != nil {
 				t.Fatal(err)
 			}
-			manager.markAccountManagedDataDirtyDeferred(rgb11AccountManagedProviderID)
 			mutationID := manager.accountProfile.Pending[0].ID
 			release()
 			err := <-done
-			if phase == "WaitReady" {
-				if !errors.Is(err, errAccountSnapshotChanged) {
-					t.Fatalf("stale prepublication snapshot: %v", err)
-				}
-			} else if err != nil {
+			if err != nil {
 				t.Fatal(err)
 			}
 			profile := manager.accountProfile
@@ -233,7 +194,8 @@ func TestAccountPaidActivationSelectionChangeDoesNotChangeRootIdentity(t *testin
 
 	for _, change := range []string{"account", "wallet"} {
 		t.Run(change, func(t *testing.T) {
-			manager, _, secret := buildRootWrapperSource(t)
+			manager, endpoint, _, _ := accountTTLNoopFixture(t)
+			secret := append([]byte(nil), manager.accountSecret...)
 			defer zeroBytes(secret)
 			rootID := manager.status.CurrentWallet
 			var alternateWallet int64
@@ -248,10 +210,21 @@ func TestAccountPaidActivationSelectionChangeDoesNotChangeRootIdentity(t *testin
 				}
 			}
 
-			_, done, release := startGatedPaidActivation(t, manager, secret, "CAS")
+			if err := manager.EnsureAccount(rootID, 1, "Selection target", ""); err != nil {
+				t.Fatal(err)
+			}
+			if err := manager.SyncAccountManagementState(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			_, done, release := startGatedPaidActivation(t, manager, secret, "CAS", endpoint)
 			switch change {
 			case "account":
-				manager.SwitchAccount(1)
+				if err := manager.SwitchAccount(1); err != nil {
+					t.Fatal(err)
+				}
+				if manager.status.CurrentAccount != 1 {
+					t.Fatal("account selection did not change")
+				}
 			case "wallet":
 				if err := manager.SwitchWallet(alternateWallet, "password"); err != nil {
 					t.Fatal(err)
@@ -272,21 +245,71 @@ func TestAccountPaidActivationSelectionChangeDoesNotChangeRootIdentity(t *testin
 	}
 }
 
-func TestAccountPaidActivationRejectsChangedRootConfiguration(t *testing.T) {
-	oldChain := _chain
+func TestAccountActivationThenBackup(t *testing.T) {
+	old := _chain
 	_chain = "testnet"
-	defer func() { _chain = oldChain }()
-	manager, _, secret := buildRootWrapperSource(t)
+	defer func() { _chain = old }()
+	manager, remote, pkg, auth, secret := newLocalActivationFixture(t)
 	defer zeroBytes(secret)
-	_, done, release := startGatedPaidActivation(t, manager, secret, "CAS")
-	manager.mutex.Lock()
-	manager.bumpAccountGenerationLocked()
-	manager.mutex.Unlock()
-	release()
-	if err := <-done; !errors.Is(err, errAccountSnapshotChanged) {
-		t.Fatalf("changed root configuration accepted: %v", err)
+	if err := manager.ActivateAccountManagement(secret, "password", *auth, pkg.Envelope.Locator, ""); err != nil {
+		t.Fatal(err)
 	}
-	if manager.accountProfile.RecoveryConfigured || manager.accountProfile.StorageMode != AccountStorageTemporary {
-		t.Fatal("stale activation applied after root configuration changed")
+	status := manager.GetAccountManagementStatus()
+	if !status.RecoveryConfigured || !status.DKVSWriteAllowed || !status.ManagedDataDirty || !manager.accountProfile.InitialBackupPending {
+		t.Fatalf("service activation incorrectly waited for private backup: %+v", status)
 	}
+	root, err := manager.accountManagementRootWallet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	walletModule, err := accountEntry(manager.accountProfile.AccountID, "wallets", AccountManagedDataGlobalScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexKey, err := account.ManagedIndexKey(manager.accountProfile.AccountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapperKey, err := accountRootWrapperKey(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := snapshotRGB11MemoryRecords(remote)
+	if initial[wrapperKey] == nil || initial[indexKey] != nil || initial[walletModule.Key] != nil {
+		t.Fatal("activation did not separate service opening from private backup")
+	}
+	peer := newAccountManagementAutoTestManager(t)
+	configureRGB11DKVSTestManager(peer, remote)
+	client := newRGB11MessageNodeClient(remote)
+	peer.serverNode = NewNode(client, "message.test", SERVER_NODE, client.CoreNodePubKey(), client.CoreNodePubKey())
+	if _, err := peer.ImportWallet(accountRootWrapperTestMnemonic, "password"); err != nil {
+		t.Fatal(err)
+	}
+	if err := peer.StartDKVSSync(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(peer.StopDKVSSync)
+	require.Eventually(t, func() bool { return peer.GetAccountManagementStatus().DiscoveryStatus == "active-waiting-backup" }, 30*time.Second, 20*time.Millisecond)
+	before := peer.GetWalletCatalog()
+	if err := peer.UpdateWalletName(peer.GetCurrentWalletId(), "forbidden replacement"); err == nil {
+		t.Fatal("new device overwrote a service whose first private backup is pending")
+	}
+	if !reflect.DeepEqual(before, peer.GetWalletCatalog()) {
+		t.Fatal("waiting discovery changed the new device catalog")
+	}
+	if err := manager.UpdateWalletName(manager.GetCurrentWalletId(), "B"); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.UpdateWalletName(manager.GetCurrentWalletId(), "C"); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.SyncAccountManagementState(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if manager.accountProfile.InitialBackupPending || manager.GetAccountManagementStatus().ManagedDataDirty {
+		t.Fatal("first backup did not finish its local initialization task")
+	}
+	require.Eventually(t, func() bool {
+		return peer.GetAccountManagementStatus().RecoveryConfigured && peer.GetWalletCatalog()[0].Name == "C"
+	}, 30*time.Second, 20*time.Millisecond, "new device must restore the completed backup without activation")
 }

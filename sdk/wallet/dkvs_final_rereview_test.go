@@ -38,9 +38,8 @@ func TestDKVSFinalReReview(t *testing.T) {
 
 	t.Run("QuotaRejectionReturnsErrorAndReleasesTransport", func(t *testing.T) {
 		manager, client, transport := newClient(t)
-		// This transport returns a structured business error, not HTTP 429.
-		// HTTP 429 has a separate transient classification; the HTTP regression
-		// below checks a real non-transient business refusal over NetClient.
+		// Structured quota errors stop the refused request, including HTTP 429;
+		// an unstructured HTTP 429 retains transient rate-limit handling.
 		transport.indexer = dkvs.New(newMemoryKVDB(), dkvs.Config{
 			EndpointID: "test-core-node", AllowFreeLocal: true,
 			FreeLocalCache: dkvs.FreeLocalCachePolicy{
@@ -97,27 +96,42 @@ func TestDKVSFinalReReview(t *testing.T) {
 				path = path[at:]
 				if r.Method == http.MethodGet {
 					query := make(map[string]string)
-					for key := range r.URL.Query() { query[key] = r.URL.Query().Get(key) }
+					for key := range r.URL.Query() {
+						query[key] = r.URL.Query().Get(key)
+					}
 					payload, err = transport.SendDKVSGet(path, query)
 				} else {
 					body, readErr := io.ReadAll(r.Body)
-					if readErr != nil { http.Error(w, readErr.Error(), http.StatusBadRequest); return }
+					if readErr != nil {
+						http.Error(w, readErr.Error(), http.StatusBadRequest)
+						return
+					}
 					payload, err = transport.SendDKVSPost(path, body)
 				}
 			} else {
 				payload, err = transport.SendGetRequest(&URL{Path: path})
 			}
-			if err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
-			var envelope struct { Code int `json:"code"`; ErrorCode string `json:"error_code"` }
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			var envelope struct {
+				Code      int    `json:"code"`
+				ErrorCode string `json:"error_code"`
+			}
 			if err := json.Unmarshal(payload, &envelope); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError); return
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
 			}
 			status := http.StatusOK
 			if envelope.Code != 0 {
 				switch dkvs.ErrorCode(envelope.ErrorCode) {
-				case dkvs.ErrorCodeStorageModeDowngrade: status = http.StatusConflict
-				case dkvs.ErrorCodeQuotaExceeded: status = http.StatusTooManyRequests
-				default: status = http.StatusBadRequest
+				case dkvs.ErrorCodeStorageModeDowngrade:
+					status = http.StatusConflict
+				case dkvs.ErrorCodeQuotaExceeded:
+					status = http.StatusTooManyRequests
+				default:
+					status = http.StatusBadRequest
 				}
 			}
 			w.Header().Set("Content-Type", "application/json")
@@ -225,7 +239,7 @@ func TestDKVSFinalReReview(t *testing.T) {
 		for n, key := range keys {
 			updated, err := client.PutSignedRecordWithAutopay(manager.wallet, key, []byte("updated"),
 				dkvs.RecordOptions{IssueHeight: 1}, DKVSAutopayOptions{
-				PoolContract: "review-fixture-pool", AddressParams: &chaincfg.TestNetParams,
+					PoolContract: "review-fixture-pool", AddressParams: &chaincfg.TestNetParams,
 				})
 			require.NoError(t, err)
 			notify := p2p.NotifyForRecord(updated)

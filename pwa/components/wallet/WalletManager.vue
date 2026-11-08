@@ -161,8 +161,8 @@
           <p v-if="isImporting" class="text-xs text-muted-foreground">{{ $t('walletManager.importPendingHint') }}</p>
           <p v-if="importError" role="alert" class="text-sm text-destructive">{{ importError }}</p>
           <Alert v-if="importCommitted && committedReadError" role="status">
-            <AlertDescription>Wallet imported successfully. Reload to unlock the saved wallet.</AlertDescription>
-            <Button type="button" variant="outline" class="mt-2" @click="reloadCommittedWallet">Reload wallet</Button>
+            <AlertDescription>{{ $t('walletComponents.importedReload') }}</AlertDescription>
+            <Button type="button" variant="outline" class="mt-2" @click="reloadCommittedWallet">{{ $t('walletComponents.reloadWallet') }}</Button>
           </Alert>
           <DialogFooter>
             <Button variant="secondary" type="button" :disabled="isImporting" @click="isImportWalletDialogOpen = false" class="h-11 mt-2">
@@ -272,11 +272,11 @@
               </Button>
             </div>
             <div>
-              <Button v-if="createdReadError" @click="reloadCreatedWallet" class="w-full">I saved my phrase, reload wallet</Button>
+              <Button v-if="createdReadError" @click="reloadCreatedWallet" class="w-full">{{ $t('walletComponents.savedPhraseReload') }}</Button>
               <Button v-else variant="default" @click="confirmSavedMnemonic" class="w-full">
                 {{ $t('walletManager.confirmSaved') }}
               </Button>
-			  <p class="mt-2 text-xs text-muted-foreground">Clipboard export is disabled. Record the words in a secure offline location.</p>
+			  <p class="mt-2 text-xs text-muted-foreground">{{ $t('walletComponents.clipboardDisabled') }}</p>
             </div>
           </div>
         </div>
@@ -313,9 +313,12 @@ import { hideAddress } from '@/utils'
 import { useDebounceFn } from '@vueuse/core'
 import { beginMnemonicView } from '@/lib/sensitive-session'
 import { CredentialAttemptLimiter } from '@/lib/credential-rate-limit'
+import { useI18n } from 'vue-i18n'
+import { confirmPendingBackupRisk } from '@/utils/pendingBackupRisk'
 
 
 const router = useRouter()
+const { t } = useI18n()
 const walletStore = useWalletStore()
 const { wallets, isSwitchingWallet } = storeToRefs(walletStore)
 const { toast } = useToast()
@@ -391,10 +394,11 @@ watch(wallets, async (newWallets) => {
 // 创建防抖的切换钱包函数
 const debouncedSelectWallet = useDebounceFn(async (wallet: WalletData) => {
   try {
+    if (!await confirmPendingBackupRisk(key => t(key))) return
     await walletStore.switchWallet(wallet.id)
     toast({
-      title: 'Success',
-      description: 'Wallet switched successfully',
+      title: t('walletComponents.success'),
+      description: t('walletComponents.walletSwitched'),
       variant: 'success'
     })
     safeSetTimeout(() => {
@@ -404,8 +408,8 @@ const debouncedSelectWallet = useDebounceFn(async (wallet: WalletData) => {
     console.error('Failed to switch wallet:', error)
     toast({
       variant: 'destructive',
-      title: 'Error',
-      description: error.message || 'Failed to switch wallet'
+      title: t('walletComponents.error'),
+      description: error.message || t('walletComponents.walletSwitchFailed')
     })
   }
 }, 300)
@@ -414,8 +418,8 @@ const selectWallet = async (wallet: WalletData) => {
   // 如果正在切换，直接返回
   if (isSwitchingWallet.value) {
     toast({
-      title: 'Please wait',
-      description: 'Wallet switch in progress',
+      title: t('walletComponents.wait'),
+      description: t('walletComponents.walletSwitching'),
       variant: 'default'
     })
     return
@@ -435,6 +439,7 @@ const deleteWallet = async () => {
 
   try {
     isDeleting.value = true
+    if (!await confirmPendingBackupRisk(key => t(key), true)) return
     const [err] = await walletStore.deleteWallet(walletToDelete.value.id)
 
     if (err) {
@@ -442,8 +447,8 @@ const deleteWallet = async () => {
     }
 
     toast({
-      title: 'Success',
-      description: 'Wallet deleted successfully',
+      title: t('walletComponents.success'),
+      description: t('walletComponents.walletDeleted'),
       variant: 'success'
     })
     isDeleteDialogOpen.value = false
@@ -457,8 +462,8 @@ const deleteWallet = async () => {
 
     toast({
       variant: 'destructive',
-      title: 'Error',
-      description: error.message || 'Failed to delete Wallet'
+      title: t('walletComponents.error'),
+      description: error.message || t('walletComponents.walletDeleteFailed')
     })
   } finally {
     console.log('finished ');
@@ -494,7 +499,7 @@ const createWallet = async () => {
     const [err, result] = outcome
 
     if (!result) {
-      throw err || new Error('Failed to create wallet')
+      throw err || new Error(t('walletComponents.walletCreateFailed'))
     }
 
     // 创建成功后，显示助记词
@@ -506,16 +511,16 @@ const createWallet = async () => {
     isShowMnemonicDialogOpen.value = true
 
     toast({
-      title: 'Wallet Created Successfully',
-      description: err ? 'Wallet saved. Please save your recovery phrase, then reload to unlock the wallet.'
-        : 'Your wallet has been created. Please save your recovery phrase.',
+      title: t('walletComponents.walletCreated'),
+      description: err ? t('walletComponents.walletSaveReload')
+        : t('walletComponents.walletSavePhrase'),
       variant: err ? 'info' : 'success'
     })
   } catch (error: any) {
     toast({
       variant: 'destructive',
-      title: 'Error',
-      description: error.message || 'Failed to create wallet'
+      title: t('walletComponents.error'),
+      description: error.message || t('walletComponents.walletCreateFailed')
     })
   } finally {
     isCreating.value = false
@@ -530,7 +535,7 @@ const importWallet = async () => {
   try {
 
     if (!mnemonic) {
-      throw new Error('Please enter your recovery phrase')
+      throw new Error(t('walletComponents.enterPhrase'))
     }
     assertWalletWriteAllowed()
     isImporting.value = true
@@ -546,7 +551,7 @@ const importWallet = async () => {
       return
     }
     const [err, identity] = outcome
-    if (!identity) throw err || new Error('Wallet import failed')
+    if (!identity) throw err || new Error(t('walletComponents.walletImportFailed'))
     importCommitted.value = true
     importMnemonic.value = ''
     if (err) throw err
@@ -557,8 +562,8 @@ const importWallet = async () => {
     importStage.value = ''
     isImportWalletDialogOpen.value = false
     toast({
-      title: 'Success',
-	  description: 'Wallet imported successfully',
+      title: t('walletComponents.success'),
+	  description: t('walletComponents.walletImported'),
       variant: 'success'
     })
     safeSetTimeout(() => {
@@ -569,13 +574,13 @@ const importWallet = async () => {
     if (importCommitted.value) {
       committedReadError.value = true
       importStage.value = ''
-      toast({ title: 'Wallet Imported', description: 'Wallet saved. Reload to unlock the wallet.', variant: 'default' })
+      toast({ title: t('walletComponents.walletImportedTitle'), description: t('walletComponents.walletReload'), variant: 'default' })
       return
     }
-    importError.value = error.message || 'Wallet import failed'
+    importError.value = error.message || t('walletComponents.walletImportFailed')
     toast({
       variant: 'destructive',
-      title: 'Error',
+      title: t('walletComponents.error'),
       description: error.message
     })
   } finally {
@@ -599,16 +604,16 @@ const saveWalletName = async () => {
     await walletStore.updateWalletName(editingWallet.value.id, editingName.value)
 
     toast({
-      title: 'Success',
-      description: 'Wallet name updated successfully',
+      title: t('walletComponents.success'),
+      description: t('walletComponents.walletNameUpdated'),
       variant: 'success'
     })
     isEditNameDialogOpen.value = false
   } catch (error: any) {
     toast({
       variant: 'destructive',
-      title: 'Error',
-      description: error.message || 'Failed to update Wallet name'
+      title: t('walletComponents.error'),
+      description: error.message || t('walletComponents.walletNameFailed')
     })
   } finally {
     isEditingName.value = false
@@ -633,15 +638,15 @@ const verifyMnemonicPassword = async () => {
   if (!mnemonicPassword.value || !editingWallet.value) {
     toast({
       variant: 'destructive',
-      title: 'Error',
-      description: 'Please enter password'
+      title: t('walletComponents.error'),
+      description: t('walletComponents.enterPassword')
     })
     return
   }
 	try {
 	  mnemonicLimiter.assertAllowed()
 	} catch (error) {
-	  toast({ variant: 'destructive', title: 'Error', description: (error as Error).message })
+	  toast({ variant: 'destructive', title: t('walletComponents.error'), description: (error as Error).message })
 	  return
 	}
 
@@ -654,7 +659,7 @@ const verifyMnemonicPassword = async () => {
 
     if (err || !result?.mnemonic) {
 	  mnemonicLimiter.recordFailure()
-      throw new Error('Verification failed')
+      throw new Error(t('walletComponents.verificationFailed'))
     }
 
 	mnemonicLimiter.reset()
@@ -662,15 +667,15 @@ const verifyMnemonicPassword = async () => {
 	endMnemonicView ??= beginMnemonicView()
     mnemonicPhrase.value = result.mnemonic
     toast({
-      title: 'Success',
-      description: 'Password verified successfully',
+      title: t('walletComponents.success'),
+      description: t('walletComponents.passwordVerified'),
       variant: 'success'
     })
   } catch (error: any) {
     toast({
       variant: 'destructive',
-      title: 'Error',
-      description: error.message || 'Verification failed'
+      title: t('walletComponents.error'),
+      description: error.message || t('walletComponents.verificationFailed')
     })
   } finally {
     isVerifyingMnemonic.value = false
@@ -690,8 +695,8 @@ const confirmSavedMnemonic = async () => {
       await walletStore.switchWallet(walletStore.walletId)
       sendAccountsChangedEvent(wallets.value)
       toast({
-        title: 'Success',
-        description: 'Wallet created and switched successfully',
+        title: t('walletComponents.success'),
+        description: t('walletComponents.createdAndSwitched'),
         variant: 'success'
       })
       safeSetTimeout(() => {
@@ -700,8 +705,8 @@ const confirmSavedMnemonic = async () => {
     } catch (error: any) {
       toast({
         variant: 'destructive',
-        title: 'Error',
-        description: error.message || 'Failed to switch to new wallet'
+        title: t('walletComponents.error'),
+        description: error.message || t('walletComponents.newWalletSwitchFailed')
       })
     }
   }

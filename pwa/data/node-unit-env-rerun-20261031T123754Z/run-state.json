@@ -1,0 +1,8 @@
+{
+  "state": "EXITED",
+  "pid": 77092,
+  "started_utc": "2026-10-31T12:38:08Z",
+  "ended_utc": "2026-10-31T12:38:17Z",
+  "exit_code": 1,
+  "test_log": "data/node-unit-env-rerun-20261031T123754Z/test.log"
+}

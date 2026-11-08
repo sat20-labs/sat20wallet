@@ -43,7 +43,7 @@ test('missing ID blocks invoice call', async () => {
   }).outputText
   let calls = 0
   const mocks = {
-    restoring: { value: false }, restoreFailed: { value: false }, scopeKey: { value: 'scope' }, requestId: { value: '' },
+    rgb11WriteAllowed: { value: true }, restoring: { value: false }, restoreFailed: { value: false }, scopeKey: { value: 'scope' }, requestId: { value: '' },
     assetContractID: { value: '' }, errorMessage: { value: '' }, t: (key) => key,
     props: { asset: { ticker: 'r2direct@gvml24je', precision: 0 } }, amount: { value: '1' },
     decimalToRaw: () => '1', proxyEndpoint: { value: '' }, transportMode: { value: 'out-of-band' },

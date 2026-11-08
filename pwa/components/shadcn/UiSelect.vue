@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectGroup, SelectItem } from '@/components/ui/select'
 import { toRefs } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 interface Option {
   label: string;
   value: any;
@@ -14,7 +17,6 @@ const props = withDefaults(
   }>(),
   {
     options: () => [],
-    placeholder: 'Select',
     disabled: false,
   },
 );
@@ -32,7 +34,7 @@ const updateValue = (e: any) => {
 <template>
   <Select v-model="selectedValue" :disabled="props.disabled" @update:model-value="updateValue">
     <SelectTrigger class="w-full">
-      <SelectValue :placeholder="props.placeholder" />
+      <SelectValue :placeholder="props.placeholder ?? t('settingsUi.select')" />
     </SelectTrigger>
     <SelectContent>
       <SelectGroup>

@@ -1,0 +1,244 @@
+--- a/pwa/scripts/verify/account-management-usage-e2e.mjs
++++ b/pwa/scripts/verify/account-management-usage-e2e.mjs
+@@ -93,8 +93,29 @@
+     typeof observed?.address === 'string' && observed.address,
+   'fixed-root observed identity must include fingerprint and address')
+   assert.equal(observed.fingerprint, expected.fingerprint, 'fixed root fingerprint changed')
+   assert.equal(observed.address, expected.address, 'fixed root address changed')
++}
++
++// Discovery, write eligibility and a recoverable first backup are separate
++// facts. Counters alone never prove that another device can restore the backup.
++function accountReadiness(status) {
++  const knownDiscovery = ['inactive', 'active', 'active-waiting-backup'].includes(status?.discovery_status)
++  return {
++    discovery: knownDiscovery ? status.discovery_status : 'unresolved',
++    writeQualified: status?.recovery_configured === true && status?.activation_pending === false &&
++      status?.dkvs_write_allowed === true,
++  }
++}
++
++async function assertBackupPreview(page, expectedCatalog) {
++  await expect(page.getByRole('heading', { name: '确认恢复账户', exact: true })).toBeVisible()
++  for (const wallet of expectedCatalog) {
++    await expect(page.getByText(wallet.name, { exact: true })).toBeVisible()
++    await expect(page.getByText(`${wallet.accounts.length} 个子账户`, { exact: true })).toBeVisible()
++  }
++  await expect(page.getByLabel('新设备解锁密码', { exact: true })).toBeVisible()
++  await expect(page.getByLabel('再次输入解锁密码', { exact: true })).toBeVisible()
+ }
+ 
+ // Reuse real PWA root discovery and background sync across separate devices.
+ async function sameModeReconfiguration(t, page, credential, mode, questions, mnemonic) {
+@@ -223,13 +244,14 @@
+           recovery_configured: status.recovery_configured,
+           activation_pending: status.activation_pending,
+           dkvs_write_allowed: status.dkvs_write_allowed,
+         }
++        const readiness = accountReadiness(status)
+         if (status.recovery_configured || status.activation_pending ||
+-          status.discovery_status === 'active' || status.discovery_status === 'active-waiting-backup') {
++          readiness.discovery === 'active' || readiness.discovery === 'active-waiting-backup') {
+           throw new Error('new random first wallet unexpectedly has an active or pending service')
+         }
+-        return status.discovery_status === 'inactive' && status.local_only === true &&
++        return readiness.discovery === 'inactive' && status.local_only === true &&
+           status.recovery_configured === false && !status.activation_pending
+       }, { timeout: 90000, message: 'new random first wallet requires real inactive discovery before local business' }).toBe(true)
+       return page
+     } catch (error) {
+@@ -437,8 +459,40 @@
+       } finally { db.close() }
+       return values.map((value, index) => containers.some(item => item.includes(value)) ? index : -1).filter(index => index >= 0)
+     }, secrets)
+     assert.deepEqual(exposed, [], 'recovery secrets were persisted in PWA state')
++  }
++
++  const paidQuoteCase = 'usage: Guardian paid confirmation uses 100 records and root identity after a 200 record child-wallet quote'
++  if (!t.material?.guardian_setup && t.focusedUsageCases?.includes(paidQuoteCase)) {
++    const owner = await fresh()
++    const guardian = await freshGuardian()
++    try {
++      await settings(guardian)
++      await guardian.getByRole('button', { name: '生成我的联系信息并发送给好友', exact: true }).click()
++      await confirmPassword(guardian)
++      await expect.poll(() => guardian.locator('textarea[readonly]').count(), { timeout: 90000 }).toBe(2)
++      const contact = JSON.parse(await guardian.locator('textarea[readonly]').first().inputValue())
++      const ownerStatus = await accountCall(owner, 'status')
++      const ownerReadiness = accountReadiness(ownerStatus)
++      assert.equal(ownerReadiness.discovery, 'inactive', 'Guardian quote material owner must be freshly discovered as inactive')
++      assert.equal(ownerReadiness.writeQualified, false, 'Guardian quote prep must not grant write eligibility')
++      assert.equal(ownerStatus.recovery_configured, false, 'Guardian quote prep must not pre-activate its owner')
++      assert.equal(ownerStatus.activation_pending, false)
++      assert.notEqual(contact.mailbox_id, ownerStatus.account_id, 'quote material must use an independent Guardian')
++      await preflightUI(owner)
++      await temporaryUI(owner)
++      await fillQuestions(owner)
++      const material = await accountCall(owner, 'createRecovery', {
++        password, wallets: [], recovery_mode: '2of3', questions, guardian: contact,
++      })
++      assert.ok(typeof material.guardian_setup === 'string' && material.guardian_setup.length,
++        'real PWA setup must produce Guardian material for the focused quote case')
++      t.material = { ...(t.material || {}), guardian_setup: material.guardian_setup }
++      await accountCall(owner, 'cancelPendingStorageAuthorization')
++    } finally {
++      await Promise.all([owner.context().close(), guardian.context().close()])
++    }
+   }
+ 
+   if (!t.material && t.focusedUsageCases?.includes(
+     'usage: offline catalog is read-only and resumes synchronization after reconnect')) {
+@@ -1596,11 +1650,11 @@
+       const expectedCatalog = await catalog(page)
+       const normalize = wallets => wallets.map(({ fingerprint, name, accounts }) => ({ fingerprint, name, accounts }))
+       await assertNoSecrets(page, [...questions.map(q => q.answer), savedShare, password])
+       await assertNoSecrets(guardian, [...questions.map(q => q.answer), password])
+-      // Close the original device before either recovery. Never replace the
+-      // clipboard material with an SDK/session locator in this test.
+-      await page.context().close()
++      // Keep the source open until a separate device proves the first managed
++      // backup can be decrypted and previewed through the real recovery UI.
++      let firstBackupRecoverable = false
+       for (const combination of ['knowledge+guardian', 'share+guardian']) {
+         const recovery = await device()
+         let stage = 'load-backup'
+         const stageAt = next => {
+@@ -1634,9 +1688,23 @@
+           await recovery.getByPlaceholder('粘贴 Guardian 返回的加密响应').fill(await guardian.locator('textarea[readonly]').last().inputValue())
+           await recovery.getByRole('button', { name: '使用 Guardian 响应', exact: true }).click()
+           stageAt('preview')
+           await recovery.getByRole('button', { name: '预览恢复内容', exact: true }).click()
+-          await recovery.getByRole('heading', { name: '确认恢复账户', exact: true }).waitFor()
++          await assertBackupPreview(recovery, expectedCatalog)
++          if (!firstBackupRecoverable) {
++            const sourceStatus = await accountCall(page, 'status')
++            const sourceReadiness = accountReadiness(sourceStatus)
++            assert.equal(sourceStatus.recovery_configured, true)
++            assert.equal(sourceStatus.activation_pending, false)
++            assert.equal(sourceStatus.public_locator, savedLocator)
++            console.log(JSON.stringify({ guardianRecoveryReadiness: {
++              discovery: sourceReadiness.discovery,
++              write_qualified: sourceReadiness.writeQualified,
++              first_backup_recoverable: true,
++            } }))
++            firstBackupRecoverable = true
++            await page.context().close()
++          }
+           const localPassword = recovery.getByLabel('新设备解锁密码', { exact: true })
+           const confirmPasswordBox = recovery.getByLabel('再次输入解锁密码', { exact: true })
+           stageAt('password-inputs-visible')
+           await localPassword.waitFor()
+--- a/sdk/e2e/account_management_dkvs_e2e_test.go
++++ b/sdk/e2e/account_management_dkvs_e2e_test.go
+@@ -7,8 +7,9 @@
+ 	"fmt"
+ 	"net/url"
+ 	"strings"
+ 	"testing"
++	"time"
+ 
+ 	indexerdb "github.com/sat20-labs/indexer/indexer/db"
+ 	"github.com/sat20-labs/sat20wallet/sdk/account"
+ 	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
+@@ -122,8 +123,9 @@
+ 	require.NoError(t, err)
+ 
+ 	guardianManager, guardianLocation := accountReviewDevice(t, fixture.Network, guardianMnemonic)
+ 	require.NoError(t, guardianManager.InitializeAccountManagement(accountReviewPassword))
++	require.NoError(t, guardianManager.RegisterAccountManagedDataProvider(&e2eAccountManagedProvider{}))
+ 	guardianIdentity, err := guardianManager.GetOrCreateAccountGuardianIdentity(accountReviewPassword)
+ 	require.NoError(t, err)
+ 	guardianPublic, err := base64.RawURLEncoding.DecodeString(guardianIdentity.PublicKey)
+ 	require.NoError(t, err)
+@@ -136,8 +138,74 @@
+ 		{Question: account.KnowledgeQuestion{ID: "book", Prompt: "指定版本书籍第十页最后十个字", IgnorePunctuation: true}, Answer: "月光落在安静的旧桥上", Confirmation: "月光落在安静的旧桥上"},
+ 		{Question: account.KnowledgeQuestion{ID: "note", Prompt: "私人纸条中的指定句子", IgnorePunctuation: true}, Answer: "yellow bicycle beside the winter river", Confirmation: "yellow bicycle beside the winter river"},
+ 		{Question: account.KnowledgeQuestion{ID: "family", Prompt: "未公开的家庭约定", IgnorePunctuation: true}, Answer: "周日傍晚六点在老树下见", Confirmation: "周日傍晚六点在老树下见"},
+ 	}
++	// Guardian must itself complete a real paid activation before it stores
++	// the Owner's share. The already-active AUTOPAY delegate is reused: this
++	// confirms paid storage without weakening the contract's payment rules.
++	guardianAuthorization, err := guardianManager.ConfirmAccountStorage(wallet.AccountStoragePaid, 100)
++	require.NoError(t, err)
++	require.Equal(t, wallet.AccountStoragePaid, guardianAuthorization.Mode)
++	require.Empty(t, guardianAuthorization.TransactionID, "ready Guardian AUTOPAY must not be funded twice")
++	guardianBackup, err := guardianManager.ExportAccountBackupForPWA("123456", nil)
++	require.NoError(t, err)
++	defer clearAccountBackup(&guardianBackup)
++	guardianPkg, err := guardianManager.CreateAccountRecoveryPackage(account.CreateOptions{
++		AccountID: guardianID, Backup: guardianBackup, RecoveryMode: account.RecoveryMode2Of2, Questions: questions,
++	})
++	require.NoError(t, err)
++	guardianRepo, err := guardianManager.NewAccountRepositoryForStorage(*guardianAuthorization)
++	require.NoError(t, err)
++	require.NoError(t, account.NewManager(guardianRepo).Publish(context.Background(), *guardianPkg))
++	guardianAnswers := []account.AnswerAttempt{
++		{QuestionID: "book", Answer: "月光落在安静的旧桥上。"},
++		{QuestionID: "note", Answer: "yellow bicycle beside the winter river"},
++	}
++	guardianDKVSShare, err := account.RecoverDKVSShare(guardianPkg.DKVSShareCapsule,
++		guardianPkg.KnowledgeBundle, guardianAnswers)
++	require.NoError(t, err)
++	guardianRestored, guardianSecret, err := account.RecoverAccount(guardianPkg.Envelope,
++		guardianPkg.UserShare, guardianDKVSShare)
++	require.NoError(t, err)
++	defer clearBytes(guardianSecret)
++	defer clearAccountBackup(&guardianRestored)
++	require.NoError(t, guardianManager.ActivateAccountManagement(guardianSecret,
++		"123456", *guardianAuthorization, guardianPkg.Envelope.Locator, ""))
++	guardianReadyCtx, guardianReadyCancel := context.WithTimeout(context.Background(), 30*time.Second)
++	defer guardianReadyCancel()
++	require.NoError(t, guardianManager.WaitAccountManagedDataReady(guardianReadyCtx),
++		"Guardian first paid backup must reach confirmed DKVS state and data")
++	guardianStatus := guardianManager.GetAccountManagementStatus()
++	require.Equal(t, "active", guardianStatus.DiscoveryStatus)
++	require.True(t, guardianStatus.RecoveryConfigured)
++	require.False(t, guardianStatus.ActivationPending)
++	require.True(t, guardianStatus.DKVSWriteAllowed)
++	require.Equal(t, wallet.AccountStoragePaid, guardianStatus.StorageMode)
++	require.False(t, guardianStatus.ManagedDataDirty)
++	require.Zero(t, guardianStatus.PendingChanges)
++	require.Zero(t, guardianStatus.DKVSPendingRequests)
++	guardianLatest, err := guardianManager.LoadAccountManagementStateForRecovery(
++		guardianLocation, guardianPkg.Envelope.Locator, guardianSecret, guardianMnemonic)
++	require.NoError(t, err, "Guardian's first paid backup must be independently recoverable")
++	require.NotZero(t, guardianLatest.State.Revision)
++	require.NotZero(t, guardianLatest.ManagedData.Revision)
++	require.NotEmpty(t, guardianLatest.ManagedData.Items)
++	guardianPubKey := guardianManager.GetWallet().GetPubKey().SerializeCompressed()
++	guardianStateKey, err := dkvsindexer.PersonalKey(guardianPubKey, "account/state")
++	require.NoError(t, err)
++	guardianDataKey, err := dkvsindexer.BlobKey(guardianID, "account-managed-data")
++	require.NoError(t, err)
++	for _, record := range []*wire.DKVSRecord{
++		waitForDKVSRecord(t, fixture.Network.Core, guardianStateKey),
++		waitForDKVSRecord(t, fixture.Network.Core, guardianDataKey),
++	} {
++		require.Zero(t, record.TTL)
++		proof, proofErr := dkvsindexer.ParseFeeProof(record.FeeProof)
++		require.NoError(t, proofErr)
++		require.Equal(t, dkvsindexer.FeeModeAutopay, proof.Mode)
++		require.Equal(t, contractAddress.MustEncode(), proof.PoolContract)
++	}
++
+ 	backup := account.Backup{Version: account.Version, Wallets: []account.WalletBackup{{
+ 		Name: "Primary", Mnemonic: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+ 		AccountCount: 2, SubAccounts: []account.SubAccount{{Index: 0, DID: "alice"}, {Index: 1, DID: "alice-work"}},
+ 	}}}
+@@ -207,12 +275,13 @@
+ 		RecoveryMode: account.RecoveryMode2Of3, Questions: questions, GuardianMailboxID: guardianID,
+ 		GuardianPublicKey: guardianPublic})
+ 	require.NoError(t, err)
+ 	require.NoError(t, manager.Publish(context.Background(), *pkg))
+-	guardianAuthorization, err := guardianManager.ReusePaidAccountStorage(100)
+-	require.NoError(t, err)
++	guardianCapsuleAuthorization, err := guardianManager.ReusePaidAccountStorage(100)
++	require.NoError(t, err)
++	require.Empty(t, guardianCapsuleAuthorization.TransactionID)
+ 	require.NoError(t, guardianManager.PutGuardianCapsuleForStorage(
+-		*guardianAuthorization, guardianID, *pkg.GuardianCapsule,
++		*guardianCapsuleAuthorization, guardianID, *pkg.GuardianCapsule,
+ 	))
+ 
+ 	packageBytes, err := account.EncodeRecoveryPackageStorage(*pkg)
+ 	require.NoError(t, err)

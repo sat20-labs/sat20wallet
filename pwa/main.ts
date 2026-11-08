@@ -1,5 +1,5 @@
 import '@/utils/debug'
-import { createApp } from 'vue'
+import { createApp, watch } from 'vue'
 import App from './entrypoints/popup/App.vue'
 import router from './router'
 import './assets/index.css'
@@ -31,6 +31,8 @@ const i18n = createI18n({
     zh,
   },
 })
+
+watch(i18n.global.locale, (locale) => { document.documentElement.lang = locale }, { immediate: true })
 
 import sat20 from './utils/sat20'
 import rgb11Address from './utils/rgb11Address'
@@ -192,7 +194,7 @@ clearDevelopmentServiceWorkerCache().then(() => {
   }
 }).catch(renderStartupError);
 
-export const setLanguage = (locale: Language) => {
+export const setLanguage = async (locale: Language): Promise<void> => {
+  await walletStorage.setValue('language', locale)
   i18n.global.locale.value = locale
-  walletStorage.setValue('language', locale)
 }

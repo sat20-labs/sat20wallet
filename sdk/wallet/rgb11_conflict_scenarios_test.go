@@ -111,7 +111,7 @@ func TestRGB11ConflictCandidateFlushAtomic(t *testing.T) {
 	f := newRGB11ConflictFixture(t, false)
 	f.publish(t, true)
 	ctx := context.Background()
-	current := f.snapshot(t)
+	current := localConflictSnap(t, f)
 	candidate, _, err := f.sender.rgbManager.buildRGB11RefreshCandidate(ctx, current, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -123,7 +123,7 @@ func TestRGB11ConflictCandidateFlushAtomic(t *testing.T) {
 	if !errors.Is(err, errRGB11ProjectionInjectedFlushFailure) || fail.flushCount() != 1 {
 		t.Fatalf("atomic failure not exercised: %v", err)
 	}
-	if !reflect.DeepEqual(current.ProjectionRecords, f.snapshot(t).ProjectionRecords) {
+	if !reflect.DeepEqual(current.ProjectionRecords, localConflictSnap(t, f).ProjectionRecords) {
 		t.Fatal("failed commit changed projection")
 	}
 	f.assertProtected(t)

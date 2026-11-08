@@ -31,7 +31,7 @@
             {{ $t('escapeHatch.cooperativeClose') }}
           </Button>
           <Button class="w-full" variant="destructive" :disabled="loading" @click="requestForceClose">
-            Force Close
+            {{ t('settingsUi.forceClose') }}
           </Button>
         </div>
 
@@ -202,25 +202,24 @@
     <AlertDialog v-model:open="showForceCloseConfirm">
       <AlertDialogContent class="w-[350px] rounded-lg bg-zinc-900">
         <AlertDialogHeader>
-          <AlertDialogTitle>Confirm Force Close</AlertDialogTitle>
+          <AlertDialogTitle>{{ t('settingsUi.confirmForceClose') }}</AlertDialogTitle>
           <AlertDialogDescription>
-            Force close broadcasts the latest commitment transaction and may require waiting for the CSV delay.
-            Continue only if cooperative close is unavailable.
+            {{ t('settingsUi.forceWarning') }}
           </AlertDialogDescription>
           <div v-if="forceCloseSnapshot" class="space-y-1 rounded border border-zinc-700 p-3 text-xs text-zinc-300">
-            <p>Channel: {{ forceCloseSnapshot.channel_id }}</p>
-            <p>Status: {{ forceCloseSnapshot.status }}</p>
-            <p>Commit height: {{ forceCloseSnapshot.commit_height }}</p>
-            <p>CSV delay: {{ forceCloseSnapshot.csv_delay }}</p>
-            <p>Local commitment: {{ forceCloseSnapshot.local_commitment_txid }}</p>
-            <p>Remote commitment: {{ forceCloseSnapshot.remote_commitment_txid }}</p>
-            <p>Punish coverage: {{ forceCloseSnapshot.punish_coverage?.status }}</p>
+            <p>{{ t('settingsUi.channel') }} {{ forceCloseSnapshot.channel_id }}</p>
+            <p>{{ t('settingsUi.status') }} {{ forceCloseSnapshot.status }}</p>
+            <p>{{ t('settingsUi.commitHeight') }} {{ forceCloseSnapshot.commit_height }}</p>
+            <p>{{ t('settingsUi.csvDelay') }} {{ forceCloseSnapshot.csv_delay }}</p>
+            <p>{{ t('settingsUi.localCommitment') }} {{ forceCloseSnapshot.local_commitment_txid }}</p>
+            <p>{{ t('settingsUi.remoteCommitment') }} {{ forceCloseSnapshot.remote_commitment_txid }}</p>
+            <p>{{ t('settingsUi.punishCoverage') }} {{ forceCloseSnapshot.punish_coverage?.status }}</p>
           </div>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel :disabled="loading">Cancel</AlertDialogCancel>
+          <AlertDialogCancel :disabled="loading">{{ t('approvalUi.cancel') }}</AlertDialogCancel>
           <AlertDialogAction :disabled="loading" @click.prevent="forceCloseChannel">
-            {{ loading ? 'Checking safety…' : 'Force Close' }}
+            {{ loading ? t('settingsUi.checkingSafety') : t('settingsUi.forceClose') }}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
@@ -229,6 +228,8 @@
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
+const { t } = useI18n()
 import { ref, computed, onMounted, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { Button } from '@/components/ui/button'
@@ -322,7 +323,7 @@ const mergedChannelAssets = computed(() => {
 const formatAssets = (assets: any): string => {
   if (!assets) return '-';
   // 假设 assets 是一个数组，格式化为字符串
-  return assets.map((asset: any) => asset.name || 'Unknown').join(', ');
+  return assets.map((asset: any) => asset.name || t('settingsUi.unknown')).join(', ');
 };
 
 const channelId = computed(() => {
@@ -342,10 +343,10 @@ const cooperativeCloseSnapshot = ref<CooperativeCloseSnapshot | null>(null)
 
 const cooperativeCloseNetworkLabel = (networkKey: string) => (
   networkKey.toLowerCase() === 'mainnet'
-    ? 'Bitcoin mainnet / SatoshiNet mainnet'
+    ? t('settingsUi.mainnetPair')
     : networkKey.toLowerCase() === 'regtest'
-      ? 'Bitcoin regtest / SatoshiNet regtest'
-    : 'Bitcoin testnet4 / SatoshiNet testnet'
+      ? t('settingsUi.regtestPair')
+    : t('settingsUi.testnetPair')
 )
 
 const formatCooperativeCloseBalance = (balances: any[]) => {
@@ -354,7 +355,7 @@ const formatCooperativeCloseBalance = (balances: any[]) => {
     const name = balance?.Name || {}
     const asset = !name.Protocol && !name.Type && !name.Ticker
       ? 'sats'
-      : (name.Ticker || [name.Protocol, name.Type].filter(Boolean).join(':') || 'asset')
+      : (name.Ticker || [name.Protocol, name.Type].filter(Boolean).join(':') || t('settingsUi.asset'))
     return `${String(balance?.Amount ?? 0)} ${asset}`
   }).join(', ')
 }
@@ -403,8 +404,8 @@ const confirmCooperativeClose = async () => {
       snapshot.feeRate !== String(btcFeeRate.value)) {
     showCooperativeCloseConfirm.value = false
     toast({
-      title: 'Error',
-      description: 'The channel or network changed. Review the current close details and confirm again.',
+      title: t('approvalUi.error'),
+      description: t('settingsUi.channelChanged'),
       variant: 'destructive',
     })
     return
@@ -416,15 +417,15 @@ const confirmCooperativeClose = async () => {
     const [err] = await satsnetStp.closeChannel(snapshot.channelId, snapshot.feeRate, false)
     if (err) {
       toast({
-        title: 'Error',
-        description: err.message || 'Failed to close the channel cooperatively.',
+        title: t('approvalUi.error'),
+        description: err.message || t('settingsUi.cooperativeCloseFailed'),
         variant: 'destructive',
       })
       return
     }
     toast({
-      title: 'Success',
-      description: 'Cooperative channel close initiated.',
+      title: t('approvalUi.success'),
+      description: t('settingsUi.cooperativeCloseStarted'),
       variant: 'success',
     })
   } finally {
@@ -437,7 +438,7 @@ const confirmCooperativeClose = async () => {
 const readSafeForceCloseSnapshot = async (id: string) => {
   const [snapshotErr, snapshotResult] = await satsnetStp.safetySnapshot(id)
   if (snapshotErr || !snapshotResult) {
-    throw snapshotErr || new Error('Unable to read the current channel safety snapshot.')
+    throw snapshotErr || new Error(t('settingsUi.readSnapshotFailed'))
   }
 
   const snapshot = typeof snapshotResult.json === 'string'
@@ -445,7 +446,14 @@ const readSafeForceCloseSnapshot = async (id: string) => {
     : snapshotResult
   const safety = assessStpValueMovementSafety(snapshot)
   if (!safety.allowed) {
-    throw new Error(safety.reason || 'The current channel safety snapshot does not allow force close.')
+    const status = safety.details?.status
+    const coverage = safety.details?.punish_coverage_status
+    const reason = safety.reason === `STP safety snapshot is ${status}; value-moving Agent operations require READY_SAFE.`
+      ? t('settingsUi.unsafeSnapshot', { status })
+      : safety.reason === `STP punish coverage is ${coverage}; value-moving Agent operations require NO_REVOKED_REMOTE_STATE or COVERED.`
+        ? t('settingsUi.unsafeCoverage', { status: coverage })
+        : safety.reason || t('settingsUi.forceCloseUnsafe')
+    throw new Error(reason)
   }
   return snapshot
 }
@@ -460,8 +468,8 @@ const requestForceClose = async () => {
     showForceCloseConfirm.value = true
   } catch (error) {
     toast({
-      title: 'Force close blocked',
-      description: error instanceof Error ? error.message : 'Unable to verify channel safety.',
+      title: t('settingsUi.forceCloseBlocked'),
+      description: error instanceof Error ? error.message : t('settingsUi.verifySafetyFailed'),
       variant: 'destructive',
     })
   } finally {
@@ -480,21 +488,21 @@ const forceCloseChannel = async () => {
     const [forceErr] = await satsnetStp.closeChannel(id, btcFeeRate.value, true)
     if (forceErr) {
       toast({
-        title: 'Error',
-        description: forceErr.message || 'Failed to force close the channel.',
+        title: t('approvalUi.error'),
+        description: forceErr.message || t('settingsUi.forceCloseFailed'),
         variant: 'destructive',
       })
       return
     }
     toast({
-      title: 'Success',
-      description: 'Force close initiated.',
+      title: t('approvalUi.success'),
+      description: t('settingsUi.forceCloseStarted'),
       variant: 'success',
     })
   } catch (error) {
     toast({
-      title: 'Force close blocked',
-      description: error instanceof Error ? error.message : 'Unable to verify channel safety.',
+      title: t('settingsUi.forceCloseBlocked'),
+      description: error instanceof Error ? error.message : t('settingsUi.verifySafetyFailed'),
       variant: 'destructive',
     })
   } finally {

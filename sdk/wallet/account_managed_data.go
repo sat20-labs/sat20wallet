@@ -23,6 +23,7 @@ const (
 // AccountManagedDataScope is defined by account management and handed to
 // providers. Modules do not discover or mutate the wallet/account catalog.
 type AccountManagedDataScope struct {
+	Type              account.WalletType
 	WalletID          int64
 	WalletFingerprint string
 	AccountIndex      uint32
@@ -130,34 +131,34 @@ func (p *Manager) accountManagedActiveDataProvider(id string) AccountManagedActi
 	return provider
 }
 
-func (p *Manager) currentAccountManagedProviderPayloads(providerID string) (
-	map[string]AccountManagedDataPayload, error) {
+func (p *Manager) currentAccountManagedProviderPayloads(providerID string) (map[string]AccountManagedDataPayload, error) {
 	result := make(map[string]AccountManagedDataPayload)
 	if p == nil {
 		return result, nil
 	}
 	p.mutex.RLock()
-	if p.accountProfile == nil || len(p.accountProfile.ManagedDataEnvelope) == 0 ||
-		len(p.accountSecret) == 0 {
+	if p.accountProfile == nil || len(p.accountSecret) != 32 {
 		p.mutex.RUnlock()
 		return result, nil
 	}
-	accountID := p.accountProfile.AccountID
-	envelope := append([]byte(nil), p.accountProfile.ManagedDataEnvelope...)
+	accountID, network := p.accountProfile.AccountID, p.cfg.Chain
 	secret := append([]byte(nil), p.accountSecret...)
+	values, err := p.listAccountLocal(accountID)
 	p.mutex.RUnlock()
 	defer zeroBytes(secret)
-	bundle, _, err := account.OpenManagedDataBundleWithInfo(secret, accountID, envelope)
 	if err != nil {
 		return nil, err
 	}
-	for _, item := range bundle.Items {
-		if item.Provider != providerID {
+	for _, value := range values {
+		if value.Provider != providerID || value.Deleted || value.Restoring || value.Baseline == nil {
 			continue
 		}
-		result[item.Scope] = AccountManagedDataPayload{
-			Scope: item.Scope, Payload: append([]byte(nil), item.Payload...),
+		entry := account.ManagedEntry{Provider: value.Provider, Scope: value.Scope, Key: value.Key, Codec: value.Codec}
+		payload, err := openAccountPayload(secret, accountID, network, entry, value.Baseline.Value)
+		if err != nil {
+			return nil, err
 		}
+		result[value.Scope] = AccountManagedDataPayload{Scope: value.Scope, Payload: payload}
 	}
 	return result, nil
 }
@@ -168,6 +169,11 @@ func (p *Manager) accountManagedDataCatalog() (AccountManagedDataCatalog, error)
 	}
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
+	return p.accountManagedCatalogLocked()
+}
+
+// Caller owns the Manager read/write gate.
+func (p *Manager) accountManagedCatalogLocked() (AccountManagedDataCatalog, error) {
 	accountID := ""
 	if p.accountProfile != nil {
 		accountID = p.accountProfile.AccountID
@@ -183,13 +189,22 @@ func (p *Manager) accountManagedDataCatalog() (AccountManagedDataCatalog, error)
 	}
 	catalog := AccountManagedDataCatalog{AccountID: accountID, Network: _chain}
 	for _, info := range p.canonicalWalletInfosLocked() {
-		if info == nil || info.Wallet == nil || info.Type != WALLET_TYPE_MNEMONIC {
+		if info == nil || info.Wallet == nil || (info.Type != WALLET_TYPE_MNEMONIC && info.Type != WALLET_TYPE_PRIVKEY) {
 			continue
+		}
+		var typ account.WalletType
+		switch info.Type {
+		case WALLET_TYPE_MNEMONIC:
+			typ = account.WalletMnemonic
+		case WALLET_TYPE_PRIVKEY:
+			typ = account.WalletPrivateKey
+		default:
+			return AccountManagedDataCatalog{}, fmt.Errorf("unsupported managed wallet type")
 		}
 		fingerprint := walletFingerprint(info.Wallet)
 		for index := uint32(0); index < uint32(info.Accounts); index++ {
 			catalog.Scopes = append(catalog.Scopes, AccountManagedDataScope{
-				WalletID: info.Id, WalletFingerprint: fingerprint,
+				Type: typ, WalletID: info.Id, WalletFingerprint: fingerprint,
 				AccountIndex: index, Network: _chain,
 			})
 		}
@@ -322,16 +337,24 @@ func (p *Manager) markAccountManagedDataDirtyMode(schedule bool) error {
 	err := func() error {
 		p.mutex.Lock()
 		defer p.mutex.Unlock()
-		p.bumpAccountGenerationLocked()
 		if p.accountProfile != nil {
-			p.accountProfile.ManagedDataDirty = true
-			p.accountProfile.ManagedDataGeneration++
-			if p.accountProfile.ManagedDataGeneration == 0 {
-				p.accountProfile.ManagedDataGeneration = 1
+			profile := *p.accountProfile
+			profile.ManagedDataDirty = true
+			profile.ManagedDataGeneration++
+			if profile.ManagedDataGeneration == 0 {
+				profile.ManagedDataGeneration = 1
 			}
-			if err := p.saveAccountManagementProfileLocked(); err != nil {
+			encoded, err := EncodeToBytes(&profile)
+			if err != nil {
+				return err
+			}
+			if err := p.db.Write(accountManagementProfileKey(), encoded); err != nil {
 				return fmt.Errorf("persist account-managed operation marker: %w", err)
 			}
+			p.accountProfile = &profile
+			p.bumpAccountGenerationLocked()
+			Log.Debugf("account generation advanced: source=managed_data activation_pending=%t data_generation=%d",
+				profile.ManagedEntered && !profile.RecoveryConfigured, profile.ManagedDataGeneration)
 		}
 		return nil
 	}()
@@ -373,9 +396,9 @@ func accountManagedDataCatalogFromState(accountID, network string,
 		}
 		for index := uint32(0); index < wallet.AccountCount; index++ {
 			catalog.Scopes = append(catalog.Scopes, AccountManagedDataScope{
-				WalletFingerprint: wallet.Fingerprint,
-				AccountIndex:      index,
-				Network:           network,
+				Type: wallet.Type, WalletFingerprint: wallet.Fingerprint,
+				AccountIndex: index,
+				Network:      network,
 			})
 		}
 	}

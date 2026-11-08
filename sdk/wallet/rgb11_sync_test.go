@@ -17,11 +17,16 @@ import (
 const testRGB11FreeLocalTTL = uint64(144)
 
 func configureRGB11DKVSTestManager(manager *Manager, remote HttpClient) {
+	network := _chain
+	if network == "" {
+		network = "testnet"
+	}
 	manager.cfg = &sdkcommon.Config{
-		Env: "test", Chain: "testnet",
-		IndexerL2: &sdkcommon.Indexer{Scheme: "http", Host: "dkvs.test", Proxy: "testnet"},
+		Env: "test", Chain: network,
+		IndexerL2: &sdkcommon.Indexer{Scheme: "http", Host: "dkvs.test", Proxy: network},
 	}
 	manager.http = remote
+	manager.SetDKVSHttpClient(remote)
 }
 
 func TestRGB11SnapshotDoesNotCopyGlobalTickerCatalog(t *testing.T) {
@@ -56,7 +61,7 @@ func TestRGB11SnapshotPreflightDoesNotPartiallyImportEngineState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := newRGB11MultiDeviceManager(t, sourcePriv, 42)
+	source := newRGB11MultiDeviceManager(t, sourcePriv, 42, accountGroupInactive)
 	createRGB11MultiDeviceInvoice(t, source, "recipient-preflight")
 	engineRecords, err := source.rgbManager.engineStore.ExportSnapshot()
 	if err != nil || len(engineRecords) != 1 {
@@ -84,8 +89,23 @@ func TestRGB11SnapshotPreflightDoesNotPartiallyImportEngineState(t *testing.T) {
 	}
 }
 
-func newRGB11MultiDeviceManager(t *testing.T, priv *btcec.PrivateKey, localWalletID int64) *Manager {
+func newRGB11MultiDeviceManager(t *testing.T, priv *btcec.PrivateKey, localWalletID int64, states ...accountGroupState) *Manager {
 	t.Helper()
+	if len(states) > 1 {
+		t.Fatal("RGB device fixture accepts one instance account state")
+	}
+	state := accountGroupUnprepared
+	if len(states) == 1 {
+		state = states[0]
+	}
+	if state != accountGroupUnprepared && state != accountGroupInactive {
+		t.Fatal("RGB device group supports Unprepared or KnownInactive")
+	}
+	if state == accountGroupInactive {
+		oldChain := _chain
+		_chain = "testnet"
+		t.Cleanup(func() { _chain = oldChain })
+	}
 	database := indexerdb.NewKVDB(t.TempDir())
 	t.Cleanup(func() { database.Close() })
 	wallet := dkvsTestWalletFromPriv(t, priv)
@@ -108,6 +128,9 @@ func newRGB11MultiDeviceManager(t *testing.T, priv *btcec.PrivateKey, localWalle
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { manager.rgbManager.scopeStates.stopReconciliations() })
+	if state == accountGroupInactive {
+		prepareRGBGroup(t, manager, state)
+	}
 	return manager
 }
 

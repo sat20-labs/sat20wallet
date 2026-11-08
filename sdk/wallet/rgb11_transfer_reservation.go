@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,6 +26,10 @@ const (
 	RS_RGB11_ACKNOWLEDGED
 	RS_RGB11_BROADCAST
 )
+
+// Only an unchanged wallet/account/build with newer local records may be
+// rebuilt. Other snapshot changes remain ordinary conflicts.
+var errRGB11StaleLocal = errors.New("RGB11 local candidate is stale")
 
 // RGB11TransferReservation uses the common wallet reservation namespace and
 // recovery machinery. Private request/pending payloads remain in their scoped
@@ -79,6 +84,195 @@ func rgb11ResvStatus(state *rgb11wallet.TransferState) ResvStatus {
 		return RS_RGB11_ACKNOWLEDGED
 	}
 	return RS_RGB11_DELIVERED
+}
+
+type rgb11DiffCount struct{ add, del, mod int }
+
+func rgb11DiffClass(engine bool, key string) string {
+	if engine {
+		if strings.HasPrefix(key, "wallet/receive/") {
+			return "receive"
+		}
+		return "other"
+	}
+	for _, kind := range []string{
+		"proof-", "transfer-", "output-", "pending-", "object-",
+		"validation-", "receive-reservation-", "receive-key-",
+		"prepared-receive-", "contract-object-", "local-name-",
+	} {
+		if strings.HasPrefix(key, kind) {
+			return strings.TrimSuffix(kind, "-")
+		}
+	}
+	return "other"
+}
+
+func rgb11RecordDiff(left, right []rgb11wallet.SnapshotRecord, engine bool) string {
+	old := make(map[string][]byte, len(left))
+	next := make(map[string][]byte, len(right))
+	for _, record := range left {
+		old[record.Key] = record.Value
+	}
+	for _, record := range right {
+		next[record.Key] = record.Value
+	}
+	counts := make(map[string]*rgb11DiffCount)
+	count := func(key string) *rgb11DiffCount {
+		kind := rgb11DiffClass(engine, key)
+		if counts[kind] == nil {
+			counts[kind] = &rgb11DiffCount{}
+		}
+		return counts[kind]
+	}
+	for key, value := range old {
+		other, found := next[key]
+		if !found {
+			count(key).del++
+		} else if !bytes.Equal(value, other) {
+			count(key).mod++
+		}
+	}
+	for key := range next {
+		if _, found := old[key]; !found {
+			count(key).add++
+		}
+	}
+	kinds := make([]string, 0, len(counts))
+	for kind := range counts {
+		kinds = append(kinds, kind)
+	}
+	sort.Strings(kinds)
+	parts := make([]string, 0, len(kinds))
+	for _, kind := range kinds {
+		c := counts[kind]
+		parts = append(parts, fmt.Sprintf("%s:+%d/-%d/~%d", kind, c.add, c.del, c.mod))
+	}
+	if len(parts) == 0 {
+		if !sameRGB11SnapshotRecords(left, right) {
+			return "order_only"
+		}
+		return "none"
+	}
+	return strings.Join(parts, ",")
+}
+
+func logRGB11SnapDiff(manager uint64, scopeTag string, raw bool, left, right *RGB11WalletSnapshot) {
+	Log.Warnf("RGB snapshot rejected: source=reservation_commit_compare manager=%d scope_tag=%s baseline_raw=%t wallet_same=%t account_same=%t build_same=%t engine=%s projection=%s",
+		manager, scopeTag, raw, left.WalletID == right.WalletID, left.AccountIndex == right.AccountIndex,
+		left.EngineBuildID == right.EngineBuildID,
+		rgb11RecordDiff(left.EngineRecords, right.EngineRecords, true),
+		rgb11RecordDiff(left.ProjectionRecords, right.ProjectionRecords, false))
+	logRGB11LifeDiff(manager, scopeTag, left.ProjectionRecords, right.ProjectionRecords)
+}
+
+func rgb11DiffEnum(value string) string {
+	switch value {
+	case "", "send", "receive", "prepared", "delivered", "relayed", "pending", "settled",
+		"rejected", "orphaned", "cancelled", "expired", "awaiting_broadcast", "broadcast",
+		"broadcasted", "broadcast-attempted", "awaiting", "accepted", "ack-sent", "persisted":
+		return value
+	default:
+		return "other"
+	}
+}
+
+// Decode only changed lifecycle rows from the snapshots already read by CAS.
+// Log enum/boolean differences, never private payloads or raw identifiers.
+func logRGB11LifeDiff(manager uint64, scopeTag string, left, right []rgb11wallet.SnapshotRecord) {
+	old, next := make(map[string][]byte), make(map[string][]byte)
+	keys := make(map[string]bool)
+	for i, records := range [][]rgb11wallet.SnapshotRecord{left, right} {
+		for _, record := range records {
+			if !strings.HasPrefix(record.Key, "pending-") && !strings.HasPrefix(record.Key, "transfer-") {
+				continue
+			}
+			keys[record.Key] = true
+			if i == 0 {
+				old[record.Key] = record.Value
+			} else {
+				next[record.Key] = record.Value
+			}
+		}
+	}
+	ordered := make([]string, 0, len(keys))
+	for key := range keys {
+		ordered = append(ordered, key)
+	}
+	sort.Strings(ordered)
+	for _, key := range ordered {
+		a, before := old[key]
+		b, after := next[key]
+		if before && after && bytes.Equal(a, b) {
+			continue
+		}
+		kind, change := rgb11DiffClass(false, key), "mod"
+		if !before {
+			change = "add"
+		} else if !after {
+			change = "del"
+		}
+		decode := func(raw []byte, present bool) (*rgb11wallet.TransferState, *rgb11wallet.PendingTransfer) {
+			if !present {
+				return nil, nil
+			}
+			records := []rgb11wallet.SnapshotRecord{{Key: key, Value: raw}}
+			if kind == "pending" {
+				values, err := rgb11wallet.PendingTransfersFromProjectionSnapshot(records)
+				if err == nil && len(values) == 1 {
+					return &values[0].State, values[0]
+				}
+			} else {
+				values, err := rgb11wallet.TransfersFromProjectionSnapshot(records)
+				if err == nil && len(values) == 1 {
+					return values[0], nil
+				}
+			}
+			return nil, nil
+		}
+		oldState, oldPending := decode(a, before)
+		newState, newPending := decode(b, after)
+		Log.Warnf("RGB lifecycle difference: manager=%d scope_tag=%s kind=%s change=%s id_tag=%s before_present=%t after_present=%t before_decoded=%t after_decoded=%t",
+			manager, scopeTag, kind, change, accountTraceScope(strings.TrimPrefix(key, kind+"-")), before, after, oldState != nil, newState != nil)
+		for i, state := range []*rgb11wallet.TransferState{oldState, newState} {
+			if state == nil {
+				continue
+			}
+			Log.Warnf("RGB lifecycle state: manager=%d scope_tag=%s kind=%s side=%d id_tag=%s direction=%q status=%q ack=%q address_mode=%t acknowledged=%t",
+				manager, scopeTag, kind, i, accountTraceScope(state.TransferID), rgb11DiffEnum(state.Direction),
+				rgb11DiffEnum(state.Status), rgb11DiffEnum(state.AckStatus), state.AddressMode, state.DeliveryAcknowledged)
+		}
+		if oldState != nil && newState != nil {
+			fields := make([]string, 0)
+			a, b := reflect.ValueOf(*oldState), reflect.ValueOf(*newState)
+			for i := 0; i < a.NumField(); i++ {
+				if !reflect.DeepEqual(a.Field(i).Interface(), b.Field(i).Interface()) {
+					fields = append(fields, a.Type().Field(i).Name)
+				}
+			}
+			Log.Warnf("RGB lifecycle fields: manager=%d scope_tag=%s kind=%s id_tag=%s changed_fields=%s",
+				manager, scopeTag, kind, accountTraceScope(oldState.TransferID), strings.Join(fields, ","))
+		}
+		for i, pending := range []*rgb11wallet.PendingTransfer{oldPending, newPending} {
+			if pending == nil {
+				continue
+			}
+			Log.Warnf("RGB pending material: manager=%d scope_tag=%s side=%d id_tag=%s has_tx=%t has_psbt=%t has_witness=%t channel_signed=%t recipient_payload=%t local_payload=%t",
+				manager, scopeTag, i, accountTraceScope(pending.State.TransferID), len(pending.SignedTx) != 0,
+				len(pending.SignedPSBT) != 0, rgb11PendingHasWitness(pending), pending.ChannelSend != nil && pending.ChannelSend.Signed,
+				len(pending.RecipientConsignment) != 0, len(pending.LocalConsignment) != 0)
+		}
+		if oldPending != nil && newPending != nil {
+			a, b := *oldPending, *newPending
+			payloadChanged := !bytes.Equal(a.RecipientConsignment, b.RecipientConsignment) || !bytes.Equal(a.LocalConsignment, b.LocalConsignment)
+			a.RecipientConsignment, a.LocalConsignment = nil, nil
+			b.RecipientConsignment, b.LocalConsignment = nil, nil
+			Log.Warnf("RGB pending difference: manager=%d scope_tag=%s id_tag=%s state_equal=%t owner_equal=%t tx_equal=%t psbt_equal=%t object_refs_equal=%t payload_only=%t",
+				manager, scopeTag, accountTraceScope(a.State.TransferID), reflect.DeepEqual(a.State, b.State), a.ReservationID == b.ReservationID,
+				bytes.Equal(a.SignedTx, b.SignedTx), bytes.Equal(a.SignedPSBT, b.SignedPSBT),
+				a.RecipientObjectHash == b.RecipientObjectHash && a.LocalObjectHash == b.LocalObjectHash,
+				payloadChanged && reflect.DeepEqual(a, b))
+		}
+	}
 }
 
 // StageReservation is called by RGB stores with their own underlying DB batch.
@@ -460,9 +654,9 @@ func (p *rgb11Manager) LoadReservationState(scope, direction, transferID string)
 
 func (p *rgb11Manager) discardUnpublishedRGB11Receive(requestID string) error {
 	scope := p.rgb11ScopeKey()
-	batch := rgb11wallet.NewReservationWriteBatch(p.db, scope, p)
-	if batch == nil {
-		return ErrRGB11Inconsistent
+	batch, err := rgb11wallet.NewReservationWriteBatch(p.db, scope, p)
+	if err != nil {
+		return err
 	}
 	defer batch.Close()
 	for _, key := range []string{
@@ -506,9 +700,10 @@ func (p *rgb11Manager) rgb11ReceiveReservationUsed(requestID string) (bool, erro
 // Snapshot state is built only from the validated incoming records. This
 // prevents stale pre-restore resv state from leaking into the new generation.
 type rgb11SnapshotReservations struct {
-	manager  *rgb11Manager
-	requests []*corewallet.ReceiveRequest
-	records  map[int64]*RGB11TransferReservation
+	localMutation bool
+	manager       *rgb11Manager
+	requests      []*corewallet.ReceiveRequest
+	records       map[int64]*RGB11TransferReservation
 }
 
 func (s *rgb11SnapshotReservations) StageReservation(batch indexer.WriteBatch, scope string, value any) (func(), error) {
@@ -540,10 +735,42 @@ func (p *rgb11Manager) importRGB11ReservationSnapshotWithPlanAndCheck(snapshot *
 func (p *rgb11Manager) importRGB11ReservationSnapshotWithBaseline(ctx context.Context, snapshot *RGB11WalletSnapshot,
 	tickerInfos []*indexer.TickerInfo, lockReasons map[string]string, lockPlan *rgb11LockPlan,
 	checkEvidence func() error, expected *RGB11WalletSnapshot) error {
+	return p.importRGB11ReservationSnapshotWithMutation(ctx, snapshot, tickerInfos, lockReasons, lockPlan, checkEvidence, expected, true)
+}
+
+// The caller identifies the source of the snapshot. A selected remote account
+// import still commits every reservation atomically, but does not create a new
+// local business generation merely by installing that authenticated material.
+func (p *rgb11Manager) importRGB11ReservationSnapshotWithMutation(ctx context.Context, snapshot *RGB11WalletSnapshot,
+	tickerInfos []*indexer.TickerInfo, lockReasons map[string]string, lockPlan *rgb11LockPlan,
+	checkEvidence func() error, expected *RGB11WalletSnapshot, localMutation bool, localView ...*rgb11ResolvedRecoveryProjection) error {
 	if p == nil || snapshot == nil || p.db == nil || p.engineStore == nil || p.projectionStore == nil {
 		return ErrRGB11Inconsistent
 	}
-	stage := &rgb11SnapshotReservations{manager: p, records: make(map[int64]*RGB11TransferReservation)}
+	var local *rgb11ResolvedRecoveryProjection
+	if len(localView) != 0 {
+		local = localView[0]
+	}
+	if local != nil {
+		if expected == nil {
+			return ErrRGB11Inconsistent
+		}
+		frozen, err := rgb11wallet.SplitLocalProjection(expected.ProjectionRecords, local.faults...)
+		if err != nil {
+			return err
+		}
+		next := make(map[string][]byte)
+		for _, r := range snapshot.EngineRecords {
+			next[r.Key] = r.Value
+		}
+		for _, r := range expected.EngineRecords {
+			if frozen.Requests[strings.TrimPrefix(r.Key, "wallet/receive/")] && !bytes.Equal(next[r.Key], r.Value) {
+				return ErrRGB11Inconsistent
+			}
+		}
+	}
+	stage := &rgb11SnapshotReservations{manager: p, records: make(map[int64]*RGB11TransferReservation),
+		localMutation: localMutation && expected != nil && rgb11SnapshotChanged(expected, snapshot)}
 	for _, record := range snapshot.EngineRecords {
 		request, err := corewallet.DecodeReceiveRequest(record.Value)
 		if err != nil {
@@ -555,9 +782,9 @@ func (p *rgb11Manager) importRGB11ReservationSnapshotWithBaseline(ctx context.Co
 	if err != nil {
 		return err
 	}
-	batch := rgb11wallet.NewReservationWriteBatch(p.db, p.rgb11ScopeKey(), stage)
-	if batch == nil {
-		return ErrRGB11Inconsistent
+	batch, err := rgb11wallet.NewReservationWriteBatch(p.db, p.rgb11ScopeKey(), stage)
+	if err != nil {
+		return err
 	}
 	defer batch.Close()
 	for _, r := range old {
@@ -568,7 +795,11 @@ func (p *rgb11Manager) importRGB11ReservationSnapshotWithBaseline(ctx context.Co
 	if err := p.engineStore.StageSnapshotImport(batch, snapshot.EngineRecords); err != nil {
 		return err
 	}
-	if err := p.projectionStore.StageSnapshotImport(batch, snapshot.ProjectionRecords); err != nil {
+	if local != nil {
+		if err := p.projectionStore.StageLocalProjection(batch, snapshot.ProjectionRecords, expected.ProjectionRecords, local.faults); err != nil {
+			return err
+		}
+	} else if err := p.projectionStore.StageSnapshotImport(batch, snapshot.ProjectionRecords); err != nil {
 		return err
 	}
 	seenTickers := make(map[string]bool, len(tickerInfos))
@@ -612,13 +843,30 @@ func (p *rgb11Manager) importRGB11ReservationSnapshotWithBaseline(ctx context.Co
 		// Remote evidence was checked without a local lock. Reject an old
 		// candidate if another local commit completed while it was in flight.
 		// FlushWith owns the reservation gate until this batch is published.
+		if ctx != nil {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		if expected != nil {
-			actual, _, err := p.exportRGB11WalletSnapshotLocked(expected.WalletID)
+			var actual *RGB11WalletSnapshot
+			var err error
+			if local != nil {
+				actual, err = p.readRGB11LocalLocked(expected.WalletID)
+			} else {
+				actual, _, err = p.exportRGB11WalletSnapshotLocked(expected.WalletID)
+			}
 			if err != nil {
 				return nil, err
 			}
 			if rgb11SnapshotChanged(expected, actual) {
-				return nil, errAccountSnapshotChanged
+				logRGB11SnapDiff(p.rgb11ReservationOwner().debugID, accountTraceScope(p.rgb11ScopeKey()), local != nil, expected, actual)
+				if expected.WalletID != actual.WalletID ||
+					expected.AccountIndex != actual.AccountIndex ||
+					expected.EngineBuildID != actual.EngineBuildID {
+					return nil, errAccountSnapshotChanged
+				}
+				return nil, errRGB11StaleLocal
 			}
 		}
 		var finishLocks func(bool)
@@ -641,6 +889,9 @@ func (p *rgb11Manager) importRGB11ReservationSnapshotWithBaseline(ctx context.Co
 			}
 			if !committed {
 				return
+			}
+			if local != nil {
+				p.publishRGB11Readiness(local.complete, local.ready, local.faults)
 			}
 			owner := p.rgb11ReservationOwner()
 			owner.mutex.Lock()

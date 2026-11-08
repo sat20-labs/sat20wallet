@@ -237,6 +237,18 @@ func (p *Manager) persistClosedWithdrawal(owner *LocalActionPerformData, intent 
 		return err
 	}
 	if !bytes.Equal(latest, expectedChannel) {
+		if complete {
+			var expected, actual ChannelInDB
+			expectedErr := DecodeFromBytes(expectedChannel, &expected)
+			actualErr := DecodeFromBytes(latest, &actual)
+			sameRemote := expected.RemoteCommitment != nil && actual.RemoteCommitment != nil &&
+				equalSTPBitcoinTx(expected.RemoteCommitment.CommitTx, actual.RemoteCommitment.CommitTx)
+			Log.Warningf("closed withdrawal completion CAS mismatch: manager=%d channel_tag=%s expected_hash=%s actual_hash=%s expected_decoded=%t actual_decoded=%t status=%d/%d update_time=%d/%d commit_height=%d/%d same_remote_parent=%t same_local_wallet=%t",
+				p.debugID, accountTraceScope(intent.ChannelID), accountStateDigest(expectedChannel)[:12], accountStateDigest(latest)[:12],
+				expectedErr == nil, actualErr == nil, expected.Status, actual.Status, expected.UpdateTime, actual.UpdateTime,
+				expected.CommitHeight, actual.CommitHeight, sameRemote,
+				expected.LocalWalletId == actual.LocalWalletId && expected.LocalChanCfg.WalletId == actual.LocalChanCfg.WalletId)
+		}
 		owner.Unlock()
 		return fmt.Errorf("closed channel changed before withdrawal persistence")
 	}
@@ -393,7 +405,24 @@ func (p *Manager) retryClosedChannelWithdrawal(owner *LocalActionPerformData) er
 			return fmt.Errorf("indexed withdrawal no longer matches its owner's exact approved package: %v", err)
 		}
 	}
-	expected, err := p.prepareClosedWithdrawal(resv.Channel, canonical, intent)
+	// An already-confirmed indexed package needs only its local done commit.
+	// Completion revalidates the exact canonical package and its historical
+	// allocations; it must not rebroadcast or recreate current wallet holdings.
+	confirmedPackage := intent.InputFacts != nil && len(stored.PreTxs) >= 2
+	if confirmedPackage {
+		for _, tx := range stored.PreTxs {
+			if tx == nil || !p.GetIndexerRPCClient().IsTxConfirmed(tx.TxID()) {
+				confirmedPackage = false
+				break
+			}
+		}
+	}
+	var expected *ClosingDataInDB
+	if confirmedPackage {
+		expected, err = p.prepareIndexedClosedWithdrawal(resv.Channel, canonical, intent, true)
+	} else {
+		expected, err = p.prepareClosedWithdrawal(resv.Channel, canonical, intent)
+	}
 	if err != nil {
 		return err
 	}
@@ -429,6 +458,9 @@ func (p *Manager) retryClosedChannelWithdrawal(owner *LocalActionPerformData) er
 			return fmt.Errorf("closed withdrawal durable signature: %w", err)
 		}
 		AddTxOutputsToPrevFetcher(fetcher, tx)
+	}
+	if confirmedPackage {
+		return p.persistClosedWithdrawal(owner, intent, resv, channelRaw, true)
 	}
 	if _, err := p.broadcastPunishPackage(stored.PreTxs, "client-selected closed-channel Other recovery"); err != nil {
 		return err

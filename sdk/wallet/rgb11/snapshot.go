@@ -4,13 +4,14 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"sort"
 	"strings"
 
+	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	coreconsignment "github.com/sat20-labs/rgb11/consignment"
 	corewallet "github.com/sat20-labs/rgb11/wallet"
-	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
 type SnapshotRecord struct {
@@ -251,6 +252,23 @@ func (s *ProjectionStore) snapshotPrefix() ([]byte, error) {
 }
 
 func (s *ProjectionStore) ExportSnapshot() ([]SnapshotRecord, error) {
+	records, err := s.ReadLocalRecords()
+	if err != nil {
+		return nil, err
+	}
+	records, err = normalizeSnapshotRows(records)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.ValidateSnapshot(records); err != nil {
+		return nil, err
+	}
+	return records, nil
+}
+
+// ReadLocalRecords retains every record, including damaged proof bytes. It is
+// a local candidate input, never a validated backup or an import authorization.
+func (s *ProjectionStore) ReadLocalRecords() ([]SnapshotRecord, error) {
 	prefix, err := s.snapshotPrefix()
 	if err != nil {
 		return nil, err
@@ -268,6 +286,13 @@ func (s *ProjectionStore) ExportSnapshot() ([]SnapshotRecord, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	sort.Slice(records, func(i, j int) bool { return records[i].Key < records[j].Key })
+	return records, nil
+}
+
+func normalizeSnapshotRows(records []SnapshotRecord) ([]SnapshotRecord, error) {
+	records = cloneRecoveryRecords(records)
 
 	// Consignments are represented once by immutable object-<hash> records in
 	// snapshots. Runtime pending records are rehydrated on import. Keep the
@@ -298,9 +323,6 @@ func (s *ProjectionStore) ExportSnapshot() ([]SnapshotRecord, error) {
 		records[index].Value = encoded
 	}
 	sort.Slice(records, func(i, j int) bool { return records[i].Key < records[j].Key })
-	if err := s.ValidateSnapshot(records); err != nil {
-		return nil, err
-	}
 	return records, nil
 }
 
@@ -361,16 +383,6 @@ func validateProjectionSnapshot(records []SnapshotRecord) error {
 				return ErrValidationReceipt
 			}
 			if _, err := (LocalNameMetadata{}).Rename(string(record.Value)); err != nil {
-				return ErrValidationReceipt
-			}
-			namingContracts[id] = true
-		case strings.HasPrefix(record.Key, "registered-name-"):
-			id := strings.TrimPrefix(record.Key, "registered-name-")
-			signed, err := dkvsindexer.UnmarshalRecord(record.Value)
-			if err != nil {
-				return ErrValidationReceipt
-			}
-			if _, err := VerifyRGB11RegistrationForClient(signed, id, rgb11RegistryAuthority()); err != nil {
 				return ErrValidationReceipt
 			}
 			namingContracts[id] = true
@@ -812,4 +824,394 @@ func ValidateWalletSnapshot(snapshot *RGB11WalletSnapshot) error {
 		}
 	}
 	return nil
+}
+
+// ProofFault identifies unavailable local material, not an allocation proof.
+// The raw record remains in the complete local snapshot and strict backups fail.
+type ProofFault struct {
+	OutPoint  string
+	AssetName indexer.AssetName
+	Cause     error
+}
+
+func (f ProofFault) Error() string {
+	return fmt.Sprintf("RGB11 proof unavailable for %s %s: %v", f.OutPoint, f.AssetName.String(), f.Cause)
+}
+func (f ProofFault) Unwrap() error { return f.Cause }
+
+type LocalProjection struct {
+	Records  []SnapshotRecord
+	Frozen   []SnapshotRecord
+	Points   map[string]bool
+	Requests map[string]bool
+	Faults   []ProofFault
+}
+
+func localProofFault(point string, name indexer.AssetName, cause error) (ProofFault, error) {
+	out, err := wire.NewOutPointFromString(point)
+	id, hexErr := hex.DecodeString(name.Ticker)
+	if err != nil || out == nil || out.String() != point || name.Protocol != Protocol || hexErr != nil || len(id) != 32 ||
+		name.Ticker != strings.ToLower(name.Ticker) ||
+		(name.Type != indexer.ASSET_TYPE_FT && name.Type != indexer.ASSET_TYPE_NFT && name.Type != "control") {
+		return ProofFault{}, ErrInvalidProof
+	}
+	return ProofFault{OutPoint: point, AssetName: name, Cause: cause}, nil
+}
+
+func localProofValid(p *AllocationProof, output *indexer.TxOutput, receipts map[string]*ValidationReceipt) bool {
+	r := receipts[p.ConsignmentHash]
+	if output == nil || r == nil {
+		return false
+	}
+	amount := output.GetAsset(&p.AssetName)
+	hash, err := r.Hash()
+	if amount == nil || err != nil || hash != p.ValidationHash {
+		return false
+	}
+	for _, a := range r.Allocations {
+		if a.OutPoint == p.OutPoint && a.AssetName == p.AssetName && a.OperationID == p.OperationID &&
+			a.AssignmentType == p.AssignmentType && a.AssignmentIndex == p.AssignmentIndex &&
+			a.StateClass == p.StateClass && bytes.Equal(a.StateData, p.StateData) &&
+			bytes.Equal(a.SealDisclosure, p.SealDisclosure) && a.Amount.Cmp(amount) == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// SplitLocalProjection is deliberately separate from snapshot validation. Only
+// a canonical key plus an independently readable output can locate a fault.
+// Every other record is still validated; no malformed bytes are thrown away.
+func SplitLocalProjection(records []SnapshotRecord, extra ...ProofFault) (*LocalProjection, error) {
+	// Preserve the exact accepted healthy/historical semantics of the strict
+	// snapshot validator. Canonical fault attribution is needed only on failure.
+	strictErr := validateProjectionSnapshot(records)
+	if strictErr == nil && len(extra) == 0 {
+		return &LocalProjection{Records: cloneRecoveryRecords(records), Points: make(map[string]bool), Requests: make(map[string]bool)}, nil
+	}
+	outputs, err := OutputsFromProjectionSnapshot(records)
+	if err != nil {
+		return nil, err
+	}
+	receipts, err := ValidationReceiptsFromProjectionSnapshot(records)
+	if err != nil {
+		return nil, err
+	}
+	v := &LocalProjection{Points: make(map[string]bool), Requests: make(map[string]bool)}
+	keys := make(map[string]ProofFault)
+	for point, output := range outputs {
+		for _, asset := range output.Assets {
+			if asset.Name.Protocol == Protocol {
+				keys["proof-"+point+"-"+asset.Name.String()] = ProofFault{OutPoint: point, AssetName: asset.Name}
+			}
+		}
+	}
+	add := func(f ProofFault) error {
+		f, err := localProofFault(f.OutPoint, f.AssetName, f.Cause)
+		if err != nil {
+			return err
+		}
+		key := "proof-" + f.OutPoint + "-" + f.AssetName.String()
+		if _, ok := keys[key]; !ok {
+			return ErrInvalidProof
+		}
+		if !v.Points[f.OutPoint] {
+			v.Faults = append(v.Faults, f)
+		}
+		v.Points[f.OutPoint] = true
+		return nil
+	}
+	for _, f := range extra {
+		if err := add(f); err != nil {
+			return nil, err
+		}
+	}
+	seen := make(map[string]bool)
+	for _, record := range records {
+		if seen[record.Key] {
+			return nil, ErrValidationReceipt
+		}
+		seen[record.Key] = true
+		if !strings.HasPrefix(record.Key, "proof-") {
+			continue
+		}
+		identity, ok := keys[record.Key]
+		if !ok {
+			if strictErr != nil {
+				return nil, strictErr
+			}
+			return nil, ErrInvalidProof
+		}
+		var proof AllocationProof
+		if decode(record.Value, &proof) != nil || proof.OutPoint != identity.OutPoint || proof.AssetName != identity.AssetName ||
+			!localProofValid(&proof, outputs[identity.OutPoint], receipts) {
+			identity.Cause = ErrInvalidProof
+			if err := add(identity); err != nil {
+				return nil, err
+			}
+		}
+	}
+	for key, identity := range keys {
+		if !seen[key] {
+			identity.Cause = ErrInvalidProof
+			if err := add(identity); err != nil {
+				return nil, err
+			}
+		}
+	}
+	states, err := TransfersFromProjectionSnapshot(records)
+	if err != nil {
+		return nil, err
+	}
+	frozenIDs := make(map[string]bool)
+	// An operation and all its inputs/outputs form one preservation boundary.
+	// This also keeps every member of a shared-witness batch unchanged.
+	for changed := true; changed; {
+		changed = false
+		for _, state := range states {
+			points := append(append([]string(nil), state.InputOutPoints...), state.OutputOutPoints...)
+			affected := frozenIDs[state.TransferID]
+			for _, point := range points {
+				affected = affected || v.Points[point]
+			}
+			if !affected {
+				continue
+			}
+			if !frozenIDs[state.TransferID] {
+				frozenIDs[state.TransferID] = true
+				changed = true
+			}
+			if state.ReceiveRequestID != "" {
+				v.Requests[state.ReceiveRequestID] = true
+			}
+			for _, point := range points {
+				if !v.Points[point] {
+					v.Points[point] = true
+					changed = true
+				}
+			}
+		}
+	}
+	for _, record := range records {
+		if strings.HasPrefix(record.Key, "prepared-receive-") && frozenIDs[strings.TrimPrefix(record.Key, "prepared-receive-")] {
+			v.Requests[string(record.Value)] = true
+		}
+	}
+	for _, record := range records {
+		frozen := false
+		switch {
+		case strings.HasPrefix(record.Key, "proof-"):
+			frozen = v.Points[keys[record.Key].OutPoint]
+		case strings.HasPrefix(record.Key, "output-"):
+			frozen = v.Points[strings.TrimPrefix(record.Key, "output-")]
+		case strings.HasPrefix(record.Key, "pending-"):
+			frozen = frozenIDs[strings.TrimPrefix(record.Key, "pending-")]
+		case strings.HasPrefix(record.Key, "transfer-"):
+			frozen = frozenIDs[strings.TrimPrefix(record.Key, "transfer-")]
+		case strings.HasPrefix(record.Key, "prepared-receive-"):
+			frozen = frozenIDs[strings.TrimPrefix(record.Key, "prepared-receive-")]
+			if frozen {
+				v.Requests[string(record.Value)] = true
+			}
+		case strings.HasPrefix(record.Key, "receive-key-"):
+			var key ReceiveKey
+			if decode(record.Value, &key) != nil {
+				return nil, ErrValidationReceipt
+			}
+			frozen = v.Requests[key.RequestID]
+		case strings.HasPrefix(record.Key, "receive-reservation-"):
+			frozen = v.Requests[strings.TrimPrefix(record.Key, "receive-reservation-")]
+		}
+		if frozen {
+			v.Frozen = append(v.Frozen, record)
+		} else {
+			v.Records = append(v.Records, record)
+		}
+	}
+	if err := validateProjectionSnapshot(v.Records); err != nil {
+		return nil, err
+	}
+	sort.Slice(v.Faults, func(i, j int) bool { return v.Faults[i].OutPoint < v.Faults[j].OutPoint })
+	return v, nil
+}
+
+func (v *LocalProjection) Merge(records []SnapshotRecord) ([]SnapshotRecord, error) {
+	if err := validateProjectionSnapshot(records); err != nil {
+		return nil, err
+	}
+	byKey := snapshotRecordMap(records)
+	for _, record := range v.Frozen {
+		if _, exists := byKey[record.Key]; exists {
+			return nil, ErrInvalidProof
+		}
+		byKey[record.Key] = record
+	}
+	return snapshotRecordValues(byKey), nil
+}
+
+// StageLocalProjection may preserve invalid local bytes only when the exact
+// same frozen rows exist in the original baseline. It is never used for imports.
+func (s *ProjectionStore) StageLocalProjection(batch indexer.WriteBatch, records, expected []SnapshotRecord, faults []ProofFault) error {
+	records, err := HydrateLocalProjection(records, expected, faults)
+	if err != nil {
+		return err
+	}
+	prefix, err := s.snapshotPrefix()
+	if err != nil {
+		return err
+	}
+	return stageSnapshotRecords(s.db, batch, prefix, records)
+}
+
+// Compare frozen rows at the persisted layer, after runtime rehydration. The
+// baseline is the complete raw DB read, not the normalized backup snapshot.
+func HydrateLocalProjection(records, expected []SnapshotRecord, faults []ProofFault) ([]SnapshotRecord, error) {
+	old, err := SplitLocalProjection(expected, faults...)
+	if err != nil {
+		return nil, err
+	}
+	next, err := SplitLocalProjection(records, faults...)
+	if err != nil {
+		return nil, err
+	}
+	if !sameLocalRecords(old.Frozen, next.Frozen) {
+		return nil, ErrInvalidProof
+	}
+	hydrated, err := rehydratePendingSnapshotRecords(records)
+	if err != nil {
+		return nil, err
+	}
+	byKey := snapshotRecordMap(hydrated)
+	for _, r := range old.Frozen {
+		byKey[r.Key] = r
+	}
+	hydrated = snapshotRecordValues(byKey)
+	final, err := SplitLocalProjection(hydrated, faults...)
+	if err != nil || !sameLocalRecords(old.Frozen, final.Frozen) {
+		return nil, ErrInvalidProof
+	}
+	return hydrated, nil
+}
+
+func sameLocalRecords(a, b []SnapshotRecord) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	byKey := snapshotRecordMap(a)
+	for _, r := range b {
+		other, ok := byKey[r.Key]
+		if !ok || !bytes.Equal(other.Value, r.Value) {
+			return false
+		}
+	}
+	return true
+}
+
+// LocalEdit uses a private validated work set, then restores every frozen byte.
+// The merged result is a complete local candidate, never a valid recovery pack.
+func LocalEdit(records []SnapshotRecord, edit func([]SnapshotRecord) ([]SnapshotRecord, error)) ([]SnapshotRecord, error) {
+	view, err := SplitLocalProjection(records)
+	if err != nil {
+		return nil, err
+	}
+	updated, err := edit(view.Records)
+	if err != nil {
+		return nil, err
+	}
+	return view.Merge(updated)
+}
+
+func UpsertLocalPending(r []SnapshotRecord, p *PendingTransfer) ([]SnapshotRecord, error) {
+	return LocalEdit(r, func(w []SnapshotRecord) ([]SnapshotRecord, error) { return UpsertProjectionSnapshotPending(w, p) })
+}
+func UpsertLocalTransfer(r []SnapshotRecord, p *TransferState) ([]SnapshotRecord, error) {
+	return LocalEdit(r, func(w []SnapshotRecord) ([]SnapshotRecord, error) { return UpsertProjectionSnapshotTransfer(w, p) })
+}
+func AddLocalConsignment(r []SnapshotRecord, raw []byte, p *ValidationReceipt, repl []ProjectionReplacement) ([]SnapshotRecord, error) {
+	return LocalEdit(r, func(w []SnapshotRecord) ([]SnapshotRecord, error) {
+		return AddValidatedConsignmentProjectionSnapshot(w, raw, p, repl)
+	})
+}
+func RebindLocalReceipt(r []SnapshotRecord, a, b *ValidationReceipt) ([]SnapshotRecord, error) {
+	return LocalEdit(r, func(w []SnapshotRecord) ([]SnapshotRecord, error) {
+		return RebindValidatedConsignmentReceiptSnapshot(w, a, b)
+	})
+}
+func AddLocalContract(r []SnapshotRecord, id string, raw []byte) ([]SnapshotRecord, error) {
+	return LocalEdit(r, func(w []SnapshotRecord) ([]SnapshotRecord, error) {
+		return AddContractObjectSnapshotReference(w, id, raw)
+	})
+}
+func AddLocalPrepared(r []SnapshotRecord, raw []byte) ([]SnapshotRecord, error) {
+	return LocalEdit(r, func(w []SnapshotRecord) ([]SnapshotRecord, error) {
+		return AddPreparedConsignmentObjectSnapshot(w, raw)
+	})
+}
+func RemoveLocalKeys(r []SnapshotRecord, keys ...string) ([]SnapshotRecord, error) {
+	return LocalEdit(r, func(w []SnapshotRecord) ([]SnapshotRecord, error) { return RemoveProjectionSnapshotKeys(w, keys...) })
+}
+func UpsertLocalReceiveKey(r []SnapshotRecord, p *ReceiveKey) ([]SnapshotRecord, error) {
+	return LocalEdit(r, func(w []SnapshotRecord) ([]SnapshotRecord, error) { return UpsertProjectionSnapshotReceiveKey(w, p) })
+}
+func UpsertLocalReservation(r []SnapshotRecord, p *ReceiveReservation) ([]SnapshotRecord, error) {
+	return LocalEdit(r, func(w []SnapshotRecord) ([]SnapshotRecord, error) {
+		return UpsertProjectionSnapshotReceiveReservation(w, p)
+	})
+}
+func UpsertLocalPrepared(r []SnapshotRecord, id, req string) ([]SnapshotRecord, error) {
+	return LocalEdit(r, func(w []SnapshotRecord) ([]SnapshotRecord, error) {
+		return UpsertProjectionSnapshotPreparedReceive(w, id, req)
+	})
+}
+
+// LocalRecoveryBound returns numbers only. It reserves every original byte and
+// every known native-validated preview record, with no invalid recovery pack.
+// Valid recovery canonicalization only removes fields or changes fixed-width
+// hashes/timestamps; it cannot exceed this union of the original and preview.
+func LocalRecoveryBound(full, preview *RGB11WalletSnapshot) (int, int, error) {
+	if full == nil || preview == nil || full.Version != WalletSnapshotVersion || full.WalletID == "" ||
+		full.WalletID != preview.WalletID || full.AccountIndex != preview.AccountIndex ||
+		full.EngineBuildID != NativeEngineBuildID || preview.EngineBuildID != full.EngineBuildID ||
+		len(full.WalletID) > 128 || len(full.EngineBuildID) > 1024 {
+		return 0, 0, ErrRGB11Inconsistent
+	}
+	// R11K(4), codec(1), version(4), wallet(1+len), account(4),
+	// build(2+len), and two U16 record counts. Each record uses two U24 lengths.
+	n := 20 + len(full.WalletID) + len(full.EngineBuildID)
+	for _, pair := range [][2][]SnapshotRecord{{full.ProjectionRecords, preview.ProjectionRecords}, {full.EngineRecords, preview.EngineRecords}} {
+		lengths := make(map[string]int)
+		for _, records := range pair {
+			seen := make(map[string]bool)
+			for _, r := range records {
+				if r.Key == "" || len(r.Key) > 64*1024 || len(r.Value) > rgb11RecoveryMaxFieldSize || seen[r.Key] {
+					return 0, 0, ErrRGB11Inconsistent
+				}
+				seen[r.Key] = true
+				size := len(r.Value)
+				if size == 0 {
+					size = 1
+				} // numeric minimum only; raw bytes stay empty
+				if size > lengths[r.Key] {
+					lengths[r.Key] = size
+				}
+			}
+		}
+		if len(lengths) > rgb11RecoveryMaxRecords {
+			return 0, 0, ErrRGB11Inconsistent
+		}
+		for key, size := range lengths {
+			term := 6 + len(key) + size
+			if n > rgb11RecoveryMaxRawSize-term {
+				return 0, 0, ErrRGB11Inconsistent
+			}
+			n += term
+		}
+	}
+	// Current deflateRecovery writes once at BestCompression, without Flush.
+	// Go's fixed-Huffman alternative costs <=9 bits/input byte (matches consume
+	// >=4 bytes), plus <=10 bits per 16384-token block and final stored header.
+	// The writer selects no larger fixed/dynamic/stored alternative. 2*n+64
+	// safely covers this and both R11K headers; no compression monotonicity is
+	// assumed. Boundary tests compare it with the actual unchanged codec.
+	return n, 2*n + 64, nil
 }

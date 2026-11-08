@@ -1,0 +1,22 @@
+{
+  "state": "COMPLETE",
+  "pid": 77583,
+  "started_utc": "2026-10-31T12:41:32+00:00",
+  "ended_utc": "2026-10-31T12:41:34+00:00",
+  "exit_code": 0,
+  "node_version": "v22.22.3",
+  "command": "node --test scripts/diagnostic/wallet-manager-import.test.mjs",
+  "input_sha256_before": "12f91bf3c5b4aaaff0b70ac01d3d131ca36a9f9e745a5ef136caf4a7f2a9d908",
+  "input_sha256_after": "12f91bf3c5b4aaaff0b70ac01d3d131ca36a9f9e745a5ef136caf4a7f2a9d908",
+  "input_hash_unchanged": true,
+  "tests": 5,
+  "pass": 5,
+  "fail": 0,
+  "cancelled": 0,
+  "skipped": 0,
+  "todo": 0,
+  "failure_lines": [],
+  "log": "/Users/yingfeng/github/sat20wallet/pwa/data/wallet-manager-import-20261031T124123Z/test.log",
+  "log_bytes": 1276,
+  "log_sha256": "1e1f822b8cfd0968cf4c30bb1a81e6a424fad1e5da9c11af27f2f7650baa0894"
+}

@@ -1,6 +1,7 @@
 package wallet
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -88,12 +89,8 @@ func TestDKVSSignedHelpersRebuildDeletedCurrentState(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, uint64(1), recreated.Seq)
 			require.Equal(t, "new", string(recreated.Value))
-			// The ACK still does not install confirmed data. Only sync does.
+			// Managed success includes a verified installation.
 			local, err := client.GetRecord(key)
-			require.NoError(t, err)
-			require.Equal(t, dkvsindexer.RecordHash(original), dkvsindexer.RecordHash(local))
-			require.NoError(t, manager.dkvs.forceCurrentPrefixes(client, []string{prefix}))
-			local, err = client.GetRecord(key)
 			require.NoError(t, err)
 			require.Equal(t, dkvsindexer.RecordHash(recreated), dkvsindexer.RecordHash(local))
 		})
@@ -125,7 +122,8 @@ func TestDKVSFinalManagedPrefixesUseCurrentGenerationSync(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, subscriptionReadyForPrefixes(state, expected))
 	status, snapshots, deltas := currentTransportCounts(remote)
-	require.Equal(t, []int{baseStatus, baseSnapshots + 2, baseDeltas}, []int{status, snapshots, deltas})
+	// Two initial snapshots plus one consistency check per collection.
+	require.Equal(t, []int{baseStatus, baseSnapshots + 2, baseDeltas + 2}, []int{status, snapshots, deltas})
 	store := &dkvsStore{manager: manager.dkvs, client: client}
 	value, err := store.Get(keyA)
 	require.NoError(t, err)
@@ -140,7 +138,7 @@ func TestDKVSFinalManagedPrefixesUseCurrentGenerationSync(t *testing.T) {
 	require.Equal(t, uint64(2), value.Seq)
 	require.Equal(t, "a2", string(value.Value))
 	status, snapshots, deltas = currentTransportCounts(remote)
-	require.Equal(t, []int{beforeStatus, beforeSnapshots, beforeDeltas + 2}, []int{status, snapshots, deltas})
+	require.Equal(t, []int{beforeStatus, beforeSnapshots, beforeDeltas + 4}, []int{status, snapshots, deltas})
 	remote.mu.Lock()
 	remote.endpointID = "offline-simulated-endpoint"
 	remote.mu.Unlock()
@@ -302,7 +300,7 @@ func TestDKVSCurrentSyncRejectsSourceGenerationRollback(t *testing.T) {
 	remote.generations[prefix] = 0
 	remote.mu.Unlock()
 	_, err = manager.syncDKVSOnce()
-	require.ErrorIs(t, err, dkvsindexer.ErrConcurrentUpdate, "bounded retries must not bless a reset source cursor")
+	require.ErrorIs(t, err, dkvsindexer.ErrStaleGeneration, "a reset source cursor must be rejected without replacing the confirmed baseline")
 	after, err := store.LoadActiveMeta(client.replicaNamespace, dkvsindexer.ActiveScope{Prefix: prefix})
 	require.NoError(t, err)
 	require.Equal(t, before, after)
@@ -311,7 +309,7 @@ func TestDKVSCurrentSyncRejectsSourceGenerationRollback(t *testing.T) {
 	require.Equal(t, "value", string(value.Value))
 }
 
-func TestDKVSFinalLocalPutRequiresDeltaBeforeAdvancingToken(t *testing.T) {
+func TestDKVSFinalLocalPutInstallsVerifiedDeltaBeforeReturning(t *testing.T) {
 	manager, remote := finalDKVSTestManager(t)
 	key := accountTestKey(t, manager, "wallet/local-put")
 	prefix, _, err := dkvsManagedPathForKey(key)
@@ -325,12 +323,9 @@ func TestDKVSFinalLocalPutRequiresDeltaBeforeAdvancingToken(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), value.Seq)
 	require.NoError(t, store.WaitReady(key))
-	_, err = store.Get(key)
-	require.ErrorIs(t, err, ErrDKVSRecordNotFound, "ACK must not materialize the newly created value")
 	state, err := manager.GetDKVSSubscriptionStatus()
 	require.NoError(t, err)
-	require.Zero(t, state.Generations[prefix], "ACK must not advance the completed cursor")
-	require.NoError(t, store.SyncCurrent(key))
+	require.Equal(t, uint64(1), state.Generations[prefix], "successful Put has a root-verified completed cursor")
 	local, err := store.Get(key)
 	require.NoError(t, err)
 	require.Equal(t, "local-v1", string(local.Value))
@@ -352,7 +347,7 @@ func TestDKVSFinalLocalPutRequiresDeltaBeforeAdvancingToken(t *testing.T) {
 	require.Equal(t, "remote-v2", string(current.Value))
 }
 
-func TestDKVSFinalResponseLossReplaysOutboxBeforeCurrentSync(t *testing.T) {
+func TestDKVSFinalResponseLossReceivesBeforeExactOutboxReplay(t *testing.T) {
 	manager, remote := finalDKVSTestManager(t)
 	key := accountTestKey(t, manager, "wallet/response-loss")
 	prefix, _, err := dkvsManagedPathForKey(key)
@@ -374,7 +369,7 @@ func TestDKVSFinalResponseLossReplaysOutboxBeforeCurrentSync(t *testing.T) {
 	require.Equal(t, uint64(1), local.Seq)
 	require.Equal(t, "committed", string(local.Value))
 	status, snapshots, deltas := currentTransportCounts(remote)
-	require.Equal(t, []int{0, 1, 1}, []int{status, snapshots, deltas})
+	require.Equal(t, []int{0, 1, 2}, []int{status, snapshots, deltas})
 	entries, err := newDKVSReplicaStore(manager.db).LoadOutbox(store.client.replicaNamespace)
 	require.NoError(t, err)
 	require.Empty(t, entries)
@@ -434,7 +429,12 @@ func TestDKVSFinalRejectsUnapprovedEndpointSwitch(t *testing.T) {
 	require.Equal(t, beforeSnapshots, snapshots)
 	after, err := manager.GetDKVSSubscriptionStatus()
 	require.NoError(t, err)
-	require.Equal(t, before, after)
+	require.Equal(t, "SYNCING", after.Status, "an unapproved endpoint must revoke online readiness")
+	require.Equal(t, before.EndpointID, after.EndpointID)
+	require.Equal(t, before.Prefixes, after.Prefixes)
+	require.Equal(t, before.Generations, after.Generations)
+	require.Equal(t, before.ViewHeight, after.ViewHeight)
+	require.Equal(t, before.LastSyncAtMS, after.LastSyncAtMS)
 }
 
 func TestDKVSFinalUnsubscribedGetDoesNotRegisterPrefix(t *testing.T) {
@@ -502,7 +502,17 @@ func TestDKVSFinalCASConflictRefreshesRebuildsAndRetries(t *testing.T) {
 	require.NoError(t, err)
 	entries, err := newDKVSReplicaStore(manager.db).LoadOutbox(client.replicaNamespace)
 	require.NoError(t, err)
-	require.Empty(t, entries)
+	require.Len(t, entries, 1)
+	require.Equal(t, DKVSOutboxConflict, entries[0].State)
+	preserved, err := entries[0].DecodeMutations()
+	require.NoError(t, err)
+	require.Len(t, preserved, 1)
+	require.Equal(t, uint64(2), preserved[0].Record.Seq)
+	require.Equal(t, "rebuilt-1-2", string(preserved[0].Record.Value))
+	current, err := client.GetRecordDirect(key)
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), current.Seq)
+	require.Equal(t, "rebuilt-2-3", string(current.Value))
 }
 
 func TestDKVSFinalExplicitRefreshForcesCurrentSnapshot(t *testing.T) {
@@ -589,7 +599,15 @@ func TestDKVSFinalManagedMailboxUsesCurrentGeneration(t *testing.T) {
 	require.Equal(t, initialDeltas+1, deltas)
 }
 func TestDKVSFinalAccountActivationRegistersReceiveAndMailboxPrefixes(t *testing.T) {
-	manager, _ := finalDKVSTestManager(t)
+	oldChain := _chain
+	_chain = "testnet"
+	t.Cleanup(func() { _chain = oldChain })
+	manager, remote, _ := newInactiveAccountGroup(t, accountRootWrapperTestMnemonic, "password")
+	walletID := manager.GetCurrentWalletId()
+	require.NoError(t, manager.InitializeAccountManagement("password"))
+	require.NoError(t, manager.EnsureAccount(walletID, 1, "Second", ""))
+	activateSyncFixture(t, manager, remote, "password")
+	require.NoError(t, manager.SyncAccountManagementState(context.Background()))
 	require.NoError(t, manager.refreshDKVSRegistrations())
 	accountID, err := dkvsAccountID(manager.wallet)
 	require.NoError(t, err)
@@ -607,7 +625,7 @@ func TestDKVSFinalAccountActivationRegistersReceiveAndMailboxPrefixes(t *testing
 	_, scheduled := manager.dkvs.jobs[dkvsAccountServiceJobPrefix+accountID]
 	manager.dkvs.mu.Unlock()
 	require.True(t, scheduled)
-	manager.SwitchAccount(1)
+	require.NoError(t, manager.SwitchAccount(1))
 	prefixes, err = manager.ListSubscribedDKVSPrefixes()
 	require.NoError(t, err)
 	require.Equal(t, accountID, manager.rootDKVSAccountID())

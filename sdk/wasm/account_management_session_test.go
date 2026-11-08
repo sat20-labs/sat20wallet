@@ -38,7 +38,7 @@ func TestAccountCommitRecoveryDistinguishesExpiredPreview(t *testing.T) {
 				session := &accountRecoverySession{Package: &account.RecoveryPackage{}}
 				if testCase.abortFirst {
 					secret = bytes.Repeat([]byte{7}, 32)
-					backup = &account.Backup{Wallets: []account.WalletBackup{{Mnemonic: "test-only recovery material"}}}
+					backup = &account.Backup{Wallets: []account.WalletBackup{{Type: account.WalletMnemonic, Secret: []byte("test-only recovery material")}}}
 					session.Secret = secret
 					session.Backup = backup
 				}
@@ -48,7 +48,7 @@ func TestAccountCommitRecoveryDistinguishesExpiredPreview(t *testing.T) {
 			}
 			if testCase.abortFirst {
 				accountAbortSession(js.Undefined(), []js.Value{js.ValueOf(`{"session_id":"test-session"}`)})
-				if !bytes.Equal(secret, make([]byte, len(secret))) || backup.Wallets[0].Mnemonic != "" {
+				if !bytes.Equal(secret, make([]byte, len(secret))) || string(backup.Wallets[0].Secret) != "" {
 					t.Fatal("aborting a recovery session retained its secret or backup mnemonic")
 				}
 			}
@@ -74,10 +74,10 @@ func TestAccountSessionCleanupClearsRecoveryAndRGBMaterial(t *testing.T) {
 			userShare := &account.RecoveryShare{Data: "private-user-share"}
 			recoveryGuardianShare := &account.RecoveryShare{Data: "private-recovery-guardian-share"}
 			activationGuardianShare := &account.RecoveryShare{Data: "private-activation-guardian-share"}
-			backup := &account.Backup{Wallets: []account.WalletBackup{{Mnemonic: "private-mnemonic"}}}
+			backup := &account.Backup{Wallets: []account.WalletBackup{{Type: account.WalletMnemonic, Secret: []byte("private-mnemonic")}}}
 			managed := &walletsdk.RecoveredAccountManagementState{
-				State:       account.ManagedState{Wallets: []account.ManagedWallet{{Mnemonic: "private-mnemonic"}}},
-				ManagedData: account.ManagedDataBundle{Items: []account.ManagedDataItem{{Provider: "rgb11", Payload: rgb}}},
+				State:  account.ManagedState{Wallets: []account.ManagedWallet{{Type: account.WalletMnemonic, Secret: []byte("private-mnemonic")}}},
+				Copies: []walletsdk.AccountKVCopy{{Entry: account.ManagedEntry{Provider: "rgb11"}, Value: rgb}},
 			}
 			session := &accountRecoverySession{Secret: secret, RequestPrivate: recoveryPrivate,
 				DKVSShare: dkvsShare, UserShare: userShare, GuardianShare: recoveryGuardianShare,
@@ -95,7 +95,7 @@ func TestAccountSessionCleanupClearsRecoveryAndRGBMaterial(t *testing.T) {
 			if len(accountSessions.recovery) != 0 || len(accountSessions.activation) != 0 ||
 				!bytes.Equal(secret, make([]byte, 3)) || !bytes.Equal(recoveryPrivate, make([]byte, 3)) ||
 				!bytes.Equal(activationPrivate, make([]byte, 3)) || !bytes.Equal(rgb, make([]byte, 3)) ||
-				backup.Wallets[0].Mnemonic != "" || managed.State.Wallets[0].Mnemonic != "" ||
+				string(backup.Wallets[0].Secret) != "" || string(managed.State.Wallets[0].Secret) != "" ||
 				activation.Package.UserShare.Data != "" || activationGuardianShare.Data != "" ||
 				dkvsShare.Data != "" || userShare.Data != "" || recoveryGuardianShare.Data != "" || session.ManagedState != nil {
 				t.Fatal("aborted/released session retained account or RGB11 recovery material")
@@ -213,10 +213,10 @@ func advanceWASMWallClock(t *testing.T, duration time.Duration) {
 func TestAbortingPreviewDoesNotCorruptConfirmedRecoverySnapshot(t *testing.T) {
 	secret := bytes.Repeat([]byte{7}, 32)
 	id := strings.Repeat("a", 64)
-	state := account.ManagedState{Version: account.ManagedStateVersion, Revision: 1,
+	state := account.ManagedState{Version: account.ManagedStateVersion,
 		RootFingerprint: strings.Repeat("1", 64), Wallets: []account.ManagedWallet{{
-			Fingerprint: strings.Repeat("1", 64), Revision: 1, Name: "Root",
-			Mnemonic:     "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+			Fingerprint: strings.Repeat("1", 64), Name: "Root",
+			Type: account.WalletMnemonic, Secret: []byte("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"),
 			AccountCount: 1, SubAccounts: []account.SubAccount{{Index: 0, Name: "Account 1"}},
 		}}}
 	envelope, err := account.SealManagedState(secret, id, state, nil)
@@ -224,20 +224,17 @@ func TestAbortingPreviewDoesNotCorruptConfirmedRecoverySnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	preview := &accountRecoverySession{Secret: secret, ManagedState: &walletsdk.RecoveredAccountManagementState{
-		State: state, Envelope: envelope, ManagedData: account.ManagedDataBundle{
-			Version: account.ManagedDataBundleVersion, Revision: 1,
-			Items: []account.ManagedDataItem{{Provider: "rgb11", Scope: "root/0", Payload: []byte("private proof")}},
-		},
+		State: state, Envelope: envelope,
+		Copies: []walletsdk.AccountKVCopy{{
+			Entry: account.ManagedEntry{Provider: "rgb11", Scope: "root/0"}, Value: []byte("private proof"),
+		}},
 	}}
-	snapshot, err := snapshotAccountRecoveryForCommit(preview)
-	if err != nil {
-		t.Fatal(err)
-	}
+	snapshot := snapshotAccountRecoveryForCommit(preview)
 	defer clearAccountRecoverySession(snapshot)
 	clearAccountRecoverySession(preview)
 	decoded, err := account.OpenManagedState(snapshot.Secret, id, snapshot.ManagedState.Envelope)
-	if err != nil || decoded.Wallets[0].Mnemonic != snapshot.ManagedState.State.Wallets[0].Mnemonic ||
-		string(snapshot.ManagedState.ManagedData.Items[0].Payload) != "private proof" {
+	if err != nil || string(decoded.Wallets[0].Secret) != string(snapshot.ManagedState.State.Wallets[0].Secret) ||
+		string(snapshot.ManagedState.Copies[0].Value) != "private proof" {
 		t.Fatal("canceling a preview corrupted the confirmed account/RGB11 recovery snapshot")
 	}
 }

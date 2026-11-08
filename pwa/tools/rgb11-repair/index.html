@@ -25,7 +25,8 @@
 <script type="module">
 import {capture,hashText,applyPatch,validateOrphanSnapshotRepair,applyOrphanSnapshotRepair,resumeOrphanSnapshotRepair} from './repair.mjs';
 const el=id=>document.getElementById(id);
-async function guard(){if((await navigator.serviceWorker.getRegistrations()).length)throw Error('Close wallet, back up profile and unregister service worker in the COPY first');
+const lockReady=new Promise(resolve=>{if(!navigator.locks){resolve(false);return;}void navigator.locks.request('sat20-wallet-manager-v1',{mode:'exclusive',ifAvailable:true},async lock=>{if(!lock){resolve(false);return;}resolve(true);await new Promise(()=>{});}).catch(()=>resolve(false));});
+async function guard(){if(!(await lockReady))throw Error('The wallet is active or Web Locks are unavailable; close it and reload this maintenance page');if((await navigator.serviceWorker.getRegistrations()).length)throw Error('Close wallet, back up profile and unregister service worker in the COPY first');
  const db=await new Promise((resolve,reject)=>{const r=indexedDB.open('sat20-wallet-pwa');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(Error('public scope unavailable'));r.onupgradeneeded=()=>{r.transaction.abort();reject(Error('existing profile required'));}});
  try{const raw=await new Promise((resolve,reject)=>{const r=db.transaction('wallet-state','readonly').objectStore('wallet-state').get('local:wallet_state_snapshot_v1');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(Error('scope read failed'));});
  const v=typeof raw==='string'?JSON.parse(raw):raw;const s=v?.state;if(!s)throw Error('public scope missing');

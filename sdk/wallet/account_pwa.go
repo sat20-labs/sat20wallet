@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math/big"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -56,6 +57,8 @@ type AccountStorageOption struct {
 	MinimumRetention      string   `json:"minimum_retention,omitempty"`
 	RecommendedRetention  string   `json:"recommended_retention,omitempty"`
 	RecordCount           uint64   `json:"record_count,omitempty"`
+	RequiredBlobKeys      uint32   `json:"required_blob_keys"`
+	BlobKeyLimit          uint32   `json:"blob_key_limit"`
 	DefaultRecordCount    uint64   `json:"default_record_count,omitempty"`
 	FullRecordFee         string   `json:"full_record_fee_per_block,omitempty"`
 	MinimumAmountPerBlock string   `json:"minimum_amount_per_block,omitempty"`
@@ -153,6 +156,7 @@ type AccountAutopayFundingResult struct {
 	ContractAddress string `json:"contract_address"`
 	FeeAsset        string `json:"fee_asset"`
 	AmountPerBlock  string `json:"amount_per_block"`
+	BlobKeyLimit    uint32 `json:"blob_key_limit"`
 	FundingAmount   string `json:"funding_amount"`
 	FundingBlocks   uint64 `json:"funding_blocks"`
 	Reused          bool   `json:"reused"`
@@ -180,6 +184,7 @@ type RestoredSubAccountResult struct {
 }
 
 type RestoredWalletResult struct {
+	Type        account.WalletType         `json:"type"`
 	ID          int64                      `json:"id"`
 	Name        string                     `json:"name"`
 	Fingerprint string                     `json:"fingerprint"`
@@ -368,6 +373,18 @@ func (p *Manager) GetAccountStorageOptions() ([]AccountStorageOption, error) {
 		paid.Description = "当前网络尚未提供可用的 DKVS 付费保存配置。"
 		paid.Warnings = []string{paid.Description}
 	} else {
+		requiredBlobs, capacityErr := p.accountBlobRequirements()
+		if capacityErr != nil {
+			return nil, capacityErr
+		}
+		paid.RequiredBlobKeys = requiredBlobs
+		paid.BlobKeyLimit = accountBlobTarget(nil, "", requiredBlobs)
+		if root, rootErr := p.accountManagementRootWallet(); rootErr == nil {
+			if state, stateErr := p.accountAutopayState(defaults); stateErr == nil {
+				payer := PublicKeyToP2TRAddress_SatsNet(root.GetPubKey())
+				paid.BlobKeyLimit = accountBlobTarget(state, payer, requiredBlobs)
+			}
+		}
 		amountPerBlock, amountErr := accountAmountPerBlock(defaults, accountDefaultRecordCount)
 		if amountErr != nil {
 			return nil, amountErr
@@ -463,7 +480,11 @@ func (p *Manager) GetAccountAutopayFundingStatus() (*AccountAutopayFundingStatus
 	if !usesAutopay {
 		return notRequired, nil
 	}
-	status := accountAutopayStateFundingStatus(state, defaults, payer, requiredAmount)
+	requiredBlobs, err := p.accountBlobRequirements()
+	if err != nil {
+		return nil, err
+	}
+	status := accountAutopayStateFundingStatus(state, defaults, payer, requiredAmount, requiredBlobs)
 	status.Required = usesAutopay
 	if record != nil {
 		status.FundingTransactionID = record.TxID
@@ -472,6 +493,10 @@ func (p *Manager) GetAccountAutopayFundingStatus() (*AccountAutopayFundingStatus
 		}
 	}
 	if pending {
+		limit, limitErr := accountFundingBlobLimit(record)
+		if limitErr != nil {
+			return nil, limitErr
+		}
 		waiting, receiptErr := p.reconcileAccountAutopayReceipt(record)
 		if receiptErr != nil && waiting {
 			return nil, receiptErr
@@ -480,6 +505,7 @@ func (p *Manager) GetAccountAutopayFundingStatus() (*AccountAutopayFundingStatus
 			status.FundingError = receiptErr.Error()
 		}
 		if waiting {
+			status.EffectiveBlobKeyLimit = limit
 			status.FundingPending = true
 			_, validationErr := accountAutopaySignedTransaction(record, defaults, payer)
 			status.FundingCanResume = validationErr == nil
@@ -639,17 +665,22 @@ func (p *Manager) confirmPaidAccountStorageWithWallet(location AccountIndexerLoc
 			return nil, err
 		}
 	}
-	ready := accountAutopayStateReady(state, defaults, payer, amountPerBlock)
+	requiredBlobs, err := p.accountBlobRequirements()
+	if err != nil {
+		return nil, err
+	}
+	blobLimit := accountBlobTarget(state, payer, requiredBlobs)
+	ready := accountAutopayStateReady(state, defaults, payer, amountPerBlock, requiredBlobs)
 	if ready {
 		return accountPaidStorageAuthorization(location, defaults, recordCount,
-			amountPerBlock, fundingAmount, "", true), nil
+			amountPerBlock, fundingAmount, "", true, requiredBlobs, blobLimit), nil
 	}
-	transactionID, err := p.fundAccountAutopayWithWallet(defaults, amountPerBlock, fundingAmount, payerWallet)
+	transactionID, err := p.fundAccountAutopayWithWallet(defaults, amountPerBlock, fundingAmount, blobLimit, payerWallet)
 	if err != nil {
 		return nil, err
 	}
 	return accountPaidStorageAuthorization(location, defaults, recordCount,
-		amountPerBlock, fundingAmount, transactionID, false), nil
+		amountPerBlock, fundingAmount, transactionID, false, requiredBlobs, blobLimit), nil
 }
 
 func (p *Manager) FundAccountAutopay(confirmed AccountAutopayFundingStatus) (*AccountAutopayFundingResult, error) {
@@ -668,7 +699,8 @@ func (p *Manager) FundAccountAutopay(confirmed AccountAutopayFundingStatus) (*Ac
 	amountPerBlock := status.EffectiveAmountPerBlock
 	fundingAmount := status.RecommendedFundingAmount
 	if status.FundingPending {
-		if confirmed.FundingTransactionID != status.FundingTransactionID {
+		if confirmed.FundingTransactionID != status.FundingTransactionID ||
+			confirmed.EffectiveBlobKeyLimit != status.EffectiveBlobKeyLimit {
 			return nil, ErrAccountAutopayFundingQuoteChanged
 		}
 		root, err := p.accountManagementRootWallet()
@@ -683,6 +715,10 @@ func (p *Manager) FundAccountAutopay(confirmed AccountAutopayFundingStatus) (*Ac
 		if !accountAutopayLogPending(record) || record.TxID != confirmed.FundingTransactionID {
 			return nil, ErrAccountAutopayFundingQuoteChanged
 		}
+		blobLimit, err := accountFundingBlobLimit(record)
+		if err != nil {
+			return nil, err
+		}
 		txid, resumeErr := p.resumeAccountAutopayTransaction(record, defaults, payer)
 		var pending *AccountAutopayPendingError
 		if !errors.As(resumeErr, &pending) {
@@ -690,6 +726,7 @@ func (p *Manager) FundAccountAutopay(confirmed AccountAutopayFundingStatus) (*Ac
 		}
 		return &AccountAutopayFundingResult{TransactionID: txid,
 			ContractAddress: defaults.AutopayContract, FeeAsset: defaults.AutopayFeeAssetName,
+			BlobKeyLimit:   blobLimit,
 			AmountPerBlock: record.Parameters["amount_per_block"], FundingAmount: record.Parameters["amount"],
 			FundingBlocks: accountPaidDefaultFundingBlocks, Pending: true}, nil
 	}
@@ -703,6 +740,7 @@ func (p *Manager) FundAccountAutopay(confirmed AccountAutopayFundingStatus) (*Ac
 	// confirmed. Height/balance changes alone do not invalidate the quotation.
 	if confirmed.Payer != status.Payer || confirmed.ContractAddress != status.ContractAddress ||
 		confirmed.FeeAsset != status.FeeAsset || confirmed.EffectiveAmountPerBlock != amountPerBlock ||
+		confirmed.EffectiveBlobKeyLimit != status.EffectiveBlobKeyLimit ||
 		confirmed.RecommendedFundingAmount != fundingAmount || confirmed.RecommendedFundingBlocks != status.RecommendedFundingBlocks {
 		return nil, ErrAccountAutopayFundingQuoteChanged
 	}
@@ -710,7 +748,7 @@ func (p *Manager) FundAccountAutopay(confirmed AccountAutopayFundingStatus) (*Ac
 	if err != nil {
 		return nil, err
 	}
-	transactionID, err := p.fundAccountAutopayWithWallet(defaults, amountPerBlock, fundingAmount, root)
+	transactionID, err := p.fundAccountAutopayWithWallet(defaults, amountPerBlock, fundingAmount, status.EffectiveBlobKeyLimit, root)
 	var pending *AccountAutopayPendingError
 	if err != nil && !errors.As(err, &pending) {
 		return nil, err
@@ -721,12 +759,13 @@ func (p *Manager) FundAccountAutopay(confirmed AccountAutopayFundingStatus) (*Ac
 	return &AccountAutopayFundingResult{
 		TransactionID: transactionID, ContractAddress: defaults.AutopayContract,
 		FeeAsset: defaults.AutopayFeeAssetName, AmountPerBlock: amountPerBlock,
+		BlobKeyLimit:  status.EffectiveBlobKeyLimit,
 		FundingAmount: fundingAmount, FundingBlocks: accountPaidDefaultFundingBlocks, Pending: pending != nil,
 	}, nil
 }
 
 func (p *Manager) fundAccountAutopayWithWallet(defaults dkvsindexer.NetworkDefaults,
-	amountPerBlock, fundingAmount string, payerWallet common.Wallet) (string, error) {
+	amountPerBlock, fundingAmount string, blobLimit uint32, payerWallet common.Wallet) (string, error) {
 	payer := PublicKeyToP2TRAddress_SatsNet(payerWallet.GetPubKey())
 	existing, err := p.accountAutopayFundingRecord(defaults, payer)
 	if err != nil {
@@ -744,11 +783,18 @@ func (p *Manager) fundAccountAutopayWithWallet(defaults dkvsindexer.NetworkDefau
 		if waiting {
 			return existing.TxID, &AccountAutopayPendingError{TransactionID: existing.TxID}
 		}
-		if accountAutopayStateReady(state, defaults, payer, amountPerBlock) {
+		if accountAutopayStateReady(state, defaults, payer, amountPerBlock, blobLimit) {
 			return existing.TxID, nil
 		}
 	}
-	param := contractcommon.TemplateAutopayConfigInvokeParam{AmountPerBlock: amountPerBlock}
+	state, err := p.accountAutopayState(defaults)
+	if err != nil {
+		return "", err
+	}
+	if blobLimit == 0 || accountBlobLimit(state, payer) > blobLimit {
+		return "", ErrAccountAutopayFundingQuoteChanged
+	}
+	param := contractcommon.TemplateAutopayConfigInvokeParam{AmountPerBlock: amountPerBlock, BlobKeyLimit: blobLimit}
 	encodedParam, err := param.Encode()
 	if err != nil {
 		return "", err
@@ -758,7 +804,8 @@ func (p *Manager) fundAccountAutopayWithWallet(defaults dkvsindexer.NetworkDefau
 		Summary: "准备充值账户存储 AUTOPAY",
 		Parameters: map[string]string{"network": _chain, "payer": payer,
 			"contract": defaults.AutopayContract, "asset": defaults.AutopayFeeAssetName,
-			"amount_per_block": amountPerBlock, "amount": fundingAmount},
+			"amount_per_block": amountPerBlock, "amount": fundingAmount,
+			"blob_key_limit": strconv.FormatUint(uint64(blobLimit), 10)},
 	})
 	if err != nil {
 		return "", fmt.Errorf("record AUTOPAY funding before submission: %w", err)
@@ -790,7 +837,7 @@ func (p *Manager) fundAccountAutopayWithWallet(defaults dkvsindexer.NetworkDefau
 	if waiting {
 		return result.TxID, &AccountAutopayPendingError{TransactionID: result.TxID}
 	}
-	if err := p.waitForAccountAutopayReady(defaults, amountPerBlock, payer); err != nil {
+	if err := p.waitForAccountAutopayReady(defaults, amountPerBlock, payer, blobLimit); err != nil {
 		return result.TxID, &AccountAutopayPendingError{TransactionID: result.TxID, Cause: err}
 	}
 	return result.TxID, nil
@@ -798,7 +845,7 @@ func (p *Manager) fundAccountAutopayWithWallet(defaults dkvsindexer.NetworkDefau
 
 func accountPaidStorageAuthorization(location AccountIndexerLocation,
 	defaults dkvsindexer.NetworkDefaults, recordCount uint64, amountPerBlock,
-	fundingAmount, transactionID string, reused bool) *AccountStorageAuthorization {
+	fundingAmount, transactionID string, reused bool, requiredBlobs, blobLimit uint32) *AccountStorageAuthorization {
 
 	description := "AUTOPAY 首次区块支付已确认。"
 	if reused {
@@ -812,6 +859,7 @@ func accountPaidStorageAuthorization(location AccountIndexerLocation,
 			Title: "付费保存", Description: description,
 			FeeAsset: defaults.AutopayFeeAssetName, EstimatedCost: fundingAmount,
 			RecordCount: recordCount, DefaultRecordCount: accountDefaultRecordCount,
+			RequiredBlobKeys: requiredBlobs, BlobKeyLimit: blobLimit,
 			FullRecordFee:         defaults.FullRecordFeePerBlock,
 			MinimumAmountPerBlock: defaults.AutopayMinAmountPerBlock, AmountPerBlock: amountPerBlock,
 			RecommendedRetention: "持续支付期间全网保存", ContractAddress: defaults.AutopayContract},
@@ -821,7 +869,7 @@ func accountPaidStorageAuthorization(location AccountIndexerLocation,
 
 func accountPaidStorageAuthorizationFromState(location AccountIndexerLocation,
 	defaults dkvsindexer.NetworkDefaults, recordCount uint64, payer string,
-	state *dkvsindexer.AutopayContractState) (*AccountStorageAuthorization, error) {
+	state *dkvsindexer.AutopayContractState, requiredBlobs uint32) (*AccountStorageAuthorization, error) {
 
 	recordCount, err := normalizeAccountRecordCount(recordCount)
 	if err != nil {
@@ -831,7 +879,7 @@ func accountPaidStorageAuthorizationFromState(location AccountIndexerLocation,
 	if err != nil {
 		return nil, err
 	}
-	if !accountAutopayStateReady(state, defaults, payer, amountPerBlock) {
+	if !accountAutopayStateReady(state, defaults, payer, amountPerBlock, requiredBlobs) {
 		return nil, ErrAccountPaidStorageNotReusable
 	}
 	fundingAmount, err := multiplyDecimal(amountPerBlock, accountPaidDefaultFundingBlocks)
@@ -839,7 +887,7 @@ func accountPaidStorageAuthorizationFromState(location AccountIndexerLocation,
 		return nil, err
 	}
 	return accountPaidStorageAuthorization(location, defaults, recordCount,
-		amountPerBlock, fundingAmount, "", true), nil
+		amountPerBlock, fundingAmount, "", true, requiredBlobs, accountBlobLimit(state, payer)), nil
 }
 
 // ReusePaidAccountStorage is intentionally non-funding. It may rebuild an
@@ -875,7 +923,11 @@ func (p *Manager) ReusePaidAccountStorage(recordCount uint64) (*AccountStorageAu
 	if err != nil {
 		return nil, err
 	}
-	authorization, err := accountPaidStorageAuthorizationFromState(location, defaults, recordCount, payer, state)
+	requiredBlobs, err := p.accountBlobRequirements()
+	if err != nil {
+		return nil, err
+	}
+	authorization, err := accountPaidStorageAuthorizationFromState(location, defaults, recordCount, payer, state, requiredBlobs)
 	if err != nil {
 		return nil, err
 	}
@@ -899,6 +951,12 @@ func (p *Manager) boundAccountStorageWriter(auth AccountStorageAuthorization) (*
 		}
 		if err := p.checkAccountManagedDataImport(); err != nil {
 			return err
+		}
+		p.mutex.RLock()
+		writeErr := p.requireAccountManagedWriteLocked()
+		p.mutex.RUnlock()
+		if writeErr != nil {
+			return writeErr
 		}
 		root, err = p.accountManagementRootWallet()
 		if err != nil {
@@ -990,11 +1048,13 @@ func clearAccountBackup(value *account.Backup) {
 		return
 	}
 	for index := range value.Wallets {
-		value.Wallets[index].Mnemonic = ""
+		zeroBytes(value.Wallets[index].Secret)
+		value.Wallets[index].Secret = nil
 	}
 }
 
 type preparedAccountRestore struct {
+	copies     []*accountLocalKV
 	wallets    map[int64]*WalletInfo
 	status     *Status
 	results    []RestoredWalletResult
@@ -1039,7 +1099,7 @@ func (p *Manager) prepareAccountRestoreWithRootLocked(value account.Backup, pass
 	if allowedRootFingerprint != "" && len(p.walletInfoMap) == 1 &&
 		(p.accountProfile == nil || p.replaceableImportedRootProfileLocked(allowedRootFingerprint)) {
 		for _, info := range p.walletInfoMap {
-			if info != nil && info.Wallet != nil && info.Type == WALLET_TYPE_MNEMONIC &&
+			if info != nil && info.Wallet != nil && info.Type == WALLET_TYPE_MNEMONIC && info.Accounts == 1 &&
 				walletFingerprint(info.Wallet) == allowedRootFingerprint {
 				importedRootID = info.Id
 				importedRootFound = true
@@ -1060,10 +1120,11 @@ func (p *Manager) prepareAccountRestoreWithRootLocked(value account.Backup, pass
 	}
 	fingerprints := make(map[string]struct{}, len(backup.Wallets))
 	for _, item := range backup.Wallets {
-		walletValue := NewInternalWalletWithMnemonic(item.Mnemonic, "", GetChainParam())
-		if walletValue == nil {
-			return nil, fmt.Errorf("restore wallet %q: invalid mnemonic", item.Name)
+		walletValue, typ, localSecret, err := accountWalletMaterial(item.Type, item.Secret)
+		if err != nil {
+			return nil, fmt.Errorf("restore wallet %q: invalid material", item.Name)
 		}
+		defer zeroBytes(localSecret)
 		fingerprint := walletFingerprint(walletValue)
 		if _, exists := fingerprints[fingerprint]; exists {
 			return nil, fmt.Errorf("restore wallet %q: duplicate wallet identity", item.Name)
@@ -1077,7 +1138,7 @@ func (p *Manager) prepareAccountRestoreWithRootLocked(value account.Backup, pass
 			return nil, fmt.Errorf("restore wallet %q: duplicate wallet id", item.Name)
 		}
 		info := &WalletInfo{WalletInDB: WalletInDB{
-			Id: id, Accounts: int(item.AccountCount), Type: WALLET_TYPE_MNEMONIC, Name: item.Name,
+			Id: id, Accounts: int(item.AccountCount), Type: typ, Name: item.Name,
 			AccountNames: make(map[uint32]string, len(item.SubAccounts)),
 			AccountDIDs:  make(map[uint32]string, len(item.SubAccounts)),
 		}, Wallet: walletValue}
@@ -1093,7 +1154,7 @@ func (p *Manager) prepareAccountRestoreWithRootLocked(value account.Backup, pass
 		if err != nil {
 			return nil, fmt.Errorf("derive restored wallet key %q: %w", item.Name, err)
 		}
-		ciphertext, err := key.Encrypt([]byte(item.Mnemonic))
+		ciphertext, err := key.Encrypt(localSecret)
 		if err != nil {
 			return nil, fmt.Errorf("encrypt restored wallet %q: %w", item.Name, err)
 		}
@@ -1117,7 +1178,7 @@ func (p *Manager) prepareAccountRestoreWithRootLocked(value account.Backup, pass
 		}
 		prepared.wallets[id] = info
 		prepared.results = append(prepared.results, RestoredWalletResult{
-			ID: id, Name: item.Name, Fingerprint: walletFingerprint(walletValue), Accounts: accounts,
+			ID: id, Type: item.Type, Name: item.Name, Fingerprint: walletFingerprint(walletValue), Accounts: accounts,
 		})
 	}
 	sort.Slice(prepared.results, func(i, j int) bool { return prepared.results[i].ID < prepared.results[j].ID })
@@ -1145,10 +1206,40 @@ func (p *Manager) replaceableImportedRootProfileLocked(rootFingerprint string) b
 	if profile == nil {
 		return true
 	}
-	return !profile.RecoveryConfigured && profile.RootFingerprint == rootFingerprint &&
-		profile.StorageMode == AccountStorageTemporary && profile.StateSeq == 1 &&
-		profile.ManagedDataRevision == 0 && profile.ManagedDataGeneration == 1 &&
-		profile.ManagedDataDirty && len(profile.Pending) == 0 && len(p.walletInfoMap) == 1
+	// A freshly imported root has no remote state Seq yet. Its encrypted local
+	// bootstrap is not a confirmed backup, nor permission to replace later edits.
+	if profile.RecoveryConfigured || profile.ManagedEntered || profile.Activation != nil ||
+		profile.InitialBackupPending || profile.RootFingerprint != rootFingerprint ||
+		profile.StorageMode != AccountStorageTemporary || profile.StateSeq != 0 ||
+		profile.ManagedDataGeneration != 1 || !profile.ManagedDataDirty ||
+		len(profile.Pending) != 0 || len(p.walletInfoMap) != 1 {
+		return false
+	}
+	root, err := p.accountManagementRootWalletLocked()
+	if err != nil || root.Type != WALLET_TYPE_MNEMONIC || root.Accounts != 1 {
+		return false
+	}
+	accountID, err := dkvsAccountID(cloneWalletAtAccountZero(root.Wallet))
+	if err != nil || accountID != profile.AccountID {
+		return false
+	}
+	for _, enabled := range root.SPEnabled {
+		if enabled {
+			return false
+		}
+	}
+	values, err := p.listAccountLocal(accountID)
+	if err != nil {
+		return false
+	}
+	for _, value := range values {
+		// A staged module or a confirmed account KV is more than an untouched
+		// root import. Keep its data rather than replacing this local catalog.
+		if value.Provider != "account" || value.Baseline != nil || value.Confirmed != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // persistPreparedAccountRestoreLocked is the only commit point for account
@@ -1156,6 +1247,9 @@ func (p *Manager) replaceableImportedRootProfileLocked(rootFingerprint string) b
 // visible together; manager memory is updated only after a successful Flush.
 func (p *Manager) persistPreparedAccountRestoreLocked(prepared *preparedAccountRestore,
 	profile *accountManagementProfile) error {
+	if err := p.accountDBFailure(); err != nil {
+		return err
+	}
 	if prepared == nil || len(prepared.wallets) == 0 || prepared.status == nil {
 		return fmt.Errorf("invalid prepared account restore")
 	}
@@ -1173,7 +1267,7 @@ func (p *Manager) persistPreparedAccountRestoreLocked(prepared *preparedAccountR
 			return err
 		}
 		if err := batch.Put([]byte(getWalletDBKey(id)), encoded); err != nil {
-			return err
+			return p.stopAccountDB(accountDBWriteError(err))
 		}
 	}
 	statusBytes, err := encodeStatusToBytes(prepared.status)
@@ -1181,28 +1275,24 @@ func (p *Manager) persistPreparedAccountRestoreLocked(prepared *preparedAccountR
 		return err
 	}
 	if err := batch.Put([]byte(DB_KEY_STATUS), statusBytes); err != nil {
-		return err
+		return p.stopAccountDB(accountDBWriteError(err))
 	}
 	if profile != nil {
-		marker := accountManagedImportMarkerForProfile(
-			accountManagedImportOriginRestore, accountManagedImportStageLocalCommit, profile)
-		encodedMarker, err := json.Marshal(marker)
-		if err != nil {
-			return err
-		}
-		if err := batch.Put(accountManagedDataImportKey(), encodedMarker); err != nil {
-			return err
-		}
 		profileBytes, err := EncodeToBytes(profile)
 		if err != nil {
 			return err
 		}
 		if err := batch.Put(accountManagementProfileKey(), profileBytes); err != nil {
-			return err
+			return p.stopAccountDB(accountDBWriteError(err))
+		}
+	}
+	for _, copy := range prepared.copies {
+		if err := p.writeAccountLocal(batch, copy); err != nil {
+			return p.stopAccountDB(err)
 		}
 	}
 	if err := batch.Flush(); err != nil {
-		return err
+		return p.stopAccountDB(accountDBWriteError(err))
 	}
 	p.walletInfoMap = prepared.wallets
 	if p.status == nil {
@@ -1274,7 +1364,22 @@ func (p *Manager) CreateAccountRecoveryPackage(options account.CreateOptions) (*
 		return nil, err
 	}
 	defer zeroBytes(secret)
-	return account.NewManager(nil).CreateRecoveryPackage(options, secret)
+	pkg, err := account.NewManager(nil).CreateRecoveryPackage(options, secret)
+	if err != nil {
+		return nil, err
+	}
+	encoded, err := account.EncodeRecoveryPackageStorage(*pkg)
+	if err != nil {
+		return nil, err
+	}
+	key, err := dkvsindexer.AccountPersonalKey(options.AccountID, accountPackagePath(pkg.Envelope.Locator.PackageID))
+	if err != nil {
+		return nil, err
+	}
+	if err := p.saveAccountKV(options.AccountID, key, encoded); err != nil {
+		return nil, err
+	}
+	return pkg, nil
 }
 
 func (p *Manager) PutGuardianCapsuleForStorage(auth AccountStorageAuthorization, mailboxID string,

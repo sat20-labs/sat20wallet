@@ -9,7 +9,7 @@
       </a>
       <span v-else>{{ displayUtxo }}</span>
     </TableCell>
-    <TableCell class="truncate">{{ utxo.reason || '-' }}</TableCell>
+    <TableCell class="truncate">{{ utxo.reason === 'manual' ? t('settingsUi.manualLock') : utxo.reason || '-' }}</TableCell>
     <TableCell class="truncate">{{ formattedLockedTime }}</TableCell>
     <TableCell>
       <Button v-if="!showCheckbox" size="sm" variant="default" :loading="isUnlocking" @click="handleUnlock">

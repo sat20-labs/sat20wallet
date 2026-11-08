@@ -2,17 +2,17 @@
   <LayoutApprove @confirm="confirm" @cancel="cancel" :loading="isLoading">
     <div class="p-3 sm:p-4 space-y-3">
       <h2 class="text-lg sm:text-xl font-semibold text-center">
-        {{ $t('invokeUnifiedContract.title', '智能合约调用确认') }}
+        {{ $t('invokeUnifiedContract.title') }}
       </h2>
       <p class="text-xs text-gray-400 text-center mb-2 sm:mb-3">
-        {{ $t('invokeUnifiedContract.warning', '请确认以下智能合约调用信息，确认后将发起链上调用') }}
+        {{ $t('invokeUnifiedContract.warning') }}
       </p>
 
       <div class="space-y-3">
         <div class="bg-muted/50 rounded-lg p-2 sm:p-3">
           <div class="flex items-center justify-between gap-2 py-1">
             <span class="text-xs text-muted-foreground flex-shrink-0">
-              {{ $t('invokeUnifiedContract.contractType', '合约类型') }}
+              {{ $t('invokeUnifiedContract.contractType') }}
             </span>
             <span class="text-xs sm:text-sm font-medium text-right break-words">
               {{ contractType || '-' }}
@@ -20,7 +20,7 @@
           </div>
           <div class="flex items-start justify-between gap-2 py-1">
             <span class="text-xs text-muted-foreground flex-shrink-0">
-              {{ $t('invokeUnifiedContract.contractAddress', '合约地址') }}
+              {{ $t('invokeUnifiedContract.contractAddress') }}
             </span>
             <span class="text-xs font-medium text-right break-all leading-tight max-w-[60%]">
               {{ contractAddress || '-' }}
@@ -28,7 +28,7 @@
           </div>
           <div v-if="betAssetName || betAmount" class="flex items-center justify-between gap-2 py-1">
             <span class="text-xs text-muted-foreground flex-shrink-0">
-              {{ $t('invokeUnifiedContract.bet', '投注') }}
+              {{ $t('invokeUnifiedContract.bet') }}
             </span>
             <span class="text-xs sm:text-sm font-medium text-right break-words">
               {{ betAmount || '-' }} {{ betAssetName || '' }}
@@ -39,7 +39,7 @@
         <Accordion type="single" collapsible class="w-full">
           <AccordionItem value="item-1" class="border">
             <AccordionTrigger class="text-xs px-2 py-2 hover:no-underline sm:px-3">
-              <span class="text-left">{{ $t('invokeUnifiedContract.viewRawContent', '查看原始调用参数') }}</span>
+              <span class="text-left">{{ $t('invokeUnifiedContract.viewRawContent') }}</span>
             </AccordionTrigger>
             <AccordionContent class="px-2 pb-2 sm:px-3 sm:pb-3">
               <Alert class="mt-1 border-0">
@@ -106,7 +106,7 @@ const betAmount = computed(() => firstAsset.value?.Amount || firstAsset.value?.a
 
 const formattedRequest = computed(() => JSON.stringify(req.value || {}, null, 2))
 
-const walletLockedMessage = () => t('securitySetting.walletLockedError', '钱包未解锁，请先解锁钱包')
+const walletLockedMessage = () => t('securitySetting.walletLockedError')
 
 const isWalletLockedError = (message?: string) => {
   if (!message) return false
@@ -125,7 +125,7 @@ const handleWalletLocked = async () => {
   const message = walletLockedMessage()
   invokeError.value = message
   toast.toast({
-    title: t('common.error', '错误'),
+    title: t('common.error'),
     description: message,
     variant: 'destructive',
   })
@@ -135,8 +135,8 @@ const handleWalletLocked = async () => {
 const confirm = async () => {
   if (!req.value || !contractType.value) {
     toast.toast({
-      title: t('invokeUnifiedContract.parameterMissing', '参数缺失'),
-      description: t('invokeUnifiedContract.parameterMissingDescription', '智能合约调用参数缺失'),
+      title: t('invokeUnifiedContract.parameterMissing'),
+      description: t('invokeUnifiedContract.parameterMissingDescription'),
       variant: 'destructive',
     })
     return
@@ -156,9 +156,9 @@ const confirm = async () => {
         await handleWalletLocked()
         return
       }
-      invokeError.value = err.message || '智能合约调用失败'
+      invokeError.value = err.message || t('approvalUi.unifiedCallFailed')
       toast.toast({
-        title: t('invokeUnifiedContract.callFailed', '智能合约调用失败'),
+        title: t('invokeUnifiedContract.callFailed'),
         description: err.message,
         variant: 'destructive',
       })
@@ -166,14 +166,14 @@ const confirm = async () => {
     }
     emit('confirm', res)
   } catch (e: any) {
-    const message = e?.message || '智能合约调用异常'
+    const message = e?.message || t('approvalUi.unifiedCallException')
     if (isWalletLockedError(message)) {
       await handleWalletLocked()
       return
     }
     invokeError.value = message
     toast.toast({
-      title: t('invokeUnifiedContract.callException', '智能合约调用异常'),
+      title: t('invokeUnifiedContract.callException'),
       description: message,
       variant: 'destructive',
     })

@@ -40,12 +40,12 @@ const snapshot = await page.evaluate(async ({ password, origin }) => {
     const key = localStorage.key(index)
     if (!key) continue
     if (!key.startsWith('wallet-id-') &&
-      !key.endsWith('account-management-profile-v2') &&
+      !key.endsWith('account-management-profile-v1') &&
       !key.startsWith('dkvs-batch-outbox:')) continue
     const value = localStorage.getItem(key)
     if (value !== null) values[key] = value
   }
-  if (!Object.keys(values).some((key) => key.endsWith('account-management-profile-v2'))) {
+  if (!Object.keys(values).some((key) => key.endsWith('account-management-profile-v1'))) {
     throw new Error('account management profile is absent from local encrypted storage')
   }
   if (!Object.keys(values).some((key) => key.startsWith('wallet-id-'))) {

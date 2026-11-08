@@ -53,7 +53,7 @@ func TestRGB11UnsignedExpiredCancelCannotResumeAndReleasesInputs(t *testing.T) {
 	if err := sender.CancelExpiredRGB11Transfer(original.State.TransferID); err != nil {
 		t.Fatal(err)
 	}
-	coreAssertRGB11Reservation(t, sender, original.State.TransferID, false)
+	coreAssertRGB11Reservation(t, sender, original.State.TransferID, false, original)
 	delivery, err := sender.DeliverAndBroadcastConfiguredRGB11AddressTransfer(original.State.TransferID, RGB11AddressDeliveryOptions{})
 	if err != nil || delivery == nil || delivery.Broadcast || delivery.TxID != "" || delivery.RecordKey != "" || delivery.RecordHash != "" || delivery.ObjectID != "" {
 		t.Fatalf("canceled preparation performed delivery/broadcast: result=%+v err=%v", delivery, err)
@@ -155,10 +155,13 @@ func TestRGB11DirectBroadcastTimeoutCannotCancelAndResolvesWithoutRebroadcast(t 
 	sender.rgbManager.evidence = evidence
 	// Drive reconciliation explicitly so it cannot race the deliberately hidden
 	// transaction status while this test exercises cancellation after timeout.
-	sender.rgbManager.scopeStates = nil
+	sender.rgbManager.scopeStates.stopReconciliations()
 	ack, err := sender.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
-	if !errors.Is(err, ErrRGB11BroadcastResultUnknown) || !errors.Is(err, context.DeadlineExceeded) || ack == nil || ack.ACKs != 1 || ack.Invalid != 0 {
-		t.Fatalf("ACK/broadcast lost response: result=%+v err=%v", ack, err)
+	broadcastCalls := evidence.calls()
+	unknownResult := errors.Is(err, ErrRGB11BroadcastResultUnknown)
+	deadlineResult := errors.Is(err, context.DeadlineExceeded)
+	if !unknownResult || !deadlineResult || ack == nil || ack.ACKs != 1 || ack.Invalid != 0 {
+		t.Fatalf("ACK/broadcast lost response: unknown=%t deadline=%t broadcast_calls=%d result=%+v err=%v", unknownResult, deadlineResult, broadcastCalls, ack, err)
 	}
 	uncertain, err := sender.rgbManager.projectionStore.LoadPendingTransfer(original.State.TransferID)
 	if err != nil {

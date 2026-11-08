@@ -3,7 +3,7 @@
     <UiSelect
       v-model="params.assetType"
       :options="uniqueAssetList"
-      :placeholder="'Select type'"
+      :placeholder="$t('walletComponents.selectType')"
       @update:modelValue="typeChangeHandler"
     />
 
@@ -13,7 +13,7 @@
         v-model="params.asset"
         @update:model-value="assetChangeHandler"
         :options="assetList"
-        :placeholder="'Select asset'"
+        :placeholder="$t('walletComponents.selectAsset')"
       />
     </template>
 

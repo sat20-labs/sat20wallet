@@ -1,0 +1,109 @@
+PWA language and backup-status regression candidate
+Date: 2026-10-31
+
+State
+-----
+The approved language persistence production change and the reviewed language/status regression patch are applied in the working tree. No PWA business tests or builds were run by this author; Luna is running only the two status-read cases.
+
+Candidate patch
+---------------
+File: pwa/data/language-status-read-regression-20261031.patch.txt
+SHA-256: ba4a12de3c56b10172a8ba1cada078b4175aa0440795d77517fe806950c87bd8
+The combined patch includes the four changed test files below. `git apply --check`
+passed before application and `git apply --reverse --check` passes against the
+current working tree. `node --check` succeeds on all three MJS files and
+`gofmt -d` reports no changes for the Go selector wrapper. No business test
+was run by this author.
+
+The patch changes these test files:
+- `pwa/scripts/verify/wallet-basic-e2e.mjs`
+- `pwa/scripts/verify/account-management-usage-e2e.mjs`
+- `pwa/scripts/verify/account-management-e2e.mjs` (focused-case allowlist)
+- `sdk/e2e/account_management_browser_e2e_test.go` (exact Go test selector `TestPWAStatusReadRetry`)
+
+Language case
+-------------
+The failure branch wraps only `walletStorage.setValue('language', ...)` with a
+controlled rejected promise. It verifies the selector is disabled while that
+write is pending, only one language persistence write is in flight, the prior
+English locale/value remains visible, the localized failure message appears,
+and durable language remains English. It restores the real method, reloads,
+and checks English plus the original wallet identity.
+
+The success branch then selects Chinese through the normal UI, waits for the
+Chinese environment heading to become visible, and reloads immediately. It does
+not poll storage before reload. After reload it checks the durable `zh` value,
+Chinese UI and unchanged wallet identity, then switches back through the UI and
+checks that English was persisted.
+
+Status-read cases
+-----------------
+The old race-prone one-shot scenario is replaced by two exact cases:
+- Automatic recovery: one real `accountE2E.status()` call is made to fail after
+a verified rehearsal. The existing page refresh recovers to configured status;
+  the rehearsal counter remains exactly one and no read-retry click is recorded.
+- Manual read retry: the real status method continues returning the injected
+  read error until a capture listener on the exact Playwright-matched
+  “重试读取备份状态” button observes its click. That click permits one real
+  status read, then removes the fault. The test requires the error to clear,
+  configured status to return, exactly one rehearsal, one actual button click,
+  and one successful manual read.
+
+Both paths retain the existing 30-second bound. They do not fabricate account
+status, retry the rehearsal, alter SDK behavior, or use the separate “立即重试
+同步” control. The focused-case allowlist is updated for the two new scenarios. The SDK
+wrapper adds `TestPWAStatusReadRetry` so Luna can execute exactly these two
+scenarios through the existing real-node/PWA runner.
+
+Source hashes at draft time
+---------------------------
+Test patch base:
+- `pwa/scripts/verify/wallet-basic-e2e.mjs`: 7c770e249e894a18d8eaba2e3978ca9ba7bf17ce847f158cb79dfd44e8a96aa1
+- `pwa/scripts/verify/account-management-usage-e2e.mjs`: 29827df16e7e14616767b3227920c068b0886797e6532f96cd037eccc0017a58
+- `pwa/scripts/verify/account-management-e2e.mjs`: 7d510fbf3990797d076d2ea7881ee71efbc39c8ca205ade4e344db664b034e29
+
+Temporary candidate hashes:
+- wallet-basic: f38a3c3ddb3af13b34b45630eefc6e04dcb6f22f2dde8179713a0771aa4e63a5
+- account-management-usage: 2c02550e0d1336b9bbd14fb95fe2f7cbd02f43400674fdf10e439c34bcfa0962
+- account-management runner: e2b112f7367270407d7f59c0f28fe7877194337fd8201b39b698f1be9abc8c08
+- SDK browser wrapper base before `TestPWAStatusReadRetry`: 340667e862980b98191b32a578003d1765a1a3763dc8976b5a44bacfda8689ee
+- SDK browser wrapper with exact selector: ba604f5b337ead84150b9afceb2e42981dd3b9b6b784668a73067c2730f9bd3e
+
+Approved production language change applied
+-------------------------------------------
+- `pwa/main.ts`: 91e82ddd9f698d943db096dc11536768e9ee1289e5d769b78dc3047e80f6029e
+- `pwa/components/setting/NetworkSetting.vue`: f5ba2fe0392dc8bbef0cfd3ad07ceed1fe154e4ddfb858dee9a2b080fa1336a1
+- `pwa/locales/en.json`: df17e0644ba3211e346e3f16815cd4c208827c8bbf39d8819b7c7b83952418b3
+- `pwa/locales/zh.json`: e1cccf1d6e7e4d09d427dfa47b7697dc95f080db2a71d9be79e8e80aa41132fb
+
+No build/test was run after that production change. Existing staged and unstaged
+work in the shared checkout was preserved.
+
+
+First Luna execution (before the bubble-listener correction)
+-----------------------------------------------------------
+`TestPWAStatusReadRetry` ran once. Automatic status recovery passed (20.785s);
+the manual retry scenario failed its 30s predicate (43.871s total scenario).
+The run exited 1, with 1 PASS / 1 FAIL / 0 NOTRUN. No test was rerun by the
+author. Log: `/private/tmp/sat20wallet-pwa-status-read-20261031/run.log`
+(SHA-256 `dba33b05f57d53d131a76a8630c8de746e7a2088332506ba9c4228039c1c49c9`).
+The manual gate is now limited by a same-button bubble listener registered
+after the existing Vue handler; Luna is rerunning the same two exact cases.
+
+Second Luna execution (bubble-listener candidate)
+-------------------------------------------------
+`TestPWAStatusReadRetry` ran once on the updated source and exited 0 in
+54.136s. Automatic status recovery passed in 18.999s; manual exact-button
+status read passed in 14.541s. The Node progress JSONL confirms both leaves
+ran and passed; no skips. Log:
+`/private/tmp/sat20wallet-pwa-status-read-r2-20261031/run.log`
+(SHA-256 `b629b57999f0252e6cf8b5d4c3255cd1b054d483d3988537b98091f28291f9a7`).
+Progress:
+`/var/folders/gv/dpyml84n7sg9zyhm3b0x1jc00000gn/T/sat20wallet-pwa-e2e-progress-8989.jsonl`
+(SHA-256 `b11a5ea0422a37d5a18ad4bb561cc374cc3789455869d615fd886d2c9d8e156a`).
+No retry or cleanup followed.
+
+The language browser regression is implemented in the same patch but was not
+part of `TestPWAStatusReadRetry`; no language browser case was executed in this
+batch. The production language change has not yet had a PWA build or browser
+run.

@@ -17,6 +17,8 @@ import (
 )
 
 type rgb11RecoveryBundleSize struct {
+	Conservative    bool
+	BackupPending   bool
 	RPKRawBytes     int
 	RPKEncodedBytes int
 	AMDBytes        int
@@ -24,171 +26,88 @@ type rgb11RecoveryBundleSize struct {
 	DKB1Bytes       int
 }
 
-// preflightRGB11TerminalRecovery measures the complete account-managed bundle
-// with snapshot substituted for this RGB11 scope. It also previews the known
-// terminal material for active operations in every catalog scope. It has no
-// persistence or readiness side effects; successful sizing only means the
-// known prospective recovery closure fits the existing encoding and blob limits.
-func (p *Manager) preflightRGB11TerminalRecovery(scope string,
+// preflightRGB11Exact measures this scope's independent module KV, including
+// known terminal obligations. Other modules no longer share its blob limit.
+// Sizing has no persistence or readiness side effects.
+func (p *Manager) preflightRGB11Exact(scope string,
 	snapshot *rgb11wallet.RGB11WalletSnapshot) (rgb11RecoveryBundleSize, error) {
 	var size rgb11RecoveryBundleSize
-	if p == nil {
-		return size, fmt.Errorf("wallet manager is unavailable")
+	if p == nil || snapshot == nil || strings.TrimSpace(scope) == "" {
+		return size, ErrRGB11Inconsistent
 	}
-	if snapshot == nil {
-		return size, fmt.Errorf("RGB11 terminal recovery snapshot is required")
-	}
-	scope = strings.TrimSpace(scope)
-	if scope == "" {
-		return size, fmt.Errorf("RGB11 recovery scope is required")
-	}
-
 	p.mutex.RLock()
 	if p.accountProfile == nil {
 		p.mutex.RUnlock()
 		return size, nil
 	}
 	accountID := p.accountProfile.AccountID
-	revision := p.accountProfile.ManagedDataRevision
+	network := p.cfg.Chain
 	secret := append([]byte(nil), p.accountSecret...)
 	p.mutex.RUnlock()
 	defer zeroBytes(secret)
 	if len(secret) != 32 {
 		return size, fmt.Errorf("account-managed recovery preflight requires an unlocked account")
 	}
-
 	catalog, err := p.accountManagedDataCatalog()
+	if err != nil || catalog.AccountID != accountID {
+		return size, errRGB11ProjectionEvidence(err)
+	}
+	selected, err := accountScopeCatalog(catalog, scope)
+	if err != nil || len(selected.Scopes) != 1 {
+		return size, ErrRGB11Inconsistent
+	}
+	accounts, err := (&rgb11AccountManagedDataProvider{owner: p}).accountsByScope()
 	if err != nil {
-		return size, fmt.Errorf("read account-managed recovery catalog: %w", err)
+		return size, err
 	}
-	if catalog.AccountID != accountID {
-		return size, fmt.Errorf("account-managed recovery catalog changed during preflight")
+	accountValue, ok := accounts[scope]
+	if !ok {
+		return size, ErrRGB11Inconsistent
 	}
-	matchedScope := false
-	for _, candidate := range catalog.Scopes {
-		if candidate.ID() == scope {
-			matchedScope = true
-			if candidate.AccountIndex != snapshot.AccountIndex {
-				return size, fmt.Errorf("RGB11 recovery snapshot account index does not match scope")
-			}
-			break
-		}
+	scoped, err := p.newScopedRGB11Manager(accountValue)
+	if err != nil {
+		return size, err
 	}
-	if !matchedScope {
-		return size, fmt.Errorf("RGB11 recovery scope %q is not in the account catalog", scope)
+	walletID, err := scoped.RGB11WalletID()
+	if err != nil {
+		return size, err
 	}
+	if snapshot.AccountIndex != selected.Scopes[0].AccountIndex || snapshot.WalletID != walletID {
+		return size, ErrRGB11Inconsistent
+	}
+	preview, err := scoped.addRGB11PendingTerminalCapacityPreviews(snapshot)
+	if err != nil {
+		return size, err
+	}
+	recovery, err := rgb11wallet.RecoveryPackageFromSnapshot(preview, 0)
+	if err != nil {
+		return size, err
+	}
+	encoded, raw, err := rgb11wallet.EncodeRecoveryPackageWithSize(recovery)
+	if err != nil {
+		return size, err
+	}
+	size.RPKRawBytes, size.RPKEncodedBytes = raw, len(encoded)
+	return measureRGB11ModuleCapacity(size, secret, accountID, network, scope, encoded)
+}
 
-	provider := &rgb11AccountManagedDataProvider{owner: p}
-	accounts, err := provider.accountsByScope()
+// The diagnostic fields AMDBytes/ADEBytes now describe the module plaintext
+// and AMOE envelope. Use the actual account codec rather than duplicated sizes.
+func measureRGB11ModuleCapacity(size rgb11RecoveryBundleSize, secret []byte,
+	accountID, network, scope string, payload []byte) (rgb11RecoveryBundleSize, error) {
+	envelope, err := account.SealManagedModule(secret, accountID, network, account.ManagedModule{
+		Provider: rgb11AccountManagedProviderID, Scope: scope, Codec: "v1", Payload: payload,
+	}, nil)
 	if err != nil {
-		return size, fmt.Errorf("enumerate RGB11 recovery scopes for preflight: %w", err)
-	}
-	encodedByScope := make(map[string][]byte, len(catalog.Scopes))
-	for _, candidateScope := range catalog.Scopes {
-		accountValue, ok := accounts[candidateScope.ID()]
-		if !ok {
-			return size, fmt.Errorf("RGB11 recovery scope %q is unavailable during preflight", candidateScope.ID())
-		}
-		scoped, err := p.newScopedRGB11Manager(accountValue)
-		if err != nil {
-			return size, fmt.Errorf("open RGB11 recovery scope %q for preflight: %w", candidateScope.ID(), err)
-		}
-		walletID, err := scoped.RGB11WalletID()
-		if err != nil {
-			return size, fmt.Errorf("resolve RGB11 wallet for scope %q: %w", candidateScope.ID(), err)
-		}
-		var candidateSnapshot *rgb11wallet.RGB11WalletSnapshot
-		if candidateScope.ID() == scope {
-			candidateSnapshot = snapshot
-		} else {
-			candidateSnapshot, _, err = scoped.exportRGB11WalletSnapshot(walletID)
-			if err != nil {
-				return size, fmt.Errorf("export RGB11 scope %q for preflight: %w", candidateScope.ID(), err)
-			}
-		}
-		if candidateSnapshot == nil || candidateSnapshot.AccountIndex != candidateScope.AccountIndex ||
-			candidateSnapshot.WalletID != walletID {
-			return size, fmt.Errorf("RGB11 recovery snapshot does not match scope %q", candidateScope.ID())
-		}
-		candidateSnapshot, err = scoped.addRGB11PendingTerminalCapacityPreviews(candidateSnapshot)
-		if err != nil {
-			return size, fmt.Errorf("measure known pending RGB11 terminal material in scope %q: %w",
-				candidateScope.ID(), err)
-		}
-		packageValue, err := rgb11wallet.RecoveryPackageFromSnapshot(candidateSnapshot, 0)
-		if err != nil {
-			return size, fmt.Errorf("build prospective RGB11 recovery package for scope %q: %w",
-				candidateScope.ID(), err)
-		}
-		encoded, rawBytes, err := rgb11wallet.EncodeRecoveryPackageWithSize(packageValue)
-		if err != nil {
-			return size, fmt.Errorf("encode prospective RGB11 recovery package for scope %q: %w",
-				candidateScope.ID(), err)
-		}
-		encodedByScope[candidateScope.ID()] = encoded
-		if candidateScope.ID() == scope {
-			size.RPKRawBytes = rawBytes
-			size.RPKEncodedBytes = len(encoded)
-		}
-	}
-
-	bundle, _, err := p.exportAccountManagedData(catalog, revision)
-	if err != nil {
-		return size, fmt.Errorf("export current account-managed bundle for preflight: %w", err)
-	}
-	if revision == 0 {
-		bundle.Revision = 1
-	} else {
-		bundle.Revision = revision + 1
-		if bundle.Revision == 0 {
-			return size, fmt.Errorf("account-managed data revision overflow during preflight")
-		}
-	}
-	items := make([]account.ManagedDataItem, 0, len(bundle.Items)+len(encodedByScope))
-	replaced := make(map[string]bool, len(encodedByScope))
-	for _, item := range bundle.Items {
-		if item.Provider == rgb11AccountManagedProviderID {
-			if encoded, ok := encodedByScope[item.Scope]; ok {
-				if replaced[item.Scope] {
-					return size, fmt.Errorf("duplicate RGB11 recovery scope %q in account bundle", item.Scope)
-				}
-				item.Payload = append([]byte(nil), encoded...)
-				replaced[item.Scope] = true
-			}
-		}
-		items = append(items, item)
-	}
-	for scopeID, encoded := range encodedByScope {
-		if replaced[scopeID] {
-			continue
-		}
-		items = append(items, account.ManagedDataItem{
-			Provider: rgb11AccountManagedProviderID,
-			Scope:    scopeID,
-			Payload:  append([]byte(nil), encoded...),
-		})
-	}
-	bundle.Items = items
-	bundle, err = account.NormalizeManagedDataBundle(bundle)
-	if err != nil {
-		return size, fmt.Errorf("normalize prospective account-managed bundle: %w", err)
-	}
-	plain, err := account.EncodeManagedDataBundle(bundle)
-	if err != nil {
-		return size, fmt.Errorf("encode prospective account-managed AMD bundle: %w", err)
-	}
-	size.AMDBytes = len(plain)
-	envelope, _, err := account.SealManagedDataBundleWithInfo(secret, accountID, bundle, nil)
-	if err != nil {
-		return size, fmt.Errorf("seal prospective account-managed ADE bundle (AMD=%d bytes): %w",
-			size.AMDBytes, err)
+		return size, fmt.Errorf("seal prospective RGB11 module: %w", err)
 	}
 	size.ADEBytes = len(envelope)
+	// AMOE v1 magic (5), GCM nonce (12), and authentication tag (16).
+	size.AMDBytes = size.ADEBytes - 33
 	size.DKB1Bytes = size.ADEBytes + 8
 	blob, err := EncodeDKVSBlobValue(envelope, nil)
 	if err != nil {
-		return size, fmt.Errorf("encode prospective account-managed DKB1 blob (ADE=%d bytes; DKB1 limit=%d bytes): %w",
-			size.ADEBytes, swire.MaxDKVSBlobValueSize, err)
+		return size, fmt.Errorf("encode prospective RGB11 module blob (limit=%d): %w", swire.MaxDKVSBlobValueSize, err)
 	}
 	size.DKB1Bytes = len(blob)
 	return size, nil
@@ -543,7 +462,7 @@ func (p *rgb11Manager) addRGB11PreparedReceiveCapacityPreview(ctx context.Contex
 			return nil, hashErr
 		}
 		if oldHash != receiptHash {
-			candidate.ProjectionRecords, err = rgb11wallet.RebindValidatedConsignmentReceiptSnapshot(
+			candidate.ProjectionRecords, err = rgb11wallet.RebindLocalReceipt(
 				candidate.ProjectionRecords, existingReceipt, receipt,
 			)
 			if err != nil {
@@ -551,7 +470,7 @@ func (p *rgb11Manager) addRGB11PreparedReceiveCapacityPreview(ctx context.Contex
 			}
 		}
 	}
-	candidate.ProjectionRecords, err = rgb11wallet.AddValidatedConsignmentProjectionSnapshot(
+	candidate.ProjectionRecords, err = rgb11wallet.AddLocalConsignment(
 		candidate.ProjectionRecords, raw, receipt,
 		[]rgb11wallet.ProjectionReplacement{{Output: output, Asset: asset, Proof: proof}},
 	)
@@ -562,7 +481,7 @@ func (p *rgb11Manager) addRGB11PreparedReceiveCapacityPreview(ctx context.Contex
 	if err != nil {
 		return nil, err
 	}
-	candidate.ProjectionRecords, err = rgb11wallet.AddContractObjectSnapshotReference(
+	candidate.ProjectionRecords, err = rgb11wallet.AddLocalContract(
 		candidate.ProjectionRecords, receipt.ContractID, contractFile,
 	)
 	if err != nil {
@@ -570,7 +489,7 @@ func (p *rgb11Manager) addRGB11PreparedReceiveCapacityPreview(ctx context.Contex
 	}
 	completed := *state
 	completed.Status = "pending"
-	candidate.ProjectionRecords, err = rgb11wallet.UpsertProjectionSnapshotTransfer(
+	candidate.ProjectionRecords, err = rgb11wallet.UpsertLocalTransfer(
 		candidate.ProjectionRecords, &completed,
 	)
 	if err != nil {
@@ -583,7 +502,7 @@ func (p *rgb11Manager) addRGB11PreparedReceiveCapacityPreview(ctx context.Contex
 	if err != nil {
 		return nil, err
 	}
-	candidate.ProjectionRecords, err = rgb11wallet.RemoveProjectionSnapshotKeys(candidate.ProjectionRecords,
+	candidate.ProjectionRecords, err = rgb11wallet.RemoveLocalKeys(candidate.ProjectionRecords,
 		"prepared-receive-"+state.TransferID, "receive-reservation-"+state.ReceiveRequestID)
 	if err != nil {
 		return nil, err
@@ -602,14 +521,25 @@ func rgb11PendingCapacityPreviewComplete(records []rgb11wallet.SnapshotRecord,
 		return false
 	}
 	covered := make(map[string]bool, len(pending.ChangeSeals))
+	outpoints := make(map[string]string, len(pending.ChangeSeals))
 	for _, seal := range pending.ChangeSeals {
-		covered[fmt.Sprintf("%s:%d", pending.State.WitnessTxID, seal.Vout)] = false
+		strict, err := seal.StrictBytes()
+		if err != nil {
+			return false
+		}
+		key := string(strict)
+		if _, duplicate := covered[key]; duplicate {
+			return false
+		}
+		covered[key] = false
+		outpoints[key] = fmt.Sprintf("%s:%d", pending.State.WitnessTxID, seal.Vout)
 	}
 	for _, proof := range proofs {
 		if proof != nil && proof.WitnessTxID == pending.State.WitnessTxID &&
 			proof.ConsignmentHash == pending.LocalObjectHash {
-			if _, ok := covered[proof.OutPoint]; ok {
-				covered[proof.OutPoint] = true
+			key := string(proof.SealDisclosure)
+			if _, ok := covered[key]; ok && proof.OutPoint == outpoints[key] {
+				covered[key] = true
 			}
 		}
 	}
@@ -619,4 +549,103 @@ func rgb11PendingCapacityPreviewComplete(records []rgb11wallet.SnapshotRecord,
 		}
 	}
 	return len(covered) != 0
+}
+
+func (p *Manager) preflightRGB11TerminalRecovery(scope string, snapshot *rgb11wallet.RGB11WalletSnapshot) (rgb11RecoveryBundleSize, error) {
+	size, err := p.preflightRGB11Exact(scope, snapshot)
+	if err == nil {
+		return size, nil
+	}
+	bounded, found, boundErr := p.preflightRGB11Bounded(scope, snapshot)
+	if !found {
+		return size, err
+	}
+	if boundErr != nil {
+		return bounded, fmt.Errorf("RGB11 complete local capacity unavailable: %w", boundErr)
+	}
+	return bounded, nil
+}
+
+// This path is entered only for positively located local faults. It creates no
+// recovery payload and never clears an account's pending backup generation.
+func (p *Manager) preflightRGB11Bounded(scope string, snapshot *RGB11WalletSnapshot) (rgb11RecoveryBundleSize, bool, error) {
+	var size rgb11RecoveryBundleSize
+	if p == nil || snapshot == nil || strings.TrimSpace(scope) == "" {
+		return size, false, ErrRGB11Inconsistent
+	}
+	p.mutex.RLock()
+	if p.accountProfile == nil {
+		p.mutex.RUnlock()
+		return size, false, nil
+	}
+	accountID, network := p.accountProfile.AccountID, p.cfg.Chain
+	secret := append([]byte(nil), p.accountSecret...)
+	p.mutex.RUnlock()
+	defer zeroBytes(secret)
+	if len(secret) != 32 {
+		return size, false, ErrRGB11Inconsistent
+	}
+	catalog, err := p.accountManagedDataCatalog()
+	if err != nil || catalog.AccountID != accountID {
+		return size, false, errRGB11ProjectionEvidence(err)
+	}
+	selected, err := accountScopeCatalog(catalog, scope)
+	if err != nil || len(selected.Scopes) != 1 {
+		return size, false, ErrRGB11Inconsistent
+	}
+	accounts, err := (&rgb11AccountManagedDataProvider{owner: p}).accountsByScope()
+	if err != nil {
+		return size, false, err
+	}
+	accountValue, ok := accounts[scope]
+	if !ok {
+		return size, false, ErrRGB11Inconsistent
+	}
+	rgb, err := p.newScopedRGB11Manager(accountValue)
+	if err != nil {
+		return size, false, err
+	}
+	walletID, err := rgb.RGB11WalletID()
+	if err != nil {
+		return size, false, err
+	}
+	if snapshot.WalletID != walletID || snapshot.AccountIndex != selected.Scopes[0].AccountIndex {
+		return size, false, ErrRGB11Inconsistent
+	}
+	view, err := rgb11wallet.SplitLocalProjection(snapshot.ProjectionRecords, rgb.rgb11ScopeState().ProofFaults...)
+	if err != nil {
+		return size, false, err
+	}
+	if len(view.Faults) == 0 {
+		return size, false, ErrRGB11Inconsistent
+	}
+	// Keep lifecycle rows only for sizing. Damaged proofs and outputs cannot
+	// assert ownership; their complete original bytes remain in the bound.
+	work := *snapshot
+	work.ProjectionRecords = append([]rgb11wallet.SnapshotRecord(nil), view.Records...)
+	for _, record := range view.Frozen {
+		if !strings.HasPrefix(record.Key, "proof-") && !strings.HasPrefix(record.Key, "output-") {
+			work.ProjectionRecords = append(work.ProjectionRecords, record)
+		}
+	}
+	if err := rgb11wallet.ValidateWalletSnapshot(&work); err != nil {
+		return size, true, err
+	}
+	preview, err := rgb.addRGB11PendingTerminalCapacityPreviews(&work)
+	if err != nil {
+		return size, true, err
+	}
+	raw, bound, err := rgb11wallet.LocalRecoveryBound(snapshot, preview)
+	if err != nil {
+		return size, true, err
+	}
+	if bound <= 0 || bound > account.ManagedObjectMaxBytes {
+		return size, true, fmt.Errorf("RGB11 module capacity bound %d exceeds limit %d", bound, account.ManagedObjectMaxBytes)
+	}
+	size.Conservative, size.BackupPending = true, true
+	size.RPKRawBytes, size.RPKEncodedBytes = raw, bound
+	// AMOD/AMOE do not compress payloads, so a placeholder of the conservative
+	// bound has exactly the same framing size without exporting damaged data.
+	size, err = measureRGB11ModuleCapacity(size, secret, accountID, network, scope, make([]byte, bound))
+	return size, true, err
 }

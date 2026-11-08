@@ -18,8 +18,8 @@ function fixture() {
   let authorize, finish
   const calls = []
   const context = {
-    isImporting: { value: false }, importMnemonic: { value: 'approved phrase' },
-    importError: { value: '' }, importStage: { value: '' }, isImportWalletDialogOpen: { value: true },
+    isImporting: { value: false }, importCommitted: { value: false }, committedReadError: { value: false }, importMnemonic: { value: 'approved phrase' },
+    importError: { value: '' }, importStage: { value: '' }, isImportWalletDialogOpen: { value: true }, t: key => key,
     assertWalletWriteAllowed: () => policy.assertAllowed(false),
     withWalletPassword: async operation => {
       prompts++
@@ -61,7 +61,7 @@ assert.equal(failed.context.isImporting.value, false)
 assert.equal(failed.context.isImportWalletDialogOpen.value, true)
 const dialog = source.slice(source.indexOf('<Dialog :open="isImportWalletDialogOpen"'), source.indexOf('<!-- Delete Confirmation Dialog -->'))
 assert.ok(dialog.includes('if (!isImporting) isImportWalletDialogOpen = value'))
-assert.ok(dialog.includes('v-model="importMnemonic" :disabled="isImporting"'))
+assert.ok(dialog.includes('v-model="importMnemonic" :disabled="isImporting || importCommitted"'))
 assert.ok(dialog.includes('role="status"') && dialog.includes('role="alert"'))
 assert.ok(dialog.includes('@escape-key-down') && dialog.includes('@interact-outside'))
 const store = readFileSync('store/wallet.ts', 'utf8')

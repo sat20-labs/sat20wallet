@@ -50,6 +50,10 @@ func (e *unknownSuccessorEvidence) GetTxStatus(txid string) (*rgb11wallet.Bitcoi
 func testRGB11UnknownHistoricalSuccessor(t *testing.T, source *Manager, rpc IndexerRPCClient,
 	evidence rgb11wallet.BitcoinEvidenceProvider, first, second *rgb11wallet.PendingTransfer, spentChange string) {
 	t.Helper()
+	remote, ok := source.http.(*rgb11MemoryDKVSHTTP)
+	if !ok || source.GetAccountManagementStatus().DiscoveryStatus != "inactive" {
+		t.Fatal("historical successor group needs its original inactive endpoint")
+	}
 	engine, err := source.rgbManager.engineStore.ExportSnapshot()
 	if err != nil {
 		t.Fatal(err)
@@ -61,7 +65,8 @@ func testRGB11UnknownHistoricalSuccessor(t *testing.T, source *Manager, rpc Inde
 	for _, kind := range []string{"missing_raw", "malformed_raw", "hash_mismatch", "unconfirmed", "insufficient_confirmations", "no_candidate", "ambiguous", "explicit_conflict", "same_witness_recipients", "unknown_literal"} {
 		t.Run(kind, func(t *testing.T) {
 			fault := &unknownSuccessorEvidence{BitcoinEvidenceProvider: evidence, target: second.State.WitnessTxID, kind: kind}
-			manager := newRGB11FlowManager(t, source.wallet, rpc, fault, source.status.CurrentWallet)
+			manager := newRGB11FlowManager(t, source.wallet, rpc, fault, source.status.CurrentWallet, accountGroupUnprepared)
+			prepareRGBEndpoint(t, manager, remote)
 			if err := manager.rgbManager.importRGB11ReservationSnapshot(&RGB11WalletSnapshot{EngineRecords: engine, ProjectionRecords: projection}); err != nil {
 				t.Fatal(err)
 			}

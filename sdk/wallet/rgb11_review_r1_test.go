@@ -18,22 +18,59 @@ import (
 
 func r1ManagedPeer(t *testing.T, source *Manager, evidence rgb11wallet.BitcoinEvidenceProvider, rpc IndexerRPCClient) *Manager {
 	t.Helper()
+	if err := source.SyncAccountManagementState(context.Background()); err != nil {
+		t.Fatalf("source backup must finish before switching devices: %v", err)
+	}
+	source.accountBackgroundWG.Wait()
 	remote := source.http.(*rgb11MemoryDKVSHTTP)
 	peer := newAccountManagementAutoTestManager(t)
 	configureRGB11DKVSTestManager(peer, remote)
+	useRGB11TestCoreAuthority(t, peer)
 	client := newRGB11MessageNodeClient(remote)
 	peer.serverNode = NewNode(client, "message.test", SERVER_NODE, client.CoreNodePubKey(), client.CoreNodePubKey())
 	peer.rgbManager.evidence = evidence
 	peer.l1IndexerClient = NewIndexerRPCClientMgr()
 	peer.l1IndexerClient.Set(rpc)
 	peer.utxoLockerL1.rpcClient = rpc
-	if err := restoreManagedImportTestWallet(t, peer, source); err != nil {
+	peer.rgbManager.scopeStates.stopReconciliations()
+	locator, location := importGroupMaterial(t, source)
+	mnemonic := source.GetMnemonic(source.GetAccountManagementStatus().RootWalletID, "password")
+	if mnemonic == "" {
+		t.Fatal("source root recovery material is unavailable")
+	}
+	value, err := peer.LoadAccountManagementStateForRecovery(location, locator, source.accountSecret, mnemonic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := peer.RestoreAccountManagementState(*value, source.accountSecret, "password", locator,
+		AccountManagementRestoreOptions{Location: location, StorageMode: source.accountProfile.StorageMode,
+			RecordTTL: source.accountProfile.RecordTTL, PublicLocator: source.accountProfile.PublicLocator,
+			AutopayContract: source.accountProfile.AutopayContract}); err != nil {
 		t.Fatal(err)
 	}
 	if err := peer.SyncAccountManagementState(context.Background()); err != nil {
+		client, clientErr := peer.GetDKVSClient()
+		peer.mutex.RLock()
+		if peer.accountProfile != nil {
+			t.Logf("restore diagnostic: managedGeneration=%d stateRevision=%d dataRevision=%d pending=%d dirty=%t secretPresent=%t", peer.accountProfile.ManagedDataGeneration, peer.accountProfile.StateSeq, peer.accountProfile.ManagedDataRevision, len(peer.accountProfile.Pending), peer.accountProfile.ManagedDataDirty, len(peer.accountSecret) != 0)
+		}
+		peer.mutex.RUnlock()
+		if clientErr == nil {
+			entries, readErr := newDKVSReplicaStore(peer.db).LoadOutbox(client.replicaNamespace)
+			t.Logf("restore diagnostic: outbox=%d readErr=%v", len(entries), readErr)
+			for _, entry := range entries {
+				t.Logf("restore diagnostic: state=%s originDomain=%s originGeneration=%d sameNamespace=%t", entry.State, entry.OriginDomain, entry.OriginGeneration, entry.Namespace == client.replicaNamespace)
+			}
+		}
 		t.Fatalf("restored peer baseline sync: %v", err)
 	}
 	peer.rgbManager.scopeStates.stopReconciliations()
+	// Restoring against current chain evidence can normalize the recovery
+	// closure and publish it. Hand control back only after the old device has
+	// adopted that confirmed baseline, before it makes another local edit.
+	if err := source.SyncAccountManagementState(context.Background()); err != nil {
+		t.Fatalf("returning source must synchronize before resuming edits: %v", err)
+	}
 	return peer
 }
 
@@ -82,6 +119,9 @@ func TestRGB11R1ExpiredBlindPeerSync(t *testing.T) {
 	}
 	if _, err = a.RefreshRGB11State(context.Background()); err != nil {
 		t.Fatalf("A expiry publish: %v", err)
+	}
+	if err := a.SyncAccountManagementState(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 	selected := decodeRGB11ProjectionRecoverySnapshot(t, exportRGB11RecoveryForTest(t, a))
 	before := r1Snapshot(t, b)
@@ -195,6 +235,9 @@ func TestRGB11R1WitnessBatchIndependentRequests(t *testing.T) {
 					}
 				}
 			}
+			if err := recipient.SyncAccountManagementState(context.Background()); err != nil {
+				t.Fatal(err)
+			}
 			// A restored ACKed second invoice is itself actionable background work.
 			// Restore that branch after both accepts so the two devices are not writers
 			// of the same prepared request. The direct-accept branch checks 1 -> 2 sync.
@@ -296,6 +339,7 @@ func TestRGB11R1ReceiptExpansionPeerSync(t *testing.T) {
 	if err != nil || zero.Projected != 0 {
 		t.Fatalf("zero allocation import: %v %v", zero, err)
 	}
+	installRGB11PublicContractFixture(t, a, remote, imported.ContractID)
 	b := r1ManagedPeer(t, a, evidence, rpc)
 	evidence.mu.Lock()
 	delete(evidence.spendingTx, point)
@@ -305,6 +349,9 @@ func TestRGB11R1ReceiptExpansionPeerSync(t *testing.T) {
 	one, err := a.ImportRGB11ContractFile(context.Background(), raw)
 	if err != nil || one.Projected != 1 {
 		t.Fatalf("restored allocation import: %v %v", one, err)
+	}
+	if err := a.SyncAccountManagementState(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 	before := r1Snapshot(t, b)
 	if err = b.SyncAccountManagementState(context.Background()); err != nil {

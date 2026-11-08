@@ -1,0 +1,64 @@
+diff --git a/sdk/wasm/main.go b/sdk/wasm/main.go
+--- a/sdk/wasm/main.go
++++ b/sdk/wasm/main.go
+@@ -31,6 +31,7 @@
+ var managerLifecycleMu sync.Mutex
+ var managerAsyncTasks sync.WaitGroup
+ var managerClosing bool
++var managerInitializing bool
+ 
+ type AsyncTaskFunc func() (interface{}, int, string)
+ 
+@@ -207,6 +208,10 @@
+ 		managerLifecycleMu.Unlock()
+ 		return createJsRet(nil, -1, "Manager is closing")
+ 	}
++	if managerInitializing {
++		managerLifecycleMu.Unlock()
++		return createJsRet(nil, -1, "Manager is initializing")
++	}
+ 	if _mgr != nil {
+ 		managerLifecycleMu.Unlock()
+ 		return createJsRet(nil, -1, "Manager is initialized")
+@@ -238,14 +243,33 @@
+ 	}
+ 	wallet.Log.SetLevel(logLevel)
+ 
+-	// _mgr = wallet.NewManager(cfg, make(chan struct{}))
+-	// if _mgr == nil {
+-	// 	return createJsRet(nil, -1, "NewManager failed")
+-	// }
+-	// wallet.Log.Info("Manager created")
+-	// return createJsRet(nil, 0, "ok")
+-
+-	handler := createAsyncJsHandler(func() (interface{}, int, string) {
++	// Reserve exactly once after config validation. The lock also orders this
++	// Add against releaseManager setting managerClosing and starting Wait.
++	managerLifecycleMu.Lock()
++	if managerClosing {
++		managerLifecycleMu.Unlock()
++		return createJsRet(nil, -1, "Manager is closing")
++	}
++	if managerInitializing {
++		managerLifecycleMu.Unlock()
++		return createJsRet(nil, -1, "Manager is initializing")
++	}
++	if _mgr != nil {
++		managerLifecycleMu.Unlock()
++		return createJsRet(nil, -1, "Manager is initialized")
++	}
++	managerInitializing = true
++	managerAsyncTasks.Add(1)
++	managerLifecycleMu.Unlock()
++
++	handler := createUntrackedAsyncJsHandler(func() (interface{}, int, string) {
++		defer managerAsyncTasks.Done()
++		defer func() {
++			managerLifecycleMu.Lock()
++			managerInitializing = false
++			managerLifecycleMu.Unlock()
++		}()
++
+ 		db := wallet.NewKVDB(cfg.DB)
+ 		if db == nil {
+ 			wallet.Log.Errorf("NewKVDB failed")

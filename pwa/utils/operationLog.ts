@@ -69,6 +69,59 @@ export function projectSettledRGB11OperationLogs(records: OperationLogRecord[], 
   })
 }
 
+export interface RGB11OperationStatus {
+  transfer_id: string
+  status: string
+  ack_status: string
+  delivery_record_key: string
+  delivery_record_hash: string
+  delivery_acknowledged: boolean | null
+  witness_txid: string
+  reject_reason: string
+  logged_error: string
+}
+
+// A display-only whitelist, bound to the current account and one exact transfer.
+// Never return the full RGB state: it also contains invoices and seal disclosures.
+export function projectRGB11OperationStatus(
+  record: OperationLogRecord,
+  transfers: any[],
+  identity: { walletId: string | number | undefined; accountIndex: string | number | undefined },
+): RGB11OperationStatus | null {
+  if (record.action !== 'rgb11_send_address' || record.wallet_id == null ||
+    identity.walletId == null || identity.accountIndex == null ||
+    String(record.wallet_id) !== String(identity.walletId) ||
+    // The SDK JSON omits account_index for Root (Go uint32 zero + omitempty).
+    String(record.account_index ?? 0) !== String(identity.accountIndex)) return null
+  const assetKey = record.parameters?.asset || ''
+  if (!/^rgb11:[^:]+:[0-9a-f]{64}$/.test(assetKey)) return null
+  const ids = new Set([
+    record.result?.transfer_id,
+    ...record.history.map(event => event.details?.transfer_id),
+  ].filter((value): value is string => typeof value === 'string' && value.length > 0))
+  if (ids.size !== 1) return null
+  const [transferID] = ids
+  const matches = transfers.filter(transfer => {
+    const name = transfer?.asset?.Name
+    return transfer?.transfer_id === transferID && transfer.direction === 'send' &&
+      `${name?.Protocol}:${name?.Type}:${name?.Ticker}` === assetKey
+  })
+  if (matches.length !== 1) return null
+  const transfer = matches[0]
+  const text = (value: unknown) => typeof value === 'string' ? value : ''
+  return {
+    transfer_id: transferID,
+    status: text(transfer.status),
+    ack_status: text(transfer.ack_status),
+    delivery_record_key: text(transfer.delivery_record_key),
+    delivery_record_hash: text(transfer.delivery_record_hash),
+    delivery_acknowledged: typeof transfer.delivery_acknowledged === 'boolean' ? transfer.delivery_acknowledged : null,
+    witness_txid: text(transfer.witness_txid),
+    reject_reason: text(transfer.reject_reason),
+    logged_error: text([...record.history].reverse().find(event => event.details?.error)?.details?.error),
+  }
+}
+
 type WasmResult = {
   code: number
   msg?: string

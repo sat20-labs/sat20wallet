@@ -12,6 +12,7 @@ import (
 	"time"
 
 	indexer "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/sat20wallet/sdk/account"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
@@ -116,14 +117,42 @@ func coreVerifyPaidRecords(t *testing.T, source *Manager, cfg coreE2EConfig) {
 	coreRequire(t, "read root", err)
 	stateKey, err := source.accountManagedStateKey(root)
 	coreRequire(t, "managed state key", err)
-	blobKey, err := source.accountManagedDataBlobKey(root)
-	coreRequire(t, "managed blob key", err)
+	accountID, err := dkvsAccountID(root)
+	coreRequire(t, "managed account ID", err)
+	indexKey, err := account.ManagedIndexKey(accountID)
+	coreRequire(t, "managed index key", err)
 	wrapperKey, err := accountRootWrapperKey(root)
 	coreRequire(t, "root wrapper key", err)
 	client := NewSatsNetDKVSClient(cfg.Core.Scheme, cfg.Core.Host, cfg.Core.Proxy, nil)
-	for _, key := range []string{stateKey, blobKey, wrapperKey} {
+	indexRecord, err := client.GetRecordDirect(indexKey)
+	coreRequire(t, "read published directory", err)
+	coreAssert(t, indexRecord != nil, "published directory is missing")
+	coreRequire(t, "verify published directory signature", dkvsindexer.VerifySignature(indexRecord))
+	source.mutex.RLock()
+	secret := append([]byte(nil), source.accountSecret...)
+	network := source.cfg.Chain
+	source.mutex.RUnlock()
+	defer zeroBytes(secret)
+	index, err := account.OpenManagedIndex(secret, accountID, network, indexRecord.Value)
+	coreRequire(t, "authenticate published directory", err)
+	keys := []string{indexKey, wrapperKey}
+	walletsFound := false
+	for _, entry := range index.Entries {
+		if entry.Deleted {
+			continue
+		}
+		keys = append(keys, entry.Key)
+		if entry.Provider == "wallets" && entry.Scope == AccountManagedDataGlobalScope {
+			coreAssert(t, entry.Key == stateKey, "directory wallet catalog key mismatch")
+			walletsFound = true
+		}
+	}
+	coreAssert(t, walletsFound, "directory must include the actual wallet catalog")
+	for _, key := range keys {
 		record, err := client.GetRecordDirect(key)
 		coreRequire(t, "read published paid record", err)
+		coreAssert(t, record != nil, "published paid record is missing")
+		coreRequire(t, "verify published paid record signature", dkvsindexer.VerifySignature(record))
 		proof, err := dkvsindexer.ParseFeeProof(record.FeeProof)
 		coreRequire(t, "parse AUTOPAY proof", err)
 		coreAssert(t, record.TTL == 0 && proof.Mode == dkvsindexer.FeeModeAutopay && proof.PoolContract == cfg.Contract,
@@ -207,14 +236,44 @@ func coreCheckpoint(t *testing.T, name string, source *Manager, cfg coreE2EConfi
 	t.Helper()
 	t.Run(name, func(t *testing.T) {
 		beforeBroadcasts := chain.broadcastCount()
+		sourceWallet, sourceAccount := source.status.CurrentWallet, source.status.CurrentAccount
+		sourceStopped := false
+		// Register before constructing target: its Close cleanup runs first.
+		t.Cleanup(func() {
+			coreRequire(t, "restore source wallet selection", source.SwitchWallet(sourceWallet, coreE2EPassword))
+			coreRequire(t, "restore source account selection", source.SwitchAccount(sourceAccount))
+			if sourceStopped {
+				coreRequire(t, "resume source after checkpoint target closed", source.StartDKVSSync())
+				coreSynchronizeRestoredAccount(t, source)
+				coreWaitPrivateBackup(t, source)
+				coreAssert(t, chain.broadcastCount() == beforeBroadcasts, "checkpoint source resume caused an unexpected broadcast")
+			}
+		})
+		coreWaitPrivateBackup(t, source)
+		entries := source.GetWalletCatalog()
+		expected := make(map[string]map[uint32]coreRGBView, len(entries))
+		for _, entry := range entries {
+			coreRequire(t, "select source scope", source.SwitchWallet(entry.ID, coreE2EPassword))
+			expected[entry.Fingerprint] = make(map[uint32]coreRGBView, len(entry.Accounts))
+			for _, sub := range entry.Accounts {
+				coreRequire(t, "select source account", source.SwitchAccount(sub.Index))
+				_, err := source.RefreshRGB11State(context.Background())
+				coreRequire(t, "refresh source checkpoint scope", err)
+				expected[entry.Fingerprint][sub.Index] = coreRGBSemantic(t, source)
+			}
+		}
+		// Confirm all freshly reconciled scopes before handing this account to
+		// its independent cold device. The original worker remains stopped.
+		coreWaitPrivateBackup(t, source)
 		coreVerifyPaidRecords(t, source, cfg)
+		catalog := coreCanonicalCatalog(source)
+		source.StopDKVSSync()
+		sourceStopped = true
 		target := coreRestoreE2E(t, cfg, chain, material)
 		coreSynchronizeRestoredAccount(t, target)
-		coreAssert(t, coreDigest(coreCanonicalCatalog(source)) == coreDigest(coreCanonicalCatalog(target)), "recovered wallet/subaccount catalog is not exact")
-		sourceWallet, sourceAccount := source.status.CurrentWallet, source.status.CurrentAccount
-		defer func() { _ = source.SwitchWallet(sourceWallet, coreE2EPassword); source.SwitchAccount(sourceAccount) }()
+		coreAssert(t, coreDigest(catalog) == coreDigest(coreCanonicalCatalog(target)), "recovered wallet/subaccount catalog is not exact")
 		targetCatalog := target.GetWalletCatalog()
-		for _, entry := range source.GetWalletCatalog() {
+		for _, entry := range entries {
 			var restoredID int64
 			for _, candidate := range targetCatalog {
 				if candidate.Fingerprint == entry.Fingerprint {
@@ -222,12 +281,12 @@ func coreCheckpoint(t *testing.T, name string, source *Manager, cfg coreE2EConfi
 				}
 			}
 			coreAssert(t, restoredID != 0, "missing restored wallet fingerprint")
-			coreRequire(t, "select source scope", source.SwitchWallet(entry.ID, coreE2EPassword))
 			coreRequire(t, "select restored scope", target.SwitchWallet(restoredID, coreE2EPassword))
 			for _, sub := range entry.Accounts {
-				source.SwitchAccount(sub.Index)
-				target.SwitchAccount(sub.Index)
-				a, b := coreRGBSemantic(t, source), coreRGBSemantic(t, target)
+				coreRequire(t, "select restored account", target.SwitchAccount(sub.Index))
+				_, err := target.RefreshRGB11State(context.Background())
+				coreRequire(t, "refresh restored checkpoint scope", err)
+				a, b := expected[entry.Fingerprint][sub.Index], coreRGBSemantic(t, target)
 				if coreDigest(a) != coreDigest(b) {
 					coreDescribeDifference(t, a, b)
 					t.Errorf("core-e2e: %s scope account=%d recovery mismatch: assets=%t available=%t pending=%t proofs=%t tasks=%t invoices=%t locks=%t",
@@ -236,6 +295,8 @@ func coreCheckpoint(t *testing.T, name string, source *Manager, cfg coreE2EConfi
 				}
 			}
 		}
+		// Finish the cold device's actual refresh backup before its Close.
+		coreWaitPrivateBackup(t, target)
 		coreAssert(t, chain.broadcastCount() == beforeBroadcasts, "recovery synchronization caused an unexpected broadcast")
 	})
 }

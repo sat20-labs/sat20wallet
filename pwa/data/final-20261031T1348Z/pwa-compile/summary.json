@@ -1,0 +1,34 @@
+{
+  "state": "COMPLETE",
+  "pid": 86110,
+  "started_utc": "2026-10-31T13:51:16+00:00",
+  "ended_utc": "2026-10-31T13:51:35+00:00",
+  "exit_code": 0,
+  "command": "npm run compile",
+  "script": "vue-tsc --noEmit",
+  "node_version": "v22.22.3",
+  "npm_version": "10.9.8",
+  "input_files": 2,
+  "input_hashes_unchanged": true,
+  "input_sha256_before": {
+    "package.json": "fd0216d0124f14230b03c460871086137da701d6cc6302bbb0255eafafd919fe",
+    "tsconfig.json": "231e4461c795f0cfe4543edf6d1eede6e4f78719945204b4d9f68db1d40675ef"
+  },
+  "input_sha256_after": {
+    "package.json": "fd0216d0124f14230b03c460871086137da701d6cc6302bbb0255eafafd919fe",
+    "tsconfig.json": "231e4461c795f0cfe4543edf6d1eede6e4f78719945204b4d9f68db1d40675ef"
+  },
+  "log": "/Users/yingfeng/github/sat20wallet/pwa/data/final-20261031T1348Z/pwa-compile/compile.log",
+  "log_bytes": 55,
+  "log_sha256": "48dacadd52d700a07293327aea0dc2f648f3db931dee8095bc7768243804f885",
+  "error_lines": [],
+  "compile_hash_scope": {
+    "recorded_file_count": 2,
+    "recorded_files": [
+      "package.json",
+      "tsconfig.json"
+    ],
+    "complete_vue_ts_source_fingerprint_verified": false,
+    "reason": "The compile receipt hashed only package.json and tsconfig.json; the PWA source tree uses root-level and nested directories (for example entrypoints/, router/, components/), not src/. No full pre-freeze PWA source fingerprint inventory was found in pwa/data or sdk/data/final-20261031T1348Z."
+  }
+}

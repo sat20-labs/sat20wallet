@@ -1,22 +1,22 @@
 <template>
   <div class="flex h-screen w-full flex-col bg-background text-foreground">
     <header class="flex h-14 shrink-0 items-center gap-2 border-b border-border px-3">
-      <Button size="icon" variant="ghost" aria-label="Back" @click="goBack">
+      <Button size="icon" variant="ghost" :aria-label="$t('pwaUi.market.back')" @click="goBack">
         <Icon icon="lucide:chevron-left" class="text-lg" />
       </Button>
       <div class="min-w-0 flex-1">
         <p class="truncate text-sm font-medium">SAT20 Market</p>
         <p class="truncate text-xs text-muted-foreground">{{ displayUrl }}</p>
       </div>
-      <Button size="icon" variant="ghost" aria-label="Reload" @click="reload">
+      <Button size="icon" variant="ghost" :aria-label="$t('pwaUi.market.reload')" @click="reload">
         <Icon icon="lucide:rotate-cw" class="text-lg" />
       </Button>
-      <Button size="icon" variant="ghost" aria-label="Home" @click="loadHome">
+      <Button size="icon" variant="ghost" :aria-label="$t('pwaUi.market.home')" @click="loadHome">
         <Icon icon="lucide:home" class="text-lg" />
       </Button>
-      <Button v-if="!embeddedMarket" size="sm" variant="outline" :disabled="disconnecting" aria-label="Disconnect DApp" @click="disconnectDapp">
+      <Button v-if="!embeddedMarket" size="sm" variant="outline" :disabled="disconnecting" :aria-label="$t('pwaUi.market.disconnectDapp')" @click="disconnectDapp">
         <Icon icon="lucide:unplug" class="mr-1 text-sm" aria-hidden="true" />
-        Disconnect
+        {{ $t('pwaUi.market.disconnect') }}
       </Button>
     </header>
 
@@ -39,7 +39,7 @@
       >
         <div class="text-center">
           <Icon icon="lucide:loader-2" class="mx-auto mb-2 text-2xl animate-spin" />
-          <p class="text-sm text-muted-foreground">Loading Market</p>
+          <p class="text-sm text-muted-foreground">{{ $t('pwaUi.market.loading') }}</p>
         </div>
       </div>
 
@@ -51,7 +51,7 @@
           <Icon icon="lucide:cloud-off" class="mx-auto mb-3 text-3xl text-muted-foreground" />
           <h2 class="mb-2 text-lg font-semibold">{{ errorTitle }}</h2>
           <p class="mb-4 text-sm text-muted-foreground">{{ errorMessage }}</p>
-          <Button class="w-full" @click="reload">Retry</Button>
+          <Button class="w-full" @click="reload">{{ $t('pwaUi.market.retry') }}</Button>
         </div>
       </div>
 
@@ -59,7 +59,7 @@
         v-if="pendingRequests > 0"
         class="pointer-events-none absolute bottom-4 left-1/2 -translate-x-1/2 rounded-md border border-border bg-background px-3 py-2 text-xs text-muted-foreground shadow"
       >
-        Waiting for wallet confirmation
+        {{ $t('pwaUi.market.waiting') }}
       </div>
     </div>
 
@@ -68,6 +68,7 @@
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Icon } from '@iconify/vue'
@@ -88,6 +89,8 @@ import {
   consumePendingDappIdentityDisconnect,
   registerReadyDappIdentitySink,
 } from '@/lib/dapp-identity-events'
+
+const { t } = useI18n()
 
 const DEFAULT_MARKET_URL = import.meta.env.DEV
   ? `${window.location.protocol}//${window.location.hostname}:3006/swap/`
@@ -192,12 +195,12 @@ const displayUrl = computed(() => {
   }
 })
 
-const errorTitle = computed(() => isOnline.value ? 'Market failed to load' : 'Network unavailable')
+const errorTitle = computed(() => isOnline.value ? t('pwaUi.market.loadFailed') : t('pwaUi.market.offline'))
 const errorMessage = computed(() => isOnline.value
   ? (!frameUrl.value
-    ? 'No local regtest Market endpoint is configured.'
-    : readyTimedOut.value ? 'Could not confirm Market is ready. Try again.' : 'Check the Market frame policy or try again.')
-  : 'The wallet is still available offline, but Market needs a network connection.'
+    ? t('pwaUi.market.localEndpointMissing')
+    : readyTimedOut.value ? t('pwaUi.market.readinessTimeout') : t('pwaUi.market.frameError'))
+  : t('pwaUi.market.offlineHint')
 )
 
 const bridge = usePwaDappBridge(

@@ -3,9 +3,26 @@ package wallet
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
+
+// Discovery and confirmation use the same service. Only the target policy
+// request blocks after the real inactive discovery phase has completed.
+type accountPolicyGateHTTP struct {
+	*blockedAccountConfigHTTP
+	armed atomic.Bool
+}
+
+func (h *accountPolicyGateHTTP) DKVSClientConfig() (*dkvsindexer.ClientConfig, error) {
+	if !h.armed.Load() {
+		return h.rgb11MemoryDKVSHTTP.DKVSClientConfig()
+	}
+	return h.blockedAccountConfigHTTP.DKVSClientConfig()
+}
 
 func TestReviewStorageCancelInvalidatesInflightConfirmation(t *testing.T) {
 	oldChain := _chain
@@ -18,17 +35,18 @@ func TestReviewStorageCancelInvalidatesInflightConfirmation(t *testing.T) {
 			name = "cancel_before_policy_returns"
 		}
 		t.Run(name, func(t *testing.T) {
-			manager, _, secret := buildRootWrapperSource(t)
-			defer zeroBytes(secret)
-			remote := &blockedAccountConfigHTTP{
-				rgb11MemoryDKVSHTTP: newRGB11MemoryDKVSHTTP(),
-				started: make(chan struct{}), release: make(chan struct{}),
-				continueAfterRelease: true,
-			}
-			manager.http = remote
-			manager.dkvs.mu.Lock()
-			manager.dkvs.clients = make(map[string]*SatsNetDKVSClient)
-			manager.dkvs.mu.Unlock()
+			var remote *accountPolicyGateHTTP
+			manager, _, _ := newInactiveAccountGroup(t, accountRootWrapperTestMnemonic, "password",
+				func(manager *Manager, base *rgb11MemoryDKVSHTTP) {
+					remote = &accountPolicyGateHTTP{blockedAccountConfigHTTP: &blockedAccountConfigHTTP{
+						rgb11MemoryDKVSHTTP: base,
+						started:             make(chan struct{}), release: make(chan struct{}),
+						continueAfterRelease: true,
+					}}
+					manager.http = remote
+					manager.SetDKVSHttpClient(remote)
+				})
+			remote.armed.Store(true)
 			var releaseOnce sync.Once
 			release := func() { releaseOnce.Do(func() { close(remote.release) }) }
 			defer release()

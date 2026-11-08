@@ -416,6 +416,17 @@ func TestMergeSelectedRecoveryAdoptsCleanTransferPhase(t *testing.T) {
 			{Key: "transfer-selected-phase", Value: mustEncodeRecoveryTest(t, &selectedState)},
 		},
 	}
+	if _, err := MergeSelectedRecoverySnapshot(base, selected); err == nil {
+		t.Fatal("selected recovery accepted terminal ACK execution bookkeeping")
+	}
+	selectedPackage, err := RecoveryPackageFromSnapshot(selected, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err = selectedPackage.WalletSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
 	merged, err := MergeSelectedRecoverySnapshot(base, selected)
 	if err != nil {
 		t.Fatal(err)
@@ -434,8 +445,8 @@ func TestMergeSelectedRecoveryAdoptsCleanTransferPhase(t *testing.T) {
 	if !found {
 		t.Fatal("selected transfer record is missing")
 	}
-	if got.Status != "settled" || got.AckStatus != "accepted" {
-		t.Fatalf("selected account lifecycle was not adopted: status=%q ack=%q", got.Status, got.AckStatus)
+	if got.Status != "settled" || got.AckStatus != "" {
+		t.Fatalf("selected material outcome was not adopted: status=%q ack=%q", got.Status, got.AckStatus)
 	}
 
 	conflicting := *selected
@@ -571,12 +582,26 @@ func TestSelectedRecoveryOnlyReleasesTerminalReservationOwner(t *testing.T) {
 			t.Fatalf("selected %q operation silently released an unresolved reservation", status)
 		}
 	}
-	for _, status := range []string{"rejected", "settled", "orphaned"} {
+	for _, status := range []string{"rejected", "orphaned"} {
 		selected := base
 		selected.State.Status = status
 		selected.ReservationID = ""
 		if !samePendingIntent(base, selected) {
 			t.Fatalf("selected terminal %q phase did not permit its existing owner cleanup", status)
+		}
+	}
+	// Settled recovery keeps the historical owner for confirmation loss.
+	// Releasing its current locks does not erase that recovery identity.
+	settled := base
+	settled.State.Status = "settled"
+	if !samePendingIntent(base, settled) {
+		t.Fatal("selected settled recovery rejected its original owner identity")
+	}
+	for _, reservationID := range []string{"", "different-owner"} {
+		selected := settled
+		selected.ReservationID = reservationID
+		if samePendingIntent(base, selected) {
+			t.Fatal("selected settled recovery lost or replaced its historical owner")
 		}
 	}
 }

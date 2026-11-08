@@ -2,7 +2,7 @@
   <div class="space-y-4">
     <!-- Current Pools -->
     <div v-if="currentPool.length > 0" class="space-y-4">
-      <h3 class="text-sm font-semibold">Current Pools</h3>
+      <h3 class="text-sm font-semibold">{{ $t('walletComponents.currentPools') }}</h3>
       <div v-for="pool in currentPool" :key="pool.id" class="rounded-lg border hover:border-primary/30 bg-muted p-4 space-y-3">
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-2">
@@ -21,19 +21,19 @@
           </div>
           <Button variant="outline" size="sm" @click="handleExitPool(pool)">
             <Icon icon="lucide:log-out" class="w-4 h-4 mr-1" />
-            Exit Pool
+            {{ $t('walletComponents.exitPool') }}
           </Button>
         </div>
         <div class="grid grid-cols-2 gap-4 text-sm">
           <div>
-            <div class="text-muted-foreground">Asset</div>
+            <div class="text-muted-foreground">{{ $t('walletComponents.asset') }}</div>
             <div class="flex items-center gap-1">
               <span>{{ pool.asset.ticker || pool.asset.name }}</span>
               <span v-if="pool.amount" class="text-muted-foreground">({{ pool.amount }})</span>
             </div>
           </div>
           <div>
-            <div class="text-muted-foreground">Balance</div>
+            <div class="text-muted-foreground">{{ $t('walletComponents.balance') }}</div>
             <div>{{ pool.balance }} {{ pool.unit }}</div>
           </div>
         </div>
@@ -43,10 +43,10 @@
     <!-- Available Pools -->
     <div class="space-y-3">
       <div class="flex items-center justify-between">
-        <h3 class="text-sm font-semibold">Available Pools</h3>
+        <h3 class="text-sm font-semibold">{{ $t('walletComponents.availablePools') }}</h3>
         <Button v-if="canCreatePool" variant="outline" size="sm" @click="showCreateDialog = true">
           <Icon icon="lucide:plus" class="w-4 h-4 mr-1" />
-          Create Pool
+          {{ $t('walletComponents.createPool') }}
         </Button>
       </div>
 
@@ -70,17 +70,17 @@
             </div>
             <Button variant="outline" size="sm" @click="handleJoinPool(pool)">
               <Icon icon="lucide:log-in" class="w-4 h-4 mr-1" />
-              Join Pool
+              {{ $t('walletComponents.joinPool') }}
             </Button>
           </div>
           <div class="grid grid-cols-3 gap-4 text-sm">
             <div>
-              <div class="text-muted-foreground">Amount</div>
+              <div class="text-muted-foreground">{{ $t('walletComponents.amount') }}</div>
               <div v-if="pool.totalAmount">{{ pool.totalAmount }}</div>
               <div v-else>-</div>
             </div>
             <div>
-              <div class="text-muted-foreground">Value</div>
+              <div class="text-muted-foreground">{{ $t('walletComponents.value') }}</div>
               <div>{{ pool.totalValue }} {{ pool.unit }}</div>
             </div>
             <!-- <div>
@@ -88,7 +88,7 @@
               <div>{{ pool.userCount }}</div>
             </div> -->
             <div>
-              <div class="text-muted-foreground">Min Deposit</div>
+              <div class="text-muted-foreground">{{ $t('walletComponents.minDeposit') }}</div>
               <div>{{ pool.minDeposit }} {{ pool.unit }}</div>
             </div>
           </div>
@@ -100,31 +100,31 @@
     <Dialog v-model:open="showJoinDialog">
       <DialogContent class="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Join Pool</DialogTitle>
+          <DialogTitle>{{ $t('walletComponents.joinPool') }}</DialogTitle>
           <DialogDescription>
             <hr class="mb-6 mt-1 border-t-1 border-accent">
-            Enter the amount you want to deposit into the pool
+            {{ $t('walletComponents.joinHelp') }}
           </DialogDescription>
         </DialogHeader>
         <div class="space-y-4">
           <div class="space-y-2">
-            <Label>Asset Information</Label>
+            <Label>{{ $t('walletComponents.assetInfo') }}</Label>
             <div class="rounded-lg border p-3">
               <div class="text-sm">
-                <div>Asset Type: {{ selectedPool?.asset.type }}</div>
-                <div>Asset: {{ selectedPool?.asset.ticker || selectedPool?.asset.name }}</div>
-                <div v-if="selectedPool?.totalAmount">Total Amount: {{ selectedPool.totalAmount }}</div>
-                <div>Min Deposit: {{ selectedPool?.minDeposit }} {{ selectedPool?.unit }}</div>
+                <div>{{ $t('walletComponents.poolAssetType', { type: selectedPool?.asset.type }) }}</div>
+                <div>{{ $t('walletComponents.poolAsset', { name: selectedPool?.asset.ticker || selectedPool?.asset.name }) }}</div>
+                <div v-if="selectedPool?.totalAmount">{{ $t('walletComponents.poolTotal', { amount: selectedPool.totalAmount }) }}</div>
+                <div>{{ $t('walletComponents.poolMinimum', { amount: selectedPool?.minDeposit, unit: selectedPool?.unit }) }}</div>
               </div>
             </div>
           </div>
           <div class="space-y-2">
-            <Label>Deposit Amount</Label>
+            <Label>{{ $t('walletComponents.depositAmount') }}</Label>
             <div class="flex items-center gap-2">
               <Input
                 v-model="depositAmount"
                 type="number"
-                :placeholder="`Min: ${selectedPool?.minDeposit}`"
+                :placeholder="$t('walletComponents.minimumPlaceholder', { amount: selectedPool?.minDeposit })"
               />
               <span class="text-sm text-muted-foreground">
                 {{ selectedPool?.unit }}
@@ -133,7 +133,7 @@
           </div>
         </div>
         <DialogFooter>
-          <Button @click="handleJoinConfirm">Join Pool</Button>
+          <Button @click="handleJoinConfirm">{{ $t('walletComponents.joinPool') }}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -142,18 +142,18 @@
     <Dialog v-model:open="showCreateDialog">
       <DialogContent class="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Create New Pool</DialogTitle>
+          <DialogTitle>{{ $t('walletComponents.createNewPool') }}</DialogTitle>
           <DialogDescription>
             <hr class="mb-6 mt-1 border-t-1 border-accent">
-            Set up parameters for your new pool
+            {{ $t('walletComponents.createPoolHelp') }}
           </DialogDescription>
         </DialogHeader>
         <div class="space-y-4">
           <div class="space-y-2">
-            <Label>Asset Type</Label>
+            <Label>{{ $t('walletComponents.assetType') }}</Label>
             <Select v-model="newPoolAssetType">
               <SelectTrigger>
-                <SelectValue placeholder="Select asset type" />
+                <SelectValue :placeholder="$t('walletComponents.selectAssetType')" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem v-for="type in availableAssetTypes" :key="type" :value="type">
@@ -163,10 +163,10 @@
             </Select>
           </div>
           <div v-if="newPoolAssetType && newPoolAssetType !== 'BTC'" class="space-y-2">
-            <Label>Asset</Label>
+            <Label>{{ $t('walletComponents.asset') }}</Label>
             <Select v-model="newPoolAsset">
               <SelectTrigger>
-                <SelectValue placeholder="Select asset" />
+                <SelectValue :placeholder="$t('walletComponents.selectAsset')" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem v-for="asset in availableAssets" :key="asset.ticker" :value="asset">
@@ -176,19 +176,19 @@
             </Select>
           </div>
           <div class="space-y-2">
-            <Label>Minimum Deposit</Label>
+            <Label>{{ $t('walletComponents.minimumDeposit') }}</Label>
             <div class="flex items-center gap-2">
               <Input
                 v-model="newPoolMinDeposit"
                 type="number"
-                placeholder="Enter minimum deposit"
+                :placeholder="$t('walletComponents.enterMinimum')"
               />
               <span class="text-sm text-muted-foreground">sats</span>
             </div>
           </div>
         </div>
         <DialogFooter>
-          <Button @click="handleCreateConfirm">Create Pool</Button>
+          <Button @click="handleCreateConfirm">{{ $t('walletComponents.createPool') }}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -197,27 +197,27 @@
     <Dialog v-model:open="showExitDialog">
       <DialogContent class="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Exit Pool</DialogTitle>
+          <DialogTitle>{{ $t('walletComponents.exitPool') }}</DialogTitle>
           <DialogDescription>
             <hr class="mb-6 mt-1 border-t-1 border-accent">
-            Are you sure you want to exit this pool? Your funds will be returned to your L1 account.
+            {{ $t('walletComponents.exitPoolHelp') }}
           </DialogDescription>
         </DialogHeader>
         <div class="space-y-4">
           <div class="space-y-2">
-            <Label>Pool Information</Label>
+            <Label>{{ $t('walletComponents.poolInfo') }}</Label>
             <div class="rounded-lg border p-3">
               <div class="text-sm">
-                <div>Asset Type: {{ selectedExitPool?.asset.type }}</div>
-                <div>Asset: {{ selectedExitPool?.asset.ticker || selectedExitPool?.asset.name }}</div>
-                <div v-if="selectedExitPool?.amount">Amount: {{ selectedExitPool.amount }}</div>
-                <div>Your Balance: {{ selectedExitPool?.balance }} {{ selectedExitPool?.unit }}</div>
+                <div>{{ $t('walletComponents.poolAssetType', { type: selectedExitPool?.asset.type }) }}</div>
+                <div>{{ $t('walletComponents.poolAsset', { name: selectedExitPool?.asset.ticker || selectedExitPool?.asset.name }) }}</div>
+                <div v-if="selectedExitPool?.amount">{{ $t('walletComponents.poolAmount', { amount: selectedExitPool.amount }) }}</div>
+                <div>{{ $t('walletComponents.poolBalance', { amount: selectedExitPool?.balance, unit: selectedExitPool?.unit }) }}</div>
               </div>
             </div>
           </div>
         </div>
         <DialogFooter>
-          <Button variant="destructive" @click="handleExitConfirm">Exit Pool</Button>
+          <Button variant="destructive" @click="handleExitConfirm">{{ $t('walletComponents.exitPool') }}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -225,6 +225,8 @@
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
+const { t } = useI18n()
 import { ref, computed, onMounted } from 'vue'
 import { Icon } from '@iconify/vue'
 import { Button } from '@/components/ui/button'
@@ -337,8 +339,8 @@ const handleJoinConfirm = async () => {
 
   if (amount < selectedPool.value.minDeposit) {
     toast({
-      title: 'Error',
-      description: `Minimum deposit is ${selectedPool.value.minDeposit} ${selectedPool.value.unit}`,
+      title: t('walletComponents.error'),
+      description: t('walletComponents.minimumDepositError', { amount: selectedPool.value.minDeposit, unit: selectedPool.value.unit }),
       variant: 'destructive'
     })
     return
@@ -347,16 +349,16 @@ const handleJoinConfirm = async () => {
   const success = await poolStore.joinPool(selectedPool.value.id, amount)
   if (success) {
     toast({
-      title: 'Success',
-      description: 'Successfully joined the pool',
+      title: t('walletComponents.success'),
+      description: t('walletComponents.joinedPool'),
     })
     showJoinDialog.value = false
     depositAmount.value = ''
     selectedPool.value = null
   } else {
     toast({
-      title: 'Error',
-      description: 'Failed to join pool',
+      title: t('walletComponents.error'),
+      description: t('walletComponents.joinPoolFailed'),
       variant: 'destructive'
     })
   }
@@ -373,8 +375,8 @@ const handleCreateConfirm = async () => {
 
   if (success) {
     toast({
-      title: 'Success',
-      description: 'Successfully created new pool',
+      title: t('walletComponents.success'),
+      description: t('walletComponents.createdPool'),
     })
     showCreateDialog.value = false
     newPoolAssetType.value = ''
@@ -382,8 +384,8 @@ const handleCreateConfirm = async () => {
     newPoolMinDeposit.value = ''
   } else {
     toast({
-      title: 'Error',
-      description: 'Failed to create pool',
+      title: t('walletComponents.error'),
+      description: t('walletComponents.createPoolFailed'),
       variant: 'destructive'
     })
   }
@@ -400,15 +402,15 @@ const handleExitConfirm = async () => {
   const success = await poolStore.exitPool()
   if (success) {
     toast({
-      title: 'Success',
-      description: 'Successfully exited the pool',
+      title: t('walletComponents.success'),
+      description: t('walletComponents.exitedPool'),
     })
     showExitDialog.value = false
     selectedExitPool.value = null
   } else {
     toast({
-      title: 'Error',
-      description: 'Failed to exit pool',
+      title: t('walletComponents.error'),
+      description: t('walletComponents.exitPoolFailed'),
       variant: 'destructive'
     })
   }

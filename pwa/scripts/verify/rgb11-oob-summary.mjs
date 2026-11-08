@@ -45,33 +45,31 @@ for (const armor of ['-----BEGIN RGB-----\nexample\n-----END RGB-----\n', '\r\na
 }
 assert.throws(() => rgb11ConsignmentInput(' \n\t'))
 assert.throws(() => rgb11ConsignmentInput(JSON.stringify({ transport_mode: 'other', consignment: 'armor' })))
-// Old PWA trim compatibility requires the sender's exact SDK-bound source.
+// The new format binds the exact submitted bytes. Whitespace changes are
+// different objects and cannot reuse a prior summary or prepared receipt.
 for (const newline of ['\n', '\r\n']) {
   const armor = ['-----BEGIN RGB CONSIGNMENT-----', 'Version: 1', '', 'same-body', '-----END RGB CONSIGNMENT-----', ''].join(newline)
   const rawHash = await sha256Text(armor)
   const oldHash = await sha256Text(armor.trim())
   const boundState = { ...state, consignment_hash: rawHash }
   const oldSummary = { ...summary, consignment_hash: oldHash }
-  const check = (value = oldSummary, target = boundState, source = armor) => matches(JSON.stringify(value), target, 'rgb:contract', 'schema', source)
-  assert.equal(await check(), true, 'old LF/CRLF trimmed receipt matches the same source')
+  const check = (value = oldSummary, target = boundState) => matches(JSON.stringify(value), target, 'rgb:contract', 'schema')
+  assert.equal(await check(), false, 'trimmed receipt does not match the exact object')
   assert.equal(await check({ ...summary, consignment_hash: rawHash }), true, 'exact hash remains accepted')
-  assert.equal(await check(oldSummary, boundState, armor.replace('same-body', 'changed-body')), false, 'source hash must bind to SDK state')
   assert.equal(await check({ ...oldSummary, consignment_hash: await sha256Text(armor.trim().replace('same-body', 'changed-body')) }), false, 'body changes are not whitespace compatibility')
   assert.equal(await check({ ...oldSummary, invoice_hash: await sha256Text('other-invoice') }), false)
   assert.equal(await check(oldSummary, { ...boundState, consignment_hash: 'unrelated' }), false)
-  assert.equal(await rgb11ResumeConsignment(armor, oldHash, oldHash, true), armor.trim())
-  assert.equal(await rgb11ResumeConsignment(armor, rawHash, rawHash, true), armor)
-  assert.equal(await rgb11ResumeConsignment(armor, '', '', false), armor, 'new request retains bytes')
-  await assert.rejects(rgb11ResumeConsignment(armor, oldHash, 'other', true))
-  await assert.rejects(rgb11ResumeConsignment(armor, oldHash, oldHash, false))
-  await assert.rejects(rgb11ResumeConsignment(armor.replace('same-body', 'changed-body'), oldHash, oldHash, true))
+  await assert.rejects(rgb11ResumeConsignment(armor, oldHash))
+  assert.equal(await rgb11ResumeConsignment(armor, rawHash), armor)
+  assert.equal(await rgb11ResumeConsignment(armor, ''), armor, 'new request retains bytes')
+  await assert.rejects(rgb11ResumeConsignment(armor.replace('same-body', 'changed-body'), rawHash))
 }
 const nonArmor = 'not-armor\n'
 const nonArmorHash = await sha256Text(nonArmor)
 const nonArmorTrimHash = await sha256Text(nonArmor.trim())
 assert.equal(await matches(JSON.stringify({ ...summary, consignment_hash: nonArmorTrimHash }),
-  { ...state, consignment_hash: nonArmorHash }, 'rgb:contract', 'schema', nonArmor), false)
-await assert.rejects(rgb11ResumeConsignment(nonArmor, nonArmorTrimHash, nonArmorTrimHash, true))
+  { ...state, consignment_hash: nonArmorHash }, 'rgb:contract', 'schema'), false)
+await assert.rejects(rgb11ResumeConsignment(nonArmor, nonArmorTrimHash))
 const resumeSource = 'sdk-package'
 const resumeIDs = ['resume-one', 'resume-two']
 const resumePackages = await Promise.all(resumeIDs.map(async (id) => ({ recipient_consignment: resumeSource, state: {

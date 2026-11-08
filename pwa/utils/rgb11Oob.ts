@@ -34,28 +34,12 @@ export const rgb11ConsignmentInput = (input: string): string => {
   return consignment
 }
 
-// Compatibility is confined to whitespace outside a complete RGB armor.
-// ParseArmor stops at its END line; no header or encoded body is normalized.
-const completeRGB11Armor = (text: string): boolean =>
-  /^[ \t\r\n]*-----BEGIN RGB CONSIGNMENT-----\r?\n[\s\S]+\r?\n-----END RGB CONSIGNMENT-----[ \t\r\n]*$/.test(text)
-
-const matchesRGB11ObjectHash = async (summaryHash: string, preparedHash: string, original: string): Promise<boolean> => {
-  if (!preparedHash) return false
-  if (summaryHash === preparedHash) return true
-  if (!original || !completeRGB11Armor(original) || await sha256Text(original) !== preparedHash) return false
-  return summaryHash === await sha256Text(original.trim())
-}
-
 export const rgb11ResumeConsignment = async (
-  input: string, savedHash: string, summaryHash: string, prepared: boolean,
+  input: string, savedHash: string,
 ): Promise<string> => {
   const original = rgb11ConsignmentInput(input)
   const hash = await sha256Text(original)
   if (!savedHash || savedHash === hash) return original
-  // Retain the exact bytes that the old PWA already validated, and retain its
-  // hashes/ACK marker. New requests never enter this compatibility branch.
-  if (prepared && summaryHash === savedHash && completeRGB11Armor(original) &&
-      await sha256Text(original.trim()) === savedHash) return original.trim()
   throw new Error('Consignment differs from the validated original')
 }
 
@@ -79,7 +63,7 @@ export const rgb11Amount = (state: any) => {
 }
 
 export const matchesRGB11Summary = async (
-  text: string, state: any, contractID: string, schemaID: string, originalConsignment = '',
+  text: string, state: any, contractID: string, schemaID: string,
 ): Promise<boolean> => {
   try {
     const summary = JSON.parse(text) as RGB11PrebroadcastSummary
@@ -90,7 +74,7 @@ export const matchesRGB11Summary = async (
     )
     return summary.version === 1 && summary.stage === 'validated-awaiting-broadcast' &&
       !!schemaID && summary.schema_id === schemaID && summary.contract_id === contractID &&
-      await matchesRGB11ObjectHash(summary.consignment_hash, state.consignment_hash, originalConsignment) &&
+      !!state.consignment_hash && summary.consignment_hash === state.consignment_hash &&
       !!state.witness_txid && summary.witness_txid === state.witness_txid && sameTransfer &&
       (!state.recipient_vout || summary.recipient_outpoint === `${state.witness_txid}:${state.recipient_vout}`) &&
       !!state.invoice && summary.invoice_hash === await sha256Text(state.invoice) &&

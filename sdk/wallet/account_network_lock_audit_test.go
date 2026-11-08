@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"context"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -49,6 +50,21 @@ type accountNetworkLockAuditNode struct {
 	observe func(string)
 }
 
+func logAccountNetworkLockCallers(t *testing.T, operation, path string) {
+	t.Helper()
+	pcs := make([]uintptr, 32)
+	n := runtime.Callers(2, pcs)
+	frames := runtime.CallersFrames(pcs[:n])
+	for frameCount := 0; frameCount < 32; frameCount++ {
+		frame, more := frames.Next()
+		t.Logf("network audit call frame operation=%s path=%s frame=%d function=%s file=%s line=%d",
+			operation, path, frameCount, frame.Function, frame.File, frame.Line)
+		if !more {
+			return
+		}
+	}
+}
+
 func (n *accountNetworkLockAuditNode) SendMessageServiceReq(req *swire.MessageServiceRequest) (*swire.MessageServiceResponse, error) {
 	n.observe("message-service")
 	return n.accountManagedActiveRateLimitClient.SendMessageServiceReq(req)
@@ -81,6 +97,10 @@ func TestAccountNetworkBoundariesHoldNoStateLocks(t *testing.T) {
 				client := newRGB11MessageNodeClient(remote)
 				manager = newRGB11ActivatedFlowAccount(t, accountRootWrapperTestMnemonic,
 					remote, client, rgb11ManagedRecoveryEvidence{}, &rgb11FlowIndexer{})
+				// The successful initial sync also schedules active-data cleanup.
+				// Drain that fixture work before creating a new dirty generation or
+				// auditing the foreground operation's network boundaries.
+				manager.accountBackgroundWG.Wait()
 				if operation == "managed-state-publication" {
 					if err := manager.EnsureAccount(manager.status.CurrentWallet, 1, "Audit", ""); err != nil {
 						t.Fatal(err)
@@ -91,9 +111,11 @@ func TestAccountNetworkBoundariesHoldNoStateLocks(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
+					status := manager.GetAccountManagementStatus()
+					locator := account.Locator{Version: account.Version, AccountID: status.AccountID,
+						PackageID: status.PackageID, RecoveryMode: account.RecoveryMode(status.RecoveryMode)}
 					run = func() error {
-						_, err := manager.LoadAccountManagementStateForRecovery(location,
-							account.Locator{AccountID: manager.accountProfile.AccountID},
+						_, err := manager.LoadAccountManagementStateForRecovery(location, locator,
 							manager.accountSecret, accountRootWrapperTestMnemonic)
 						return err
 					}
@@ -106,6 +128,7 @@ func TestAccountNetworkBoundariesHoldNoStateLocks(t *testing.T) {
 			var observedMu sync.Mutex
 			hits := 0
 			held := make(map[string]bool)
+			loggedManagerLockFrame := make(map[string]bool)
 			probe := &accountNetworkLockAuditHTTP{rgb11MemoryDKVSHTTP: remote}
 			probe.observe = func(path string) {
 				if operation == "managed-state-publication" && path != "/v3/dkvs/records/batch-cas" {
@@ -114,6 +137,10 @@ func TestAccountNetworkBoundariesHoldNoStateLocks(t *testing.T) {
 				observedMu.Lock()
 				defer observedMu.Unlock()
 				hits++
+				pathWithoutQuery := path
+				if separator := strings.IndexByte(pathWithoutQuery, '?'); separator >= 0 {
+					pathWithoutQuery = pathWithoutQuery[:separator]
+				}
 				locks := []struct {
 					name string
 					lock interface {
@@ -131,17 +158,27 @@ func TestAccountNetworkBoundariesHoldNoStateLocks(t *testing.T) {
 				for _, item := range locks {
 					if item.lock.TryLock() {
 						item.lock.Unlock()
-					} else {
-						held[item.name] = true
+						continue
 					}
+					held[item.name] = true
+					if item.name != "manager-data" {
+						continue
+					}
+					key := operation + "\x00" + pathWithoutQuery
+					if loggedManagerLockFrame[key] {
+						continue
+					}
+					loggedManagerLockFrame[key] = true
+					t.Logf("network audit manager lock busy operation=%s path=%s stage=transport", operation, pathWithoutQuery)
+					logAccountNetworkLockCallers(t, operation, pathWithoutQuery)
 				}
-				runtime := runtimeForDKVSManager(manager.dkvs)
-				runtime.mu.Lock()
+				dkvsRuntime := runtimeForDKVSManager(manager.dkvs)
+				dkvsRuntime.mu.Lock()
 				var keys []*sync.Mutex
-				for _, lock := range runtime.keyLocks {
+				for _, lock := range dkvsRuntime.keyLocks {
 					keys = append(keys, lock)
 				}
-				runtime.mu.Unlock()
+				dkvsRuntime.mu.Unlock()
 				for _, lock := range keys {
 					if lock.TryLock() {
 						lock.Unlock()
@@ -164,9 +201,12 @@ func TestAccountNetworkBoundariesHoldNoStateLocks(t *testing.T) {
 				client.Http = probe
 			}
 			manager.dkvs.mu.Unlock()
+			t.Logf("network audit operation=%s stage=start", operation)
 			if err := run(); err != nil {
+				t.Logf("network audit operation=%s stage=end result=error", operation)
 				t.Fatalf("operation did not complete against the real test transport: %v", err)
 			}
+			t.Logf("network audit operation=%s stage=end result=success", operation)
 			observedMu.Lock()
 			defer observedMu.Unlock()
 			if hits == 0 {

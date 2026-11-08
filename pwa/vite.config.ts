@@ -5,9 +5,14 @@ import path from 'path'
 import fs from 'node:fs'
 import crypto from 'node:crypto'
 
+const buildDir = process.env.SAT20_PWA_BUILD_DIR
+if (buildDir && !path.isAbsolute(buildDir)) {
+  throw new Error('SAT20_PWA_BUILD_DIR must be an absolute private directory')
+}
+
 const readVersionInfo = () => {
   try {
-    return JSON.parse(fs.readFileSync(path.resolve(__dirname, 'public/version.json'), 'utf8'))
+    return JSON.parse(fs.readFileSync(path.resolve(buildDir || __dirname, 'public/version.json'), 'utf8'))
   } catch {
     return {}
   }
@@ -223,9 +228,10 @@ export default defineConfig(({ command, mode }) => {
   const releaseId = `${versionInfo.version || '0.0.0'}-${versionInfo.buildId || ''}`
   const productionBuild = command === 'build' && mode === 'production'
   const regtestBuild = mode === 'regtest'
-  const outputDirectory = regtestBuild ? 'dist-regtest' : 'dist'
+  const outputDirectory = buildDir ? path.join(buildDir, 'dist') : regtestBuild ? 'dist-regtest' : 'dist'
 
   return {
+    ...(buildDir ? { publicDir: path.join(buildDir, 'public'), cacheDir: path.join(buildDir, 'vite-cache') } : {}),
     base: process.env.VITE_PWA_BASE_PATH || (mode === 'production' ? '/pwa/' : '/'),
     define: {
       __SAT20_APP_VERSION__: JSON.stringify(versionInfo.version || '0.0.0'),
@@ -258,6 +264,7 @@ export default defineConfig(({ command, mode }) => {
     },
     resolve: {
       alias: [
+        ...(buildDir ? [{ find: /^@\/generated\/wasm-integrity$/, replacement: path.join(buildDir, 'generated/wasm-integrity.ts') }] : []),
         // The PWA only needs local standard-JSON compilation. Avoid the
         // Node-oriented solc wrapper (remote loader, http/stream/fs helpers)
         // and keep the compiler in the lazy Tools chunk.

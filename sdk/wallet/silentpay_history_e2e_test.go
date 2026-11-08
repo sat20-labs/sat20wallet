@@ -98,7 +98,16 @@ func TestSilentPayArchiveBackfillIndependentCheckpointsAndSpentKZeroE2E(t *testi
 	previousChain := _chain
 	_chain = "testnet"
 	defer func() { _chain = previousChain }()
-	mgr, receiver := spE2EAccountManager(t)
+	for _, state := range []accountGroupState{accountGroupInactive, accountGroupReady} {
+		t.Run(string(state), func(t *testing.T) {
+			mgr, receiver := spAccountGroup(t, state)
+			runSPArchiveBackfill(t, mgr, receiver)
+		})
+	}
+}
+
+func runSPArchiveBackfill(t *testing.T, mgr *Manager, receiver *InternalWallet) {
+	t.Helper()
 	if _, err := mgr.EnableSilentPay(receiver.GetId(), 0); err != nil {
 		t.Fatal(err)
 	}

@@ -224,14 +224,33 @@ func (p *Manager) getAllUnmanagedUtxos(channel *Channel, assetName *swire.AssetN
 	return utxos, nil
 }
 
-func (p *Manager) getAllUnmanagedUtxosSatsNet(channel *Channel) ([]string, error) {
-	utxomap, err := p.GetIndexerRPCClient_SatsNet().GetUtxosWithAddress(channel.Address)
+func (p *Manager) getAllUnmanagedUtxosSatsNet(channel *Channel, assetName *swire.AssetName) ([]string, error) {
+	channel.Mutex.RLock()
+	address := channel.Address
+	controlled := channel.UtxosInControl_SatsNet()
+	channel.Mutex.RUnlock()
+	rpc := p.GetIndexerRPCClient_SatsNet()
+	utxomap, err := rpc.GetUtxosWithAddress(address)
 	if err != nil {
-		Log.Errorf("GetUtxosWithAddress %s failed. %v", channel.Address, err)
+		Log.Errorf("GetUtxosWithAddress %s failed. %v", address, err)
 		return nil, err
 	}
 	utxos := make([]string, 0, len(utxomap))
 	for k := range utxomap {
+		if controlled[k] {
+			continue
+		}
+		output, err := rpc.GetTxOutput(k)
+		if err != nil {
+			return nil, err
+		}
+		if output == nil {
+			return nil, fmt.Errorf("missing L2 expansion output %s", k)
+		}
+		amount := output.GetAsset(assetName)
+		if amount == nil || amount.Sign() <= 0 {
+			continue
+		}
 		if err := p.rejectBTCLuckyOutput(k, nil); err != nil {
 			if errors.Is(err, errBTCLuckyChannelInput) {
 				continue
@@ -240,7 +259,7 @@ func (p *Manager) getAllUnmanagedUtxosSatsNet(channel *Channel) ([]string, error
 		}
 		utxos = append(utxos, k)
 	}
-	utxos = channel.NotInControl_SatsNet(utxos)
+	sort.Strings(utxos)
 	if len(utxos) == 0 {
 		return nil, fmt.Errorf("no new utxo")
 	}
@@ -303,6 +322,9 @@ func (p *Manager) ExpandAssetInChannel(channel *Channel, assetName *swire.AssetN
 func (p *Manager) expandAssetInChannelForWallet(channel *Channel, assetName *swire.AssetName, w common.Wallet) ([]string, *Decimal, error) {
 	if channel == nil || w == nil {
 		return nil, nil, fmt.Errorf("missing expansion channel or captured wallet")
+	}
+	if err := p.requireRGB11PublicRegistration(assetName); err != nil {
+		return nil, nil, err
 	}
 	channel.Mutex.Lock()
 	utxos, err := p.getAllUnmanagedUtxos(channel, assetName)
@@ -654,9 +676,10 @@ func (p *Manager) funderInitExpandingProcessWithRGBEvidenceAndPolicy(channel *Ch
 
 // ExpandAssetInChannelSatsNet, like the public SDK entry, owns its lock.
 func (p *Manager) ExpandAssetInChannelSatsNet(channel *Channel, assetName *swire.AssetName) (*Decimal, error) {
-	channel.Mutex.Lock()
-	utxos, err := p.getAllUnmanagedUtxosSatsNet(channel)
-	channel.Mutex.Unlock()
+	if err := ValidateSTPAsset(assetName, STPOpExpand); err != nil {
+		return nil, err
+	}
+	utxos, err := p.getAllUnmanagedUtxosSatsNet(channel, assetName)
 	if err != nil {
 		Log.Errorf("getAllUnmanagedUtxosSatsNet failed. %v", err)
 		return nil, err

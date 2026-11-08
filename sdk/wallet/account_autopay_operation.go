@@ -35,7 +35,12 @@ func accountAutopaySignedTransaction(record *OperationLogRecord, defaults dkvsin
 	if err != nil {
 		return nil, fmt.Errorf("validate original AUTOPAY intent: %w", err)
 	}
-	expected := contractcommon.TemplateAutopayConfigInvokeParam{AmountPerBlock: record.Parameters["amount_per_block"]}
+	blobLimit, err := accountFundingBlobLimit(record)
+	if err != nil {
+		return nil, err
+	}
+	expected := contractcommon.TemplateAutopayConfigInvokeParam{
+		AmountPerBlock: record.Parameters["amount_per_block"], BlobKeyLimit: blobLimit}
 	param, err := expected.Encode()
 	if err != nil {
 		return nil, err

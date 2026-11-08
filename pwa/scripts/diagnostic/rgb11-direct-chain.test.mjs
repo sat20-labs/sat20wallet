@@ -23,8 +23,14 @@ test('Direct lifecycle authority stays in SDK reservations', () => {
   }
 
   assert.match(tabs, /syncDirectMailboxOnce\(false\)/)
-  assert.match(dkvs, /resumeReadyRGB11AddressTransfers\(\)/)
-  assert.match(dkvs, /BroadcastRGB11AddressTransfer\(pending\.State\.TransferID\)/)
+  for (const required of [
+    'resumeReadyRGB11AddressTransfers()',
+    'p.continueRGB11AddressSend(state.TransferID)',
+    'result, err := p.continueRGB11AddressSend(transferID)',
+    'p.scopeStates.sendFlights.Do(key, func() (any, error)',
+    'pending, batch, err := p.readRGB11AddressBatch(transferID)',
+    'txID, err := p.broadcastRGB11PendingBatch(batch, nil)',
+  ]) assert.ok(dkvs.includes(required), `SDK Direct recovery path missing ${required}`)
   assert.match(reservations, /State\s+\*rgb11wallet\.TransferState/)
   assert.match(broadcast, /rgb11StatusBroadcastAttempted/)
 })

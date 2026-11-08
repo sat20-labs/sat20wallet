@@ -5,7 +5,7 @@
         {{ currentChain === Chain.BTC ? 'Bitcoin' : 'Satnet' }}
       </label>
       <span class="text-xs text-muted-foreground">
-        {{ currentChain === Chain.BTC ? 'Switch to Satnet' : 'Switch to Bitcoin' }}
+        {{ $t(currentChain === Chain.BTC ? 'walletComponents.switchSatnet' : 'walletComponents.switchBitcoin') }}
       </span>
     </div>
     <Switch

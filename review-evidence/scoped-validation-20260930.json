@@ -1,0 +1,31 @@
+{
+  "generated_at": "2026-10-30T20:17:41+08:00",
+  "race_regressions": {
+    "command": [
+      "test",
+      "-race",
+      "-count=1",
+      "-timeout=300s",
+      "./wallet",
+      "-run",
+      "^(TestReviewAccountMergeAppliesRemoteIncrement|TestReviewRGB11BaselineRechecksOperationPreconditions|TestReviewRGB11BaselineImportsActiveAfterLocalPublication|TestReviewStorageAuthorizationOperationOwnership|TestReviewStorageCancelInvalidatesInflightConfirmation|TestReviewRGB11ReadDoesNotMixAtomicInvoiceGenerations|TestAccountManagedPutAckPreservesChangesDuringNetworkWait|TestAccountPaidActivationSelectionChangeDoesNotChangeRootIdentity|TestRGB11ManagedBaselineNetworkWaitDoesNotBlockRGBState|TestRGB11ManagedOperationWaitDoesNotBlockReadOnlyAPIs|TestRGB11ManagedOperationKeepsScopeChangeBlocked|TestRGB11DirectReservationResumesAfterSDKRestart|TestAccountStorageAuthorizationOwnedByRootSDKSession|TestPendingAccountStorageAuthorizationIsRootBoundNotSelectionBound|TestReviewStorageAuthorizationRejectsForeignEndpoint)$"
+    ],
+    "exit_code": 1,
+    "output": "go: cannot find main module, but found .git/config in /Users/yingfeng/github/sat20wallet\n\tto create a module there, run:\n\tgo mod init\n",
+    "seconds": 0.021831023,
+    "timed_out": false
+  },
+  "regression_entry_points": 15,
+  "wasm_build": {
+    "command": [
+      "build",
+      "-o",
+      "/var/folders/gv/dpyml84n7sg9zyhm3b0x1jc00000gn/T/TestReviewScopedValidationwasm_build_without_deployment1765922649/001/sat20wallet.wasm",
+      "./wasm"
+    ],
+    "exit_code": 1,
+    "output": "go: cannot find main module, but found .git/config in /Users/yingfeng/github/sat20wallet\n\tto create a module there, run:\n\tgo mod init\n",
+    "seconds": 0.020309665,
+    "timed_out": false
+  }
+}

@@ -4,12 +4,12 @@
       <AccountCard :address="address" />
       <div class="mt-3 rounded-md border border-border p-3 text-xs">
         <p class="break-all"><span class="text-muted-foreground">DApp:</span> {{ origin }}</p>
-        <p class="mt-2 text-muted-foreground">Requested permissions</p>
+        <p class="mt-2 text-muted-foreground">{{ t('approvalUi.permissions') }}</p>
         <ul class="mt-1 list-disc pl-5">
           <li v-for="capability in capabilities" :key="capability">{{ capability }}</li>
         </ul>
         <p class="mt-2 text-muted-foreground">
-          {{ props.data?.sessionOnly ? 'This browser session only' : 'Expires after 24 hours' }}
+          {{ props.data?.sessionOnly ? t('approvalUi.sessionOnly') : t('approvalUi.expiresDay') }}
         </p>
       </div>
     </div>
@@ -17,6 +17,8 @@
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
+const { t } = useI18n()
 import LayoutApprove from '@/components/layout/LayoutApprove.vue'
 import AccountCard from '@/components/wallet/AccountCard.vue'
 import { useApproveStore, useWalletStore } from '@/store'
@@ -60,8 +62,8 @@ const confirm = async () => {
   loading.value = true
   try {
     assertValid()
-    if (!approvedOrigin) throw new Error('Invalid DApp origin')
-    if (!approvedCapabilities.length) throw new Error('Invalid DApp capabilities request')
+    if (!approvedOrigin) throw new Error(t('approvalUi.invalidOrigin'))
+    if (!approvedCapabilities.length) throw new Error(t('approvalUi.invalidCapabilities'))
     const accounts = await service.getAccounts()
     assertValid()
     const scope = await getCurrentDappScope()

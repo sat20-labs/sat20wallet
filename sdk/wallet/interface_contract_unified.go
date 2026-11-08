@@ -1627,6 +1627,7 @@ func (p *Manager) deployEVMContract(req *ContractDeployRequest) (*ContractTxResu
 	tx, contract, err := contractcommon.BuildDeployTx(contractcommon.DeployTxBuildRequest{
 		ContractPrefix:  p.contractAddressPrefix(),
 		Type:            contractcommon.ContractTypeEVM,
+		Version:         req.Version,
 		Deployer:        caller,
 		GasLimit:        estimate.GasLimit,
 		DeployNonce:     estimate.Nonce,

@@ -3,7 +3,10 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +20,7 @@ import (
 	"time"
 
 	indexerdb "github.com/sat20-labs/indexer/indexer/db"
+	"github.com/sat20-labs/sat20wallet/sdk/account"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet"
 	dkvscore "github.com/sat20-labs/sat20wallet/sdk/wallet/dkvs"
 	dkvs "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
@@ -24,15 +28,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// This is an SDK/bootstrap diagnostic, not a browser or PWA acceptance case.
-// It holds only the first-writer bootstrap boundary: the real SDK request is
-// decoded in memory, classified without retaining values/signatures, rejected
-// with a transient 503 before reaching the node, then allowed through after
-// direct remote absence and local readiness state have been checked.
-func TestSDKAccountBootstrapBindingCASTransientFailureRetries_NotUI(t *testing.T) {
+// Initial activation uses the real PWA recovery workflow. A controlled 503
+// blocks its binding, then ordinary retry/re-entry completes service activation
+// and the independent private backup. Import itself performs no remote CAS.
+func TestSDKAccountActivationRetry(t *testing.T) {
 	network := newDKVSNoPluginTemplateFixtureWithArgs(t, map[string]int64{}, nil, nil, dkvsMinerArgs(t)).Network
 	waitForDKVSPeerReady(t, network)
+	runSDKAccountActivationRetry(t, network, accountSyncMnemonic(t, 249))
+}
 
+func runSDKAccountActivationRetry(t *testing.T, network *realSatoshiNet, mnemonic string) {
+	t.Helper()
 	config, _ := accountReviewConfig(t, network)
 	target, err := url.Parse("http://" + config.IndexerL2.Host)
 	require.NoError(t, err)
@@ -90,127 +96,161 @@ func TestSDKAccountBootstrapBindingCASTransientFailureRetries_NotUI(t *testing.T
 	})
 	require.NoError(t, manager.StartDKVSSync())
 
-	mnemonic := accountSyncMnemonic(t, 249)
 	_, err = manager.RecoverAccountManagementFromRootMnemonic(context.Background(), mnemonic, accountReviewPassword)
 	require.ErrorIs(t, err, wallet.ErrRootAccountNotFound,
 		"an empty temporary node must authorize only this mnemonic's first-wallet import")
 
-	importDone := make(chan error, 1)
-	go func() {
-		_, importErr := manager.ImportWallet(mnemonic, accountReviewPassword)
-		importDone <- importErr
-	}()
-	importFinished := false
+	_, err = manager.ImportWallet(mnemonic, accountReviewPassword)
+	require.NoError(t, err)
+	require.NoError(t, manager.InitializeAccountManagement(accountReviewPassword))
+	require.Eventually(t, func() bool { return manager.GetAccountManagementStatus().LocalOnly }, 20*time.Second, 20*time.Millisecond)
+	blocked, forwarded, unexpected, _ := audit.safeCounts()
+	require.Zero(t, blocked)
+	require.Zero(t, forwarded)
+	require.Zero(t, unexpected, "inactive discovery must not publish")
+	_, err = manager.ConfirmAccountStorage(wallet.AccountStorageTemporary, 0)
+	require.NoError(t, err)
+	backup, err := manager.ExportAccountBackupForPWA(accountReviewPassword, nil)
+	require.NoError(t, err)
+	pkg, err := manager.CreateAccountRecoveryPackage(account.CreateOptions{AccountID: manager.GetAccountManagementStatus().AccountID, Backup: backup, RecoveryMode: account.RecoveryMode2Of2, Questions: e2eKnowledgeQuestions()})
+	require.NoError(t, err)
+	share, err := account.RecoverDKVSShare(pkg.DKVSShareCapsule, pkg.KnowledgeBundle, e2eKnowledgeAnswers())
+	require.NoError(t, err)
+	_, secret, err := account.RecoverAccount(pkg.Envelope, pkg.UserShare, share)
+	require.NoError(t, err)
+	defer clearBytes(secret)
+	activate := func() error {
+		stage := "storage_authorization"
+		err := manager.UseAccountStorageAuthorization(wallet.AccountStoragePurposeRecovery, func(auth *wallet.AccountStorageAuthorization) error {
+			stage = "binding"
+			repo, err := manager.NewAccountRepositoryForStorage(*auth)
+			if err != nil {
+				return fmt.Errorf("bind repository: %w", err)
+			}
+			stage = "recovery_package_publish"
+			if err = account.NewManager(repo).Publish(context.Background(), *pkg); err != nil {
+				return fmt.Errorf("publish recovery package: %w", err)
+			}
+			stage = "service_activation"
+			if err = manager.ActivateAccountManagement(secret, accountReviewPassword, *auth, pkg.Envelope.Locator, "account://"+pkg.Envelope.Locator.PackageID); err != nil {
+				return fmt.Errorf("activate account service: %w", err)
+			}
+			return nil
+		})
+		if err != nil {
+			status := manager.GetAccountManagementStatus()
+			t.Logf("activation failure stage=%s discovery=%s dkvs_status=%s activation_pending=%t recovery_configured=%t dkvs_write_allowed=%t",
+				stage, status.DiscoveryStatus, status.DKVSStatus, status.ActivationPending, status.RecoveryConfigured, status.DKVSWriteAllowed)
+		}
+		return err
+	}
+	require.Error(t, activate(), "the explicit activation must expose the controlled binding failure")
 	select {
 	case <-audit.firstBlockedBinding:
-	case importErr := <-importDone:
-		require.NoError(t, importErr)
-		importFinished = true
-		select {
-		case <-audit.firstBlockedBinding:
-		case <-time.After(20 * time.Second):
-			t.Fatal("SDK bootstrap did not submit its account binding CAS")
-		}
 	case <-time.After(20 * time.Second):
-		t.Fatal("SDK bootstrap did not submit its account binding CAS")
+		t.Fatal("activation did not reach the real binding CAS")
 	}
-	if !importFinished {
-		select {
-		case importErr := <-importDone:
-			require.NoError(t, importErr)
-		case <-time.After(20 * time.Second):
-			t.Fatal("wallet import did not finish while the bootstrap CAS was rejected")
-		}
-	}
-
-	status := manager.GetAccountManagementStatus()
-	require.True(t, status.Active, "first-wallet import may activate local account management")
-	require.False(t, status.RecoveryConfigured, "a local active profile is not remote recovery readiness")
-	require.Empty(t, status.PackageID)
-	require.Empty(t, status.PublicLocator)
-	require.Equal(t, wallet.AccountStorageTemporary, status.StorageMode)
-	require.Eventually(t, func() bool {
-		current := manager.GetAccountManagementStatus()
-		return current.LastDKVSSyncError != "" && current.LastDKVSSyncErrorCode != "" && current.LastDKVSSyncErrorAt > 0
-	}, 5*time.Second, 50*time.Millisecond, "the background sync status must report the controlled transport failure")
-
+	require.False(t, manager.GetAccountManagementStatus().RecoveryConfigured)
 	root := manager.GetWallet()
 	require.NotNil(t, root)
-	expectedBindingKey, err := dkvs.AccountMappingKey(wallet.GetChainParam().Name, root.GetAddress())
+	expectedKey, err := dkvs.AccountMappingKey(wallet.GetChainParam().Name, root.GetAddress())
 	require.NoError(t, err)
-	observedBindingKey := audit.getBindingKey()
-	require.True(t, observedBindingKey != "" && observedBindingKey == expectedBindingKey,
-		"the blocked CAS must be the selected root's canonical account mapping")
-	blockedRecord, readErr := dkvsClientForNode(t, network.Core).GetRecord(observedBindingKey)
-	require.ErrorIs(t, readErr, wallet.ErrDKVSRecordNotFound,
-		"a controlled 503 must not reach or commit at the CoreNode")
-	require.Nil(t, blockedRecord)
-	blocked, forwarded, unexpected, bindingRows := audit.safeCounts()
-	require.GreaterOrEqual(t, blocked, 1)
-	require.Zero(t, forwarded, "no binding request may reach the backend while the failure gate is closed")
-	require.Zero(t, unexpected, "bootstrap-only synchronization must not submit any non-binding CAS")
-	require.NotEmpty(t, bindingRows)
-	for _, row := range bindingRows {
+	require.Equal(t, expectedKey, audit.getBindingKey())
+	client := dkvsClientForNode(t, network.Core)
+	_, err = client.GetRecord(expectedKey)
+	require.ErrorIs(t, err, wallet.ErrDKVSRecordNotFound, "503 must not reach the backend")
+	blocked, forwarded, unexpected, rows := audit.safeCounts()
+	require.Positive(t, blocked)
+	require.Zero(t, forwarded)
+	require.Zero(t, unexpected)
+	for _, row := range rows {
 		require.Equal(t, "core_binding", row.Class)
-		require.Equal(t, "account", row.Namespace)
 		require.Equal(t, uint64(1), row.Seq)
-		require.Equal(t, uint64(0), row.TTL)
+		require.Zero(t, row.TTL)
 		require.Equal(t, "none", row.FeeMode)
 		require.Equal(t, "rejected_before_backend_http_503", row.Result)
 	}
-	t.Logf("bootstrap CAS held: class=core_binding namespace=account attempts=%d backend_binding=0 non_binding=0 seq=1 ttl=0 fee_mode=none local_recovery_configured=false", len(bindingRows))
-
-	// Only the normal worker retries this original domain job; the test never
-	// calls SyncAccountManagementState to manufacture a successful result.
 	audit.blockBinding.Store(false)
-	client := dkvsClientForNode(t, network.Core)
+	// The 503 invalidated the online session before service activation began.
+	// Re-enter the real discovery path and wait for verified inactive status;
+	// only preparation is retried, never package publication or activation.
+	retryIdentity := manager.GetAccountManagementStatus()
+	retryCtx, retryCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	attempts := 0
+	retryErr := func() error {
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			if err := retryCtx.Err(); err != nil {
+				return err
+			}
+			attempts++
+			_, err := manager.RecoverAccountManagementFromCurrentWallet(retryCtx, accountReviewPassword)
+			status := manager.GetAccountManagementStatus()
+			if status.AccountID != retryIdentity.AccountID || status.RootWalletID != retryIdentity.RootWalletID {
+				return fmt.Errorf("activation preparation changed account identity")
+			}
+			if status.RecoveryConfigured || status.ActivationPending ||
+				status.DiscoveryStatus == "active" || status.DiscoveryStatus == "active-waiting-backup" {
+				return fmt.Errorf("activation preparation unexpectedly found an active or pending service")
+			}
+			if errors.Is(err, wallet.ErrRootAccountNotFound) && status.DiscoveryStatus == "inactive" && status.LocalOnly {
+				return nil
+			}
+			if !errors.Is(err, wallet.ErrRootAccountNotFound) &&
+				!errors.Is(err, wallet.ErrRootAccountDiscoveryPending) && !errors.Is(err, wallet.ErrDKVSPathNotSynced) {
+				if err == nil {
+					return fmt.Errorf("activation preparation unexpectedly completed account recovery")
+				}
+				return fmt.Errorf("activation discovery preparation: %w", err)
+			}
+			select {
+			case <-retryCtx.Done():
+				return retryCtx.Err()
+			case <-ticker.C:
+			}
+		}
+	}()
+	retryCancel()
+	retryStatus := manager.GetAccountManagementStatus()
+	t.Logf("activation retry preparation attempts=%d discovery=%s dkvs_status=%s activation_pending=%t recovery_configured=%t local_only=%t error_type=%T",
+		attempts, retryStatus.DiscoveryStatus, retryStatus.DKVSStatus, retryStatus.ActivationPending, retryStatus.RecoveryConfigured, retryStatus.LocalOnly, retryErr)
+	require.NoError(t, retryErr)
+	require.Equal(t, "inactive", retryStatus.DiscoveryStatus)
+	require.True(t, retryStatus.LocalOnly)
+	require.False(t, retryStatus.RecoveryConfigured)
+	require.False(t, retryStatus.ActivationPending)
+	// The raw binding has no outbox. Resume its unfinished explicit workflow
+	// once, after the real online discovery baseline is usable again.
+	require.NoError(t, activate())
 	var committed *wire.DKVSRecord
-	require.Eventually(t, func() bool {
-		committed, err = client.GetRecord(observedBindingKey)
-		return err == nil && committed != nil
-	}, 30*time.Second, 100*time.Millisecond, "the existing background retry must commit the actual binding")
-	require.Eventually(t, func() bool {
-		return audit.hasSuccessfulBindingForward()
-	}, 5*time.Second, 50*time.Millisecond, "the retry must traverse the real reverse-proxy backend")
-	boundNetwork, boundAddress, descriptor, err := dkvs.ValidateAccountMappingBindingRecord(committed)
-	require.NoError(t, err, "the committed mapping must have a valid account-service signature")
-	parsedBinding, err := dkvs.ParseKey(expectedBindingKey)
+	committed, err = client.GetRecord(expectedKey)
 	require.NoError(t, err)
-	require.True(t, len(parsedBinding.Segments) > 0 && boundNetwork == parsedBinding.Segments[0],
-		"the signed mapping must use the configured network namespace")
-	require.True(t, boundAddress == root.GetAddress(), "the committed mapping must target the imported root")
+	require.NotNil(t, committed)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	require.NoError(t, manager.WaitAccountManagedDataReady(ctx))
+	boundNetwork, boundAddress, descriptor, err := dkvs.ValidateAccountMappingBindingRecord(committed)
+	require.NoError(t, err)
+	parsed, err := dkvs.ParseKey(expectedKey)
+	require.NoError(t, err)
+	require.NotEmpty(t, parsed.Segments)
+	require.Equal(t, parsed.Segments[0], boundNetwork)
+	require.Equal(t, root.GetAddress(), boundAddress)
 	remoteClient, err := manager.GetDKVSClient()
 	require.NoError(t, err)
 	remoteConfig, err := remoteClient.GetDKVSClientConfig()
 	require.NoError(t, err)
-	require.NotNil(t, remoteConfig)
-	require.True(t, descriptor.CoreNodeID == remoteConfig.EndpointID,
-		"the binding must identify the selected CoreNode")
+	require.Equal(t, remoteConfig.EndpointID, descriptor.CoreNodeID)
 	require.Equal(t, uint64(1), committed.Seq)
 	require.Zero(t, committed.TTL)
 	require.Empty(t, committed.FeeProof)
+	require.True(t, manager.GetAccountManagementStatus().RecoveryConfigured)
+	require.NotEmpty(t, manager.GetAccountManagementStatus().PackageID)
+	require.NotEmpty(t, manager.GetAccountManagementStatus().PublicLocator)
+	require.Zero(t, manager.GetAccountManagementStatus().PendingChanges)
+	require.False(t, manager.GetAccountManagementStatus().ManagedDataDirty)
 
-	status = manager.GetAccountManagementStatus()
-	require.False(t, status.RecoveryConfigured,
-		"a successful root-to-CoreNode binding still does not configure remote account recovery")
-	require.Empty(t, status.PackageID)
-	require.Empty(t, status.PublicLocator)
-	blocked, forwarded, unexpected, bindingRows = audit.safeCounts()
-	require.GreaterOrEqual(t, blocked, 1)
-	require.GreaterOrEqual(t, forwarded, 1)
-	require.Zero(t, unexpected, "bootstrap-only synchronization must not submit any non-binding CAS")
-	for _, row := range bindingRows {
-		if strings.HasPrefix(row.Result, "forwarded_http_") {
-			require.Equal(t, "forwarded_http_200", row.Result)
-			require.Equal(t, "core_binding", row.Class)
-			require.Equal(t, "account", row.Namespace)
-			require.Equal(t, uint64(1), row.Seq)
-			require.Equal(t, uint64(0), row.TTL)
-			require.Equal(t, "none", row.FeeMode)
-		}
-	}
-	t.Logf("bootstrap CAS retry: class=core_binding namespace=account backend_binding=%d non_binding=0 seq=%d ttl=%d fee_mode=none recovery_configured=false",
-		forwarded, committed.Seq, committed.TTL)
 }
 
 type bootstrapCASObservation struct {
@@ -294,8 +334,10 @@ func summarizeBootstrapCAS(batch dkvscore.BatchCASRequest) ([]bootstrapCASObserv
 			parsed.Segments[1] == "account" {
 			row.Class = "account_managed_state"
 		} else if parsed.Namespace == "blob" && len(parsed.Segments) == 2 &&
-			parsed.Segments[1] == "account-managed-data" {
-			row.Class = "account_backup"
+			len(parsed.Segments[1]) == 64 {
+			if _, err := hex.DecodeString(parsed.Segments[1]); err == nil {
+				row.Class = "account_backup"
+			}
 		}
 		if len(record.FeeProof) != 0 {
 			proof, parseErr := dkvs.ParseFeeProof(record.FeeProof)

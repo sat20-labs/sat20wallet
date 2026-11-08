@@ -1,0 +1,41 @@
+{
+  "state": "PASS",
+  "pid": 8040,
+  "started_utc": "2026-10-31T17:23:40.217832+00:00",
+  "ended_utc": "2026-10-31T17:24:12.108756+00:00",
+  "command": "npm run compile",
+  "script": "vue-tsc --noEmit",
+  "cwd": "/Users/yingfeng/github/sat20wallet/pwa",
+  "exit_code": 0,
+  "timed_out": false,
+  "binary_or_build_output_generated": false,
+  "pre_file_count": 620,
+  "post_file_count": 620,
+  "pre_tree_sha256": "cf0eaed3a8fdbc4e26f658dc040dfae9c393617e55b5eacc1b853a3b73e74018",
+  "post_tree_sha256": "cf0eaed3a8fdbc4e26f658dc040dfae9c393617e55b5eacc1b853a3b73e74018",
+  "input_hashes_unchanged": true,
+  "changed_files": [],
+  "added_files": [],
+  "removed_files": [],
+  "pre_unstable_paths": [],
+  "post_unstable_paths": [],
+  "pre_missing_paths": [],
+  "post_missing_paths": [],
+  "node_npm_versions": {
+    "node": {
+      "exit_code": 0,
+      "stdout": "v22.22.3",
+      "stderr": ""
+    },
+    "npm": {
+      "exit_code": 0,
+      "stdout": "10.9.8",
+      "stderr": ""
+    }
+  },
+  "log": "/Users/yingfeng/github/sat20wallet/pwa/data/final-20261031T1348Z/pwa-language-compile-recheck-20261031T172304Z/compile.log",
+  "log_bytes": 55,
+  "log_sha256": "48dacadd52d700a07293327aea0dc2f648f3db931dee8095bc7768243804f885",
+  "before_manifest": "/Users/yingfeng/github/sat20wallet/pwa/data/final-20261031T1348Z/pwa-language-compile-recheck-20261031T172304Z/inputs-before.json",
+  "after_manifest": "/Users/yingfeng/github/sat20wallet/pwa/data/final-20261031T1348Z/pwa-language-compile-recheck-20261031T172304Z/inputs-after.json"
+}

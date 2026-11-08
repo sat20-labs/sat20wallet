@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "releaseId": "0.1.46-20261106T225010Z-pwa",
+  "assets": [
+    {
+      "role": "go-runtime",
+      "path": "wasm/wasm_exec.js",
+      "mimeTypes": [
+        "text/javascript",
+        "application/javascript"
+      ],
+      "size": 16992,
+      "sha256": "0c949f4996f9a89698e4b5c586de32249c3b69b7baadb64d220073cc04acba14"
+    },
+    {
+      "role": "wallet-wasm",
+      "path": "wasm/sat20wallet.wasm",
+      "mimeTypes": [
+        "application/wasm"
+      ],
+      "size": 39305847,
+      "sha256": "830a890ae161aab5912d2a74e4fc0d2aaf89e57fb14584acf0361315ad76c6c8"
+    }
+  ]
+}

@@ -101,7 +101,15 @@ test('legacy refund fee label changes without relabeling other contract calls', 
   })
   assert.equal(isRefund('{"action":"refund"}'), true)
   for (const invoke of ['{"action":"mint"}', '{}', 'null', '{']) assert.equal(isRefund(invoke), false)
-  assert.match(source, /isRefund \? \$t\('invokeContractSatsNet.callFee', '合约调用费'\)/)
+  assert.match(source, /isRefund \? \$t\('invokeContractSatsNet.callFee'\) : \$t\('invokeContractSatsNet.mintingFee'\)/)
+  for (const [locale, expectedCallFee, expectedMintingFee] of [
+    ['en', 'Contract call fee', 'Minting fee'],
+    ['zh', '合约调用费', '铸造费用'],
+  ]) {
+    const messages = JSON.parse(read(`locales/${locale}.json`))
+    assert.equal(messages.invokeContractSatsNet.callFee, expectedCallFee)
+    assert.equal(messages.invokeContractSatsNet.mintingFee, expectedMintingFee)
+  }
 })
 
 test('lock-with-expand submitted toast uses an existing localized message', () => {

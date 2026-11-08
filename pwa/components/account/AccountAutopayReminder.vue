@@ -10,7 +10,7 @@
           {{ t('accountManagement.dkvsPaymentNeedsAttention') }}
         </div>
         <div class="mt-1 text-xs text-amber-400/90">
-          {{ autopay.message || '账户付费同步当前不可用。' }}
+          {{ accountDisplayMessage(t, autopay.message) || t('accountManagement.ui.paymentUnavailable') }}
         </div>
       </div>
     </div>
@@ -25,31 +25,42 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import { storeToRefs } from 'pinia'
 import { Icon } from '@iconify/vue'
 import { Button } from '@/components/ui/button'
-import accountSDK, { type AccountAutopayFundingStatus } from '@/utils/accountManagement'
+import accountSDK, { accountDisplayMessage, type AccountAutopayFundingStatus } from '@/utils/accountManagement'
+import { useAccountManagementStore } from '@/store/accountManagement'
 
 const router = useRouter()
 const { t } = useI18n()
+const accountState = useAccountManagementStore()
+const { status } = storeToRefs(accountState)
 const autopay = ref<AccountAutopayFundingStatus | null>(null)
 let refreshTimer: ReturnType<typeof setInterval> | undefined
 
 const openFunding = () => router.push('/wallet/setting/account-management')
 
 const refresh = async () => {
-  const account = await accountSDK.status()
-  autopay.value = account.storage_mode === 'paid' ? await accountSDK.autopayStatus() : null
+  autopay.value = status.value?.storage_mode === 'paid' ? await accountSDK.autopayStatus() : null
 }
 
+const stopAccountWatch = watch(
+  () => [status.value?.account_id, status.value?.storage_mode],
+  () => { void refresh().catch(() => { autopay.value = null }) },
+  { immediate: true },
+)
+
 onMounted(() => {
-  void refresh().catch(() => { autopay.value = null })
-  refreshTimer = setInterval(() => void refresh().catch(() => undefined), 30_000)
+  refreshTimer = setInterval(() => {
+    if (document.visibilityState === 'visible') void refresh().catch(() => undefined)
+  }, 30_000)
 })
 
 onBeforeUnmount(() => {
+  stopAccountWatch()
   if (refreshTimer) clearInterval(refreshTimer)
 })
 </script>

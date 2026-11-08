@@ -53,6 +53,8 @@
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
+const { t } = useI18n()
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import LayoutApprove from '@/components/layout/LayoutApprove.vue'
@@ -117,7 +119,7 @@ const canSign = computed(() => Boolean(
 const parseTxDetailItems = (items: unknown): TxDetailItem[] => {
   const parsed = typeof items === 'string' ? JSON.parse(items) : items
   if (!Array.isArray(parsed) || parsed.length === 0) {
-    throw new Error('Missing transaction details')
+    throw new Error(t('approvalUi.missingDetails'))
   }
   return parsed
 }
@@ -150,8 +152,8 @@ watch(() => [props.data?.psbtHex, props.data.options?.chain, network.value, prop
   if (!props.data?.psbtHex) {
       console.warn("No psbtHex provided");
       toast.toast({
-          title: 'Missing Data',
-          description: 'No PSBT data available to parse.',
+          title: t('approvalUi.missingData'),
+          description: t('approvalUi.noPsbt'),
           variant: 'destructive'
       })
       isLoading.value = false
@@ -178,8 +180,8 @@ watch(() => [props.data?.psbtHex, props.data.options?.chain, network.value, prop
     if (err) {
       console.error("Error fetching PSBT info:", err);
       toast.toast({
-        title: 'Error Parsing PSBT',
-        description: err.message || 'Failed to retrieve transaction details.',
+        title: t('approvalUi.parsePsbtError'),
+        description: err.message || t('approvalUi.retrieveDetailsFailed'),
         variant: 'destructive'
       })
        parseError.value = true // Mark as error
@@ -208,9 +210,9 @@ watch(() => [props.data?.psbtHex, props.data.options?.chain, network.value, prop
            parsedOutputs.value = parseTxDetailItems(res.outputs);
            if (!satsNet) {
              const outputs = bitcoin.Transaction.fromHex(res.txHex).outs
-             if (outputs.length !== parsedOutputs.value.length) throw new Error('Transaction output count mismatch')
+             if (outputs.length !== parsedOutputs.value.length) throw new Error(t('approvalUi.outputCountMismatch'))
              parsedOutputs.value = parsedOutputs.value.map((item, index) => {
-               if (item.Value !== outputs[index].value) throw new Error('Transaction output value mismatch')
+               if (item.Value !== outputs[index].value) throw new Error(t('approvalUi.outputValueMismatch'))
                return { ...item, PkScript: outputs[index].script.toString('base64') }
              })
            }
@@ -227,8 +229,8 @@ watch(() => [props.data?.psbtHex, props.data.options?.chain, network.value, prop
        if(inputParseFailed || outputParseFailed) {
             parseError.value = true; // Mark error if any part failed parsing
             toast.toast({
-                title: 'Parsing Error',
-                description: `Failed to parse ${inputParseFailed ? 'input' : ''}${inputParseFailed && outputParseFailed ? ' and ' : ''}${outputParseFailed ? 'output' : ''} data format. Some details might be missing.`,
+                title: t('approvalUi.parsingError'),
+                description: t(inputParseFailed && outputParseFailed ? 'approvalUi.parseBoth' : inputParseFailed ? 'approvalUi.parseInputs' : 'approvalUi.parseOutputs'),
                 variant: 'destructive'
             })
        }
@@ -236,8 +238,8 @@ watch(() => [props.data?.psbtHex, props.data.options?.chain, network.value, prop
     } else {
         console.warn("No response data received from getTxAssetInfoFromPsbt_SatsNet");
         toast.toast({
-            title: 'Info',
-            description: 'No transaction details found for this PSBT.',
+            title: t('approvalUi.info'),
+            description: t('approvalUi.noPsbtDetails'),
         })
         parseError.value = true
     }
@@ -245,8 +247,8 @@ watch(() => [props.data?.psbtHex, props.data.options?.chain, network.value, prop
      if (cancelled) return
      console.error("Exception during PSBT info fetch:", fetchError);
        toast.toast({
-          title: 'Network Error',
-          description: fetchError?.message || 'Failed to communicate with the server.',
+          title: t('approvalUi.networkError'),
+          description: fetchError?.message || t('approvalUi.serverFailed'),
           variant: 'destructive'
       });
        parseError.value = true // Mark as error
@@ -262,8 +264,8 @@ const confirm = async () => {
 
   if (!psbtHex) {
       toast.toast({
-        title: 'Error',
-        description: 'Cannot sign, PSBT data is missing.',
+        title: t('approvalUi.error'),
+        description: t('approvalUi.cannotSign'),
         variant: 'destructive'
       })
       return;
@@ -292,8 +294,8 @@ const confirm = async () => {
       if (err) {
            console.error("Sign PSBT Error:", err);
            toast.toast({
-              title: 'Sign PSBT Failed',
-              description: err?.message || 'An unknown error occurred during signing.',
+              title: t('approvalUi.signFailed'),
+              description: err?.message || t('approvalUi.signUnknown'),
               variant: 'destructive'
           });
       } else if (res?.psbt) {
@@ -303,8 +305,8 @@ const confirm = async () => {
            // This case might indicate an issue in the walletManager logic if no error is thrown but no PSBT is returned
            console.warn("Signing process completed but no signed PSBT was returned.", res);
            toast.toast({
-              title: 'Sign PSBT Issue',
-              description: 'Signing process seemed to complete, but no signed data was received. Please retry or contact support.',
+              title: t('approvalUi.signIssue'),
+              description: t('approvalUi.noSignedData'),
               variant: 'destructive'
           });
       }
@@ -312,8 +314,8 @@ const confirm = async () => {
        parseError.value = true
        console.error("Exception during signing:", signError);
        toast.toast({
-          title: 'Sign PSBT Error',
-          description: signError?.message || 'An unexpected critical error occurred during signing.',
+          title: t('approvalUi.signError'),
+          description: signError?.message || t('approvalUi.signCritical'),
           variant: 'destructive'
       });
   } finally {

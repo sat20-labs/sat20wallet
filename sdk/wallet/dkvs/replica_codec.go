@@ -3,10 +3,10 @@ package dkvs
 import (
 	"bytes"
 	"encoding/binary"
-	"encoding/json"
 	"io"
 	"strings"
 
+	"github.com/sat20-labs/satoshinet/btcec/schnorr"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
@@ -14,7 +14,8 @@ import (
 const (
 	dkvsSubscriptionStateMagic  = "DKSS"
 	dkvsOutboxEntryMagic        = "DKOB"
-	dkvsStorageCodecVersion     = uint8(4)
+	dkvsStorageCodecVersion     = uint8(1)
+	dkvsOutboxCodecVersion      = uint8(1)
 	maxDKVSEndpointIDSize       = uint64(512)
 	maxDKVSNamespaceSize        = uint64(128)
 	maxDKVSRequestIDSize        = uint64(128)
@@ -29,10 +30,10 @@ const (
 type walletDKVSEncoder struct{ buf bytes.Buffer }
 type walletDKVSDecoder struct{ reader *bytes.Reader }
 
-func newWalletDKVSEncoder(magic string) *walletDKVSEncoder {
+func newWalletDKVSEncoder(magic string, version uint8) *walletDKVSEncoder {
 	encoder := &walletDKVSEncoder{}
 	_, _ = encoder.buf.WriteString(magic)
-	_ = encoder.buf.WriteByte(dkvsStorageCodecVersion)
+	_ = encoder.buf.WriteByte(version)
 	return encoder
 }
 func (e *walletDKVSEncoder) u8(value uint8) { _ = e.buf.WriteByte(value) }
@@ -54,14 +55,14 @@ func (e *walletDKVSEncoder) string(value string, maximum uint64) error {
 	return e.bytes([]byte(value), maximum)
 }
 func (e *walletDKVSEncoder) encoded() []byte { return e.buf.Bytes() }
-func newWalletDKVSDecoder(encoded []byte, magic string) (*walletDKVSDecoder, error) {
+func newWalletDKVSDecoder(encoded []byte, magic string, expectedVersion uint8) (*walletDKVSDecoder, error) {
 	decoder := &walletDKVSDecoder{reader: bytes.NewReader(encoded)}
 	header, err := decoder.raw(uint64(len(magic)))
 	if err != nil || string(header) != magic {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
 	version, err := decoder.u8()
-	if err != nil || version != dkvsStorageCodecVersion {
+	if err != nil || version != expectedVersion {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
 	return decoder, nil
@@ -159,7 +160,7 @@ func encodeDKVSSubscriptionState(state *SubscriptionState) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	encoder := newWalletDKVSEncoder(dkvsSubscriptionStateMagic)
+	encoder := newWalletDKVSEncoder(dkvsSubscriptionStateMagic, dkvsStorageCodecVersion)
 	if err := encoder.string(strings.TrimSpace(state.EndpointID), maxDKVSEndpointIDSize); err != nil {
 		return nil, err
 	}
@@ -182,7 +183,7 @@ func decodeDKVSSubscriptionState(encoded []byte) (*SubscriptionState, error) {
 	if len(encoded) == 0 || uint64(len(encoded)) > maxDKVSStateEncoded {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
-	decoder, err := newWalletDKVSDecoder(encoded, dkvsSubscriptionStateMagic)
+	decoder, err := newWalletDKVSDecoder(encoded, dkvsSubscriptionStateMagic, dkvsStorageCodecVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -239,6 +240,8 @@ func outboxStateCode(state string) (uint8, error) {
 		return 3, nil
 	case DKVSOutboxTerminal:
 		return 4, nil
+	case DKVSOutboxAcknowledged:
+		return 5, nil
 	default:
 		return 0, dkvsindexer.ErrInvalidRecord
 	}
@@ -253,6 +256,8 @@ func outboxStateFromCode(code uint8) (string, error) {
 		return DKVSOutboxConflict, nil
 	case 4:
 		return DKVSOutboxTerminal, nil
+	case 5:
+		return DKVSOutboxAcknowledged, nil
 	default:
 		return "", dkvsindexer.ErrInvalidRecord
 	}
@@ -267,7 +272,7 @@ func encodeDKVSOutboxEntry(entry *BatchOutboxEntry) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	encoder := newWalletDKVSEncoder(dkvsOutboxEntryMagic)
+	encoder := newWalletDKVSEncoder(dkvsOutboxEntryMagic, dkvsOutboxCodecVersion)
 	if err := encoder.string(strings.TrimSpace(entry.EndpointID), maxDKVSEndpointIDSize); err != nil {
 		return nil, err
 	}
@@ -324,7 +329,7 @@ func encodeDKVSOutboxEntry(entry *BatchOutboxEntry) ([]byte, error) {
 			dkvsindexer.BatchCASOptions{EndpointID: entry.EndpointID, RequestID: entry.RequestID}, entry.Authorization); err != nil {
 			return nil, err
 		}
-		authorization, err = json.Marshal(entry.Authorization)
+		authorization, err = encodeDKVSAuthorization(entry.Authorization)
 		if err != nil {
 			return nil, err
 		}
@@ -344,7 +349,7 @@ func decodeDKVSOutboxEntry(encoded []byte, namespace, requestID string) (*BatchO
 		len(encoded) == 0 || uint64(len(encoded)) > maxDKVSOutboxEncoded {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
-	decoder, err := newWalletDKVSDecoder(encoded, dkvsOutboxEntryMagic)
+	decoder, err := newWalletDKVSDecoder(encoded, dkvsOutboxEntryMagic, dkvsOutboxCodecVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -436,8 +441,8 @@ func decodeDKVSOutboxEntry(encoded []byte, namespace, requestID string) (*BatchO
 		State: state, Attempts: uint32(attempts), LastErrorCode: lastErrorCode, LastError: lastError,
 		CreatedAtMS: createdAtMS, UpdatedAtMS: updatedAtMS, OriginKey: originKey, OriginDomain: originDomain, OriginGeneration: originGeneration}
 	if len(encodedAuthorization) != 0 {
-		entry.Authorization = &dkvsindexer.WalletWriteAuthorization{}
-		if json.Unmarshal(encodedAuthorization, entry.Authorization) != nil {
+		entry.Authorization, err = decodeDKVSAuthorization(encodedAuthorization)
+		if err != nil {
 			return nil, dkvsindexer.ErrInvalidRecord
 		}
 		decoded, err := entry.DecodeMutations()
@@ -450,4 +455,54 @@ func decodeDKVSOutboxEntry(encoded []byte, namespace, requestID string) (*BatchO
 		}
 	}
 	return entry, nil
+}
+
+// Authorization uses the enclosing DKOB version. Prefix order and signature
+// bytes are preserved exactly; the caller verifies the signed context.
+func encodeDKVSAuthorization(auth *dkvsindexer.WalletWriteAuthorization) ([]byte, error) {
+	e := &walletDKVSEncoder{}
+	if err := e.string(auth.Context.EndpointID, maxDKVSEndpointIDSize); err != nil {
+		return nil, err
+	}
+	if len(auth.Context.Prefixes) > dkvsindexer.MaxBatchCASMutations || len(auth.Signature) != schnorr.SignatureSize {
+		return nil, dkvsindexer.ErrInvalidRecord
+	}
+	e.uvarint(uint64(len(auth.Context.Prefixes)))
+	for _, prefix := range auth.Context.Prefixes {
+		if err := e.string(prefix.Prefix, dkvsindexer.MaxPrefixLength); err != nil {
+			return nil, err
+		}
+		e.uvarint(prefix.Generation)
+	}
+	e.raw(auth.Signature)
+	return e.encoded(), nil
+}
+func decodeDKVSAuthorization(encoded []byte) (*dkvsindexer.WalletWriteAuthorization, error) {
+	d := &walletDKVSDecoder{reader: bytes.NewReader(encoded)}
+	auth := &dkvsindexer.WalletWriteAuthorization{}
+	var err error
+	auth.Context.EndpointID, err = d.string(maxDKVSEndpointIDSize)
+	if err != nil {
+		return nil, err
+	}
+	count, err := d.uvarint()
+	if err != nil || count > dkvsindexer.MaxBatchCASMutations {
+		return nil, dkvsindexer.ErrInvalidRecord
+	}
+	auth.Context.Prefixes = make([]dkvsindexer.PrefixGeneration, int(count))
+	for n := range auth.Context.Prefixes {
+		auth.Context.Prefixes[n].Prefix, err = d.string(dkvsindexer.MaxPrefixLength)
+		if err != nil {
+			return nil, err
+		}
+		auth.Context.Prefixes[n].Generation, err = d.uvarint()
+		if err != nil {
+			return nil, err
+		}
+	}
+	auth.Signature, err = d.raw(schnorr.SignatureSize)
+	if err != nil || !d.done() {
+		return nil, dkvsindexer.ErrInvalidRecord
+	}
+	return auth, nil
 }

@@ -4,6 +4,7 @@ import test from 'node:test'
 import { runInNewContext } from 'node:vm'
 import { transformSync } from 'esbuild'
 import { ref, computed } from 'vue'
+import { createI18n } from 'vue-i18n'
 
 const source = relative => readFileSync(new URL(relative, import.meta.url), 'utf8')
 
@@ -29,11 +30,18 @@ test('account storage authorization is owned by SDK, not PWA state', () => {
 function actualRestorePage({ commitError, rehearsalOnly = false } = {}) {
   const page = readFileSync(process.env.SAT20_RESTORE_SOURCE || new URL('../../entrypoints/popup/pages/RestoreAccount.vue', import.meta.url), 'utf8')
   const script = page.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1].replace(/^import .*$/gm, '')
+  const zh = JSON.parse(source('../../locales/zh.json'))
+  const i18n = createI18n({ legacy: false, locale: 'zh', messages: { zh } })
+  const sdkSource = source('../../utils/accountManagement.ts')
+  const displayHelper = sdkSource.slice(sdkSource.indexOf('const accountDisplayMessageKeys:')).replace('export const accountDisplayMessage', 'const accountDisplayMessage')
+  const { accountDisplayMessage } = runInNewContext(transformSync(displayHelper + '\n({ accountDisplayMessage })', { loader: 'ts', target: 'es2022' }).code)
   const calls = { commits: 0, aborted: [], reloads: [], timers: [], routes: [], guardianRequests: [], guardianResponses: [] }
   const lifecycle = { beforeUnmount: [], mounted: [] }
   let now = 0
   const context = {
     ref, computed,
+    useI18n: () => i18n.global,
+    accountDisplayMessage,
     onBeforeUnmount: callback => lifecycle.beforeUnmount.push(callback),
     onMounted: callback => lifecycle.mounted.push(callback),
     useRoute: () => ({ query: rehearsalOnly ? { mode: 'rehearsal' } : {} }),

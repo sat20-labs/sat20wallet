@@ -4,21 +4,109 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
 
-// Keep failed case data for diagnosis; successful cases own and remove only
-// their fresh directory under the runner's private TMPDIR.
+var (
+	runtimeDirsMu     sync.Mutex
+	runtimeRoot       string
+	runtimeFailedCase string
+	runtimeKeepPaths  []string
+)
+
+// The process owns this fresh root. Shared build caches live until TestMain
+// finishes; no cleanup scans or removes directories from an earlier run.
+func e2eRuntimeDirectory(t *testing.T) string {
+	t.Helper()
+	runtimeDirsMu.Lock()
+	defer runtimeDirsMu.Unlock()
+	if runtimeRoot == "" {
+		var err error
+		runtimeRoot, err = os.MkdirTemp("", "sat20wallet-e2e-run-")
+		require.NoError(t, err)
+	}
+	return runtimeRoot
+}
+
+// Retain the original files of at most one failed top-level case, including
+// its nodes and child log. Never make another copy of the failure scene.
+func keepFailedRuntime(t *testing.T, path string) bool {
+	t.Helper()
+	if !t.Failed() {
+		return false
+	}
+	name, rest, _ := strings.Cut(t.Name(), "/")
+	if name == "TestSDKCoreModulesE2E" && rest != "" {
+		// Core now closes one independent environment per segment. Retain
+		// only the first failed segment rather than all three environments.
+		segment, _, _ := strings.Cut(rest, "/")
+		name += "/" + segment
+	}
+	runtimeDirsMu.Lock()
+	defer runtimeDirsMu.Unlock()
+	if runtimeFailedCase == "" {
+		runtimeFailedCase = name
+	}
+	if runtimeFailedCase != name {
+		return false
+	}
+	runtimeKeepPaths = append(runtimeKeepPaths, path)
+	t.Logf("failed case data retained in place: %s", path)
+	return true
+}
+
+// Called after m.Run has completed all cleanup (including node kill/wait),
+// while the process still owns the E2E runtime lock.
+func cleanupE2ERuntime() error {
+	if runtimeRoot == "" {
+		return nil
+	}
+	var clean func(string) error
+	clean = func(path string) error {
+		for _, keep := range runtimeKeepPaths {
+			if path == keep {
+				return nil
+			}
+		}
+		for _, keep := range runtimeKeepPaths {
+			if strings.HasPrefix(keep, path+string(os.PathSeparator)) {
+				entries, err := os.ReadDir(path)
+				if err != nil {
+					return err
+				}
+				for _, entry := range entries {
+					if err := clean(filepath.Join(path, entry.Name())); err != nil {
+						return err
+					}
+				}
+				return nil
+			}
+		}
+		return os.RemoveAll(path)
+	}
+	return clean(runtimeRoot)
+}
+
+func e2ePhase(t *testing.T, name string) func() {
+	t.Helper()
+	started := time.Now()
+	return func() {
+		t.Helper()
+		t.Logf("e2e-phase: name=%s elapsed_seconds=%.3f", name, time.Since(started).Seconds())
+	}
+}
+
 func testCaseDirectory(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "sat20-e2e-case-")
+	dir, err := os.MkdirTemp(e2eRuntimeDirectory(t), "case-")
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		if t.Failed() {
-			t.Logf("failed case data retained: %s", dir)
+		if keepFailedRuntime(t, dir) {
 			return
 		}
 		require.NoError(t, os.RemoveAll(dir))

@@ -11,9 +11,11 @@ import { Transaction } from 'bitcoinjs-lib'
 import { createServer } from 'vite'
 import {
   regtestAccountUsageCaseNames,
+  installWalletStartProbe,
   runPwaUsageCases,
   runRgbPwaCases,
   runAutopayPwaReviewCases,
+  waitForAccountWrite,
 } from './account-management-usage-e2e.mjs'
 import { requiredPwaBiometricCases, runPwaBiometricCases } from './wallet-biometric-e2e.mjs'
 import { requiredPwaPosCases, optionalPwaEscapeCases, runPwaPosCases } from './pos-pwa-e2e.mjs'
@@ -485,7 +487,7 @@ const requiredAccountCases = [
   "usage: maintenance rehearsal obeys the one minute inactivity lock and discards its session",
   "usage: independent address DID entry persists changes and clearing through recovery",
   "usage: address DID persistence failure leaves catalog and recovery value unchanged",
-  "usage: remote deletion consumes stale local edits after reload and publishes unrelated changes",
+  "usage: remote deletion rejects offline edits and adopts the confirmed remote state",
   "usage: configured account exposes maintenance and cancels without replacing recovery",
   "usage: configured recovery rehearsal previews real backup without committing or changing wallet",
   "usage: Guardian paid confirmation uses 100 records and root identity after a 200 record child-wallet quote",
@@ -525,13 +527,16 @@ const requiredAccountCases = [
   "usage: background catalog refresh cannot invalidate a subaccount switch",
   "usage: newly created account publishes first recovery package after initial sync settles",
   "usage: account page refreshes background backup failure and success without navigation",
-  "usage: offline catalog edits survive reload and converge with another device",
-  "usage: shared IndexedDB tabs invalidate pending writes when another tab locks",
-  "usage: shared IndexedDB subaccount switch discards another tab previous-identity response",
-  "usage: shared IndexedDB wallet switch survives another tab rebuilding before commit",
-  "usage: shared IndexedDB password change cannot authorize an old-password tab",
+  "usage: offline catalog is read-only and resumes synchronization after reconnect",
+  "usage: active Manager rejects a pending account write after same-page lock",
+  "usage: same-page subaccount switch discards a stale account response",
+  "usage: committed wallet selection survives single Manager handoff",
+  "usage: password changes apply on single Manager handoff",
+  "usage: same-context PWA pages serialize Manager lifetime",
+  "usage: refresh serializes PWA Manager startup",
   "usage: real 2of2 setup page validates answers and completes rehearsal",
-  "usage: verified setup survives final status read failure without replaying rehearsal",
+  "usage: verified setup recovers automatically from a status read failure without replay",
+  "usage: configured recovery status has an explicit read retry without replaying rehearsal",
   "usage: same temporary mode reconfiguration converges across cold devices and root recovery",
   "usage: real 2of3 settings and independent Guardian pages complete setup and rehearsal",
   "usage: committed recovery with lost response survives reload without duplicate wallets",
@@ -571,10 +576,14 @@ if (focusedWalletCases) {
 if (focusedUsageCases) {
   assert.ok(focusedUsageCases.length > 0, 'focused rerun needs at least one case')
   assert.equal(new Set(focusedUsageCases).size, focusedUsageCases.length)
-  assert.ok(focusedUsageCases.every(name => name.startsWith('usage: ') && [...requiredAccountCases,
+  assert.ok(focusedUsageCases.every(name => (name.startsWith('usage: ') || requiredPwaBiometricCases.includes(name)) && [...requiredAccountCases,
     'usage: temporary Guardian renews paid hosting without changing its own recovery',
     'usage: original AUTOPAY resumes after prebroadcast exit and lost acknowledgement',
     ...(regtestMode ? regtestAccountUsageCaseNames : [])].includes(name)), 'unknown usage case')
+  if (focusedUsageCases.some(name => requiredPwaBiometricCases.includes(name))) {
+    assert.ok(requiredPwaBiometricCases.every(name => focusedUsageCases.includes(name)),
+      'biometric reruns require the original PRF creation and reload prerequisites')
+  }
 }
 if (focusedRGBCases) {
   assert.ok(rgbFixture && focusedRGBCases.length, 'RGB rerun requires the existing RGB fixture and exact cases')
@@ -721,7 +730,10 @@ function auditAccountCAS(context) {
   })
 }
 
-async function device(sharedContext) {
+let accountDiagnosticDevice = 0
+
+async function device(sharedContext, waitForReady = true, beforeGoto, diagnosticRole = 'unassigned') {
+  const diagnosticDeviceId = ++accountDiagnosticDevice
   const context = sharedContext ?? await browser.newContext()
   if (!sharedContext && posFixture && process.env.SAT20_PWA_DIAGNOSTIC === '1') auditAccountCAS(context)
   context.setDefaultTimeout(30000)
@@ -778,7 +790,7 @@ async function device(sharedContext) {
     body: `import { walletStorage } from '/lib/walletStorage.ts';
       await walletStorage.initializeState();
       await walletStorage.setValue('network', '${expectedNetwork}');
-      export const logLevel = ${process.env.SAT20_PWA_DIAGNOSTIC === '1' ? 3 : 2}; export const getConfig = () => (${JSON.stringify(config)});`,
+      export const logLevel = ${process.env.SAT20_PWA_DIAGNOSTIC === 'debug' ? 5 : process.env.SAT20_PWA_DIAGNOSTIC === '1' ? 3 : 2}; export const getConfig = () => (${JSON.stringify(config)});`,
   }))
   if (!sharedContext) await context.route('**/*', route => {
     const url = new URL(route.request().url())
@@ -839,14 +851,27 @@ async function device(sharedContext) {
   })
   page.on('console', message => {
     if (message.type() === 'log' && message.text().startsWith('{"event":"test-call-diagnostic"')) console.log(message.text())
+    const rgbDebug = process.env.SAT20_PWA_DIAGNOSTIC === 'debug' &&
+      /\[debug\] default: RGB (?:snapshot (?:operation|rejected)|broadcast diagnostic):/.test(message.text())
+    const accountDebug = process.env.SAT20_PWA_DIAGNOSTIC === 'debug' &&
+      /\[debug\] default: (?:account authorization (?:completion|gate)|account managed write rejected):/.test(message.text())
+    if (message.type() === 'log' && accountDebug) {
+      console.log(JSON.stringify({ event: 'account-authorization-diagnostic', device_id: diagnosticDeviceId,
+        role: diagnosticRole, message: message.text() }))
+      return
+    }
+    if (message.type() === 'log' && (rgbDebug || /(?:DKVS paths rejected|account ACK precheck rejected|account managed write rejected|account baseline rejected|account activation snapshot rejected|account generation advanced):/.test(message.text()))) {
+      console.log(message.text())
+    }
   })
   page.on('pageerror', error => {
     pageErrors.push(error.message)
     console.error(`[PWA page error] ${error.message}`)
   })
+  if (beforeGoto) await page.addInitScript(beforeGoto)
   await page.goto(server.resolvedUrls.local[0], { waitUntil: 'domcontentloaded', timeout: 90000 })
-  await ready(page)
-  if (regtestMode) await page.evaluate(async () => {
+  if (waitForReady) await ready(page)
+  if (waitForReady && regtestMode) await page.evaluate(async () => {
     const manager = (await import('/utils/sat20.ts')).default
     window.__observedAssetReads = []
     for (const method of ['getRGB11State', 'getAssetSummary']) {
@@ -889,6 +914,13 @@ async function device(sharedContext) {
       return result
     }
   })
+  return page
+}
+async function waitingDevice(sharedContext) {
+  const page = await device(sharedContext, false, installWalletStartProbe)
+  // The caller must already hold the wallet lock; install the probe before navigation.
+  await page.getByTestId('wallet-startup-shell').waitFor()
+  await expect(page.getByTestId('wallet-startup-shell')).toHaveAttribute('data-state', 'waiting')
   return page
 }
 async function walletCall(page, method, ...args) {
@@ -965,10 +997,21 @@ async function runAccountGate() {
     assert.equal(error, undefined)
     rootMnemonic = mnemonic
     root = (await catalog(owner))[0]
+    // Creation persists the minimum local identity. The existing PWA worker
+    // must establish signed online absence before local-only business begins.
+    await expect.poll(async () => {
+      const observed = await accountCall(owner, 'status')
+      return observed.discovery_status === 'inactive' && observed.local_only === true &&
+        observed.recovery_configured === false && !observed.activation_pending
+    }, { timeout: 90000 }).toBe(true)
     const status = await accountCall(owner, 'status')
     assert.equal(status.active, true)
     assert.equal(String(status.root_wallet_id), String(root.id))
     assert.equal(status.account_id, root.accounts[0].account_id)
+    assert.equal(status.recovery_configured, false)
+    assert.equal(status.discovery_status, 'inactive')
+    assert.equal(status.local_only, true)
+    assert.equal(status.dkvs_write_allowed, false)
   })
   for (const [method, args] of [
     ['updateWalletName', [String(root.id), 'Rejected name']],
@@ -992,7 +1035,7 @@ async function runAccountGate() {
               const keys = store.getAllKeys()
               const values = store.getAll()
               transaction.oncomplete = () => resolve(keys.result.flatMap((key, index) =>
-                String(key).includes('wallet-id-') || String(key).endsWith('account-management-profile-v2')
+                String(key).includes('wallet-id-') || String(key).endsWith('account-management-profile-v1')
                   ? [[key, values.result[index]]] : []))
               transaction.onabort = () => reject(transaction.error)
             })
@@ -1005,7 +1048,7 @@ async function runAccountGate() {
         const put = prototype.put
         let injected = false
         prototype.put = function(value, key) {
-          if (this.name === 'kv' && String(key).endsWith('account-management-profile-v2')) {
+          if (this.name === 'kv' && String(key).endsWith('account-management-profile-v1')) {
             injected = true
             throw new DOMException('injected account profile failure', 'QuotaExceededError')
           }
@@ -1018,7 +1061,7 @@ async function runAccountGate() {
         } finally { prototype.put = put }
         return { injected, failure, unchanged: before === await digest() }
       }, { method, args })
-      assert.equal(observed.injected, true)
+      assert.equal(observed.injected, true, `profile fault did not reach IndexedDB: ${JSON.stringify(observed)}`)
       assert.match(observed.failure, /injected account profile failure/)
       assert.equal(observed.unchanged, true, 'failed API changed durable wallet/profile records')
       assert.deepEqual(await catalog(owner), [root], 'failed API changed the live catalog')
@@ -1072,6 +1115,10 @@ async function runAccountGate() {
     assert.equal((await accountCall(owner, 'rehearse', two.session_id, answers, two.user_share, password)).verified, true)
     assert.equal((await accountCall(owner, 'status')).recovery_configured, true)
     await assert.rejects(accountCall(owner, 'rehearse', two.session_id, answers, two.user_share, password))
+    await expect.poll(async () => {
+      const current = await accountCall(owner, 'status')
+      return current.dkvs_write_allowed ? 'ready' : `${current.dkvs_status || 'unknown'}:${current.last_dkvs_sync_error || 'pending'}`
+    }, { timeout: 90000 }).toBe('ready')
   })
   await check('PWA adds and renames subaccount and preserves root identity', async () => {
     await owner.evaluate(async () => {
@@ -1094,6 +1141,15 @@ async function runAccountGate() {
     await assert.rejects(walletCall(owner, 'deleteWallet', String(root.id)))
     assert.deepEqual(await catalog(owner), [root])
   })
+  // Local write eligibility precedes asynchronous backup completion. Establish
+  // the owner's real remote baseline before the independent recovery flow.
+  await expect.poll(async () => {
+    const status = await accountCall(owner, 'status')
+    return { configured: status.recovery_configured, backup: status.backup_state,
+      dirty: Boolean(status.managed_data_dirty), pending: status.pending_changes ?? 0,
+      hasBaseline: status.state_seq > 0 }
+  }, { timeout: 30000, message: 'cold recovery requires the current owner backup to be confirmed' })
+    .toEqual({ configured: true, backup: 'backed_up', dirty: false, pending: 0, hasBaseline: true })
   const recovery = await device()
   let loaded
   await check('recovery cannot commit before preview; wrong knowledge is read only', async () => {
@@ -1383,6 +1439,13 @@ async function runAccountGate() {
       for (const endpoint of endpoints) await owner.context().unroute(endpoint, unavailable)
     }
     assert.equal((await accountCall(owner, 'status')).account_id, identity)
+    // This device observed a real transport failure. Removing the test route
+    // does not itself restore its verified DKVS write grant; the next case
+    // must wait for normal online reconciliation before creating a wallet.
+    await expect.poll(async () => {
+      const current = await accountCall(owner, 'status')
+      return current.dkvs_write_allowed ? 'ready' : `${current.dkvs_status || 'unknown'}:${current.last_dkvs_sync_error || 'pending'}`
+    }, { timeout: 90000 }).toBe('ready')
   })
   await check('network password prompt rejects wrong password and cancel preserves account', async () => {
     const before = await catalog(owner)
@@ -1515,20 +1578,44 @@ async function runAccountGate() {
     }
   })
   try {
-    await runPwaBiometricCases({ check, device, ready, walletCall }, { basicWallet: {
+    await runPwaBiometricCases({ check, device, ready, walletCall, accountCall }, { basicWallet: {
       mnemonic: rootMnemonic, password, address: (await walletCall(owner, 'validateMnemonic', rootMnemonic, '')).address,
     } })
   } catch (error) {
     console.error(JSON.stringify({ suite: 'runPwaBiometricCases', status: 'fail', message: error.message }))
     process.exitCode = 1
   }
-  await runPwaUsageCases({ check, device, ready, unlock, catalog, walletCall, accountCall,
+  await runPwaUsageCases({ check, device, waitingDevice, ready, unlock, catalog, walletCall, accountCall,
     password, newPassword, questions, answers, rootMnemonic, nodeAPIOrigins, material: three })
   assert.deepEqual(pageErrors, [], 'PWA must not produce unhandled page errors')
   console.log(JSON.stringify({ passed: true, cases: verdicts.length, backend: 'real local SatoshiNet', browser: 'real PWA and WASM' }))
 }
 
 let runFailed = false
+
+async function prepareBiometricRoot() {
+  const owner = await device()
+  let actor
+  try {
+    const mnemonic = await owner.evaluate(async credential => {
+      const [error, phrase] = await window.__SAT20_PWA_VERIFY__.useWalletStore().createWallet(credential)
+      if (error) throw error
+      return phrase
+    }, password)
+    await waitForAccountWrite(owner, accountCall)
+    await accountCall(owner, 'confirmStorage', 'temporary')
+    const material = await accountCall(owner, 'createRecovery', { password, wallets: [], recovery_mode: '2of2', questions })
+    assert.equal((await accountCall(owner, 'rehearse', material.session_id, answers, material.user_share, password)).verified, true)
+    await expect.poll(async () => {
+      const status = await accountCall(owner, 'status')
+      return status.recovery_configured && !status.activation_pending && status.dkvs_write_allowed &&
+        status.backup_state === 'backed_up' && !status.managed_data_dirty && (status.pending_changes ?? 0) === 0
+    }, { timeout: 90000 }).toBe(true)
+    actor = { mnemonic, password, address: (await walletCall(owner, 'validateMnemonic', mnemonic, '')).address }
+  } finally { await owner.context().close() }
+  return actor
+}
+
 try {
   await server.listen()
   browser = runnerResources.own('browser', await chromium.launch({ headless: true, ...(executable ? { executablePath: executable } : {}) }))
@@ -1568,8 +1655,19 @@ try {
     assert.deepEqual(pageErrors, [], 'paid Guardian review must not produce unhandled page errors')
   }
   else if (focusedUsageCases) {
-    await runPwaUsageCases({ check, device, ready, unlock, catalog, walletCall, accountCall,
-      password, newPassword, questions, answers, nodeAPIOrigins, regtestMode, preserveBrowserFailureState,
+    let rootMnemonic
+    if (focusedUsageCases.some(name => requiredPwaBiometricCases.includes(name))) {
+      const actor = await prepareBiometricRoot()
+      rootMnemonic = actor.mnemonic
+      try { await runPwaBiometricCases({ check, device, ready, walletCall, accountCall }, { basicWallet: actor }) }
+      catch (error) {
+        console.error(JSON.stringify({ suite: 'runPwaBiometricCases', status: 'fail', message: error.message }))
+        process.exitCode = 1
+      }
+    }
+    await runPwaUsageCases({ check, device, waitingDevice, ready, unlock, catalog, walletCall, accountCall,
+      password, newPassword, questions, answers, rootMnemonic, nodeAPIOrigins, regtestMode, preserveBrowserFailureState,
+      focusedUsageCases,
       fixedAccountManagement: regtestMode ? regtestWalletFixture?.fixedAccountManagement : undefined })
     assert.deepEqual(pageErrors, [], 'focused account rerun must not produce unhandled page errors')
   }

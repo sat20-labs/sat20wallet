@@ -46,18 +46,24 @@ func (p *Manager) DisableChannel(channel *Channel) {
 		return
 	}
 	p.mutex.Lock()
-	current := p.channelMap[channel.ChannelId]
-	if current != channel {
-		p.mutex.Unlock()
+	removed := p.removeChannelLocked(channel)
+	p.mutex.Unlock()
+	if !removed {
 		Log.Warnf("DisableChannel ignored stale channel %s", channel.ChannelId)
-		return
+	}
+}
+
+// The caller holds the manager write lock and has checked this generation.
+func (p *Manager) removeChannelLocked(channel *Channel) bool {
+	if p.channelMap[channel.ChannelId] != channel {
+		return false
 	}
 	key := getNodeMapKeyWithChannel(channel)
 	if p.nodeMap[key] == channel.ChannelId {
 		delete(p.nodeMap, key)
 	}
 	delete(p.channelMap, channel.ChannelId)
-	p.mutex.Unlock()
+	return true
 }
 
 func (p *Manager) installChannelLocked(channel *Channel) {
@@ -156,6 +162,63 @@ func (p *Manager) HasChannel() bool {
 	defer p.mutex.RUnlock()
 
 	return len(p.channelMap) != 0 || len(p.fundingChannelMap) != 0
+}
+
+// RejectStakedAddr checks the current membership for the exact channel
+// address. A failed indexer read must not be treated as an unstaked address.
+func (p *Manager) RejectStakedAddr(pubkey []byte, address string) error {
+	if p == nil || p.l2IndexerClient == nil || len(pubkey) == 0 || address == "" {
+		return fmt.Errorf("stake state is unavailable")
+	}
+	staked, err := p.l2IndexerClient.IsMinerNode(pubkey)
+	if err != nil {
+		return fmt.Errorf("check stake state: %w", err)
+	}
+	if !staked {
+		return nil
+	}
+	info, err := p.l2IndexerClient.GetMinerInfo(pubkey)
+	if err != nil {
+		return fmt.Errorf("read stake address: %w", err)
+	}
+	if info == nil || info.MinerInfo == nil {
+		return fmt.Errorf("stake address is unavailable")
+	}
+	if info.ChannelAddr == "" {
+		if info.AscendUtxo == "" && info.AssetAmt == "0" {
+			return nil // Configured core without a stake allocation.
+		}
+		return fmt.Errorf("stake address is unavailable")
+	}
+	if info.ChannelAddr == address {
+		return fmt.Errorf("channel address %s is used for stake", address)
+	}
+	return nil
+}
+
+// RejectChannelStake protects an existing channel and its opening reservation
+// before staking the same address. It does not depend on a wallet-wide flag.
+func (p *Manager) RejectChannelStake(address string) error {
+	if p == nil || address == "" {
+		return fmt.Errorf("channel address is unavailable")
+	}
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	for _, channel := range p.channelMap {
+		if channel != nil && channel.Status > CS_CLOSED &&
+			(channel.Address == address || channel.ChannelId == address) {
+			return fmt.Errorf("channel address %s has an active channel", address)
+		}
+	}
+	for _, resv := range p.fundingChannelMap {
+		if resv == nil || resv.Status <= RS_CLOSED || resv.Status == RS_CONFIRMED {
+			continue
+		}
+		if resv.ChannelId == address || resv.Channel != nil && resv.Channel.Address == address {
+			return fmt.Errorf("channel address %s has an opening channel", address)
+		}
+	}
+	return nil
 }
 
 func (p *Manager) GetActiveChannel() *Channel {

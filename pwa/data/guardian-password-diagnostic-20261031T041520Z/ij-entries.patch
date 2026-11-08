@@ -1,0 +1,21 @@
+--- a/sdk/e2e/account_management_browser_e2e_test.go
++++ b/sdk/e2e/account_management_browser_e2e_test.go
+@@ -66,6 +66,18 @@
+ 	)
+ }
+ 
++func TestPWAGuardianRecovery(t *testing.T) {
++	runAccountPWABrowser(t,
++		"usage: real 2of3 settings and independent Guardian pages complete setup and rehearsal",
++	)
++}
++
++func TestPWABackupStatus(t *testing.T) {
++	runAccountPWABrowser(t,
++		"usage: account page refreshes background backup failure and success without navigation",
++	)
++}
++
+ func runAccountPWABrowser(t *testing.T, cases ...string) {
+ 	t.Helper()
+ 	_, file, _, ok := runtime.Caller(0)

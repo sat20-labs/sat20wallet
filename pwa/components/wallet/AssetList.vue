@@ -12,7 +12,7 @@
         </TabsTrigger>
         <TabsTrigger v-if="transcendingModeStore.selectedTranscendingMode === 'lightning'" value="channel">
           <Icon icon="lucide:zap" class="w-4 h-4 mr-1 justify-self-center" />
-          Channel
+          {{ $t('walletComponents.channel') }}
         </TabsTrigger>
         <TabsTrigger value="l2">
           <Icon icon="lucide:globe-lock" class="w-4 h-4 mr-1 justify-self-center" />
@@ -375,7 +375,7 @@ const handleSplicingOut = (asset: any) => {
 // 错误处理函数
 const handleError = (message: string) => {
   toast({
-    title: 'Error',
+    title: t('walletComponents.error'),
     description: message,
     variant: 'destructive'
   })
@@ -390,7 +390,7 @@ const l1Send = async ({ toAddress, asset_name, amt }: any) => {
   let err: Error | undefined
   if (/^(sp1|tsp1)/i.test(String(toAddress).trim())) {
     if (asset_name !== '::') {
-      err = new Error('Silent Payments are available only for BTC')
+      err = new Error(t('walletComponents.silentBtcOnly'))
     } else {
       [err] = await walletManager.sendSilentPayment(toAddress, amt, btcFeeRate.value)
     }
@@ -399,7 +399,7 @@ const l1Send = async ({ toAddress, asset_name, amt }: any) => {
   }
   if (err) {
     toast({
-      title: 'Error',
+      title: t('walletComponents.error'),
       description: err.message,
       variant: 'destructive',
       duration: 1500,
@@ -411,8 +411,8 @@ const l1Send = async ({ toAddress, asset_name, amt }: any) => {
   loading.value = false
   refreshL1Assets()
   toast({
-    title: 'Success',
-    description: 'send success',
+    title: t('walletComponents.success'),
+    description: t('walletComponents.sendSuccess'),
     variant: 'success',
     duration: 1500,
   })
@@ -428,7 +428,7 @@ const l2Send = async ({ toAddress, asset_name, amt }: any) => {
   )
   if (err) {
     toast({
-      title: 'Error',
+      title: t('walletComponents.error'),
       description: err.message,
       variant: 'destructive',
       duration: 1500,
@@ -440,8 +440,8 @@ const l2Send = async ({ toAddress, asset_name, amt }: any) => {
   loading.value = false
   refreshL2Assets()
   toast({
-    title: 'Success',
-    description: 'send success',
+    title: t('walletComponents.success'),
+    description: t('walletComponents.sendSuccess'),
     variant: 'success',
     duration: 1500,
   })
@@ -466,7 +466,7 @@ const deposit = async ({
   )
   if (err) {
     toast({
-      title: 'Error',
+      title: t('walletComponents.error'),
       description: err.message,
       variant: 'destructive',
       duration: 1500,
@@ -477,8 +477,8 @@ const deposit = async ({
   loading.value = false
   refreshL1Assets()
   toast({
-    title: 'Success',
-    description: 'deposit success',
+    title: t('walletComponents.success'),
+    description: t('walletComponents.depositSuccess'),
     variant: 'success',
     duration: 1500,
   })
@@ -503,7 +503,7 @@ const withdraw = async ({
   )
   if (err) {
     toast({
-      title: 'Error',
+      title: t('walletComponents.error'),
       description: err.message,
       variant: 'destructive',
       duration: 1500,
@@ -515,8 +515,8 @@ const withdraw = async ({
   loading.value = false
   refreshL2Assets()
   toast({
-    title: 'Success',
-    description: 'withdraw success',
+    title: t('walletComponents.success'),
+    description: t('walletComponents.withdrawSuccess'),
     variant: 'success',
     duration: 1500,
   })
@@ -527,8 +527,8 @@ const handleOperationConfirm = async () => {
   if (!selectedAsset.value || !operationAmount.value) return
   if (operationType.value === 'send' && !operationAddress.value) {
     toast({
-      title: 'Error',
-      description: 'Please enter address',
+      title: t('walletComponents.error'),
+      description: t('walletComponents.enterAddress'),
       variant: 'destructive'
     })
     return
@@ -635,7 +635,7 @@ const handleOperationConfirm = async () => {
     showDialog.value = false
   } catch (error) {
     console.error('Operation error:', error)
-    handleError('Operation failed')
+    handleError(t('walletComponents.operationFailed'))
   }
 }
 

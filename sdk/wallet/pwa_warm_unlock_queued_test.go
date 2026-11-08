@@ -14,18 +14,18 @@ func TestPWAWarmUnlockAndIdentitySwitchDuringRGBNetworkWait(t *testing.T) {
 	old := _chain
 	_chain = "testnet"
 	defer func() { _chain = old }()
-	manager, _, secret := buildRootWrapperSource(t)
-	defer zeroBytes(secret)
-	remote := &blockedAccountConfigHTTP{rgb11MemoryDKVSHTTP: newRGB11MemoryDKVSHTTP(), started: make(chan struct{}), release: make(chan struct{})}
+	manager, syncedRemote, _, _ := accountTTLNoopFixture(t)
+	manager.accountBackgroundWG.Wait()
+	remote := &blockedAccountConfigHTTP{rgb11MemoryDKVSHTTP: syncedRemote, started: make(chan struct{}), release: make(chan struct{})}
 	var once sync.Once
 	release := func() { once.Do(func() { close(remote.release) }) }
 	defer release()
 	manager.http = remote
-	manager.dkvs.mu.Lock()
-	manager.dkvs.clients = make(map[string]*SatsNetDKVSClient)
-	manager.dkvs.mu.Unlock()
-	manager.accountProfile.RecoveryConfigured = true
-	manager.accountProfile.ManagedDataDirty = true
+	client, err := manager.GetDKVSClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.Http = remote
 	rgbDone := make(chan error, 1)
 	go func() {
 		_, err := manager.syncRootRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})

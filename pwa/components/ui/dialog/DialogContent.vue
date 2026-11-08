@@ -43,7 +43,7 @@ const forwarded = useForwardPropsEmits(delegatedProps, emits)
         class="DialogClose"
       >
         <Cross2Icon class="w-4 h-4" />
-        <span class="sr-only">Close</span>
+        <span class="sr-only">{{ $t('pwaUi.common.close') }}</span>
       </DialogClose>
     </DialogContent>
   </DialogPortal>

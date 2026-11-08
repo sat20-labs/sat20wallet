@@ -29,7 +29,7 @@ func TestRGB11ConflictCandidateLocalBaseline(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = f.sender.rgbManager.importRGB11ReservationSnapshotWithBaseline(ctx, resolved.snapshot, resolved.tickerInfos, resolved.lockReasons, &plan, resolved.checkEvidence, current)
-	if !errors.Is(err, errAccountSnapshotChanged) {
+	if !errors.Is(err, errRGB11StaleLocal) {
 		t.Fatalf("old conflict candidate overwrote new local baseline: %v", err)
 	}
 	p = f.journal(t)

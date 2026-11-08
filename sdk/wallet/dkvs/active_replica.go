@@ -1,6 +1,7 @@
 package dkvs
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	indexercommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
@@ -47,6 +49,34 @@ type activeAckMark struct {
 	Generation uint64 `json:"generation"`
 }
 
+// AckGeneration is a verified request-completion position, not a receive cursor
+// or a write grant. A different source's mark supplies no authorization here;
+// endpoint reset and baseline validation keep their existing responsibilities.
+func (s *ReplicaStore) AckGeneration(namespace, prefix, endpointID string) (uint64, error) {
+	if s == nil || s.db == nil || strings.TrimSpace(namespace) == "" || strings.TrimSpace(endpointID) == "" {
+		return 0, ErrReplicaNotReady
+	}
+	scope, err := dkvsindexer.NormalizeActiveScope(dkvsindexer.ActiveScope{Prefix: prefix})
+	if err != nil {
+		return 0, err
+	}
+	encoded, err := s.db.Read(activeAckKey(namespace, scope.Prefix))
+	if errors.Is(err, indexercommon.ErrKeyNotFound) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	mark, decodeErr := decodeActiveAckMark(encoded)
+	if decodeErr != nil || mark.EndpointID == "" {
+		return 0, dkvsindexer.ErrInvalidRecord
+	}
+	if mark.EndpointID != endpointID {
+		return 0, nil
+	}
+	return mark.Generation, nil
+}
+
 func (s *ReplicaStore) LoadActiveMeta(namespace string, scope dkvsindexer.ActiveScope) (*dkvsindexer.ActiveMeta, error) {
 	if s == nil || s.db == nil || strings.TrimSpace(namespace) == "" {
 		return nil, ErrReplicaNotReady
@@ -59,11 +89,11 @@ func (s *ReplicaStore) LoadActiveMeta(namespace string, scope dkvsindexer.Active
 	if err != nil {
 		return nil, err
 	}
-	var meta dkvsindexer.ActiveMeta
-	if len(encoded) > MaxActiveReplicaBytes || json.Unmarshal(encoded, &meta) != nil || meta.EndpointID == "" || !dkvsindexer.SameActiveScope(scope, meta.Scope) {
+	meta, decodeErr := decodeActiveMeta(encoded)
+	if decodeErr != nil || meta.EndpointID == "" || !dkvsindexer.SameActiveScope(scope, meta.Scope) {
 		return nil, dkvsindexer.ErrInvalidSnapshot
 	}
-	return &meta, nil
+	return meta, nil
 }
 
 func (s *ReplicaStore) activeScopeRecords(namespace string, scope dkvsindexer.ActiveScope) ([]*swire.DKVSRecord, error) {
@@ -179,8 +209,8 @@ func (s *ReplicaStore) checkActiveSource(namespace string, meta dkvsindexer.Acti
 	if err != nil {
 		return err
 	}
-	var ack activeAckMark
-	if json.Unmarshal(encoded, &ack) != nil {
+	ack, decodeErr := decodeActiveAckMark(encoded)
+	if decodeErr != nil {
 		return dkvsindexer.ErrInvalidRecord
 	}
 	if ack.EndpointID != meta.EndpointID {
@@ -205,15 +235,15 @@ func (s *ReplicaStore) NoteActiveAckBatch(batch batchWriter, namespace string, r
 			return err
 		}
 		if err == nil {
-			var old activeAckMark
-			if json.Unmarshal(encoded, &old) != nil || old.EndpointID != mark.EndpointID {
+			old, decodeErr := decodeActiveAckMark(encoded)
+			if decodeErr != nil || old.EndpointID != mark.EndpointID {
 				return dkvsindexer.ErrEndpointMismatch
 			}
-			if old.Generation > mark.Generation {
-				mark.Generation = old.Generation
+			if old.Generation >= mark.Generation {
+				continue
 			}
 		}
-		encoded, err = json.Marshal(mark)
+		encoded, err = encodeActiveAckMark(mark)
 		if err != nil {
 			return err
 		}
@@ -228,13 +258,110 @@ func (s *ReplicaStore) NoteActiveAckBatch(batch batchWriter, namespace string, r
 // generation candidate set and checks its resulting root. A delta missing a
 // physical deletion returns ErrPathDiverged WITHOUT committing any data/cursor;
 // the caller must obtain a full current view from this same source.
+// ActiveInstall is an uncommitted, fully collected source candidate.
+type ActiveInstall struct {
+	Baseline chainhash.Hash
+	Meta     dkvsindexer.ActiveMeta
+	Records  []*swire.DKVSRecord
+	Full     bool
+}
+
 func (s *ReplicaStore) InstallActiveState(namespace string, baseline chainhash.Hash,
 	meta dkvsindexer.ActiveMeta, records []*swire.DKVSRecord, full bool) ([]string, error) {
-	if s == nil || s.db == nil || strings.TrimSpace(namespace) == "" {
+	return s.InstallActiveStates(namespace, []ActiveInstall{{baseline, meta, records, full}})
+}
+
+// InstallActiveStates publishes every collection in one transaction. No Put or
+// Delete may become visible before Flush, even at bulk-writer size thresholds.
+func (s *ReplicaStore) InstallActiveStates(namespace string, installs []ActiveInstall) ([]string, error) {
+	if s == nil || s.db == nil || strings.TrimSpace(namespace) == "" || len(installs) == 0 {
 		return nil, ErrReplicaNotReady
+	}
+	atomic, ok := s.db.(indexercommon.AtomicWriteBatchDB)
+	if !ok {
+		return nil, errors.New("DKVS requires atomic write transactions")
 	}
 	unlock := lockActiveReplica(namespace)
 	defer unlock()
+	batch := atomic.NewAtomicWriteBatch()
+	if batch == nil {
+		return nil, ErrReplicaNotReady
+	}
+	defer batch.Close()
+	changed := make(map[string]struct{})
+	var scopes []dkvsindexer.ActiveScope
+	var height uint64
+	totalBytes := 0
+	wrote := false
+	var endpoint string
+	for _, candidate := range installs {
+		if endpoint != "" && candidate.Meta.EndpointID != endpoint {
+			return nil, dkvsindexer.ErrEndpointMismatch
+		}
+		endpoint = candidate.Meta.EndpointID
+		scope, err := dkvsindexer.NormalizeActiveScope(candidate.Meta.Scope)
+		if err != nil {
+			return nil, err
+		}
+		for _, previous := range scopes {
+			if previous.Prefix != scope.Prefix {
+				continue
+			}
+			if len(previous.Keys) == 0 || len(scope.Keys) == 0 {
+				return nil, dkvsindexer.ErrInvalidSnapshot
+			}
+			for _, key := range scope.Keys {
+				if dkvsindexer.ActiveScopeMatches(previous, key) {
+					return nil, dkvsindexer.ErrInvalidSnapshot
+				}
+			}
+		}
+		scopes = append(scopes, scope)
+		keys, err := s.stageActiveState(batch, namespace, candidate.Baseline, candidate.Meta, candidate.Records, candidate.Full, &totalBytes, &wrote)
+		if err != nil {
+			return nil, err
+		}
+		for _, key := range keys {
+			changed[key] = struct{}{}
+		}
+		if candidate.Meta.ViewHeight > height {
+			height = candidate.Meta.ViewHeight
+		}
+	}
+	state, err := s.LoadSubscriptionState(namespace)
+	if err == nil {
+		if state.EndpointID != "" && state.EndpointID != endpoint {
+			return nil, dkvsindexer.ErrEndpointMismatch
+		}
+		if wrote || state.EndpointID != endpoint || height > state.ViewHeight {
+			state.EndpointID = endpoint
+			if height > state.ViewHeight {
+				state.ViewHeight = height
+			}
+			state.LastSyncAtMS = uint64(time.Now().UnixMilli())
+			if err := putSubscriptionStateBatch(batch, namespace, state); err != nil {
+				return nil, err
+			}
+			wrote = true
+		}
+	} else if !errors.Is(err, indexercommon.ErrKeyNotFound) {
+		return nil, err
+	}
+	if wrote {
+		if err := batch.Flush(); err != nil {
+			return nil, err
+		}
+	}
+	keys := make([]string, 0, len(changed))
+	for key := range changed {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys, nil
+}
+
+func (s *ReplicaStore) stageActiveState(batch indexercommon.WriteBatch, namespace string, baseline chainhash.Hash,
+	meta dkvsindexer.ActiveMeta, records []*swire.DKVSRecord, full bool, totalBytes *int, wrote *bool) ([]string, error) {
 	if err := validateActiveRecords(meta, records); err != nil {
 		return nil, err
 	}
@@ -270,6 +397,10 @@ func (s *ReplicaStore) InstallActiveState(namespace string, baseline chainhash.H
 			return nil, dkvsindexer.ErrBatchTooLarge
 		}
 		total += size
+		if size > MaxActiveReplicaBytes-*totalBytes {
+			return nil, dkvsindexer.ErrBatchTooLarge
+		}
+		*totalBytes += size
 		merged = append(merged, record)
 	}
 	root, err := dkvsindexer.ActiveRecordsRoot(merged)
@@ -279,8 +410,6 @@ func (s *ReplicaStore) InstallActiveState(namespace string, baseline chainhash.H
 	if root != meta.Root {
 		return nil, dkvsindexer.ErrPathDiverged
 	}
-	batch := s.db.NewWriteBatch()
-	defer batch.Close()
 	changed := make(map[string]struct{})
 	oldByKey := make(map[string]*swire.DKVSRecord, len(old))
 	for _, record := range old {
@@ -289,14 +418,16 @@ func (s *ReplicaStore) InstallActiveState(namespace string, baseline chainhash.H
 			if err := batch.Delete(dkvsSubscriptionRecordKey(namespace, record.Key)); err != nil {
 				return nil, err
 			}
+			*wrote = true
 			changed[record.Key] = struct{}{}
 		}
 	}
 	for _, record := range merged {
 		previous := oldByKey[record.Key]
-		if previous == nil || dkvsindexer.RecordHash(previous) != dkvsindexer.RecordHash(record) {
-			changed[record.Key] = struct{}{}
+		if previous != nil && dkvsindexer.RecordHash(previous) == dkvsindexer.RecordHash(record) {
+			continue // A retained collection must not rewrite unchanged values.
 		}
+		changed[record.Key] = struct{}{}
 		encoded, err := dkvsindexer.MarshalRecord(record)
 		if err != nil {
 			return nil, err
@@ -304,32 +435,22 @@ func (s *ReplicaStore) InstallActiveState(namespace string, baseline chainhash.H
 		if err := batch.Put(dkvsSubscriptionRecordKey(namespace, record.Key), encoded); err != nil {
 			return nil, err
 		}
+		*wrote = true
 	}
-	encoded, err := json.Marshal(meta)
+	encoded, err := encodeActiveMeta(meta)
 	if err != nil {
 		return nil, err
 	}
-	if err := batch.Put(activeMetaKey(namespace, meta.Scope), encoded); err != nil {
+	key := activeMetaKey(namespace, meta.Scope)
+	previous, err := s.db.Read(key)
+	if err != nil && !errors.Is(err, indexercommon.ErrKeyNotFound) {
 		return nil, err
 	}
-	// Keep the existing Manager readiness view in step with confirmed commits.
-	state, err := s.LoadSubscriptionState(namespace)
-	if err == nil && KeyCoveredByPrefixes(meta.Scope.Prefix, state.Prefixes) && len(meta.Scope.Keys) == 0 {
-		if state.EndpointID != "" && state.EndpointID != meta.EndpointID {
-			return nil, dkvsindexer.ErrEndpointMismatch
-		}
-		state.EndpointID = meta.EndpointID
-		if meta.ViewHeight > state.ViewHeight {
-			state.ViewHeight = meta.ViewHeight
-		}
-		if err := putSubscriptionStateBatch(batch, namespace, state); err != nil {
+	if !bytes.Equal(previous, encoded) {
+		if err := batch.Put(key, encoded); err != nil {
 			return nil, err
 		}
-	} else if err != nil && !errors.Is(err, indexercommon.ErrKeyNotFound) {
-		return nil, err
-	}
-	if err := batch.Flush(); err != nil {
-		return nil, err
+		*wrote = true
 	}
 	keys := make([]string, 0, len(changed))
 	for key := range changed {
@@ -337,4 +458,43 @@ func (s *ReplicaStore) InstallActiveState(namespace string, baseline chainhash.H
 	}
 	sort.Strings(keys)
 	return keys, nil
+}
+
+// ValidateActiveCache checks completeness and signatures before granting a new
+// session offline reads. Callers retain that grant; ordinary Get never scans.
+func (s *ReplicaStore) ValidateActiveCache(namespace string) error {
+	unlock := lockActiveReplica(namespace)
+	defer unlock()
+	state, err := s.LoadSubscriptionState(namespace)
+	if err != nil {
+		return err
+	}
+	if state.Status != DKVSSubscriptionReady && state.Status != DKVSSubscriptionOfflineReady {
+		return ErrReplicaNotReady
+	}
+	for _, prefix := range state.Prefixes {
+		scope := dkvsindexer.ActiveScope{Prefix: prefix}
+		meta, err := s.LoadActiveMeta(namespace, scope)
+		if err != nil {
+			return err
+		}
+		if meta.EndpointID != state.EndpointID {
+			return dkvsindexer.ErrEndpointMismatch
+		}
+		records, err := s.activeScopeRecords(namespace, scope)
+		if err != nil {
+			return err
+		}
+		if err = validateActiveRecords(*meta, records); err != nil {
+			return err
+		}
+		root, err := dkvsindexer.ActiveRecordsRoot(records)
+		if err != nil {
+			return err
+		}
+		if root != meta.Root {
+			return dkvsindexer.ErrPathDiverged
+		}
+	}
+	return nil
 }

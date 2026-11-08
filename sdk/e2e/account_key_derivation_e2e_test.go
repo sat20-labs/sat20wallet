@@ -15,7 +15,11 @@ import (
 func TestSDKAccountBackupKeyRecreatedFromRoot(t *testing.T) {
 	network := newDKVSNoPluginTemplateFixtureWithArgs(t, map[string]int64{}, nil, nil, dkvsMinerArgs(t)).Network
 	waitForDKVSPeerReady(t, network)
-	mnemonic := accountSyncMnemonic(t, 219)
+	runSDKAccountBackupKeyRecreatedFromRoot(t, network, accountSyncMnemonic(t, 219))
+}
+
+func runSDKAccountBackupKeyRecreatedFromRoot(t *testing.T, network *realSatoshiNet, mnemonic string) {
+	t.Helper()
 	first := prepareAccountReviewWithMnemonic(t, network, mnemonic, true)
 	second := prepareAccountReviewWithMnemonic(t, network, mnemonic, true)
 	require.Equal(t, first.pkg.Envelope.Locator.AccountID, second.pkg.Envelope.Locator.AccountID)

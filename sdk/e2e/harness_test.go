@@ -44,20 +44,20 @@ import (
 const (
 	harnessPortStart  uint32 = 20000
 	harnessPortEnd    uint32 = 29995 // Five-port blocks end at 29999, below Linux's default ephemeral range.
-	bootstrapMnemonic        = "acquire pet news congress unveil erode paddle crumble blue fish match eye"
-	coreMnemonic             = "uniform bulb body vital later special era tourist build chief devote annual"
-	minerMnemonic            = "letter advice cage absurd amount doctor acoustic avoid letter advice cage above"
-	rpcReadyTimeout          = 2 * time.Minute
+	bootstrapMnemonic            = "acquire pet news congress unveil erode paddle crumble blue fish match eye"
+	coreMnemonic                 = "uniform bulb body vital later special era tourist build chief devote annual"
+	minerMnemonic                = "letter advice cage absurd amount doctor acoustic avoid letter advice cage above"
+	rpcReadyTimeout              = 2 * time.Minute
 )
 
 var (
-	satoshinetBuildMu        sync.Mutex
-	satoshinetTestArtifacts  satoshinetArtifacts
-	satoshinetNodeDirsMu     sync.Mutex
-	activeSatoshiNetNodeDirs = make(map[string]bool)
-	satoshinetRuntimeLock    *os.File
-	nextHarnessPort          uint32 = harnessPortStart - 5
-	satoshinetTestConf              = `env: test
+	satoshinetBuildMu         sync.Mutex
+	satoshinetTestArtifacts   satoshinetArtifacts
+	satoshinetNodeDirsMu      sync.Mutex
+	activeSatoshiNetNodeDirs  = make(map[string]bool)
+	satoshinetRuntimeLock     *os.File
+	nextHarnessPort           uint32 = harnessPortStart - 5
+	satoshinetTestConf               = `env: test
 chain: testnet
 mode: %s
 log: info
@@ -454,6 +454,7 @@ type testHarness struct {
 
 func newTestHarness(t *testing.T, exe, nodeDir, p2pAddr, rpcAddr string, args, env []string) *testHarness {
 	t.Helper()
+	defer e2ePhase(t, "node_start")()
 	require.NoError(t, os.MkdirAll(filepath.Join(nodeDir, "logs"), 0o755))
 	logPath := filepath.Join(nodeDir, "btcd.stdout.log")
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
@@ -477,34 +478,12 @@ func newTestHarness(t *testing.T, exe, nodeDir, p2pAddr, rpcAddr string, args, e
 		logFile: logPath,
 	}
 	t.Cleanup(func() {
+		defer e2ePhase(t, "node_close_wait")()
 		require.NoError(t, h.TearDown())
 		require.NoError(t, logFile.Close())
-		require.NoError(t, preserveHarnessLog(t, h))
 	})
 	h.Client = waitForRPCClient(t, rpcAddr)
 	return h
-}
-
-func preserveHarnessLog(t *testing.T, h *testHarness) error {
-	t.Helper()
-	data, err := os.ReadFile(h.logFile)
-	if err != nil {
-		return err
-	}
-	dir := filepath.Join(os.TempDir(), "sat20wallet-satoshinet-rpctest-logs", sanitizePathPart(t.Name()))
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	path := filepath.Join(dir, sanitizePathPart(filepath.Base(h.nodeDir))+"-"+sanitizePathPart(h.p2pAddr)+".log")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return err
-	}
-	t.Logf("preserved node log: %s", path)
-	return nil
-}
-
-func sanitizePathPart(s string) string {
-	return strings.NewReplacer("/", "_", ":", "_", " ", "_").Replace(s)
 }
 
 func waitForRPCClient(t *testing.T, rpcAddr string) *rpcclient.Client {
@@ -709,9 +688,16 @@ func buildSatoshiNetTestArtifacts(t *testing.T, coreOnly bool) satoshinetArtifac
 	t.Helper()
 	satoshinetBuildMu.Lock()
 	defer satoshinetBuildMu.Unlock()
-	if satoshinetTestArtifacts.coreExecutable != "" && (coreOnly || satoshinetTestArtifacts.minerExecutable != "") {
+	coreReady := satoshinetTestArtifacts.coreExecutable != "" && satoshinetTestArtifacts.corePlugin != ""
+	minerReady := satoshinetTestArtifacts.minerExecutable != "" && satoshinetTestArtifacts.minerPlugin != ""
+	if coreReady && (coreOnly || minerReady) {
 		return satoshinetTestArtifacts
 	}
+	if artifacts, prebuilt := stagePrebuiltSatoshiNetArtifacts(t, "normal", coreOnly); prebuilt {
+		satoshinetTestArtifacts = artifacts
+		return artifacts
+	}
+	defer e2ePhase(t, "node_plugin_build")()
 
 	_, file, _, ok := runtime.Caller(0)
 	require.True(t, ok)
@@ -723,7 +709,7 @@ func buildSatoshiNetTestArtifacts(t *testing.T, coreOnly bool) satoshinetArtifac
 	require.FileExists(t, filepath.Join(sdkPluginDir, "main.go"))
 	require.FileExists(t, filepath.Join(transcendPluginDir, "main.go"))
 
-	outputDir := filepath.Join(os.TempDir(), "sat20wallet-satoshinet-rpctest")
+	outputDir := filepath.Join(e2eRuntimeDirectory(t), "normal")
 	require.NoError(t, os.MkdirAll(outputDir, 0o755))
 
 	artifacts := satoshinetArtifacts{
@@ -737,29 +723,59 @@ func buildSatoshiNetTestArtifacts(t *testing.T, coreOnly bool) satoshinetArtifac
 		artifacts.minerExecutable += ".exe"
 	}
 
+	// Only published caches can donate files. Keep each variant's own paths so
+	// prepareSatoshiNetNodeDir continues to allocate separate node slots.
+	dkvsReady := dkvsNoPluginTestArtifacts.coreExecutable != "" && dkvsNoPluginTestArtifacts.corePlugin != "" &&
+		dkvsNoPluginTestArtifacts.minerExecutable != "" && dkvsNoPluginTestArtifacts.minerPlugin != ""
 	if !coreOnly {
-		cmd := exec.Command("go", "build", "-buildmode=plugin", "-o", artifacts.minerPlugin, "main.go")
-		cmd.Dir = sdkPluginDir
-		output, err := cmd.CombinedOutput()
-		require.NoError(t, err, string(output))
+		started := time.Now()
+		if dkvsReady {
+			copySatoshiNetRuntimeFile(t, dkvsNoPluginTestArtifacts.minerPlugin, artifacts.minerPlugin)
+			copySatoshiNetRuntimeFile(t, dkvsNoPluginTestArtifacts.minerExecutable, artifacts.minerExecutable)
+			t.Logf("artifact: variant=normal files=wallet.so,miner source=dkvs elapsed_seconds=%.3f", time.Since(started).Seconds())
+		} else {
+			cmd := exec.Command("go", "build", "-buildmode=plugin", "-o", artifacts.minerPlugin, "main.go")
+			cmd.Dir = sdkPluginDir
+			output, err := cmd.CombinedOutput()
+			require.NoError(t, err, string(output))
+			t.Logf("artifact: variant=normal file=wallet.so source=build elapsed_seconds=%.3f", time.Since(started).Seconds())
 
-		cmd = exec.Command("go", "build", "-tags=rpctest,wallet_plugin", "-o", artifacts.minerExecutable, "github.com/sat20-labs/satoshinet")
-		cmd.Dir = satoshinetDir
-		output, err = cmd.CombinedOutput()
-		require.NoError(t, err, string(output))
+			started = time.Now()
+			cmd = exec.Command("go", "build", "-tags=rpctest,wallet_plugin", "-o", artifacts.minerExecutable, "github.com/sat20-labs/satoshinet")
+			cmd.Dir = satoshinetDir
+			output, err = cmd.CombinedOutput()
+			require.NoError(t, err, string(output))
+			t.Logf("artifact: variant=normal file=miner source=build elapsed_seconds=%.3f", time.Since(started).Seconds())
+		}
 	} else {
 		artifacts.minerExecutable, artifacts.minerPlugin = "", ""
 	}
 
-	cmd := exec.Command("go", "build", "-buildmode=plugin", "-o", artifacts.corePlugin, "main.go")
-	cmd.Dir = transcendPluginDir
-	output, err := cmd.CombinedOutput()
-	require.NoError(t, err, string(output))
+	if coreReady {
+		// Extending coreOnly must not overwrite its valid Core pair, even if
+		// building or copying the missing miner pair fails.
+		artifacts.coreExecutable = satoshinetTestArtifacts.coreExecutable
+		artifacts.corePlugin = satoshinetTestArtifacts.corePlugin
+	} else {
+		started := time.Now()
+		cmd := exec.Command("go", "build", "-buildmode=plugin", "-o", artifacts.corePlugin, "main.go")
+		cmd.Dir = transcendPluginDir
+		output, err := cmd.CombinedOutput()
+		require.NoError(t, err, string(output))
+		t.Logf("artifact: variant=normal file=stpd.so source=build elapsed_seconds=%.3f", time.Since(started).Seconds())
 
-	cmd = exec.Command("go", "build", "-tags=rpctest,stp_plugin", "-o", artifacts.coreExecutable, "github.com/sat20-labs/satoshinet")
-	cmd.Dir = satoshinetDir
-	output, err = cmd.CombinedOutput()
-	require.NoError(t, err, string(output))
+		started = time.Now()
+		if dkvsReady {
+			copySatoshiNetRuntimeFile(t, dkvsNoPluginTestArtifacts.coreExecutable, artifacts.coreExecutable)
+			t.Logf("artifact: variant=normal file=core source=dkvs elapsed_seconds=%.3f", time.Since(started).Seconds())
+		} else {
+			cmd = exec.Command("go", "build", "-tags=rpctest,stp_plugin", "-o", artifacts.coreExecutable, "github.com/sat20-labs/satoshinet")
+			cmd.Dir = satoshinetDir
+			output, err = cmd.CombinedOutput()
+			require.NoError(t, err, string(output))
+			t.Logf("artifact: variant=normal file=core source=build elapsed_seconds=%.3f", time.Since(started).Seconds())
+		}
+	}
 	satoshinetTestArtifacts = artifacts
 	return satoshinetTestArtifacts
 }
@@ -797,14 +813,16 @@ func prepareSatoshiNetNodeDir(t *testing.T, artifacts satoshinetArtifacts, role 
 		}
 	}
 	t.Cleanup(func() {
-		// Failed slots stay reserved so the next case cannot erase their DB.
-		if t.Failed() {
-			return
-		}
 		satoshinetNodeDirsMu.Lock()
 		defer satoshinetNodeDirsMu.Unlock()
-		// Harness teardown and log preservation run first. Keep only verified
-		// binaries cached; successful case state is deleted immediately.
+		// Harness close/wait runs first. A retained failed slot is never reused;
+		// its executables can be rebuilt and are not part of the failure scene.
+		if keepFailedRuntime(t, nodeDir) {
+			require.NoError(t, os.RemoveAll(filepath.Join(nodeDir, filepath.Base(executable))))
+			require.NoError(t, os.RemoveAll(filepath.Join(nodeDir, filepath.Base(plugin))))
+			return
+		}
+		// Keep verified binaries until process shutdown for successive cases.
 		entries, err := os.ReadDir(nodeDir)
 		require.NoError(t, err)
 		for _, entry := range entries {

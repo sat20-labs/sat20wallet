@@ -69,7 +69,8 @@
           <Label for="rgb11-consignment-file">{{ $t('rgb11Transfer.selectArmoredFile') }}</Label>
           <input id="rgb11-consignment-file" type="file" accept=".asc,.txt,.json" :disabled="loading" @change="selectPackageFile" />
           <p v-if="packageHash && !transferPackage" class="text-xs text-amber-400">{{ $t('rgb11Transfer.reselectOriginal') }}</p>
-          <Button variant="outline" class="w-full" :disabled="loading || expired || !!sdkTerminalStatus || !transferPackage.trim() || phase !== 'created'" @click="preparePackage">
+          <p v-if="!rgb11WriteAllowed" class="text-xs text-amber-400" role="status">{{ $t('accountManagement.readiness.moduleBlocked') }}</p>
+          <Button variant="outline" class="w-full" :disabled="loading || !rgb11WriteAllowed || expired || !!sdkTerminalStatus || !transferPackage.trim() || phase !== 'created'" @click="preparePackage">
             {{ $t('rgb11Transfer.prepareReceive') }}
           </Button>
           <div v-if="summary" class="space-y-2">
@@ -94,7 +95,8 @@
       </div>
 
       <DialogFooter>
-        <Button class="w-full" :disabled="loading || restoring || restoreFailed || !scopeKey || !amount.trim() || (!!requestId)" @click="generateInvoice">
+        <p v-if="!requestId && !rgb11WriteAllowed" class="text-xs text-amber-400" role="status">{{ $t('accountManagement.readiness.moduleBlocked') }}</p>
+        <Button class="w-full" :disabled="loading || !rgb11WriteAllowed || restoring || restoreFailed || !scopeKey || !amount.trim() || (!!requestId)" @click="generateInvoice">
           {{ loading ? $t('rgb11Invoice.generating') : $t('rgb11Invoice.generate') }}
         </Button>
       </DialogFooter>
@@ -108,6 +110,8 @@ import { Icon } from '@iconify/vue'
 import { useI18n } from 'vue-i18n'
 import { useClipboard, useNow } from '@vueuse/core'
 import walletManager from '@/utils/sat20'
+import { storeToRefs } from 'pinia'
+import { useAccountManagementStore } from '@/store/accountManagement'
 import { useToast } from '@/components/ui/toast-new'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -159,6 +163,13 @@ const { toast } = useToast()
 const { copy } = useClipboard()
 const globalStore = useGlobalStore()
 const walletStore = useWalletStore()
+const accountManagementState = useAccountManagementStore()
+const { rgb11WriteAllowed } = storeToRefs(accountManagementState)
+const displayOperationError = (error: any, fallbackKey: string) => {
+  const quotaKey = accountManagementState.quotaMessageKeyForCode(error?.code)
+  if (quotaKey) return [error?.message, t(quotaKey)].filter(Boolean).join(' ')
+  return error?.message || t(fallbackKey)
+}
 const assetContractID = computed(() => {
   const value = props.asset?.contract_id?.trim() || ''
   return !value || value.startsWith('rgb:') ? value : `rgb:${value}`
@@ -230,7 +241,7 @@ const checkRequestState = async () => {
       sdkTerminalStatus.value = ''
     }
     await persistRequest(key)
-  } catch (error: any) { errorMessage.value = error?.message || t('rgb11Invoice.receiveFailed') }
+  } catch (error: any) { errorMessage.value = displayOperationError(error, 'rgb11Invoice.receiveFailed') }
   finally { loading.value = false }
 }
 
@@ -264,7 +275,7 @@ const startNewRequest = async () => {
     packageHash.value = ''
     expiresAt.value = 0
     sdkTerminalStatus.value = ''
-  } catch (error: any) { errorMessage.value = error?.message || t('rgb11Transfer.persistenceFailed') }
+  } catch (error: any) { errorMessage.value = displayOperationError(error, 'rgb11Transfer.persistenceFailed') }
   finally { loading.value = false }
 }
 
@@ -291,6 +302,10 @@ const decimalToRaw = (input: string, precision: number): string | null => {
 
 const generateInvoice = async () => {
   if (restoring.value || restoreFailed.value || !scopeKey.value || requestId.value) return
+  if (!rgb11WriteAllowed.value) {
+    errorMessage.value = t('accountManagement.readiness.moduleBlocked')
+    return
+  }
   if (!assetContractID.value) {
     errorMessage.value = t('rgb11Invoice.contractIdMissing')
     return
@@ -326,7 +341,7 @@ const generateInvoice = async () => {
   })
   loading.value = false
   if (err || !result?.invoice) {
-    errorMessage.value = err?.message || t('rgb11Invoice.generateFailed')
+    errorMessage.value = displayOperationError(err, 'rgb11Invoice.generateFailed')
     return
   }
   try { await Storage.set({ key: `${key}:selection`, value: result.request_id || result.requestId || '' }) }
@@ -361,7 +376,7 @@ const checkProxyTransfer = async () => {
       duration: 3000,
     })
   } catch (error: any) {
-    errorMessage.value = error?.message || t('rgb11Invoice.noTransfer')
+    errorMessage.value = displayOperationError(error, 'rgb11Invoice.noTransfer')
   } finally {
     loading.value = false
   }
@@ -381,8 +396,7 @@ const refreshRGB11State = async () => {
 const packageInput = async () => {
   let consignment: string
   try {
-    consignment = await rgb11ResumeConsignment(transferPackage.value, packageHash.value,
-      summary.value?.consignment_hash || '', phase.value === 'prepared')
+    consignment = await rgb11ResumeConsignment(transferPackage.value, packageHash.value)
   } catch { throw new Error(t('rgb11Transfer.wrongOriginal')) }
   const hash = await sha256Text(consignment)
   return { consignment, hash }
@@ -398,6 +412,10 @@ const selectPackageFile = async (event: Event) => {
 
 const preparePackage = async () => {
   if (phase.value !== 'created') return
+  if (!rgb11WriteAllowed.value) {
+    errorMessage.value = t('accountManagement.readiness.moduleBlocked')
+    return
+  }
   const key = scopeKey.value
   loading.value = true
   errorMessage.value = ''
@@ -432,7 +450,7 @@ const preparePackage = async () => {
     phase.value = 'prepared'
     await persistRequest(key)
   } catch (error: any) {
-    errorMessage.value = error?.message || t('rgb11Transfer.acceptFailed')
+    errorMessage.value = displayOperationError(error, 'rgb11Transfer.acceptFailed')
   } finally { loading.value = false }
 }
 
@@ -453,7 +471,7 @@ const acceptPackage = async () => {
     await refreshRGB11State()
     toast({ title: t('rgb11Transfer.acceptedOutOfBand'), variant: 'success', duration: 2500 })
   } catch (error: any) {
-    errorMessage.value = `${t('rgb11Transfer.acceptRetry')} ${error?.message || ''}`
+    errorMessage.value = `${t('rgb11Transfer.acceptRetry')} ${displayOperationError(error, 'rgb11Transfer.acceptFailed')}`
   } finally { loading.value = false }
 }
 
@@ -477,7 +495,7 @@ watch(scopeKey, async (key) => {
     const [{ value: selected }, [err, result]] = await Promise.all([
       Storage.get({ key: `${key}:selection` }), walletManager.getRGB11State(),
     ])
-    if (err || !result?.state) throw err || new Error('Unable to load SDK reservations')
+    if (err || !result?.state) throw err || new Error(t('walletComponents.sdkReservationsFailed'))
     if (key !== scopeKey.value) return
     const state = JSON.parse(result.state)
     const requests = (state.reservations || []).filter((r: any) =>
@@ -528,7 +546,12 @@ watch(scopeKey, async (key) => {
     await Storage.remove({ key })
     if (key !== scopeKey.value) return
     transferPackage.value = rgb11ReceivePackages.get(key) || ''
-  } catch { if (key === scopeKey.value) { restoreFailed.value = true; errorMessage.value = t('rgb11Transfer.persistenceFailed') } }
+  } catch (error: any) {
+    if (key === scopeKey.value) {
+      restoreFailed.value = true
+      errorMessage.value = displayOperationError(error, 'rgb11Transfer.persistenceFailed')
+    }
+  }
   finally { if (key === scopeKey.value) restoring.value = false }
 }, { immediate: true })
 

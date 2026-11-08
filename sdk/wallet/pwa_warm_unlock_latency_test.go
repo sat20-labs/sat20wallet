@@ -9,7 +9,9 @@ import (
 	"testing"
 	"time"
 
+	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
+	"github.com/stretchr/testify/require"
 )
 
 // Reuses the existing account fixture and HTTP boundary. The real public RGB
@@ -22,18 +24,31 @@ func TestPWAWarmUnlockDuringRGBNetworkWait(t *testing.T) {
 				oldChain := _chain
 				_chain = "testnet"
 				defer func() { _chain = oldChain }()
-				manager, _, secret := buildRootWrapperSource(t)
-				defer zeroBytes(secret)
-				remote := &blockedAccountConfigHTTP{rgb11MemoryDKVSHTTP: newRGB11MemoryDKVSHTTP(), started: make(chan struct{}), release: make(chan struct{})}
+				var evidence rgb11wallet.BitcoinEvidenceProvider
+				manager, syncedRemote, _, _ := accountTTLWithSeed(t, func(owner *Manager, remote *rgb11MemoryDKVSHTTP) {
+					if entry == "public-refresh" {
+						evidence = prepareWarmUnlockRGBEvidence(t, owner, remote)
+					}
+				})
+				if entry == "public-refresh" {
+					require.NoError(t, manager.SyncAccountManagementState(context.Background()))
+				}
+				manager.accountBackgroundWG.Wait()
+				remote := &blockedAccountConfigHTTP{rgb11MemoryDKVSHTTP: syncedRemote, started: make(chan struct{}), release: make(chan struct{})}
 				var once sync.Once
 				release := func() { once.Do(func() { close(remote.release) }) }
 				defer release()
 				manager.http = remote
-				manager.dkvs.mu.Lock()
-				manager.dkvs.clients = make(map[string]*SatsNetDKVSClient)
-				manager.dkvs.mu.Unlock()
-				manager.accountProfile.RecoveryConfigured = true
-				manager.accountProfile.ManagedDataDirty = true
+				client, err := manager.GetDKVSClient()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if entry == "public-refresh" {
+					manager.rgbManager.evidence = &warmUnlockEvidenceGate{BitcoinEvidenceProvider: evidence, started: remote.started, release: remote.release}
+					defer manager.rgbManager.scopeStates.stopReconciliations()
+				} else {
+					client.Http = remote
+				}
 				runtimeWallet := manager.wallet
 				selected := manager.status.CurrentWallet
 				generation := manager.accountGeneration
@@ -114,4 +129,46 @@ func TestPWAWarmUnlockDuringRGBNetworkWait(t *testing.T) {
 			})
 		}
 	}
+}
+
+type warmUnlockEvidenceGate struct {
+	rgb11wallet.BitcoinEvidenceProvider
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (g *warmUnlockEvidenceGate) GetTip() (*rgb11wallet.BitcoinTip, error) {
+	g.once.Do(func() { close(g.started) })
+	<-g.release
+	return g.BitcoinEvidenceProvider.GetTip()
+}
+
+func prepareWarmUnlockRGBEvidence(t *testing.T, manager *Manager, remote *rgb11MemoryDKVSHTTP) rgb11wallet.BitcoinEvidenceProvider {
+	t.Helper()
+	chain := newCoreE2EChain()
+	rpc := &coreE2EL1Indexer{chain: chain}
+	manager.l1IndexerClient = NewIndexerRPCClientMgr()
+	manager.l1IndexerClient.Set(rpc)
+	manager.rgbManager.evidence = chain
+	wallet := cloneWalletAtAccountZero(manager.wallet)
+	chain.fund(t, wallet.GetAddress(), 6)
+	source := newRGB11FlowManager(t, wallet, rpc, chain, 1661, accountGroupUnprepared)
+	prepareRGBEndpoint(t, source, remote)
+	issued, err := source.rgbManager.IssueRGB11Asset(context.Background(), RGB11IssueRequest{
+		Schema: "NIA", Ticker: "WARM", Name: "Warm unlock fixture", Amounts: []uint64{25},
+	})
+	require.NoError(t, err)
+	installRGB11PublicContractFixture(t, source, remote, issued.ContractID)
+	useRGB11TestCoreAuthority(t, manager)
+	sourceCatalog, err := source.accountManagedDataCatalog()
+	require.NoError(t, err)
+	payloads, err := (&rgb11AccountManagedDataProvider{owner: source}).Export(sourceCatalog)
+	require.NoError(t, err)
+	catalog, err := manager.accountManagedDataCatalog()
+	require.NoError(t, err)
+	require.NoError(t, (&rgb11AccountManagedDataProvider{owner: manager}).Import(catalog, payloads))
+	// The enclosing TTL fixture activates and performs the final real sync after this seed phase.
+	manager.accountBackgroundWG.Wait()
+	return chain
 }

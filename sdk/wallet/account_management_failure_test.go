@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/sat20-labs/sat20wallet/sdk/account"
+	"github.com/stretchr/testify/require"
 )
 
 func TestAccountDeleteFlushFailurePreservesCatalogAndPending(t *testing.T) {
@@ -60,7 +60,7 @@ func TestAccountDeleteFlushFailurePreservesCatalogAndPending(t *testing.T) {
 func TestAccountRestoreRetryRequiresMatchingSnapshot(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
-	defer func() { _chain = oldChain }()
+	t.Cleanup(func() { _chain = oldChain })
 	for _, restart := range []bool{false, true} {
 		name := "same-manager"
 		if restart {
@@ -68,60 +68,75 @@ func TestAccountRestoreRetryRequiresMatchingSnapshot(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			remote := newRGB11MemoryDKVSHTTP()
-			source, sourceProvider := managedImportTestSource(t, remote)
-			target, provider := managedImportTestManager(t, remote)
+			source, sourceProvider, _ := newImportSource(t, remote)
+			target, provider, closeTarget := newImportGroup(t, remote)
 			failure := errors.New("transient provider failure")
 			provider.importErr = failure
 			original := managedImportRecoveryValue(t, source)
-			if err := restoreManagedImportTestWallet(t, target, source); !errors.Is(err, failure) {
-				t.Fatalf("restore did not reach provider failure: %v", err)
-			}
+			require.NoError(t, restoreImportGroup(t, target, source), "healthy wallets survive a module import failure")
+			require.Positive(t, provider.imports, "the actual provider failure must be reached")
+			originalCopy := importModuleTarget(t, target, provider.id, []byte("A"))
 			before := target.GetWalletCatalog()
 			if restart {
-				reopened, reopenedProvider := managedImportTestManager(t, remote)
-				reopened.db = target.db
-				reopened.status = loadStatusFromDB(target.db)
-				var err error
-				reopened.walletInfoMap, err = loadAllWalletFromDB(target.db)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := reopened.loadAccountManagementProfileLocked(); err != nil {
-					t.Fatal(err)
-				}
-				target, provider = reopened, reopenedProvider
+				cfg := target.cfg
+				closeTarget()
+				target, provider, _ = openImportGroup(t, cfg, remote)
+				provider.importErr = failure
+				_, err := target.UnlockWallet("password")
+				require.NoError(t, err)
 			}
+			// A newer remote module cannot replace the unfinished target A.
+			// Its record may become the latest baseline while A still awaits Import.
+			pendingTarget := func() {
+				t.Helper()
+				assertManagedImportModuleProtected(t, target, provider.id)
+				value, err := target.readAccountLocal(target.accountProfile.AccountID, provider.id, AccountManagedDataGlobalScope)
+				require.NoError(t, err)
+				require.NotNil(t, value)
+				require.Equal(t, originalCopy.Value, value.Value, "retry replaced the authenticated unfinished module target")
+			}
+			pendingTarget()
+			newPayload := []byte("newer remote provider state")
+			stageManagedImportTestPayload(t, source, sourceProvider, newPayload)
+			require.NoError(t, source.SyncAccountManagementState(context.Background()))
+			remoteBefore := snapshotRGB11MemoryRecords(remote)
+			imports := provider.imports
+			require.NoError(t, restoreImportGroup(t, target, source), "a newer wallet snapshot must not discard the failed module target")
+			require.Greater(t, provider.imports, imports)
+			pendingTarget()
+			require.Equal(t, before, target.GetWalletCatalog())
+			require.Equal(t, remoteBefore, snapshotRGB11MemoryRecords(remote))
+			locator, location := importGroupMaterial(t, source)
+			options := AccountManagementRestoreOptions{Location: location, StorageMode: AccountStorageTemporary,
+				RecordTTL: testRGB11FreeLocalTTL, PublicLocator: source.GetAccountManagementStatus().PublicLocator}
+			imports = provider.imports
+			_, err := target.RestoreAccountManagementState(original, source.accountSecret, "wrong password", locator, options)
+			require.Error(t, err, "retry accepted an invalid local password")
+			require.Equal(t, imports, provider.imports, "invalid authentication reached the provider")
+			pendingTarget()
+			err = target.SyncAccountManagementState(nil)
+			require.ErrorIs(t, err, failure)
+			require.True(t, accountModuleOnly(err))
+			pendingTarget()
+			require.Equal(t, remoteBefore, snapshotRGB11MemoryRecords(remote))
 			provider.importErr = nil
-			// A newer valid snapshot must not authorize overwriting the partial
-			// local commit. Only the exact authenticated target can resume it.
-			sourceProvider.payloads[0].Payload = []byte("newer remote provider state")
-			if err := source.SyncAccountManagementState(context.Background()); err != nil {
-				t.Fatal(err)
-			}
-			if err := restoreManagedImportTestWallet(t, target, source); !errors.Is(err, ErrAccountManagedDataImportIncomplete) {
-				t.Fatalf("different snapshot bypassed the import boundary: %v", err)
-			}
-			locator := account.Locator{AccountID: source.accountProfile.AccountID}
-			options := AccountManagementRestoreOptions{StorageMode: AccountStorageTemporary, RecordTTL: testRGB11FreeLocalTTL}
-			if _, err := target.RestoreAccountManagementState(original, source.accountSecret, "wrong password", locator, options); err == nil {
-				t.Fatal("retry accepted an invalid local password")
-			}
-			if err := target.SyncAccountManagementState(nil); !errors.Is(err, ErrAccountManagedDataImportIncomplete) {
-				t.Fatalf("rejected retry removed upload protection: %v", err)
-			}
+			attempts := len(provider.imported)
 			results, err := target.RestoreAccountManagementState(original, source.accountSecret, "password", locator, options)
-			if err != nil {
-				t.Fatal(err)
+			require.NoError(t, err)
+			require.Len(t, results, len(before))
+			require.Equal(t, before, target.GetWalletCatalog(), "retry replaced wallet identities")
+			replayed := provider.imported[attempts:]
+			require.NotEmpty(t, replayed)
+			require.Len(t, replayed[0], 1)
+			require.Equal(t, []byte("A"), replayed[0][0].Payload, "the original authenticated target must finish before adopting the newer remote module")
+			for _, attempt := range replayed {
+				require.Len(t, attempt, 1)
+				if string(attempt[0].Payload) != "A" {
+					require.Equal(t, newPayload, attempt[0].Payload)
+				}
 			}
-			if len(results) != len(before) || !reflect.DeepEqual(before, target.GetWalletCatalog()) {
-				t.Fatal("retry replaced wallet handles or catalog identities")
-			}
-			if err := target.checkAccountManagedDataImport(); err != nil {
-				t.Fatalf("completed retry retained import protection: %v", err)
-			}
-			if len(provider.payloads) != 1 || string(provider.payloads[0].Payload) != "A" {
-				t.Fatal("retry did not import the authenticated original payload")
-			}
+			assertImportComplete(t, target, provider, newPayload)
+			require.Equal(t, remoteBefore, snapshotRGB11MemoryRecords(remote), "resume must not republish A over the newer remote module")
 		})
 	}
 }

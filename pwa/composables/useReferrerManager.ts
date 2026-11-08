@@ -105,18 +105,6 @@ export const useReferrerManager = () => {
     }
   }
 
-  // 删除本地存储的绑定推荐人
-  const removeLocalBoundReferrer = async (targetAddress: string): Promise<void> => {
-    try {
-      const key = generateBoundReferrerKey(targetAddress)
-      await Storage.remove({ key })
-      console.log(`[ReferrerManager] 已删除绑定推荐人 (地址: ${targetAddress})`)
-    } catch (error) {
-      console.error('Failed to remove local bound referrer:', error)
-      throw error
-    }
-  }
-
   // 缓存推荐人注册的txId
   const cacheReferrerTxId = async (targetAddress: string, referrerName: string, txId: string): Promise<void> => {
     try {
@@ -194,18 +182,6 @@ export const useReferrerManager = () => {
     }
   }
 
-  // 删除绑定推荐人的txId
-  const removeBoundReferrerTxId = async (targetAddress: string): Promise<void> => {
-    try {
-      const key = generateBoundReferrerTxIdKey(targetAddress)
-      await Storage.remove({ key })
-      console.log(`[ReferrerManager] 已删除绑定推荐人txId (地址: ${targetAddress})`)
-    } catch (error) {
-      console.error('Failed to remove bound referrer txId:', error)
-      throw error
-    }
-  }
-
   // 清理无效的推荐人缓存（没有txId的推荐人名字）
   const cleanInvalidReferrerCache = async (targetAddress: string): Promise<void> => {
     try {
@@ -251,13 +227,11 @@ export const useReferrerManager = () => {
     clearLocalReferrerNames,
     getLocalBoundReferrer,
     addLocalBoundReferrer,
-    removeLocalBoundReferrer,
     cacheReferrerTxId,
     getReferrerTxId,
     getAllReferrerTxIds,
     cacheBoundReferrerTxId,
     getLocalBoundReferrerTxId,
-    removeBoundReferrerTxId,
     cleanInvalidReferrerCache,
     clearReferrerNameCache,
   }

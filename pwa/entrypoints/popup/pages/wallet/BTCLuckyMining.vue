@@ -7,7 +7,7 @@
         <Button variant="ghost" size="sm" @click="router.back()">
           <Icon icon="lucide:arrow-left" class="h-4 w-4" />
         </Button>
-        <div class="text-base font-medium">BTC Lucky Mining</div>
+        <div class="text-base font-medium">{{ $t('pwaUi.mining.title') }}</div>
         <Button variant="ghost" size="icon" :disabled="loading" @click="refreshStatus">
           <Icon icon="lucide:refresh-cw" class="h-4 w-4" :class="{ 'animate-spin': loading }" />
         </Button>
@@ -15,21 +15,21 @@
 
       <Card>
         <CardHeader class="space-y-1">
-          <CardTitle class="text-base">挖矿状态</CardTitle>
-          <CardDescription>{{ status.running ? '正在参与抽奖' : '未运行' }}</CardDescription>
+          <CardTitle class="text-base">{{ $t('pwaUi.mining.status') }}</CardTitle>
+          <CardDescription>{{ status.running ? $t('pwaUi.mining.running') : $t('pwaUi.mining.stopped') }}</CardDescription>
         </CardHeader>
         <CardContent class="space-y-3 text-sm">
           <div class="grid grid-cols-2 gap-3">
             <div class="rounded-sm border border-border p-3">
-              <div class="text-xs text-muted-foreground">本机算力</div>
+              <div class="text-xs text-muted-foreground">{{ $t('pwaUi.mining.localHashrate') }}</div>
               <div class="mt-1 font-medium">{{ formatHashrate(status.hashesPerSecond) }}</div>
             </div>
             <div class="rounded-sm border border-border p-3">
-              <div class="text-xs text-muted-foreground">当前难度</div>
+              <div class="text-xs text-muted-foreground">{{ $t('pwaUi.mining.difficulty') }}</div>
               <div class="mt-1 font-medium">{{ formatDifficulty(currentDifficulty) }}</div>
             </div>
             <div class="rounded-sm border border-border p-3">
-              <div class="text-xs text-muted-foreground">全网算力</div>
+              <div class="text-xs text-muted-foreground">{{ $t('pwaUi.mining.networkHashrate') }}</div>
               <div class="mt-1 font-medium">{{ networkHashrateText }}</div>
               <div v-if="networkStats.source" class="mt-1 text-[11px] text-muted-foreground">
                 {{ networkStats.source }}
@@ -39,54 +39,54 @@
               </div>
             </div>
             <div class="rounded-sm border border-border p-3">
-              <div class="text-xs text-muted-foreground">Jobs</div>
+              <div class="text-xs text-muted-foreground">{{ $t('pwaUi.mining.jobs') }}</div>
               <div class="mt-1 font-medium">{{ status.jobs || form.jobs }}</div>
             </div>
           </div>
           <div class="space-y-1">
-            <div class="text-xs text-muted-foreground">Reward Address（钱包通道地址）</div>
+            <div class="text-xs text-muted-foreground">{{ $t('pwaUi.mining.rewardAddress') }}</div>
             <div class="break-all rounded-sm bg-muted/70 p-2 text-xs">{{ status.rewardAddress || '-' }}</div>
           </div>
           <div class="rounded-sm border border-border p-3 text-xs">
-            <div class="text-muted-foreground">挖矿收益分成</div>
+            <div class="text-muted-foreground">{{ $t('pwaUi.mining.revenueSplit') }}</div>
             <div class="mt-2 grid grid-cols-3 gap-2 text-center">
               <div>
                 <div class="font-medium">85%</div>
-                <div class="mt-1 text-muted-foreground">用户</div>
+                <div class="mt-1 text-muted-foreground">{{ $t('pwaUi.mining.user') }}</div>
               </div>
               <div>
                 <div class="font-medium">10%</div>
-                <div class="mt-1 text-muted-foreground">索引器数据服务节点</div>
+                <div class="mt-1 text-muted-foreground">{{ $t('pwaUi.mining.indexer') }}</div>
               </div>
               <div>
                 <div class="font-medium">5%</div>
-                <div class="mt-1 text-muted-foreground">引导节点</div>
+                <div class="mt-1 text-muted-foreground">{{ $t('pwaUi.mining.bootstrap') }}</div>
               </div>
             </div>
           </div>
           <div class="grid grid-cols-2 gap-3 text-xs">
             <div>
-              <div class="text-muted-foreground">BTC Height</div>
+              <div class="text-muted-foreground">{{ $t('pwaUi.mining.btcHeight') }}</div>
               <div class="mt-1">{{ status.btcHeight || '-' }}</div>
             </div>
             <div>
-              <div class="text-muted-foreground">Job ID</div>
+              <div class="text-muted-foreground">{{ $t('pwaUi.mining.jobId') }}</div>
               <div class="mt-1 truncate" :title="status.jobId">{{ status.jobId || '-' }}</div>
             </div>
             <div>
-              <div class="text-muted-foreground">Best Share</div>
+              <div class="text-muted-foreground">{{ $t('pwaUi.mining.bestShare') }}</div>
               <div class="mt-1 truncate" :title="status.bestShare">{{ shortHash(status.bestShare) }}</div>
             </div>
             <div>
-              <div class="text-muted-foreground">Target</div>
+              <div class="text-muted-foreground">{{ $t('pwaUi.mining.target') }}</div>
               <div class="mt-1 truncate" :title="status.currentTarget">{{ shortHash(status.currentTarget) }}</div>
             </div>
             <div>
-              <div class="text-muted-foreground">Last Job</div>
+              <div class="text-muted-foreground">{{ $t('pwaUi.mining.lastJob') }}</div>
               <div class="mt-1">{{ formatTime(status.lastJobTime) }}</div>
             </div>
             <div>
-              <div class="text-muted-foreground">Last Submit</div>
+              <div class="text-muted-foreground">{{ $t('pwaUi.mining.lastSubmit') }}</div>
               <div class="mt-1 truncate">{{ status.lastSubmitResult || '-' }}</div>
             </div>
           </div>
@@ -98,39 +98,39 @@
 
       <Card>
         <CardHeader>
-          <CardTitle class="text-base">配置</CardTitle>
+          <CardTitle class="text-base">{{ $t('pwaUi.mining.configuration') }}</CardTitle>
         </CardHeader>
         <CardContent class="space-y-3">
           <div class="grid grid-cols-2 gap-3">
             <div class="space-y-1">
-              <Label>Jobs</Label>
+              <Label>{{ $t('pwaUi.mining.jobs') }}</Label>
               <Select v-model="form.jobs" :disabled="status.running">
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="1">1</SelectItem>
-                  <SelectItem value="auto">auto</SelectItem>
+                  <SelectItem value="auto">{{ $t('pwaUi.mining.auto') }}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
             <div class="space-y-1">
-              <Label>Sleep (ms)</Label>
+              <Label>{{ $t('pwaUi.mining.sleep') }}</Label>
               <Input v-model="form.lowPrioritySleepMs" type="number" min="0" step="1" inputmode="numeric" :disabled="status.running" />
             </div>
           </div>
           <label class="flex items-center gap-3 rounded-sm border border-border p-3 text-sm">
             <input v-model="form.lowPriority" type="checkbox" class="h-4 w-4" :disabled="status.running" />
-            <span>低优先级</span>
+            <span>{{ $t('pwaUi.mining.lowPriority') }}</span>
           </label>
           <div class="grid grid-cols-2 gap-3">
             <Button :disabled="status.running || loading" @click="startMining">
               <Icon icon="lucide:play" class="h-4 w-4" />
-              启动
+              {{ $t('pwaUi.mining.start') }}
             </Button>
             <Button variant="secondary" :disabled="!status.running || loading" @click="stopMining">
               <Icon icon="lucide:square" class="h-4 w-4" />
-              停止
+              {{ $t('pwaUi.mining.stop') }}
             </Button>
           </div>
         </CardContent>
@@ -138,17 +138,17 @@
 
       <Card>
         <CardHeader>
-          <CardTitle class="text-base">中奖记录</CardTitle>
+          <CardTitle class="text-base">{{ $t('pwaUi.mining.foundBlocks') }}</CardTitle>
         </CardHeader>
         <CardContent class="space-y-2">
-          <div v-if="!status.foundBlocks?.length" class="text-sm text-muted-foreground">暂无记录</div>
+          <div v-if="!status.foundBlocks?.length" class="text-sm text-muted-foreground">{{ $t('pwaUi.mining.noRecords') }}</div>
           <div
             v-for="block in status.foundBlocks"
             :key="`${block.jobId}-${block.blockHash}`"
             class="space-y-1 rounded-sm border border-border p-3 text-xs"
           >
             <div class="flex items-center justify-between gap-2">
-              <span class="font-medium">{{ block.submitted ? '已提交' : '未提交' }}</span>
+              <span class="font-medium">{{ block.submitted ? $t('pwaUi.mining.submitted') : $t('pwaUi.mining.notSubmitted') }}</span>
               <span class="text-muted-foreground">{{ block.submitResult || '-' }}</span>
             </div>
             <div class="break-all text-muted-foreground">{{ block.blockHash }}</div>
@@ -158,20 +158,20 @@
 
       <Card>
         <CardHeader>
-          <CardTitle class="text-base">奖励提取</CardTitle>
-          <CardDescription>奖励在 L1 成熟后自动进入聪网，再共签提取；扣除网络费后按 85% / 10% / 5% 分账。核心节点使用自己的索引器时，前两项均归自己。</CardDescription>
+          <CardTitle class="text-base">{{ $t('pwaUi.mining.claimRewards') }}</CardTitle>
+          <CardDescription>{{ $t('pwaUi.mining.claimDescription') }}</CardDescription>
         </CardHeader>
         <CardContent class="space-y-3">
           <div v-if="rewardError" class="break-all text-xs text-destructive">{{ rewardError }}</div>
-          <div v-if="claimResult" class="break-all text-xs">提取交易：{{ claimResult }}</div>
-          <div v-if="!rewards.length" class="text-sm text-muted-foreground">暂无奖励</div>
+          <div v-if="claimResult" class="break-all text-xs">{{ $t('pwaUi.mining.claimTransaction') }}{{ claimResult }}</div>
+          <div v-if="!rewards.length" class="text-sm text-muted-foreground">{{ $t('pwaUi.mining.noRewards') }}</div>
           <div v-for="reward in rewards" :key="reward.fundingUtxo" class="space-y-2 rounded-sm border border-border p-3 text-xs">
             <div class="break-all">{{ reward.fundingUtxo }}</div>
-            <div v-if="reward.status !== 'error'" class="text-muted-foreground">{{ reward.amount }} sats · L1 确认 {{ reward.confirmations }} / {{ reward.maturity }}</div>
+            <div v-if="reward.status !== 'error'" class="text-muted-foreground">{{ $t('pwaUi.mining.confirmations', { amount: reward.amount, confirmations: reward.confirmations, maturity: reward.maturity }) }}</div>
             <div v-if="reward.error" class="break-all text-destructive">{{ reward.error }}</div>
-            <div v-if="reward.anchorTxId" class="break-all text-muted-foreground">Ascend：{{ reward.anchorTxId }}</div>
+            <div v-if="reward.anchorTxId" class="break-all text-muted-foreground">{{ $t('pwaUi.mining.ascend') }}{{ reward.anchorTxId }}</div>
             <Button size="sm" :disabled="reward.status !== 'claimable' || !!claiming" @click="claimReward(reward.fundingUtxo)">
-              {{ claiming === reward.fundingUtxo ? '正在共签' : rewardState(reward.status) }}
+              {{ claiming === reward.fundingUtxo ? $t('pwaUi.mining.cosigning') : rewardState(reward.status) }}
             </Button>
           </div>
         </CardContent>
@@ -181,6 +181,7 @@
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
@@ -196,6 +197,8 @@ import { useWalletStore } from '@/store'
 import { Network } from '@/types'
 import { getConfig } from '@/config/wasm'
 import walletManager from '@/utils/sat20'
+
+const { t } = useI18n()
 
 const router = useRouter()
 const walletStore = useWalletStore()
@@ -262,7 +265,7 @@ const refreshStatus = async () => {
 }
 
 const rewardState = (state: string) => ({
-  unascended: '等待 Ascend', immature: '等待成熟', claimable: '提取', spent: '已花费', error: '来源异常',
+  unascended: t('pwaUi.mining.awaitAscend'), immature: t('pwaUi.mining.immature'), claimable: t('pwaUi.mining.claim'), spent: t('pwaUi.mining.spent'), error: t('pwaUi.mining.sourceError'),
 }[state] || state)
 
 const claimReward = async (utxo: string) => {
@@ -354,7 +357,7 @@ async function refreshNetworkStats(force = false) {
 
 async function fetchNetworkStats() {
   if (network.value === Network.REGTEST) {
-    throw new Error('Regtest has no configured public hashrate service')
+    throw new Error(t('pwaUi.mining.regtestStatsUnavailable'))
   }
   const errors: string[] = []
   const mempoolURL = network.value === Network.MAINNET
@@ -365,7 +368,7 @@ async function fetchNetworkStats() {
     const hashrate = Number(data?.currentHashrate || latestHashrate(data?.hashrates) || 0)
     const difficulty = Number(data?.currentDifficulty || latestDifficulty(data?.difficulty) || 0)
     if (hashrate > 0 || difficulty > 0) return { hashrate, difficulty, source: 'mempool.space' }
-    errors.push('mempool.space returned empty stats')
+    errors.push(t('pwaUi.mining.mempoolStatsEmpty'))
   } catch (error: any) {
     errors.push(`mempool.space: ${error?.message || String(error)}`)
   }
@@ -379,7 +382,7 @@ async function fetchNetworkStats() {
     const hashrate = Number(data?.data?.hashrate_24h || 0)
     const difficulty = Number(data?.data?.difficulty || 0)
     if (hashrate > 0 || difficulty > 0) return { hashrate, difficulty, source: 'blockchair.com' }
-    errors.push('blockchair.com returned empty stats')
+    errors.push(t('pwaUi.mining.blockchairStatsEmpty'))
   } catch (error: any) {
     errors.push(`blockchair.com: ${error?.message || String(error)}`)
   }
@@ -389,7 +392,7 @@ async function fetchNetworkStats() {
     const last = Array.isArray(data?.values) ? data.values[data.values.length - 1] : undefined
     const hashrate = Number(last?.y || 0) * 1_000_000_000_000
     if (hashrate > 0) return { hashrate, difficulty: 0, source: 'blockchain.info' }
-    errors.push('blockchain.info returned empty stats')
+    errors.push(t('pwaUi.mining.blockchainStatsEmpty'))
   } catch (error: any) {
     errors.push(`blockchain.info: ${error?.message || String(error)}`)
   }
@@ -425,7 +428,7 @@ async function refreshRewardAddress() {
     const env = localStorage.getItem('env') || 'test'
     const cfg = getConfig(env, network.value || Network.TESTNET)
     const pubkey = serviceNodePubkey(cfg.Peers)
-    if (!pubkey) throw new Error('indexer pubkey is empty')
+    if (!pubkey) throw new Error(t('pwaUi.mining.indexerPubkeyEmpty'))
     const [err, result] = await walletManager.getChannelAddrByPeerPubkey(pubkey)
     if (err) throw err
     if (result?.channelAddr) {

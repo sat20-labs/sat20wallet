@@ -65,6 +65,7 @@
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import { ref, computed, onMounted, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { Icon } from '@iconify/vue'
@@ -83,7 +84,7 @@ import L2Card from '@/components/wallet/L2Card.vue'
 
 import SubWalletSelector from '@/components/wallet/SubWalletSelector.vue'
 import CopyButton from '@/components/common/CopyButton.vue'
-import { useChannelStore, useWalletStore, useL1Store, useL2Store } from '@/store'
+import { useChannelStore, useWalletStore, useL1Store } from '@/store'
 import { useUnifiedAssets, useL2Assets } from '@/composables'
 import { useAssetOperations } from '@/composables/useAssetOperations'
 import { useRouter, useRoute } from 'vue-router'
@@ -99,12 +100,13 @@ import { Separator } from '@/components/ui/separator'
 import { generateMempoolUrl } from '@/utils'
 import { useNameManager } from '@/composables/useNameManager'
 
+const { t } = useI18n()
+
 console.log('Debug: This is index.vue')
 
 // 钱包数据
 const walletStore = useWalletStore()
 const l1Store = useL1Store()
-const l2Store = useL2Store()
 const channelStore = useChannelStore()
 const transcendingModeStore = useTranscendingModeStore()
 const router = useRouter()
@@ -224,8 +226,6 @@ watch(
   async (newVal, oldVal) => {
     console.log('wallet_summary_context_change', newVal, oldVal)
     if (!address.value || JSON.stringify(newVal) === JSON.stringify(oldVal)) return
-    l1Store.reset()
-    l2Store.reset()
     await refreshActiveWalletView({ resetState: true, clearCache: true })
   },
   { immediate: true }
@@ -325,28 +325,28 @@ const channelCallback = async (e: any, value?: unknown) => {
         if (noticeWalletId !== walletId.value || noticeAccountIndex !== accountIndex.value) return
         channelStore.setClosedRebuildFundingNotice({ walletId: noticeWalletId, accountIndex: noticeAccountIndex,
           channelId: noticeChannelId, message: noticeMessage, assetRestorationOnly: channelStore.channel?.status === 16, identityGeneration: notificationGeneration })
-        toast({ title: 'Channel recovery paused', description: noticeMessage })
+        toast({ title: t('pwaUi.home.recoveryPaused'), description: noticeMessage })
       } catch { /* A malformed or stale notice never authorizes a transfer. */ }
       return
     }
     case 'splicingin':
-      msg = 'splicing in success'
+      msg = t('pwaUi.home.splicingIn')
       await channelHandler()
       await refreshL1Assets()
       break
     case 'expanded':
-      msg = 'splicing in success'
+      msg = t('pwaUi.home.splicingIn')
       await channelHandler()
       await refreshL1Assets()
       break
 
     case 'splicingout':
-      msg = 'splicing out success'
+      msg = t('pwaUi.home.splicingOut')
       await channelHandler()
       await refreshL1Assets()
       break
     case 'channelopened':
-      msg = 'channel opened'
+      msg = t('pwaUi.home.opened')
       await channelHandler()
       await refreshL1Assets()
       break
@@ -355,13 +355,13 @@ const channelCallback = async (e: any, value?: unknown) => {
       await refreshL1Assets()
       break
     case 'channelclosed':
-      msg = 'channel closed'
+      msg = t('pwaUi.home.closed')
       channelStore.invalidateCurrentChannel()
       await channelHandler()
       await refreshL1Assets()
       break
     case 'utxounlockedorlocked':
-      msg = 'utxo change'
+      msg = t('pwaUi.home.utxoChanged')
       await channelHandler()
       await refreshL2Assets()
       break
@@ -371,7 +371,7 @@ const channelCallback = async (e: any, value?: unknown) => {
   }
   if (msg) {
     toast({
-      title: 'Success',
+      title: t('common.success'),
       description: msg,
       variant: 'success'
     })

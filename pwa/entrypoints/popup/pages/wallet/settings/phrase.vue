@@ -50,12 +50,14 @@
           <span class="font-medium">{{ word }}</span>
         </div>
       </div>
-	  <p class="mt-4 text-xs text-muted-foreground">Clipboard export is disabled. Record the words in a secure offline location.</p>
+	  <p class="mt-4 text-xs text-muted-foreground">{{ t('settingsUi.offlineMnemonic') }}</p>
     </div>
   </LayoutSecond>
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
+const { t } = useI18n()
 import LayoutSecond from '@/components/layout/LayoutSecond.vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -86,8 +88,8 @@ const mnemonicWords = computed(() =>
 const verifyPassword = async () => {
   if (!password.value) {
     toast({
-      title: 'Error',
-      description: 'Please enter password',
+      title: t('approvalUi.error'),
+      description: t('settingsUi.passwordRequired'),
       variant: 'destructive'
     })
     return
@@ -95,7 +97,7 @@ const verifyPassword = async () => {
 	try {
 	  limiter.assertAllowed()
 	} catch (error) {
-	  toast({ title: 'Error', description: (error as Error).message, variant: 'destructive' })
+	  toast({ title: t('approvalUi.error'), description: (error as Error).message, variant: 'destructive' })
 	  return
 	}
   loading.value = true
@@ -108,8 +110,8 @@ const verifyPassword = async () => {
   if (err || !result?.mnemonic) {
 	limiter.recordFailure()
     toast({
-      title: 'Error',
-      description: 'Verification failed',
+      title: t('approvalUi.error'),
+      description: t('settingsUi.verificationFailed'),
       variant: 'destructive'
     })
     return

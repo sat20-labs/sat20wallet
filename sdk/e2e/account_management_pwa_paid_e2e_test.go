@@ -175,6 +175,9 @@ func TestSDKAccountPWAPaidFundingWithChildSelected(t *testing.T) {
 		require.Equal(t, childID, f.manager.GetCurrentWalletId())
 	}
 	require.Len(t, transport.bodies, 1, "ready paid storage reconfirmation submitted another payment")
+	t.Run("refused_backup_then_recharge", func(t *testing.T) {
+		checkPWAFundingAfterBackup(t, f)
+	})
 }
 
 // Crash only after the real database has committed signed bytes, before any
@@ -199,6 +202,54 @@ func (d *accountPreparedCrashDB) Write(key, value []byte) error {
 	if d.armed && prepared {
 		d.captured = &record
 		d.armed = false
+		panic("account E2E: stopped after durable transaction preparation")
+	}
+	return nil
+}
+
+// Account setup also needs atomic batches before the prepared funding write.
+// Never substitute the generic batch for an atomic backend transaction.
+func (d *accountPreparedCrashDB) NewAtomicWriteBatch() indexercommon.WriteBatch {
+	atomicDB, ok := d.KVDB.(indexercommon.AtomicWriteBatchDB)
+	if !ok {
+		return nil
+	}
+	batch := atomicDB.NewAtomicWriteBatch()
+	if batch == nil {
+		return nil
+	}
+	return &accountPreparedCrashBatch{WriteBatch: batch, database: d}
+}
+
+type accountPreparedCrashBatch struct {
+	indexercommon.WriteBatch
+	database *accountPreparedCrashDB
+	prepared *wallet.OperationLogRecord
+}
+
+func (b *accountPreparedCrashBatch) Put(key, value []byte) error {
+	var record wallet.OperationLogRecord
+	prepared := strings.Contains(string(key), wallet.DB_KEY_OPERATION_LOG) && wallet.DecodeFromBytes(value, &record) == nil &&
+		record.Action == "account_autopay_fund" && len(record.PreparedTransaction) > 0 && record.Status == wallet.OperationLogPending
+	if b.database.failPrepared && prepared {
+		return fmt.Errorf("account E2E: signed transaction persistence failed")
+	}
+	if err := b.WriteBatch.Put(key, value); err != nil {
+		return err
+	}
+	if prepared {
+		b.prepared = &record
+	}
+	return nil
+}
+
+func (b *accountPreparedCrashBatch) Flush() error {
+	if err := b.WriteBatch.Flush(); err != nil {
+		return err
+	}
+	if b.database.armed && b.prepared != nil {
+		b.database.captured = b.prepared
+		b.database.armed = false
 		panic("account E2E: stopped after durable transaction preparation")
 	}
 	return nil
@@ -290,7 +341,12 @@ func TestSDKAccountGuardianPaidPWABatchReview(t *testing.T) {
 	runAccountAutopayPreparedTransactionReview(t, true)
 }
 
-func runAccountAutopayPreparedTransactionReview(t *testing.T, browser bool) {
+func TestPWAAccountGuardianRenewal(t *testing.T) {
+	runAccountAutopayPreparedTransactionReview(t, true,
+		"usage: temporary Guardian renews paid hosting without changing its own recovery")
+}
+
+func runAccountAutopayPreparedTransactionReview(t *testing.T, browser bool, cases ...string) {
 	defaults := dkvs.NetworkDefaultsForParams(&chaincfg.TestNetParams)
 	fixture := newDKVSNoPluginTemplateFixtureWithArgs(t,
 		map[string]int64{defaults.AutopayFeeAssetName: 50000}, nil, nil, dkvsMinerArgs(t))
@@ -332,6 +388,7 @@ func runAccountAutopayPreparedTransactionReview(t *testing.T, browser bool) {
 	_, err = manager.ImportWallet(dkvsClientMnemonic, accountReviewPassword)
 	require.NoError(t, err)
 	require.NoError(t, manager.InitializeAccountManagement(accountReviewPassword))
+	requireE2EInactive(t, manager)
 	require.NoError(t, manager.BindAccountToCurrentCoreNode())
 	t.Run("PreparationWriteFailure", func(t *testing.T) {
 		transport := &accountPreparedAckTransport{inner: wallet.NewHTTPClient()}
@@ -391,6 +448,10 @@ func runAccountAutopayPreparedTransactionReview(t *testing.T, browser bool) {
 			require.NoError(t, err)
 			manager.SetIndexerHttpClient_SatsNet(wallet.NewIndexerClient(location.Scheme, location.Host, location.Proxy, transport))
 			before := len(transport.bodies)
+			// Unlock restores encrypted local data, not an online discovery grant.
+			// Establish actual absence without changing the prepared payment;
+			// the existing body-count assertion also covers this phase.
+			requireE2EInactive(t, manager)
 			status, err := manager.GetAccountAutopayFundingStatus()
 			require.NoError(t, err)
 			require.True(t, status.FundingCanResume)
@@ -438,7 +499,12 @@ func runAccountAutopayPreparedTransactionReview(t *testing.T, browser bool) {
 			finalLogs, err := manager.GetOperationLogs()
 			require.NoError(t, err)
 			require.Len(t, finalLogs, len(logs), "continuation created another operation")
-			require.NoError(t, manager.SyncAccountManagementState(context.Background()))
+			// Paying for hosting does not itself activate private recovery backup.
+			// The completed payment/receipt remains valid in this local-only state.
+			backupStatus := manager.GetAccountManagementStatus()
+			require.False(t, backupStatus.RecoveryConfigured)
+			require.False(t, backupStatus.ActivationPending)
+			require.True(t, backupStatus.LocalOnly)
 		})
 	}
 	if browser {
@@ -470,9 +536,14 @@ func runAccountAutopayPreparedTransactionReview(t *testing.T, browser bool) {
 		fixtureJSON, err := json.Marshal(map[string]string{"mnemonic": dkvsClientMnemonic,
 			"password": accountReviewPassword, "contract": address.MustEncode(), "control_url": server.URL})
 		require.NoError(t, err)
-		command := exec.CommandContext(ctx, "node", "scripts/verify/account-management-e2e.mjs", "--usage-cases",
-			"usage: temporary Guardian renews paid hosting without changing its own recovery",
-			"usage: original AUTOPAY resumes after prebroadcast exit and lost acknowledgement")
+		if len(cases) == 0 {
+			cases = []string{
+				"usage: temporary Guardian renews paid hosting without changing its own recovery",
+				"usage: original AUTOPAY resumes after prebroadcast exit and lost acknowledgement",
+			}
+		}
+		args := append([]string{"scripts/verify/account-management-e2e.mjs", "--usage-cases"}, cases...)
+		command := exec.CommandContext(ctx, "node", args...)
 		command.Dir = filepath.Join(sdk, "..", "pwa")
 		command.Env = append(os.Environ(), "SAT20_ACCOUNT_E2E_CONFIG="+string(configJSON),
 			"SAT20_PWA_AUTOPAY_REVIEW="+string(fixtureJSON), "SAT20_PWA_E2E_WASM="+wasmPath, "SAT20_PWA_E2E_WASM_RUNTIME="+runtimePath)

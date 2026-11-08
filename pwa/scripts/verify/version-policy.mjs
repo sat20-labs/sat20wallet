@@ -5,6 +5,8 @@ const transpile=s=>ts.transpileModule(s,{compilerOptions:{target:ts.ScriptTarget
 const url=s=>`data:text/javascript;base64,${Buffer.from(s).toString('base64')}`
 const source=await readFile(new URL('../../utils/versionPolicy.ts',import.meta.url),'utf8')
 const policyURL=url(transpile(source));const {VersionPolicy}=await import(policyURL)
+const wasmErrorSource=await readFile(new URL('../../utils/wasmError.ts',import.meta.url),'utf8')
+globalThis.fixtureWasmError=await import(url(transpile(wasmErrorSource)))
 const make=()=>new VersionPolicy('1.2.3','20260909T010000Z')
 const release={version:'1.2.3',buildId:'20260909T010000Z',minVersion:'1.0.0',forceUpdate:false}
 let p=make();assert.equal(p.blocked,false);p.begin(false)(); // first unknown retains capability
@@ -39,6 +41,7 @@ const finishPwaOperation=async()=>{if(globalThis.finishLog)await globalThis.fini
 const facades=[]
 for(const name of ['sat20','stp','rgb11Address','accountManagement']){
  let text=transpile(await readFile(new URL(`../../utils/${name}.ts`,import.meta.url),'utf8'))
+ text=text.replace(/^import \{([^}]+)\} from '@\/utils\/wasmError';?$/gm,'const {$1} = globalThis.fixtureWasmError')
  text=text.replace(/^import .*?;\n/gm,'')
  facades.push((await import(url(helpers+text))).default)
 }

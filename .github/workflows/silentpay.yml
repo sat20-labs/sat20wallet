@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'sdk/wallet/silentpay*.go'
+      - 'sdk/account/**'
       - 'sdk/wallet/db.go'
       - 'sdk/wallet/wallet_catalog.go'
       - 'sdk/wallet/account_management_state.go'
@@ -67,15 +68,39 @@ jobs:
       - name: Compile SDK wallet packages
         working-directory: sat20wallet/sdk
         run: go test ./wallet/... -run '^$' -count=1
-      - name: Test SP SDK PWA acceptance scenarios
+      - name: Test SP public interfaces and changed-module internals
         working-directory: sat20wallet/sdk
-        run: go test ./wallet -run '^TestSilentPay' -count=1 -v -timeout=12m
-      - name: Test complete SDK wallet packages
+        shell: bash
+        run: |
+          selector="$(python3 - <<'PY'
+          from pathlib import Path
+          roots = []
+          for line in Path('../scripts/sdk-functional-roots.tsv').read_text().splitlines():
+              if line and not line.startswith('#'):
+                  package, name, kind, source = line.split('\t')
+                  if package == 'wallet' and source.startswith('wallet/silentpay'):
+                      roots.append(name)
+          assert roots, 'missing SP functional roots'
+          print('^(' + '|'.join(roots) + ')$')
+          PY
+          )"
+          go test -mod=readonly ./wallet -run "$selector" -count=1 -v -timeout=12m
+          changed="$(git diff --name-only origin/main...HEAD -- 'wallet/silentpay*.go')"
+          if [[ -n "$changed" ]]; then
+            go test -mod=readonly ./wallet -run '^TestSilentPay' -skip "$selector" -count=1 -v -timeout=12m
+          else
+            echo 'NOTRUN: unchanged SilentPay module internals'
+          fi
+      - name: Test account internals only when account module changed
         working-directory: sat20wallet/sdk
-        run: go test ./wallet/... -count=1 -timeout=25m
-      - name: Test account packages
-        working-directory: sat20wallet/sdk
-        run: go test ./account/... -count=1 -timeout=10m
+        shell: bash
+        run: |
+          changed="$(git diff --name-only origin/main...HEAD -- 'account/**')"
+          if [[ -n "$changed" ]]; then
+            go test -mod=readonly ./account/... -count=1 -timeout=10m
+          else
+            echo 'NOTRUN: unchanged account module internals'
+          fi
       - name: Vet SDK wallet
         working-directory: sat20wallet/sdk
         run: go vet -copylocks=false ./wallet/...

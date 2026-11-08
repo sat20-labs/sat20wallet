@@ -26,7 +26,7 @@ import (
 )
 
 // This diagnostic has no Manager, local database, browser, import or storage
-// path. Its transport accepts only GETs for the three exact public record keys
+// path. Its transport accepts only GETs for the index and its exact member record keys
 // and chain height. Remote ciphertext/plaintext and root material stay in RAM.
 type recoveryReadOnlyTransport struct {
 	keys     map[string]bool
@@ -122,8 +122,11 @@ func TestDiagnosticRemoteAccountRecoveryReadOnly(t *testing.T) {
 		t.Fatal("wrapper_key_derivation_failed")
 	}
 	stateKey := "/personal/" + accountID + "/account/state"
-	dataKey := "/blob/" + accountID + "/account-managed-data"
-	transport := &recoveryReadOnlyTransport{keys: map[string]bool{wrapperKey: true, stateKey: true, dataKey: true}}
+	indexKey, err := account.ManagedIndexKey(accountID)
+	if err != nil {
+		t.Fatal("index_key_derivation_failed")
+	}
+	transport := &recoveryReadOnlyTransport{keys: map[string]bool{wrapperKey: true, stateKey: true, indexKey: true}}
 	httpClient := &NetClient{Client: &http.Client{Transport: transport, Timeout: 12 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}}
 	client := NewSatsNetDKVSClient("https", "apiprd.ordx.market", "satsnet/testnet", httpClient)
 	if client.manager != nil {
@@ -156,7 +159,7 @@ func TestDiagnosticRemoteAccountRecoveryReadOnly(t *testing.T) {
 		t.Fatal("wrapper_open_same_root=false")
 	}
 	defer zeroBytes(payload.Secret)
-	t.Logf("wrapper_open_same_root=true recovery_configured=%t paid=%t", payload.RecoveryConfigured, payload.StorageMode == AccountStoragePaid)
+	t.Logf("wrapper_open_same_root=true recovery_configured=%t paid=%t", payload.PackageID != "", payload.StorageMode == AccountStoragePaid)
 	stateRecord := read("state", stateKey)
 	state, err := account.OpenManagedState(payload.Secret, accountID, stateRecord.Value)
 	if err != nil || state.RootFingerprint != walletFingerprint(root) {
@@ -164,25 +167,41 @@ func TestDiagnosticRemoteAccountRecoveryReadOnly(t *testing.T) {
 	}
 	defer func() {
 		for i := range state.Wallets {
-			state.Wallets[i].Mnemonic = ""
+			zeroBytes(state.Wallets[i].Secret)
+			state.Wallets[i].Secret = nil
 		}
 	}()
-	blobRecord := read("blob", dataKey)
-	managed, err := openAccountManagedDataValue(payload.Secret, accountID, cloneDKVSValue(blobRecord), state)
+	indexRecord := read("index", indexKey)
+	index, err := account.OpenManagedIndex(payload.Secret, accountID, _chain, indexRecord.Value)
 	if err != nil {
-		t.Fatal("state_blob_reference_match=false")
+		t.Fatal("index_open_failed")
+	}
+	var items []account.ManagedDataItem
+	records := []*swire.DKVSRecord{wrapperRecord, stateRecord, indexRecord}
+	for _, entry := range index.Entries {
+		if entry.Deleted || entry.Provider == "wallets" {
+			continue
+		}
+		transport.keys[entry.Key] = true
+		record := read("module", entry.Key)
+		raw, err := openAccountPayload(payload.Secret, accountID, _chain, entry, record.Value)
+		if err != nil {
+			t.Fatal("module_index_binding_invalid")
+		}
+		items = append(items, account.ManagedDataItem{Provider: entry.Provider, Scope: entry.Scope, Payload: raw})
+		records = append(records, record)
 	}
 	defer func() {
-		for i := range managed.Bundle.Items {
-			zeroBytes(managed.Bundle.Items[i].Payload)
+		for i := range items {
+			zeroBytes(items[i].Payload)
 		}
 	}()
-	t.Logf("state_open_same_root=true state_blob_reference_match=true state_revision=%d data_revision=%d wallet_count=%d provider_item_count=%d", state.Revision, state.DataRevision, len(state.Wallets), len(managed.Bundle.Items))
+	t.Logf("state_open_same_root=true index_modules_match=true state_seq=%d wallet_count=%d provider_item_count=%d", stateRecord.Seq, len(state.Wallets), len(items))
 	rootScope := (AccountManagedDataScope{WalletFingerprint: walletFingerprint(root), AccountIndex: 0, Network: _chain}).ID()
 	packages, proofs, outputs, lunarRefs := 0, 0, 0, 0
 	returnProof, outboundChangeProof := false, false
 	remoteBalanceMatches84 := false
-	for _, item := range managed.Bundle.Items {
+	for _, item := range items {
 		if item.Provider != rgb11AccountManagedProviderID || item.Scope != rootScope {
 			continue
 		}
@@ -238,7 +257,7 @@ func TestDiagnosticRemoteAccountRecoveryReadOnly(t *testing.T) {
 		}
 	}
 	// A second exact metadata read excludes a concurrently changed remote pair.
-	for _, record := range []*swire.DKVSRecord{wrapperRecord, stateRecord, blobRecord} {
+	for _, record := range records {
 		keyState, err := client.GetKeyState(record.Key)
 		if err != nil || keyState.ETag != dkvsindexer.RecordHash(record).String() {
 			t.Fatal("remote_records_stable=false")

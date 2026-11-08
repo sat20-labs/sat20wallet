@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSatsNetDKVSClientGetConfig(t *testing.T) {

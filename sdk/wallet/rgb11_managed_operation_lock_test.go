@@ -8,29 +8,29 @@ import (
 	"time"
 )
 
-func TestRGB11ManagedBaselineNetworkWaitDoesNotBlockRGBState(t *testing.T) {
+func TestRGB11BackupNetworkWaitDoesNotBlockRGBState(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
 
-	manager, _, secret := buildRootWrapperSource(t)
-	defer zeroBytes(secret)
+	manager, baselineRemote := newRGB11OnlineLockTestManager(t)
 	remote := &blockedAccountConfigHTTP{
-		rgb11MemoryDKVSHTTP: newRGB11MemoryDKVSHTTP(),
+		rgb11MemoryDKVSHTTP: baselineRemote,
 		started:             make(chan struct{}), release: make(chan struct{}),
 	}
 	manager.http = remote
-	manager.dkvs.mu.Lock()
-	manager.dkvs.clients = make(map[string]*SatsNetDKVSClient)
-	manager.dkvs.mu.Unlock()
-	manager.accountProfile.RecoveryConfigured = true
-	manager.accountProfile.ManagedDataDirty = true
+	client, err := manager.GetDKVSClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.Http = remote
+	var releaseOnce sync.Once
+	releaseRemote := func() { releaseOnce.Do(func() { close(remote.release) }) }
+	defer releaseRemote()
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := runRGB11ManagedOperation(manager, context.Background(), rgb11ManagedOperationNew,
-			func(*rgb11Manager) (struct{}, error) { return struct{}{}, nil })
-		done <- err
+		done <- manager.SyncAccountManagementState(context.Background())
 	}()
 	select {
 	case <-remote.started:
@@ -51,11 +51,11 @@ func TestRGB11ManagedBaselineNetworkWaitDoesNotBlockRGBState(t *testing.T) {
 			t.Fatalf("read RGB state during managed baseline wait: %v", err)
 		}
 	case <-time.After(time.Second):
-		close(remote.release)
+		releaseRemote()
 		<-done
 		t.Fatal("GetRGB11State blocked behind managed baseline network wait")
 	}
-	close(remote.release)
+	releaseRemote()
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
@@ -64,9 +64,8 @@ func TestRGB11ManagedBaselineNetworkWaitDoesNotBlockRGBState(t *testing.T) {
 }
 
 func TestRGB11ManagedOperationWaitDoesNotBlockRGBState(t *testing.T) {
-	manager, _, secret := buildRootWrapperSource(t)
-	defer zeroBytes(secret)
-	manager.accountProfile.RecoveryConfigured = false
+	manager, baselineRemote := newRGB11OnlineLockTestManager(t)
+	_ = baselineRemote
 
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -116,9 +115,8 @@ func TestRGB11ManagedOperationWaitDoesNotBlockRGBState(t *testing.T) {
 }
 
 func TestRGB11ManagedOperationKeepsCapturedScope(t *testing.T) {
-	manager, _, secret := buildRootWrapperSource(t)
-	defer zeroBytes(secret)
-	manager.accountProfile.RecoveryConfigured = false
+	manager, baselineRemote := newRGB11OnlineLockTestManager(t)
+	_ = baselineRemote
 	originalAddress := manager.wallet.GetAddress()
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -179,9 +177,8 @@ func TestRGB11ManagedOperationKeepsCapturedScope(t *testing.T) {
 }
 
 func TestRGB11ManagedOperationWaitDoesNotBlockReadOnlyAPIs(t *testing.T) {
-	manager, _, secret := buildRootWrapperSource(t)
-	defer zeroBytes(secret)
-	manager.accountProfile.RecoveryConfigured = false
+	manager, baselineRemote := newRGB11OnlineLockTestManager(t)
+	_ = baselineRemote
 
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -229,4 +226,14 @@ func TestRGB11ManagedOperationWaitDoesNotBlockReadOnlyAPIs(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
+}
+
+func newRGB11OnlineLockTestManager(t *testing.T) (*Manager, *rgb11MemoryDKVSHTTP) {
+	t.Helper()
+	old := _chain
+	_chain = "testnet"
+	t.Cleanup(func() { _chain = old })
+	manager, remote, _, _ := accountTTLNoopFixture(t)
+	manager.accountBackgroundWG.Wait()
+	return manager, remote
 }

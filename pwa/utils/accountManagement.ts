@@ -2,6 +2,7 @@ import { beginVersionDispatch } from '@/utils/pwaVersionPolicy'
 import { walletRequestSessionGuard } from '@/lib/walletSession'
 import { beginAccountManagementOperation, finishPwaOperation } from '@/utils/accountManagementOperationLog'
 import { noteWasmOperation } from '@/utils/wasmRuntimeDiagnostics'
+import { preserveWasmError, wasmResponseError } from '@/utils/wasmError'
 
 export interface AccountStorageOption {
   id: string
@@ -67,8 +68,20 @@ export interface RestoredWallet {
 }
 
 export interface AccountManagementStatus {
+  account_state: 'local' | 'locked' | 'syncing' | 'ready' | 'error'
+  write_allowed: boolean
+  backup_state: 'none' | 'pending' | 'uploading' | 'backed_up' | 'cleanup'
+  modules?: AccountModuleStatus[]
+  dkvs_status?: 'SYNCING' | 'READY' | 'OFFLINE_READY' | 'RESET_REQUIRED' | 'ERROR'
+  dkvs_cache_at_ms?: number
+  dkvs_cache_height?: number
+  dkvs_write_allowed?: boolean
+  dkvs_pending_requests?: number
   active: boolean
   recovery_configured: boolean
+  local_only?: boolean
+  discovery_status?: 'unknown' | 'inactive' | 'active-waiting-backup' | 'active'
+  activation_pending?: boolean
   managed_data_revision?: number
   managed_data_dirty?: boolean
   account_id?: string
@@ -83,6 +96,51 @@ export interface AccountManagementStatus {
   last_dkvs_sync_error_code?: string
   last_dkvs_sync_error?: string
   last_dkvs_sync_error_at?: number
+}
+
+export interface AccountModuleStatus {
+  provider: string
+  scope: string
+  write_allowed: boolean
+  backup_state: 'none' | 'pending' | 'uploading' | 'backed_up' | 'cleanup' | 'error' | 'conflict' | 'restoring'
+  last_error?: string
+  last_error_code?: string
+}
+
+export interface AccountDKVSInspection {
+  scope: { account_id: string; wallet_subscopes?: string[] }
+  snapshot: {
+    id: string
+    status: string
+    endpoint_id?: string
+    verified_at_ms?: number
+    cache_height?: number
+    covered_prefixes: string[]
+    complete: boolean
+    remote_current: boolean
+    local_dirty: boolean
+    pending_changes: number
+    total_cached_count: number
+  }
+  records: Array<{
+    key: string
+    raw_hex?: string
+    raw_hidden?: boolean
+    raw_hidden_reason?: string
+    record_hash: string
+    seq: number
+    decoded: {
+      type: string
+      status: string
+      revision?: number
+      data_revision?: number
+      wallet_count?: number
+      item_count?: number
+      providers?: string[]
+      subscopes?: string[]
+    }
+  }>
+  next_cursor?: string
 }
 
 export interface AccountAutopayFundingStatus {
@@ -124,10 +182,14 @@ export interface AccountAutopayFundingResult {
 }
 
 export class AccountAutopayPendingError extends Error {
-  constructor(message: string, public data: { transaction_id: string; pending: true }) { super(message) }
+  code?: string
+  constructor(message: string, public data: { transaction_id: string; pending: true }, code?: string) {
+    super(message)
+    this.code = code
+  }
 }
 
-type SDKResponse<T> = { code: number; msg: string; data?: T }
+type SDKResponse<T> = { code: number; msg: string; data?: T; error_code?: string }
 
 class AccountManagementSDK {
   private async request<T>(methodName: string, payload: unknown = {}): Promise<T> {
@@ -159,7 +221,7 @@ class AccountManagementSDK {
       noteWasmOperation(diagnosticMethod, 'returned')
     } catch (error: any) {
       noteWasmOperation(diagnosticMethod, 'failed')
-      const requestError = new Error(error?.message || '账户管理调用失败')
+      const requestError = preserveWasmError(error, '账户管理调用失败')
       await finishPwaOperation(operation, requestError)
       throw requestError
     }
@@ -167,12 +229,16 @@ class AccountManagementSDK {
       noteWasmOperation(diagnosticMethod, 'failed')
       const pending = response?.data as any
       const responseError = pending?.pending && pending?.transaction_id
-        ? new AccountAutopayPendingError(response.msg, pending)
-        : new Error(response?.msg || '账户管理调用失败')
+        ? new AccountAutopayPendingError(response.msg, pending, response.error_code)
+        : wasmResponseError(response?.msg || '账户管理调用失败', response?.error_code)
       await finishPwaOperation(operation, responseError)
       throw responseError
     }
-    await finishPwaOperation(operation, null, response.data)
+    // The inspector returns raw record bytes. Never copy them into the
+    // persistent PWA operation log or diagnostic payloads.
+    await finishPwaOperation(operation, null, methodName === 'inspectDKVS'
+      ? { inspected: true, record_count: (response.data as AccountDKVSInspection)?.records?.length ?? 0 }
+      : response.data)
     checkSession()
     noteWasmOperation(diagnosticMethod, 'finished')
     return response.data as T
@@ -185,6 +251,14 @@ class AccountManagementSDK {
 
   status() {
     return this.request<AccountManagementStatus>('status')
+  }
+
+  retryDKVSSync() {
+    return this.request<{ queued: boolean }>('retryDKVSSync')
+  }
+
+  inspectDKVS(cursor?: string, limit = 20) {
+    return this.request<AccountDKVSInspection>('inspectDKVS', { cursor, limit })
   }
 
   getStorageOptions() {
@@ -285,3 +359,42 @@ class AccountManagementSDK {
 }
 
 export default new AccountManagementSDK()
+
+// Translate known SDK display messages at the UI boundary; retain unknown diagnostics.
+const accountDisplayMessageKeys: Record<string, string> = {
+  "账户管理 SDK 尚未加载": "accountManagement.ui.sdkNotLoaded",
+  "账户管理调用失败": "accountManagement.ui.sdkRequestFailed",
+  "由当前连接节点临时保存；到期后数据可能被删除。": "accountManagement.ui.temporaryDescription",
+  "这不是长期账户备份。": "accountManagement.ui.temporaryWarning",
+  "恢复时需要能够访问保存数据的同一节点。": "accountManagement.ui.sameNodeWarning",
+  "当前连接节点不提供临时 DKVS 缓存。": "accountManagement.ui.temporaryUnavailable",
+  "无法读取当前节点的 DKVS 配置。": "accountManagement.ui.configReadFailed",
+  "当前网络尚未提供可用的 DKVS 付费保存配置。": "accountManagement.ui.paidUnavailable",
+  "通过 AUTOPAY 按区块持续支付后，全网保存加密账户数据。": "accountManagement.ui.paidDescription",
+  "余额不足、未继续支付时，付费同步会失败或停止；已付费记录不会自动降级为节点临时缓存。": "accountManagement.ui.paidWarning",
+  "当前账户未使用 AUTOPAY 付费存储。": "accountManagement.ui.autopayNotRequired",
+  "AUTOPAY 合约状态无效，无法充值。": "accountManagement.ui.invalidContract",
+  "AUTOPAY 合约当前不可用，请检查网络或联系节点维护者。": "accountManagement.ui.contractUnavailable",
+  "账户尚未配置 AUTOPAY，请充值以恢复付费同步。": "accountManagement.ui.delegateMissing",
+  "账户 AUTOPAY 已停止，请充值以恢复付费同步。": "accountManagement.ui.delegateInactive",
+  "账户 AUTOPAY 已过期，请充值以恢复付费同步。": "accountManagement.ui.paymentExpired",
+  "AUTOPAY 支付参数无效，无法充值。": "accountManagement.ui.invalidRate",
+  "账户 AUTOPAY 每区块费率不足，请充值以恢复付费同步。": "accountManagement.ui.rateInsufficient",
+  "AUTOPAY 模块容量不足，请确认调整容量；增加余额不会自动增加模块数量。": "accountManagement.ui.blobCapacity",
+  "AUTOPAY 余额状态无效，无法充值。": "accountManagement.ui.invalidBalance",
+  "账户 AUTOPAY 余额不足，请充值以继续付费同步。": "accountManagement.ui.balanceInsufficient",
+  "AUTOPAY 合约尚未恢复支付，请检查网络或联系节点维护者。": "accountManagement.ui.contractNotResumed",
+  "AUTOPAY 支付正常。": "accountManagement.ui.paymentNormal",
+  "原充值交易等待提交或合约确认；可查询或继续提交同一笔交易。": "accountManagement.ui.pendingOriginal",
+  "原充值交易等待提交或合约确认；可查询或继续提交同一笔交易。 当前合约查询暂不可用。": "accountManagement.ui.pendingQueryUnavailable",
+  "AUTOPAY 充值未提交": "accountManagement.ui.fundingNotSubmitted",
+  "合约查询确认 AUTOPAY 充值已成功": "accountManagement.ui.fundingSucceeded",
+  "付费保存": "accountManagement.ui.paidStorage",
+  "临时缓存": "accountManagement.ui.temporaryStorage"
+}
+
+export const accountDisplayMessage = (t: (key: string) => string, message?: string): string => {
+  if (!message) return ''
+  const key = accountDisplayMessageKeys[message]
+  return key ? t(key) : message
+}

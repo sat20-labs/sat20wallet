@@ -14,7 +14,7 @@
           <TabsTrigger value="faucet">{{ t('tools.tabs.faucet') }}</TabsTrigger>
           <TabsTrigger value="contracts">{{ t('tools.tabs.contracts') }}</TabsTrigger>
           <TabsTrigger value="mint">{{ t('tools.tabs.mint') }}</TabsTrigger>
-          <TabsTrigger value="mining">Mining</TabsTrigger>
+          <TabsTrigger value="mining">{{ $t('pwaUi.tools.mining') }}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="faucet" class="mt-4">
@@ -728,15 +728,15 @@
         <TabsContent value="mining" class="mt-4">
           <Card class="mb-4">
             <CardHeader>
-              <CardTitle class="text-base">BTC Lucky Mining</CardTitle>
+              <CardTitle class="text-base">{{ $t('pwaUi.tools.miningTitle') }}</CardTitle>
               <CardDescription>
-                参与 BTC 幸运挖矿，中奖后自动向 L1 提交区块。
+                {{ $t('pwaUi.tools.miningDescription') }}
               </CardDescription>
             </CardHeader>
             <CardContent>
               <Button class="w-full justify-start" @click="router.push('/wallet/btc-lucky-mining')">
                 <Icon icon="lucide:pickaxe" class="h-4 w-4" />
-                打开挖矿
+                {{ $t('pwaUi.tools.openMining') }}
               </Button>
             </CardContent>
           </Card>
@@ -2278,12 +2278,12 @@ const invokeParamLabels: Record<string, string> = {
   reason: t('tools.invoke.reason'),
   checked_at: t('tools.invoke.checkedAt'),
   recipient: t('tools.invoke.recipient'),
-  minOut: 'Min Out',
+  minOut: t('pwaUi.tools.minOut'),
   assetAmt: t('tools.invoke.assetAmount'),
   amount: t('tools.invoke.assetAmount'),
   beneficiary: t('tools.invoke.beneficiary'),
   n: 'N',
-  authorizationBase64: 'Authorization Base64',
+  authorizationBase64: t('pwaUi.tools.authorizationBase64'),
   to: t('tools.invoke.recipient'),
   from: 'From',
   spender: 'Spender',
@@ -2424,7 +2424,7 @@ const loadEVMCompilerConfig = async () => {
   evmCompilerConfigError.value = ''
   try {
     const response = await smartContractApi.getEVMCompilerConfig({ network: network.value || 'testnet' })
-    if (response?.code && response.code !== 0) throw new Error(response.msg || response.message || 'load compiler config failed')
+    if (response?.code && response.code !== 0) throw new Error(response.msg || response.message || t('pwaUi.tools.compilerConfigFailed'))
     evmCompilerConfig.value = response?.data || response?.Data || response
   } catch (error) {
     evmCompilerConfigError.value = error instanceof Error ? error.message : String(error)
@@ -2485,7 +2485,7 @@ const compileEVMSource = async () => {
       },
     }
     const compiledResult = await evmCompiler.compile(JSON.stringify(compilerInput))
-    if (!stillCurrent()) throw new Error('Solidity input changed; generate init code again')
+    if (!stillCurrent()) throw new Error(t('pwaUi.tools.solidityChanged'))
     const actualCompilerVersion = compiledResult.version
     const output = JSON.parse(compiledResult.output)
     const errors = Array.isArray(output.errors) ? output.errors : []
@@ -2519,7 +2519,7 @@ const compileEVMSource = async () => {
       : bytecodeHex
     const initCodeHash = await sha256Hex(initCodeHex)
     const runtimeCodeHash = compiled.evm?.deployedBytecode?.object ? await sha256Hex(`0x${compiled.evm.deployedBytecode.object}`) : ''
-    if (!stillCurrent()) throw new Error('Solidity input changed; generate init code again')
+    if (!stillCurrent()) throw new Error(t('pwaUi.tools.solidityChanged'))
     deployContractForm.value.initCodeHex = initCodeHex
     evmSolidityContractName.value = contractName
     evmCompileResult.value = {
@@ -3858,10 +3858,10 @@ const assertPredictionSourceURLReachable = async (sourceURL: string) => {
   try {
     parsed = new URL(sourceURL)
   } catch {
-    throw new Error('Prediction source URL is invalid')
+    throw new Error(t('pwaUi.tools.predictionUrlInvalid'))
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error('Prediction source URL must use http or https')
+    throw new Error(t('pwaUi.tools.predictionUrlScheme'))
   }
 
   try {
@@ -3917,14 +3917,14 @@ const validateAgentPredictionBeforeDeploy = async (prediction: Record<string, un
     contract: prediction,
   })
   if (response?.code !== 0) {
-    throw new Error(response?.msg || 'Prediction ready review failed')
+    throw new Error(response?.msg || t('pwaUi.tools.predictionReviewFailed'))
   }
   const review = parseReviewReadyData(response)
   if (!review?.urlReachable) {
-    throw new Error(review?.reason || 'Prediction source URL is not reachable by oracle')
+    throw new Error(review?.reason || t('pwaUi.tools.predictionOracleUnreachable'))
   }
   if (!review?.ready) {
-    throw new Error(review?.reason || 'Prediction contract cannot pass oracle ready review')
+    throw new Error(review?.reason || t('pwaUi.tools.predictionNotReady'))
   }
 }
 
@@ -4172,7 +4172,7 @@ const loadContract = async () => {
       },
     }
     if (isPredictionAgentContract(queriedContract)) {
-      showError(t('tools.messages.queryFailed'), 'Prediction contracts should be used from L2 Market.')
+      showError(t('tools.messages.queryFailed'), t('pwaUi.tools.predictionL2'))
       return
     }
     selectedContract.value = summary.data

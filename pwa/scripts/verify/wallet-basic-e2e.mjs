@@ -239,22 +239,80 @@ export async function runPwaWalletBasicCases(t, fixture) {
     await check(requiredPwaWalletBasicCases[6], async () => {
       await settings(page)
       await page.getByRole('button', { name: /Environment Options/ }).click()
-      const environment = page.getByRole('heading', { name: 'Environment Options', exact: true }).locator('../..').locator('..')
-      await environment.getByRole('combobox').nth(1).click()
-      await page.getByRole('option', { name: '中文', exact: true }).click()
-      await expect(page.getByRole('heading', { name: 'Environment Options', exact: true })).toBeHidden()
+      const englishHeading = page.getByRole('heading', { name: 'Environment Options', exact: true })
+      const languageSelect = englishHeading.locator('../..').locator('..').getByRole('combobox').nth(1)
+      assert.equal(await page.evaluate(() => window.__SAT20_PWA_VERIFY__.walletStorage.getValue('language')), 'en')
+
+      // Hold the durable write so the UI failure path and repeated-selection
+      // guard are checked without replacing the storage implementation.
+      await page.evaluate(() => {
+        const storage = window.__SAT20_PWA_VERIFY__.walletStorage
+        const descriptor = Object.getOwnPropertyDescriptor(storage, 'setValue')
+        const realSetValue = storage.setValue.bind(storage)
+        const gate = { descriptor, rejects: [], writes: 0 }
+        window.languageWriteFailureGate = gate
+        storage.setValue = (key, value) => {
+          if (key !== 'language') return realSetValue(key, value)
+          gate.writes++
+          return new Promise((_resolve, reject) => { gate.rejects.push(reject) })
+        }
+      })
+      try {
+        await languageSelect.click()
+        await page.getByRole('option', { name: '中文', exact: true }).click()
+        await expect(languageSelect).toBeDisabled()
+        assert.equal(await page.evaluate(() => window.languageWriteFailureGate.writes), 1,
+          'first language change should start exactly one pending persistence write')
+        await expect(englishHeading).toBeVisible()
+        await expect(languageSelect).toContainText('English')
+        await page.evaluate(() => {
+          for (const reject of window.languageWriteFailureGate.rejects) {
+            reject(new Error('usage injected language preference write failure'))
+          }
+        })
+        await expect(page.getByText('Could not save the language preference. The previous language remains active.', { exact: true })).toBeVisible()
+        await expect(englishHeading).toBeVisible()
+        await expect(languageSelect).toContainText('English')
+        assert.equal(await page.evaluate(() => window.__SAT20_PWA_VERIFY__.walletStorage.getValue('language')), 'en')
+      } finally {
+        await page.evaluate(() => {
+          const gate = window.languageWriteFailureGate
+          if (!gate) return
+          for (const reject of gate.rejects) reject(new Error('language-write test cleanup'))
+          const storage = window.__SAT20_PWA_VERIFY__.walletStorage
+          if (gate.descriptor) Object.defineProperty(storage, 'setValue', gate.descriptor)
+          else delete storage.setValue
+          delete window.languageWriteFailureGate
+        })
+      }
+
       await reloadUnlock(page, actor.password)
-      const language = await page.evaluate(async () => (await import('/lib/walletStorage.ts')).walletStorage.getValue('language'))
+      assert.equal(await page.evaluate(() => window.__SAT20_PWA_VERIFY__.walletStorage.getValue('language')), 'en')
+      assert.deepEqual(await identity(page), originalIdentity, 'failed language save changed the wallet identity')
+
+      await settings(page)
+      await page.getByRole('button', { name: /Environment Options/ }).click()
+      await expect(page.getByRole('heading', { name: 'Environment Options', exact: true })).toBeVisible()
+      await page.getByRole('heading', { name: 'Environment Options', exact: true }).locator('../..').locator('..')
+        .getByRole('combobox').nth(1).click()
+      await page.getByRole('option', { name: '中文', exact: true }).click()
+      await expect(englishHeading).toBeHidden()
+      await expect(page.getByRole('heading', { name: '环境选项', exact: true })).toBeVisible()
+      // Refresh immediately after the visible locale switch; do not wait for a
+      // storage poll that could hide a missing persistence barrier.
+      await reloadUnlock(page, actor.password)
+      const language = await page.evaluate(() => window.__SAT20_PWA_VERIFY__.walletStorage.getValue('language'))
       assert.equal(language, 'zh')
       assert.deepEqual(await identity(page), originalIdentity)
-      // The environment selector remains second in this section in both
-      // languages; use its exact visible selected language to reopen it.
       await visit(page, '/wallet/setting')
-      const heading = page.getByRole('heading').filter({ hasText: '环境' })
+      await expect(page.getByRole('heading', { name: '系统设置', exact: true })).toBeVisible()
+      await expect(page.getByRole('heading', { name: '环境选项', exact: true })).toBeVisible()
+      const heading = page.getByRole('heading', { name: '环境选项', exact: true })
       await heading.locator('../..').click()
       await page.getByRole('combobox').filter({ hasText: '中文' }).click()
       await page.getByRole('option', { name: 'English', exact: true }).click()
       await expect(page.getByRole('heading', { name: 'Environment Options', exact: true })).toBeVisible()
+      assert.equal(await page.evaluate(() => window.__SAT20_PWA_VERIFY__.walletStorage.getValue('language')), 'en')
     })
 
     await check(requiredPwaWalletBasicCases[7], async () => {
@@ -429,7 +487,7 @@ export async function runPwaWalletBasicCases(t, fixture) {
 // Hold a genuine A response until B has rendered. The observer delegates every
 // SDK call unchanged; it only provides a completion barrier after WASM returns.
 async function runAssetContextStability(t, fixture, fresh, visit, identity, walletBalance) {
-  const { walletCall } = t
+  const { walletCall, accountCall } = t
   const page = await fresh()
   const endpoint = fixture.config.IndexerL1
   const base = `${endpoint.Scheme}://${endpoint.Host}/${String(endpoint.Proxy || '').replace(/^\/+|\/+$/g, '')}`.replace(/\/$/, '')
@@ -523,6 +581,14 @@ async function runAssetContextStability(t, fixture, fresh, visit, identity, wall
     await page.getByRole('button', { name: 'Import Wallet', exact: true }).click()
     await expect(page.getByRole('tab', { name: 'Bitcoin', exact: true })).toBeVisible({ timeout: poll.timeout })
     assert.equal((await identity(page)).address, fixture.address)
+    // This case calls the store directly. A local-only account can write before
+    // activation; an activated account needs its verified online baseline.
+    await expect.poll(async () => {
+      const state = await accountCall(page, 'status')
+      if (!state.activation_pending &&
+        (state.local_only || (state.recovery_configured && state.dkvs_write_allowed))) return 'ready'
+      return `${state.dkvs_status || 'unknown'}:${state.last_dkvs_sync_error || 'pending'}`
+    }, { timeout: 90000 }).toBe('ready')
     await page.evaluate(async () => { await window.__SAT20_PWA_VERIFY__.useWalletStore().addAccount('Asset context B', 1) })
     const b = await identity(page)
     assert.equal(b.accountIndex, 1)

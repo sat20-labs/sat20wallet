@@ -17,7 +17,7 @@ func TestReusePaidStorageAuthorizationNeverFundsNotReadyDelegate(t *testing.T) {
 	state.Delegates["payer"] = delegate
 
 	authorization, err := accountPaidStorageAuthorizationFromState(
-		location, defaults, accountMinimumRecordCount, "payer", state)
+		location, defaults, accountMinimumRecordCount, "payer", state, 1)
 	if err != nil {
 		t.Fatalf("ready delegate was not reusable: %v", err)
 	}
@@ -29,7 +29,7 @@ func TestReusePaidStorageAuthorizationNeverFundsNotReadyDelegate(t *testing.T) {
 	delegate.Balance = "0"
 	state.Delegates["payer"] = delegate
 	authorization, err = accountPaidStorageAuthorizationFromState(
-		location, defaults, accountMinimumRecordCount, "payer", state)
+		location, defaults, accountMinimumRecordCount, "payer", state, 1)
 	if !errors.Is(err, ErrAccountPaidStorageNotReusable) {
 		t.Fatalf("not-ready delegate should require explicit funding confirmation: %v", err)
 	}
@@ -43,8 +43,7 @@ func TestAccountStorageAuthorizationOwnedByRootSDKSession(t *testing.T) {
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
 
-	manager, _, secret := buildRootWrapperSource(t)
-	defer zeroBytes(secret)
+	manager, _, _, _ := accountTTLNoopFixture(t)
 	// Obtain the authorization through the real SDK endpoint/policy path.
 	// A fabricated grant with no location no longer satisfies root binding.
 	authorization, err := manager.ConfirmAccountStorage(AccountStorageTemporary, 0)
@@ -54,7 +53,15 @@ func TestAccountStorageAuthorizationOwnedByRootSDKSession(t *testing.T) {
 	if authorization.ID == "" || authorization.ID == AccountStorageTemporary {
 		t.Fatalf("SDK did not assign an opaque authorization id: %q", authorization.ID)
 	}
-	manager.SwitchAccount(1)
+	if err := manager.EnsureAccount(manager.GetCurrentWalletId(), 1, "Savings", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.SwitchAccount(1); err != nil {
+		t.Fatal(err)
+	}
+	if manager.status.CurrentAccount != 1 {
+		t.Fatal("selection did not change")
+	}
 	pending, err := manager.PendingAccountStorageAuthorization()
 	if err != nil {
 		t.Fatalf("current account selection invalidated root authorization: %v", err)
@@ -73,8 +80,7 @@ func TestPendingAccountStorageAuthorizationIsRootBoundNotSelectionBound(t *testi
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
 
-	manager, _, secret := buildRootWrapperSource(t)
-	defer zeroBytes(secret)
+	manager, _, _, _ := accountTTLNoopFixture(t)
 	rootID := manager.status.CurrentWallet
 	if err := manager.EnsureAccount(rootID, 1, "Savings", ""); err != nil {
 		t.Fatal(err)
@@ -96,7 +102,15 @@ func TestPendingAccountStorageAuthorizationIsRootBoundNotSelectionBound(t *testi
 		t.Fatal("SDK storage authorization has no runtime handle")
 	}
 
-	manager.SwitchAccount(1)
+	if err := manager.EnsureAccount(manager.GetCurrentWalletId(), 1, "Savings", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.SwitchAccount(1); err != nil {
+		t.Fatal(err)
+	}
+	if manager.status.CurrentAccount != 1 {
+		t.Fatal("selection did not change")
+	}
 	if current, err := manager.PendingAccountStorageAuthorization(); err != nil || current.ID != stored.ID {
 		t.Fatalf("account selection invalidated root authorization: %+v %v", current, err)
 	}
@@ -117,8 +131,7 @@ func TestReviewStorageAuthorizationRejectsForeignEndpoint(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
-	manager, _, secret := buildRootWrapperSource(t)
-	defer zeroBytes(secret)
+	manager, _, _ := newInactiveAccountGroup(t, accountRootWrapperTestMnemonic, "password")
 	location, err := manager.AccountIndexerLocation()
 	if err != nil {
 		t.Fatal(err)
@@ -141,8 +154,7 @@ func TestAccountStorageRuntimeStopRejectsAuthorizationWork(t *testing.T) {
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
 
-	manager, _, secret := buildRootWrapperSource(t)
-	defer zeroBytes(secret)
+	manager, _, _ := newInactiveAccountGroup(t, accountRootWrapperTestMnemonic, "password")
 	if _, err := manager.ConfirmAccountStorage(AccountStorageTemporary, 0); err != nil {
 		t.Fatal(err)
 	}

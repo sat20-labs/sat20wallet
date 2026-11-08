@@ -1,8 +1,11 @@
 package wallet
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,17 +30,70 @@ func coreRGB11RecoveryIdentityAndBatchE2E(t *testing.T, cfg coreE2EConfig,
 		coreRGB11ContractIdentityAndCacheE2E(t, cfg, chain, sender, senderMaterial)
 	})
 	t.Run("R19_multi_output_batch_ack_cold_restore_and_respend", func(t *testing.T) {
-		coreRGB11BatchColdRestoreE2E(t, cfg, chain, senderMaterial, receiverMaterial)
+		coreRGB11BatchColdRestoreE2E(t, cfg, chain, sender, receiver, senderMaterial, receiverMaterial)
 	})
 	t.Run("R19_self_send_ack_cold_restore_and_respend", func(t *testing.T) {
-		coreRGB11SelfSendColdRestoreE2E(t, cfg, chain, senderMaterial, receiverMaterial)
+		coreRGB11SelfSendColdRestoreE2E(t, cfg, chain, sender, receiver, senderMaterial, receiverMaterial)
 	})
+}
+
+// Join automatic receive work before confirming the final source closure.
+// Replay its frozen outbox without consuming RGB mail or restarting the worker.
+func coreSuspendRGBDevice(t *testing.T, manager *Manager) {
+	t.Helper()
+	manager.StopDKVSSync()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	coordinator := manager.ensureDKVSManager()
+	// The stopped coordinator has no worker request context. Bound this final
+	// handoff's transport calls to the same deadline as its account sync.
+	coordinator.mu.Lock()
+	previous := coordinator.requestCtx
+	coordinator.requestCtx = ctx
+	coordinator.mu.Unlock()
+	defer func() {
+		coordinator.mu.Lock()
+		coordinator.requestCtx = previous
+		coordinator.mu.Unlock()
+	}()
+	// Joining a canceled receive may revoke the online write session. This
+	// device handoff explicitly verifies all subscriptions without restarting
+	// the mailbox worker; a targeted account refresh cannot grant that session.
+	client, err := coordinator.primaryClient()
+	coreRequire(t, "open stopped source subscription client", err)
+	coreRequire(t, "verify stopped source subscriptions before final backup", coordinator.ensureCurrentSubscription(client))
+	coreRequire(t, "finish frozen outbox after automatic worker joined", coordinator.runTransport(func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		client, err := coordinator.primaryClient()
+		if err != nil {
+			return err
+		}
+		store := newDKVSReplicaStore(manager.db)
+		entries, err := store.LoadOutbox(client.replicaNamespace)
+		if err != nil {
+			return err
+		}
+		// This handoff only finishes captured requests; a refusal must fail here,
+		// rather than letting the normal sender discard it for a fresh rebase.
+		for _, entry := range entries {
+			if entry.State == DKVSOutboxConflict || entry.State == DKVSOutboxTerminal {
+				return dkvsOutboxEntryError(entry)
+			}
+		}
+		_, err = manager.flushDKVSBatchOutbox(client, store)
+		return err
+	}))
+	coreRequire(t, "confirm source account after automatic worker joined", manager.SyncAccountManagementState(ctx))
+	coreRequire(t, "confirm source backup before device handoff", manager.WaitAccountManagedDataReady(ctx))
 }
 
 func coreRGB11ZeroBalanceAliasColdRestoreE2E(t *testing.T, cfg coreE2EConfig,
 	chain *coreE2EChain, sender, receiver *Manager,
 	senderMaterial *coreRecoveryMaterial) {
 	t.Helper()
+	coreTransferDeviceCleanup(t, sender, receiver)
 	issued, err := sender.IssueRGB11Asset(context.Background(), RGB11IssueRequest{
 		Schema: "NIA", Ticker: "E2EZ", Name: "E2E zero-balance recovery asset", Amounts: []uint64{333},
 	})
@@ -59,6 +115,7 @@ func coreRGB11ZeroBalanceAliasColdRestoreE2E(t *testing.T, cfg coreE2EConfig,
 	// This manager has a new database and imports only the account's confirmed
 	// recovery package. The contract and alias are still user intent even though
 	// the issuer no longer owns an allocation.
+	coreSuspendRGBDevice(t, sender)
 	coldIssuer := coreRestoreE2E(t, cfg, chain, senderMaterial)
 	coreSynchronizeRestoredAccount(t, coldIssuer)
 	_, err = coldIssuer.RefreshRGB11State(context.Background())
@@ -94,11 +151,19 @@ func coreRGB11ZeroBalanceAliasColdRestoreE2E(t *testing.T, cfg coreE2EConfig,
 	coreAssert(t, coldBalance != nil && coldBalance.Value.Uint64() == 100 &&
 		receiverBalance != nil && receiverBalance.Value.Uint64() == 233,
 		"cold-restored contract could not spend a newly received allocation")
+	coreSuspendRGBDevice(t, coldIssuer)
+	coreSuspendRGBDevice(t, receiver)
 }
 
 func coreRGB11ContractIdentityAndCacheE2E(t *testing.T, cfg coreE2EConfig,
 	chain *coreE2EChain, sender *Manager, senderMaterial *coreRecoveryMaterial) {
 	t.Helper()
+	// Cold devices close before the original device returns to this account.
+	t.Cleanup(func() {
+		coreRequire(t, "resume duplicate-ticker source after cold devices close", sender.StartDKVSSync())
+		coreSynchronizeRestoredAccount(t, sender)
+		coreWaitPrivateBackup(t, sender)
+	})
 	first, err := sender.IssueRGB11Asset(context.Background(), RGB11IssueRequest{
 		Schema: "NIA", Ticker: "E2EDUP", Name: "E2E duplicate ticker first contract", Amounts: []uint64{111},
 	})
@@ -110,12 +175,14 @@ func coreRGB11ContractIdentityAndCacheE2E(t *testing.T, cfg coreE2EConfig,
 	coreAssert(t, first.ContractID != second.ContractID && first.AssetName != second.AssetName,
 		"same ticker issuance reused a contract-derived asset identity")
 
+	coreSuspendRGBDevice(t, sender)
 	cold := coreRestoreE2E(t, cfg, chain, senderMaterial)
 	coreSynchronizeRestoredAccount(t, cold)
 	_, err = cold.RefreshRGB11State(context.Background())
 	coreRequire(t, "refresh duplicate-ticker cold restore", err)
 	coreAssertRGB11IdentityBalance(t, cold, first.ContractID, first.AssetName, 111)
 	coreAssertRGB11IdentityBalance(t, cold, second.ContractID, second.AssetName, 222)
+	coreSuspendRGBDevice(t, cold)
 
 	// Export a structurally valid but false amount cache from an isolated copy,
 	// then ask another cold database to import it against the real Core evidence.
@@ -127,6 +194,11 @@ func coreRGB11ContractIdentityAndCacheE2E(t *testing.T, cfg coreE2EConfig,
 	coreSynchronizeRestoredAccount(t, forger)
 	_, err = forger.RefreshRGB11State(context.Background())
 	coreRequire(t, "refresh forged-cache fixture", err)
+	coreSuspendRGBDevice(t, forger)
+	// Only its healthy closure may reach the server. Keep this deliberately
+	// corrupted device offline while the normal cold device validates the input.
+	coreRequire(t, "resume healthy cold target before forged import", cold.StartDKVSSync())
+	coreSynchronizeRestoredAccount(t, cold)
 	coreRequire(t, "seed self-consistent forged allocation cache",
 		coreForgeRGB11LocalAmountCache(t, forger, first.AssetName))
 	forgerCatalog, err := forger.accountManagedDataCatalog()
@@ -142,6 +214,7 @@ func coreRGB11ContractIdentityAndCacheE2E(t *testing.T, cfg coreE2EConfig,
 		"cold import accepted a cached amount that disagrees with the original consignment and local validation")
 	coreAssertRGB11IdentityBalance(t, cold, first.ContractID, first.AssetName, 111)
 	coreAssertRGB11IdentityBalance(t, cold, second.ContractID, second.AssetName, 222)
+	coreSuspendRGBDevice(t, cold)
 }
 
 func coreForgeRGB11LocalAmountCache(t *testing.T, manager *Manager,
@@ -216,8 +289,12 @@ func coreForgeRGB11LocalAmountCache(t *testing.T, manager *Manager,
 }
 
 func coreRGB11BatchColdRestoreE2E(t *testing.T, cfg coreE2EConfig,
-	chain *coreE2EChain, senderMaterial, receiverMaterial *coreRecoveryMaterial) {
+	chain *coreE2EChain, originalSender, originalReceiver *Manager,
+	senderMaterial, receiverMaterial *coreRecoveryMaterial) {
 	t.Helper()
+	coreTransferDeviceCleanup(t, originalSender, originalReceiver)
+	coreSuspendRGBDevice(t, originalSender)
+	coreSuspendRGBDevice(t, originalReceiver)
 	// Keep this long-lived public API goroutine away from the aggregate's shared
 	// managers. If ACK polling fails and the API continues until its own timeout,
 	// only these child-scoped databases can be affected.
@@ -362,6 +439,7 @@ func coreRGB11BatchColdRestoreE2E(t *testing.T, cfg coreE2EConfig,
 		receiverBalance != nil && receiverBalance.Value.Uint64() == 300,
 		"confirmed batch did not conserve both recipient allocations and sender change")
 
+	coreSuspendRGBDevice(t, receiver)
 	coldReceiver := coreRestoreE2E(t, cfg, chain, receiverMaterial)
 	coreSynchronizeRestoredAccount(t, coldReceiver)
 	_, err = coldReceiver.RefreshRGB11State(context.Background())
@@ -381,16 +459,38 @@ func coreRGB11BatchColdRestoreE2E(t *testing.T, cfg coreE2EConfig,
 	coreAssert(t, recoveredBalance != nil && recoveredBalance.Value.Uint64() == 250 &&
 		senderBalance != nil && senderBalance.Value.Uint64() == 350,
 		"cold-restored batch allocations could not be spent through the real send path")
+	coreSuspendRGBDevice(t, coldReceiver)
+	coreSuspendRGBDevice(t, sender)
 }
 
 func coreRGB11SelfSendColdRestoreE2E(t *testing.T, cfg coreE2EConfig,
-	chain *coreE2EChain, senderMaterial, receiverMaterial *coreRecoveryMaterial) {
+	chain *coreE2EChain, sender, receiver *Manager,
+	senderMaterial, receiverMaterial *coreRecoveryMaterial) {
 	t.Helper()
-	// Use isolated databases for both roots. All send/receive stages stay on one
-	// public Manager so this exercises its real account gate and mailbox path.
+	// The old devices go offline before cold devices take over their roots.
+	// StopDKVSSync joins the worker, including automatic mailbox receive jobs.
+	coreWaitPrivateBackup(t, sender)
+	coreWaitPrivateBackup(t, receiver)
+	sender.StopDKVSSync()
+	receiver.StopDKVSSync()
+	// Register before creating cold devices: their Close cleanups run first.
+	// Later groups reuse these exact original instances after real online sync.
+	t.Cleanup(func() {
+		senderErr := sender.StartDKVSSync()
+		receiverErr := receiver.StartDKVSSync()
+		coreRequire(t, "resume original sender after cold device handoff", senderErr)
+		coreRequire(t, "resume original receiver after cold device handoff", receiverErr)
+		coreSynchronizeRestoredAccount(t, sender)
+		coreSynchronizeRestoredAccount(t, receiver)
+		coreWaitPrivateBackup(t, sender)
+		coreWaitPrivateBackup(t, receiver)
+	})
+	// All self-send/receive stages use one public Manager and its real gate.
 	self := coreRestoreE2E(t, cfg, chain, senderMaterial)
+	coreRGBManagerRole(t, "self-sender-receiver", self)
 	coreSynchronizeRestoredAccount(t, self)
 	otherRoot := coreRestoreE2E(t, cfg, chain, receiverMaterial)
+	coreRGBManagerRole(t, "self-other-root", otherRoot)
 	coreSynchronizeRestoredAccount(t, otherRoot)
 
 	issued, err := self.IssueRGB11Asset(context.Background(), RGB11IssueRequest{
@@ -420,18 +520,27 @@ func coreRGB11SelfSendColdRestoreE2E(t *testing.T, cfg coreE2EConfig,
 		"public self-send omitted its durable operation identity")
 	coreAssert(t, chain.broadcastCount() == beforeBroadcast,
 		"public self-send broadcast before its own receive ACK")
+	checkBroadcast, releaseObserver := coreObserveSelfSendBroadcast(t, chain, self, prepared, beforeBroadcast)
 	delivery, err := self.DeliverAndBroadcastConfiguredRGB11AddressTransfer(
 		prepared.State.TransferID, RGB11AddressDeliveryOptions{})
 	coreRequire(t, "deliver public RGB11 self-send", err)
-	coreAssert(t, delivery.AwaitingACK && !delivery.Broadcast &&
-		chain.broadcastCount() == beforeBroadcast,
-		"public self-send crossed the ACK barrier during delivery")
+	coreAssert(t, delivery != nil && delivery.TransferID == prepared.State.TransferID &&
+		(delivery.AwaitingACK && !delivery.Broadcast ||
+			delivery.Broadcast && !delivery.AwaitingACK && delivery.TxID == prepared.TxID),
+		"self-send delivery did not retain its awaiting-ACK or completed transaction identity")
 
-	coreWaitRGB11MailboxACK(t, chain, self, prepared, beforeBroadcast)
+	coreWaitSelfSendACK(t, chain, self, prepared, beforeBroadcast)
 	coreAssertRGB11ACKRecoveryPublished(t, self, prepared)
-	coreAssert(t, chain.broadcastCount() == beforeBroadcast,
-		"self-send ACK publication broadcast before sender consumed the ACK")
+	// One Manager owns both roles, so its normal worker can consume its own
+	// durable ACK while the foreground waits for the private recovery backup.
 	coreWaitRGB11MailboxBroadcast(t, chain, self, prepared, beforeBroadcast)
+	checkBroadcast()
+	result, err := self.SyncConfiguredRGB11AddressMailbox(context.Background(),
+		dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+	coreRequire(t, "repeat self-send mailbox synchronization after broadcast", err)
+	coreAssertRGB11MailboxErrors(t, self, map[string]bool{prepared.State.TransferID: true}, result)
+	checkBroadcast()
+	releaseObserver()
 
 	chain.confirm(prepared.TxID)
 	_, err = self.RefreshRGB11State(context.Background())
@@ -444,7 +553,10 @@ func coreRGB11SelfSendColdRestoreE2E(t *testing.T, cfg coreE2EConfig,
 	coreAssert(t, selfBalance != nil && selfBalance.Value.Uint64() == 300,
 		"self-send did not conserve the sender's total allocation")
 
+	coreWaitPrivateBackup(t, self)
+	self.Close()
 	coldSelf := coreRestoreE2E(t, cfg, chain, senderMaterial)
+	coreRGBManagerRole(t, "cold-self-respend", coldSelf)
 	coreSynchronizeRestoredAccount(t, coldSelf)
 	_, err = coldSelf.RefreshRGB11State(context.Background())
 	coreRequire(t, "refresh cold-restored self-send root", err)
@@ -455,6 +567,11 @@ func coreRGB11SelfSendColdRestoreE2E(t *testing.T, cfg coreE2EConfig,
 		"cold self-send recovery lost or duplicated the two same-root roles")
 
 	beforeRespend := chain.broadcastCount()
+	defer func() {
+		if t.Failed() {
+			coreSelfSendACKFacts(t, chain, coldSelf, otherRoot, prepared.State.TransferID, issued.AssetName)
+		}
+	}()
 	coreSendRGB11AddressAmountAndSettle(t, chain, coldSelf, otherRoot,
 		issued.AssetName, "50", beforeRespend)
 	coldBalance, err = coldSelf.GetRGB11AssetBalance(&issued.AssetName)
@@ -464,6 +581,193 @@ func coreRGB11SelfSendColdRestoreE2E(t *testing.T, cfg coreE2EConfig,
 	coreAssert(t, coldBalance != nil && coldBalance.Value.Uint64() == 250 &&
 		otherBalance != nil && otherBalance.Value.Uint64() == 50,
 		"cold-restored self-send allocation could not be spent through the public ACK path")
+	coreWaitPrivateBackup(t, coldSelf)
+	coreWaitPrivateBackup(t, otherRoot)
+}
+
+// Failure-only local observation. Never receive, accept, refresh or repair an
+// ACK here; preserve the failing mailbox assertion and the original state.
+func coreSelfSendACKFacts(t *testing.T, chain *coreE2EChain, source, destination *Manager,
+	originalID string, asset indexer.AssetName) {
+	t.Helper()
+	sourceID, sourceErr := source.RootAccountID()
+	destinationID, destinationErr := destination.RootAccountID()
+	originalMessage, originalErr := rgb11AddressMessageID(originalID)
+	if sourceErr != nil || destinationErr != nil || originalErr != nil {
+		t.Logf("self ACK facts: source_error=%T destination_error=%T original_error=%T", sourceErr, destinationErr, originalErr)
+		return
+	}
+	for _, actor := range []struct {
+		role    string
+		manager *Manager
+	}{{"respend-sender", source}, {"respend-receiver", destination}} {
+		manager := actor.manager
+		root, err := manager.accountManagementRootWallet()
+		if err != nil {
+			t.Logf("self ACK facts: role=%s manager=%d root_error=%T", actor.role, manager.debugID, err)
+			continue
+		}
+		accountID, err := dkvsAccountID(root)
+		if err != nil {
+			t.Logf("self ACK facts: role=%s manager=%d identity_error=%T", actor.role, manager.debugID, err)
+			continue
+		}
+		client, err := manager.dkvs.primaryClient()
+		if err != nil {
+			t.Logf("self ACK facts: role=%s manager=%d client_error=%T", actor.role, manager.debugID, err)
+			continue
+		}
+		records, err := newDKVSReplicaStore(manager.db).ListSubscriptionRecords(client.replicaNamespace)
+		if err != nil {
+			t.Logf("self ACK facts: role=%s manager=%d replica_error=%T", actor.role, manager.debugID, err)
+			continue
+		}
+		states, err := manager.rgbManager.projectionStore.ListTransfers()
+		if err != nil {
+			t.Logf("self ACK facts: role=%s manager=%d state_error=%T", actor.role, manager.debugID, err)
+			continue
+		}
+		currentSends := 0
+		for _, state := range states {
+			if state != nil && state.Direction == "send" && state.TransferID != originalID &&
+				state.Asset.Name == asset && state.SenderAccountID == sourceID && state.ReceiverAccountID == destinationID {
+				currentSends++
+			}
+		}
+		prefix := "/mail/" + accountID + "/msg/"
+		for _, record := range records {
+			if record == nil || !strings.HasPrefix(record.Key, prefix) {
+				continue
+			}
+			message, err := decodeWalletDirectRecord(root, record)
+			if err != nil {
+				t.Logf("self ACK facts: role=%s manager=%d record_tag=%s verified=false decode_error=%T", actor.role, manager.debugID, accountTraceScope(record.Key), err)
+				continue
+			}
+			if message == nil || message.Direct == nil || message.Payload == nil || message.Payload.Kind != AccountMessageKindRGB11ACK {
+				continue
+			}
+			messageID := message.Payload.ApplicationID
+			ack, ackErr := rgb11wallet.DecodeAddressACK(message.Payload.Body)
+			t.Logf("self ACK facts: role=%s manager=%d message_tag=%s original_match=%t verified=true recipient_self=%t sender_self=%t sender_source=%t sender_destination=%t ack_decoded=%t ack_accepted=%t ack_rejected=%t ack_resend=%t processed=%t current_send_candidates=%d",
+				actor.role, manager.debugID, accountTraceScope(messageID), messageID == originalMessage,
+				message.Direct.RecipientAccount == accountID, message.Direct.SenderAccount == accountID,
+				message.Direct.SenderAccount == sourceID, message.Direct.SenderAccount == destinationID,
+				ackErr == nil, ackErr == nil && ack.Status == RGB11AddressACKAccepted,
+				ackErr == nil && ack.Status == RGB11AddressACKRejected, ackErr == nil && ack.Status == RGB11AddressACKNeedResend,
+				manager.rgbManager.rgb11AddressMessageProcessed("ack", messageID), currentSends)
+			matches := 0
+			for _, state := range states {
+				if state == nil || !state.AddressMode {
+					continue
+				}
+				id, err := rgb11AddressMessageID(state.TransferID)
+				if err != nil || id != messageID {
+					continue
+				}
+				matches++
+				current := state.TransferID != originalID && state.Asset.Name == asset &&
+					state.SenderAccountID == sourceID && state.ReceiverAccountID == destinationID
+				status, statusErr := chain.GetTxStatus(state.WitnessTxID)
+				t.Logf("self ACK binding: role=%s manager=%d message_tag=%s transfer_tag=%s send=%t receive=%t original_match=%t current_match=%t terminal=%t settled=%t confirmed=%t sender_match=%t recipient_match=%t stored_message_present=%t stored_message_match=%t stored_ack_accepted=%t stored_ack_sent=%t acknowledged=%t",
+					actor.role, manager.debugID, accountTraceScope(messageID), accountTraceScope(state.TransferID),
+					state.Direction == "send", state.Direction == "receive", state.TransferID == originalID, current,
+					state.Status == "settled" || state.Status == "orphaned" || state.Status == "rejected",
+					state.Status == "settled", statusErr == nil && status != nil && status.Confirmed,
+					message.Direct.SenderAccount == state.ReceiverAccountID, message.Direct.RecipientAccount == state.SenderAccountID,
+					state.AddressMessageID != "", state.AddressMessageID == messageID,
+					state.AckStatus == "accepted", state.AckStatus == "ack-sent", state.DeliveryAcknowledged)
+			}
+			t.Logf("self ACK facts: role=%s manager=%d message_tag=%s canonical_matches=%d", actor.role, manager.debugID, accountTraceScope(messageID), matches)
+		}
+		latest, latestErr := manager.rgbManager.projectionStore.ListTransfers()
+		t.Logf("self ACK facts: role=%s manager=%d state_unchanged=%t state_error=%T", actor.role, manager.debugID,
+			latestErr == nil && coreDigest(states) == coreDigest(latest), latestErr)
+	}
+}
+
+// Observe the real backend boundary without delaying, rejecting or replacing
+// its transaction. This proves ACK and signed intent existed before Broadcast.
+func coreObserveSelfSendBroadcast(t *testing.T, chain *coreE2EChain, manager *Manager,
+	prepared *RGB11PreparedTransfer, beforeBroadcast int) (func(), func()) {
+	t.Helper()
+	store := manager.rgbManager.projectionStore
+	unsigned, err := store.LoadPendingTransfer(prepared.State.TransferID)
+	coreRequire(t, "read original self-send unsigned intent", err)
+	coreAssert(t, unsigned.State.SenderAccountID != "" &&
+		unsigned.State.SenderAccountID == unsigned.State.ReceiverAccountID &&
+		unsigned.State.WitnessTxID == prepared.TxID && unsigned.State.ConsignmentHash == prepared.State.ConsignmentHash &&
+		!unsigned.State.DeliveryAcknowledged && unsigned.State.AckStatus != "accepted" && !rgb11PendingHasWitness(unsigned),
+		"self-send was signed or acknowledged before delivery")
+	var mu sync.Mutex
+	calls, invalid := 0, false
+	observe := func(raw []byte) {
+		pending, err := store.LoadPendingTransfer(prepared.State.TransferID)
+		valid := err == nil && pending != nil && pending.State.Direction == "send" &&
+			pending.State.DeliveryAcknowledged && pending.State.AckStatus == "accepted" &&
+			pending.State.DeliveryRecordKey != "" && pending.State.DeliveryRecordHash != "" &&
+			bytes.Equal(pending.SignedTx, raw) && validRGB11SigningTransition(unsigned, pending)
+		mu.Lock()
+		calls++
+		invalid = invalid || !valid
+		mu.Unlock()
+	}
+	func() {
+		chain.mu.Lock()
+		defer chain.mu.Unlock()
+		coreAssert(t, chain.observeBroadcast == nil, "self-send cannot replace another broadcast observer")
+		chain.observeBroadcast = observe
+	}()
+	release := func() {
+		chain.mu.Lock()
+		chain.observeBroadcast = nil
+		chain.mu.Unlock()
+	}
+	t.Cleanup(release)
+	return func() {
+		mu.Lock()
+		count, failed := calls, invalid
+		mu.Unlock()
+		coreAssert(t, count == 1 && !failed && chain.broadcastCount() == beforeBroadcast+1,
+			"self-send did not broadcast exactly one original signed intent after its durable accepted ACK")
+		pending, err := store.LoadPendingTransfer(prepared.State.TransferID)
+		coreRequire(t, "read completed self-send signed intent", err)
+		coreAssert(t, pending.State.Status == "broadcast" && pending.State.DeliveryAcknowledged &&
+			pending.State.AckStatus == "accepted" && validRGB11SigningTransition(unsigned, pending),
+			"self-send completion lost its original identity, accepted ACK or verified signed witness")
+		raw, err := chain.GetRawTx(prepared.TxID)
+		coreRequire(t, "read actual self-send Bitcoin transaction", err)
+		coreAssert(t, bytes.Equal(raw, pending.SignedTx), "self-send chain record differs from its durable signed transaction")
+	}, release
+}
+
+func coreWaitSelfSendACK(t *testing.T, chain *coreE2EChain, manager *Manager,
+	prepared *RGB11PreparedTransfer, beforeBroadcast int) {
+	t.Helper()
+	deadline := time.Now().Add(45 * time.Second)
+	for {
+		result, err := manager.SyncConfiguredRGB11AddressMailbox(context.Background(),
+			dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+		coreRequire(t, "receive self-send consignment and publish ACK", err)
+		coreAssertRGB11MailboxErrors(t, manager, map[string]bool{prepared.State.TransferID: true}, result)
+		coreAssert(t, chain.broadcastCount() <= beforeBroadcast+1, "self-send mailbox repeated its backend broadcast")
+		state, err := manager.GetRGB11State()
+		coreRequire(t, "read self-send receive ACK", err)
+		matches := 0
+		for _, transfer := range state.Transfers {
+			if transfer != nil && transfer.Direction == "receive" && transfer.TransferID == prepared.State.TransferID &&
+				transfer.WitnessTxID == prepared.TxID && transfer.ConsignmentHash == prepared.State.ConsignmentHash &&
+				transfer.DeliveryAcknowledged && transfer.AckStatus == "ack-sent" {
+				matches++
+			}
+		}
+		coreAssert(t, matches <= 1, "self-send consignment has duplicate receive ACKs")
+		if matches == 1 {
+			return
+		}
+		coreAssert(t, time.Now().Before(deadline), "self-send did not persist its exact receive ACK")
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func coreAssertSelfSendRecoveryRolesAndLocks(t *testing.T, manager *Manager,

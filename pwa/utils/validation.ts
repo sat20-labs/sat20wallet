@@ -6,7 +6,7 @@ import * as z from 'zod'
  * 不强制要求特定长度，但提供合理的安全建议
  */
 export const passwordSchema = z.string()
-.min(6, 'Password must be at least 6 characters')
+.min(6, 'pwaUi.validation.passwordMin')
   .refine(
     (password) => {
       // 提供密码强度建议，但不强制要求
@@ -28,7 +28,7 @@ export const passwordSchema = z.string()
       return true;
     },
     {
-      message: 'Password should be at least 8 characters with uppercase, lowercase, number and special character for better security'
+      message: 'pwaUi.validation.passwordStrength'
     }
   )
 
@@ -38,9 +38,9 @@ export const passwordSchema = z.string()
  */
 export const createPasswordSchema = z.object({
   password: passwordSchema,
-  confirmPassword: z.string().min(1, 'Please confirm your password'),
+  confirmPassword: z.string().min(1, 'pwaUi.validation.confirmPassword'),
 }).refine((data) => data.password === data.confirmPassword, {
-  message: 'Passwords do not match',
+  message: 'pwaUi.validation.passwordMismatch',
   path: ['confirmPassword'],
 })
 
@@ -60,9 +60,9 @@ export const unlockPasswordSchema = z.object({
 /**
  * 助记词验证规则
  */
-export const mnemonicSchema = z.string().min(1, 'Recovery phrase is required')
+export const mnemonicSchema = z.string().min(1, 'pwaUi.validation.phraseRequired')
 
 /**
  * 私钥验证规则
  */
-export const privateKeySchema = z.string().min(1, 'Private key is required')
+export const privateKeySchema = z.string().min(1, 'pwaUi.validation.privateKeyRequired')

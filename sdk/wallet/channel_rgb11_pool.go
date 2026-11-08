@@ -97,7 +97,7 @@ func (p *Manager) registerObservedRGB11ChannelPoolSources(ctx context.Context, o
 		}
 		source := &NativeChannelSource{Version: 1, ChannelID: channelID, Output: sourceOutput, PublicProof: proof,
 			DescendTxIDs: locators, PrivateWitness: append([]byte(nil), privateWitness...)}
-		if err := p.RegisterNativeChannelSettlementSource(ctx, owner, channelID, source); err != nil {
+		if err := p.registerNativeSettlementSource(ctx, owner, channelID, source, true); err != nil {
 			return err
 		}
 	}

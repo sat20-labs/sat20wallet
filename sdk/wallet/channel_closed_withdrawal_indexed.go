@@ -432,6 +432,12 @@ func (p *Manager) prepareIndexedClosedWithdrawal(channel *Channel, parent *wire.
 			return nil, fmt.Errorf("indexed recovery output spend is unavailable: %v", err)
 		}
 		if spent.Spent {
+			if complete && allConfirmed && consumers[point] == "" && bytes.Equal(output.OutValue.PkScript, walletScript) {
+				if err := verifyIndexedTerminalSpend(chains, point, spent.SpendingTx); err != nil {
+					return nil, err
+				}
+				continue
+			}
 			if consumers[point] == "" || spent.SpendingTx != consumers[point] {
 				return nil, fmt.Errorf("indexed recovery output was consumed outside its authorized package")
 			}
@@ -469,6 +475,34 @@ func (p *Manager) prepareIndexedClosedWithdrawal(channel *Channel, parent *wire.
 		intent.InputFacts = snapshot // Publish only fully verified facts.
 	}
 	return &ClosingDataInDB{CloseTx: parent.Copy(), PreTxs: cloneSTPBitcoinChain(txs), DeAnchorTx: deanchor.Copy()}, nil
+}
+
+// This is historical receipt validation, never permission for another spend.
+// A locator alone cannot turn an externally consumed terminal into completion.
+func verifyIndexedTerminalSpend(chains *nativeSettlementChains, point, txID string) error {
+	status, err := chains.bitcoin.GetTxStatus(txID)
+	if err != nil || status == nil || status.TxID != txID || status.Confirmed && status.InMempool || !status.Confirmed && !status.InMempool {
+		return fmt.Errorf("indexed terminal spender is not observed with an exact transaction identity: %v", err)
+	}
+	// The receipt is the already-confirmed original package. A later valid
+	// mempool spend cannot undo that receipt and need not delay local cleanup.
+	tx, err := chains.bitcoinTx(txID, status.Confirmed)
+	if err != nil {
+		return fmt.Errorf("indexed terminal spender raw evidence is unavailable: %w", err)
+	}
+	found := false
+	for _, input := range tx.TxIn {
+		if input != nil && input.PreviousOutPoint.String() == point {
+			found = true
+		}
+	}
+	if !found {
+		return fmt.Errorf("indexed terminal spender does not consume its exact terminal")
+	}
+	if err := chains.verifyBitcoinSpend(tx); err != nil {
+		return fmt.Errorf("indexed terminal spender is not fully authorized: %w", err)
+	}
+	return nil
 }
 
 func (p *Manager) validateIndexedWithdrawalRelease(chains *nativeSettlementChains, channel *Channel, parentID string,

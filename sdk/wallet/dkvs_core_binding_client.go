@@ -54,6 +54,9 @@ func (p *SatsNetDKVSClient) acceptCoreBinding(root common.Wallet,
 			seq = current.Seq + 1
 		}
 	}
+	if current != nil && bytes.Equal(value, current.Value) {
+		return current, nil
+	}
 	record := current
 	if current == nil || !bytes.Equal(value, current.Value) {
 		height, err := p.GetBestHeight()
@@ -77,16 +80,17 @@ func (p *SatsNetDKVSClient) acceptCoreBinding(root common.Wallet,
 	if err != nil {
 		return nil, err
 	}
-	result, err := p.putRecordBatchCASRaw([]dkvsindexer.CASMutation{{
+	result, err := p.WithWriteSigner(root).putRecordBatchCASRaw([]dkvsindexer.CASMutation{{
 		Record: record, Precondition: precondition,
 	}}, coreID, requestID)
 	if err != nil {
 		return nil, fmt.Errorf("bind account through wallet KV RPC: %w", err)
 	}
-	if result == nil || len(result.Records) != 1 ||
-		dkvsindexer.RecordHash(result.Records[0]) != dkvsindexer.RecordHash(record) {
+	if result == nil || len(result.Records) != 1 {
 		return nil, dkvsindexer.ErrWriteConflict
 	}
+	// Submission verifies the final signed record, including a height refresh.
+	record = result.Records[0]
 	confirmed, err := p.GetRecordDirect(key)
 	if err != nil {
 		return nil, fmt.Errorf("read committed account binding: %w", err)
@@ -102,7 +106,15 @@ func (p *Manager) commitAccountCoreBinding(root common.Wallet, store *dkvsStore,
 	if p == nil || store == nil || store.manager == nil || store.client == nil {
 		return ErrMessageServiceUnavailable
 	}
+	// Authentication bootstrap is not an exception to session write eligibility.
+	// Prepare before acquiring the transport slot; nested acquisition would block.
+	if err := store.manager.prepareManagedWrite(store.client, []string{key}); err != nil {
+		return err
+	}
 	err := store.manager.runTransport(func() error {
+		if err := store.manager.requireWritePaths(store.client, []string{key}); err != nil {
+			return err
+		}
 		if _, err := store.client.acceptCoreBinding(root, key, coreID, value); err != nil {
 			return err
 		}

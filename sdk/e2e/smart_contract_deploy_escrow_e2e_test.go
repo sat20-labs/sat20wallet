@@ -16,6 +16,11 @@ import (
 
 func TestSDKSmartContractTemplateReleaseEscrow(t *testing.T) {
 	f := newSDKContractReviewFixture(t)
+	runSDKSmartContractTemplateReleaseEscrow(t, f)
+}
+
+func runSDKSmartContractTemplateReleaseEscrow(t *testing.T, f *sdkContractReviewFixture) {
+	t.Helper()
 	encoded, err := wallet.BuildUnifiedContractContent(wallet.ContractTypeTemplate, contract.TemplateExchange,
 		sdkReviewJSON(t, contract.TemplateExchangeContract{AssetAName: reviewAssetA, AssetBName: contract.SatoshiAssetName,
 			PriceMode: contract.ExchangePriceModeHeight, Steps: []contract.TemplateExchangePriceStep{{Threshold: "0", BPerA: "10"}}}))

@@ -17,6 +17,7 @@ import (
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	"github.com/sat20-labs/satoshinet/anchortx/nativeproof"
+	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
 // NativeChannelSource is an authenticated, local recovery record. It is never
@@ -133,6 +134,13 @@ func (p *Manager) validateNativeChannelSource(ctx context.Context, local common.
 // settlement receipts may only be appended, retaining their exact prefix.
 func (p *Manager) RegisterNativeChannelSettlementSource(ctx context.Context, local common.Wallet,
 	channelID string, source *NativeChannelSource) error {
+	return p.registerNativeSettlementSource(ctx, local, channelID, source, false)
+}
+
+// observed is used only by the SDK's independently verified mined channel
+// settlement path. Publicly presented new sources retain normal write checks.
+func (p *Manager) registerNativeSettlementSource(ctx context.Context, local common.Wallet,
+	channelID string, source *NativeChannelSource, observed bool) error {
 	if _, err := p.validateNativeChannelSource(ctx, local, channelID, source, nativeproof.Current); err != nil {
 		return err
 	}
@@ -141,15 +149,110 @@ func (p *Manager) RegisterNativeChannelSettlementSource(ctx context.Context, loc
 			return err
 		}
 	}
-	if err := p.saveNativeChannelSource(source); err != nil {
+	scope, err := p.stpRGB11Scope(local)
+	if err != nil {
 		return err
 	}
-	_, err := runRGB11ManagedOperationWithManager(p, ctx, rgb11ManagedOperationContinue,
-		func() (*rgb11Manager, error) { return p.stpRGB11Scope(local) },
+	reconcile, err := p.nativeSourceRecorded(scope, channelID, source)
+	if err != nil {
+		return err
+	}
+	reconcile = reconcile || observed
+	mode := rgb11ManagedOperationContinue
+	if reconcile {
+		mode = rgb11ManagedOperationReconcile
+	}
+	_, err = runRGB11ManagedOperationWithManager(p, ctx, mode,
+		func() (*rgb11Manager, error) { return scope, nil },
 		func(scope *rgb11Manager) (*RGB11ImportResult, error) {
-			return scope.importObservedNativePoolTransfer(ctx, source)
+			// Qualify before the first write: a new registration must not
+			// authorize its own retry merely by saving an inventory row.
+			if err := p.saveNativeChannelSource(source); err != nil {
+				return nil, err
+			}
+			stored, err := p.loadNativeChannelSource(channelID, source.Output.OutPointStr)
+			if err != nil {
+				return nil, err
+			}
+			return scope.importObservedNativePoolTransfer(ctx, stored, reconcile)
 		})
 	return err
+}
+
+// Only prior local material can select the reconciliation path. A newly
+// presented proof, even if valid, still needs the normal business permission.
+func (p *Manager) nativeSourceRecorded(scope *rgb11Manager, channelID string,
+	source *NativeChannelSource) (bool, error) {
+	stored, err := p.loadNativeChannelSource(channelID, source.Output.OutPointStr)
+	if err == nil {
+		before, after := *stored, *source
+		before.DescendTxIDs, after.DescendTxIDs = nil, nil
+		a, aErr := json.Marshal(before)
+		b, bErr := json.Marshal(after)
+		if aErr != nil || bErr != nil || !bytes.Equal(a, b) {
+			return false, fmt.Errorf("native channel source is immutable")
+		}
+		// Monotonic receipt validation is repeated by saveNativeChannelSource.
+		return true, nil
+	}
+	if !errors.Is(err, indexer.ErrKeyNotFound) {
+		return false, err
+	}
+	point, err := wire.NewOutPointFromString(source.Output.OutPointStr)
+	if err != nil {
+		return false, err
+	}
+	raw, err := p.GetDB().Read(nativeContractWithdrawKey("signed", point.Hash.String()))
+	if errors.Is(err, indexer.ErrKeyNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var pair nativeContractBroadcastPair
+	if json.Unmarshal(raw, &pair) != nil || pair.Version != 1 || pair.Proof == nil {
+		return false, fmt.Errorf("invalid durable native withdrawal pair")
+	}
+	channel, asset, _, err := ParseContractURL(pair.ContractURL)
+	if err != nil || channel != channelID || asset != source.Output.Assets[0].Name.String() || len(source.PrivateWitness) != 0 {
+		return false, fmt.Errorf("native source differs from its recorded withdrawal")
+	}
+	proof, err := nativeproof.BuildRGB11(pair.Proof.Consignment, pair.Proof.ChangeSeals)
+	if err != nil || !bytes.Equal(proof, source.PublicProof) {
+		return false, fmt.Errorf("native source proof differs from its recorded withdrawal")
+	}
+	descend := new(swire.MsgTx)
+	reader := bytes.NewReader(pair.Descend)
+	if descend.Deserialize(reader) != nil || reader.Len() != 0 || len(source.DescendTxIDs) == 0 ||
+		source.DescendTxIDs[len(source.DescendTxIDs)-1] != descend.TxID() {
+		return false, fmt.Errorf("native source lacks its recorded descend receipt")
+	}
+	status, err := scope.evidence.GetTxStatus(point.Hash.String())
+	if err != nil {
+		return false, err
+	}
+	if !validRGB11ObservedTxStatus(status, point.Hash.String()) || (!status.Confirmed && !status.InMempool) {
+		return false, fmt.Errorf("recorded native withdrawal is not observed")
+	}
+	observed, err := scope.evidence.GetRawTx(point.Hash.String())
+	if err != nil {
+		return false, err
+	}
+	if !bytes.Equal(observed, pair.Bitcoin) {
+		return false, fmt.Errorf("observed native withdrawal differs from recorded signed bytes")
+	}
+	if p.l2IndexerClient == nil {
+		return false, fmt.Errorf("recorded native descend evidence unavailable")
+	}
+	encoded, err := p.l2IndexerClient.GetRawTx(descend.TxID())
+	if err != nil {
+		return false, err
+	}
+	observedDescend, err := hex.DecodeString(encoded)
+	if err != nil || !bytes.Equal(observedDescend, pair.Descend) {
+		return false, fmt.Errorf("observed native descend differs from recorded signed bytes")
+	}
+	return true, nil
 }
 
 func (p *Manager) saveNativeChannelSource(source *NativeChannelSource) error {

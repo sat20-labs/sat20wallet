@@ -12,6 +12,9 @@ import (
 
 func TestRGB11PrivateCancelRequiresExactUnpublishedRecoveryDelta(t *testing.T) {
 	sender, receiver, imported, _, _ := newRGB11GenericSendFixture(t)
+	if err := sender.SyncAccountManagementState(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	scope, err := sender.captureRGB11NetworkScope(false)
 	if err != nil {
 		t.Fatal(err)
@@ -32,8 +35,8 @@ func TestRGB11PrivateCancelRequiresExactUnpublishedRecoveryDelta(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Stop before the account CAS, exactly as a failed prepare retains its
-	// private signed material. The public result would be withheld at this point.
+	// Prepare locally without publishing its background backup. The exact
+	// unpublished delta may be canceled only while no submission is uncertain.
 	scope.Manager.beginRGB11ManagedOperationState()
 	prepared, err := scope.PrepareRGB11Transfer(context.Background(), RGB11SendRequest{Invoice: invoice.Invoice, FeeRate: 2, MinConfirmations: 1})
 	scope.Manager.endRGB11ManagedOperationState()
@@ -99,6 +102,9 @@ func TestRGB11PrivateCancelRequiresExactUnpublishedRecoveryDelta(t *testing.T) {
 
 func TestRGB11PrivateCancelPreservesUncertainPublication(t *testing.T) {
 	sender, receiver, imported, _, _ := newRGB11GenericSendFixture(t)
+	if err := sender.SyncAccountManagementState(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	invoice, err := receiver.CreateRGB11Invoice(RGB11InvoiceRequest{Mode: "witness", TransportMode: "out-of-band", ContractID: imported.ContractID, AmountRaw: "100", WitnessVout: 1, Expiry: time.Now().Add(time.Hour).Unix()})
 	if err != nil {
 		t.Fatal(err)
@@ -115,8 +121,11 @@ func TestRGB11PrivateCancelPreservesUncertainPublication(t *testing.T) {
 	}
 	sender.dkvs.mu.Unlock()
 	prepared, prepareErr := sender.PrepareRGB11Transfer(context.Background(), RGB11SendRequest{Invoice: invoice.Invoice, FeeRate: 2, MinConfirmations: 1})
-	if prepareErr == nil || prepared != nil {
-		t.Fatal("unconfirmed publication exposed a prepared transfer")
+	if prepareErr != nil || prepared == nil {
+		t.Fatalf("local preparation failed before asynchronous backup: %v", prepareErr)
+	}
+	if err := sender.SyncAccountManagementState(context.Background()); err == nil {
+		t.Fatal("backup did not reach the injected uncertain transport")
 	}
 	sender.http = remote
 	sender.dkvs.mu.Lock()

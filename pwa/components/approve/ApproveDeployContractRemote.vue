@@ -1,25 +1,24 @@
 <template>
   <LayoutApprove @confirm="confirm" @cancel="cancel">
     <div class="p-4 space-y-4">
-      <h2 class="text-2xl font-semibold text-center">{{ $t('deployContractRemote.title', '合约远程部署确认') }}</h2>
+      <h2 class="text-2xl font-semibold text-center">{{ $t('deployContractRemote.title') }}</h2>
       <p class="text-xs text-gray-400 text-center mb-4">
-        {{ $t('deployContractRemote.warning', '请确认以下合约部署信息，确认后将发起链上部署') }}
+        {{ $t('deployContractRemote.warning') }}
       </p>
 
       <div class="space-y-2">
         <div>
-          <span class="font-semibold">{{ $t('deployContractRemote.templateName', '合约模板') }}：</span>
+          <span class="font-semibold">{{ $t('deployContractRemote.templateName') }}：</span>
           <span>{{ props.data?.templateName || '-' }}</span>
         </div>
         <div>
-          <span class="font-semibold">{{ $t('deployContractRemote.feeRate', '费率') }}：</span>
+          <span class="font-semibold">{{ $t('deployContractRemote.feeRate') }}：</span>
           <span>{{ props.data?.feeRate || '-' }} sats</span>
         </div>
         <div>
-          <span class="font-semibold">{{ $t('deployContractRemote.estimatedFee', '预估费用') }}：</span>
-          <span v-if="feeLoading">{{ $t('deployContractRemote.loading', '查询中...') }}</span>
-          <span v-else-if="feeError" class="text-destructive">{{ feeErrorMessage || $t('deployContractRemote.feeError',
-            '查询失败') }}</span>
+          <span class="font-semibold">{{ $t('deployContractRemote.estimatedFee') }}：</span>
+          <span v-if="feeLoading">{{ $t('deployContractRemote.loading') }}</span>
+          <span v-else-if="feeError" class="text-destructive">{{ feeErrorMessage || $t('deployContractRemote.feeError') }}</span>
           <span v-else>{{ estimatedFee || '-' }} sats</span>
         </div>
       </div>
@@ -27,7 +26,7 @@
       <!-- 合约参数美化展示 -->
       <Accordion type="single" collapsible class="w-full mt-2">
         <AccordionItem value="item-1">
-          <AccordionTrigger class="text-sm">{{ $t('deployContractRemote.viewRawContent', '查看原始合约参数') }}
+          <AccordionTrigger class="text-sm">{{ $t('deployContractRemote.viewRawContent') }}
           </AccordionTrigger>
           <AccordionContent>
             <Alert class="mt-2">
@@ -40,7 +39,7 @@
       </Accordion>
 
       <div v-if="isLoading" class="text-center text-muted-foreground">
-        <span class="animate-spin inline-block mr-2">⏳</span> {{ $t('deployContractRemote.deploying', '正在部署合约...') }}
+        <span class="animate-spin inline-block mr-2">⏳</span> {{ $t('deployContractRemote.deploying') }}
       </div>
       <div v-if="deployError && !isLoading" class="text-center text-destructive">
         {{ deployError }}
@@ -50,6 +49,8 @@
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
+const { t } = useI18n()
 import { ref, watch, computed } from 'vue'
 import LayoutApprove from '@/components/layout/LayoutApprove.vue'
 import { Alert, AlertTitle } from '@/components/ui/alert'
@@ -106,14 +107,14 @@ const getFee = async () => {
     console.log('getFeeForDeployContract', err, res)
     if (err) {
       feeError.value = true
-      feeErrorMessage.value = err?.message || err?.toString?.() || '查询失败'
+      feeErrorMessage.value = err?.message || err?.toString?.() || t('approvalUi.feeFailed')
       estimatedFee.value = '-'
     } else {
       estimatedFee.value = res?.fee ? res.fee.toString() : '-'
     }
   } catch (e: any) {
     feeError.value = true
-    feeErrorMessage.value = e?.message || e?.toString?.() || '查询失败'
+    feeErrorMessage.value = e?.message || e?.toString?.() || t('approvalUi.feeFailed')
     estimatedFee.value = '-'
   } finally {
     feeLoading.value = false
@@ -125,8 +126,8 @@ watch(() => [props.data?.templateName, props.data?.content, props.data?.feeRate]
 const confirm = async () => {
   if (!props.data?.templateName || !props.data?.content || !props.data?.feeRate) {
     toast.toast({
-      title: '参数缺失',
-      description: '合约模板、参数或费率缺失',
+      title: t('approvalUi.missingParameters'),
+      description: t('approvalUi.missingDeployParameters'),
       variant: 'destructive',
     })
     return
@@ -141,26 +142,26 @@ const confirm = async () => {
       props.data.bol ?? false // 默认为 false 如果未提供
     )
     if (err) {
-      deployError.value = err.message || '合约部署失败'
+      deployError.value = err.message || t('approvalUi.deployFailed')
       toast.toast({
-        title: '合约部署失败',
+        title: t('approvalUi.deployFailed'),
         description: err.message,
         variant: 'destructive',
       })
     } else if (res?.txId && res?.resvId) {
       emit('confirm', { txId: res.txId, resvId: res.resvId })
     } else {
-      deployError.value = '合约部署返回异常'
+      deployError.value = t('approvalUi.deployInvalidResult')
       toast.toast({
-        title: '合约部署异常',
-        description: '未获取到部署结果',
+        title: t('approvalUi.deployException'),
+        description: t('approvalUi.noDeployResult'),
         variant: 'destructive',
       })
     }
   } catch (e: any) {
-    deployError.value = e?.message || '合约部署异常'
+    deployError.value = e?.message || t('approvalUi.deployException')
     toast.toast({
-      title: '合约部署异常',
+      title: t('approvalUi.deployException'),
       description: e?.message,
       variant: 'destructive',
     })

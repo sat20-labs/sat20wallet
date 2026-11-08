@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"strings"
 	"testing"
 
@@ -300,6 +301,44 @@ func TestLocalMetadataIsScopedAndExcludedFromPortableSnapshot(t *testing.T) {
 	}
 	if _, err := store.LoadLocalMetadata("wallet-head"); err == nil {
 		t.Fatal("wallet head leaked across local wallet scopes")
+	}
+}
+
+type failLocalWriteDB struct {
+	indexer.KVDB
+	failure error
+}
+
+func (db *failLocalWriteDB) Write([]byte, []byte) error { return db.failure }
+
+func TestLocalMetaRestartAndFailure(t *testing.T) {
+	path := t.TempDir()
+	db := indexerdb.NewKVDB(path)
+	store := NewProjectionStore(db, nil)
+	if err := store.SetScope("wallet-1-account-0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveLocalMetadata("l1-monitor-v1", []byte("tip-7")); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened := indexerdb.NewKVDB(path)
+	defer reopened.Close()
+	failure := errors.New("local write failed")
+	failed := NewProjectionStore(&failLocalWriteDB{KVDB: reopened, failure: failure}, nil)
+	if err := failed.SetScope("wallet-1-account-0"); err != nil {
+		t.Fatal(err)
+	}
+	if value, err := failed.LoadLocalMetadata("l1-monitor-v1"); err != nil || string(value) != "tip-7" {
+		t.Fatalf("checkpoint did not survive restart: value=%q err=%v", value, err)
+	}
+	if err := failed.SaveLocalMetadata("l1-monitor-v1", []byte("tip-8")); !errors.Is(err, failure) {
+		t.Fatalf("local write failure was hidden: %v", err)
+	}
+	if value, err := failed.LoadLocalMetadata("l1-monitor-v1"); err != nil || string(value) != "tip-7" {
+		t.Fatalf("failed write changed checkpoint: value=%q err=%v", value, err)
 	}
 }
 

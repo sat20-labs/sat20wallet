@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	indexer "github.com/sat20-labs/indexer/common"
@@ -11,7 +12,11 @@ import (
 )
 
 func TestRGB11ConflictCandidateOlderBundleReevaluation(t *testing.T) {
-	f := newRGB11ConflictFixture(t, false)
+	var cold *Manager
+	f := newRGB11ConflictFixture(t, false, func(source *Manager, remote *rgb11MemoryDKVSHTTP,
+		evidence *rgb11AddressEvidence, rpc *rgb11FlowIndexer) {
+		cold = newRGBColdDevice(t, source, remote, evidence, rpc, coreE2ESenderMnemonic, "password")
+	})
 	old, err := rgb11wallet.RecoveryPackageFromSnapshot(f.before, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -23,7 +28,7 @@ func TestRGB11ConflictCandidateOlderBundleReevaluation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cold := newRGB11FlowManager(t, f.sender.wallet.Clone(), f.rpc, f.evidence, 9910)
+	assertRGBColdEmpty(t, cold)
 	cold.rgbManager.scopeStates.stopReconciliations()
 	if err = cold.rgbManager.importSelectedRGB11AccountRecoverySnapshot(snap); err != nil {
 		t.Fatalf("old complete bundle safe import: %v", err)
@@ -75,39 +80,77 @@ var errRGB11ConflictMarkerFailure = errors.New("injected account marker write fa
 
 type rgb11ConflictMarkerFailureDB struct {
 	indexer.KVDB
-	fixture *rgb11ConflictFixture
-	failed  bool
+	fixture   *rgb11ConflictFixture
+	failed    bool
+	moduleKey []byte
+	rgbPrefix []byte
 }
 
-func (db *rgb11ConflictMarkerFailureDB) Write(key, value []byte) error {
-	if !db.failed && bytes.Equal(key, accountManagementProfileKey()) {
-		p, err := db.fixture.sender.rgbManager.projectionStore.LoadPendingTransfer(db.fixture.pending.State.TransferID)
-		if err == nil && p.State.Status == "conflicted" {
-			db.failed = true
-			return errRGB11ConflictMarkerFailure
-		}
-	}
-	return db.KVDB.Write(key, value)
+type rgb11ConflictMarkerFailureBatch struct {
+	indexer.WriteBatch
+	owner *rgb11ConflictMarkerFailureDB
+	rgb   bool
 }
-func TestRGB11ConflictCandidateMarkerFailure(t *testing.T) {
+
+func (db *rgb11ConflictMarkerFailureDB) NewAtomicWriteBatch() indexer.WriteBatch {
+	return &rgb11ConflictMarkerFailureBatch{WriteBatch: db.KVDB.(indexer.AtomicWriteBatchDB).NewAtomicWriteBatch(), owner: db}
+}
+func (batch *rgb11ConflictMarkerFailureBatch) Put(key, value []byte) error {
+	batch.rgb = batch.rgb || bytes.HasPrefix(key, batch.owner.rgbPrefix)
+	if !batch.owner.failed && batch.rgb && bytes.Equal(key, batch.owner.moduleKey) {
+		batch.owner.failed = true
+		return errRGB11ConflictMarkerFailure
+	}
+	return batch.WriteBatch.Put(key, value)
+}
+func TestRGB11ConflictCandidateMarkerFailureIsAtomic(t *testing.T) {
 	f := newRGB11ConflictFixture(t, false)
 	f.publish(t, true)
-	db := &rgb11ConflictMarkerFailureDB{KVDB: f.sender.db, fixture: f}
+	before := f.snapshot(t)
+	beforeProfile, err := f.sender.db.Read(accountManagementProfileKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope, err := f.sender.rgbManager.rgb11AccountManagedScopeID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	moduleKey := accountLocalKey(f.sender.accountProfile.AccountID, rgb11AccountManagedProviderID, scope)
+	beforeModule, err := f.sender.db.Read(moduleKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := &rgb11ConflictMarkerFailureDB{KVDB: f.sender.db, fixture: f, moduleKey: moduleKey,
+		rgbPrefix: []byte("rgb11-" + f.sender.rgbManager.rgb11ScopeKey() + "-")}
 	f.sender.db = db
 	defer func() { f.sender.db = db.KVDB }()
-	result, err := f.sender.RefreshRGB11State(context.Background())
-	if !db.failed {
-		t.Fatal("post-commit marker failure was not reached")
+	_, err = f.sender.RefreshRGB11State(context.Background())
+	if !db.failed || !errors.Is(err, errRGB11ConflictMarkerFailure) {
+		t.Fatalf("atomic marker failure was not reached: %v", err)
 	}
-	if !errors.Is(err, errRGB11ConflictMarkerFailure) || !errors.Is(err, ErrRGB11Inconsistent) || result == nil || len(result.Inconsistent) != 1 {
-		t.Fatalf("lost committed business/backup results: result=%+v err=%v", result, err)
+	if !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("failed marker partially committed the RGB projection")
+	}
+	afterProfile, err := f.sender.db.Read(accountManagementProfileKey())
+	if err != nil || !bytes.Equal(beforeProfile, afterProfile) {
+		t.Fatal("failed marker partially changed the account profile")
+	}
+	afterModule, err := f.sender.db.Read(moduleKey)
+	if err != nil || !bytes.Equal(beforeModule, afterModule) {
+		t.Fatal("failed marker partially changed the durable RGB module")
+	}
+	f.assertProtected(t)
+	result, err := f.sender.RefreshRGB11State(context.Background())
+	if !errors.Is(err, ErrRGB11Inconsistent) || result == nil || len(result.Inconsistent) != 1 {
+		t.Fatalf("retry did not commit the safe conflict state: result=%+v err=%v", result, err)
 	}
 	if f.journal(t).State.Status != "conflicted" {
-		t.Fatal("marker error rolled back committed conflict")
+		t.Fatal("retry lost the committed quarantine")
 	}
-	// The existing managed wrapper still performs its final barrier even when
-	// the business callback reports error; this one-shot failure is recoverable.
-	if verifyErr := f.sender.verifyCurrentRGB11RecoveryClosure(); verifyErr != nil {
-		t.Fatalf("final barrier skipped after business error: %v", verifyErr)
+	if err := f.sender.SyncAccountManagementState(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.sender.verifyCurrentRGB11RecoveryClosure(); err != nil {
+		t.Fatal(err)
 	}
 }

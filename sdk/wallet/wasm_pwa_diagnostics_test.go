@@ -126,7 +126,11 @@ func TestRGB11DirectLifecycleAuthorityIsSDKOwned(t *testing.T) {
 	}
 	for _, want := range []string{
 		"resumeReadyRGB11AddressTransfers()",
-		"BroadcastRGB11AddressTransfer(pending.State.TransferID)",
+		"p.continueRGB11AddressSend(state.TransferID)",
+		"result, err := p.continueRGB11AddressSend(transferID)",
+		"p.scopeStates.sendFlights.Do(key, func() (any, error)",
+		"pending, batch, err := p.readRGB11AddressBatch(transferID)",
+		"txID, err := p.broadcastRGB11PendingBatch(batch, nil)",
 		"owner.SubscribeDKVSPrefix(mailboxTarget)",
 	} {
 		if !strings.Contains(dkvs, want) {
@@ -138,7 +142,6 @@ func TestRGB11DirectLifecycleAuthorityIsSDKOwned(t *testing.T) {
 		t.Fatal("Direct durable lifecycle is not anchored in RGB11 reservation/broadcast state")
 	}
 }
-
 
 func TestRGB11GenericReservationWASMViewDoesNotExposeInternalJSON(t *testing.T) {
 	wasm := readRepoTextForTest(t, "../wasm/main.go")

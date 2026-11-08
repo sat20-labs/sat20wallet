@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
-import { cp, copyFile, mkdir, readFile, stat, symlink } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, readdir, stat, symlink } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
 import { spawn } from 'node:child_process'
-import { dirname, join, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium, expect } from '@playwright/test'
 
@@ -15,7 +15,7 @@ const regtestMode = process.argv.includes('--regtest')
 const pageErrorsOnly = process.argv.includes('--page-errors-only')
 const continueAfterBuild = pageErrorsOnly || process.argv.includes('--continue-after-build')
 assert.ok(!continueAfterBuild || regtestMode, 'focused continuation is only for the existing regtest gate')
-const copied = join(temporary, 'pwa')
+assert.ok(isAbsolute(temporary), 'release output directory must be absolute')
 const required = [
   'Release PWA: current production WASM passes the ordinary typechecked release build',
   'Release PWA: all emitted release assets match size hash MIME and release metadata',
@@ -66,17 +66,27 @@ const check = async (index, action) => {
   }
 }
 const build = async label => {
+  const buildDir = join(temporary, `build-${label}`)
+  // A/B own fresh output directories; never reuse an existing checkout or build.
+  await mkdir(buildDir, { mode: 0o700 })
+  const publicDir = join(buildDir, 'public')
+  await mkdir(join(publicDir, 'wasm'), { recursive: true, mode: 0o700 })
+  for (const name of await readdir(join(root, 'public'))) {
+    if (['wasm', 'version.json', 'integrity-manifest.json'].includes(name)) continue
+    await symlink(join(root, 'public', name), join(publicDir, name))
+  }
+  await copyFile(wasmPath, join(publicDir, 'wasm/sat20wallet.wasm'))
+  await copyFile(runtimePath, join(publicDir, 'wasm/wasm_exec.js'))
   await new Promise((resolve, reject) => {
     const child = spawn('npm', ['run', regtestMode ? 'build:regtest' : 'build'], {
-      cwd: copied, stdio: 'inherit', env: { ...process.env, SAT20_PWA_BUILD_ID: `e2e-${process.pid}-${label}`,
+      cwd: root, stdio: 'inherit', env: { ...process.env, SAT20_PWA_BUILD_DIR: buildDir,
+        SAT20_PWA_BUILD_ID: `e2e-${process.pid}-${label}`,
         SAT20_PWA_BUILD_STATUS_DIR: join(temporary, `build-status-${label}`), VITE_PWA_BASE_PATH: '/pwa/' },
     })
     child.once('error', reject)
     child.once('exit', (code, signal) => code === 0 ? resolve() : reject(new Error(`release build ${label}: ${signal || code}`)))
   })
-  const output = join(temporary, `release-${label}`)
-  await cp(join(copied, regtestMode ? 'dist-regtest' : 'dist'), output, { recursive: true })
-  return output
+  return join(buildDir, 'dist')
 }
 const manifests = async directory => {
   const load = async name => JSON.parse(await readFile(join(directory, name), 'utf8'))
@@ -145,17 +155,7 @@ const state = (page, selected = false) => page.evaluate(async selected => {
 
 try {
   let releaseA, context, page, origin, catalog
-  const prepareBuild = async () => {
-    await cp(root, copied, { recursive: true, filter: path => {
-      const relative = path.slice(root.length).split(sep).filter(Boolean)
-      return !relative.some(part => ['node_modules', 'dist', 'dist-regtest', '.git', '.build-status'].includes(part))
-    } })
-    await symlink(join(root, 'node_modules'), join(copied, 'node_modules'), 'dir')
-    await mkdir(join(copied, 'public/wasm'), { recursive: true })
-    await copyFile(wasmPath, join(copied, 'public/wasm/sat20wallet.wasm'))
-    await copyFile(runtimePath, join(copied, 'public/wasm/wasm_exec.js'))
-    dist = await build('a')
-  }
+  const prepareBuild = async () => { dist = await build('a') }
   if (continueAfterBuild) {
     await prepareBuild()
     console.log(JSON.stringify({ setup: 'rebuilt private artifacts through the ordinary typechecked npm entry for unfinished cases' }))

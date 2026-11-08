@@ -410,6 +410,19 @@ func TestRGB11StandardWitnessInvoicesUseIndependentReceiveKeys(t *testing.T) {
 }
 
 func TestRGB11StandardProxyInvoiceUsesBlindedBeneficiary(t *testing.T) {
+	originalChain := _chain
+	_chain = "testnet"
+	t.Cleanup(func() { _chain = originalChain })
+	for _, state := range []accountGroupState{accountGroupInactive, accountGroupReady} {
+		t.Run(string(state), func(t *testing.T) {
+			manager, receiveOutpoint := rgbProxyAccountGroup(t, state)
+			runRGBProxyInvoice(t, manager, receiveOutpoint)
+		})
+	}
+}
+
+func rgbProxyAccountGroup(t *testing.T, state accountGroupState) (*Manager, string) {
+	t.Helper()
 	wallet := NewInternalWalletWithMnemonic(
 		"comfort very add tuition senior run eight snap burst appear exile dutch", "", &chaincfg.TestNet4Params,
 	)
@@ -437,7 +450,18 @@ func TestRGB11StandardProxyInvoiceUsesBlindedBeneficiary(t *testing.T) {
 		OutPoint: receiveOutpoint, Value: 100_000,
 		PkScript: append([]byte(nil), script...), Confirmations: 6,
 	}
-	manager := newRGB11FlowManager(t, wallet, rpc, evidence, 71)
+	manager := newRGB11FlowManager(t, wallet, rpc, evidence, 71, accountGroupUnprepared)
+	manager.walletInfoMap[71].Name = "Proxy invoice"
+	if err := manager.RegisterAccountManagedDataProvider(&rgb11AccountManagedDataProvider{owner: manager}); err != nil {
+		t.Fatal(err)
+	}
+	prepareAccountGroup(t, manager, state,
+		"comfort very add tuition senior run eight snap burst appear exile dutch", "password")
+	return manager, receiveOutpoint
+}
+
+func runRGBProxyInvoice(t *testing.T, manager *Manager, receiveOutpoint string) {
+	t.Helper()
 	request, err := manager.rgbManager.CreateRGB11Invoice(RGB11InvoiceRequest{
 		Mode: "blind", TransportMode: RGB11ProxyTransport,
 		TransportEndpoints: []string{testRGB11ProxyTransport}, AmountRaw: "2", WitnessVout: 1,

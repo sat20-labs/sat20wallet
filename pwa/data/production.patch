@@ -1,0 +1,222 @@
+diff --git a/pwa/index.html b/pwa/index.html
+--- a/pwa/index.html
++++ b/pwa/index.html
+@@ -17,6 +17,6 @@
+   </head>
+   <body>
+     <div id="app"></div>
+-    <script type="module" src="./main.ts"></script>
++    <script type="module" src="./wallet-bootstrap.ts"></script>
+   </body>
+ </html>
+diff --git a/pwa/wallet-bootstrap.ts b/pwa/wallet-bootstrap.ts
+new file mode 100644
+--- /dev/null
++++ b/pwa/wallet-bootstrap.ts
+@@ -0,0 +1,118 @@
++const lockName = 'sat20-wallet-manager-v1'
++const root = document.getElementById('app')
++const locale = (navigator.language || 'en').toLowerCase().startsWith('zh') ? 'zh' : 'en'
++const copy = locale === 'zh' ? {
++  busyTitle: '钱包已在另一个窗口打开',
++  busyMessage: '本页会在当前钱包关闭后自动启动。若窗口没有切回，请手动切换到已打开的钱包。',
++  focus: '尝试切回已打开的钱包',
++  focusRequested: '已请求浏览器切回已打开的钱包；若未切换，请手动切回。',
++  unsupportedTitle: '当前浏览器无法安全启动钱包',
++  unsupportedMessage: '浏览器不支持单实例锁。本页没有打开钱包数据。',
++  lockErrorTitle: '无法安全启动钱包',
++  lockErrorMessage: '没有取得独占钱包锁。本页没有打开钱包数据。',
++  startErrorMessage: '钱包启动失败。刷新本页后重试。',
++  retry: '刷新并重试',
++} : {
++  busyTitle: 'Wallet is already open',
++  busyMessage: 'This page will start after the open wallet closes. Switch to the open wallet manually if it did not come forward.',
++  focus: 'Try to return to the open wallet',
++  focusRequested: 'Asked the browser to switch to the open wallet. Switch manually if it did not.',
++  unsupportedTitle: 'Wallet cannot start safely',
++  unsupportedMessage: 'This browser cannot enforce a single wallet instance. No wallet data was opened.',
++  lockErrorTitle: 'Wallet could not start safely',
++  lockErrorMessage: 'The exclusive wallet lock was not granted. No wallet data was opened.',
++  startErrorMessage: 'Wallet startup failed. Refresh this page to retry.',
++  retry: 'Refresh and retry',
++}
++let ownsLock = false
++let statusNode: HTMLElement | undefined
++let runChan: BroadcastChannel | undefined
++
++const holdLock = () => new Promise(() => {})
++
++const renderShell = (titleText: string, message: string, showFocus: boolean, showRetry: boolean, state: 'waiting' | 'error') => {
++  if (!root) return
++  const shell = document.createElement('main')
++  shell.dataset.testid = 'wallet-startup-shell'
++  shell.dataset.state = state
++  shell.style.cssText = 'min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:#09090b;color:#f4f4f5;padding:24px;font-family:system-ui,sans-serif;text-align:center;'
++  const heading = document.createElement('h1')
++  heading.dataset.testid = 'wallet-startup-title'
++  heading.textContent = titleText
++  statusNode = document.createElement('p')
++  statusNode.dataset.testid = 'wallet-startup-status'
++  statusNode.dataset.state = state
++  statusNode.setAttribute('role', 'status')
++  statusNode.textContent = message
++  shell.append(heading, statusNode)
++  if (showFocus) {
++    const button = document.createElement('button')
++    button.type = 'button'
++    button.dataset.testid = 'wallet-focus-existing'
++    button.disabled = !runChan
++    button.textContent = copy.focus
++    button.style.cssText = 'padding:10px 20px;border:1px solid currentColor;border-radius:6px;cursor:pointer;'
++    button.addEventListener('click', () => {
++      runChan?.postMessage({ type: 'focus' })
++      if (statusNode) {
++        statusNode.dataset.state = 'focus-requested'
++        statusNode.textContent = copy.focusRequested
++      }
++    })
++    shell.append(button)
++  }
++  if (showRetry) {
++    const button = document.createElement('button')
++    button.type = 'button'
++    button.dataset.testid = 'wallet-retry-startup'
++    button.textContent = copy.retry
++    button.style.cssText = 'padding:10px 20px;border:1px solid currentColor;border-radius:6px;cursor:pointer;'
++    button.addEventListener('click', () => window.location.reload())
++    shell.append(button)
++  }
++  root.replaceChildren(shell)
++}
++
++try {
++  if (typeof BroadcastChannel === 'function') runChan = new BroadcastChannel('sat20-wallet-run-v1')
++} catch {
++  runChan = undefined
++}
++
++runChan?.addEventListener('message', event => {
++  const data = event.data
++  if (ownsLock && data?.type === 'focus') {
++    try { window.focus() } catch { /* Focus is controlled by the browser. */ }
++  }
++})
++
++window.addEventListener('pageshow', event => {
++  if ((event as PageTransitionEvent).persisted) {
++    document.documentElement.inert = true
++    window.location.reload()
++  }
++})
++
++const lockManager = (navigator as Navigator & { locks?: LockManager }).locks
++if (!lockManager) {
++  renderShell(copy.unsupportedTitle, copy.unsupportedMessage, false, true, 'error')
++} else {
++  renderShell(copy.busyTitle, copy.busyMessage, true, true, 'waiting')
++  void lockManager.request(lockName, { mode: 'exclusive' }, async lock => {
++    if (!lock) {
++      renderShell(copy.lockErrorTitle, copy.lockErrorMessage, false, true, 'error')
++      return
++    }
++    ownsLock = true
++    try {
++      await import('./main')
++    } catch (error) {
++      console.error('Wallet entry failed while holding the instance lock:', error)
++      try { renderShell(copy.lockErrorTitle, copy.startErrorMessage, false, true, 'error') } catch {}
++    }
++    await holdLock()
++  }).catch(error => {
++    console.error('Wallet instance lock request failed:', error)
++    try { renderShell(copy.lockErrorTitle, copy.lockErrorMessage, false, true, 'error') } catch {}
++  })
++}
+diff --git a/pwa/utils/wasm.ts b/pwa/utils/wasm.ts
+--- a/pwa/utils/wasm.ts
++++ b/pwa/utils/wasm.ts
+@@ -163,9 +163,14 @@
+   return { runtimeFailure }
+ }
+ 
++let runtimeTask: Promise<{ runtimeFailure: Promise<never> }> | undefined
++let loadTask: Promise<void> | undefined
++
++const loadRuntime = () => runtimeTask ??= instantiateGoWasm()
++
+ const loadWalletWasm = async () => {
+   const config = await getRuntimeConfig()
+-  const { runtimeFailure } = await instantiateGoWasm()
++  const { runtimeFailure } = await loadRuntime()
+   const [initError] = await Promise.race([
+     walletManager.init(config, logLevel),
+     runtimeFailure,
+@@ -173,6 +178,13 @@
+   if (initError) throw runtimeError('Wallet WASM initialization failed', initError)
+ }
+ 
+-export const loadWasm = async () => {
+-  await loadWalletWasm()
++export const loadWasm = () => {
++  if (loadTask) return loadTask
++  const task = loadWalletWasm()
++  loadTask = task
++  void task.then(
++    () => { if (loadTask === task) loadTask = undefined },
++    () => { if (loadTask === task) loadTask = undefined },
++  )
++  return task
+ }
+diff --git a/pwa/utils/sat20.ts b/pwa/utils/sat20.ts
+--- a/pwa/utils/sat20.ts
++++ b/pwa/utils/sat20.ts
+@@ -14,6 +14,8 @@
+   address: string
+ }
+ class WalletManager {
++  private initTask?: Promise<[Error | undefined, any | undefined]>
++
+   private async _handleRequest(
+     methodName: string,
+     ...args: any[]
+@@ -313,7 +315,15 @@
+     config: any,
+     logLevel: number
+   ): Promise<[Error | undefined, void | undefined]> {
+-    return this._handleRequest('init', config, logLevel)
++    if (!this.initTask) {
++      const task = this._handleRequest('init', config, logLevel)
++      this.initTask = task
++      void task.then(
++        ([error]) => { if (error && this.initTask === task) this.initTask = undefined },
++        () => { if (this.initTask === task) this.initTask = undefined },
++      )
++    }
++    return this.initTask
+   }
+ 
+   async start(): Promise<[Error | undefined, void | undefined]> {
+@@ -321,7 +331,9 @@
+   }
+ 
+   async release(): Promise<[Error | undefined, void | undefined]> {
+-    return this._handleRequest('release')
++    const result = await this._handleRequest('release')
++    if (!result[0]) this.initTask = undefined
++    return result
+   }
+ 
+   async isWalletExist(): Promise<
+diff --git a/pwa/tools/rgb11-repair/index.html b/pwa/tools/rgb11-repair/index.html
+--- a/pwa/tools/rgb11-repair/index.html
++++ b/pwa/tools/rgb11-repair/index.html
+@@ -25,7 +25,8 @@
+ <script type="module">
+ import {capture,hashText,applyPatch,validateOrphanSnapshotRepair,applyOrphanSnapshotRepair,resumeOrphanSnapshotRepair} from './repair.mjs';
+ const el=id=>document.getElementById(id);
+-async function guard(){if((await navigator.serviceWorker.getRegistrations()).length)throw Error('Close wallet, back up profile and unregister service worker in the COPY first');
++const lockReady=new Promise(resolve=>{if(!navigator.locks){resolve(false);return;}void navigator.locks.request('sat20-wallet-manager-v1',{mode:'exclusive',ifAvailable:true},async lock=>{if(!lock){resolve(false);return;}resolve(true);await new Promise(()=>{});}).catch(()=>resolve(false));});
++async function guard(){if(!(await lockReady))throw Error('The wallet is active or Web Locks are unavailable; close it and reload this maintenance page');if((await navigator.serviceWorker.getRegistrations()).length)throw Error('Close wallet, back up profile and unregister service worker in the COPY first');
+  const db=await new Promise((resolve,reject)=>{const r=indexedDB.open('sat20-wallet-pwa');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(Error('public scope unavailable'));r.onupgradeneeded=()=>{r.transaction.abort();reject(Error('existing profile required'));}});
+  try{const raw=await new Promise((resolve,reject)=>{const r=db.transaction('wallet-state','readonly').objectStore('wallet-state').get('local:wallet_state_snapshot_v1');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(Error('scope read failed'));});
+  const v=typeof raw==='string'?JSON.parse(raw):raw;const s=v?.state;if(!s)throw Error('public scope missing');

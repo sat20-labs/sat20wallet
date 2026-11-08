@@ -4,20 +4,18 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/sat20-labs/sat20wallet/sdk/account"
 )
 
 func TestAccountRestorePostSyncNetworkWaitDoesNotBlockRGBState(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
-	defer func() { _chain = oldChain }()
+	t.Cleanup(func() { _chain = oldChain })
 
 	remote := newRGB11MemoryDKVSHTTP()
-	source, _ := managedImportTestSource(t, remote)
-	target, provider := managedImportTestManager(t, remote)
+	source, _, _ := newImportSource(t, remote)
+	target, provider, _ := newImportGroup(t, remote)
 	// Keep the post-sync network phase observable with a real active provider;
-	// RGB recovery now uses only the stable bundle and does not read its cache.
+	// RGB recovery now uses stable module copies and does not read its cache.
 	for _, manager := range []*Manager{source, target} {
 		if err := manager.RegisterAccountManagedDataProvider(&accountManagedActiveDataProviderStub{
 			accountManagedDataProviderStub: accountManagedDataProviderStub{id: "postsync-active"},
@@ -26,10 +24,11 @@ func TestAccountRestorePostSyncNetworkWaitDoesNotBlockRGBState(t *testing.T) {
 		}
 	}
 	localImport := make(chan struct{})
+	var importOnce sync.Once
 	beforeImport := provider.beforeImport
 	provider.beforeImport = func() {
 		beforeImport()
-		close(localImport)
+		importOnce.Do(func() { close(localImport) })
 	}
 
 	blocked := &blockedAccountConfigHTTP{
@@ -37,19 +36,26 @@ func TestAccountRestorePostSyncNetworkWaitDoesNotBlockRGBState(t *testing.T) {
 		started:             make(chan struct{}), release: make(chan struct{}),
 	}
 	target.http = blocked
-	target.dkvs.mu.Lock()
-	target.dkvs.clients = make(map[string]*SatsNetDKVSClient)
-	target.dkvs.mu.Unlock()
+	target.SetDKVSHttpClient(blocked)
 
 	value := managedImportRecoveryValue(t, source)
+	locator, location := importGroupMaterial(t, source)
 	done := make(chan error, 1)
 	var stateDone chan error
 	var release sync.Once
 	defer func() {
 		release.Do(func() { close(blocked.release) })
-		<-done
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("restore did not stop after the network gate was released")
+		}
 		if stateDone != nil {
-			<-stateDone
+			select {
+			case <-stateDone:
+			case <-time.After(3 * time.Second):
+				t.Error("RGB state read did not stop after the network gate was released")
+			}
 		}
 	}()
 	go func() {
@@ -58,8 +64,9 @@ func TestAccountRestorePostSyncNetworkWaitDoesNotBlockRGBState(t *testing.T) {
 			value,
 			source.accountSecret,
 			"password",
-			account.Locator{AccountID: source.accountProfile.AccountID},
+			locator,
 			AccountManagementRestoreOptions{
+				Location:    location,
 				StorageMode: AccountStorageTemporary,
 				RecordTTL:   testRGB11FreeLocalTTL,
 			},
@@ -73,6 +80,8 @@ func TestAccountRestorePostSyncNetworkWaitDoesNotBlockRGBState(t *testing.T) {
 	case <-localImport:
 	case err := <-done:
 		t.Fatalf("restore ended before local provider import: %v", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("restore did not reach its local provider import")
 	}
 	select {
 	case <-blocked.started:

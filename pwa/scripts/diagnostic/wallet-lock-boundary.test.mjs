@@ -104,6 +104,7 @@ function walletSessionFixture() {
   } })
   const logs = { beginPwaWalletOperation: async () => {}, finishPwaOperation: async () => {} }
   const dependencies = {
+    '@/utils/wasmError': loadModule('../../utils/wasmError.ts'),
     radash: { tryit }, '@/lib/walletSession': session, '@/utils/pwaOperationLog': logs,
     '@/utils/pwaVersionPolicy': { beginVersionDispatch: () => () => {} },
     '@/utils/walletAwaitTrace': { beginWalletAwaitTrace: () => () => {} },

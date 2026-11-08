@@ -1,0 +1,98 @@
+--- a/pwa/scripts/verify/account-management-usage-e2e.mjs
++++ b/pwa/scripts/verify/account-management-usage-e2e.mjs
+@@ -1464,18 +1464,27 @@
+       await page.context().close()
+       for (const combination of ['knowledge+guardian', 'share+guardian']) {
+         const recovery = await device()
++        let stage = 'load-backup'
++        const stageAt = next => {
++          stage = next
++          console.log(JSON.stringify({ guardianRecoveryStage: { combination, stage } }))
++        }
+         try {
++          stageAt('load-backup')
+           await recovery.evaluate(() => { location.hash = '#/restore-account' })
+           await recovery.getByPlaceholder('粘贴 sat20account1:...').fill(savedLocator)
+           await recovery.getByRole('button', { name: '加载加密账户备份', exact: true }).click()
+           if (combination === 'knowledge+guardian') {
++            stageAt('recover-knowledge')
+             for (let i = 0; i < 2; i++) await recovery.locator('section input[type="password"]').nth(i).fill(questions[i].answer)
+             await recovery.getByRole('button', { name: '恢复加密分片', exact: true }).click()
+           } else {
++            stageAt('set-user-share')
+             await recovery.getByRole('button', { name: '使用用户分片和 Guardian', exact: true }).click()
+             await recovery.getByPlaceholder('可选：粘贴 sat20share1:...').fill(savedShare)
+             await recovery.getByRole('button', { name: '使用用户分片', exact: true }).click()
+           }
++          stageAt('guardian-request')
+           await recovery.getByRole('button', { name: '生成 Guardian 恢复请求', exact: true }).click()
+           const recoveryRequest = await recovery.locator('textarea[readonly]').first().inputValue()
+           const previousResponse = await guardian.locator('textarea[readonly]').last().inputValue()
+@@ -1483,18 +1492,63 @@
+           await guardian.getByRole('button', { name: '生成加密恢复响应', exact: true }).click()
+           await confirmPassword(guardian)
+           await expect.poll(() => guardian.locator('textarea[readonly]').last().inputValue(), { timeout: 90000 }).not.toBe(previousResponse)
++          stageAt('guardian-response')
+           await recovery.getByPlaceholder('粘贴 Guardian 返回的加密响应').fill(await guardian.locator('textarea[readonly]').last().inputValue())
+           await recovery.getByRole('button', { name: '使用 Guardian 响应', exact: true }).click()
++          stageAt('preview')
+           await recovery.getByRole('button', { name: '预览恢复内容', exact: true }).click()
+-          await recovery.getByPlaceholder('设置新的本地钱包密码').fill(newPassword)
+-          await recovery.getByPlaceholder('再次输入密码').fill(newPassword)
++          await recovery.getByRole('heading', { name: '确认恢复账户', exact: true }).waitFor()
++          const localPassword = recovery.getByLabel('新设备解锁密码', { exact: true })
++          const confirmPasswordBox = recovery.getByLabel('再次输入解锁密码', { exact: true })
++          stageAt('password-inputs-visible')
++          await localPassword.waitFor()
++          await confirmPasswordBox.waitFor()
++          stageAt('fill-local-password')
++          await localPassword.fill(newPassword)
++          stageAt('fill-confirm-password')
++          await confirmPasswordBox.fill(newPassword)
++          stageAt('restore-wallets')
+           await Promise.all([recovery.waitForEvent('domcontentloaded', { timeout: 90000 }), recovery.getByRole('button', { name: '恢复全部钱包', exact: true }).click()])
+           await ready(recovery); await unlock(recovery, newPassword)
++          stageAt('catalog-and-secret-checks')
+           assert.deepEqual(normalize(await catalog(recovery)), normalize(expectedCatalog), combination)
+           await assertNoSecrets(recovery, [...questions.map(q => q.answer), savedShare, newPassword])
+-        } catch (error) {
++        } catch {
++          const view = await recovery.evaluate(() => {
++            const visible = element => Boolean(element && element.getClientRects().length &&
++              getComputedStyle(element).visibility !== 'hidden')
++            return {
++              hash_route: location.hash.split('?')[0],
++              headings: [...document.querySelectorAll('h1,h2')].filter(visible).slice(0, 20).map(element => element.textContent),
++              errors: [...document.querySelectorAll('[role="alert"]')].filter(visible).slice(0, 10).map(element => element.textContent),
++              password_inputs: ['restore-local-password', 'restore-confirm-password'].map(id => {
++                const element = document.getElementById(id)
++                return { id, type: element?.getAttribute('type') ?? null,
++                  label: document.querySelector(`label[for="${id}"]`)?.textContent ?? null,
++                  visible: visible(element) }
++              }),
++            }
++          }).catch(() => null)
++          const redact = value => {
++            let text = String(value ?? '').replace(/\{[\s\S]*\}|\[[\s\S]*\]/g, '[redacted-detail]')
++            for (const secret of [password, newPassword, savedLocator, savedShare, importMnemonic,
++              ...Object.values(guardianRecoverySyntheticMnemonics),
++              ...questions.flatMap(question => [question.prompt, question.answer, question.confirmation])]) {
++              if (typeof secret === 'string' && secret) text = text.replaceAll(secret, '[redacted]')
++            }
++            return text.replace(/sat20(?:account1:|-share-v1:)[^\s"'<>]+/g, '[redacted]')
++              .replace(/[A-Za-z0-9_+/=-]{32,}/g, '[redacted]')
++              .replace(/\b(?:[a-z]+\s+){11,23}[a-z]+\b/gi, '[redacted]')
++              .slice(0, 240)
++          }
++          console.error(JSON.stringify({ guardianRecoveryFailure: { combination, stage,
++            hash_route: redact(view?.hash_route), headings: view?.headings.map(redact) ?? [],
++            errors: view?.errors.map(redact) ?? [],
++            password_inputs: view?.password_inputs.map(input => ({ ...input, label: redact(input.label) })) ?? [] } }))
+           await t.preserveBrowserFailureState?.()
+-          throw error
++          // Locator errors can contain fill arguments. Report the allowed view
++          // above without rethrowing a password-bearing Playwright call log.
++          throw new Error(`Guardian recovery ${combination} failed at ${stage}; see redacted guardianRecoveryFailure`)
+         } finally { await recovery.context().close() }
+       }
+     } catch (error) {

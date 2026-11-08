@@ -7,6 +7,7 @@ import (
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/satoshinet/btcec/ecdsa"
+	"github.com/sat20-labs/satoshinet/contract"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	"github.com/stretchr/testify/require"
 )
@@ -24,7 +25,9 @@ func (s sourceSigner) SignMessage(message []byte) ([]byte, error) {
 
 func TestEVMSourceRecordUsesExistingPublicKeySigner(t *testing.T) {
 	signer := sourceSigner{key: secp256k1.PrivKeyFromBytes([]byte{1})}
-	record, err := NewSignedRecord(signer, "/contract/evm/source/testcontract", []byte(`{"source":"example"}`), dkvsindexer.RecordOptions{Seq: 1})
+	value, err := contract.EncodeEVMSourceMetadata(contract.EVMSourceMetadata{Version: 1, Source: "example"})
+	require.NoError(t, err)
+	record, err := NewSignedRecord(signer, "/contract/evm/source/testcontract", value, dkvsindexer.RecordOptions{Seq: 1})
 	require.NoError(t, err)
 	require.Equal(t, signer.GetPubKey().SerializeCompressed(), record.PubKey)
 	require.NoError(t, dkvsindexer.VerifyRecordForClient(record, dkvsindexer.RecordVerificationOptions{ExpectedKey: record.Key}))

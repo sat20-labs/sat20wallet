@@ -10,9 +10,14 @@ import (
 
 func TestSDKDKVSActiveManager(t *testing.T) {
 	fixture := newTemplateFixtureWithArgs(t, map[string]int64{}, nil, nil, dkvsMinerArgs(t))
+	runSDKDKVSActiveManager(t, fixture, dkvsClientMnemonic)
+}
+
+func runSDKDKVSActiveManager(t *testing.T, fixture *templateFixture, mnemonic string) *dkvsActiveManagerLocalSnapshot {
+	t.Helper()
 	remote := dkvsClientForNode(t, fixture.Network.Core)
-	owner := newDKVSKeyPathActor(t, keyFromMnemonic(t, dkvsClientMnemonic, 0))
-	manager, _ := newWalletManagerForNode(t, fixture.Network.Core, dkvsClientMnemonic)
+	owner := newDKVSKeyPathActor(t, keyFromMnemonic(t, mnemonic, 0))
+	manager, _ := newWalletManagerForNode(t, fixture.Network.Core, mnemonic)
 	require.NoError(t, manager.InitializeAccountManagement("123456"))
 	require.NoError(t, manager.BindAccountToCurrentCoreNode())
 	key, err := dkvs.PersonalKey(owner.Wallet.GetPubKey().SerializeCompressed(), "active-manager/settings")
@@ -27,7 +32,9 @@ func TestSDKDKVSActiveManager(t *testing.T) {
 	t.Cleanup(manager.StopDKVSSync)
 	readValue := func(value string) bool {
 		state, err := manager.GetDKVSSubscriptionStatus()
-		if err != nil || state.Status != "READY" { return false }
+		if err != nil || state.Status != "READY" {
+			return false
+		}
 		record, err := client.GetRecord(key)
 		return err == nil && string(record.Value) == value
 	}
@@ -56,7 +63,9 @@ func TestSDKDKVSActiveManager(t *testing.T) {
 		require.NoError(t, manager.StartDKVSSync())
 		require.Eventually(t, func() bool {
 			state, err := manager.GetDKVSSubscriptionStatus()
-			if err != nil || state.Status != "READY" { return false }
+			if err != nil || state.Status != "READY" {
+				return false
+			}
 			_, err = client.GetRecord(key)
 			return err != nil
 		}, 6*time.Second, 30*time.Millisecond)
@@ -75,7 +84,9 @@ func TestSDKDKVSActiveManager(t *testing.T) {
 		// key lifetime from Seq=1.
 		require.Eventually(t, func() bool {
 			status, statusErr := manager.GetDKVSSubscriptionStatus()
-			if statusErr != nil || status.Status != "READY" { return false }
+			if statusErr != nil || status.Status != "READY" {
+				return false
+			}
 			_, readErr := client.GetRecord(key)
 			return readErr != nil
 		}, 6*time.Second, 30*time.Millisecond)
@@ -85,4 +96,22 @@ func TestSDKDKVSActiveManager(t *testing.T) {
 		require.Equal(t, uint64(1), fresh.Seq)
 		require.Eventually(t, func() bool { return readValue("after-own-delete") }, 6*time.Second, 30*time.Millisecond)
 	})
+
+	local := &dkvsActiveManagerLocalSnapshot{}
+	if state, stateErr := manager.GetDKVSSubscriptionStatus(); stateErr != nil {
+		local.statusError = stateErr.Error()
+	} else {
+		local.subscriptionStatus = state.Status
+	}
+	if record, recordErr := client.GetRecord(key); recordErr != nil {
+		local.recordError = recordErr.Error()
+	} else {
+		local.recordPresent = true
+		local.recordSeq = record.Seq
+		local.recordHash = dkvs.RecordHash(record).String()
+		local.recordValue = string(record.Value)
+	}
+	t.Logf("dkvs-active-manager-local-state: status=%s status_error=%q record_present=%t record_seq=%d record_hash=%s record_value=%q record_error=%q",
+		local.subscriptionStatus, local.statusError, local.recordPresent, local.recordSeq, local.recordHash, local.recordValue, local.recordError)
+	return local
 }

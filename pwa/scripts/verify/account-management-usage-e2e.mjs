@@ -1,14 +1,41 @@
 import assert from 'node:assert/strict'
-import { appendFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect } from '@playwright/test'
+
+const accountMessages = JSON.parse(readFileSync(new URL('../../locales/en.json', import.meta.url), 'utf8')).accountManagement
 
 function dkvsFundingButton(page, quote) {
   assert.equal(quote.can_fund, true, 'current DKVS quote cannot be funded')
   return page.locator('[aria-label="账户备份状态"]').getByRole('button', {
     name: quote.ready ? /^(Renew DKVS storage|续费 DKVS 存储)$/ : /^(Pay DKVS storage fees|支付 DKVS 存储费用)$/,
   })
+}
+
+export function installWalletStartProbe() {
+  if (window.__walletStartProbe) return
+  const probe = { wasm: 0, dbOpen: 0, dbWrite: 0, storageWrite: 0 }
+  Object.defineProperty(window, '__walletStartProbe', { value: probe, configurable: true })
+  const wrap = (owner, key, field) => {
+    if (!owner) return
+    const descriptor = Object.getOwnPropertyDescriptor(owner, key)
+    if (!descriptor || typeof descriptor.value !== 'function' || descriptor.value.__walletStartProbeWrapped) return
+    const original = descriptor.value
+    const wrapped = function (...args) {
+      probe[field]++
+      return Reflect.apply(original, this, args)
+    }
+    Object.defineProperty(wrapped, '__walletStartProbeWrapped', { value: true })
+    Object.defineProperty(owner, key, { ...descriptor, value: wrapped })
+  }
+  wrap(WebAssembly, 'instantiate', 'wasm')
+  wrap(WebAssembly, 'instantiateStreaming', 'wasm')
+  wrap(IDBFactory.prototype, 'open', 'dbOpen')
+  wrap(IDBFactory.prototype, 'deleteDatabase', 'dbWrite')
+  for (const method of ['put', 'add', 'delete', 'clear']) wrap(IDBObjectStore.prototype, method, 'dbWrite')
+  if (typeof IDBCursor !== 'undefined') wrap(IDBCursor.prototype, 'update', 'dbWrite')
+  for (const method of ['setItem', 'removeItem', 'clear']) wrap(Storage.prototype, method, 'storageWrite')
 }
 
 export const fixedRegtestAccountUsageCaseNames = [
@@ -69,6 +96,64 @@ export function assertFixedRootIdentity(expected, observed) {
   'fixed-root observed identity must include fingerprint and address')
   assert.equal(observed.fingerprint, expected.fingerprint, 'fixed root fingerprint changed')
   assert.equal(observed.address, expected.address, 'fixed root address changed')
+}
+
+// Discovery, write eligibility and a recoverable first backup are separate
+// facts. Counters alone never prove that another device can restore the backup.
+function accountReadiness(status) {
+  const knownDiscovery = ['inactive', 'active', 'active-waiting-backup'].includes(status?.discovery_status)
+  return {
+    discovery: knownDiscovery ? status.discovery_status : 'unresolved',
+    writeQualified: status?.recovery_configured === true && status?.activation_pending === false &&
+      status?.dkvs_write_allowed === true,
+  }
+}
+
+export async function waitForAccountWrite(page, accountCall) {
+  let observed
+  try {
+    await expect.poll(async () => {
+      const status = await accountCall(page, 'status')
+      observed = Object.fromEntries(['discovery_status', 'local_only', 'recovery_configured',
+        'activation_pending', 'dkvs_write_allowed', 'account_state'].map(key => [key, status[key]]))
+      return accountReadiness(status).writeQualified ||
+        (status.discovery_status === 'inactive' && status.local_only === true &&
+          status.recovery_configured === false && !status.activation_pending)
+    }, { timeout: 90000, message: 'business preparation requires a verified account write qualification' }).toBe(true)
+  } catch (error) {
+    console.error(JSON.stringify({ accountWriteWaitFailure: observed }))
+    throw error
+  }
+}
+
+async function assertBackupPreview(page, expectedCatalog) {
+  const heading = page.getByRole('heading', { name: '确认恢复账户', exact: true })
+  const cards = page.locator('section').filter({ has: heading }).locator(':scope > div.rounded-lg')
+  let phase = 'heading'
+  let walletIndex = -1
+  let matchingCards = 0
+  try {
+    await expect(heading).toBeVisible()
+    phase = 'wallet-count'
+    await expect(cards).toHaveCount(expectedCatalog.length)
+    for (const [index, wallet] of expectedCatalog.entries()) {
+      walletIndex = index
+      const card = cards.filter({ has: page.getByText(wallet.name, { exact: true }) })
+      phase = 'wallet-name'
+      matchingCards = await card.count()
+      await expect(card).toHaveCount(1)
+      await expect(card.getByText(wallet.name, { exact: true })).toBeVisible()
+      phase = 'account-count'
+      await expect(card.getByText(`${wallet.accounts.length} 个子账户`, { exact: true })).toBeVisible()
+    }
+    phase = 'password-inputs'
+    await expect(page.getByLabel('新设备解锁密码', { exact: true })).toBeVisible()
+    await expect(page.getByLabel('再次输入解锁密码', { exact: true })).toBeVisible()
+  } catch (error) {
+    console.error(JSON.stringify({ backupPreviewFailure: { phase, wallet_index: walletIndex,
+      expected_cards: expectedCatalog.length, actual_cards: await cards.count(), matching_cards: matchingCards } }))
+    throw error
+  }
 }
 
 // Reuse real PWA root discovery and background sync across separate devices.
@@ -170,7 +255,7 @@ async function sameModeReconfiguration(t, page, credential, mode, questions, mne
 // fixture. Faults intercept only the failing browser boundary, never replace
 // the account/crypto/RGB implementation or its successful responses.
 export async function runPwaUsageCases(t) {
-  const { check, device, ready, unlock, catalog, walletCall, accountCall, password, newPassword, questions, answers } = t
+  const { check, device, waitingDevice, ready, unlock, catalog, walletCall, accountCall, password, newPassword, questions, answers } = t
   const importMnemonic = t.rootMnemonic || 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
   const fixedOwner = t.fixedAccountManagement == null
     ? null
@@ -181,11 +266,39 @@ export async function runPwaUsageCases(t) {
   }
   const fresh = async () => {
     const page = await device()
-    await page.evaluate(async credential => {
-      const [error] = await window.__SAT20_PWA_VERIFY__.useWalletStore().createWallet(credential)
-      if (error) throw error
-    }, password)
-    return page
+    let readiness
+    try {
+      await page.evaluate(async credential => {
+        const [error] = await window.__SAT20_PWA_VERIFY__.useWalletStore().createWallet(credential)
+        if (error) throw error
+      }, password)
+      // This helper creates a new random first wallet. Its local identity is
+      // not an activation decision; wait for verified online absence first.
+      await expect.poll(async () => {
+        const status = await accountCall(page, 'status')
+        readiness = {
+          discovery_status: status.discovery_status,
+          dkvs_status: status.dkvs_status,
+          local_only: status.local_only,
+          recovery_configured: status.recovery_configured,
+          activation_pending: status.activation_pending,
+          dkvs_write_allowed: status.dkvs_write_allowed,
+        }
+        const qualification = accountReadiness(status)
+        if (status.recovery_configured || status.activation_pending ||
+          qualification.discovery === 'active' || qualification.discovery === 'active-waiting-backup') {
+          throw new Error('new random first wallet unexpectedly has an active or pending service')
+        }
+        return qualification.discovery === 'inactive' && status.local_only === true &&
+          status.recovery_configured === false && !status.activation_pending
+      }, { timeout: 90000, message: 'new random first wallet requires real inactive discovery before local business' }).toBe(true)
+      return page
+    } catch (error) {
+      console.error(JSON.stringify({ freshReadinessFailure: readiness ?? { status: 'not observed' } }))
+      await t.preserveBrowserFailureState?.()
+      await page.context().close().catch(() => {})
+      throw error
+    }
   }
   const freshSynthetic = async mnemonic => {
     const page = await device()
@@ -244,8 +357,18 @@ export async function runPwaUsageCases(t) {
     ? freshSynthetic(guardianRecoverySyntheticMnemonics.guardian)
     : fresh()
   const setup = async page => {
+    const before = (await catalog(page)).map(({ fingerprint, name, accounts }) => ({ fingerprint, name, accounts }))
+    assert.ok(before.length > 0, 'local account catalog is empty before recovery setup')
+    await page.reload(); await ready(page); await unlock(page, password)
+    assert.deepEqual((await catalog(page)).map(({ fingerprint, name, accounts }) => ({ fingerprint, name, accounts })), before,
+      'unactivated account catalog was not persisted locally')
+    // Cold unlock starts real discovery again; do not treat its initial status
+    // as the confirmed absence required by this unactivated setup.
+    await waitForAccountWrite(page, accountCall)
+    const local = await accountCall(page, 'status')
+    assert.equal(local.local_only, true, 'unactivated account must remain local-only')
+    assert.equal(local.recovery_configured, false)
     await accountCall(page, 'confirmStorage', 'temporary')
-    await settled(page)
     const material = await accountCall(page, 'createRecovery', { password, wallets: [], recovery_mode: '2of2', questions })
     // Match the visible setup page's bounded retry of this same session after
     // a safe CAS refusal; never replace the material or suppress other errors.
@@ -381,6 +504,55 @@ export async function runPwaUsageCases(t) {
     assert.deepEqual(exposed, [], 'recovery secrets were persisted in PWA state')
   }
 
+  const paidQuoteCase = 'usage: Guardian paid confirmation uses 100 records and root identity after a 200 record child-wallet quote'
+  if (!t.material?.guardian_setup && t.focusedUsageCases?.includes(paidQuoteCase)) {
+    const owner = await fresh()
+    const guardian = await freshGuardian()
+    try {
+      await settings(guardian)
+      await guardian.getByRole('button', { name: '生成我的联系信息并发送给好友', exact: true }).click()
+      await confirmPassword(guardian)
+      const guardianTools = guardian.getByRole('heading', { name: 'Guardian 工具', exact: true }).locator('xpath=..')
+      const copyContact = guardianTools.getByRole('button', { name: '复制联系信息', exact: true })
+      await expect(copyContact).toBeVisible()
+      const contactOutput = copyContact.locator('xpath=..').locator('textarea[readonly]')
+      await expect(contactOutput).toHaveCount(1)
+      const contact = JSON.parse(await contactOutput.inputValue())
+      assert.ok(typeof contact.network === 'string' && contact.network.length > 0,
+        'Guardian contact must include its network')
+      assert.match(contact.mailbox_id, /^[0-9a-f]{64}$/i,
+        'Guardian contact must include a 32-byte mailbox id')
+      assert.ok(typeof contact.recovery_public_key === 'string' && contact.recovery_public_key.length > 0,
+        'Guardian contact must include its recovery public key')
+      const ownerStatus = await accountCall(owner, 'status')
+      const ownerReadiness = accountReadiness(ownerStatus)
+      assert.equal(ownerReadiness.discovery, 'inactive', 'Guardian quote material owner must be freshly discovered as inactive')
+      assert.equal(ownerReadiness.writeQualified, false, 'Guardian quote prep must not grant write eligibility')
+      assert.equal(ownerStatus.recovery_configured, false, 'Guardian quote prep must not pre-activate its owner')
+      assert.equal(ownerStatus.activation_pending, false)
+      assert.notEqual(contact.mailbox_id, ownerStatus.account_id, 'quote material must use an independent Guardian')
+      await preflightUI(owner)
+      await temporaryUI(owner)
+      await fillQuestions(owner)
+      const material = await accountCall(owner, 'createRecovery', {
+        password, wallets: [], recovery_mode: '2of3', questions, guardian: contact,
+      })
+      assert.ok(typeof material.guardian_setup === 'string' && material.guardian_setup.length,
+        'real PWA setup must produce Guardian material for the focused quote case')
+      t.material = { ...(t.material || {}), guardian_setup: material.guardian_setup }
+      await accountCall(owner, 'cancelPendingStorageAuthorization')
+    } finally {
+      await Promise.all([owner.context().close(), guardian.context().close()])
+    }
+  }
+
+  if (!t.material && t.focusedUsageCases?.includes(
+    'usage: offline catalog is read-only and resumes synchronization after reconnect')) {
+    const source = await fresh()
+    try { t.material = await setup(source) }
+    finally { await source.context().close() }
+  }
+
   await scenario('usage: background catalog refresh cannot invalidate a subaccount switch', () => using(async page => {
     const observed = await page.evaluate(async () => {
       const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
@@ -442,6 +614,10 @@ export async function runPwaUsageCases(t) {
       await restore(restored, material)
       assert.equal((await catalog(restored))[0].accounts[0].did, 'bob.btc')
       assert.equal((await catalog(restored))[0].accounts[0].name, before[0].accounts[0].name)
+      await expect.poll(async () => {
+        const status = await accountCall(restored, 'status')
+        return status.recovery_configured && status.dkvs_write_allowed
+      }, { timeout: 90000 }).toBe(true)
       await didSettings(restored)
       await restored.getByRole('button', { name: '清空 DID', exact: true }).click()
       await expect(restored.getByLabel('地址 DID（可选）', { exact: true })).toHaveValue('')
@@ -466,7 +642,7 @@ export async function runPwaUsageCases(t) {
       const put = IDBObjectStore.prototype.put
       window.__restoreDIDPut = () => { IDBObjectStore.prototype.put = put }
       IDBObjectStore.prototype.put = function(value, key) {
-        if (this.name === 'kv' && String(key).endsWith('account-management-profile-v2')) {
+        if (this.name === 'kv' && String(key).endsWith('account-management-profile-v1')) {
           throw new DOMException('DID profile persistence failure', 'QuotaExceededError')
         }
         return put.call(this, value, key)
@@ -483,7 +659,7 @@ export async function runPwaUsageCases(t) {
     await expect(page.getByLabel('地址 DID（可选）', { exact: true })).toHaveValue('saved.btc')
   }))
 
-  await scenario('usage: remote deletion consumes stale local edits after reload and publishes unrelated changes', () => using(async page => {
+  await scenario('usage: remote deletion rejects offline edits and adopts the confirmed remote state', () => using(async page => {
     await page.evaluate(async credential => {
       const [error] = await window.__SAT20_PWA_VERIFY__.useWalletStore().createWallet(credential)
       if (error) throw error
@@ -494,22 +670,68 @@ export async function runPwaUsageCases(t) {
     const unavailable = route => route.abort('failed')
     try {
       await restore(replica, material)
+      await expect.poll(async () => {
+        const statuses = await Promise.all([page, replica].map(p => accountCall(p, 'status')))
+        return statuses.every(status => status.recovery_configured && status.dkvs_write_allowed)
+      }, { timeout: 90000 }).toBe(true)
       const before = await catalog(page)
       const rootID = (await accountCall(page, 'status')).root_wallet_id
       const child = before.find(wallet => String(wallet.id) !== String(rootID))
+      assert.ok(child)
       const replicaChild = (await catalog(replica)).find(wallet => wallet.fingerprint === child.fingerprint)
-      for (const route of routes) await replica.context().route(route, unavailable)
-      await replica.evaluate(async ({ childID, rootID }) => {
+      assert.ok(replicaChild)
+      const localBefore = await catalog(replica)
+      await replica.evaluate(async childID => {
         const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
         await store.switchWallet(childID)
-        await store.updateWalletName(childID, 'Stale renamed child')
-        await store.addAccount('Stale child account', 1)
-        await store.updateAccountDID(1, 'stale.btc')
-        await store.updateWalletName(rootID, 'Local independent root')
+      }, String(replicaChild.id))
+      await expect.poll(async () => (await accountCall(replica, 'status')).dkvs_write_allowed,
+        { timeout: 90000 }).toBe(true)
+      // Offline rejection is measured from a confirmed, clean baseline;
+      // write eligibility alone also permits normal asynchronous backup.
+      await settled(replica)
+      assert.equal((await accountCall(replica, 'status')).pending_changes ?? 0, 0,
+        'replica preparation left pending changes before the offline boundary')
+      for (const route of routes) await replica.context().route(route, unavailable)
+      let offlineQualification
+      try {
+        await expect.poll(async () => {
+          const status = await accountCall(replica, 'status')
+          offlineQualification = { account_state: status.account_state,
+            write_allowed: status.dkvs_write_allowed, error_code: status.last_dkvs_sync_error_code || '' }
+          return Boolean(status.last_dkvs_sync_error) && !status.dkvs_write_allowed
+        }, { timeout: 90000, message: 'offline edits require the actual write gate to close' }).toBe(true)
+      } catch (error) {
+        console.error(JSON.stringify({ offlineQualificationFailure: offlineQualification }))
+        throw error
+      }
+      const rejected = await replica.evaluate(async ({ childID, rootID }) => {
+        const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
+        const attempt = async operation => {
+          try {
+            const result = await operation()
+            const error = Array.isArray(result) ? result[0] : null
+            return error ? String(error.message || error) : ''
+          } catch (error) { return String(error?.message || error) }
+        }
+        return {
+          childName: await attempt(() => store.updateWalletName(childID, 'Forbidden offline child')),
+          childAccount: await attempt(() => store.addAccount('Forbidden offline account', 1)),
+          childDID: await attempt(() => store.updateAccountDID(0, 'forbidden.btc')),
+          rootName: await attempt(() => store.updateWalletName(rootID, 'Forbidden offline root')),
+        }
       }, { childID: String(replicaChild.id), rootID: String((await accountCall(replica, 'status')).root_wallet_id) })
-      const localPending = (await accountCall(replica, 'status')).pending_changes
-      assert.ok(localPending > 0)
+      for (const [operation, error] of Object.entries(rejected)) {
+        assert.match(error, /DKVS|synchroniz|offline|同步|离线/i,
+          `offline ${operation} did not reject at the synchronization boundary`)
+      }
+      assert.deepEqual(await catalog(replica), localBefore)
+      assert.equal((await accountCall(replica, 'status')).pending_changes ?? 0, 0,
+        'rejected offline edits created pending changes')
       await replica.reload(); await ready(replica); await unlock(replica)
+      assert.deepEqual(await catalog(replica), localBefore, 'offline reload changed confirmed account data')
+      assert.equal((await accountCall(replica, 'status')).pending_changes ?? 0, 0,
+        'offline reload changed the confirmed backup baseline')
       await page.evaluate(async ({ childID, rootID }) => {
         const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
         const [error] = await store.deleteWallet(childID)
@@ -522,14 +744,18 @@ export async function runPwaUsageCases(t) {
       await settled(replica)
       const semantic = value => value.map(wallet => ({ fingerprint: wallet.fingerprint, name: wallet.name,
         accounts: wallet.accounts.map(account => ({ index: account.index, name: account.name, did: account.did || '' })) }))
-      await expect.poll(async () => semantic(await catalog(page)), { timeout: 90000 }).toEqual(semantic(await catalog(replica)))
+      const remote = semantic(await catalog(page))
+      await expect.poll(async () => semantic(await catalog(replica)), { timeout: 90000 }).toEqual(remote)
       const final = await catalog(replica)
       assert.equal(final.length, 1)
-      assert.equal(final[0].name, 'Local independent root')
+      assert.equal(final[0].name, before.find(wallet => String(wallet.id) === String(rootID)).name)
       assert.equal(final[0].accounts[0].name, 'Remote independent account')
+      assert.equal(final[0].accounts[0].did || '', before.find(wallet => String(wallet.id) === String(rootID)).accounts[0].did || '')
+      assert.equal(final.some(wallet => wallet.name.startsWith('Forbidden offline')), false)
       assert.equal(final.some(wallet => wallet.fingerprint === child.fingerprint), false)
       await replica.reload(); await ready(replica); await unlock(replica)
-      assert.equal((await accountCall(replica, 'status')).pending_changes || 0, 0)
+      assert.deepEqual(semantic(await catalog(replica)), remote,
+        'cold reload lost the persisted remote deletion before synchronization')
       assert.equal((await catalog(replica)).length, 1)
       const displayed = await replica.evaluate(() => {
         const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
@@ -542,6 +768,10 @@ export async function runPwaUsageCases(t) {
       assert.equal(displayed.account, 0)
       assert.equal(displayed.address, root.accounts[0].address)
       assert.equal(displayed.pubkey, root.accounts[0].pub_key)
+      await waitForAccountWrite(replica, accountCall)
+      await settled(replica)
+      assert.equal((await accountCall(replica, 'status')).pending_changes || 0, 0,
+        'online reload has not reconciled the remote deletion baseline')
     } finally {
       for (const route of routes) await replica.context().unroute(route, unavailable)
       await replica.context().close()
@@ -721,6 +951,7 @@ export async function runPwaUsageCases(t) {
       await page.getByRole('button', { name: 'Import Wallet', exact: true }).click()
       await expect.poll(() => new URL(page.url()).hash, { timeout: 90000 }).toBe('#/wallet')
       assert.equal(await page.evaluate(() => window.usageRedundantWrites), 0)
+      await waitForAccountWrite(page, accountCall)
       await page.evaluate(async () => {
         const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
         await store.addAccount('Persistent selection', 1)
@@ -884,34 +1115,125 @@ export async function runPwaUsageCases(t) {
     // Pending can finish before the background worker clears an earlier CAS
     // error. Establish a healthy baseline before injecting this outage.
     await expect.poll(async () => (await accountCall(page, 'status')).last_dkvs_sync_error || '', { timeout: 90000 }).toBe('')
-    await expect(card).not.toContainText('DKVS 同步异常', { timeout: 45000 })
+    await expect(card).not.toContainText(accountMessages.readiness.error, { timeout: 45000 })
+    await expect.poll(async () => {
+      const status = await accountCall(page, 'status')
+      return status.recovery_configured && !status.activation_pending && status.dkvs_write_allowed &&
+        (status.pending_changes ?? 0) === 0 && !status.managed_data_dirty &&
+        (status.dkvs_pending_requests ?? 0) === 0
+    }, { timeout: 90000 }).toBe(true)
+    const baseline = await accountCall(page, 'status')
+    assert.equal(baseline.dkvs_write_allowed, true)
+    assert.equal(baseline.pending_changes ?? 0, 0)
+    assert.equal(baseline.managed_data_dirty ?? false, false)
+    assert.equal(baseline.dkvs_pending_requests ?? 0, 0)
+    console.log(JSON.stringify({ backgroundBackupGate: 'ready', write_allowed: true,
+      pending_changes: 0, managed_data_dirty: false, pending_requests: 0 }))
     const location = page.url()
-    const unavailable = route => route.abort('failed')
+    const stateKey = `/personal/${baseline.account_id}/account/state`
+    let failBackup = true
+    let blocked = false
+    let releaseWrite
+    const writeGate = new Promise(resolve => { releaseWrite = resolve })
+    const heldWrites = []
+    const unavailable = async route => {
+      const request = route.request()
+      if (request.method() !== 'POST' || !new URL(request.url()).pathname.endsWith('/records/batch-cas')) {
+        return route.fallback()
+      }
+      const body = request.postDataJSON()
+      const isBackup = (body.mutations || []).some(({ record }) => record?.Key === stateKey)
+      if (!isBackup || !failBackup) return route.fallback()
+      const first = !blocked
+      blocked = true
+      if (first) console.log(JSON.stringify({ backgroundBackupGate: 'write-held' }))
+      const completion = (async () => {
+        await writeGate
+        if (!failBackup) return route.fallback()
+        await route.abort('failed')
+        if (first) console.log(JSON.stringify({ backgroundBackupGate: 'write-failed' }))
+      })()
+      heldWrites.push(completion)
+      return completion
+    }
     const routes = t.nodeAPIOrigins.map(origin => `${origin}/**`)
     try {
       for (const route of routes) await page.context().route(route, unavailable)
-      await page.evaluate(async () => {
+      const renamedID = await page.evaluate(async () => {
         const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
         await store.updateWalletName(store.walletId, 'Background backup status')
+        return store.walletId
       })
+      assert.equal((await catalog(page)).find(wallet => String(wallet.id) === String(renamedID))?.name,
+        'Background backup status', 'local wallet rename did not commit')
+      console.log(JSON.stringify({ backgroundBackupGate: 'local-commit' }))
+      await expect.poll(() => blocked, { timeout: 90000 }).toBe(true)
+      const heldStatus = await accountCall(page, 'status')
+      const heldCardText = await card.textContent() || ''
+      console.log(JSON.stringify({ backgroundBackupGate: 'held-observed',
+        backup_post_blocked: blocked,
+        held_requests: heldWrites.length,
+        same_account: heldStatus.account_id === baseline.account_id,
+        sdk: {
+          pending_changes: heldStatus.pending_changes ?? null,
+          managed_data_dirty: heldStatus.managed_data_dirty ?? null,
+          pending_requests: heldStatus.dkvs_pending_requests ?? null,
+          state_seq: heldStatus.state_seq ?? null,
+          data_revision: heldStatus.managed_data_revision ?? null,
+          write_allowed: heldStatus.dkvs_write_allowed ?? null,
+          dkvs_status: heldStatus.dkvs_status ?? null,
+          error_code: heldStatus.last_dkvs_sync_error_code || '',
+        },
+        baseline: { state_seq: baseline.state_seq ?? null,
+          data_revision: baseline.managed_data_revision ?? null },
+        ui: {
+          dirty_warning: heldCardText.includes('最新必要数据尚未备份，恢复仅覆盖最后确认版本'),
+          pending_zero: heldCardText.includes('待同步变更：0'),
+          sync_error: heldCardText.includes(accountMessages.readiness.error),
+          synchronized: heldCardText.includes('Synchronized'),
+          writable: heldCardText.includes('Writable'),
+        },
+        same_location: page.url() === location }))
+      await expect(card).not.toContainText('待同步变更：0')
+      releaseWrite()
+      await Promise.all(heldWrites)
       await expect.poll(async () => Boolean((await accountCall(page, 'status')).last_dkvs_sync_error), { timeout: 90000 }).toBe(true)
-      await expect(card).toContainText('DKVS 同步异常', { timeout: 45000 })
+      await expect(card).toContainText(accountMessages.readiness.error, { timeout: 45000 })
       await expect(card).toContainText('最新必要数据尚未备份，恢复仅覆盖最后确认版本')
       await expect(card).not.toContainText('待同步变更：0')
+      const retryButton = card.getByRole('button', { name: accountMessages.readiness.retryNow, exact: true })
+      await expect(retryButton).toBeVisible()
+      const retriesBeforeClick = heldWrites.length
+      await retryButton.click()
+      await expect.poll(() => heldWrites.length, { timeout: 4000 }).toBeGreaterThan(retriesBeforeClick)
+      await expect(card).toContainText(accountMessages.readiness.error)
+      await expect(card).not.toContainText('待同步变更：0')
+      failBackup = false
       for (const route of routes) await page.context().unroute(route, unavailable)
       await settled(page)
       await expect(card).toContainText('待同步变更：0', { timeout: 45000 })
       await expect(card).not.toContainText('最新必要数据尚未备份，恢复仅覆盖最后确认版本')
-      await expect(card).not.toContainText('DKVS 同步异常')
+      await expect(card).not.toContainText(accountMessages.readiness.error)
+      assert.equal((await catalog(page)).find(wallet => String(wallet.id) === String(renamedID))?.name,
+        'Background backup status', 'backup recovery lost the committed wallet name')
       assert.equal(page.url(), location)
-    } finally { for (const route of routes) await page.context().unroute(route, unavailable) }
+    } finally {
+      failBackup = false
+      releaseWrite()
+      try { for (const route of routes) await page.context().unroute(route, unavailable) }
+      finally { await Promise.all(heldWrites) }
+    }
   }))
 
-  await scenario('usage: offline catalog edits survive reload and converge with another device', async () => {
+  await scenario('usage: offline catalog is read-only and resumes synchronization after reconnect', async () => {
     const page = await device()
     const material = t.material
     try {
       await restore(page, material)
+      await expect.poll(async () => {
+        const status = await accountCall(page, 'status')
+        return status.recovery_configured && status.dkvs_write_allowed
+      }, { timeout: 90000 }).toBe(true)
       await page.evaluate(async credential => {
         const [error] = await window.__SAT20_PWA_VERIFY__.useWalletStore().createWallet(credential)
         if (error) throw error
@@ -921,24 +1243,46 @@ export async function runPwaUsageCases(t) {
       const status = await accountCall(page, 'status')
       const root = before.find(wallet => String(wallet.id) === String(status.root_wallet_id))
       const child = before.find(wallet => wallet.fingerprint !== root.fingerprint)
+      assert.ok(root && child)
+      await page.evaluate(async rootID => {
+        await window.__SAT20_PWA_VERIFY__.useWalletStore().switchWallet(rootID)
+      }, String(root.id))
       const replica = await device()
       const unavailable = route => route.abort('failed')
       const routes = t.nodeAPIOrigins.map(origin => `${origin}/**`)
       try {
         await restore(replica, material)
+        await waitForAccountWrite(replica, accountCall)
+        await settled(page)
+        const confirmed = await catalog(page)
         for (const route of routes) await page.context().route(route, unavailable)
-        await page.evaluate(async ({ rootID, childID }) => {
+        // Wait for an observed transport failure. Merely installing a route
+        // cannot retroactively invalidate an already verified online session.
+        await expect.poll(async () => Boolean((await accountCall(page, 'status')).last_dkvs_sync_error),
+          { timeout: 90000 }).toBe(true)
+        const rejected = await page.evaluate(async ({ rootID, childID }) => {
           const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
-          await store.updateWalletName(rootID, 'Offline durable root')
-          await store.switchWallet(rootID)
-          await store.addAccount('Offline savings', 2)
-          const [error] = await store.deleteWallet(childID)
-          if (error) throw error
+          const attempt = async operation => {
+            try {
+              const result = await operation()
+              const error = Array.isArray(result) ? result[0] : null
+              return error ? String(error.message || error) : ''
+            } catch (error) { return String(error?.message || error) }
+          }
+          return {
+            rename: await attempt(() => store.updateWalletName(rootID, 'Forbidden offline root')),
+            add: await attempt(() => store.addAccount('Forbidden offline savings', 2)),
+            remove: await attempt(() => store.deleteWallet(childID)),
+          }
         }, { rootID: String(root.id), childID: String(child.id) })
-        assert.ok((await accountCall(page, 'status')).pending_changes > 0)
-        const offline = await catalog(page)
+        for (const [operation, error] of Object.entries(rejected)) {
+          assert.match(error, /DKVS|synchroniz|offline|同步|离线/i, `offline ${operation} did not reject at the synchronization boundary`)
+        }
+        assert.deepEqual(await catalog(page), confirmed)
+        assert.equal((await accountCall(page, 'status')).pending_changes ?? 0, 0)
         await page.reload(); await ready(page); await unlock(page)
-        assert.deepEqual(await catalog(page), offline)
+        assert.deepEqual(await catalog(page), confirmed, 'offline reload must preserve readable confirmed data')
+        assert.equal((await accountCall(page, 'status')).pending_changes ?? 0, 0)
         await replica.evaluate(async () => {
           const root = (await window.sat20.getWalletCatalog())[1].wallets[0]
           const [error] = await window.sat20.updateAccountMetadata(String(root.id), 0, 'Online independent edit', 'did:online')
@@ -946,15 +1290,14 @@ export async function runPwaUsageCases(t) {
         })
         await settled(replica)
         for (const route of routes) await page.context().unroute(route, unavailable)
+        await expect.poll(async () => (await catalog(page)).find(wallet => wallet.fingerprint === root.fingerprint)?.accounts[0]?.did,
+          { timeout: 90000 }).toBe('did:online')
         await settled(page)
-        await expect.poll(async () => (await catalog(replica)).map(wallet => ({ fingerprint: wallet.fingerprint, name: wallet.name, accounts: wallet.accounts })), { timeout: 90000 })
-          .toEqual((await catalog(page)).map(wallet => ({ fingerprint: wallet.fingerprint, name: wallet.name, accounts: wallet.accounts })))
         const final = await catalog(page)
-        assert.equal(final.length, 1)
-        assert.equal(final[0].name, 'Offline durable root')
-        assert.equal(final[0].accounts[0].name, 'Online independent edit')
-        assert.equal(final[0].accounts.find(account => account.index === 2).name, 'Offline savings')
-        assert.equal(final.some(wallet => wallet.fingerprint === child.fingerprint), false)
+        assert.equal(final.length, confirmed.length)
+        assert.equal(final.find(wallet => wallet.fingerprint === root.fingerprint).name, root.name)
+        assert.equal(final.some(wallet => wallet.fingerprint === child.fingerprint), true)
+        assert.equal(final.find(wallet => wallet.fingerprint === root.fingerprint).accounts.some(account => account.index === 2), false)
       } finally {
         for (const route of routes) await page.context().unroute(route, unavailable)
         await replica.context().close()
@@ -962,127 +1305,240 @@ export async function runPwaUsageCases(t) {
     } finally { await page.context().close() }
   })
 
-  await scenario('usage: shared IndexedDB tabs invalidate pending writes when another tab locks', () => using(async page => {
-    const second = await device(page.context())
-    // Authentication alone keeps the same SDK selection and does not require
-    // a peer reload. The lock below is the identity transition under test.
-    await unlock(second)
-    const held = second.evaluate(async () => {
+  const assertWaitingStart = async page => {
+    await expect(page.getByTestId('wallet-startup-shell')).toBeVisible()
+    await expect(page.getByTestId('wallet-startup-shell')).toHaveAttribute('data-state', 'waiting')
+    assert.equal(await page.evaluate(() => Boolean(window.__SAT20_PWA_VERIFY__)), false,
+      'waiting page must not create the PWA Manager')
+    assert.deepEqual(await page.evaluate(() => window.__walletStartProbe),
+      { wasm: 0, dbOpen: 0, dbWrite: 0, storageWrite: 0 },
+      'waiting page must not instantiate WASM, open IndexedDB or write wallet storage')
+  }
+
+  await scenario('usage: same-context PWA pages serialize Manager lifetime', async () => {
+    const owner = await fresh()
+    const context = owner.context()
+    const before = await catalog(owner)
+    try {
+      const waiting = await waitingDevice(context)
+      await assertWaitingStart(waiting)
+      const focus = waiting.getByTestId('wallet-focus-existing')
+      assert.equal(await focus.isEnabled(), true, 'same-origin focus request should be available')
+      await focus.click()
+      await expect(waiting.getByTestId('wallet-startup-status')).toHaveAttribute('data-state', 'focus-requested')
+
+      await owner.evaluate(() => window.__SAT20_PWA_VERIFY__?.useWalletStore().lockWallet())
+      await assertWaitingStart(waiting)
+      await unlock(owner, password)
+
+      const reinitialized = await owner.evaluate(async () => {
+        const [releaseError] = await window.sat20.release()
+        if (releaseError) throw releaseError
+        let wasmCalls = 0
+        let initCalls = 0
+        const originalInstantiate = WebAssembly.instantiate
+        const originalInit = window.sat20wallet_wasm.init
+        WebAssembly.instantiate = function (...args) {
+          wasmCalls++
+          return Reflect.apply(originalInstantiate, this, args)
+        }
+        window.sat20wallet_wasm.init = function (...args) {
+          initCalls++
+          return Reflect.apply(originalInit, this, args)
+        }
+        try {
+          const wasm = await import('/utils/wasm.ts')
+          await Promise.all([wasm.loadWasm(), wasm.loadWasm(), wasm.loadWasm()])
+          return { wasmCalls, initCalls }
+        } finally {
+          WebAssembly.instantiate = originalInstantiate
+          window.sat20wallet_wasm.init = originalInit
+        }
+      })
+      assert.deepEqual(reinitialized, { wasmCalls: 0, initCalls: 1 },
+        'same-page release/reinit must reuse Go runtime and collapse repeated Manager init')
+      await assertWaitingStart(waiting)
+
+      await owner.close()
+      await ready(waiting)
+      await unlock(waiting, password)
+      const probe = await waiting.evaluate(() => window.__walletStartProbe)
+      assert.equal(probe.wasm, 1, 'the handoff page should instantiate one wallet WASM runtime')
+      assert.ok(probe.dbOpen > 0, 'the handoff page should initialize the wallet database')
+      assert.ok(probe.dbWrite > 0 || probe.storageWrite > 0,
+        'the handoff page should complete real wallet initialization/unlock writes')
+      assert.deepEqual(await catalog(waiting), before, 'handoff must reopen the same persisted wallet')
+    } finally {
+      await context.close().catch(() => {})
+    }
+  })
+
+  await scenario('usage: refresh serializes PWA Manager startup', async () => {
+    const owner = await fresh()
+    const context = owner.context()
+    try {
+      await context.addInitScript(installWalletStartProbe)
+      const waiting = await waitingDevice(context)
+      await assertWaitingStart(waiting)
+
+      await owner.reload({ waitUntil: 'domcontentloaded', timeout: 90000 })
+      await owner.waitForFunction(() =>
+        Boolean(window.__walletStartProbe) &&
+        document.querySelector('[data-testid="wallet-startup-shell"]')?.getAttribute('data-state') === 'waiting' &&
+        !window.__SAT20_PWA_VERIFY__,
+      undefined, { timeout: 90000 })
+      await assertWaitingStart(owner)
+
+      await ready(waiting)
+      await unlock(waiting, password)
+      const first = await waiting.evaluate(() => window.__walletStartProbe)
+      assert.equal(first.wasm, 1, 'the first queued page should create one wallet WASM runtime')
+      assert.ok(first.dbOpen > 0, 'the first queued page should initialize the wallet database')
+
+      await waiting.close()
+      await ready(owner)
+      await unlock(owner, password)
+      const second = await owner.evaluate(() => window.__walletStartProbe)
+      assert.equal(second.wasm, 1, 'the refreshed page should create one runtime only after handoff')
+      assert.ok(second.dbOpen > 0, 'the refreshed page should complete database initialization')
+    } finally {
+      await context.close().catch(() => {})
+    }
+  })
+
+  await scenario('usage: active Manager rejects a pending account write after same-page lock', () => using(async page => {
+    const held = page.evaluate(async () => {
       const api = window.accountE2E
       const original = api.confirmStorage.bind(api)
-      // Hold the real operation before dispatch through the existing facade.
       const { walletRequestSessionGuard } = await import('/lib/walletSession.ts')
       const checkSession = walletRequestSessionGuard('account.confirmStorage')
       window.releaseUsageRequest = null
       await new Promise(resolve => { window.releaseUsageRequest = resolve })
-      try { checkSession(); await original('temporary'); return { rejected: false } }
-      catch { return { rejected: true } }
-    }).catch(error => ({ rejected: /context|closed|navigation|destroyed/i.test(error.message) }))
-    await second.waitForFunction(() => typeof window.releaseUsageRequest === 'function')
-    // BroadcastChannel delivery should quiesce the second page before reload.
-    const reloaded = second.waitForEvent('domcontentloaded', { timeout: 90000 })
-    await Promise.all([page.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().lockWallet()), reloaded])
-    const result = await held
-    assert.equal(result.rejected, true)
-    await ready(second)
-    assert.equal(await second.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().locked), true)
-    assert.equal(await accountCall(second, 'resumePendingStorageAuthorization'), null)
-    await assert.rejects(accountCall(second, 'confirmStorage', 'temporary'), /unlocked|session/i)
-    assert.equal((await catalog(second)).length, 1)
+      let dispatched = false
+      try {
+        checkSession()
+        dispatched = true
+        await original('temporary')
+        return { rejected: false, dispatched }
+      } catch {
+        return { rejected: true, dispatched }
+      }
+    })
+    await page.waitForFunction(() => typeof window.releaseUsageRequest === 'function')
+    await page.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().lockWallet())
+    await page.evaluate(() => window.releaseUsageRequest())
+    assert.deepEqual(await held, { rejected: true, dispatched: false },
+      'a request captured before lock must fail its session guard before dispatch')
+    assert.equal(await page.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().locked), true)
+    assert.equal(await accountCall(page, 'resumePendingStorageAuthorization'), null)
+    await assert.rejects(accountCall(page, 'confirmStorage', 'temporary'), /unlocked|session/i)
+    assert.equal((await catalog(page)).length, 1)
   }))
 
-  await scenario('usage: shared IndexedDB subaccount switch discards another tab previous-identity response', () => using(async page => {
+  await scenario('usage: same-page subaccount switch discards a stale account response', () => using(async page => {
     await page.evaluate(async () => {
       const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
-      await store.addAccount('Shared tab savings', 1)
+      await store.addAccount('Same page savings', 1)
       await store.switchToAccount(0)
     })
-    const second = await device(page.context())
-    const held = second.evaluate(async () => {
+    const held = page.evaluate(async () => {
       const { walletRequestSessionGuard } = await import('/lib/walletSession.ts')
       const checkSession = walletRequestSessionGuard('account.status')
       const previous = await window.accountE2E.status()
       await new Promise(resolve => { window.releaseUsageRequest = resolve })
       try { checkSession(); return { accepted: true, previous } }
       catch { return { accepted: false } }
-    }).catch(error => ({ accepted: !/context|closed|navigation|destroyed/i.test(error.message) }))
-    await second.waitForFunction(() => typeof window.releaseUsageRequest === 'function')
-    const reloaded = second.waitForEvent('domcontentloaded', { timeout: 90000 })
-    await Promise.all([page.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().switchToAccount(1)), reloaded])
-    assert.equal((await held).accepted, false, 'old subaccount response was accepted after the other tab switched')
-    await ready(second); await unlock(second)
-    const selected = await second.evaluate(() => {
+    })
+    await page.waitForFunction(() => typeof window.releaseUsageRequest === 'function')
+    await page.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().switchToAccount(1))
+    await page.evaluate(() => window.releaseUsageRequest())
+    assert.equal((await held).accepted, false, 'old subaccount response was accepted after the same-page switch')
+    const selected = await page.evaluate(() => {
       const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
       return { index: store.accountIndex, address: store.address, pubKey: store.publicKey }
     })
     assert.equal(selected.index, 1)
-    assert.equal(selected.address, (await walletCall(second, 'getWalletAddress', 1)).address)
-    assert.equal(selected.pubKey, (await walletCall(second, 'getWalletPubkey', 1)).pubKey)
+    assert.equal(selected.address, (await walletCall(page, 'getWalletAddress', 1)).address)
+    assert.equal(selected.pubKey, (await walletCall(page, 'getWalletPubkey', 1)).pubKey)
   }))
 
-  await scenario('usage: shared IndexedDB wallet switch survives another tab rebuilding before commit', () => using(async page => {
-    const rootId = await page.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().walletId)
-    const childId = await page.evaluate(async ({ credential, rootId }) => {
-      const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
-      const [error] = await store.createWallet(credential)
-      if (error) throw error
-      const childId = store.walletId
-      await store.switchWallet(rootId)
-      return childId
-    }, { credential: password, rootId })
-    assert.notEqual(childId, rootId)
-    const second = await device(page.context())
-    const rebuilt = second.waitForEvent('domcontentloaded', { timeout: 90000 }).then(() => null, error => error)
-    // Keep the real SDK switch pending before its durable commit. The peer's
-    // existing cross-tab reload then rebuilds from the previous selection.
-    const switching = page.evaluate(async id => {
-      const api = window.sat20wallet_wasm
-      const original = api.switchWallet
-      api.switchWallet = async (...args) => {
-        await new Promise(resolve => { window.releaseUsageWalletSwitch = resolve })
-        return original(...args)
-      }
-      try { await window.__SAT20_PWA_VERIFY__.useWalletStore().switchWallet(id) }
-      finally { api.switchWallet = original }
-    }, childId).then(() => null, error => error)
+  await scenario('usage: committed wallet selection survives single Manager handoff', async () => {
+    const owner = await fresh()
+    const context = owner.context()
     try {
-      await page.waitForFunction(() => typeof window.releaseUsageWalletSwitch === 'function')
-      assert.equal(await rebuilt, null, 'peer did not reload during the pending wallet switch')
-      await ready(second)
-      await page.evaluate(() => window.releaseUsageWalletSwitch())
-      assert.equal(await switching, null, 'real SDK wallet switch failed')
-      const selected = await second.evaluate(async credential => {
+      const rootId = await owner.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().walletId)
+      const childId = await owner.evaluate(async ({ credential, rootId }) => {
         const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
-        const [error, result] = await store.unlockWallet(credential)
+        const [error] = await store.createWallet(credential)
         if (error) throw error
-        return { displayed: store.walletId, manager: result.walletId, address: store.address }
-      }, password)
-      assert.equal(selected.displayed, childId, 'peer overwrote the committed wallet selection')
-      assert.equal(selected.manager, childId, 'peer SDK unlocked the previous wallet')
-      assert.equal(selected.address, (await walletCall(second, 'getWalletAddress', 0)).address)
+        const childId = store.walletId
+        await store.switchWallet(rootId)
+        return childId
+      }, { credential: password, rootId })
+      assert.notEqual(childId, rootId)
+      const waiting = await waitingDevice(context)
+      await assertWaitingStart(waiting)
+
+      const switching = owner.evaluate(async id => {
+        const api = window.sat20wallet_wasm
+        const original = api.switchWallet
+        api.switchWallet = async (...args) => {
+          await new Promise(resolve => { window.releaseUsageWalletSwitch = resolve })
+          return Reflect.apply(original, api, args)
+        }
+        try { await window.__SAT20_PWA_VERIFY__.useWalletStore().switchWallet(id) }
+        finally { api.switchWallet = original }
+      }, childId).then(() => null, error => error)
+      try {
+        await owner.waitForFunction(() => typeof window.releaseUsageWalletSwitch === 'function')
+        await owner.evaluate(() => window.releaseUsageWalletSwitch())
+        assert.equal(await switching, null, 'real SDK wallet switch failed')
+        assert.equal(await owner.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().walletId), childId)
+        await owner.close()
+
+        await ready(waiting)
+        const [error, result] = await waiting.evaluate(async credential => {
+          const [error, result] = await window.__SAT20_PWA_VERIFY__.useWalletStore().unlockWallet(credential)
+          return [error?.message, result]
+        }, password)
+        if (error) throw new Error(error)
+        assert.equal(result.walletId, childId, 'handoff SDK Manager did not open committed selected wallet')
+        assert.equal(await waiting.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().walletId), childId)
+        assert.equal((await walletCall(waiting, 'getWalletAddress', 0)).address,
+          await waiting.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().address))
+      } finally {
+        await owner.evaluate(() => window.releaseUsageWalletSwitch?.()).catch(() => {})
+        await switching.catch(() => {})
+      }
     } finally {
-      await page.evaluate(() => window.releaseUsageWalletSwitch?.()).catch(() => {})
-      await switching.catch(() => {})
+      await context.close().catch(() => {})
     }
-  }))
+  })
 
-  await scenario('usage: shared IndexedDB password change cannot authorize an old-password tab', () => using(async page => {
-    const guardianIdentity = await accountCall(page, 'guardianIdentity', password)
-    const second = await device(page.context())
-    await unlock(second)
-    await walletCall(page, 'changePassword', password, newPassword)
-    // Another Manager must not authenticate using its stale cached ciphertext.
-    const acceptedOld = await walletCall(second, 'unlockWallet', password).then(() => true, () => false)
-    await second.reload(); await ready(second)
-    await assert.rejects(walletCall(second, 'unlockWallet', password))
-    await unlock(second, newPassword)
-    assert.equal((await catalog(second)).length, 1)
-    assert.equal(acceptedOld, false, 'second tab authenticated with the replaced password')
-    await assert.rejects(accountCall(second, 'guardianIdentity', password))
-    assert.deepEqual(await accountCall(second, 'guardianIdentity', newPassword), guardianIdentity)
-  }))
+  await scenario('usage: password changes apply on single Manager handoff', async () => {
+    const owner = await fresh()
+    const context = owner.context()
+    try {
+      const guardianIdentity = await accountCall(owner, 'guardianIdentity', password)
+      const waiting = await waitingDevice(context)
+      await assertWaitingStart(waiting)
+      await walletCall(owner, 'changePassword', password, newPassword)
+      await owner.close()
 
-  const realTwoFactorSetupUI = async (page, failStatus = false) => {
+      await ready(waiting)
+      const acceptedOld = await walletCall(waiting, 'unlockWallet', password).then(() => true, () => false)
+      await assert.rejects(walletCall(waiting, 'unlockWallet', password))
+      await unlock(waiting, newPassword)
+      assert.equal((await catalog(waiting)).length, 1)
+      assert.equal(acceptedOld, false, 'handoff Manager authenticated with a replaced password')
+      await assert.rejects(accountCall(waiting, 'guardianIdentity', password))
+      assert.deepEqual(await accountCall(waiting, 'guardianIdentity', newPassword), guardianIdentity)
+    } finally {
+      await context.close().catch(() => {})
+    }
+  })
+
+  const realTwoFactorSetupUI = async (page, statusReadMode = 'none') => {
     await preflightUI(page)
     await page.getByRole('button', { name: '2/2 增强安全', exact: true }).click()
     await temporaryUI(page)
@@ -1100,23 +1556,39 @@ export async function runPwaUsageCases(t) {
     await page.getByRole('button', { name: '进入恢复演练', exact: true }).click()
     for (let i = 0; i < 2; i++) await page.getByPlaceholder(`问题 ${i + 1} 的答案`, { exact: true }).fill(questions[i].answer)
     await page.getByPlaceholder('重新粘贴用户分片', { exact: true }).fill(share)
-    if (failStatus) await page.evaluate(() => {
+    if (statusReadMode !== 'none') await page.evaluate(mode => {
       const rehearse = window.accountE2E.rehearse.bind(window.accountE2E)
       const status = window.accountE2E.status.bind(window.accountE2E)
-      window.setupCompletionFault = { armed: false, hits: 0, verified: 0 }
+      window.setupCompletionFault = {
+        mode, armed: false, hits: 0, verified: 0,
+        manualAuthorized: false, manualClicks: 0, manualReads: 0, manualSuccesses: 0,
+      }
       window.accountE2E.rehearse = async (...args) => {
         const result = await rehearse(...args)
-        if (result.verified) { window.setupCompletionFault.verified++; window.setupCompletionFault.armed = true }
+        if (result.verified) {
+          window.setupCompletionFault.verified++
+          window.setupCompletionFault.armed = true
+        }
         return result
       }
       window.accountE2E.status = async () => {
-        if (window.setupCompletionFault.armed) {
-          window.setupCompletionFault.armed = false; window.setupCompletionFault.hits++
+        const fault = window.setupCompletionFault
+        if (fault.armed) {
+          if (fault.mode === 'manual' && fault.manualAuthorized) {
+            fault.manualAuthorized = false
+            fault.manualReads++
+            const result = await status()
+            fault.manualSuccesses++
+            fault.armed = false
+            return result
+          }
+          fault.hits++
+          if (fault.mode === 'automatic') fault.armed = false
           throw new Error('usage injected final configuration status read failure')
         }
         return status()
       }
-    })
+    }, statusReadMode)
     await page.getByRole('button', { name: '执行恢复演练', exact: true }).click()
     await confirmPassword(page)
     // First publication and active-scope refresh can advance the captured
@@ -1145,19 +1617,64 @@ export async function runPwaUsageCases(t) {
       await confirmPassword(page)
     }
     await page.getByRole('heading', { name: '账户恢复已配置', exact: true }).waitFor()
-    if (failStatus) {
-      assert.deepEqual(await page.evaluate(() => window.setupCompletionFault), { armed: false, hits: 1, verified: 1 })
-      await page.getByRole('status').filter({ hasText: 'usage injected final configuration status read failure' }).waitFor()
+    if (statusReadMode === 'automatic') {
+      await expect.poll(async () => {
+        const fault = await page.evaluate(() => window.setupCompletionFault)
+        const errorVisible = await page.getByText(accountMessages.dkvsStatusReadFailed, { exact: true }).count()
+        const configuredVisible = await page.getByText('恢复配置：已配置', { exact: true }).count()
+        return fault.verified === 1 && fault.hits === 1 && !fault.armed && errorVisible === 0 && configuredVisible === 1
+      }, { timeout: 30_000, intervals: [250, 500, 1000] }).toBe(true)
+      assert.deepEqual(await page.evaluate(() => window.setupCompletionFault), {
+        mode: 'automatic', armed: false, hits: 1, verified: 1,
+        manualAuthorized: false, manualClicks: 0, manualReads: 0, manualSuccesses: 0,
+      }, 'automatic status recovery replayed the recovery rehearsal or used the manual button')
+    }
+    if (statusReadMode === 'manual') {
+      const statusError = page.getByText(accountMessages.dkvsStatusReadFailed, { exact: true })
+      const retryRead = page.getByRole('button', { name: accountMessages.readiness.retryReadStatus, exact: true })
+      await expect(statusError).toBeVisible()
+      await expect(retryRead).toBeVisible()
+      await expect(retryRead).toBeEnabled()
       assert.equal(await page.getByRole('button', { name: '执行恢复演练', exact: true }).count(), 0)
-      await page.getByRole('button', { name: '重试读取备份状态', exact: true }).click()
-      await expect(page.getByText('usage injected final configuration status read failure', { exact: true })).toHaveCount(0)
-      assert.equal(await page.evaluate(() => window.setupCompletionFault.verified), 1, 'display refresh replayed consumed activation')
+      await retryRead.evaluate(button => {
+        const fault = window.setupCompletionFault
+        // This capture listener only releases the test's status-read fault on
+        // the exact real button matched by Playwright, before Vue invokes refreshAccountStatus.
+        button.addEventListener('click', () => {
+          fault.manualClicks++
+          fault.manualAuthorized = true
+        }, { capture: true, once: true })
+        // The page's Vue click handler was registered before this bubble
+        // listener. Its synchronous status() call must consume the permit;
+        // otherwise revoke it before any later poll can run.
+        button.addEventListener('click', () => { fault.manualAuthorized = false }, { once: true })
+      })
+      await retryRead.click()
+      await expect.poll(async () => {
+        const fault = await page.evaluate(() => window.setupCompletionFault)
+        const errorVisible = await statusError.count()
+        const configuredVisible = await page.getByText('恢复配置：已配置', { exact: true }).count()
+        return fault.verified === 1 && fault.manualClicks === 1 && fault.manualReads === 1 &&
+          fault.manualSuccesses === 1 && !fault.manualAuthorized && !fault.armed &&
+          errorVisible === 0 && configuredVisible === 1
+      }, { timeout: 30_000, intervals: [250, 500, 1000] }).toBe(true)
+      const fault = await page.evaluate(() => window.setupCompletionFault)
+      assert.equal(fault.mode, 'manual')
+      assert.ok(fault.hits >= 1, 'controlled status-read failure was never observed')
+      assert.equal(fault.verified, 1, 'manual status retry replayed the recovery rehearsal')
+      assert.equal(fault.manualClicks, 1)
+      assert.equal(fault.manualReads, 1, 'manual button did not directly issue exactly one real status read')
+      assert.equal(fault.manualSuccesses, 1, 'the status read issued by the manual button did not succeed')
     }
     assert.equal((await accountCall(page, 'status')).recovery_configured, true)
     await assertNoSecrets(page, [...questions.map(q => q.answer), share, password])
   }
-  await scenario('usage: real 2of2 setup page validates answers and completes rehearsal', () => using(page => realTwoFactorSetupUI(page)))
-  await scenario('usage: verified setup survives final status read failure without replaying rehearsal', () => using(page => realTwoFactorSetupUI(page, true)))
+  await scenario('usage: real 2of2 setup page validates answers and completes rehearsal',
+    () => using(page => realTwoFactorSetupUI(page)))
+  await scenario('usage: verified setup recovers automatically from a status read failure without replay',
+    () => using(page => realTwoFactorSetupUI(page, 'automatic')))
+  await scenario('usage: configured recovery status has an explicit read retry without replaying rehearsal',
+    () => using(page => realTwoFactorSetupUI(page, 'manual')))
 
   await scenario('usage: configured account exposes maintenance and cancels without replacing recovery', () => using(async page => {
     const material = await setup(page)
@@ -1304,23 +1821,32 @@ export async function runPwaUsageCases(t) {
       const normalize = wallets => wallets.map(({ fingerprint, name, accounts }) => ({ fingerprint, name, accounts }))
       await assertNoSecrets(page, [...questions.map(q => q.answer), savedShare, password])
       await assertNoSecrets(guardian, [...questions.map(q => q.answer), password])
-      // Close the original device before either recovery. Never replace the
-      // clipboard material with an SDK/session locator in this test.
-      await page.context().close()
+      // Keep the source open until a separate device proves the first managed
+      // backup can be decrypted and previewed through the real recovery UI.
+      let firstBackupRecoverable = false
       for (const combination of ['knowledge+guardian', 'share+guardian']) {
         const recovery = await device()
+        let stage = 'load-backup'
+        const stageAt = next => {
+          stage = next
+          console.log(JSON.stringify({ guardianRecoveryStage: { combination, stage } }))
+        }
         try {
+          stageAt('load-backup')
           await recovery.evaluate(() => { location.hash = '#/restore-account' })
           await recovery.getByPlaceholder('粘贴 sat20account1:...').fill(savedLocator)
           await recovery.getByRole('button', { name: '加载加密账户备份', exact: true }).click()
           if (combination === 'knowledge+guardian') {
+            stageAt('recover-knowledge')
             for (let i = 0; i < 2; i++) await recovery.locator('section input[type="password"]').nth(i).fill(questions[i].answer)
             await recovery.getByRole('button', { name: '恢复加密分片', exact: true }).click()
           } else {
+            stageAt('set-user-share')
             await recovery.getByRole('button', { name: '使用用户分片和 Guardian', exact: true }).click()
             await recovery.getByPlaceholder('可选：粘贴 sat20share1:...').fill(savedShare)
             await recovery.getByRole('button', { name: '使用用户分片', exact: true }).click()
           }
+          stageAt('guardian-request')
           await recovery.getByRole('button', { name: '生成 Guardian 恢复请求', exact: true }).click()
           const recoveryRequest = await recovery.locator('textarea[readonly]').first().inputValue()
           const previousResponse = await guardian.locator('textarea[readonly]').last().inputValue()
@@ -1328,18 +1854,101 @@ export async function runPwaUsageCases(t) {
           await guardian.getByRole('button', { name: '生成加密恢复响应', exact: true }).click()
           await confirmPassword(guardian)
           await expect.poll(() => guardian.locator('textarea[readonly]').last().inputValue(), { timeout: 90000 }).not.toBe(previousResponse)
+          stageAt('guardian-response')
           await recovery.getByPlaceholder('粘贴 Guardian 返回的加密响应').fill(await guardian.locator('textarea[readonly]').last().inputValue())
           await recovery.getByRole('button', { name: '使用 Guardian 响应', exact: true }).click()
+          stageAt('preview')
           await recovery.getByRole('button', { name: '预览恢复内容', exact: true }).click()
-          await recovery.getByPlaceholder('设置新的本地钱包密码').fill(newPassword)
-          await recovery.getByPlaceholder('再次输入密码').fill(newPassword)
+          stageAt('preview-content')
+          await assertBackupPreview(recovery, expectedCatalog)
+          if (!firstBackupRecoverable) {
+            stageAt('source-status')
+            const sourceStatus = await accountCall(page, 'status')
+            const sourceReadiness = accountReadiness(sourceStatus)
+            const locatorFacts = await page.evaluate(({ current, saved }) => {
+              try {
+                const decode = value => JSON.parse(atob(value.split(':')[1].replaceAll('-', '+').replaceAll('_', '/')))
+                const actual = decode(current)
+                const expected = decode(saved)
+                const fields = ['network', 'storage_location', 'storage_mode', 'record_ttl',
+                  'autopay_contract', 'guardian_location', 'locator']
+                return { decoded: true, current_guardian: Boolean(actual.guardian_location),
+                  saved_guardian: Boolean(expected.guardian_location),
+                  matches: Object.fromEntries(fields.map(key => [key, JSON.stringify(actual[key]) === JSON.stringify(expected[key])])) }
+              } catch { return { decoded: false } }
+            }, { current: sourceStatus.public_locator, saved: savedLocator })
+            console.log(JSON.stringify({ guardianSourceStatus: {
+              configured: sourceStatus.recovery_configured, activation_pending: sourceStatus.activation_pending,
+              locator_matches: sourceStatus.public_locator === savedLocator, locator: locatorFacts } }))
+            assert.equal(sourceStatus.recovery_configured, true)
+            assert.equal(sourceStatus.activation_pending, false)
+            assert.equal(sourceStatus.public_locator, savedLocator)
+            console.log(JSON.stringify({ guardianRecoveryReadiness: {
+              discovery: sourceReadiness.discovery,
+              write_qualified: sourceReadiness.writeQualified,
+              first_backup_recoverable: true,
+            } }))
+            firstBackupRecoverable = true
+            await page.context().close()
+          }
+          const localPassword = recovery.getByLabel('新设备解锁密码', { exact: true })
+          const confirmPasswordBox = recovery.getByLabel('再次输入解锁密码', { exact: true })
+          stageAt('password-inputs-visible')
+          await localPassword.waitFor()
+          await confirmPasswordBox.waitFor()
+          stageAt('fill-local-password')
+          await localPassword.fill(newPassword)
+          stageAt('fill-confirm-password')
+          await confirmPasswordBox.fill(newPassword)
+          stageAt('restore-wallets')
           await Promise.all([recovery.waitForEvent('domcontentloaded', { timeout: 90000 }), recovery.getByRole('button', { name: '恢复全部钱包', exact: true }).click()])
           await ready(recovery); await unlock(recovery, newPassword)
+          stageAt('catalog-and-secret-checks')
+          const restoredStatus = await accountCall(recovery, 'status')
+          assert.equal(restoredStatus.recovery_configured, true)
+          assert.equal(restoredStatus.public_locator, savedLocator, 'restored account lost the verified Guardian recovery route')
           assert.deepEqual(normalize(await catalog(recovery)), normalize(expectedCatalog), combination)
           await assertNoSecrets(recovery, [...questions.map(q => q.answer), savedShare, newPassword])
         } catch (error) {
+          const view = await recovery.evaluate(() => {
+            const visible = element => Boolean(element && element.getClientRects().length &&
+              getComputedStyle(element).visibility !== 'hidden')
+            return {
+              hash_route: location.hash.split('?')[0],
+              headings: [...document.querySelectorAll('h1,h2')].filter(visible).slice(0, 20).map(element => element.textContent),
+              errors: [...document.querySelectorAll('[role="alert"]')].filter(visible).slice(0, 10).map(element => element.textContent),
+              password_inputs: ['restore-local-password', 'restore-confirm-password'].map(id => {
+                const element = document.getElementById(id)
+                return { id, type: element?.getAttribute('type') ?? null,
+                  label: document.querySelector(`label[for="${id}"]`)?.textContent ?? null,
+                  visible: visible(element) }
+              }),
+            }
+          }).catch(() => null)
+          const redact = value => {
+            let text = String(value ?? '').replace(/\{[\s\S]*\}|\[[\s\S]*\]/g, '[redacted-detail]')
+            for (const secret of [password, newPassword, savedLocator, savedShare, importMnemonic,
+              ...Object.values(guardianRecoverySyntheticMnemonics),
+              ...questions.flatMap(question => [question.prompt, question.answer, question.confirmation])]) {
+              if (typeof secret === 'string' && secret) text = text.replaceAll(secret, '[redacted]')
+            }
+            return text.replace(/sat20(?:account1:|-share-v1:)[^\s"'<>]+/g, '[redacted]')
+              .replace(/[A-Za-z0-9_+/=-]{32,}/g, '[redacted]')
+              .replace(/\b(?:[a-z]+\s+){11,23}[a-z]+\b/gi, '[redacted]')
+              .slice(0, 240)
+          }
+          console.error(JSON.stringify({ guardianRecoveryFailure: { combination, stage,
+            failure: { name: error?.name || '',
+              operation: String(error?.message || '').match(/^[A-Za-z.]+/)?.[0] || '',
+              timed_out: /Timeout|Timed out/i.test(String(error?.message || '')),
+              strict_locator: /strict mode violation/i.test(String(error?.message || '')) },
+            hash_route: redact(view?.hash_route), headings: view?.headings.map(redact) ?? [],
+            errors: view?.errors.map(redact) ?? [],
+            password_inputs: view?.password_inputs.map(input => ({ ...input, label: redact(input.label) })) ?? [] } }))
           await t.preserveBrowserFailureState?.()
-          throw error
+          // Locator errors can contain fill arguments. Report the allowed view
+          // above without rethrowing a password-bearing Playwright call log.
+          throw new Error(`Guardian recovery ${combination} failed at ${stage}; see redacted guardianRecoveryFailure`)
         } finally { await recovery.context().close() }
       }
     } catch (error) {
@@ -2690,6 +3299,20 @@ export async function runAutopayPwaReviewCases(t, fixture) {
   const { check, device, ready, accountCall, walletCall, questions, answers } = t
   const g = await device(), owner = await device(), password = fixture.password
   const poll = { timeout: 90000, intervals: [250, 500, 1000] }
+  const waitInactive = async page => {
+    await expect.poll(async () => {
+      const s = await accountCall(page, 'status')
+      return s.discovery_status === 'inactive' && s.local_only === true &&
+        !s.recovery_configured && !s.activation_pending
+    }, poll).toBe(true)
+  }
+  const waitBackup = async page => {
+    await expect.poll(async () => {
+      const s = await accountCall(page, 'status')
+      return s.recovery_configured === true && !s.activation_pending &&
+        s.dkvs_write_allowed === true && !s.pending_changes && !s.managed_data_dirty
+    }, poll).toBe(true)
+  }
   const mine = async () => {
     const r = await fetch(new URL('/mine', fixture.control_url), { method: 'POST', signal: AbortSignal.timeout(90000) })
     assert.equal(r.ok, true); assert.equal((await r.json()).mined, true)
@@ -2704,6 +3327,7 @@ export async function runAutopayPwaReviewCases(t, fixture) {
     await g.locator('form button[type="submit"]').click()
     await expect.poll(() => g.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().locked), poll).toBe(false)
     await management()
+    await waitForAccountWrite(g, accountCall)
   }
   const passwordDialog = async () => {
     const d = g.getByRole('dialog')
@@ -2730,7 +3354,8 @@ export async function runAutopayPwaReviewCases(t, fixture) {
       await owner.evaluate(async p => {
         const [e] = await window.__SAT20_PWA_VERIFY__.useWalletStore().createWallet(p); if (e) throw e
       }, password)
-      await expect.poll(async () => { const s = await accountCall(g, 'status'); return !s.pending_changes && !s.managed_data_dirty }, poll).toBe(true)
+      await waitInactive(g)
+      await waitInactive(owner)
       await accountCall(g, 'confirmStorage', 'temporary')
       const own = await accountCall(g, 'createRecovery', { password, wallets: [], recovery_mode: '2of2', questions })
       for (let attempt = 0; attempt < 4; attempt++) {
@@ -2738,9 +3363,10 @@ export async function runAutopayPwaReviewCases(t, fixture) {
         catch (error) {
           if (!/publish account activation state: dkvs write conflict/.test(error.message) || attempt === 3) throw error
           assert.equal((await accountCall(g, 'status')).recovery_configured, false)
-          await expect.poll(async () => { const s = await accountCall(g, 'status'); return !s.pending_changes && !s.managed_data_dirty }, poll).toBe(true)
+          await waitInactive(g)
         }
       }
+      await waitBackup(g)
       const before = await accountCall(g, 'status'); assert.equal(before.storage_mode, 'temporary')
       await management()
       await g.getByRole('button', { name: '生成我的联系信息并发送给好友', exact: true }).click(); await passwordDialog()

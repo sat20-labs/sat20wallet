@@ -145,3 +145,8 @@ func TestReviewRGB11ReadDoesNotMixAtomicInvoiceGenerations(t *testing.T) {
 		t.Fatalf("final persisted invoice/reservation pair is invalid: state=%+v err=%v", state, err)
 	}
 }
+
+// Preserve the real atomic backend while retaining this fixture's fault hook.
+func (db *reviewReservationReadGateDB) NewAtomicWriteBatch() indexer.WriteBatch {
+	return &reviewReservationPreparedBatch{WriteBatch: db.KVDB.(indexer.AtomicWriteBatchDB).NewAtomicWriteBatch(), owner: db}
+}

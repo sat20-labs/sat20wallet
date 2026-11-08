@@ -9,6 +9,7 @@ interface SatsnetResponse<T = any> {
   code: number
   data: T
   msg: string
+  error_code?: string
 }
 
 interface CommitTxAssetUtxo {

@@ -215,5 +215,5 @@ func TestDKVSReviewCompletedWatchCannotReviveExpiredSiblingScope(t *testing.T) {
 	t.Logf("verification height after delayed A Watch=%d known=%v", height, known)
 	assert.GreaterOrEqual(t, height, uint64(3), "a delayed collection response must not roll back endpoint expiry verification")
 	_, err = client.GetRecord(keyB)
-	assert.ErrorIs(t, err, dkvs.ErrExpiredRecord, "an expired record in another scope must stay expired")
+	assert.ErrorIs(t, err, dkvs.ErrRecordNotFound, "the expired record was pruned by the control read and must not be revived")
 }

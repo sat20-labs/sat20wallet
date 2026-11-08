@@ -12,24 +12,24 @@
       </div>
     </button>
     <div v-if="isExpanded" class="space-y-6 px-2 py-4">
-      <div v-if="isLoading" class="text-xs text-muted-foreground">{{ $t('loading', '加载中...') }}</div>
-      <div v-if="isError" class="text-xs text-destructive">{{ error?.message || '加载失败' }}</div>
+      <div v-if="isLoading" class="text-xs text-muted-foreground">{{ $t('loading') }}</div>
+      <div v-if="isError" class="text-xs text-destructive">{{ error?.message || t('settingsUi.loadFailed') }}</div>
       <div v-if="!isLoading && !isError" class="bg-zinc-800/60 rounded p-3 text-xs text-zinc-200 space-y-2">
         <template v-if="displayMinerInfo.ServerNode || tempStakeData">
           <div v-if="tempStakeData" class="text-center text-yellow-400 mb-2">
             <Icon icon="lucide:clock" class="w-4 h-4 inline mr-1" />
-            节点质押已提交，等待后台处理中...
+            {{ t('settingsUi.stakePending') }}
           </div>
           <div v-if="displayMinerInfo.ServerNode" class="flex justify-between items-center">
-            <span class="text-muted-foreground break-keep">连接的节点：</span>
+            <span class="text-muted-foreground break-keep">{{ t('settingsUi.connectedNode') }}</span>
             <span class="font-mono text-xs break-all">{{ displayMinerInfo.ServerNode }}</span>
           </div>
           <div v-if="displayMinerInfo.ServerNode" class="flex justify-between items-center">
-            <span class="text-muted-foreground break-keep">本地节点：</span>
+            <span class="text-muted-foreground break-keep">{{ t('settingsUi.localNode') }}</span>
             <span class="font-mono text-xs break-all">{{ publicKey }}</span>
           </div>
           <div v-if="displayMinerInfo.ServerNode" class="flex justify-between items-center">
-            <span class="text-muted-foreground break-keep">通道地址：</span>
+            <span class="text-muted-foreground break-keep">{{ t('settingsUi.channelAddress') }}</span>
             <a :href="generateMempoolUrl({
               network: network,
               path: `address/${displayMinerInfo.ChannelAddr}`,
@@ -38,16 +38,16 @@
             </a>
           </div>
           <div v-if="displayMinerInfo.ServerNode" class="flex justify-between items-center">
-            <span class="text-muted-foreground">质押资产：</span>
+            <span class="text-muted-foreground">{{ t('settingsUi.stakedAsset') }}</span>
             <span class="font-mono text-xs">{{ displayMinerInfo.AssetName }}</span>
           </div>
           <div v-if="displayMinerInfo.ServerNode" class="flex justify-between items-center">
-            <span class="text-muted-foreground">资产数量：</span>
+            <span class="text-muted-foreground">{{ t('settingsUi.assetQuantity') }}</span>
             <span class="font-mono text-xs">{{ displayMinerInfo.AssetAmt }}</span>
           </div>
           <div v-if="displayMinerInfo.ServerNode && displayMinerInfo.AnchorTxId"
             class="flex justify-between items-center">
-            <span class="text-muted-foreground">锚定交易ID：</span>
+            <span class="text-muted-foreground">{{ t('settingsUi.anchorTx') }}</span>
             <a :href="generateMempoolUrl({
               network: network,
               path: `tx/${displayMinerInfo.AnchorTxId}`,
@@ -59,46 +59,46 @@
           </div>
           <div v-if="displayMinerInfo.ServerNode && displayMinerInfo.AscendUtxo"
             class="flex justify-between items-center">
-            <span class="text-muted-foreground break-keep">升级UTXO：</span>
+            <span class="text-muted-foreground break-keep">{{ t('settingsUi.upgradeUtxo') }}</span>
             <span class="font-mono text-xs break-all">{{ displayMinerInfo.AscendUtxo }}</span>
           </div>
           <!-- 显示临时质押数据 -->
           <template v-if="tempStakeData && !displayMinerInfo.ServerNode">
             <div class="flex justify-between items-center">
-              <span class="text-muted-foreground">交易ID：</span>
+              <span class="text-muted-foreground">{{ t('settingsUi.transactionId') }}</span>
               <a :href="generateMempoolUrl({ network: network, path: `tx/${tempStakeData.txId}` })" target="_blank"
                 class="font-mono text-xs text-blue-400 hover:text-blue-300 underline break-all">
                 {{ hideAddress(tempStakeData.txId) }}
               </a>
             </div>
             <div class="flex justify-between items-center">
-              <span class="text-muted-foreground break-keep">预定ID：</span>
+              <span class="text-muted-foreground break-keep">{{ t('settingsUi.reservationId') }}</span>
               <span class="font-mono text-xs break-all">{{ hideAddress(tempStakeData.resvId) }}</span>
             </div>
             <div class="flex justify-between items-center">
-              <span class="text-muted-foreground break-keep">质押资产：</span>
+              <span class="text-muted-foreground break-keep">{{ t('settingsUi.stakedAsset') }}</span>
               <span class="font-mono text-xs break-all">{{ tempStakeData.assetName }}</span>
             </div>
             <div class="flex justify-between items-center">
-              <span class="text-muted-foreground break-keep">质押数量：</span>
+              <span class="text-muted-foreground break-keep">{{ t('settingsUi.stakedAmount') }}</span>
               <span class="font-mono text-xs">{{ tempStakeData.amt }}</span>
             </div>
             <div class="flex justify-between items-center">
-              <span class="text-muted-foreground">节点类型：</span>
-              <span class="font-mono text-xs">{{ tempStakeData.isCore ? '核心节点' : '挖矿节点' }}</span>
+              <span class="text-muted-foreground">{{ t('settingsUi.nodeType') }}</span>
+              <span class="font-mono text-xs">{{ tempStakeData.isCore ? t('settingsUi.coreNode') : t('settingsUi.miningNode') }}</span>
             </div>
           </template>
         </template>
         <template v-else>
           <div class="text-center text-muted-foreground">
-            {{ $t('nodeSetting.noNodeInfo', '暂无已绑定节点信息') }}
+            {{ $t('nodeSetting.noNodeInfo') }}
           </div>
         </template>
       </div>
       <Button :variant="displayMinerInfo.ServerNode ? 'destructive' : 'secondary'" class="h-10 w-full"
         :disabled="!displayMinerInfo.ServerNode && !!tempStakeData"
         @click="router.push('/wallet/setting/node')">
-        {{ displayMinerInfo.ServerNode ? $t('nodeSetting.unstake', '取消质押') : $t('nodeSetting.selectNodeType') }}
+        {{ displayMinerInfo.ServerNode ? $t('nodeSetting.unstake') : $t('nodeSetting.selectNodeType') }}
       </Button>
 
     </div>
@@ -106,6 +106,8 @@
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
+const { t } = useI18n()
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'

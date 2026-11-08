@@ -27,9 +27,9 @@ type rgb11ConflictFixture struct {
 	beforePrepare *RGB11WalletSnapshot
 }
 
-func newRGB11ConflictFixture(t *testing.T, feeOnly bool) *rgb11ConflictFixture {
+func newRGB11ConflictFixture(t *testing.T, feeOnly bool, prepare ...rgbColdPrepare) *rgb11ConflictFixture {
 	t.Helper()
-	sender, recipient, imported, evidence, rpc := newRGB11GenericSendFixtureWithCarrier(t, 330)
+	sender, recipient, imported, evidence, rpc := newRGB11GenericSendFixtureWithCarrier(t, 330, prepare...)
 	sender.rgbManager.scopeStates.stopReconciliations()
 	recipient.rgbManager.scopeStates.stopReconciliations()
 	invoice, err := recipient.CreateRGB11Invoice(RGB11InvoiceRequest{Mode: "witness", TransportMode: "out-of-band", ContractID: imported.ContractID, AmountRaw: "1", WitnessVout: 1, Expiry: time.Now().Add(time.Hour).Unix()})
@@ -245,7 +245,11 @@ func TestRGB11ConflictCandidateMempool(t *testing.T) {
 	f.assertImmutable(t)
 }
 func TestRGB11ConflictCandidateRecoveryAndReorg(t *testing.T) {
-	f := newRGB11ConflictFixture(t, false)
+	var cold *Manager
+	f := newRGB11ConflictFixture(t, false, func(source *Manager, remote *rgb11MemoryDKVSHTTP,
+		evidence *rgb11AddressEvidence, rpc *rgb11FlowIndexer) {
+		cold = newRGBColdDevice(t, source, remote, evidence, rpc, coreE2ESenderMnemonic, "password")
+	})
 	f.publish(t, true)
 	if _, err := f.sender.RefreshRGB11State(context.Background()); !errors.Is(err, ErrRGB11Inconsistent) {
 		t.Fatal("confirmed conflict setup not classified")
@@ -268,7 +272,7 @@ func TestRGB11ConflictCandidateRecoveryAndReorg(t *testing.T) {
 			t.Fatal("recovery must not persist chain-derived status")
 		}
 	}
-	cold := newRGB11FlowManager(t, f.sender.wallet.Clone(), f.rpc, f.evidence, 9901)
+	assertRGBColdEmpty(t, cold)
 	cold.rgbManager.scopeStates.stopReconciliations()
 	if err = cold.rgbManager.importSelectedRGB11AccountRecoverySnapshot(snap); err != nil {
 		t.Fatalf("safe quarantine import must succeed: %v", err)

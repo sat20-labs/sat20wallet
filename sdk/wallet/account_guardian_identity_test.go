@@ -49,6 +49,7 @@ func TestAccountGuardianIdentityDoesNotDependOnCurrentWallet(t *testing.T) {
 	_, err := manager.ImportWallet(accountRootWrapperTestMnemonic, "password")
 	require.NoError(t, err)
 	require.NoError(t, manager.InitializeAccountManagement("password"))
+	establishAccountManagedTestWriteSession(t, manager, manager.http.(*rgb11MemoryDKVSHTTP))
 	first, err := manager.GetOrCreateAccountGuardianIdentity("password")
 	require.NoError(t, err)
 	_, _, err = manager.CreateWallet("password")

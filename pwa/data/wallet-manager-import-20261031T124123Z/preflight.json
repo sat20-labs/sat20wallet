@@ -1,0 +1,12 @@
+{
+  "state": "PREPARED",
+  "cwd": "/Users/yingfeng/github/sat20wallet/pwa",
+  "command": "node --test scripts/diagnostic/wallet-manager-import.test.mjs",
+  "args": [
+    "node",
+    "--test",
+    "scripts/diagnostic/wallet-manager-import.test.mjs"
+  ],
+  "node_version": "v22.22.3",
+  "source_sha256_before": "12f91bf3c5b4aaaff0b70ac01d3d131ca36a9f9e745a5ef136caf4a7f2a9d908"
+}

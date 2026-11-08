@@ -253,7 +253,7 @@ func TestSDKPWARegtestExistingRecoveryMaterialReadback(t *testing.T) {
 			require.NoError(t, err)
 			require.NotEmpty(t, root.Wallets)
 			require.NotEmpty(t, seeds[entry.Role])
-			require.True(t, root.Wallets[0].Mnemonic == seeds[entry.Role], "existing package must recover the same fixed root")
+			require.True(t, string(root.Wallets[0].Secret) == seeds[entry.Role], "existing package must recover the same fixed root")
 		})
 	}
 }

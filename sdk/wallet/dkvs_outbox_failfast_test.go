@@ -94,8 +94,8 @@ func TestDKVSOutboxBusinessRefusalStopsOriginalSubmission(t *testing.T) {
 		})
 	}
 	quota429 := &HTTPResponseError{StatusCode: 429, Body: []byte(`{"code":-1,"error_code":"DKVS_QUOTA_EXCEEDED"}`)}
-	if got := classifyDKVSOutboxError(quota429); got != dkvsOutboxTransient {
-		t.Fatalf("HTTP 429 quota rejection lost transient classification: %d", got)
+	if got := classifyDKVSOutboxError(quota429); got != dkvsOutboxConflict {
+		t.Fatalf("structured HTTP 429 quota rejection must stop the refused request: %d", got)
 	}
 }
 

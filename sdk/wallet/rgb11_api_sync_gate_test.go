@@ -1,12 +1,13 @@
 package wallet
 
 import (
+	"context"
 	"errors"
+	"net"
 	"reflect"
 	"testing"
 	"time"
 
-	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
@@ -90,32 +91,73 @@ func TestRGB11PublicOperationsRequireRecoveryBeforeMutation(t *testing.T) {
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
 
-	t.Run("unconfigured-invoice-does-not-create-local-request", func(t *testing.T) {
+	t.Run("unconfigured-invoice-stays-local", func(t *testing.T) {
 		manager := newAccountManagementAutoTestManager(t)
+		remote := manager.http.(*rgb11MemoryDKVSHTTP)
 		if _, err := manager.ImportWallet(rgb11ManagedOperationTestMnemonic, "password"); err != nil {
 			t.Fatal(err)
 		}
 		if err := manager.InitializeAccountManagement("password"); err != nil {
 			t.Fatal(err)
 		}
+		prepareRGBEndpoint(t, manager, remote)
+		if err := manager.rgbManager.selectRGB11Scope(); err != nil {
+			t.Fatal(err)
+		}
+		manager.rgbManager.evidence = newCoreE2EChain()
 		if manager.accountManagedRecoveryConfigured() {
 			t.Fatal("fixture unexpectedly has account recovery configured")
+		}
+		beforeRemote := snapshotRGB11MemoryRecords(remote)
+		scope, err := manager.rgbManager.rgb11AccountManagedScopeID()
+		if err != nil {
+			t.Fatal(err)
+		}
+		previous, err := manager.readAccountLocal(manager.accountProfile.AccountID, rgb11AccountManagedProviderID, scope)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var beforeGen uint64
+		if previous != nil {
+			beforeGen = previous.Generation
 		}
 		receive, err := manager.CreateRGB11Invoice(RGB11InvoiceRequest{
 			Mode: "witness", TransportMode: "out-of-band", AmountRaw: "1",
 			WitnessVout: 1, Expiry: time.Now().Add(time.Hour).Unix(),
 		})
-		if !errors.Is(err, ErrDKVSPathNotSynced) || receive != nil {
+		if err != nil || receive == nil {
 			t.Fatalf("unconfigured invoice result=%v error=%v", receive != nil, err)
 		}
-		if count := countRGB11Receives(t, manager.db); count != 0 {
+		if count := countRGB11Receives(t, manager.db); count != 1 {
 			t.Fatalf("unconfigured invoice persisted %d receive requests", count)
+		}
+		if !rgb11LocalModulePendingForTest(t, manager) ||
+			rgb11LocalModuleForTest(t, manager).Generation <= beforeGen {
+			t.Fatal("local receive request did not advance the durable backup generation")
+		}
+		if afterRemote := snapshotRGB11MemoryRecords(remote); !reflect.DeepEqual(beforeRemote, afterRemote) {
+			t.Fatal("unactivated invoice reached account DKVS")
+		}
+		restarted, err := newRGB11Manager(manager, manager.db, manager.utxoLockerL1, manager.rgbManager.evidence)
+		if err != nil {
+			t.Fatal(err)
+		}
+		manager.rgbManager = restarted
+		if err := restarted.selectRGB11Scope(); err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := restarted.engine.LoadReceive(receive.RequestID)
+		if err != nil || loaded == nil || loaded.Invoice != receive.Invoice ||
+			loaded.RelayKey != receive.RelayKey || loaded.AckKey != receive.AckKey ||
+			!reflect.DeepEqual(loaded.WitnessScript, receive.WitnessScript) {
+			t.Fatalf("local RGB receive material did not survive module restart: loaded=%t error=%v",
+				loaded != nil, err)
 		}
 	})
 
-	t.Run("projection-does-not-run-before-baseline-cas", func(t *testing.T) {
+	t.Run("projection-does-not-run-while-offline", func(t *testing.T) {
 		manager := configuredRGB11ManagedOperationTestManager(t)
-		remote, fault := installRGB11DirtyCASRejector(t, manager)
+		remote := observeRGB11OfflineSession(t, manager)
 		beforeRecords := snapshotRGB11MemoryRecords(remote)
 		beforeOutputs, err := manager.rgbManager.projectionStore.ListOutputs()
 		if err != nil {
@@ -124,14 +166,8 @@ func TestRGB11PublicOperationsRequireRecoveryBeforeMutation(t *testing.T) {
 		beforeLocks := manager.utxoLockerL1.GetLockedUtxoList()
 
 		err = manager.ProjectRGB11Allocation("", nil, nil)
-		if err == nil || errors.Is(err, rgb11wallet.ErrProjectionMismatch) {
+		if !errors.Is(err, ErrDKVSPathNotSynced) {
 			t.Fatalf("ProjectRGB11Allocation ran before rejecting its baseline: %v", err)
-		}
-		fault.rejectMu.Lock()
-		rejected := fault.rejected
-		fault.rejectMu.Unlock()
-		if rejected == 0 {
-			t.Fatal("projection did not reach the authoritative account CAS gate")
 		}
 		if afterRecords := snapshotRGB11MemoryRecords(remote); !reflect.DeepEqual(beforeRecords, afterRecords) {
 			t.Fatal("rejected projection changed the authoritative account baseline")
@@ -146,43 +182,65 @@ func TestRGB11PublicOperationsRequireRecoveryBeforeMutation(t *testing.T) {
 		}
 	})
 
-	t.Run("direct-receive-mapping-does-not-run-before-baseline-cas", func(t *testing.T) {
+	t.Run("direct-receive-mapping-does-not-run-while-offline", func(t *testing.T) {
 		manager := configuredRGB11ManagedOperationTestManager(t)
-		remote, fault := installRGB11DirtyCASRejector(t, manager)
+		remote := observeRGB11OfflineSession(t, manager)
 		beforeRecords := snapshotRGB11MemoryRecords(remote)
 
 		endpoint, err := manager.EnableConfiguredRGB11AddressReceive(RGB11ReceiveCapabilityOptions{})
-		if err == nil || endpoint != nil {
+		if !errors.Is(err, ErrDKVSPathNotSynced) || endpoint != nil {
 			t.Fatalf("Direct receive escaped before its baseline CAS: endpoint=%v error=%v", endpoint != nil, err)
-		}
-		fault.rejectMu.Lock()
-		rejected := fault.rejected
-		fault.rejectMu.Unlock()
-		if rejected == 0 {
-			t.Fatal("Direct receive did not reach the authoritative account CAS gate")
 		}
 		if afterRecords := snapshotRGB11MemoryRecords(remote); !reflect.DeepEqual(beforeRecords, afterRecords) {
 			t.Fatal("rejected Direct receive changed account DKVS records")
 		}
 	})
 
-	t.Run("ack-refresh-does-not-run-before-baseline-cas", func(t *testing.T) {
+	t.Run("ack-refresh-does-not-run-while-offline", func(t *testing.T) {
 		manager := configuredRGB11ManagedOperationTestManager(t)
-		remote, fault := installRGB11DirtyCASRejector(t, manager)
+		remote := observeRGB11OfflineSession(t, manager)
 		beforeRecords := snapshotRGB11MemoryRecords(remote)
 
 		ack, err := manager.RefreshRGB11AddressACK(&swire.DKVSRecord{}, dkvsindexer.RecordVerificationOptions{})
-		if err == nil || ack != nil {
+		if !errors.Is(err, ErrDKVSPathNotSynced) || ack != nil {
 			t.Fatalf("ACK refresh escaped before its baseline CAS: ack=%v error=%v", ack != nil, err)
-		}
-		fault.rejectMu.Lock()
-		rejected := fault.rejected
-		fault.rejectMu.Unlock()
-		if rejected == 0 {
-			t.Fatal("ACK refresh did not reach the authoritative account CAS gate")
 		}
 		if afterRecords := snapshotRGB11MemoryRecords(remote); !reflect.DeepEqual(beforeRecords, afterRecords) {
 			t.Fatal("rejected ACK refresh changed account DKVS records")
 		}
 	})
+}
+
+func observeRGB11OfflineSession(t *testing.T, manager *Manager) *rgb11MemoryDKVSHTTP {
+	t.Helper()
+	manager.accountBackgroundWG.Wait()
+	remote, ok := manager.http.(*rgb11MemoryDKVSHTTP)
+	if !ok {
+		t.Fatal("unexpected test transport")
+	}
+	fault := &reviewAcceptanceHTTP{rgb11MemoryDKVSHTTP: remote}
+	fault.post = func(context.Context, string, []byte) ([]byte, error) {
+		return nil, &net.DNSError{Err: "offline test transport", IsTimeout: true}
+	}
+	client, err := manager.GetDKVSClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.Http = fault
+	root, err := manager.accountManagementRootWallet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := manager.accountManagedStateKey(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := manager.accountDKVSStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SyncCurrent(key); err == nil {
+		t.Fatal("fixture did not observe an actual offline synchronization failure")
+	}
+	return remote
 }

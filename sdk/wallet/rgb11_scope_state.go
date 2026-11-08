@@ -1,6 +1,8 @@
 package wallet
 
 import (
+	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
+	"golang.org/x/sync/singleflight"
 	"sync"
 	"time"
 )
@@ -8,6 +10,8 @@ import (
 type rgb11ScopeBackupState struct {
 	ReconciliationState string
 	ProjectionVerified  bool
+	ReadyCarriers       map[string]bool
+	ProofFaults         []rgb11wallet.ProofFault
 }
 
 type rgb11ScopeReconciliation struct {
@@ -20,6 +24,7 @@ type rgb11ScopeReconciliation struct {
 
 type rgb11ScopeStateRegistry struct {
 	mu               sync.RWMutex
+	sendFlights      singleflight.Group
 	states           map[string]rgb11ScopeBackupState
 	reconciliations  map[string]*rgb11ScopeReconciliation
 	retryDelay       time.Duration

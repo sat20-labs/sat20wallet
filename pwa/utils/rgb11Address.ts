@@ -2,11 +2,13 @@ import { beginVersionDispatch } from '@/utils/pwaVersionPolicy'
 import { tryit } from 'radash'
 import { beginPwaWalletOperation, finishPwaOperation } from '@/utils/pwaOperationLog'
 import { walletRequestSessionGuard } from '@/lib/walletSession'
+import { wasmResponseError } from '@/utils/wasmError'
 
 type WasmResponse<T> = {
   code: number
   msg: string
   data?: T
+  error_code?: string
 }
 
 const invoke = async <T>(methodName: string, args: unknown[], recordOperation: boolean): Promise<[Error | undefined, T | undefined]> => {
@@ -21,7 +23,7 @@ const invoke = async <T>(methodName: string, args: unknown[], recordOperation: b
       finishVersion = beginVersionDispatch(methodName)
       const response = await method(...args) as WasmResponse<T> | undefined
       checkSession()
-      if (response && response.code !== 0) throw new Error(response.msg)
+      if (response && response.code !== 0) throw wasmResponseError(response.msg, response.error_code)
       if (operation) await finishPwaOperation(operation, null, response?.data)
       checkSession()
       return response?.data

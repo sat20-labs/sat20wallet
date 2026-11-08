@@ -175,7 +175,7 @@ func (protocol rgb11STPProtocol) PrepareInputs(p *Manager, req STPAssetInputRequ
 	if req.AssetAddress != "" && req.AssetAddress != manager.wallet.GetAddress() {
 		return nil, fmt.Errorf("RGB11 private funding must use its captured wallet")
 	}
-	proofs, err := manager.projectionStore.ListProofs()
+	proofs, blocked, err := manager.readRGB11ProofView()
 	if err != nil {
 		return nil, err
 	}
@@ -189,7 +189,7 @@ func (protocol rgb11STPProtocol) PrepareInputs(p *Manager, req STPAssetInputRequ
 			continue
 		}
 		seen[proof.OutPoint] = true
-		if !rgb11CarrierLockAllowsSpend(manager.utxoLockerL1.GetLockedUtxoList()[proof.OutPoint]) {
+		if blocked[proof.OutPoint] || !manager.rgb11CarrierAvailable(proof.OutPoint) || !rgb11CarrierLockAllowsSpend(manager.utxoLockerL1.GetLockedUtxoList()[proof.OutPoint]) {
 			continue
 		}
 		output, err := manager.projectionStore.LoadOutput(proof.OutPoint)
@@ -243,11 +243,23 @@ func (p *rgb11Manager) stpRGB11Funding(output *TxOutput, asset *indexer.AssetNam
 		return rgb11wallet.ChannelFunding{}, ErrRGB11AssetPreservation
 	}
 	if err := p.projectionStore.AssertConsistent(output.OutPointStr, *asset); err != nil {
+		p.traceRGB11Broadcast("stp-funding-consistency", "", err)
 		return rgb11wallet.ChannelFunding{}, err
 	}
-	proofs, err := p.projectionStore.ListProofs()
+	proofs, blocked, err := p.readRGB11ProofView()
 	if err != nil {
+		p.traceRGB11Broadcast("stp-funding-proof-view", "", err)
 		return rgb11wallet.ChannelFunding{}, err
+	}
+	if blocked[output.OutPointStr] || !p.rgb11CarrierAvailable(output.OutPointStr) {
+		p.traceRGB11Broadcast("stp-funding-readiness", "", ErrRGB11Inconsistent)
+		if owner := p.rgb11ReservationOwner(); owner != nil {
+			state := p.rgb11ScopeState()
+			Log.Debugf("RGB STP readiness rejected: manager=%d blocked=%t verified=%t target_ready=%t ready=%d faults=%d",
+				owner.debugID, blocked[output.OutPointStr], state.ProjectionVerified,
+				state.ReadyCarriers[output.OutPointStr], len(state.ReadyCarriers), len(state.ProofFaults))
+		}
+		return rgb11wallet.ChannelFunding{}, ErrRGB11Inconsistent
 	}
 	for _, proof := range proofs {
 		if proof.OutPoint == output.OutPointStr && proof.AssetName != *asset {
@@ -448,9 +460,14 @@ func verifySTPRGB11KnownCoassets(p *Manager, sources map[string]indexer.AssetNam
 		owner.rgbReservationMu.RLock()
 		defer owner.rgbReservationMu.RUnlock()
 		for _, manager := range managers {
-			proofs, err := manager.projectionStore.ListProofs()
+			proofs, blocked, err := manager.localRGB11ProofView()
 			if err != nil {
 				return err
+			}
+			for point := range sources {
+				if blocked[point] {
+					return ErrRGB11AssetPreservation
+				}
 			}
 			for _, proof := range proofs {
 				if proof == nil {

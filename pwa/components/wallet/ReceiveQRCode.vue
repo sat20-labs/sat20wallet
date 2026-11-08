@@ -18,7 +18,7 @@
         <div class="text-center">
           <p class="flex justify-center text-sm text-zinc-400 mb-2">
             <Icon icon="lucide:user-round" class="w-5 h-5 text-purple-600 flex-shrink-0" />
-            {{ $t('receiveQRcode.account') }}
+            {{ accountName }}
           </p>
           <p class="text-sm text-zinc-300 font-mono">{{ hideAddress(address, 8) }}</p>
         </div>
@@ -32,7 +32,7 @@
         <button v-if="chain.toLowerCase() === 'bitcoin'" type="button"
           class="w-full rounded-lg border border-primary px-4 py-2 text-sm text-primary hover:bg-zinc-700"
           @click="openSilentPay">
-          Private · SP
+          {{ $t('walletComponents.privateSp') }}
         </button>
       </div>
     </div>
@@ -40,6 +40,8 @@
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
+const { t } = useI18n()
 import { ref, watch, onMounted, computed } from 'vue'
 import { hideAddress } from '@/utils'
 import QRCode from 'qrcode'
@@ -49,8 +51,9 @@ import { useRouter } from 'vue-router'
 
 
 // Props for address and chain
-const { address, chain } = defineProps<{
+const { address, accountName, chain } = defineProps<{
   address: string
+  accountName: string
   chain: string
 }>()
 
@@ -125,8 +128,8 @@ const copyAddress = async () => {
   try {
     await navigator.clipboard.writeText(address)
     toast({
-      title: 'Copied to clipboard',
-      description: 'Address copied successfully!',
+      title: t('walletComponents.copied'),
+      description: t('walletComponents.addressCopied'),
       variant: 'success'
     })
 

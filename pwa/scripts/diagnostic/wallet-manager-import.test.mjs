@@ -1,9 +1,13 @@
+import { createI18n } from 'vue-i18n'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { parse, compileScript } from '@vue/compiler-sfc'
 import * as Vue from 'vue'
 import ts from 'typescript'
+
+const messages = JSON.parse(readFileSync(new URL('../../locales/en.json', import.meta.url), 'utf8'))
+const i18n = createI18n({ legacy: false, locale: 'en', messages: { en: messages } })
 
 const source = readFileSync(new URL('../../components/wallet/WalletManager.vue', import.meta.url), 'utf8')
 const compiled = compileScript(parse(source).descriptor, { id: 'wallet-manager-import-review' }).content
@@ -17,6 +21,7 @@ function fixture({ readFailure = false, switchFailure = false, importFailure = f
   })
   const mocks = {
     vue: { ...Vue, onUnmounted() {} },
+    'vue-i18n': { useI18n: () => i18n.global },
     'vue-router': { useRouter: () => ({ go() {} }) },
     pinia: { storeToRefs: Vue.toRefs },
     '@/store': { useWalletStore: () => store, useApproveStore: () => ({ isVisible: Vue.ref(false) }) },

@@ -29,11 +29,11 @@
               >
                 <div class="flex justify-between items-start">
                   <div class="flex-1">
-                    <div class="font-semibold">{{ index + 1 }}. Address:</div>
+                    <div class="font-semibold">{{ index + 1 }}. {{ $t('sendAssets.destinationAddress') }}:</div>
                     <div class="break-all">{{ addr }}</div>
                   </div>
                   <div class="ml-2 text-right">
-                    <div class="font-semibold">Amount:</div>
+                    <div class="font-semibold">{{ $t('sendAssets.amount') }}:</div>
                     <div>{{ props.data.amtList[index] || '0' }}</div>
                   </div>
                 </div>
@@ -55,6 +55,8 @@
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
+const { t } = useI18n()
 import { ref, computed, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { z } from 'zod'
@@ -64,17 +66,17 @@ import { useToast } from '@/components/ui/toast-new'
 import sat20 from '@/utils/sat20'
 
 // Define Zod schema for validation
-const batchSendAssetsV2Schema = z.object({
-  destAddr: z.array(z.string().min(1, 'Destination address cannot be empty')),
-  assetName: z.string().min(1, 'Asset name is required'),
-  amtList: z.array(z.string().min(1, 'Amount cannot be empty')).min(1, 'At least one amount is required')
+const batchSendAssetsV2Schema = computed(() => z.object({
+  destAddr: z.array(z.string().min(1, t('approvalUi.addressEmpty'))),
+  assetName: z.string().min(1, t('approvalUi.assetRequired')),
+  amtList: z.array(z.string().min(1, t('approvalUi.amountEmpty'))).min(1, t('approvalUi.oneAmountRequired'))
 }).refine((data) => data.destAddr.length === data.amtList.length, {
-  message: 'Number of addresses must match number of amounts',
+  message: t('approvalUi.countsMismatch'),
   path: ['amtList']
-})
+}))
 
 // Infer TypeScript type from Zod schema
-type BatchSendAssetsV2Data = z.infer<typeof batchSendAssetsV2Schema>
+type BatchSendAssetsV2Data = z.infer<typeof batchSendAssetsV2Schema.value>
 
 interface Props {
   data: BatchSendAssetsV2Data
@@ -93,7 +95,7 @@ const assetDisplayName = ref<string>(props.data.assetName)
 
 // Computed property to check data validity
 const isValidData = computed(() => {
-  const result = batchSendAssetsV2Schema.safeParse(props.data)
+  const result = batchSendAssetsV2Schema.value.safeParse(props.data)
   return result.success
 })
 
@@ -119,13 +121,13 @@ watch(() => props.data.assetName, (newAssetName) => {
 }, { immediate: true })
 
 const validateData = (): boolean => {
-  const result = batchSendAssetsV2Schema.safeParse(props.data)
+  const result = batchSendAssetsV2Schema.value.safeParse(props.data)
 
   if (!result.success) {
     const errors = result.error.errors.map(err => err.message).join(', ')
-    errorMessage.value = `Validation failed: ${errors}`
+    errorMessage.value = t('approvalUi.validationFailed', { errors })
     toast({
-      title: 'Error',
+      title: t('approvalUi.error'),
       description: errorMessage.value,
       variant: 'destructive'
     })
@@ -157,7 +159,7 @@ const confirm = async () => {
     )
 
     if (err) {
-      let detail = 'Failed to send assets on SatsNet.'
+      let detail = t('approvalUi.sendFailed')
       if (err.message) {
         detail = err.message
       } else if (typeof err === 'string') {
@@ -167,8 +169,8 @@ const confirm = async () => {
     }
 
     toast({
-      title: 'Success',
-      description: `Successfully sent assets to ${destAddresses.length} addresses.`,
+      title: t('approvalUi.success'),
+      description: t('approvalUi.batchSuccess', { count: destAddresses.length }),
       variant: 'success'
     })
 
@@ -176,9 +178,9 @@ const confirm = async () => {
 
   } catch (error: any) {
     console.error('Batch Send Assets V2 Error:', error)
-    const description = error.message || 'An unexpected error occurred during the batch send.'
+    const description = error.message || t('approvalUi.batchException')
     toast({
-      title: 'Error',
+      title: t('approvalUi.error'),
       description: description,
       variant: 'destructive',
     })

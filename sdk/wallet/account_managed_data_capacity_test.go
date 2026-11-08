@@ -140,169 +140,344 @@ func TestManagedDataBundleCapacityReportsPlaintextActualAndLimit(t *testing.T) {
 	t.Logf("plaintext bundle rejected: AMD=%d limit=%d", wantActual, account.ManagedDataMaxPayload)
 }
 
-func TestManagedDataCapacityFailureKeepsRGBProofAndRemoteRevision(t *testing.T) {
+func TestModuleCapacityKeepsRGBProof(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
-	manager, _, store, keys := accountTTLNoopFixture(t)
+	chain := newCoreE2EChain()
+	rpc := &coreE2EL1Indexer{chain: chain}
+	var source *Manager
+	var issued *RGB11IssueResult
+	manager, remote, store, _ := accountTTLWithSeed(t, func(owner *Manager, remote *rgb11MemoryDKVSHTTP) {
+		wallet := cloneWalletAtAccountZero(owner.wallet)
+		chain.fund(t, wallet.GetAddress(), 6)
+		source = newRGB11FlowManager(t, wallet, rpc, chain, 1660, accountGroupUnprepared)
+		prepareRGBEndpoint(t, source, remote)
+		var issueErr error
+		issued, issueErr = source.rgbManager.IssueRGB11Asset(context.Background(), RGB11IssueRequest{
+			Schema: "NIA", Ticker: "CAP", Name: "Capacity recovery fixture", Amounts: []uint64{25},
+		})
+		if issueErr != nil {
+			t.Fatal(issueErr)
+		}
+	})
 	catalog, err := manager.accountManagedDataCatalog()
 	if err != nil || len(catalog.Scopes) != 1 {
 		t.Fatalf("account catalog scopes=%d err=%v", len(catalog.Scopes), err)
 	}
+	scope := catalog.Scopes[0].ID()
 	provider := &rgb11AccountManagedDataProvider{owner: manager}
-	accounts, err := provider.accountsByScope()
+	// Seed a real issued contract and proof; synthetic proof bytes do not
+	// establish an independently restorable RGB baseline.
+	manager.accountBackgroundWG.Wait()
+	manager.l1IndexerClient = NewIndexerRPCClientMgr()
+	manager.l1IndexerClient.Set(rpc)
+	manager.rgbManager.evidence = chain
+	defer manager.rgbManager.scopeStates.stopReconciliations()
+	installRGB11PublicContractFixture(t, source, remote, issued.ContractID)
+	useRGB11TestCoreAuthority(t, manager)
+	sourceCatalog, err := source.accountManagedDataCatalog()
 	if err != nil {
 		t.Fatal(err)
 	}
-	scoped, err := manager.newScopedRGB11Manager(accounts[catalog.Scopes[0].ID()])
+	payloads, err := (&rgb11AccountManagedDataProvider{owner: source}).Export(sourceCatalog)
 	if err != nil {
 		t.Fatal(err)
 	}
-	outpoint, assetName, _ := seedRGB11DurableAccountRecoveryState(t, scoped)
+	if err := provider.Import(catalog, payloads); err != nil {
+		t.Fatal(err)
+	}
+	// Import installs the real RGB projection. Record that public module change
+	// in the same local durability model used by normal provider writes before
+	// taking its first backup snapshot.
+	batch, err := NewAtomicWriteBatch(manager.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finish, err := manager.StageAccountChange(batch, rgb11AccountManagedProviderID, scope)
+	if err != nil {
+		batch.Close()
+		t.Fatal(err)
+	}
+	defer finish(false)
+	if err := batch.Flush(); err != nil {
+		batch.Close()
+		t.Fatal(err)
+	}
+	finish(true)
+	batch.Close()
+	proofs, err := source.rgbManager.projectionStore.ListProofs()
+	if err != nil || len(proofs) == 0 {
+		t.Fatalf("issued proof unavailable: %v", err)
+	}
+	outpoint := proofs[0].OutPoint
 	if err := manager.SyncAccountManagementState(context.Background()); err != nil {
-		t.Fatalf("publish nonempty RGB11 recovery baseline before capacity failure: %v", err)
+		t.Fatalf("publish nonempty RGB11 module baseline before capacity failure: %v", err)
 	}
-	base, _, err := manager.exportAccountManagedData(catalog, manager.accountProfile.ManagedDataRevision)
-	if err != nil {
-		t.Fatal(err)
-	}
+
 	manager.mutex.RLock()
 	accountID := manager.accountProfile.AccountID
 	secret := append([]byte(nil), manager.accountSecret...)
-	beforeRevision := manager.accountProfile.ManagedDataRevision
-	beforeHash := manager.accountProfile.ManagedDataHash
-	beforeEnvelope := append([]byte(nil), manager.accountProfile.ManagedDataEnvelope...)
+	network := manager.cfg.Chain
 	manager.mutex.RUnlock()
 	defer zeroBytes(secret)
-	defer zeroBytes(beforeEnvelope)
-	baselineBlob, err := store.GetAuthoritative(keys[1])
-	if err != nil || baselineBlob == nil || len(baselineBlob.Value) == 0 {
-		t.Fatalf("successful RGB11 baseline did not leave a nonempty remote bundle: value=%v err=%v",
-			baselineBlob != nil, err)
-	}
-	baselinePackageCount := 0
-	for _, item := range base.Items {
-		if item.Provider == rgb11AccountManagedProviderID && item.Scope == catalog.Scopes[0].ID() {
-			packageValue, decodeErr := rgb11wallet.DecodeRecoveryPackage(item.Payload)
-			if decodeErr != nil {
-				t.Fatal(decodeErr)
-			}
-			for _, record := range packageValue.ProjectionRecords {
-				if strings.HasPrefix(record.Key, "proof-") {
-					baselinePackageCount++
-				}
-			}
-		}
-	}
-	if baselinePackageCount == 0 {
-		t.Fatal("successful remote baseline did not contain the locally seeded RGB proof")
-	}
-	oversizedPayload := accountManagedPayloadForEnvelopeSize(t, secret, accountID, base,
-		"zz-capacity", catalog.Scopes[0].ID(), swire.MaxDKVSBlobValueSize)
-	if err := manager.RegisterAccountManagedDataProvider(&accountManagedCapacityProvider{
-		scope: catalog.Scopes[0].ID(), payload: oversizedPayload,
-	}); err != nil {
+	indexKey, err := account.ManagedIndexKey(accountID)
+	if err != nil {
 		t.Fatal(err)
 	}
-	defer zeroBytes(oversizedPayload)
+	remoteIndex, err := store.GetAuthoritative(indexKey)
+	if err != nil || remoteIndex == nil {
+		t.Fatalf("read confirmed account index: value=%v err=%v", remoteIndex != nil, err)
+	}
+	if err := dkvsindexer.VerifySignature(remoteIndex.record); err != nil {
+		t.Fatalf("verify account index signature: %v", err)
+	}
+	index, err := account.OpenManagedIndex(secret, accountID, network, remoteIndex.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rgbEntry account.ManagedEntry
+	for _, entry := range index.Entries {
+		if !entry.Deleted && entry.Provider == rgb11AccountManagedProviderID && entry.Scope == scope {
+			rgbEntry = entry
+		}
+	}
+	if rgbEntry.Key == "" {
+		t.Fatal("confirmed account index does not contain the RGB11 module")
+	}
+	rgbRecord, err := store.GetAuthoritative(rgbEntry.Key)
+	if err != nil || rgbRecord == nil {
+		t.Fatalf("read confirmed RGB11 module: value=%v err=%v", rgbRecord != nil, err)
+	}
+	if err := dkvsindexer.VerifySignature(rgbRecord.record); err != nil {
+		t.Fatalf("verify RGB11 module signature: %v", err)
+	}
+	blob, err := DecodeDKVSBlobValue(rgbRecord.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blob.Metadata) != 0 {
+		t.Fatal("confirmed RGB11 module unexpectedly contains plaintext metadata")
+	}
+	managedModule, err := account.OpenManagedModule(secret, accountID, network, rgbEntry.Key, blob.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if managedModule.Provider != rgbEntry.Provider || managedModule.Scope != rgbEntry.Scope || managedModule.Codec != rgbEntry.Codec {
+		t.Fatal("confirmed module does not match its authenticated index entry")
+	}
+	remotePackage, err := rgb11wallet.DecodeRecoveryPackage(managedModule.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteHasProof := false
+	for _, record := range remotePackage.ProjectionRecords {
+		if strings.HasPrefix(record.Key, "proof-"+outpoint+"-") {
+			remoteHasProof = true
+		}
+	}
+	if !remoteHasProof {
+		t.Fatal("confirmed remote RGB11 module does not contain the issued proof")
+	}
 
-	beforeRemote := make(map[string]*dkvsValue, len(keys))
-	for _, key := range keys {
+	walletModule, err := accountEntry(accountID, "wallets", AccountManagedDataGlobalScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	walletModuleKey := walletModule.Key
+	if walletModuleKey == "" {
+		t.Fatal("wallet module key is empty")
+	}
+	root, err := manager.accountManagementRootWallet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapperKey, err := accountRootWrapperKey(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeRemote := make(map[string]*dkvsValue, 5)
+	for _, key := range []string{indexKey, walletModuleKey, wrapperKey, rgbEntry.Key} {
 		value, err := store.GetAuthoritative(key)
-		if err != nil {
-			t.Fatal(err)
+		if err != nil || value == nil {
+			t.Fatalf("read confirmed record %q: value=%v err=%v", key, value != nil, err)
 		}
 		beforeRemote[key] = value
+	}
+
+	capacityEntry, err := accountEntry(accountID, "zz-capacity", scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// ManagedObjectMaxBytes and MaxDKVSBlobValueSize are both 1 MiB. Sealing
+	// adds 33 bytes (AMOE magic, nonce, and GCM tag), while DKB1 adds 8 bytes;
+	// therefore there is an 8-byte interval of valid sealed modules that DKB1
+	// cannot carry. Find the first such payload while keeping the module valid.
+	low, high := 1, account.ManagedDataMaxPayload
+	for low < high {
+		middle := low + (high-low)/2
+		candidate := capacityTestNoise(middle)
+		encoded, sealErr := account.SealManagedModule(secret, accountID, network,
+			account.ManagedModule{Provider: capacityEntry.Provider, Scope: capacityEntry.Scope,
+				Codec: capacityEntry.Codec, Payload: candidate}, nil)
+		zeroBytes(candidate)
+		if sealErr != nil {
+			high = middle
+			continue
+		}
+		_, wrapErr := EncodeDKVSBlobValue(encoded, nil)
+		zeroBytes(encoded)
+		if errors.Is(wrapErr, dkvsindexer.ErrRecordTooLarge) {
+			high = middle
+		} else if wrapErr == nil {
+			low = middle + 1
+		} else {
+			t.Fatalf("encode DKB1 capacity candidate: %v", wrapErr)
+		}
+	}
+	oversizedPayload := capacityTestNoise(low)
+	defer zeroBytes(oversizedPayload)
+	encodedModule, err := account.SealManagedModule(secret, accountID, network,
+		account.ManagedModule{Provider: capacityEntry.Provider, Scope: capacityEntry.Scope,
+			Codec: capacityEntry.Codec, Payload: oversizedPayload}, nil)
+	if err != nil {
+		t.Fatalf("seal valid account module just beyond DKB1 limit: %v", err)
+	}
+	if len(encodedModule) > account.ManagedDataMaxPayload {
+		t.Fatalf("account module envelope=%d exceeds account module limit=%d", len(encodedModule), account.ManagedDataMaxPayload)
+	}
+	if len(encodedModule)+8 <= swire.MaxDKVSBlobValueSize {
+		t.Fatalf("module bytes=%d plus DKB1 header fit wire limit=%d", len(encodedModule), swire.MaxDKVSBlobValueSize)
+	}
+	_, capacityErr := EncodeDKVSBlobValue(encodedModule, nil)
+	defer zeroBytes(encodedModule)
+	if !errors.Is(capacityErr, dkvsindexer.ErrRecordTooLarge) {
+		t.Fatalf("single module DKB1 error=%v, want ErrRecordTooLarge", capacityErr)
+	}
+	if err := manager.RegisterAccountManagedDataProvider(&accountManagedCapacityProvider{
+		scope: scope, payload: oversizedPayload,
+	}); err != nil {
+		t.Fatal(err)
 	}
 	if err := manager.markAccountManagedDataDirtyDeferred("zz-capacity"); err != nil {
 		t.Fatal(err)
 	}
 	err = manager.SyncAccountManagementState(context.Background())
 	if !errors.Is(err, dkvsindexer.ErrRecordTooLarge) {
-		t.Fatalf("oversized final DKB1 sync error=%v, want ErrRecordTooLarge", err)
+		t.Fatalf("oversized per-module sync error=%v, want ErrRecordTooLarge", err)
 	}
-	if !strings.Contains(err.Error(), fmt.Sprintf("envelope=%d bytes", swire.MaxDKVSBlobValueSize)) ||
-		!strings.Contains(err.Error(), fmt.Sprintf("payload limit=%d bytes", swire.MaxDKVSBlobValueSize-8)) {
-		t.Fatalf("capacity error lacks exact final envelope/payload limit: %v", err)
+
+	status := manager.GetAccountManagementStatus()
+	if !status.DKVSWriteAllowed {
+		t.Fatalf("unrelated module capacity failure revoked a healthy account baseline: %+v", status)
 	}
-	manager.mutex.RLock()
-	profile := manager.accountProfile
-	profilePreserved := profile != nil && profile.ManagedDataDirty &&
-		profile.ManagedDataRevision == beforeRevision && profile.ManagedDataHash == beforeHash &&
-		bytes.Equal(profile.ManagedDataEnvelope, beforeEnvelope)
-	gotDirty, gotRevision := false, uint64(0)
-	gotHash, gotEnvelope := false, false
-	if profile != nil {
-		gotDirty = profile.ManagedDataDirty
-		gotRevision = profile.ManagedDataRevision
-		gotHash = profile.ManagedDataHash == beforeHash
-		gotEnvelope = bytes.Equal(profile.ManagedDataEnvelope, beforeEnvelope)
+	if err := manager.CheckAccountWrite(rgb11AccountManagedProviderID, scope); err != nil {
+		t.Fatalf("capacity failure blocked the healthy RGB11 module: %v", err)
 	}
-	manager.mutex.RUnlock()
-	if !profilePreserved {
-		t.Fatalf("capacity failure changed durable state: dirty=%t revision=%d hash_unchanged=%t envelope_unchanged=%t",
-			gotDirty, gotRevision, gotHash, gotEnvelope)
+	if err := manager.CheckAccountWrite("zz-capacity", scope); err == nil {
+		t.Fatal("oversized module remained eligible for a new module write")
 	}
-	for _, key := range keys {
-		value, err := store.GetAuthoritative(key)
-		if err != nil {
-			t.Fatal(err)
+	var capacityStatus, rgbStatus *AccountModuleStatus
+	for index := range status.Modules {
+		module := &status.Modules[index]
+		if module.Provider == "zz-capacity" && module.Scope == scope {
+			capacityStatus = module
 		}
-		before := beforeRemote[key]
-		if before.Hash != value.Hash || before.Seq != value.Seq || !bytes.Equal(before.Value, value.Value) {
-			t.Fatalf("capacity failure changed authoritative remote account record %q", key)
+		if module.Provider == rgb11AccountManagedProviderID && module.Scope == scope {
+			rgbStatus = module
 		}
 	}
+	if capacityStatus == nil || capacityStatus.WriteAllowed || capacityStatus.BackupState != "error" || capacityStatus.LastError == "" {
+		t.Fatalf("failed module status does not expose its capacity failure: %+v", capacityStatus)
+	}
+	if rgbStatus == nil || !rgbStatus.WriteAllowed {
+		t.Fatalf("healthy RGB11 module lost write eligibility: %+v", rgbStatus)
+	}
+	localCapacity, err := manager.readAccountLocal(accountID, "zz-capacity", scope)
+	if err != nil || localCapacity == nil {
+		t.Fatalf("read failed per-module receipt: value=%v err=%v", localCapacity != nil, err)
+	}
+	if localCapacity.AccountID != accountID || localCapacity.Network != network ||
+		localCapacity.Provider != capacityEntry.Provider || localCapacity.Scope != capacityEntry.Scope {
+		t.Fatal("capacity failure changed the durable module identity")
+	}
+	pendingEntry, err := accountEntry(localCapacity.AccountID, localCapacity.Provider, localCapacity.Scope)
+	if err != nil || pendingEntry != capacityEntry ||
+		localCapacity.Key != "" && localCapacity.Key != capacityEntry.Key ||
+		localCapacity.Codec != "" && localCapacity.Codec != capacityEntry.Codec {
+		t.Fatalf("capacity failure retained an inconsistent module destination: %v", err)
+	}
+	// Encoding failed before capture: retain the durable change marker, not
+	// a fabricated frozen snapshot or confirmation of the oversized value.
+	if localCapacity.Generation != 1 || localCapacity.Captured != 0 || localCapacity.Confirmed != 0 ||
+		len(localCapacity.Value) != 0 || localCapacity.Baseline != nil ||
+		localCapacity.LastError != capacityErr.Error() {
+		t.Fatalf("capacity failure lost the pre-capture marker: generation=%d captured=%d confirmed=%d value_bytes=%d baseline=%t error_matches=%t",
+			localCapacity.Generation, localCapacity.Captured, localCapacity.Confirmed,
+			len(localCapacity.Value), localCapacity.Baseline != nil, localCapacity.LastError == capacityErr.Error())
+	}
+	if _, err := store.GetAuthoritative(capacityEntry.Key); !errors.Is(err, ErrDKVSRecordNotFound) {
+		t.Fatalf("oversized module was published remotely: %v", err)
+	}
+
+	for key, before := range beforeRemote {
+		after, err := store.GetAuthoritative(key)
+		if err != nil || after == nil {
+			t.Fatalf("read prior healthy record %q after capacity failure: value=%v err=%v", key, after != nil, err)
+		}
+		if before.Hash != after.Hash || before.Seq != after.Seq || !bytes.Equal(before.Value, after.Value) {
+			t.Fatalf("capacity failure changed healthy remote record %q", key)
+		}
+	}
+	afterIndex, err := store.GetAuthoritative(indexKey)
+	if err != nil || afterIndex == nil {
+		t.Fatalf("read account index after capacity failure: value=%v err=%v", afterIndex != nil, err)
+	}
+	decodedIndex, err := account.OpenManagedIndex(secret, accountID, network, afterIndex.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keptRGB := false
+	for _, entry := range decodedIndex.Entries {
+		if !entry.Deleted && entry.Provider == rgbEntry.Provider && entry.Scope == rgbEntry.Scope && entry.Key == rgbEntry.Key {
+			keptRGB = true
+		}
+		if !entry.Deleted && entry.Provider == "zz-capacity" && entry.Scope == scope {
+			t.Fatal("directory advertised an oversized module without a published record")
+		}
+	}
+	if !keptRGB {
+		t.Fatal("capacity failure removed the valid RGB11 module from the directory")
+	}
+
 	localPayloads, err := provider.Export(catalog)
-	if err != nil || len(localPayloads) != 1 {
+	if err != nil || len(localPayloads) != len(catalog.Scopes) {
 		t.Fatalf("local RGB recovery payloads=%d err=%v", len(localPayloads), err)
 	}
-	localPackage, err := rgb11wallet.DecodeRecoveryPackage(localPayloads[0].Payload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	foundProof := false
-	for _, record := range localPackage.ProjectionRecords {
-		if strings.HasPrefix(record.Key, "proof-"+outpoint+"-") {
-			foundProof = true
+	var localProofPayload []byte
+	for _, payload := range localPayloads {
+		if payload.Scope == scope {
+			localProofPayload = payload.Payload
+			break
 		}
 	}
-	if !foundProof {
-		t.Fatalf("capacity failure lost local RGB proof for %s", assetName.String())
+	if len(localProofPayload) == 0 {
+		t.Fatalf("local RGB recovery payload for proof scope %q is missing", scope)
 	}
-	prospective, _, err := manager.exportAccountManagedData(catalog, beforeRevision)
+	localPackage, err := rgb11wallet.DecodeRecoveryPackage(localProofPayload)
 	if err != nil {
 		t.Fatal(err)
 	}
-	plain, err := account.EncodeManagedDataBundle(prospective)
-	if err != nil {
-		t.Fatal(err)
+	localHasProof := false
+	for _, record := range localPackage.ProjectionRecords {
+		if strings.HasPrefix(record.Key, "proof-"+outpoint+"-") {
+			localHasProof = true
+		}
 	}
-	envelope, _, err := account.SealManagedDataBundleWithInfo(secret, accountID, prospective, nil)
-	if err != nil {
-		t.Fatalf("expected the exact ADE boundary to seal before DKB1 rejection: %v", err)
+	if !localHasProof {
+		t.Fatal("capacity failure lost the original local RGB proof")
 	}
-	blob, blobErr := EncodeDKVSBlobValue(envelope, nil)
-	if !errors.Is(blobErr, dkvsindexer.ErrRecordTooLarge) {
-		t.Fatalf("prospective DKB1 error=%v, want ErrRecordTooLarge", blobErr)
-	}
-	if len(envelope)+8 <= swire.MaxDKVSBlobValueSize {
-		t.Fatalf("prospective DKB1 bytes=%d unexpectedly fit limit=%d", len(envelope)+8, swire.MaxDKVSBlobValueSize)
-	}
-	localRecovery, err := rgb11wallet.DecodeRecoveryPackage(localPayloads[0].Payload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, rpkRawBytes, err := rgb11wallet.EncodeRecoveryPackageWithSize(localRecovery)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("capacity failure preserved local proof and prior nonempty remote RGB bundle: RPK_raw=%d RPK_deflate=%d AMD=%d ADE=%d DKB1_would_be=%d DKB1_limit=%d rejected_blob_bytes=%d old_blob_bytes=%d baseline_revision=%d baseline_hash_present=%t",
-		rpkRawBytes, len(localPayloads[0].Payload), len(plain), len(envelope), len(envelope)+8,
-		swire.MaxDKVSBlobValueSize, len(blob), len(baselineBlob.Value), beforeRevision,
-		beforeHash != "")
 }
-
 func accountManagedPayloadForEnvelopeSize(t *testing.T, secret []byte, accountID string,
 	base account.ManagedDataBundle, provider, scope string, wantEnvelopeBytes int) []byte {
 	t.Helper()

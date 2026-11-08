@@ -1,0 +1,44 @@
+{
+  "state": "PASS",
+  "pid": 8353,
+  "started_utc": "2026-10-31T17:25:07.425706+00:00",
+  "command": "npm run compile",
+  "cwd": "/Users/yingfeng/github/sat20wallet/pwa",
+  "log": "/Users/yingfeng/github/sat20wallet/pwa/data/final-20261031T1348Z/pwa-language-compile-recheck-full-deps-20261031T172427Z/compile.log",
+  "input_count_before": 32707,
+  "input_tree_sha256_before": "88e9c5bfdb68ab296a9305cf1ca501950bc066eb6d20526b3e91d12411355f20",
+  "node_npm_versions": {
+    "node": {
+      "exit_code": 0,
+      "stdout": "v22.22.3",
+      "stderr": ""
+    },
+    "npm": {
+      "exit_code": 0,
+      "stdout": "10.9.8",
+      "stderr": ""
+    }
+  },
+  "ended_utc": "2026-10-31T17:25:47.262295+00:00",
+  "script": "vue-tsc --noEmit",
+  "exit_code": 0,
+  "timed_out": false,
+  "pre_file_count": 32707,
+  "post_file_count": 32707,
+  "pre_tree_sha256": "88e9c5bfdb68ab296a9305cf1ca501950bc066eb6d20526b3e91d12411355f20",
+  "post_tree_sha256": "88e9c5bfdb68ab296a9305cf1ca501950bc066eb6d20526b3e91d12411355f20",
+  "input_hashes_unchanged": true,
+  "changed_files": [],
+  "added_files": [],
+  "removed_files": [],
+  "pre_unstable_paths": [],
+  "post_unstable_paths": [],
+  "pre_missing_paths": [],
+  "post_missing_paths": [],
+  "scope": "All regular PWA project files plus full nested node_modules tree; excludes VCS, data receipts, generated/cache dirs, secrets/keys/databases, and tsbuildinfo.",
+  "build_or_wasm_generation": "not invoked; compile script uses vue-tsc --noEmit",
+  "log_bytes": 55,
+  "log_sha256": "48dacadd52d700a07293327aea0dc2f648f3db931dee8095bc7768243804f885",
+  "before_manifest": "/Users/yingfeng/github/sat20wallet/pwa/data/final-20261031T1348Z/pwa-language-compile-recheck-full-deps-20261031T172427Z/inputs-before.json",
+  "after_manifest": "/Users/yingfeng/github/sat20wallet/pwa/data/final-20261031T1348Z/pwa-language-compile-recheck-full-deps-20261031T172427Z/inputs-after.json"
+}

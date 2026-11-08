@@ -1,0 +1,63 @@
+{
+  "completed_utc": "2026-10-31T04:17:46.913369+00:00",
+  "j": {
+    "target": "/Users/yingfeng/github/sat20wallet/pwa/scripts/verify/account-management-usage-e2e.mjs",
+    "sha256_before": "01596bbd82f4fda900e154b3589cbb9a0cd0480ba555bc11e3111574625ff1a3",
+    "sha256_after": "3406201794eb008d29f600cc182ab2542aa6e621515e075d0da542c5bbec00aa",
+    "patch_sha256": "3191f8aeabbed8f06374ffee9fcdb5a84007ef02a03b85872b95c151c3713e06",
+    "only_requested_scenario_changed": true,
+    "restore_catalog_no_secrets_lines_preserved": true,
+    "timeouts_unchanged": "Added waitFor() uses existing default; original explicit timeout arguments retained",
+    "new_identifiers_max_utf8_bytes": 23
+  },
+  "d": {
+    "target": "/Users/yingfeng/github/sat20wallet/sdk/e2e/account_management_browser_e2e_test.go",
+    "sha256_before": "28b75b17c890b776aa1d63f1c88915b846696456b7c80f31bd67341759d5a575",
+    "sha256_after": "cfe39aabea2e5469dee3562a0b8b5473e1f21765cde4f50c4ef5dc7fa197872e",
+    "patch_sha256": "ec113fe49f9924a0828601a004ac4072b3086f73b756be2de8c54b2f05ede818",
+    "only_five_thin_wrappers_added": true,
+    "new_identifiers_max_utf8_bytes": 26
+  },
+  "watched_sources": {
+    "/Users/yingfeng/github/sat20wallet/pwa/scripts/verify/account-management-usage-e2e.mjs": {
+      "before": "01596bbd82f4fda900e154b3589cbb9a0cd0480ba555bc11e3111574625ff1a3",
+      "after": "3406201794eb008d29f600cc182ab2542aa6e621515e075d0da542c5bbec00aa",
+      "unchanged": false
+    },
+    "/Users/yingfeng/github/sat20wallet/sdk/e2e/account_management_browser_e2e_test.go": {
+      "before": "28b75b17c890b776aa1d63f1c88915b846696456b7c80f31bd67341759d5a575",
+      "after": "cfe39aabea2e5469dee3562a0b8b5473e1f21765cde4f50c4ef5dc7fa197872e",
+      "unchanged": false
+    },
+    "/Users/yingfeng/github/sat20wallet/sdk/e2e/pwa_real_regtest_browser_e2e_test.go": {
+      "before": "2e0bc469d2c77295871df1d945133970d8a497a60384bdf4472d01ea9f40a4f5",
+      "after": "2e0bc469d2c77295871df1d945133970d8a497a60384bdf4472d01ea9f40a4f5",
+      "unchanged": true
+    },
+    "/Users/yingfeng/github/sat20wallet/sdk/e2e/account_management_dkvs_sync_gate_e2e_test.go": {
+      "before": "397d355169a2dbcc2537c338b1efc8c6871a470732d19aa5358a8314001d5e71",
+      "after": "397d355169a2dbcc2537c338b1efc8c6871a470732d19aa5358a8314001d5e71",
+      "unchanged": true
+    },
+    "/Users/yingfeng/github/sat20wallet/pwa/entrypoints/popup/pages/RestoreAccount.vue": {
+      "before": "f6ea0c566683a362e21986e77e35655e661fb00f5c6bac53ba1b2d3236ac6cdd",
+      "after": "f6ea0c566683a362e21986e77e35655e661fb00f5c6bac53ba1b2d3236ac6cdd",
+      "unchanged": true
+    },
+    "/Users/yingfeng/github/sat20wallet/pwa/scripts/verify/account-management-e2e.mjs": {
+      "before": "3b2edd17441f4577eb2c0dd4b156b724cef2e6777eb5fd6ae816f446f2f2540f",
+      "after": "3b2edd17441f4577eb2c0dd4b156b724cef2e6777eb5fd6ae816f446f2f2540f",
+      "unchanged": true
+    },
+    "/Users/yingfeng/github/sat20wallet/pwa/scripts/verify/workspace-e2e.mjs": {
+      "before": "bb6e7f4cfdd64c0d98c598b38dbf79a78ac38a84313842b4746937e671963818",
+      "after": "bb6e7f4cfdd64c0d98c598b38dbf79a78ac38a84313842b4746937e671963818",
+      "unchanged": true
+    }
+  },
+  "index_sha256_before": "e3a5450b02efbeed038cb9233c0750f4de89adf1d7ba995706e869de687e1ca9",
+  "index_sha256_after": "e3a5450b02efbeed038cb9233c0750f4de89adf1d7ba995706e869de687e1ca9",
+  "index_unchanged": true,
+  "compiled": false,
+  "tests_executed": false
+}

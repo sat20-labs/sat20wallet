@@ -17,10 +17,15 @@ import (
 func TestSDKDKVSBoundWalletRPC(t *testing.T) {
 	f := newTemplateFixtureWithArgs(t, map[string]int64{}, nil, nil, dkvsMinerArgs(t))
 	waitForDKVSPeerReady(t, f.Network)
+	runSDKDKVSBoundWalletRPC(t, f, dkvsClientMnemonic)
+}
+
+func runSDKDKVSBoundWalletRPC(t *testing.T, f *templateFixture, mnemonic string) {
+	t.Helper()
 	core := dkvsClientForNode(t, f.Network.Core)
 	bootstrap := dkvsClientForNode(t, f.Network.Bootstrap)
 	miner := dkvsClientForNode(t, f.Network.Miner)
-	owner := newDKVSKeyPathActor(t, keyFromMnemonic(t, dkvsClientMnemonic, 0))
+	owner := newDKVSKeyPathActor(t, keyFromMnemonic(t, mnemonic, 0))
 	key, err := dkvs.PersonalKey(owner.Wallet.GetPubKey().SerializeCompressed(), "bound-real/value")
 	require.NoError(t, err)
 	var manager *wallet.Manager
@@ -33,10 +38,12 @@ func TestSDKDKVSBoundWalletRPC(t *testing.T) {
 			_, err = client.GetRecordDirect(key)
 			require.ErrorIs(t, err, dkvs.ErrRecordNotFound)
 		}
-	}) { return }
+	}) {
+		return
+	}
 
 	if !t.Run("ExplicitSDKBindingPrecedesGenericKVWrite", func(t *testing.T) {
-		manager, _ = newWalletManagerForNode(t, f.Network.Core, dkvsClientMnemonic)
+		manager, _ = newWalletManagerForNode(t, f.Network.Core, mnemonic)
 		require.NoError(t, manager.InitializeAccountManagement("123456"))
 		require.Equal(t, owner.Wallet.GetPubKey().SerializeCompressed(), manager.GetWallet().GetPubKey().SerializeCompressed())
 		require.NoError(t, manager.BindAccountToCurrentCoreNode())
@@ -51,7 +58,9 @@ func TestSDKDKVSBoundWalletRPC(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, f.Network.Core.nodePubKey, descriptor.CoreNodeID)
 		requireDKVSValue(t, f.Network.Bootstrap, bindingKey, binding.Value)
-	}) { return }
+	}) {
+		return
+	}
 
 	t.Run("BoundCoreAllowsCRUDWhileOtherNodesRemainReadOnlyForWallet", func(t *testing.T) {
 		first, err := core.PutSignedRecordFreeLocal(owner.Wallet, key, []byte("created"),

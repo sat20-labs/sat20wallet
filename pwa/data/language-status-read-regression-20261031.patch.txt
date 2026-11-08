@@ -1,0 +1,253 @@
+diff --git a/pwa/scripts/verify/wallet-basic-e2e.mjs b/pwa/scripts/verify/wallet-basic-e2e.mjs
+--- a/pwa/scripts/verify/wallet-basic-e2e.mjs
++++ b/pwa/scripts/verify/wallet-basic-e2e.mjs
+@@ -239,22 +239,80 @@
+     await check(requiredPwaWalletBasicCases[6], async () => {
+       await settings(page)
+       await page.getByRole('button', { name: /Environment Options/ }).click()
+-      const environment = page.getByRole('heading', { name: 'Environment Options', exact: true }).locator('../..').locator('..')
+-      await environment.getByRole('combobox').nth(1).click()
+-      await page.getByRole('option', { name: '中文', exact: true }).click()
+-      await expect(page.getByRole('heading', { name: 'Environment Options', exact: true })).toBeHidden()
++      const englishHeading = page.getByRole('heading', { name: 'Environment Options', exact: true })
++      const languageSelect = englishHeading.locator('../..').locator('..').getByRole('combobox').nth(1)
++      assert.equal(await page.evaluate(() => window.__SAT20_PWA_VERIFY__.walletStorage.getValue('language')), 'en')
++
++      // Hold the durable write so the UI failure path and repeated-selection
++      // guard are checked without replacing the storage implementation.
++      await page.evaluate(() => {
++        const storage = window.__SAT20_PWA_VERIFY__.walletStorage
++        const descriptor = Object.getOwnPropertyDescriptor(storage, 'setValue')
++        const realSetValue = storage.setValue.bind(storage)
++        const gate = { descriptor, rejects: [], writes: 0 }
++        window.languageWriteFailureGate = gate
++        storage.setValue = (key, value) => {
++          if (key !== 'language') return realSetValue(key, value)
++          gate.writes++
++          return new Promise((_resolve, reject) => { gate.rejects.push(reject) })
++        }
++      })
++      try {
++        await languageSelect.click()
++        await page.getByRole('option', { name: '中文', exact: true }).click()
++        await expect(languageSelect).toBeDisabled()
++        assert.equal(await page.evaluate(() => window.languageWriteFailureGate.writes), 1,
++          'first language change should start exactly one pending persistence write')
++        await expect(englishHeading).toBeVisible()
++        await expect(languageSelect).toContainText('English')
++        await page.evaluate(() => {
++          for (const reject of window.languageWriteFailureGate.rejects) {
++            reject(new Error('usage injected language preference write failure'))
++          }
++        })
++        await expect(page.getByText('Could not save the language preference. The previous language remains active.', { exact: true })).toBeVisible()
++        await expect(englishHeading).toBeVisible()
++        await expect(languageSelect).toContainText('English')
++        assert.equal(await page.evaluate(() => window.__SAT20_PWA_VERIFY__.walletStorage.getValue('language')), 'en')
++      } finally {
++        await page.evaluate(() => {
++          const gate = window.languageWriteFailureGate
++          if (!gate) return
++          for (const reject of gate.rejects) reject(new Error('language-write test cleanup'))
++          const storage = window.__SAT20_PWA_VERIFY__.walletStorage
++          if (gate.descriptor) Object.defineProperty(storage, 'setValue', gate.descriptor)
++          else delete storage.setValue
++          delete window.languageWriteFailureGate
++        })
++      }
++
+       await reloadUnlock(page, actor.password)
+-      const language = await page.evaluate(async () => (await import('/lib/walletStorage.ts')).walletStorage.getValue('language'))
++      assert.equal(await page.evaluate(() => window.__SAT20_PWA_VERIFY__.walletStorage.getValue('language')), 'en')
++      assert.deepEqual(await identity(page), originalIdentity, 'failed language save changed the wallet identity')
++
++      await settings(page)
++      await page.getByRole('button', { name: /Environment Options/ }).click()
++      await expect(page.getByRole('heading', { name: 'Environment Options', exact: true })).toBeVisible()
++      await page.getByRole('heading', { name: 'Environment Options', exact: true }).locator('../..').locator('..')
++        .getByRole('combobox').nth(1).click()
++      await page.getByRole('option', { name: '中文', exact: true }).click()
++      await expect(englishHeading).toBeHidden()
++      await expect(page.getByRole('heading', { name: '环境选项', exact: true })).toBeVisible()
++      // Refresh immediately after the visible locale switch; do not wait for a
++      // storage poll that could hide a missing persistence barrier.
++      await reloadUnlock(page, actor.password)
++      const language = await page.evaluate(() => window.__SAT20_PWA_VERIFY__.walletStorage.getValue('language'))
+       assert.equal(language, 'zh')
+       assert.deepEqual(await identity(page), originalIdentity)
+-      // The environment selector remains second in this section in both
+-      // languages; use its exact visible selected language to reopen it.
+       await visit(page, '/wallet/setting')
+-      const heading = page.getByRole('heading').filter({ hasText: '环境' })
++      await expect(page.getByRole('heading', { name: '系统设置', exact: true })).toBeVisible()
++      await expect(page.getByRole('heading', { name: '环境选项', exact: true })).toBeVisible()
++      const heading = page.getByRole('heading', { name: '环境选项', exact: true })
+       await heading.locator('../..').click()
+       await page.getByRole('combobox').filter({ hasText: '中文' }).click()
+       await page.getByRole('option', { name: 'English', exact: true }).click()
+       await expect(page.getByRole('heading', { name: 'Environment Options', exact: true })).toBeVisible()
++      assert.equal(await page.evaluate(() => window.__SAT20_PWA_VERIFY__.walletStorage.getValue('language')), 'en')
+     })
+ 
+     await check(requiredPwaWalletBasicCases[7], async () => {
+diff --git a/pwa/scripts/verify/account-management-usage-e2e.mjs b/pwa/scripts/verify/account-management-usage-e2e.mjs
+--- a/pwa/scripts/verify/account-management-usage-e2e.mjs
++++ b/pwa/scripts/verify/account-management-usage-e2e.mjs
+@@ -1472,7 +1472,7 @@
+     }
+   })
+ 
+-  const realTwoFactorSetupUI = async (page, failStatus = false) => {
++  const realTwoFactorSetupUI = async (page, statusReadMode = 'none') => {
+     await preflightUI(page)
+     await page.getByRole('button', { name: '2/2 增强安全', exact: true }).click()
+     await temporaryUI(page)
+@@ -1490,23 +1490,39 @@
+     await page.getByRole('button', { name: '进入恢复演练', exact: true }).click()
+     for (let i = 0; i < 2; i++) await page.getByPlaceholder(`问题 ${i + 1} 的答案`, { exact: true }).fill(questions[i].answer)
+     await page.getByPlaceholder('重新粘贴用户分片', { exact: true }).fill(share)
+-    if (failStatus) await page.evaluate(() => {
++    if (statusReadMode !== 'none') await page.evaluate(mode => {
+       const rehearse = window.accountE2E.rehearse.bind(window.accountE2E)
+       const status = window.accountE2E.status.bind(window.accountE2E)
+-      window.setupCompletionFault = { armed: false, hits: 0, verified: 0 }
++      window.setupCompletionFault = {
++        mode, armed: false, hits: 0, verified: 0,
++        manualAuthorized: false, manualClicks: 0, manualReads: 0, manualSuccesses: 0,
++      }
+       window.accountE2E.rehearse = async (...args) => {
+         const result = await rehearse(...args)
+-        if (result.verified) { window.setupCompletionFault.verified++; window.setupCompletionFault.armed = true }
++        if (result.verified) {
++          window.setupCompletionFault.verified++
++          window.setupCompletionFault.armed = true
++        }
+         return result
+       }
+       window.accountE2E.status = async () => {
+-        if (window.setupCompletionFault.armed) {
+-          window.setupCompletionFault.armed = false; window.setupCompletionFault.hits++
++        const fault = window.setupCompletionFault
++        if (fault.armed) {
++          if (fault.mode === 'manual' && fault.manualAuthorized) {
++            fault.manualAuthorized = false
++            fault.manualReads++
++            const result = await status()
++            fault.manualSuccesses++
++            fault.armed = false
++            return result
++          }
++          fault.hits++
++          if (fault.mode === 'automatic') fault.armed = false
+           throw new Error('usage injected final configuration status read failure')
+         }
+         return status()
+       }
+-    })
++    }, statusReadMode)
+     await page.getByRole('button', { name: '执行恢复演练', exact: true }).click()
+     await confirmPassword(page)
+     // First publication and active-scope refresh can advance the captured
+@@ -1535,19 +1551,64 @@
+       await confirmPassword(page)
+     }
+     await page.getByRole('heading', { name: '账户恢复已配置', exact: true }).waitFor()
+-    if (failStatus) {
+-      assert.deepEqual(await page.evaluate(() => window.setupCompletionFault), { armed: false, hits: 1, verified: 1 })
+-      await page.getByRole('status').filter({ hasText: 'usage injected final configuration status read failure' }).waitFor()
++    if (statusReadMode === 'automatic') {
++      await expect.poll(async () => {
++        const fault = await page.evaluate(() => window.setupCompletionFault)
++        const errorVisible = await page.getByText('usage injected final configuration status read failure', { exact: true }).count()
++        const configuredVisible = await page.getByText('恢复配置：已配置', { exact: true }).count()
++        return fault.verified === 1 && fault.hits === 1 && !fault.armed && errorVisible === 0 && configuredVisible === 1
++      }, { timeout: 30_000, intervals: [250, 500, 1000] }).toBe(true)
++      assert.deepEqual(await page.evaluate(() => window.setupCompletionFault), {
++        mode: 'automatic', armed: false, hits: 1, verified: 1,
++        manualAuthorized: false, manualClicks: 0, manualReads: 0, manualSuccesses: 0,
++      }, 'automatic status recovery replayed the recovery rehearsal or used the manual button')
++    }
++    if (statusReadMode === 'manual') {
++      const statusError = page.getByText('usage injected final configuration status read failure', { exact: true })
++      const retryRead = page.getByRole('button', { name: '重试读取备份状态', exact: true })
++      await expect(statusError).toBeVisible()
++      await expect(retryRead).toBeVisible()
++      await expect(retryRead).toBeEnabled()
+       assert.equal(await page.getByRole('button', { name: '执行恢复演练', exact: true }).count(), 0)
+-      await page.getByRole('button', { name: '重试读取备份状态', exact: true }).click()
+-      await expect(page.getByText('usage injected final configuration status read failure', { exact: true })).toHaveCount(0)
+-      assert.equal(await page.evaluate(() => window.setupCompletionFault.verified), 1, 'display refresh replayed consumed activation')
++      await retryRead.evaluate(button => {
++        const fault = window.setupCompletionFault
++        // This capture listener only releases the test's status-read fault on
++        // the exact real button matched by Playwright, before Vue invokes refreshAccountStatus.
++        button.addEventListener('click', () => {
++          fault.manualClicks++
++          fault.manualAuthorized = true
++        }, { capture: true, once: true })
++        // The page's Vue click handler was registered before this bubble
++        // listener. Its synchronous status() call must consume the permit;
++        // otherwise revoke it before any later poll can run.
++        button.addEventListener('click', () => { fault.manualAuthorized = false }, { once: true })
++      })
++      await retryRead.click()
++      await expect.poll(async () => {
++        const fault = await page.evaluate(() => window.setupCompletionFault)
++        const errorVisible = await statusError.count()
++        const configuredVisible = await page.getByText('恢复配置：已配置', { exact: true }).count()
++        return fault.verified === 1 && fault.manualClicks === 1 && fault.manualReads === 1 &&
++          fault.manualSuccesses === 1 && !fault.manualAuthorized && !fault.armed &&
++          errorVisible === 0 && configuredVisible === 1
++      }, { timeout: 30_000, intervals: [250, 500, 1000] }).toBe(true)
++      const fault = await page.evaluate(() => window.setupCompletionFault)
++      assert.equal(fault.mode, 'manual')
++      assert.ok(fault.hits >= 1, 'controlled status-read failure was never observed')
++      assert.equal(fault.verified, 1, 'manual status retry replayed the recovery rehearsal')
++      assert.equal(fault.manualClicks, 1)
++      assert.equal(fault.manualReads, 1, 'manual button did not directly issue exactly one real status read')
++      assert.equal(fault.manualSuccesses, 1, 'the status read issued by the manual button did not succeed')
+     }
+     assert.equal((await accountCall(page, 'status')).recovery_configured, true)
+     await assertNoSecrets(page, [...questions.map(q => q.answer), share, password])
+   }
+-  await scenario('usage: real 2of2 setup page validates answers and completes rehearsal', () => using(page => realTwoFactorSetupUI(page)))
+-  await scenario('usage: verified setup survives final status read failure without replaying rehearsal', () => using(page => realTwoFactorSetupUI(page, true)))
++  await scenario('usage: real 2of2 setup page validates answers and completes rehearsal',
++    () => using(page => realTwoFactorSetupUI(page)))
++  await scenario('usage: verified setup recovers automatically from a status read failure without replay',
++    () => using(page => realTwoFactorSetupUI(page, 'automatic')))
++  await scenario('usage: configured recovery status has an explicit read retry without replaying rehearsal',
++    () => using(page => realTwoFactorSetupUI(page, 'manual')))
+ 
+   await scenario('usage: configured account exposes maintenance and cancels without replacing recovery', () => using(async page => {
+     const material = await setup(page)
+diff --git a/pwa/scripts/verify/account-management-e2e.mjs b/pwa/scripts/verify/account-management-e2e.mjs
+--- a/pwa/scripts/verify/account-management-e2e.mjs
++++ b/pwa/scripts/verify/account-management-e2e.mjs
+@@ -534,7 +534,8 @@
+   "usage: same-context PWA pages serialize Manager lifetime",
+   "usage: refresh serializes PWA Manager startup",
+   "usage: real 2of2 setup page validates answers and completes rehearsal",
+-  "usage: verified setup survives final status read failure without replaying rehearsal",
++  "usage: verified setup recovers automatically from a status read failure without replay",
++  "usage: configured recovery status has an explicit read retry without replaying rehearsal",
+   "usage: same temporary mode reconfiguration converges across cold devices and root recovery",
+   "usage: real 2of3 settings and independent Guardian pages complete setup and rehearsal",
+   "usage: committed recovery with lost response survives reload without duplicate wallets",
+diff --git a/sdk/e2e/account_management_browser_e2e_test.go b/sdk/e2e/account_management_browser_e2e_test.go
+--- a/sdk/e2e/account_management_browser_e2e_test.go
++++ b/sdk/e2e/account_management_browser_e2e_test.go
+@@ -92,6 +92,13 @@
+ 	)
+ }
+ 
++func TestPWAStatusReadRetry(t *testing.T) {
++	runAccountPWABrowser(t,
++		"usage: verified setup recovers automatically from a status read failure without replay",
++		"usage: configured recovery status has an explicit read retry without replaying rehearsal",
++	)
++}
++
+ func runAccountPWABrowser(t *testing.T, cases ...string) {
+ 	t.Helper()
+ 	_, file, _, ok := runtime.Caller(0)

@@ -1,13 +1,13 @@
 <template>
-  <LayoutSecond title="Receive">
+  <LayoutSecond :title="$t('pwaUi.receive.title')">
     <div class="flex flex-col gap-5 items-center">
-      <div v-if="isBitcoin" class="w-full flex gap-2" role="group" aria-label="BTC receiving method">
+      <div v-if="isBitcoin" class="w-full flex gap-2" role="group" :aria-label="$t('pwaUi.receive.btcMethod')">
         <button class="flex-1 px-3 py-2 rounded-lg border text-sm"
           :class="mode === 'normal' ? 'border-primary text-primary' : 'border-zinc-700'"
-          type="button" @click="mode = 'normal'">Ordinary BTC</button>
+          type="button" @click="mode = 'normal'">{{ $t('pwaUi.receive.ordinary') }}</button>
         <button class="flex-1 px-3 py-2 rounded-lg border text-sm"
           :class="mode === 'silent' ? 'border-primary text-primary' : 'border-zinc-700'"
-          type="button" @click="mode = 'silent'">Private · SP</button>
+          type="button" @click="mode = 'silent'">{{ $t('pwaUi.receive.private') }}</button>
       </div>
 
       <template v-if="mode === 'normal' || !isBitcoin">
@@ -18,10 +18,9 @@
       </template>
       <template v-else>
         <p class="text-center text-sm text-zinc-400">
-          BIP352 Silent Payments uses a reusable private receiving address.
-          The sender's wallet must support SP.
+          {{ $t('pwaUi.receive.description') }}
         </p>
-        <p v-if="loading" role="status" class="text-sm text-zinc-400">Reading SP account…</p>
+        <p v-if="loading" role="status" class="text-sm text-zinc-400">{{ $t('pwaUi.receive.reading') }}</p>
         <p v-if="error" role="alert" class="text-sm text-red-400 break-words">{{ error }}</p>
         <template v-if="enabled && spAddress">
           <QrcodeVue :value="spAddress" :size="200" class="mx-auto" />
@@ -30,21 +29,21 @@
           </div>
           <button type="button" class="rounded-lg border border-zinc-600 px-4 py-2 text-sm"
             :disabled="syncing" @click="scanPayments">
-            {{ syncing ? 'Scanning verified BTC outputs…' : 'Refresh private BTC balance' }}
+            {{ syncing ? $t('pwaUi.receive.scanning') : $t('pwaUi.receive.refresh') }}
           </button>
           <div v-if="balanceComplete" class="text-center text-sm">
-            <div>SP balance (confirmed snapshot)</div>
+            <div>{{ $t('pwaUi.receive.balance') }}</div>
             <strong>{{ (balanceSats / 100000000).toFixed(8) }} BTC</strong>
-            <p class="text-xs text-zinc-500">This is the separate SP recovery view; full transaction history may still be syncing.</p>
+            <p class="text-xs text-zinc-500">{{ $t('pwaUi.receive.snapshotHint') }}</p>
           </div>
           <p v-else class="text-center text-xs text-zinc-400">
-            Private BTC balance not scanned yet; zero must not be assumed.
+            {{ $t('pwaUi.receive.unscanned') }}
           </p>
         </template>
         <button v-else-if="!loading && !enabled" type="button"
           class="rounded-lg border border-primary px-4 py-2 text-sm"
           :disabled="enabling" @click="enablePrivateReceive">
-          {{ enabling ? 'Enabling…' : 'Enable private BTC receive for this account' }}
+          {{ enabling ? $t('pwaUi.receive.enabling') : $t('pwaUi.receive.enable') }}
         </button>
       </template>
     </div>
@@ -52,6 +51,7 @@
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import QrcodeVue from 'qrcode.vue'
@@ -60,6 +60,8 @@ import CopyCard from '@/components/common/CopyCard.vue'
 import { hideAddress } from '@/utils'
 import walletManager from '@/utils/sat20'
 import { useWalletStore } from '@/store'
+
+const { t } = useI18n()
 
 const walletStore = useWalletStore()
 const { address, walletId, accountIndex, chain } = storeToRefs(walletStore)
@@ -139,7 +141,7 @@ const scanPayments = async () => {
     const account = response?.accounts.find(item =>
       String(item.wallet_id) === String(walletId.value) &&
       Number(item.account_index) === Number(accountIndex.value ?? 0))
-    if (!account?.complete) throw new Error('SP account balance was not fully scanned')
+    if (!account?.complete) throw new Error(t('pwaUi.receive.incompleteScan'))
     balanceSats.value = Number(account.balance)
     balanceComplete.value = true
   } catch (cause) {

@@ -4,11 +4,16 @@ const { execSync } = require('node:child_process')
 
 const root = path.resolve(__dirname, '..')
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
-const versionPath = path.join(root, 'public', 'version.json')
+const buildDir = process.env.SAT20_PWA_BUILD_DIR
+if (buildDir && !path.isAbsolute(buildDir)) {
+  throw new Error('SAT20_PWA_BUILD_DIR must be an absolute private directory')
+}
+const existingVersionPath = path.join(root, 'public', 'version.json')
+const versionPath = path.join(buildDir || root, 'public', 'version.json')
 
 const readExistingVersion = () => {
   try {
-    return JSON.parse(fs.readFileSync(versionPath, 'utf8'))
+    return JSON.parse(fs.readFileSync(existingVersionPath, 'utf8'))
   } catch {
     return {}
   }
@@ -47,5 +52,5 @@ const next = {
   },
 }
 
-fs.writeFileSync(versionPath, `${JSON.stringify(next, null, 2)}\n`)
+fs.writeFileSync(versionPath, `${JSON.stringify(next, null, 2)}\n`, { flag: buildDir ? 'wx' : 'w' })
 console.log(`Wrote ${path.relative(root, versionPath)} version=${next.version} buildId=${next.buildId}`)

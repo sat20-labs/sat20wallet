@@ -12,18 +12,21 @@ import (
 func newAccountStorageHeightTestManager(t *testing.T, ttl uint64, bestHeight int64,
 	bestHeightErr error, syncHeight int) *Manager {
 	t.Helper()
-	remote := newRGB11MemoryDKVSHTTP()
+	manager, remote, service, _ := newAccountGroup(t)
 	remote.freeLocal.MaxTTL = ttl
 	remote.bestHeight = bestHeight
 	remote.bestHeightErr = bestHeightErr
-	manager := &Manager{
-		cfg: &common.Config{Chain: "testnet", Env: "test", IndexerL2: &common.Indexer{
-			Scheme: "https", Host: "dkvs.test", Proxy: "satsnet/testnet",
-		}},
-		status: &Status{CurrentChain: "testnet", SyncHeightL2: syncHeight},
-		http:   remote,
+	manager.serverNode = NewNode(service, "message.test", SERVER_NODE,
+		service.CoreNodePubKey(), service.CoreNodePubKey())
+	manager.status.Lock()
+	manager.status.SyncHeightL2 = syncHeight
+	manager.status.Unlock()
+	if _, err := manager.ImportWallet(accountRootWrapperTestMnemonic, "password"); err != nil {
+		t.Fatalf("import real wallet without endpoint synchronization: %v", err)
 	}
-	manager.dkvs = newDKVSManager(manager)
+	if height, known := manager.ensureDKVSManager().endpointVerificationHeight(); known {
+		t.Fatalf("storage height fixture already observed trusted endpoint height %d", height)
+	}
 	return manager
 }
 
@@ -170,17 +173,21 @@ func TestAccountStorageOptionsDoesNotUseWalletSyncHeightBeforeEndpointSuccess(t 
 }
 
 func TestAccountStorageConfirmUsesSharedEndpointHeightEntry(t *testing.T) {
-	manager := newAccountStorageHeightTestManager(t, 7200, 3467, nil, 39420)
-	manager.wallet = NewInternalWalletWithMnemonic(
-		"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
-		"", GetChainParam(),
-	)
-	manager.status.CurrentWallet = 1
-	manager.status.CurrentAccount = 0
-	manager.walletInfoMap = map[int64]*WalletInfo{1: {
-		WalletInDB: WalletInDB{Id: 1, Accounts: 1, Type: WALLET_TYPE_MNEMONIC},
-		Wallet: manager.wallet,
-	}}
+	manager, _, _ := newInactiveAccountGroup(t, accountRootWrapperTestMnemonic, "password",
+		func(manager *Manager, remote *rgb11MemoryDKVSHTTP) {
+			remote.freeLocal.MaxTTL = 7200
+			remote.bestHeight = 3467
+			// Preserve the deliberately wrong local-height input. It must
+			// never become the authority for the endpoint's storage expiry.
+			manager.status.SyncHeightL2 = 39420
+		})
+	manager.status.RLock()
+	localHeight := manager.status.SyncHeightL2
+	manager.status.RUnlock()
+	if localHeight != 39420 {
+		t.Fatalf("fixture lost deliberately wrong local height: got %d, want 39420", localHeight)
+	}
+
 	authorization, err := manager.ConfirmAccountStorage(AccountStorageTemporary, 0)
 	if err != nil {
 		t.Fatal(err)

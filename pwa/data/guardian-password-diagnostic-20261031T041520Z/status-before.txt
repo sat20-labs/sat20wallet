@@ -1,0 +1,4 @@
+MM pwa/scripts/verify/account-management-e2e.mjs
+MM pwa/scripts/verify/account-management-usage-e2e.mjs
+MM sdk/e2e/account_management_browser_e2e_test.go
+ M sdk/e2e/account_management_dkvs_sync_gate_e2e_test.go

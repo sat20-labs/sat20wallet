@@ -1,0 +1,8 @@
+{
+  "state": "EXITED",
+  "pid": 77701,
+  "started_utc": "2026-10-31T12:42:41Z",
+  "ended_utc": "2026-10-31T12:42:42Z",
+  "exit_code": 0,
+  "test_log": "data/workspace-e2e-normal-rerun-20261031T124231Z/test.log"
+}

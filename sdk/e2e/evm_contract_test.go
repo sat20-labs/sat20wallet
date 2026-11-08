@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	indexercommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet"
@@ -111,8 +113,175 @@ func TestRealSatoshiNetHarnessAscendAndEVMContract(t *testing.T) {
 	require.Equal(t, contractcommon.TestnetContractPrefix, contract.Prefix())
 }
 
+func TestSDKEVMSharedNetworkGroup(t *testing.T) {
+	setupDone := e2ePhase(t, "evm_shared_network_setup")
+	fixtures := newEVMSharedNetworkCases(t)
+	setupDone()
+	for _, tc := range fixtures {
+		tc := tc
+		if t.Failed() {
+			return
+		}
+		run := t.Run(tc.name, func(t *testing.T) {
+			before := captureEVMSharedSnapshot(t, tc.fixture)
+			tc.run(t, tc.fixture)
+			after := captureEVMSharedSnapshot(t, tc.fixture)
+			requireEVMSharedSnapshotAdvanced(t, tc.name, before, after)
+		})
+		if !run {
+			t.Fatalf("stopped shared-network EVM group after %s failed; rerun only it with -run '^TestSDKEVMSharedNetworkGroup$/^%s$' or rerun the whole fresh group with -run '^TestSDKEVMSharedNetworkGroup$'",
+				tc.name, tc.name)
+		}
+		if t.Failed() {
+			return
+		}
+	}
+}
+
+type evmSharedNetworkCase struct {
+	name    string
+	fixture *templateFixture
+	run     func(*testing.T, *templateFixture)
+}
+
+type evmSharedSnapshot struct {
+	height      int32
+	tipHash     string
+	actorAssets map[string]map[string]string
+}
+
+func newEVMSharedNetworkCases(t *testing.T) []evmSharedNetworkCase {
+	t.Helper()
+	const gasSupply = int64(120000000)
+	base := newTemplateFixtureWithGasSupply(t, map[string]int64{
+		"ordx:f:e2evault":        1000,
+		"ordx:f:e2eapps":         5000,
+		"ordx:f:e2estandard":     20000,
+		"ordx:f:e2edefaultamm":   5000,
+		"ordx:f:e2edefaultwrong": 100,
+	}, gasSupply)
+
+	type caseSeed struct {
+		name              string
+		gasAmounts        []int64
+		useBaseAssetOwner bool
+		run               func(*testing.T, *templateFixture)
+	}
+	cases := []caseSeed{
+		{name: "SignedAssetVault", gasAmounts: []int64{2000000, 30000, 2000000, 2000000, 2000000}, useBaseAssetOwner: true, run: runEVMSignedAssetVault},
+		{name: "AssetApps", gasAmounts: repeatedEVMAmount(10, 2000000), useBaseAssetOwner: true, run: runEVMAssetApps},
+		{name: "StandardApps", gasAmounts: repeatedEVMAmount(15, 2000000), useBaseAssetOwner: true, run: runEVMStandardApps},
+		{name: "AMMDefaultInvoke", gasAmounts: repeatedEVMAmount(3, 2000000), useBaseAssetOwner: true, run: runEVMAMMDefaultInvoke},
+		{name: "AMMGasAsset", gasAmounts: repeatedEVMAmount(6, 2100000), run: runEVMAMMGasAsset},
+		{name: "InternalERC20", gasAmounts: repeatedEVMAmount(13, 2000000), run: runEVMInternalERC20},
+	}
+
+	actorsByCase := make([][6]*templateActor, len(cases))
+	gasAmounts := make([]int64, 0, len(cases)+1)
+	gasValues := make([]int64, 0, len(cases)+1)
+	gasRecipients := make([]*templateActor, 0, len(cases)+1)
+	var totalGasSeedAmount int64
+	for i, seed := range cases {
+		actors := [6]*templateActor{}
+		for actorIndex := range actors {
+			if actorIndex == 0 && seed.useBaseAssetOwner {
+				// The fixture's original anchors belong to base.A. Asset cases
+				// use that owner directly, avoiding a redundant pre-split while
+				// keeping each contract nonce and spendable gas seed isolated.
+				actors[actorIndex] = base.A
+				continue
+			}
+			keyIndex := uint32(300 + i*10 + actorIndex)
+			actors[actorIndex] = newTemplateActor(t, keyFromMnemonic(t, bootstrapMnemonic, keyIndex))
+		}
+		var gasSeedAmount int64
+		for _, amount := range seed.gasAmounts {
+			gasSeedAmount += amount
+		}
+		actorsByCase[i] = actors
+		gasAmounts = append(gasAmounts, gasSeedAmount)
+		gasValues = append(gasValues, 1000000)
+		gasRecipients = append(gasRecipients, actors[0])
+		totalGasSeedAmount += gasSeedAmount
+	}
+	require.LessOrEqual(t, totalGasSeedAmount, gasSupply)
+	if remainder := gasSupply - totalGasSeedAmount; remainder > 0 {
+		gasAmounts = append(gasAmounts, remainder)
+		gasValues = append(gasValues, 1000)
+		gasRecipients = append(gasRecipients, base.A)
+	}
+	gasSeeds := base.split(t, base.A, base.gasAnchor, wallet.GetGasAssetName(), gasAmounts, gasValues, gasRecipients)
+	require.Len(t, gasSeeds, len(gasAmounts))
+
+	fixtures := make([]evmSharedNetworkCase, 0, len(cases))
+	for i, seed := range cases {
+		actors := actorsByCase[i]
+		fixture := *base
+		fixture.A, fixture.B, fixture.C = actors[0], actors[1], actors[2]
+		fixture.D, fixture.E, fixture.F = actors[3], actors[4], actors[5]
+		gasInput := gasSeeds[i]
+		fixture.gasInput = &gasInput
+		fixture.assetInputs = make(map[string]wire.OutPoint)
+		fixtures = append(fixtures, evmSharedNetworkCase{name: seed.name, fixture: &fixture, run: seed.run})
+	}
+	return fixtures
+}
+
+func repeatedEVMAmount(count int, amount int64) []int64 {
+	values := make([]int64, count)
+	for i := range values {
+		values[i] = amount
+	}
+	return values
+}
+
+func evmNextBlockHeight(t *testing.T, f *templateFixture) uint64 {
+	t.Helper()
+	_, height, err := f.Network.Bootstrap.Client.GetBestBlock()
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, height, int32(0))
+	return uint64(height + 1)
+}
+
+func captureEVMSharedSnapshot(t *testing.T, f *templateFixture) evmSharedSnapshot {
+	t.Helper()
+	started := time.Now()
+	tipHash, height, err := f.Network.Bootstrap.Client.GetBestBlock()
+	require.NoError(t, err)
+	// Every case is funded and executed by actor A. The case bodies retain
+	// their detailed assertions for the other actors and contracts, so the
+	// group delta only needs one address summary rather than six.
+	balances, err := fetchAssetSummary(f.Network.Bootstrap, f.A.Address)
+	if err != nil && strings.Contains(err.Error(), "get UTXOs for "+f.A.Address+": not found") {
+		balances = map[string]string{}
+	} else {
+		require.NoError(t, err)
+	}
+	assets := map[string]map[string]string{"A": balances}
+	t.Logf("evm_shared_snapshot_elapsed_seconds=%.3f actor=A", time.Since(started).Seconds())
+	return evmSharedSnapshot{height: height, tipHash: tipHash.String(), actorAssets: assets}
+}
+
+func requireEVMSharedSnapshotAdvanced(t *testing.T, caseName string, before, after evmSharedSnapshot) {
+	t.Helper()
+	require.Greater(t, after.height, before.height, "%s should advance the shared chain", caseName)
+	require.NotEqual(t, before.tipHash, after.tipHash, "%s should change the shared tip", caseName)
+	beforeAssets, err := json.Marshal(before.actorAssets)
+	require.NoError(t, err)
+	afterAssets, err := json.Marshal(after.actorAssets)
+	require.NoError(t, err)
+	require.NotEqual(t, string(beforeAssets), string(afterAssets), "%s should change actor asset balances", caseName)
+	t.Logf("evm_shared_case=%s tip=%d:%s->%d:%s actor_asset_state_changed=true", caseName,
+		before.height, before.tipHash, after.height, after.tipHash)
+}
+
 func TestRealSatoshiNetEVMSignedAssetVault(t *testing.T) {
 	f := newTemplateFixture(t, map[string]int64{"ordx:f:e2evault": 1000})
+	runEVMSignedAssetVault(t, f)
+}
+
+func runEVMSignedAssetVault(t *testing.T, f *templateFixture) {
+	t.Helper()
 	const (
 		vaultAsset       = "ordx:f:e2evault"
 		unitAmount       = uint64(25)
@@ -144,7 +313,7 @@ func TestRealSatoshiNetEVMSignedAssetVault(t *testing.T) {
 	caller := evmAddressFromAddressString(f.A.Address)
 	contract, err := contractcommon.DeriveEVMCreateContractAddress(contractcommon.TestnetContractPrefix, caller, 1)
 	require.NoError(t, err)
-	deployPlan, err := EVMDeployGasPlan(deployGasLimit, 2, 2000000)
+	deployPlan, err := EVMDeployGasPlan(deployGasLimit, evmNextBlockHeight(t, f), 2000000)
 	require.NoError(t, err)
 	deployChange := wire.NewTxOut(0, txAsset(gas, deployPlan.ChangeGasAsset), f.A.PkScript)
 	deployTx, builtContract, err := contractcommon.BuildDeployTx(contractcommon.DeployTxBuildRequest{
@@ -177,18 +346,18 @@ func TestRealSatoshiNetEVMSignedAssetVault(t *testing.T) {
 	firstKey := int64(1717300000000000)
 	secondKey := int64(1717300000000001)
 	firstWithdraw := buildSignedVaultWithdrawTx(t, f.B, contract, f.B.Address, f.A.Key,
-		firstKey, 2, 1, withdrawGasLimit, 4, 2000000, gasOuts[2])
+		firstKey, 2, 1, withdrawGasLimit, evmNextBlockHeight(t, f), 2000000, gasOuts[2])
 	f.Network.sendAndMine(t, firstWithdraw, 0)
 	requireAssetSummaryAtLeast(t, f.Network.Bootstrap, f.B.Address, vaultAsset, "50")
 
 	replayWithdraw := buildSignedVaultWithdrawTx(t, f.B, contract, f.B.Address, f.A.Key,
-		firstKey, 2, 2, withdrawGasLimit, 6, 2000000, gasOuts[3])
+		firstKey, 2, 2, withdrawGasLimit, evmNextBlockHeight(t, f), 2000000, gasOuts[3])
 	f.Network.sendAndMine(t, replayWithdraw, 0)
 	requireAssetSummaryAmount(t, f.Network.Bootstrap, f.B.Address, vaultAsset, "50")
 	requireAssetSummaryAmount(t, f.Network.Bootstrap, contract.MustEncode(), vaultAsset, "450")
 
 	secondWithdraw := buildSignedVaultWithdrawTx(t, f.B, contract, f.B.Address, f.A.Key,
-		secondKey, 3, 3, withdrawGasLimit, 8, 2000000, gasOuts[4])
+		secondKey, 3, 3, withdrawGasLimit, evmNextBlockHeight(t, f), 2000000, gasOuts[4])
 	f.Network.sendAndMine(t, secondWithdraw, 0)
 	requireAssetSummaryAtLeast(t, f.Network.Bootstrap, f.B.Address, vaultAsset, "125")
 	requireAssetSummaryAmount(t, f.Network.Bootstrap, contract.MustEncode(), vaultAsset, "375")
@@ -196,6 +365,12 @@ func TestRealSatoshiNetEVMSignedAssetVault(t *testing.T) {
 }
 
 func TestRealSatoshiNetEVMAssetApps(t *testing.T) {
+	f := newTemplateFixture(t, map[string]int64{"ordx:f:e2eapps": 5_000})
+	runEVMAssetApps(t, f)
+}
+
+func runEVMAssetApps(t *testing.T, f *templateFixture) {
+	t.Helper()
 	const (
 		appAsset       = "ordx:f:e2eapps"
 		deployGasLimit = int64(10_000_000)
@@ -203,18 +378,13 @@ func TestRealSatoshiNetEVMAssetApps(t *testing.T) {
 		closeGasLimit  = int64(1_800_000)
 		inputGasAsset  = int64(2_000_000)
 	)
-	f := newTemplateFixture(t, map[string]int64{appAsset: 5_000})
 	gas := wallet.GetGasAssetName()
 
 	gasOuts := f.split(t, f.A, f.gasAnchor, gas,
-		[]int64{
-			inputGasAsset, inputGasAsset, inputGasAsset, inputGasAsset, inputGasAsset, inputGasAsset,
-			inputGasAsset, inputGasAsset, inputGasAsset, inputGasAsset, inputGasAsset, inputGasAsset,
-			inputGasAsset, inputGasAsset, inputGasAsset, inputGasAsset, inputGasAsset, inputGasAsset,
-			inputGasAsset,
-		},
-		[]int64{1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000},
-		[]*templateActor{f.A, f.A, f.A, f.A, f.A, f.A, f.B, f.B, f.B, f.C, f.C, f.A, f.A, f.A, f.A, f.A, f.B, f.B, f.C})
+		[]int64{inputGasAsset, inputGasAsset, inputGasAsset, inputGasAsset, inputGasAsset,
+			inputGasAsset, inputGasAsset, inputGasAsset, inputGasAsset, inputGasAsset},
+		[]int64{1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000},
+		[]*templateActor{f.A, f.A, f.A, f.A, f.B, f.B, f.C, f.A, f.A, f.A})
 	assetOuts := f.split(t, f.A, f.assetAnchors[appAsset], appAsset,
 		[]int64{1000, 300, 400, 1000, 100}, []int64{1000, 1000, 1000, 1000, 1000},
 		[]*templateActor{f.A, f.B, f.C, f.A, f.B})
@@ -229,7 +399,7 @@ func TestRealSatoshiNetEVMAssetApps(t *testing.T) {
 		evmABIAddress(ownerEVM),
 		evmABIString(f.A.Address),
 	)
-	escrowDeploy, escrow, _ := buildEVMDeployTxFor(t, f.A, escrowInit, 101, deployGasLimit, 2, inputGasAsset, gasOuts[0])
+	escrowDeploy, escrow, _ := buildEVMDeployTxFor(t, f.A, escrowInit, 101, deployGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[0])
 	f.Network.sendAndMine(t, escrowDeploy, 0)
 	requireEVMContractMetadata(t, f.Network.Bootstrap, escrow.MustEncode(), "escrow", []string{appAsset})
 	escrowFund := buildEVMDefaultInvokeFor(t, f.A, escrow, []wire.OutPoint{assetOuts[0]}, wire.TxOut{
@@ -240,26 +410,26 @@ func TestRealSatoshiNetEVMAssetApps(t *testing.T) {
 
 	escrowRelease, _ := buildEVMInvokeTxFor(t, f.A, escrow, "call",
 		solidityCall("release(string,uint256)", evmABIString(f.E.Address), evmABIUint(250)),
-		1, invokeGasLimit, 4, inputGasAsset, gasOuts[1])
+		1, invokeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[1])
 	f.Network.sendAndMine(t, escrowRelease, 0)
 	requireAssetSummaryAmount(t, f.Network.Bootstrap, f.E.Address, appAsset, "250")
 	requireAssetSummaryAmount(t, f.Network.Bootstrap, escrow.MustEncode(), appAsset, "750")
 
 	escrowReject, _ := buildEVMInvokeTxFor(t, f.B, escrow, "call",
 		solidityCall("release(string,uint256)", evmABIString(f.E.Address), evmABIUint(100)),
-		1, invokeGasLimit, 5, inputGasAsset, gasOuts[6])
+		1, invokeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[4])
 	f.Network.sendAndMine(t, escrowReject, 0)
 	requireAssetSummaryAmount(t, f.Network.Bootstrap, f.E.Address, appAsset, "250")
 	requireAssetSummaryAmount(t, f.Network.Bootstrap, escrow.MustEncode(), appAsset, "750")
 
 	escrowOverRelease, _ := buildEVMInvokeTxFor(t, f.A, escrow, "call",
 		solidityCall("release(string,uint256)", evmABIString(f.E.Address), evmABIUint(800)),
-		2, invokeGasLimit, 6, inputGasAsset, gasOuts[15])
+		2, invokeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[9])
 	f.Network.sendAndMine(t, escrowOverRelease, 0)
 	requireAssetSummaryAmount(t, f.Network.Bootstrap, f.E.Address, appAsset, "250")
 	requireAssetSummaryAmount(t, f.Network.Bootstrap, escrow.MustEncode(), appAsset, "750")
 
-	escrowClose, _ := buildEVMCloseTxFor(t, f.A, escrow, 3, closeGasLimit, 7, inputGasAsset, gasOuts[11])
+	escrowClose, _ := buildEVMCloseTxFor(t, f.A, escrow, 3, closeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[7])
 	f.Network.sendAndMine(t, escrowClose, 0)
 	requireAssetSummaryZero(t, f.Network.Bootstrap, escrow.MustEncode(), appAsset)
 	requireAssetSummaryAmount(t, f.Network.Bootstrap, f.A.Address, appAsset, "1750")
@@ -271,30 +441,30 @@ func TestRealSatoshiNetEVMAssetApps(t *testing.T) {
 		evmABIUint(700),
 		evmABIAddress(ownerEVM),
 	)
-	crowdDeploy, crowd, _ := buildEVMDeployTxFor(t, f.A, crowdInit, 102, deployGasLimit, 8, inputGasAsset, gasOuts[2])
+	crowdDeploy, crowd, _ := buildEVMDeployTxFor(t, f.A, crowdInit, 102, deployGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[2])
 	f.Network.sendAndMine(t, crowdDeploy, 0)
 	requireEVMContractMetadata(t, f.Network.Bootstrap, crowd.MustEncode(), "crowdfund", []string{appAsset})
 	crowdPledgeB, _ := buildEVMInvokeTxWithFundingFor(t, f.B, crowd, "call",
-		solidityCall("pledge()"), 1, invokeGasLimit, 10,
-		inputGasAsset, gasOuts[7], []wire.OutPoint{assetOuts[1]}, 0,
+		solidityCall("pledge()"), 1, invokeGasLimit, evmNextBlockHeight(t, f),
+		inputGasAsset, gasOuts[5], []wire.OutPoint{assetOuts[1]}, 0,
 		txAssets(templateFunding(t, appAsset, 300)))
 	f.Network.sendAndMine(t, crowdPledgeB, 0)
 
 	crowdPledgeC, _ := buildEVMInvokeTxWithFundingFor(t, f.C, crowd, "call",
-		solidityCall("pledge()"), 1, invokeGasLimit, 12,
-		inputGasAsset, gasOuts[9], []wire.OutPoint{assetOuts[2]}, 0,
+		solidityCall("pledge()"), 1, invokeGasLimit, evmNextBlockHeight(t, f),
+		inputGasAsset, gasOuts[6], []wire.OutPoint{assetOuts[2]}, 0,
 		txAssets(templateFunding(t, appAsset, 400)))
 	f.Network.sendAndMine(t, crowdPledgeC, 0)
 	requireAssetSummaryAmount(t, f.Network.Bootstrap, crowd.MustEncode(), appAsset, "700")
 
 	crowdClaim, _ := buildEVMInvokeTxFor(t, f.A, crowd, "call",
 		solidityCall("claim(string)", evmABIString(f.D.Address)),
-		1, invokeGasLimit, 13, inputGasAsset, gasOuts[3])
+		1, invokeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[3])
 	f.Network.sendAndMine(t, crowdClaim, 0)
 	requireAssetSummaryAmount(t, f.Network.Bootstrap, f.D.Address, appAsset, "700")
 	requireAssetSummaryZero(t, f.Network.Bootstrap, crowd.MustEncode(), appAsset)
 
-	crowdClose, _ := buildEVMCloseTxFor(t, f.A, crowd, 2, closeGasLimit, 14, inputGasAsset, gasOuts[12])
+	crowdClose, _ := buildEVMCloseTxFor(t, f.A, crowd, 2, closeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[8])
 	f.Network.sendAndMine(t, crowdClose, 0)
 	requireAssetSummaryZero(t, f.Network.Bootstrap, crowd.MustEncode(), appAsset)
 	requireAssetSummaryAmount(t, f.Network.Bootstrap, f.D.Address, appAsset, "700")
@@ -303,6 +473,12 @@ func TestRealSatoshiNetEVMAssetApps(t *testing.T) {
 }
 
 func TestRealSatoshiNetEVMStandardApps(t *testing.T) {
+	f := newTemplateFixture(t, map[string]int64{"ordx:f:e2estandard": 20_000})
+	runEVMStandardApps(t, f)
+}
+
+func runEVMStandardApps(t *testing.T, f *templateFixture) {
+	t.Helper()
 	const (
 		appAsset       = "ordx:f:e2estandard"
 		deployGasLimit = int64(10_000_000)
@@ -310,18 +486,13 @@ func TestRealSatoshiNetEVMStandardApps(t *testing.T) {
 		closeGasLimit  = int64(1_800_000)
 		inputGasAsset  = int64(2_000_000)
 	)
-	f := newTemplateFixture(t, map[string]int64{appAsset: 20_000})
 	gas := wallet.GetGasAssetName()
 	gasOuts := f.split(t, f.A, f.gasAnchor, gas,
-		[]int64{
-			inputGasAsset, inputGasAsset, inputGasAsset, inputGasAsset,
-			inputGasAsset, inputGasAsset, inputGasAsset, inputGasAsset,
-			inputGasAsset, inputGasAsset, inputGasAsset, inputGasAsset,
-			inputGasAsset, inputGasAsset, inputGasAsset, inputGasAsset,
-			inputGasAsset,
-		},
-		[]int64{1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000},
-		[]*templateActor{f.A, f.A, f.B, f.B, f.A, f.A, f.A, f.A, f.B, f.A, f.C, f.C, f.B, f.C, f.A, f.B, f.A})
+		[]int64{inputGasAsset, inputGasAsset, inputGasAsset, inputGasAsset, inputGasAsset,
+			inputGasAsset, inputGasAsset, inputGasAsset, inputGasAsset, inputGasAsset,
+			inputGasAsset, inputGasAsset, inputGasAsset, inputGasAsset, inputGasAsset},
+		[]int64{1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000},
+		[]*templateActor{f.A, f.A, f.B, f.B, f.A, f.A, f.A, f.B, f.A, f.C, f.B, f.C, f.A, f.B, f.A})
 	assetOuts := f.split(t, f.A, f.assetAnchors[appAsset], appAsset,
 		[]int64{1000, 100, 600, 50}, []int64{1000, 1000, 1000, 1000},
 		[]*templateActor{f.A, f.B, f.A, f.B})
@@ -330,20 +501,20 @@ func TestRealSatoshiNetEVMStandardApps(t *testing.T) {
 	ammArtifact, err := LoadSolidityArtifact(source, "ConstantProductAMM")
 	require.NoError(t, err)
 	ammInit := appendSolidityConstructorArgs(ammArtifact.Bytecode, evmABIString(appAsset))
-	ammDeploy, amm, _ := buildEVMDeployTxFor(t, f.A, ammInit, 301, deployGasLimit, 2, inputGasAsset, gasOuts[0])
+	ammDeploy, amm, _ := buildEVMDeployTxFor(t, f.A, ammInit, 301, deployGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[0])
 	f.Network.sendAndMine(t, ammDeploy, 0)
 	requireEVMContractMetadata(t, f.Network.Bootstrap, amm.MustEncode(), "amm", []string{appAsset, "::"})
 
 	addLiquidity, _ := buildEVMInvokeTxWithFundingFor(t, f.A, amm, "call",
 		solidityCall("addLiquidity(uint256)", evmABIUint(1000)),
-		1, invokeGasLimit, 4, inputGasAsset, gasOuts[1], []wire.OutPoint{assetOuts[0]}, 1000,
+		1, invokeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[1], []wire.OutPoint{assetOuts[0]}, 1000,
 		txAssets(templateFunding(t, appAsset, 1000)))
 	f.Network.sendAndMine(t, addLiquidity, 0)
 	requireAssetSummaryAmount(t, f.Network.Bootstrap, amm.MustEncode(), appAsset, "1000")
 
 	swapSatForAsset, _ := buildEVMInvokeTxWithFundingFor(t, f.B, amm, "call",
 		solidityCall("swapSatForAsset(string)", evmABIString("90")),
-		1, invokeGasLimit, 6, inputGasAsset, gasOuts[2], nil, 100, nil)
+		1, invokeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[2], nil, 100, nil)
 	swapSatBlock := f.Network.sendManyAndMine(t, []*wire.MsgTx{swapSatForAsset}, 0)
 	swapSatResult := requireSingleResultTx(t, swapSatBlock)
 	requireTxOutputAssetAmount(t, swapSatResult, f.B.Address, appAsset, "90")
@@ -351,7 +522,7 @@ func TestRealSatoshiNetEVMStandardApps(t *testing.T) {
 
 	swapAssetForSat, _ := buildEVMInvokeTxWithFundingFor(t, f.B, amm, "call",
 		solidityCall("swapAssetForSat(uint256)", evmABIUint(108)),
-		2, invokeGasLimit, 8, inputGasAsset, gasOuts[3], []wire.OutPoint{assetOuts[1]}, 0,
+		2, invokeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[3], []wire.OutPoint{assetOuts[1]}, 0,
 		txAssets(templateFunding(t, appAsset, 100)))
 	swapAssetBlock := f.Network.sendManyAndMine(t, []*wire.MsgTx{swapAssetForSat}, 0)
 	swapAssetResult := requireSingleResultTx(t, swapAssetBlock)
@@ -360,14 +531,14 @@ func TestRealSatoshiNetEVMStandardApps(t *testing.T) {
 
 	removeLiquidity, _ := buildEVMInvokeTxFor(t, f.A, amm, "call",
 		solidityCall("removeLiquidity(uint256,string,uint256)", evmABIUint(100), evmABIString("100"), evmABIUint(99)),
-		2, invokeGasLimit, 10, inputGasAsset, gasOuts[4])
+		2, invokeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[4])
 	removeBlock := f.Network.sendManyAndMine(t, []*wire.MsgTx{removeLiquidity}, 0)
 	removeResult := requireSingleResultTx(t, removeBlock)
 	requireTxOutputAssetAmount(t, removeResult, f.A.Address, appAsset, "101")
 	requireTxOutputValueAmount(t, removeResult, f.A.Address, 99)
 	requireAssetSummaryAmount(t, f.Network.Bootstrap, amm.MustEncode(), appAsset, "909")
 
-	closeAMM, _ := buildEVMCloseTxFor(t, f.A, amm, 3, closeGasLimit, 11, inputGasAsset, gasOuts[14])
+	closeAMM, _ := buildEVMCloseTxFor(t, f.A, amm, 3, closeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[12])
 	closeAMMBlock := f.Network.sendManyAndMine(t, []*wire.MsgTx{closeAMM}, 0)
 	closeAMMResult := requireSingleResultTx(t, closeAMMBlock)
 	requireTxOutputAssetAmount(t, closeAMMResult, f.A.Address, appAsset, "909")
@@ -377,14 +548,14 @@ func TestRealSatoshiNetEVMStandardApps(t *testing.T) {
 	orderArtifact, err := LoadSolidityArtifact(source, "LimitOrderBook")
 	require.NoError(t, err)
 	orderInit := appendSolidityConstructorArgs(orderArtifact.Bytecode, evmABIString(appAsset))
-	orderDeploy, orderBook, _ := buildEVMDeployTxFor(t, f.A, orderInit, 302, deployGasLimit, 12, inputGasAsset, gasOuts[5])
+	orderDeploy, orderBook, _ := buildEVMDeployTxFor(t, f.A, orderInit, 302, deployGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[5])
 	f.Network.sendAndMine(t, orderDeploy, 0)
 	requireEVMContractMetadata(t, f.Network.Bootstrap, orderBook.MustEncode(), "limitorder", []string{appAsset, "::"})
 	requireEVMLimitOrderView(t, f.Network.Bootstrap, orderBook.MustEncode(), "1", nil)
 
 	createSellAssetOrder, _ := buildEVMInvokeTxWithFundingFor(t, f.A, orderBook, "call",
 		solidityCall("createOrder(string,string,string)", evmABIString(appAsset), evmABIString("::"), evmABIString("300")),
-		1, invokeGasLimit, 14, inputGasAsset, gasOuts[6], []wire.OutPoint{assetOuts[2]}, 0,
+		1, invokeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[6], []wire.OutPoint{assetOuts[2]}, 0,
 		txAssets(templateFunding(t, appAsset, 600)))
 	f.Network.sendAndMine(t, createSellAssetOrder, 0)
 	requireAssetSummaryAmount(t, f.Network.Bootstrap, orderBook.MustEncode(), appAsset, "600")
@@ -399,7 +570,7 @@ func TestRealSatoshiNetEVMStandardApps(t *testing.T) {
 
 	fillSellAssetOrder, _ := buildEVMInvokeTxWithFundingFor(t, f.B, orderBook, "call",
 		solidityCall("fillOrder(uint256)", evmABIUint(1)),
-		1, invokeGasLimit, 16, inputGasAsset, gasOuts[8], nil, 100, nil)
+		1, invokeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[7], nil, 100, nil)
 	fillSellAssetBlock := f.Network.sendManyAndMine(t, []*wire.MsgTx{fillSellAssetOrder}, 0)
 	fillSellAssetResult := requireSingleResultTx(t, fillSellAssetBlock)
 	requireTxOutputAssetAmount(t, fillSellAssetResult, f.B.Address, appAsset, "200")
@@ -416,7 +587,7 @@ func TestRealSatoshiNetEVMStandardApps(t *testing.T) {
 
 	cancelSellAssetOrder, _ := buildEVMInvokeTxFor(t, f.A, orderBook, "call",
 		solidityCall("cancelOrder(uint256)", evmABIUint(1)),
-		2, invokeGasLimit, 18, inputGasAsset, gasOuts[9])
+		2, invokeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[8])
 	cancelSellAssetBlock := f.Network.sendManyAndMine(t, []*wire.MsgTx{cancelSellAssetOrder}, 0)
 	cancelSellAssetResult := requireSingleResultTx(t, cancelSellAssetBlock)
 	requireTxOutputAssetAmount(t, cancelSellAssetResult, f.A.Address, appAsset, "400")
@@ -425,7 +596,7 @@ func TestRealSatoshiNetEVMStandardApps(t *testing.T) {
 
 	createSellSatOrder, _ := buildEVMInvokeTxWithFundingFor(t, f.C, orderBook, "call",
 		solidityCall("createOrder(string,string,string)", evmABIString("::"), evmABIString(appAsset), evmABIString("150")),
-		1, invokeGasLimit, 20, inputGasAsset, gasOuts[10], nil, 300, nil)
+		1, invokeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[9], nil, 300, nil)
 	f.Network.sendAndMine(t, createSellSatOrder, 0)
 	requireEVMLimitOrderView(t, f.Network.Bootstrap, orderBook.MustEncode(), "3", []evmLimitOrderViewRow{{
 		OrderID:       "2",
@@ -438,7 +609,7 @@ func TestRealSatoshiNetEVMStandardApps(t *testing.T) {
 
 	fillSellSatOrder, _ := buildEVMInvokeTxWithFundingFor(t, f.B, orderBook, "call",
 		solidityCall("fillOrder(uint256)", evmABIUint(2)),
-		1, invokeGasLimit, 22, inputGasAsset, gasOuts[12], []wire.OutPoint{assetOuts[3]}, 0,
+		1, invokeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[10], []wire.OutPoint{assetOuts[3]}, 0,
 		txAssets(templateFunding(t, appAsset, 50)))
 	fillSellSatBlock := f.Network.sendManyAndMine(t, []*wire.MsgTx{fillSellSatOrder}, 0)
 	fillSellSatResult := requireSingleResultTx(t, fillSellSatBlock)
@@ -455,7 +626,7 @@ func TestRealSatoshiNetEVMStandardApps(t *testing.T) {
 
 	cancelSellSatOrder, _ := buildEVMInvokeTxFor(t, f.C, orderBook, "call",
 		solidityCall("cancelOrder(uint256)", evmABIUint(2)),
-		2, invokeGasLimit, 24, inputGasAsset, gasOuts[13])
+		2, invokeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[11])
 	cancelSellSatBlock := f.Network.sendManyAndMine(t, []*wire.MsgTx{cancelSellSatOrder}, 0)
 	cancelSellSatResult := requireSingleResultTx(t, cancelSellSatBlock)
 	requireTxOutputValueAmount(t, cancelSellSatResult, f.C.Address, 200)
@@ -463,7 +634,7 @@ func TestRealSatoshiNetEVMStandardApps(t *testing.T) {
 
 	createCloseRefundOrder, _ := buildEVMInvokeTxWithFundingFor(t, f.B, orderBook, "call",
 		solidityCall("createOrder(string,string,string)", evmABIString("::"), evmABIString(appAsset), evmABIString("25")),
-		2, invokeGasLimit, 26, inputGasAsset, gasOuts[15], nil, 50, nil)
+		2, invokeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[13], nil, 50, nil)
 	f.Network.sendAndMine(t, createCloseRefundOrder, 0)
 	requireEVMLimitOrderView(t, f.Network.Bootstrap, orderBook.MustEncode(), "4", []evmLimitOrderViewRow{{
 		OrderID:       "3",
@@ -474,7 +645,7 @@ func TestRealSatoshiNetEVMStandardApps(t *testing.T) {
 		BuyRemaining:  "25",
 	}})
 
-	closeOrderBook, _ := buildEVMCloseTxFor(t, f.A, orderBook, 3, closeGasLimit, 28, inputGasAsset, gasOuts[16])
+	closeOrderBook, _ := buildEVMCloseTxFor(t, f.A, orderBook, 3, closeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[14])
 	closeOrderBlock := f.Network.sendManyAndMine(t, []*wire.MsgTx{closeOrderBook}, 0)
 	closeOrderResult := requireSingleResultTx(t, closeOrderBlock)
 	requireTxOutputValueAmount(t, closeOrderResult, f.B.Address, 50)
@@ -482,6 +653,12 @@ func TestRealSatoshiNetEVMStandardApps(t *testing.T) {
 }
 
 func TestRealSatoshiNetEVMAMMDefaultInvoke(t *testing.T) {
+	f := newTemplateFixture(t, map[string]int64{"ordx:f:e2edefaultamm": 5_000, "ordx:f:e2edefaultwrong": 100})
+	runEVMAMMDefaultInvoke(t, f)
+}
+
+func runEVMAMMDefaultInvoke(t *testing.T, f *templateFixture) {
+	t.Helper()
 	const (
 		appAsset       = "ordx:f:e2edefaultamm"
 		wrongAsset     = "ordx:f:e2edefaultwrong"
@@ -489,7 +666,6 @@ func TestRealSatoshiNetEVMAMMDefaultInvoke(t *testing.T) {
 		invokeGasLimit = int64(1_000_000)
 		inputGasAsset  = int64(2_000_000)
 	)
-	f := newTemplateFixture(t, map[string]int64{appAsset: 5_000, wrongAsset: 100})
 	gas := wallet.GetGasAssetName()
 	gasOuts := f.split(t, f.A, f.gasAnchor, gas,
 		[]int64{inputGasAsset, inputGasAsset, inputGasAsset}, []int64{1000, 1000, 1000},
@@ -504,13 +680,13 @@ func TestRealSatoshiNetEVMAMMDefaultInvoke(t *testing.T) {
 	artifact, err := LoadSolidityArtifact(source, "ConstantProductAMM")
 	require.NoError(t, err)
 	initCode := appendSolidityConstructorArgs(artifact.Bytecode, evmABIString(appAsset))
-	deployTx, amm, _ := buildEVMDeployTxFor(t, f.A, initCode, 401, deployGasLimit, 2,
+	deployTx, amm, _ := buildEVMDeployTxFor(t, f.A, initCode, 401, deployGasLimit, evmNextBlockHeight(t, f),
 		inputGasAsset, gasOuts[0])
 	f.Network.sendAndMine(t, deployTx, 0)
 
 	addLiquidity, _ := buildEVMInvokeTxWithFundingFor(t, f.A, amm, "call",
 		solidityCall("addLiquidity(uint256)", evmABIUint(1000)),
-		1, invokeGasLimit, 4, inputGasAsset, gasOuts[1], []wire.OutPoint{assetOuts[0]}, 1000,
+		1, invokeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[1], []wire.OutPoint{assetOuts[0]}, 1000,
 		txAssets(templateFunding(t, appAsset, 1000)))
 	f.Network.sendAndMine(t, addLiquidity, 0)
 
@@ -545,13 +721,18 @@ func TestRealSatoshiNetEVMAMMDefaultInvoke(t *testing.T) {
 }
 
 func TestRealSatoshiNetEVMAMMGasAsset(t *testing.T) {
+	f := newTemplateFixture(t, nil)
+	runEVMAMMGasAsset(t, f)
+}
+
+func runEVMAMMGasAsset(t *testing.T, f *templateFixture) {
+	t.Helper()
 	const (
 		deployGasLimit = int64(10_000_000)
 		invokeGasLimit = int64(1_000_000)
 		closeGasLimit  = int64(1_800_000)
 		inputGasAsset  = int64(2_100_000)
 	)
-	f := newTemplateFixture(t, nil)
 	gas := wallet.GetGasAssetName()
 	gasOuts := f.split(t, f.A, f.gasAnchor, gas,
 		[]int64{inputGasAsset, inputGasAsset, inputGasAsset, inputGasAsset, inputGasAsset, inputGasAsset},
@@ -562,18 +743,18 @@ func TestRealSatoshiNetEVMAMMGasAsset(t *testing.T) {
 	ammArtifact, err := LoadSolidityArtifact(source, "ConstantProductAMM")
 	require.NoError(t, err)
 	ammInit := appendSolidityConstructorArgs(ammArtifact.Bytecode, evmABIString(gas))
-	ammDeploy, amm, _ := buildEVMDeployTxFor(t, f.A, ammInit, 201, deployGasLimit, 2, inputGasAsset, gasOuts[0])
+	ammDeploy, amm, _ := buildEVMDeployTxFor(t, f.A, ammInit, 201, deployGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[0])
 	f.Network.sendAndMine(t, ammDeploy, 0)
 
 	addLiquidity, _ := buildEVMInvokeTxWithFundingFor(t, f.A, amm, "call",
 		solidityCall("addLiquidity(uint256)", evmABIUint(900)),
-		1, invokeGasLimit, 4, inputGasAsset, gasOuts[1], nil, 900, txAsset(gas, 1000))
+		1, invokeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[1], nil, 900, txAsset(gas, 1000))
 	f.Network.sendAndMine(t, addLiquidity, 0)
 	requireAssetSummaryAmount(t, f.Network.Bootstrap, amm.MustEncode(), gas, "1000")
 
 	swapSatForGas, _ := buildEVMInvokeTxWithFundingFor(t, f.B, amm, "call",
 		solidityCall("swapSatForAsset(string)", evmABIString("80")),
-		1, invokeGasLimit, 6, inputGasAsset, gasOuts[2], nil, 90, nil)
+		1, invokeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[2], nil, 90, nil)
 	swapSatBlock := f.Network.sendManyAndMine(t, []*wire.MsgTx{swapSatForGas}, 0)
 	swapSatResult := requireSingleResultTx(t, swapSatBlock)
 	requireTxOutputAssetPositive(t, swapSatResult, f.B.Address, gas)
@@ -581,7 +762,7 @@ func TestRealSatoshiNetEVMAMMGasAsset(t *testing.T) {
 
 	swapGasForSat, _ := buildEVMInvokeTxWithFundingFor(t, f.C, amm, "call",
 		solidityCall("swapAssetForSat(uint256)", evmABIUint(70)),
-		1, invokeGasLimit, 8, inputGasAsset, gasOuts[3], nil, 0, txAsset(gas, 100))
+		1, invokeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[3], nil, 0, txAsset(gas, 100))
 	swapGasBlock := f.Network.sendManyAndMine(t, []*wire.MsgTx{swapGasForSat}, 0)
 	swapGasResult := requireSingleResultTx(t, swapGasBlock)
 	requireTxOutputValueAtLeast(t, swapGasResult, f.C.Address, 70)
@@ -589,7 +770,7 @@ func TestRealSatoshiNetEVMAMMGasAsset(t *testing.T) {
 
 	rejectedSwap, _ := buildEVMInvokeTxWithFundingFor(t, f.B, amm, "call",
 		solidityCall("swapAssetForSat(uint256)", evmABIUint(1000000)),
-		2, invokeGasLimit, 9, inputGasAsset, gasOuts[4], nil, 0, txAsset(gas, 50))
+		2, invokeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[4], nil, 0, txAsset(gas, 50))
 	rejectedBlock := f.Network.sendManyAndMine(t, []*wire.MsgTx{rejectedSwap}, 0)
 	rejectedResults := contractResultTxs(rejectedBlock)
 	require.Len(t, rejectedResults, 1)
@@ -599,7 +780,7 @@ func TestRealSatoshiNetEVMAMMGasAsset(t *testing.T) {
 	requireTxOutputAssetPositive(t, rejectedResult, f.B.Address, gas)
 	requireAssetSummaryAmount(t, f.Network.Bootstrap, amm.MustEncode(), gas, "1010")
 
-	closeTx, _ := buildEVMCloseTxFor(t, f.A, amm, 2, closeGasLimit, 10, inputGasAsset, gasOuts[5])
+	closeTx, _ := buildEVMCloseTxFor(t, f.A, amm, 2, closeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[5])
 	closeBlock := f.Network.sendManyAndMine(t, []*wire.MsgTx{closeTx}, 0)
 	closeResult := requireSingleResultTx(t, closeBlock)
 	requireTxOutputAssetPositive(t, closeResult, f.A.Address, gas)
@@ -608,12 +789,17 @@ func TestRealSatoshiNetEVMAMMGasAsset(t *testing.T) {
 }
 
 func TestRealSatoshiNetEVMInternalERC20(t *testing.T) {
+	f := newTemplateFixture(t, nil)
+	runEVMInternalERC20(t, f)
+}
+
+func runEVMInternalERC20(t *testing.T, f *templateFixture) {
+	t.Helper()
 	const (
 		deployGasLimit = int64(10_000_000)
 		invokeGasLimit = int64(1_000_000)
 		inputGasAsset  = int64(2_000_000)
 	)
-	f := newTemplateFixture(t, nil)
 	gas := wallet.GetGasAssetName()
 	gasOuts := f.split(t, f.A, f.gasAnchor, gas,
 		[]int64{
@@ -632,7 +818,7 @@ func TestRealSatoshiNetEVMInternalERC20(t *testing.T) {
 		evmABIString("IDEMO"),
 		evmABIUint(8),
 	)
-	deployTx, token, _ := buildEVMDeployTxFor(t, f.A, initCode, 201, deployGasLimit, 2, inputGasAsset, gasOuts[0])
+	deployTx, token, _ := buildEVMDeployTxFor(t, f.A, initCode, 201, deployGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[0])
 	f.Network.sendAndMine(t, deployTx, 0)
 	requireEVMContractMetadata(t, f.Network.Bootstrap, token.MustEncode(), "erc20", nil)
 
@@ -645,49 +831,49 @@ func TestRealSatoshiNetEVMInternalERC20(t *testing.T) {
 
 	mintTx, _ := buildEVMInvokeTxFor(t, f.A, token, "call",
 		solidityCall("mint(address,uint256)", evmABIAddress(owner), evmABIUint(1000)),
-		1, invokeGasLimit, 4, inputGasAsset, gasOuts[2])
+		1, invokeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[2])
 	f.Network.sendAndMine(t, mintTx, 0)
 	assertOwner1000, _ := buildEVMInvokeTxFor(t, f.A, token, "call",
 		solidityCall("assertBalance(address,uint256)", evmABIAddress(owner), evmABIUint(1000)),
-		2, invokeGasLimit, 5, inputGasAsset, gasOuts[3])
+		2, invokeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[3])
 	f.Network.sendAndMine(t, assertOwner1000, 0)
 
 	transferTx, _ := buildEVMInvokeTxFor(t, f.A, token, "call",
 		solidityCall("transfer(address,uint256)", evmABIAddress(spender), evmABIUint(250)),
-		3, invokeGasLimit, 6, inputGasAsset, gasOuts[4])
+		3, invokeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[4])
 	f.Network.sendAndMine(t, transferTx, 0)
 	assertSpender250, _ := buildEVMInvokeTxFor(t, f.B, token, "call",
 		solidityCall("assertBalance(address,uint256)", evmABIAddress(spender), evmABIUint(250)),
-		1, invokeGasLimit, 7, inputGasAsset, gasOuts[8])
+		1, invokeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[8])
 	f.Network.sendAndMine(t, assertSpender250, 0)
 
 	approveTx, _ := buildEVMInvokeTxFor(t, f.A, token, "call",
 		solidityCall("approve(address,uint256)", evmABIAddress(spender), evmABIUint(100)),
-		4, invokeGasLimit, 8, inputGasAsset, gasOuts[5])
+		4, invokeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[5])
 	f.Network.sendAndMine(t, approveTx, 0)
 	transferFromTx, _ := buildEVMInvokeTxFor(t, f.B, token, "call",
 		solidityCall("transferFrom(address,address,uint256)", evmABIAddress(owner), evmABIAddress(recipient), evmABIUint(80)),
-		2, invokeGasLimit, 9, inputGasAsset, gasOuts[9])
+		2, invokeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[9])
 	f.Network.sendAndMine(t, transferFromTx, 0)
 	assertAllowance20, _ := buildEVMInvokeTxFor(t, f.B, token, "call",
 		solidityCall("assertAllowance(address,address,uint256)", evmABIAddress(owner), evmABIAddress(spender), evmABIUint(20)),
-		3, invokeGasLimit, 10, inputGasAsset, gasOuts[10])
+		3, invokeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[10])
 	f.Network.sendAndMine(t, assertAllowance20, 0)
 
 	burnTx, _ := buildEVMInvokeTxFor(t, f.A, token, "call",
 		solidityCall("burn(uint256)", evmABIUint(50)),
-		5, invokeGasLimit, 11, inputGasAsset, gasOuts[6])
+		5, invokeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[6])
 	f.Network.sendAndMine(t, burnTx, 0)
 	assertFinalOwner, _ := buildEVMInvokeTxFor(t, f.A, token, "call",
 		solidityCall("assertBalance(address,uint256)", evmABIAddress(owner), evmABIUint(620)),
-		6, invokeGasLimit, 12, inputGasAsset, gasOuts[7])
+		6, invokeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[7])
 	f.Network.sendAndMine(t, assertFinalOwner, 0)
 	assertRecipient80, _ := buildEVMInvokeTxFor(t, f.B, token, "call",
 		solidityCall("assertBalance(address,uint256)", evmABIAddress(recipient), evmABIUint(80)),
-		4, invokeGasLimit, 13, inputGasAsset, gasOuts[11])
+		4, invokeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[11])
 	f.Network.sendAndMine(t, assertRecipient80, 0)
 
-	closeTx, _ := buildEVMCloseTxFor(t, f.A, token, 7, invokeGasLimit, 14, inputGasAsset, gasOuts[12])
+	closeTx, _ := buildEVMCloseTxFor(t, f.A, token, 7, invokeGasLimit, evmNextBlockHeight(t, f), inputGasAsset, gasOuts[12])
 	closeBlock := f.Network.sendManyAndMine(t, []*wire.MsgTx{closeTx}, 0)
 	closeResult := requireSingleResultTx(t, closeBlock)
 	requireTxOutputValueAmount(t, closeResult, f.A.Address, 0)

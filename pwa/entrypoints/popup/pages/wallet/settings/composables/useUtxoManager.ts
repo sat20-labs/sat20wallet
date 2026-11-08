@@ -46,7 +46,7 @@ export function useUtxoManager() {
           const assetInfo = utxo.Assets?.[0]
           const reason = assetInfo
             ? `${assetInfo.Name.Protocol}:${assetInfo.Name.Type}:${assetInfo.Name.Ticker || ''}`
-            : 'Unknown asset'
+            : t('settingsUi.unknownAsset')
 
           return {
             utxo: utxo.Outpoint,
@@ -93,7 +93,7 @@ export function useUtxoManager() {
 
   const lockUtxo = async (utxoInput: string, tab: 'btc' | 'satsnet') => {
     if (!utxoInput) {
-      toast({ title: 'Error', description: '请输入UTXO', variant: 'destructive' })
+      toast({ title: t('approvalUi.error'), description: t('settingsUi.enterUtxo'), variant: 'destructive' })
       return
     }
 
@@ -109,9 +109,9 @@ export function useUtxoManager() {
     lockLoading.value = false
 
     if (err) {
-      toast({ title: 'Error', description: '锁定失败', variant: 'destructive' })
+      toast({ title: t('approvalUi.error'), description: t('settingsUi.lockFailed'), variant: 'destructive' })
     } else {
-      toast({ title: 'Success', description: '锁定成功', variant: 'success' })
+      toast({ title: t('approvalUi.success'), description: t('settingsUi.lockSuccess'), variant: 'success' })
       await fetchLockedUtxos(tab)
     }
   }
@@ -129,9 +129,9 @@ export function useUtxoManager() {
     unlockingIdx.value = -1
 
     if (err) {
-      toast({ title: 'Error', description: '解锁失败', variant: 'destructive' })
+      toast({ title: t('approvalUi.error'), description: t('settingsUi.unlockFailed'), variant: 'destructive' })
     } else {
-      toast({ title: 'Success', description: '解锁成功', variant: 'success' })
+      toast({ title: t('approvalUi.success'), description: t('settingsUi.unlockSuccess'), variant: 'success' })
       await fetchLockedUtxos(tab)
     }
   }
@@ -160,7 +160,7 @@ export function useUtxoManager() {
 
   const unlockSelectedOrdinals = async () => {
     if (selectedOrdinals.value.length === 0) {
-      toast({ title: 'Error', description: '请选择要解锁的UTXO', variant: 'destructive' })
+      toast({ title: t('approvalUi.error'), description: t('settingsUi.selectUtxo'), variant: 'destructive' })
       return
     }
 
@@ -170,14 +170,14 @@ export function useUtxoManager() {
       // Get public key
       const [pubKeyErr, pubKeyRes] = await walletManager.getWalletPubkey(walletStore.accountIndex)
       if (pubKeyErr || !pubKeyRes) {
-        throw new Error('Failed to get public key')
+        throw new Error(t('settingsUi.getPublicKeyFailed'))
       }
 
       // Sign the UTXOs data
       const utxosJson = JSON.stringify(selectedOrdinals.value)
       const [sigErr, sigRes] = await walletManager.signData(utxosJson)
       if (sigErr || !sigRes) {
-        throw new Error('Failed to sign data')
+        throw new Error(t('settingsUi.signDataFailed'))
       }
 
       // Call unlock API with hex strings directly
@@ -193,14 +193,14 @@ export function useUtxoManager() {
           `${failed.utxo}: ${failed.reason}`
         ).join('\n')
         toast({
-          title: 'Partial Success',
-          description: `部分UTXO解锁失败:\n${failedMessages}`,
+          title: t('settingsUi.partialSuccess'),
+          description: t('settingsUi.unlockPartial', { errors: failedMessages }),
           variant: 'destructive'
         })
       } else {
         toast({
-          title: 'Success',
-          description: `成功解锁 ${selectedOrdinals.value.length} 个UTXO`,
+          title: t('approvalUi.success'),
+          description: t('settingsUi.unlockCount', { count: selectedOrdinals.value.length }),
           variant: 'success'
         })
       }
@@ -212,8 +212,8 @@ export function useUtxoManager() {
     } catch (error: any) {
       console.error('Failed to unlock ordinals UTXOs:', error)
       toast({
-        title: 'Error',
-        description: `解锁失败: ${error.message}`,
+        title: t('approvalUi.error'),
+        description: t('settingsUi.unlockError', { error: error.message }),
         variant: 'destructive'
       })
     } finally {

@@ -7,7 +7,7 @@ import (
 )
 
 func testBackup() Backup {
-	return Backup{Version: Version, Wallets: []WalletBackup{{Name: "Primary", Mnemonic: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about", AccountCount: 2, SubAccounts: []SubAccount{{Index: 0, DID: "alice"}, {Index: 1, DID: "alice-work"}}}}}
+	return Backup{Version: BackupVersion, Wallets: []WalletBackup{{Name: "Primary", Type: WalletMnemonic, Secret: []byte("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"), AccountCount: 2, SubAccounts: []SubAccount{{Index: 0, DID: "alice"}, {Index: 1, DID: "alice-work"}}}}}
 }
 
 func testQuestions() []QuestionAnswer {

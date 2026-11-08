@@ -215,6 +215,14 @@ type RGB11SendRequest struct {
 	MinConfirmations uint8    `json:"min_confirmations"`
 }
 
+// RGB11InflationRequest derives the contract, recipient and issue amount from
+// one invoice. It cannot request an arbitrary transition or a new genesis.
+type RGB11InflationRequest struct {
+	Invoice          string `json:"invoice"`
+	FeeRate          int64  `json:"fee_rate"`
+	MinConfirmations uint8  `json:"min_confirmations"`
+}
+
 type RGB11PreparedTransfer struct {
 	State                      *TransferState   `json:"state"`
 	States                     []*TransferState `json:"states,omitempty"`

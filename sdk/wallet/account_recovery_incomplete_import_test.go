@@ -1,53 +1,39 @@
 package wallet
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 )
 
-// Create the marker through a real background recovery import which fails at
-// the provider boundary, rather than writing a fabricated marker into the DB.
-// Activation must retain its fail-closed check; setup should detect the same
-// incomplete import before returning recovery material that cannot be activated.
-func TestAccountRecoverySetupRejectsIncompleteImportBeforeCreatingPackage(t *testing.T) {
-	oldChain := _chain
-	_chain = "testnet"
-	defer func() { _chain = oldChain }()
+// Recovery setup concerns the healthy wallet identity. A failed business-module
+// import stays protected independently, including through setup and a cold reopen.
+func TestAccountRecoverySetupPreservesIncompleteModuleProtection(t *testing.T) {
 	remote := newRGB11MemoryDKVSHTTP()
-	source, sourceProvider := managedImportTestSource(t, remote)
-	target, targetProvider := managedImportTestManager(t, remote)
-	if err := restoreManagedImportTestWallet(t, target, source); err != nil {
+	source, sourceProvider, _ := newImportSource(t, remote)
+	target, targetProvider, closeTarget := newImportGroup(t, remote)
+	if err := restoreImportGroup(t, target, source); err != nil {
 		t.Fatal(err)
 	}
-	sourceProvider.payloads[0].Payload = []byte("new remote provider state")
+	stageManagedImportTestPayload(t, source, sourceProvider, []byte("new remote provider state"))
 	if err := source.SyncAccountManagementState(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	beforeRemote := snapshotRGB11MemoryRecords(remote)
 	importFailure := errors.New("test provider interrupted during import")
 	targetProvider.importErr = importFailure
-	if err := target.SyncAccountManagementState(context.Background()); !errors.Is(err, importFailure) {
-		t.Fatalf("expected provider import failure: %v", err)
+	if err := target.SyncAccountManagementState(context.Background()); !errors.Is(err, importFailure) || !accountModuleOnly(err) {
+		t.Fatalf("expected module-scoped provider import failure: %v", err)
 	}
-	if err := target.checkAccountManagedDataImport(); !errors.Is(err, ErrAccountManagedDataImportIncomplete) {
-		t.Fatalf("interrupted import did not leave protection: %v", err)
-	}
-	// A new manager proves the marker survives restart. The transient provider
-	// fault is gone; neither a retry nor package creation may erase protection.
-	restarted, _ := managedImportTestManager(t, remote)
-	restarted.db = target.db
-	if err := restarted.loadAccountManagementProfileLocked(); err != nil {
+	assertManagedImportModuleProtected(t, target, targetProvider.id)
+	localBefore, err := target.readAccountLocal(target.accountProfile.AccountID, targetProvider.id, AccountManagedDataGlobalScope)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := restarted.unlockAccountManagementLocked("password"); err != nil {
-		t.Fatal(err)
-	}
-	if err := restarted.SyncAccountManagementState(context.Background()); !errors.Is(err, ErrAccountManagedDataImportIncomplete) {
-		t.Fatalf("restart lost incomplete import protection: %v", err)
-	}
-	// Match the createRecovery preamble on the live, partially imported wallet.
 	backup, err := target.ExportAccountBackupForPWA("password", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -70,14 +56,63 @@ func TestAccountRecoverySetupRejectsIncompleteImportBeforeCreatingPackage(t *tes
 		AccountID: target.accountProfile.AccountID, Backup: bootstrap,
 		RecoveryMode: account.RecoveryMode2Of2, Questions: questions,
 	})
-	if !errors.Is(err, ErrAccountManagedDataImportIncomplete) || pkg != nil {
-		t.Errorf("setup did not reject incomplete import: package_created=%t error=%v", pkg != nil, err)
+	if err != nil || pkg == nil {
+		t.Fatalf("unrelated module failure blocked wallet recovery setup: %v", err)
 	}
-	if err := target.ActivateAccountManagement(source.accountSecret, "password",
-		AccountStorageAuthorization{Mode: AccountStorageTemporary}, account.Locator{}, ""); !errors.Is(err, ErrAccountManagedDataImportIncomplete) {
-		t.Fatalf("activation must retain import protection: %v", err)
+	assertManagedImportModuleProtected(t, target, targetProvider.id)
+	localAfter, err := target.readAccountLocal(target.accountProfile.AccountID, targetProvider.id, AccountManagedDataGlobalScope)
+	if err != nil || !reflect.DeepEqual(localBefore, localAfter) {
+		t.Fatalf("recovery setup altered an incomplete module target: %v", err)
 	}
-	if err := target.checkAccountManagedDataImport(); !errors.Is(err, ErrAccountManagedDataImportIncomplete) {
-		t.Fatal("recovery setup cleared the import marker")
+	if !bytes.Equal(target.accountSecret, source.accountSecret) {
+		t.Fatal("recovery setup replaced the account secret")
+	}
+
+	cfg := target.cfg
+	closeTarget()
+	target, targetProvider, _ = openImportGroup(t, cfg, remote)
+	if _, err := target.UnlockWallet("password"); err != nil {
+		t.Fatal(err)
+	}
+	assertManagedImportModuleProtected(t, target, targetProvider.id)
+	if err := target.SyncAccountManagementState(context.Background()); err != nil {
+		t.Fatalf("healthy reopened device could not resume module import: %v", err)
+	}
+	if err := target.CheckAccountRestore(targetProvider.id, AccountManagedDataGlobalScope); err != nil {
+		t.Fatalf("completed module import remains blocked: %v", err)
+	}
+	if !reflect.DeepEqual(targetProvider.payloads, sourceProvider.payloads) {
+		t.Fatal("resumed provider did not import its committed target")
+	}
+	if !bytes.Equal(target.accountSecret, source.accountSecret) ||
+		target.GetAccountManagementStatus().AccountID != source.GetAccountManagementStatus().AccountID ||
+		target.GetAccountManagementStatus().RootFingerprint != source.GetAccountManagementStatus().RootFingerprint {
+		t.Fatal("module retry changed the restored account identity")
+	}
+	expectedBackup, err := source.ExportAccountBackupForPWA("password", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clearAccountBackup(&expectedBackup)
+	actualBackup, err := target.ExportAccountBackupForPWA("password", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clearAccountBackup(&actualBackup)
+	normalizedExpected, err := account.NormalizeBackup(expectedBackup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clearAccountBackup(&normalizedExpected)
+	normalizedActual, err := account.NormalizeBackup(actualBackup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clearAccountBackup(&normalizedActual)
+	if !reflect.DeepEqual(normalizedExpected, normalizedActual) {
+		t.Fatal("resumed full wallet backup differs from the source")
+	}
+	if !reflect.DeepEqual(beforeRemote, snapshotRGB11MemoryRecords(remote)) {
+		t.Fatal("setup or resumed import overwrote remote records")
 	}
 }

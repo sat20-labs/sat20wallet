@@ -325,7 +325,13 @@ func (p *rgb11Manager) refreshRGB11OnHealthyTip(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	snapshot, _, err := p.exportRGB11WalletSnapshot(walletID)
+	if err := p.checkRGB11Account(rgb11ManagedOperationRefresh); err != nil {
+		return err
+	}
+	// A cached proof fault blocks backup export, not fresh chain validation.
+	// Preserve the full local material and let the candidate commit own any
+	// resulting change to proof status, locks and readiness.
+	snapshot, err := p.readRGB11Local(walletID)
 	if err != nil {
 		return err
 	}

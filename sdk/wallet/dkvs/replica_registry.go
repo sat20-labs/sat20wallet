@@ -92,6 +92,10 @@ func (s *ReplicaStore) PreparePrefixSync(namespace, endpointID string,
 		}
 		state = &SubscriptionState{}
 	}
+	if !resetGenerations && state.EndpointID == endpointID && SameStringList(state.Prefixes, prefixes) &&
+		state.Status == DKVSSubscriptionSyncing && state.LastErrorCode == "" {
+		return nil
+	}
 	state.EndpointID = endpointID
 	state.Prefixes = prefixes
 	state.Status = DKVSSubscriptionSyncing
@@ -129,6 +133,9 @@ func (s *ReplicaStore) CompletePrefixSync(namespace, endpointID string,
 		if _, ok := state.Generations[prefix]; !ok {
 			return dkvsindexer.ErrInvalidSnapshot
 		}
+	}
+	if SameStringList(state.Prefixes, prefixes) && state.Status == DKVSSubscriptionReady && state.LastErrorCode == "" {
+		return nil
 	}
 	state.Prefixes = prefixes
 	state.Status = DKVSSubscriptionReady

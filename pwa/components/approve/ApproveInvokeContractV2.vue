@@ -1,22 +1,22 @@
 <template>
   <LayoutApprove @confirm="confirm" @cancel="cancel">
     <div class="p-3 sm:p-4 space-y-3">
-      <h2 class="text-lg sm:text-xl font-semibold text-center">{{ $t('invokeContractSatsNet.title', '合约调用确认') }}</h2>
+      <h2 class="text-lg sm:text-xl font-semibold text-center">{{ $t('invokeContractSatsNet.title') }}</h2>
       <p class="text-xs text-gray-400 text-center mb-2 sm:mb-3">
-        {{ $t('invokeContractSatsNet.warning', '请确认以下合约调用信息，确认后将发起链上调用') }}
+        {{ $t('invokeContractSatsNet.warning') }}
       </p>
 
       <div class="space-y-3">
         <!-- Basic Info Section -->
         <div class="bg-muted/50 rounded-lg p-2 sm:p-3">
           <div class="flex items-center justify-between gap-2 py-1">
-            <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.action', '操作类型')
+            <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.action')
               }}</span>
             <span class="text-xs sm:text-sm font-medium text-right break-words">{{ props.data?.metadata?.action || '-'
               }}</span>
           </div>
           <div class="flex items-start justify-between gap-2 py-1">
-            <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.url', '合约URL')
+            <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.url')
               }}</span>
             <span class="text-xs font-medium text-right break-all leading-tight max-w-[60%]">{{ props.data?.url || '-'
               }}</span>
@@ -25,26 +25,24 @@
 
         <!-- Transaction Details Section -->
         <div class="bg-muted/50 rounded-lg p-2 sm:p-3">
-          <h3 class="text-xs font-medium text-muted-foreground mb-2">{{ $t('invokeContractSatsNet.transactionDetails',
-            '交易详情') }}</h3>
+          <h3 class="text-xs font-medium text-muted-foreground mb-2">{{ $t('invokeContractSatsNet.transactionDetails') }}</h3>
 
           <!-- Swap Specific Details -->
           <template v-if="props.data?.metadata?.action === 'swap'">
             <div class="flex items-center justify-between gap-2 py-1">
-              <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.orderType', '订单类型')
+              <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.orderType')
                 }}</span>
               <span class="text-xs sm:text-sm font-medium text-right break-words">{{ props.data?.metadata?.orderType ===
-                1 ? $t('invokeContractSatsNet.sell',
-                  '卖出') : $t('invokeContractSatsNet.buy', '买入') }}</span>
+                1 ? $t('invokeContractSatsNet.sell') : $t('invokeContractSatsNet.buy') }}</span>
             </div>
             <div class="flex items-center justify-between gap-2 py-1">
-              <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.quantity', '数量')
+              <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.quantity')
                 }}</span>
               <span class="text-xs sm:text-sm font-medium text-right break-words">{{ props.data?.metadata?.quantity ||
                 '-' }}</span>
             </div>
             <div class="flex items-center justify-between gap-2 py-1">
-              <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.unitPrice', '单价')
+              <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.unitPrice')
                 }}</span>
               <span class="text-xs sm:text-sm font-medium text-right break-words">{{ props.data?.metadata?.unitPrice ||
                 '-' }} sats</span>
@@ -52,32 +50,30 @@
           </template>
 
           <div class="flex items-center justify-between gap-2 py-1">
-            <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.serviceFee', '网络费')
+            <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.serviceFee')
               }}</span>
             <span class="text-xs sm:text-sm font-medium text-right break-words">{{ props.data?.metadata?.networkFee ||
               '-' }}
               sats</span>
           </div>
           <div class="flex items-center justify-between gap-2 py-1">
-            <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.estimatedFee', '服务费')
+            <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.estimatedFee')
               }}</span>
             <div class="text-right">
-              <span v-if="feeLoading" class="text-xs text-muted-foreground">{{ $t('invokeContractSatsNet.loading',
-                '查询中...') }}</span>
+              <span v-if="feeLoading" class="text-xs text-muted-foreground">{{ $t('invokeContractSatsNet.loading') }}</span>
               <span v-else-if="feeError" class="text-xs text-destructive">{{ feeErrorMessage ||
-                $t('invokeContractSatsNet.feeError',
-                  '查询失败') }}</span>
+                $t('invokeContractSatsNet.feeError') }}</span>
               <span v-else class="text-xs sm:text-sm font-medium">{{ estimatedFee || '-' }} sats</span>
             </div>
           </div>
 
           <!-- Total Cost -->
           <div class="flex items-center justify-between gap-2 py-2 border-t border-border">
-            <span class="text-xs font-medium flex-shrink-0">{{ $t('invokeContractSatsNet.totalCost', '总花费') }}</span>
+            <span class="text-xs font-medium flex-shrink-0">{{ $t('invokeContractSatsNet.totalCost') }}</span>
             <span class="text-xs sm:text-sm font-medium text-primary text-right break-words">{{ totalCost }}</span>
           </div>
           <!-- <div class="flex items-center justify-between">
-            <span class="text-sm text-muted-foreground">{{$t('invokeContractSatsNet.netFee', '网络费用')}}</span>
+            <span class="text-sm text-muted-foreground">{{$t('invokeContractSatsNet.netFee')}}</span>
             <span class="font-medium">{{ props.data?.metadata?.netFeeSats || '-' }} sats</span>
           </div> -->
         </div>
@@ -86,7 +82,7 @@
         <Accordion type="single" :collapsible="false" class="w-full">
           <AccordionItem value="item-1" class="border">
             <AccordionTrigger class="text-xs px-2 py-2 hover:no-underline sm:px-3">
-              <span class="text-left">{{ $t('invokeContractSatsNet.viewRawContent', '查看原始调用参数') }}</span>
+              <span class="text-left">{{ $t('invokeContractSatsNet.viewRawContent') }}</span>
             </AccordionTrigger>
             <AccordionContent class="px-2 pb-2 sm:px-3 sm:pb-3">
               <Alert class="mt-1 border-0">
@@ -102,8 +98,7 @@
 
       <div v-if="isLoading" class="text-center text-muted-foreground mt-2">
         <span class="animate-spin inline-block mr-2">⏳</span> <span class="text-xs">{{
-          $t('invokeContractSatsNet.invoking',
-            '正在调用合约...') }}</span>
+          $t('invokeContractSatsNet.invoking') }}</span>
       </div>
       <div v-if="invokeError && !isLoading" class="text-center text-destructive mt-2">
         <span class="text-xs">{{ invokeError }}</span>
@@ -113,6 +108,8 @@
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
+const { t } = useI18n()
 import { ref, watch, computed } from 'vue'
 import LayoutApprove from '@/components/layout/LayoutApprove.vue'
 import { Alert, AlertTitle } from '@/components/ui/alert'
@@ -190,14 +187,14 @@ const getFee = async () => {
     console.log('getFeeForInvokeContract', err, res)
     if (err) {
       feeError.value = true
-      feeErrorMessage.value = err?.message || err?.toString?.() || '查询失败'
+      feeErrorMessage.value = err?.message || err?.toString?.() || t('approvalUi.feeFailed')
       estimatedFee.value = '10'
     } else {
       estimatedFee.value = res?.fee ? res.fee.toString() : '10'
     }
   } catch (e: any) {
     feeError.value = true
-    feeErrorMessage.value = e?.message || e?.toString?.() || '查询失败'
+    feeErrorMessage.value = e?.message || e?.toString?.() || t('approvalUi.feeFailed')
     estimatedFee.value = '10'
   } finally {
     feeLoading.value = false
@@ -209,8 +206,8 @@ watch(() => [props.data?.url, props.data?.invoke, props.data?.feeRate], getFee, 
 const confirm = async () => {
   if (!props.data?.url || !props.data?.invoke || !props.data?.assetName || !props.data?.amt || !props.data?.feeRate) {
     toast.toast({
-      title: '参数缺失',
-      description: '合约URL、调用参数、资产名称、数量或费率64缺失',
+      title: t('approvalUi.missingParameters'),
+      description: t('approvalUi.missingAssetParameters'),
       variant: 'destructive',
     })
     return
@@ -226,26 +223,26 @@ const confirm = async () => {
       props.data.feeRate.toString()
     )
     if (err) {
-      invokeError.value = err.message || '合约调用失败'
+      invokeError.value = err.message || t('approvalUi.callFailed')
       toast.toast({
-        title: '合约调用失败',
+        title: t('approvalUi.callFailed'),
         description: err.message,
         variant: 'destructive',
       })
     } else if (res?.txId) {
       emit('confirm', { txId: res.txId })
     } else {
-      invokeError.value = '合约调用返回异常'
+      invokeError.value = t('approvalUi.callInvalidResult')
       toast.toast({
-        title: '合约调用异常',
-        description: '未获取到调用结果',
+        title: t('approvalUi.callException'),
+        description: t('approvalUi.noCallResult'),
         variant: 'destructive',
       })
     }
   } catch (e: any) {
-    invokeError.value = e?.message || '合约调用异常'
+    invokeError.value = e?.message || t('approvalUi.callException')
     toast.toast({
-      title: '合约调用异常',
+      title: t('approvalUi.callException'),
       description: e?.message,
       variant: 'destructive',
     })

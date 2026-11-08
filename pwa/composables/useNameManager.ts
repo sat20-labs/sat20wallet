@@ -1,4 +1,5 @@
 import { computed, readonly } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useQuery } from '@tanstack/vue-query'
 import { storeToRefs } from 'pinia'
 import ordxApi from '@/apis/ordx'
@@ -6,6 +7,7 @@ import { useWalletStore } from '@/store'
 
 // 名字管理 composable
 export const useNameManager = () => {
+  const { t } = useI18n()
   const walletStore = useWalletStore()
   const { network, address } = storeToRefs(walletStore)
 
@@ -59,7 +61,7 @@ export const useNameManager = () => {
   }
 
   const setCurrentName = async (targetAddress: string, name: string): Promise<void> => {
-    if (!targetAddress || targetAddress !== address.value) throw new Error('当前钱包地址已变化，请重新打开 DID 设置')
+    if (!targetAddress || targetAddress !== address.value) throw new Error(t('pwaUi.did.addressChanged'))
     await walletStore.updateAccountDID(Number(walletStore.accountIndex), name.trim())
   }
   const clearName = (targetAddress: string) => setCurrentName(targetAddress, '')

@@ -146,7 +146,7 @@ func (p *accountReviewTamperTransport) tamper(path string, raw []byte) ([]byte, 
 }
 
 func TestSDKAccountReviewServerSignatureVerification(t *testing.T) {
-	network := newDKVSNoPluginTemplateFixtureWithArgs(t, map[string]int64{}, nil, nil, dkvsMinerArgs(t)).Network
+	network := newDKVSNoPluginUnfundedNetwork(t)
 	waitForDKVSPeerReady(t, network)
 	f := prepareAccountReview(t, network, true)
 	f.activate(t)

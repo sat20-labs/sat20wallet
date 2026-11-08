@@ -87,12 +87,12 @@ func TestDKVSPWAFinalReview(t *testing.T) {
 		defer manager.dkvs.stopAndWait()
 		require.Eventually(t, func() bool {
 			entries, readErr := replica.LoadOutbox(client.replicaNamespace)
-			return readErr == nil && len(entries) == 0
+			return readErr == nil && len(entries) == 1 && entries[0].State == core.DKVSOutboxConflict
 		}, 3*time.Second, 10*time.Millisecond, "the stale operation must be rejected, not reauthorized")
 		require.Eventually(t, func() bool {
 			current, readErr := client.GetRecord(key)
 			return readErr == nil && dkvs.RecordHash(current) == dkvs.RecordHash(winner)
-		}, 2*time.Second, 10*time.Millisecond, "discarding a conflicting request must not leave the sync worker waiting indefinitely for an unrelated wake")
+		}, 2*time.Second, 10*time.Millisecond, "retaining a conflicting request must not stop receiving confirmed remote state")
 		next, err := remoteClient.PutSignedRecordFreeLocal(manager.wallet, key, []byte("remote-v3"),
 			dkvs.RecordOptions{IssueHeight: 1, TTL: 100})
 		require.NoError(t, err)
@@ -110,6 +110,14 @@ func TestDKVSPWAFinalReview(t *testing.T) {
 			current, readErr := client.GetRecord(key)
 			return readErr == nil && dkvs.RecordHash(current) == dkvs.RecordHash(next)
 		}, 2*time.Second, 10*time.Millisecond, "the resumed worker must also receive subsequent remote changes")
+		entries, err := replica.LoadOutbox(client.replicaNamespace)
+		require.NoError(t, err)
+		require.Len(t, entries, 1, "the original conflicting intent must remain available for explicit reconciliation")
+		require.Equal(t, core.DKVSOutboxConflict, entries[0].State)
+		require.Equal(t, entry.RequestID, entries[0].RequestID)
+		require.Equal(t, entry.Authorization, entries[0].Authorization)
+		require.Equal(t, entry.Mutations, entries[0].Mutations)
+
 	})
 
 	t.Run("OnePeerCannotFinishAnotherPeersSync", func(t *testing.T) {

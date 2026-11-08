@@ -6,25 +6,17 @@ import (
 )
 
 func TestUnlockWalletIsAtomicOnPasswordFailure(t *testing.T) {
-	oldChain := _chain
-	_chain = "testnet"
-	defer func() { _chain = oldChain }()
-
-	manager := newAccountManagementAutoTestManager(t)
+	manager, remote, service, closeManager := newAccountGroup(t)
 	if _, _, err := manager.CreateWallet("correct-password"); err != nil {
 		t.Fatal(err)
 	}
+	discoverInactiveAccount(t, manager)
 	if _, _, err := manager.CreateWallet("correct-password"); err != nil {
 		t.Fatal(err)
 	}
-	// Simulate a fresh process with encrypted metadata only, not a UI lock.
-	manager.wallet = nil
-	manager.clearAccountManagementSession()
-	var err error
-	manager.walletInfoMap, err = loadAllWalletFromDB(manager.db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	cfg := manager.cfg
+	closeManager()
+	manager, _ = openAccountGroup(t, cfg, remote, service)
 
 	if _, err := manager.UnlockWallet("wrong-password"); err == nil {
 		t.Fatal("UnlockWallet accepted an incorrect password")

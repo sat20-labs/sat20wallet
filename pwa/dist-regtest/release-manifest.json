@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "releaseId": "0.1.46-20261106T225010Z-pwa",
+  "version": "0.1.46",
+  "buildId": "20261106T225010Z-pwa",
+  "commit": "fde00ec629f6",
+  "publishedAt": "2026-11-06T22:50:10.655Z",
+  "serviceWorker": {
+    "schemaVersion": 1,
+    "releaseId": "0.1.46-20261106T225010Z-pwa",
+    "killSwitch": false
+  },
+  "assets": [
+    {
+      "path": "/index.html",
+      "mime": "text/html",
+      "size": 1000,
+      "sha256": "281b192b0a7a467be57650b0f2983649a9797d11daa9692d5bca84bbdda60196"
+    },
+    {
+      "path": "/assets/Tools-De_ay-xB.js",
+      "mime": "text/javascript",
+      "size": 163157,
+      "sha256": "8a8394c04f975f38540d89efa4446e6eb753c83c594fad56412435695ae4ee59"
+    },
+    {
+      "path": "/assets/index-B63biSUD.css",
+      "mime": "text/css",
+      "size": 173,
+      "sha256": "e3d6529e81276383036104ae0fe22fb0db2c38576e685d251aaecf9300d0be84"
+    },
+    {
+      "path": "/assets/index-D-j3A8Iw.js",
+      "mime": "text/javascript",
+      "size": 256972,
+      "sha256": "db0ea8e6dfae679e412c835c9d9d09426871155efc7f90b94fc52d4396fbcd59"
+    },
+    {
+      "path": "/assets/main-CC7y2itL.css",
+      "mime": "text/css",
+      "size": 73010,
+      "sha256": "2f64eb27b5218757f9706f25c0e095d2f4a82260f21ef99f5e4a84d1c1505db4"
+    },
+    {
+      "path": "/assets/main-CGOFWbGu.js",
+      "mime": "text/javascript",
+      "size": 3427801,
+      "sha256": "0c451416af299123a68949d1ec414be0d5bd9135581e9202d3d7b72614bfec3c"
+    },
+    {
+      "path": "/assets/solc-browser-bkLe_NDp.js",
+      "mime": "text/javascript",
+      "size": 9332417,
+      "sha256": "575d4ddf13c3e7c35c665e266acaf0985de96be12e78b485b0c9f2477a0a4125"
+    },
+    {
+      "path": "/assets/solc.worker-Bt3AFwXp.js",
+      "mime": "text/javascript",
+      "size": 354,
+      "sha256": "67ec366e967fdbc572f9cdfc9b6a0f1d149a72409f32d9782d90bc860bf3979b"
+    },
+    {
+      "path": "/wasm/wasm_exec.js",
+      "mime": "text/javascript",
+      "size": 16992,
+      "sha256": "0c949f4996f9a89698e4b5c586de32249c3b69b7baadb64d220073cc04acba14"
+    },
+    {
+      "path": "/wasm/sat20wallet.wasm",
+      "mime": "application/wasm",
+      "size": 39305847,
+      "sha256": "830a890ae161aab5912d2a74e4fc0d2aaf89e57fb14584acf0361315ad76c6c8"
+    }
+  ]
+}

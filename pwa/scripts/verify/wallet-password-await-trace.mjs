@@ -18,6 +18,7 @@ for(const blocked of ['begin-log','warm-unlock','finish-log']) {
  vm.runInNewContext(transform(traceSource+'\nglobalThis.startTrace=beginWalletAwaitTrace'),traceContext)
  const ctx={console:{error(){}},Error,String,
   beginWalletAwaitTrace:traceContext.startTrace,
+  noteWasmOperation(){},
   walletRequestSessionGuard:()=>()=>{},
   tryit:fn=>async()=>{try{return [undefined,await fn()]}catch(error){return [error,undefined]}},
   beginPwaWalletOperation:async()=>{if(blocked==='begin-log')await pending;return {}},

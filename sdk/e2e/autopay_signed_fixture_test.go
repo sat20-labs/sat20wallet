@@ -17,6 +17,12 @@ import (
 func newAutopaySignedFixture(t *testing.T, feeAsset string) (*templateFixture, *templateGasBank, []wire.OutPoint) {
 	t.Helper()
 	f := newTemplateFixture(t, map[string]int64{feeAsset: 1000})
+	gasInput := wire.OutPoint{Hash: f.gasAnchor.TxHash(), Index: 0}
+	return prepareAutopaySignedFixture(t, f, gasInput, feeAsset)
+}
+
+func prepareAutopaySignedFixture(t *testing.T, f *templateFixture, gasInput wire.OutPoint, feeAsset string) (*templateFixture, *templateGasBank, []wire.OutPoint) {
+	t.Helper()
 	legacyA := f.A
 	signed := func(actor *templateActor) *templateActor {
 		address, err := btcutil.NewAddressTaproot(schnorr.SerializePubKey(txscript.ComputeTaprootKeyNoScript(actor.Key.PubKey())), &chaincfg.TestNetParams)
@@ -26,6 +32,7 @@ func newAutopaySignedFixture(t *testing.T, feeAsset string) (*templateFixture, *
 		return &templateActor{Key: actor.Key, Address: address.EncodeAddress(), PkScript: script}
 	}
 	f.A, f.B, f.C = signed(f.A), signed(f.B), signed(f.C)
+	f.gasInput = &gasInput
 	// Existing bootstrap coins are transferred once into genuine key-path
 	// outputs. All subsequent AUTOPAY deploy/config/close inputs require signing.
 	gasOuts := f.split(t, legacyA, f.gasAnchor, contractcommon.GetGasAssetName(),

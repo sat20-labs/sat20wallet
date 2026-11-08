@@ -80,6 +80,12 @@ func newSPManagerRegtest(t *testing.T) *spManagerRegtest {
 	rpcbase.NewService(&spRealHTTPReader{SilentPayReader: base}).InitRouter(router, "/test")
 	(&rpcbitcoin.Service{}).InitRouter(router, "/test")
 	f.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The real SatoshiNet harness uses the normal L1 regtest prefix.
+		// Keep the SP browser fixture's existing /test paths unchanged.
+		if strings.HasPrefix(r.URL.Path, "/btc/regtest/") {
+			r = r.Clone(r.Context())
+			r.URL.Path = "/test/" + strings.TrimPrefix(r.URL.Path, "/btc/regtest/")
+		}
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Headers", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -119,9 +125,28 @@ func newSPManagerRegtest(t *testing.T) *spManagerRegtest {
 		f.ordinaryRead(w, r)
 	}))
 	t.Cleanup(f.server.Close)
+	// Even an unactivated wallet must discover authenticated account absence
+	// before changing its catalog. Supply the real isolated DKVS service rather
+	// than making this L1 fixture fabricate absence or bypass the write gate.
+	t.Setenv("SAT20_REAL_L1_INDEXER", f.server.URL+"/btc/regtest")
+	t.Setenv("SAT20_REAL_REGTEST_RUNTIME", testCaseDirectory(t))
+	prebuiltBundle, bundleErr := readE2EArtifactBundle()
+	require.NoError(t, bundleErr)
+	if prebuiltBundle == nil {
+		_, source, _, ok := runtime.Caller(0)
+		require.True(t, ok)
+		t.Setenv("SAT20_REAL_TEST_WALLETS", filepath.Join(filepath.Dir(source), "testdata", "regtest", "wallets.json"))
+	} else {
+		t.Setenv("SAT20_REAL_TEST_WALLETS", prebuiltSPWalletFixture(t))
+	}
+	network := prepareSDKPWARegtestNodes(t)
+	coreURL, err := network.Core.IndexerURL("regtest")
+	require.NoError(t, err)
 	endpoint := &sdkcommon.Indexer{Scheme: "http", Host: strings.TrimPrefix(f.server.URL, "http://"), Proxy: "test"}
-	f.cfg = &sdkcommon.Config{Env: "dev", Chain: "regtest", Mode: "client", IndexerL1: endpoint, IndexerL2: endpoint,
-		Peers: []string{"b@" + indexercommon.GetBootstrapPubKey() + "@" + f.server.URL + "/test"}}
+	f.cfg = &sdkcommon.Config{Env: "dev", Chain: "regtest", Mode: "client", IndexerL1: endpoint,
+		IndexerL2: &sdkcommon.Indexer{Scheme: "http", Host: strings.TrimSuffix(strings.TrimPrefix(coreURL, "http://"), "/regtest"), Proxy: "regtest"},
+		Peers: []string{"s@" + network.Core.nodePubKey + "@http://" + network.Core.stpAddr + "/regtest",
+			"b@" + network.Bootstrap.nodePubKey + "@http://" + network.Bootstrap.stpAddr + "/regtest"}}
 	return f
 }
 
@@ -180,6 +205,18 @@ func (f *spManagerRegtest) outputs(address string) ([]*indexercommon.AssetsInUtx
 func (f *spManagerRegtest) ordinaryRead(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	path := strings.TrimPrefix(r.URL.Path, "/test")
+	if path == "/health" {
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+		return
+	}
+	if path == "/v3/indexer/pubkey" && r.Method == http.MethodGet {
+		// Declare this isolated L1 fixture's configured indexer identity. DKVS
+		// records and authenticated absence still come from the real L2 nodes.
+		_ = json.NewEncoder(w).Encode(indexerwire.IndexerPubKeyResp{
+			BaseResp: indexerwire.BaseResp{Code: 0}, PubKey: indexercommon.GetBootstrapPubKey(),
+		})
+		return
+	}
 	if path == "/bestheight" {
 		_ = json.NewEncoder(w).Encode(map[string]any{"code": 0, "data": map[string]int{"height": f.base.GetHeight()}})
 		return
@@ -220,6 +257,10 @@ func (f *spManagerRegtest) manager(t *testing.T, mnemonic string) *wallet.Manage
 	t.Cleanup(func() { manager.Close(); require.NoError(t, db.Close()) })
 	_, err := manager.ImportWallet(mnemonic, "sp-regtest-only")
 	require.NoError(t, err)
+	require.NoError(t, manager.RetryDKVSSync())
+	require.Eventually(t, func() bool {
+		return manager.GetAccountManagementStatus().LocalOnly
+	}, 20*time.Second, 20*time.Millisecond, "real DKVS must confirm account absence before SP fixture edits")
 	return manager
 }
 
@@ -296,7 +337,8 @@ func TestSPSilentPayBrowserE2E(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer cancel()
 	wasm, runtimeJS := buildPWAWalletRuntime(t, ctx, sdk)
-	fixture := map[string]any{"config": f.cfg, "silentPay": sp, "wasmPath": wasm, "wasmRuntimePath": runtimeJS}
+	fixture := map[string]any{"config": f.cfg, "silentPay": sp, "wasmPath": wasm, "wasmRuntimePath": runtimeJS,
+		"browserPort": sdkPWARegtestBrowserPort(t)}
 	raw, err := json.Marshal(fixture)
 	require.NoError(t, err)
 	dir := testCaseDirectory(t)

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { expect } from '@playwright/test'
+import { waitForAccountWrite } from './account-management-usage-e2e.mjs'
 
 export const requiredPwaBiometricCases = [
   'WebAuthn PWA: real PRF credential creation persists an encrypted wallet binding',
@@ -12,7 +13,7 @@ const poll = { timeout: 120000, intervals: [250, 500, 1000] }
 const biometricButtonName = /^Use (?:Biometric Unlock|Touch ID|Face ID|Fingerprint)$/
 
 export async function runPwaBiometricCases(t, fixture) {
-  const { check, device, ready, walletCall } = t
+  const { check, device, ready, walletCall, accountCall } = t
   const actor = fixture.basicWallet
   assert.ok(actor?.mnemonic && actor.address && actor.password)
   const page = await device()
@@ -140,11 +141,28 @@ export async function runPwaBiometricCases(t, fixture) {
 
     await check(requiredPwaBiometricCases[2], async () => {
       const replacement = actor.password + '-changed'
+      await waitForAccountWrite(page, accountCall)
+      await page.evaluate(async () => {
+        const { default: manager } = await import('/utils/sat20.ts')
+        const original = manager.changePassword.bind(manager)
+        window.biometricPasswordChange = { calls: 0, error: 'not-dispatched' }
+        manager.changePassword = async (...args) => {
+          window.biometricPasswordChange.calls++
+          const result = await original(...args)
+          const message = String(result[0]?.message ?? '')
+          window.biometricPasswordChange.error = !result[0] ? 'none' :
+            /DKVS|synchroniz/i.test(message) ? 'account-sync' : /password/i.test(message) ? 'password' : 'other'
+          return result
+        }
+      })
       await page.evaluate(() => { location.hash = '#/wallet/setting/password' })
       await page.getByLabel('旧密码', { exact: true }).fill(currentPassword)
       await page.getByLabel('新密码', { exact: true }).fill(replacement)
       await page.getByLabel('确认新密码', { exact: true }).fill(replacement)
       await page.getByRole('button', { name: '确认修改', exact: true }).click()
+      await expect.poll(() => page.evaluate(() => window.biometricPasswordChange), poll)
+        .toEqual({ calls: 1, error: 'none' })
+      await expect(page.getByText('修改成功', { exact: true })).toBeVisible()
       await expect.poll(bindings, poll).toEqual([])
       await page.reload(); await ready(page)
       await expect(page.getByRole('button', { name: biometricButtonName })).toBeHidden()
@@ -153,6 +171,53 @@ export async function runPwaBiometricCases(t, fixture) {
         return Boolean(error)
       }, currentPassword)
       assert.equal(wrong, true)
+      // Test-only observation. Emit no arguments, credentials, or arbitrary errors.
+      await page.evaluate(async ({ expected }) => {
+        const { default: manager } = await import('/utils/sat20.ts')
+        const { getWalletIdentityState } = await import('/lib/identity-boundary.ts')
+        const safeErrors = new Set(['password is incorrect', 'invalid password', 'invalid secret key',
+          'Wallet session changed; request is no longer valid', 'Wallet must be unlocked',
+          'account management is locked', 'wallet has been unlocked', 'Manager not initialized',
+          'persisted wallet identity changed', 'current wallet selection is unavailable; reload the wallet'])
+        const classify = error => {
+          if (!error) return null
+          const text = String(error.message ?? error)
+          return safeErrors.has(text) ? text : text.startsWith('unlock account management:')
+            ? 'unlock account management: [detail withheld]' : 'unclassified error [detail withheld]'
+        }
+        let sequence = 0
+        const note = (event, phase, call, detail = {}) => {
+          const identity = getWalletIdentityState()
+          console.log(JSON.stringify({ event, phase, call, at_ms: Date.now(),
+            generation: identity.generation, identity_phase: identity.phase, ...detail }))
+        }
+        const original = manager.unlockWallet.bind(manager)
+        manager.unlockWallet = async value => {
+          const call = ++sequence
+          note('test-biometric-unlock', 'enter', call, { input_matches_expected: value === expected,
+            same_global_instance: manager === window.sat20 })
+          try {
+            const result = await original(value)
+            note('test-biometric-unlock', 'return', call, { error: classify(result[0]) })
+            return result
+          } catch (error) { note('test-biometric-unlock', 'throw', call, { error: classify(error) }); throw error }
+        }
+        const wasm = window.sat20wallet_wasm
+        const originalWasm = wasm.unlockWallet
+        wasm.unlockWallet = async (...args) => {
+          const call = sequence
+          note('test-biometric-wasm-unlock', 'enter', call)
+          try {
+            const result = await originalWasm(...args)
+            note('test-biometric-wasm-unlock', 'return', call, { code: result?.code,
+              error: result?.code ? classify(result.msg) : null })
+            return result
+          } catch (error) { note('test-biometric-wasm-unlock', 'throw', call, { error: classify(error) }); throw error }
+        }
+      }, { expected: replacement })
+      page.on('console', message => {
+        if (message.text().startsWith('{"event":"test-biometric-')) console.log(message.text())
+      })
       currentPassword = replacement
       await page.locator('form input[type="password"]').fill(currentPassword)
       await page.locator('form button[type="submit"]').click()

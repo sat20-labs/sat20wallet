@@ -17,7 +17,9 @@ import (
 	coreconsignment "github.com/sat20-labs/rgb11/consignment"
 	"github.com/sat20-labs/rgb11/invoicing"
 	"github.com/sat20-labs/rgb11/operations"
+	"github.com/sat20-labs/rgb11/seals"
 	corestorage "github.com/sat20-labs/rgb11/storage"
+	"github.com/sat20-labs/rgb11/strict_types"
 	corewallet "github.com/sat20-labs/rgb11/wallet"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
@@ -247,80 +249,52 @@ func (p *rgb11Manager) SyncConfiguredRGB11AddressMailbox(ctx context.Context,
 		}
 		rawRecord := value.record
 
-		// New AccountBound mailbox format authenticates the signed DirectMessage
-		// inside the unsigned outer DKVS record. Old sender-signed records remain
-		// readable during upgrade, but no new legacy record is written.
-		if direct, directErr := decodeWalletDirectRecord(p.wallet, rawRecord); directErr == nil && direct != nil {
-			messageID := direct.Payload.ApplicationID
-			switch direct.Payload.Kind {
-			case AccountMessageKindRGB11ACK:
-				if p.rgb11AddressMessageProcessed("ack", messageID) {
-					result.AlreadyDone++
-					continue
-				}
-				if _, err := p.acceptRGB11AddressACKDirect(direct); err != nil {
-					result.Invalid++
-					result.ErrorDetails = append(result.ErrorDetails, fmt.Sprintf("ack %s: %v", messageID, err))
-					continue
-				}
-				if err := p.markRGB11AddressMessageProcessed("ack", messageID); err != nil {
-					return nil, err
-				}
-				result.ACKs++
-			case AccountMessageKindRGB11Consignment:
-				if p.rgb11AddressMessageProcessed("consignment", messageID) {
-					result.AlreadyDone++
-					continue
-				}
-				if _, _, err := p.acceptRGB11AddressDirect(ctx, store, direct, ackOptions); err != nil {
-					result.Invalid++
-					result.ErrorDetails = append(result.ErrorDetails, fmt.Sprintf("consignment %s: %v", messageID, err))
-					continue
-				}
-				if err := p.markRGB11AddressMessageProcessed("consignment", messageID); err != nil {
-					return nil, err
-				}
-				result.Received++
-			}
-			continue
-		}
-
-		// Legacy upgrade path.
-		_, _, messageID, parseErr := parseRGB11AddressMailboxKey(rawRecord)
-		if parseErr != nil {
+		// AccountBound mailbox records carry the authenticated DirectMessage.
+		// A malformed or different format is an invalid message, never a second
+		// delivery path for this account.
+		direct, directErr := decodeWalletDirectRecord(p.wallet, rawRecord)
+		if directErr != nil || direct == nil {
 			result.Invalid++
-			result.ErrorDetails = append(result.ErrorDetails, parseErr.Error())
+			result.ErrorDetails = append(result.ErrorDetails, fmt.Sprintf("direct message: %v", directErr))
 			continue
 		}
-		if len(value.Value) == 4 {
+		messageID := direct.Payload.ApplicationID
+		switch direct.Payload.Kind {
+		case AccountMessageKindRGB11ACK:
 			if p.rgb11AddressMessageProcessed("ack", messageID) {
 				result.AlreadyDone++
 				continue
 			}
-			if _, err := p.AcceptRGB11AddressACK(rawRecord, verify); err != nil {
+			if _, err := p.acceptRGB11AddressACKDirect(direct); err != nil {
 				result.Invalid++
-				result.ErrorDetails = append(result.ErrorDetails, fmt.Sprintf("legacy ack %s: %v", messageID, err))
+				result.ErrorDetails = append(result.ErrorDetails, fmt.Sprintf("ack %s: %v", messageID, err))
 				continue
 			}
 			if err := p.markRGB11AddressMessageProcessed("ack", messageID); err != nil {
 				return nil, err
 			}
 			result.ACKs++
-			continue
+		case AccountMessageKindRGB11Consignment:
+			if p.rgb11AddressMessageProcessed("consignment", messageID) {
+				result.AlreadyDone++
+				continue
+			}
+			receipt, ackRecord, err := p.acceptRGB11AddressDirect(ctx, store, direct, ackOptions)
+			if err != nil {
+				result.Invalid++
+				result.ErrorDetails = append(result.ErrorDetails, fmt.Sprintf("consignment %s: %v", messageID, err))
+				continue
+			}
+			if err := p.markRGB11AddressMessageProcessed("consignment", messageID); err != nil {
+				return nil, err
+			}
+			if receipt != nil && ackRecord == nil {
+				// An exactly verified settled receive needs no new ACK or business write.
+				result.AlreadyDone++
+			} else {
+				result.Received++
+			}
 		}
-		if p.rgb11AddressMessageProcessed("consignment", messageID) {
-			result.AlreadyDone++
-			continue
-		}
-		if _, _, err := p.acceptRGB11AddressMailboxStore(ctx, store, value, ackOptions); err != nil {
-			result.Invalid++
-			result.ErrorDetails = append(result.ErrorDetails, fmt.Sprintf("legacy consignment %s: %v", messageID, err))
-			continue
-		}
-		if err := p.markRGB11AddressMessageProcessed("consignment", messageID); err != nil {
-			return nil, err
-		}
-		result.Received++
 	}
 	if nextCursor != "" {
 		if err := p.rgbManager.projectionStore.SaveLocalMetadata(
@@ -353,45 +327,18 @@ func (p *rgb11Manager) resumeReadyRGB11AddressTransfers() error {
 			state.TransferID == "" || rgb11BroadcastCompleteStatus(state.Status) {
 			continue
 		}
-		pending, err := p.rgbManager.projectionStore.LoadPendingTransfer(state.TransferID)
-		if err != nil {
-			return err
-		}
-		key := pending.State.WitnessTxID
+		key := state.WitnessTxID
 		if key == "" {
-			key = pending.State.BatchID
+			key = state.BatchID
 		}
 		if key == "" {
-			key = pending.State.TransferID
+			key = state.TransferID
 		}
 		if _, ok := seen[key]; ok {
 			continue
 		}
 		seen[key] = struct{}{}
-		batch, err := p.loadRGB11AddressBatch(pending)
-		if err != nil {
-			return err
-		}
-		ready := true
-		for _, item := range batch {
-			if item == nil || !item.State.AddressMode || item.State.Direction != "send" {
-				return ErrRGB11Inconsistent
-			}
-			if rgb11BroadcastCompleteStatus(item.State.Status) ||
-				item.State.Status == rgb11StatusBroadcastAttempted {
-				continue
-			}
-			if item.State.Status != "delivered" || !item.State.DeliveryAcknowledged ||
-				item.State.AckStatus != "accepted" || item.State.DeliveryRecordKey == "" ||
-				item.State.DeliveryRecordHash == "" {
-				ready = false
-				break
-			}
-		}
-		if !ready {
-			continue
-		}
-		if _, err := p.BroadcastRGB11AddressTransfer(pending.State.TransferID); err != nil {
+		if _, err := p.continueRGB11AddressSend(state.TransferID); err != nil {
 			return err
 		}
 	}
@@ -679,46 +626,104 @@ func (p *rgb11Manager) applyRGB11AddressDeliveryState(pending *rgb11wallet.Pendi
 	pending.State.Status = "delivered"
 }
 
+type rgb11AddressSendResult struct {
+	txID  string
+	ready bool
+}
+
+// One live owner advances a transaction at a time. All scoped views share the
+// registry; neither its map mutex nor a wallet data lock spans network work.
+func (p *rgb11Manager) continueRGB11AddressSend(transferID string) (rgb11AddressSendResult, error) {
+	var empty rgb11AddressSendResult
+	if p == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil ||
+		p.rgbManager.evidence == nil || transferID == "" {
+		return empty, ErrRGB11AddressDeliveryRequired
+	}
+	if p.scopeStates == nil {
+		return empty, ErrRGB11Inconsistent
+	}
+	// This first read supplies a grouping key only, never an executable intent.
+	release := p.beginRGB11ReservationRead()
+	probe, err := p.projectionStore.LoadPendingTransfer(transferID)
+	release()
+	if err != nil {
+		return empty, err
+	}
+	if probe.State.TransferID != transferID || probe.State.WitnessTxID == "" {
+		return empty, ErrRGB11Inconsistent
+	}
+	if !probe.State.AddressMode {
+		return empty, ErrRGB11AddressDeliveryRequired
+	}
+	ids := probe.State.BatchTransferIDs
+	if len(ids) == 0 {
+		ids = []string{transferID}
+	}
+	if probe.State.Direction != "send" || len(ids) > 32 || !slices.Contains(ids, transferID) ||
+		len(ids) > 1 && (probe.State.BatchID == "" || probe.State.BatchSize != len(ids)) {
+		return empty, ErrRGB11Inconsistent
+	}
+	if len(ids) > 1 {
+		for i, id := range ids {
+			if id == transferID && (id != rgb11BatchRecipientID(probe.State.BatchID, uint32(i)) ||
+				probe.State.RecipientVout != uint32(i+1)) {
+				return empty, ErrRGB11Inconsistent
+			}
+		}
+	}
+	key := p.rgb11ScopeKey() + "\x00" + probe.State.WitnessTxID + "\x00" + probe.State.BatchID +
+		"\x00" + strings.Join(ids, "\x00")
+	value, err, shared := p.scopeStates.sendFlights.Do(key, func() (any, error) {
+		if err := p.checkRGB11OperationSource(); err != nil {
+			return empty, err
+		}
+		pending, batch, err := p.readRGB11AddressBatch(transferID)
+		if err != nil {
+			return empty, err
+		}
+		if pending.State.WitnessTxID != probe.State.WitnessTxID || pending.State.BatchID != probe.State.BatchID ||
+			!slices.Equal(pending.State.BatchTransferIDs, probe.State.BatchTransferIDs) {
+			return empty, ErrRGB11Inconsistent
+		}
+		for _, item := range batch {
+			if item == nil || !item.State.AddressMode || item.State.Direction != "send" {
+				return empty, ErrRGB11Inconsistent
+			}
+			if rgb11BroadcastCompleteStatus(item.State.Status) {
+				continue
+			}
+			if (item.State.Status != "delivered" && item.State.Status != rgb11StatusBroadcastAttempted) ||
+				item.State.DeliveryRecordHash == "" || item.State.DeliveryRecordKey == "" ||
+				(item.State.Status != rgb11StatusBroadcastAttempted &&
+					(!item.State.DeliveryAcknowledged || item.State.AckStatus != "accepted")) {
+				return empty, nil
+			}
+		}
+		txID, err := p.broadcastRGB11PendingBatch(batch, nil)
+		return rgb11AddressSendResult{txID: txID, ready: true}, err
+	})
+	if shared {
+		Log.Infof("RGB send flight shared: manager=%d scope_tag=%s tx_tag=%s",
+			p.rgb11ReservationOwner().debugID, accountTraceScope(p.rgb11ScopeKey()), accountTraceScope(probe.State.WitnessTxID))
+	}
+	result, ok := value.(rgb11AddressSendResult)
+	if !ok {
+		return empty, errors.Join(ErrRGB11Inconsistent, err)
+	}
+	return result, err
+}
+
 // BroadcastRGB11AddressTransfer crosses the irreversible broadcast boundary
 // only after the receiver has persisted and acknowledged the consignment.
 func (p *rgb11Manager) BroadcastRGB11AddressTransfer(transferID string) (string, error) {
-	if p == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil ||
-		p.rgbManager.evidence == nil || transferID == "" {
+	result, err := p.continueRGB11AddressSend(transferID)
+	if err != nil {
+		return result.txID, err
+	}
+	if !result.ready {
 		return "", ErrRGB11AddressDeliveryRequired
 	}
-	pending, err := p.rgbManager.projectionStore.LoadPendingTransfer(transferID)
-	if err != nil {
-		return "", err
-	}
-	if rgb11BroadcastCompleteStatus(pending.State.Status) {
-		// Chain reconciliation can observe a peer broadcast before the lost
-		// signing response is recovered. A visible txid alone does not supply
-		// the complete channel witness needed by the caller.
-		if pending.ChannelSend != nil && !pending.ChannelSend.Signed {
-			batch, err := p.loadRGB11AddressBatch(pending)
-			if err != nil {
-				return "", err
-			}
-			return p.broadcastRGB11PendingBatch(batch, nil)
-		}
-		return pending.State.WitnessTxID, nil
-	}
-	batch, err := p.loadRGB11AddressBatch(pending)
-	if err != nil {
-		return "", err
-	}
-	for _, item := range batch {
-		if rgb11BroadcastCompleteStatus(item.State.Status) {
-			continue
-		}
-		if (item.State.Status != "delivered" && item.State.Status != rgb11StatusBroadcastAttempted) ||
-			item.State.DeliveryRecordHash == "" || item.State.DeliveryRecordKey == "" ||
-			(item.State.Status != rgb11StatusBroadcastAttempted &&
-				(!item.State.DeliveryAcknowledged || item.State.AckStatus != "accepted")) {
-			return "", ErrRGB11AddressDeliveryRequired
-		}
-	}
-	return p.broadcastRGB11PendingBatch(batch, nil)
+	return result.txID, nil
 }
 
 func parseRGB11AddressMailboxKey(record *swire.DKVSRecord) (receiverID, senderID, messageID string, err error) {
@@ -738,34 +743,6 @@ func parseRGB11AddressMailboxKey(record *swire.DKVSRecord) (receiverID, senderID
 		return "", "", "", ErrRGB11AddressMailbox
 	}
 	return receiverID, senderID, messageID, nil
-}
-
-func (p *rgb11Manager) readRGB11AddressConsignmentStore(store *dkvsStore, record *dkvsValue,
-	senderID, messageID string) ([]byte, string, error) {
-
-	mode, encrypted, err := rgb11wallet.DecodeAddressEnvelope(record.Value)
-	if err != nil {
-		return nil, "", err
-	}
-	modeName := "inline"
-	if mode == rgb11AddressEnvelopeBlob {
-		modeName = "blob"
-		blobKey, keyErr := dkvsindexer.BlobKey(senderID, messageID)
-		if keyErr != nil {
-			return nil, "", keyErr
-		}
-		blob, blobErr := store.Get(blobKey)
-		if blobErr != nil || blob == nil {
-			return nil, "", fmt.Errorf("%w: %v", ErrRGB11AddressMailbox, blobErr)
-		}
-		encrypted = blob.Value
-	}
-	cryptor, ok := p.wallet.(rgb11AccountPayloadCryptor)
-	if !ok {
-		return nil, "", fmt.Errorf("active wallet does not support RGB11 account decryption")
-	}
-	plain, err := cryptor.DecryptFromAccount(senderID, encrypted)
-	return plain, modeName, err
 }
 
 func (p *rgb11Manager) findPreparedRGB11AddressAllocation(prepared *rgb11wallet.PreparedValidation, messageIDs ...string) (
@@ -933,29 +910,7 @@ func (p *rgb11Manager) acceptRGB11AddressMailboxStore(ctx context.Context, store
 		direct.Payload != nil && direct.Payload.Kind == AccountMessageKindRGB11Consignment {
 		return p.acceptRGB11AddressDirect(ctx, store, direct, ackOptions)
 	}
-
-	// Legacy upgrade path: old mailbox records were sender-signed at the outer
-	// DKVS layer. Keep them readable, but all new writes use MessageManager.
-	verify := dkvsindexer.RecordVerificationOptions{ExpectedKey: value.Key}
-	if err := dkvsindexer.VerifyAccountRecordForClient(value.record, verify); err != nil {
-		return nil, nil, fmt.Errorf("%w: %v", ErrRGB11AddressMailbox, err)
-	}
-	_, senderID, messageID, err := parseRGB11AddressMailboxKey(value.record)
-	if err != nil {
-		return nil, nil, err
-	}
-	raw, mode, err := p.readRGB11AddressConsignmentStore(store, value, senderID, messageID)
-	if err != nil {
-		return nil, nil, fmt.Errorf("%w: %v", ErrRGB11AddressMailbox, err)
-	}
-	return p.acceptRGB11AddressMailboxDecoded(ctx, value.record, raw, mode,
-		func(senderID, messageID string, ack RGB11AddressACK) (*swire.DKVSRecord, error) {
-			written, err := p.sendRGB11AddressACKStore(store, senderID, messageID, ack, ackOptions)
-			if err != nil {
-				return nil, err
-			}
-			return written.record, nil
-		})
+	return nil, nil, ErrRGB11AddressMailbox
 }
 
 func rgb11AddressACKStateIdentityMatches(expected, current *rgb11wallet.TransferState,
@@ -964,10 +919,20 @@ func rgb11AddressACKStateIdentityMatches(expected, current *rgb11wallet.Transfer
 		current.Direction != "receive" || !current.AddressMode ||
 		current.TransportMode != RGB11AddressTransport || current.Status == "rejected" ||
 		current.Status == "cancelled" || current.Status == "expired" ||
-		current.AddressMessageID != messageID || current.SenderAccountID != senderID ||
+		current.SenderAccountID != senderID ||
 		current.ReceiverAccountID != receiverID || current.ConsignmentHash != consignmentHash ||
 		current.WitnessTxID != witnessTxID || current.ReceiveRequestID == "" ||
 		!slices.Contains(current.OutputOutPoints, output) {
+		return false
+	}
+	if current.Status == "settled" {
+		// Terminal recovery omits delivery cache; its protocol identity remains.
+		derived, err := rgb11AddressMessageID(current.TransferID)
+		if err != nil || derived != messageID ||
+			current.AddressMessageID != "" && current.AddressMessageID != messageID {
+			return false
+		}
+	} else if current.AddressMessageID != messageID {
 		return false
 	}
 	return expected.TransferID == current.TransferID && expected.BatchID == current.BatchID &&
@@ -1040,6 +1005,36 @@ func (p *rgb11Manager) acceptRGB11AddressMailboxDecodedWithMetadata(ctx context.
 	if p == nil || record == nil || metadataRecord == nil || sendACK == nil || p.wallet == nil || p.rgbManager == nil {
 		return nil, nil, ErrRGB11AddressMailbox
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	walletID, err := p.RGB11WalletID()
+	if err != nil {
+		return nil, nil, err
+	}
+	return p.acceptRGB11MailboxAttempt(ctx, record, metadataRecord, bytes.Clone(raw), mode, sendACK,
+		walletID, p.rgb11ScopeKey(), 0)
+}
+
+// Rebuild only a rejected precommit candidate. Every committed-target and ACK
+// path returns directly, including its persistence or backup errors.
+func (p *rgb11Manager) acceptRGB11MailboxAttempt(ctx context.Context,
+	record, metadataRecord *swire.DKVSRecord, raw []byte, mode string,
+	sendACK func(string, string, RGB11AddressACK) (*swire.DKVSRecord, error),
+	walletID, scope string, attempt int) (*rgb11wallet.ValidationReceipt, *swire.DKVSRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	actualID, err := p.RGB11WalletID()
+	if err != nil {
+		return nil, nil, err
+	}
+	if actualID != walletID || p.rgb11ScopeKey() != scope {
+		return nil, nil, errAccountSnapshotChanged
+	}
+	if err := p.checkRGB11OperationSource(); err != nil {
+		return nil, nil, err
+	}
 	receiverID, senderID, messageID, err := parseRGB11AddressMailboxKey(record)
 	if err != nil {
 		return nil, nil, err
@@ -1106,7 +1101,7 @@ func (p *rgb11Manager) acceptRGB11AddressMailboxDecodedWithMetadata(ctx context.
 			receipt.ConsignmentHash, witnessTxID, pkScript) {
 			return nil, nil, ErrRGB11AddressMailbox
 		}
-		if owner := p.accountManagementOwner(); owner != nil {
+		if owner := p.accountManagementOwner(); owner != nil && state.Status != "settled" {
 			if err := p.syncRGB11OperationRecovery(context.Background()); err != nil {
 				return nil, nil, err
 			}
@@ -1122,6 +1117,19 @@ func (p *rgb11Manager) acceptRGB11AddressMailboxDecodedWithMetadata(ctx context.
 				receipt.ConsignmentHash, witnessTxID, pkScript) {
 			return nil, nil, ErrRGB11AddressMailbox
 		}
+		if state.Status == "settled" {
+			// The proof, authenticated parties, original output and complete receive
+			// request were revalidated above. Confirmation already ended delivery;
+			// do not recreate ACK cache or alter this journal's recovery generation.
+			managerID := uint64(0)
+			if owner := p.accountManagementOwner(); owner != nil {
+				managerID = owner.debugID
+			}
+			Log.Infof("RGB settled receive replay: manager=%d message_tag=%s transfer_tag=%s consignment_tag=%s witness_tag=%s proof_verified=true identity_match=true request_match=true cached_message_present=%t",
+				managerID, accountTraceScope(messageID), accountTraceScope(state.TransferID),
+				accountTraceScope(receipt.ConsignmentHash), accountTraceScope(witnessTxID), state.AddressMessageID != "")
+			return receipt, nil, nil
+		}
 		ackBaseline := *state
 		ackRecord, err := sendACK(senderID, messageID,
 			RGB11AddressACK{Status: RGB11AddressACKAccepted})
@@ -1130,7 +1138,7 @@ func (p *rgb11Manager) acceptRGB11AddressMailboxDecodedWithMetadata(ctx context.
 		}
 		state.AckStatus = "ack-sent"
 		state.DeliveryAcknowledged = true
-		if err := p.rgbManager.projectionStore.CompareAndSaveTransferState(&ackBaseline, state); err != nil {
+		if err := p.saveRGB11ReceiveACK(&ackBaseline, state, request, "existing"); err != nil {
 			return nil, nil, err
 		}
 		if err := p.autoBackupRGB11AfterMutation(); err != nil {
@@ -1156,11 +1164,7 @@ func (p *rgb11Manager) acceptRGB11AddressMailboxDecodedWithMetadata(ctx context.
 	if err != nil {
 		return nil, nil, err
 	}
-	walletID, err := p.RGB11WalletID()
-	if err != nil {
-		return nil, nil, err
-	}
-	current, _, err := p.exportRGB11WalletSnapshot(walletID)
+	current, err := p.readRGB11Local(walletID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1209,11 +1213,11 @@ func (p *rgb11Manager) acceptRGB11AddressMailboxDecodedWithMetadata(ctx context.
 	// This row was just built in memory and has never been published. Replace
 	// that provisional identity with the complete address receive identity;
 	// existing durable receives are handled by the retry branch above.
-	next.ProjectionRecords, err = rgb11wallet.RemoveProjectionSnapshotKeys(next.ProjectionRecords, "transfer-"+state.TransferID)
+	next.ProjectionRecords, err = rgb11wallet.RemoveLocalKeys(next.ProjectionRecords, "transfer-"+state.TransferID)
 	if err != nil {
 		return nil, nil, err
 	}
-	next.ProjectionRecords, err = rgb11wallet.UpsertProjectionSnapshotTransfer(next.ProjectionRecords, state)
+	next.ProjectionRecords, err = rgb11wallet.UpsertLocalTransfer(next.ProjectionRecords, state)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1227,6 +1231,16 @@ func (p *rgb11Manager) acceptRGB11AddressMailboxDecodedWithMetadata(ctx context.
 		}
 	}
 	if _, err := p.applyRGB11CandidateSnapshot(ctx, current, next); err != nil {
+		if errors.Is(err, errRGB11StaleLocal) {
+			Log.Warnf("RGB candidate operation rejected: op=direct_receive_new manager=%d scope_tag=%s message_tag=%s transfer_tag=%s confirmed=%t attempt=%d",
+				p.rgb11ReservationOwner().debugID, accountTraceScope(p.rgb11ScopeKey()), accountTraceScope(messageID),
+				accountTraceScope(localTransferID), confirmed, attempt+1)
+			if attempt < 2 {
+				// This candidate never committed. Re-read the same message's
+				// durable target before building another complete local candidate.
+				return p.acceptRGB11MailboxAttempt(ctx, record, metadataRecord, raw, mode, sendACK, walletID, scope, attempt+1)
+			}
+		}
 		return nil, nil, err
 	}
 	expectedState := *state
@@ -1261,7 +1275,7 @@ func (p *rgb11Manager) acceptRGB11AddressMailboxDecodedWithMetadata(ctx context.
 	}
 	state.AckStatus = "ack-sent"
 	state.DeliveryAcknowledged = true
-	if err := p.rgbManager.projectionStore.CompareAndSaveTransferState(&ackBaseline, state); err != nil {
+	if err := p.saveRGB11ReceiveACK(&ackBaseline, state, request, "new"); err != nil {
 		return nil, nil, err
 	}
 	if err := p.autoBackupRGB11AfterMutation(); err != nil {
@@ -1270,14 +1284,38 @@ func (p *rgb11Manager) acceptRGB11AddressMailboxDecodedWithMetadata(ctx context.
 	return accepted, ackRecord, nil
 }
 
-func (p *rgb11Manager) sendRGB11AddressACKStore(store *dkvsStore, senderAccountID, messageID string,
-	ack RGB11AddressACK, options RGB11AddressDeliveryOptions) (*dkvsValue, error) {
-	record, err := p.sendRGB11AddressACKDirect(senderAccountID, messageID, ack, options)
-	if err != nil {
-		return nil, err
+// A concurrent receive may finish the same ACK while this caller sends it.
+// Only an exact local result completes this mark; never repeat the network ACK.
+func (p *rgb11Manager) saveRGB11ReceiveACK(expected, desired *rgb11wallet.TransferState,
+	request *corewallet.ReceiveRequest, phase string) error {
+	err := p.rgbManager.projectionStore.CompareAndSaveTransferState(expected, desired)
+	if !errors.Is(err, rgb11wallet.ErrLocalSnapshotChanged) {
+		return err
 	}
-	_ = store
-	return cloneDKVSValue(record), nil
+	current, readErr := p.rgbManager.projectionStore.LoadTransferState(desired.TransferID)
+	wanted, wantErr := rgb11wallet.UpsertProjectionSnapshotTransfer(nil, desired)
+	observed, currentErr := rgb11wallet.UpsertProjectionSnapshotTransfer(nil, current)
+	currentRequest, requestErr := p.rgbManager.engine.LoadReceive(desired.ReceiveRequestID)
+	requestEqual := requestErr == nil && request != nil && currentRequest != nil &&
+		request.Status == currentRequest.Status && request.FailureCode == currentRequest.FailureCode &&
+		sameRGB11AddressReceiveRequest(request, currentRequest)
+	stateEqual := readErr == nil && wantErr == nil && currentErr == nil &&
+		len(wanted) == 1 && len(observed) == 1 && sameRGB11SnapshotRecords(wanted, observed)
+	owner := p.rgb11ReservationOwner()
+	scopeTag := accountTraceScope(p.rgb11ScopeKey())
+	if stateEqual && requestEqual && desired.Direction == "receive" && desired.AddressMode &&
+		desired.AckStatus == "ack-sent" && desired.DeliveryAcknowledged {
+		Log.Infof("RGB receive ACK mark already complete: manager=%d scope_tag=%s phase=%s message_tag=%s transfer_tag=%s full_state_equal=true request_equal=true",
+			owner.debugID, scopeTag, phase, accountTraceScope(desired.AddressMessageID), accountTraceScope(desired.TransferID))
+		return nil
+	}
+	Log.Warnf("RGB receive ACK mark conflict: manager=%d scope_tag=%s phase=%s message_tag=%s transfer_tag=%s full_state_equal=%t request_equal=%t read_error=%T desired_encode_error=%T current_encode_error=%T request_read_error=%T",
+		owner.debugID, scopeTag, phase, accountTraceScope(desired.AddressMessageID), accountTraceScope(desired.TransferID),
+		stateEqual, requestEqual, readErr, wantErr, currentErr, requestErr)
+	if wantErr == nil && currentErr == nil {
+		logRGB11LifeDiff(owner.debugID, scopeTag, wanted, observed)
+	}
+	return err
 }
 
 func (p *rgb11Manager) sendRGB11AddressACKDirect(senderAccountID, messageID string,
@@ -1313,6 +1351,7 @@ func (p *rgb11Manager) sendRGB11AddressACKDirect(senderAccountID, messageID stri
 // compacted once the witness transaction is also confirmed.
 func (p *rgb11Manager) AcceptRGB11AddressACK(record *swire.DKVSRecord,
 	verify dkvsindexer.RecordVerificationOptions) (*RGB11AddressACK, error) {
+	_ = verify
 	if p == nil || record == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil {
 		return nil, ErrRGB11AddressMailbox
 	}
@@ -1320,18 +1359,7 @@ func (p *rgb11Manager) AcceptRGB11AddressACK(record *swire.DKVSRecord,
 		direct.Payload != nil && direct.Payload.Kind == AccountMessageKindRGB11ACK {
 		return p.acceptRGB11AddressACKDirect(direct)
 	}
-	if err := dkvsindexer.VerifyAccountRecordForClient(record, verify); err != nil {
-		return nil, err
-	}
-	senderID, receiverID, messageID, err := parseRGB11AddressMailboxKey(record)
-	if err != nil {
-		return nil, err
-	}
-	ack, err := rgb11wallet.DecodeAddressACK(record.Value)
-	if err != nil {
-		return nil, err
-	}
-	return p.acceptRGB11AddressACKDecoded(senderID, receiverID, messageID, ack)
+	return nil, ErrRGB11AddressMailbox
 }
 
 func (p *rgb11Manager) acceptRGB11AddressACKDirect(item *AccountDirectMessage) (*RGB11AddressACK, error) {
@@ -1355,13 +1383,24 @@ func (p *rgb11Manager) acceptRGB11AddressACKDecoded(senderID, receiverID, messag
 	if err != nil || senderID != localID {
 		return nil, ErrRGB11AddressMailbox
 	}
+	switch ack.Status {
+	case RGB11AddressACKAccepted, RGB11AddressACKNeedResend, RGB11AddressACKRejected:
+	default:
+		return nil, ErrRGB11AddressMailbox
+	}
 	states, err := p.rgbManager.projectionStore.ListTransfers()
 	if err != nil {
 		return nil, err
 	}
 	var pending *rgb11wallet.PendingTransfer
 	for _, state := range states {
-		if state == nil || !state.AddressMode || state.AddressMessageID != messageID {
+		if state == nil || !state.AddressMode || state.Direction != "send" {
+			continue
+		}
+		// TransferID is the persistent protocol identity. Terminal recovery
+		// intentionally omits the redundant runtime delivery/ACK cache.
+		expectedID, err := rgb11AddressMessageID(state.TransferID)
+		if err != nil || expectedID != messageID {
 			continue
 		}
 		pending, err = p.rgbManager.projectionStore.LoadPendingTransfer(state.TransferID)
@@ -1370,15 +1409,25 @@ func (p *rgb11Manager) acceptRGB11AddressACKDecoded(senderID, receiverID, messag
 		}
 		break
 	}
-	if pending == nil || !pending.State.AddressMode || pending.State.AddressMessageID != messageID ||
+	if pending == nil || !pending.State.AddressMode || pending.State.Direction != "send" ||
 		pending.State.ReceiverAccountID != receiverID || pending.State.SenderAccountID != senderID {
 		return nil, ErrRGB11AddressMailbox
 	}
-	baseline := cloneRGB11BroadcastIntent(pending)
-	if pending.State.Status == "rejected" {
-		// A delayed ACK cannot overwrite an atomically rejected batch.
+	expectedID, err := rgb11AddressMessageID(pending.State.TransferID)
+	if err != nil || expectedID != messageID {
+		return nil, ErrRGB11AddressMailbox
+	}
+	switch pending.State.Status {
+	case "settled", "rejected", "orphaned":
+		// Authenticated late ACKs cannot change a terminal journal, recreate
+		// its delivery cache, stage a backup mutation or resume a broadcast.
 		return &ack, nil
 	}
+	// Active obligations still retain and require their exact delivery binding.
+	if pending.State.AddressMessageID != messageID {
+		return nil, ErrRGB11AddressMailbox
+	}
+	baseline := cloneRGB11BroadcastIntent(pending)
 	if ack.Status != RGB11AddressACKAccepted {
 		pending.State.AckStatus = "need-resend"
 		if ack.Status == RGB11AddressACKRejected {
@@ -1563,17 +1612,57 @@ func (p *rgb11Manager) RGB11WalletID() (string, error) {
 }
 
 func (p *rgb11Manager) exportRGB11WalletSnapshot(walletID string) (*RGB11WalletSnapshot, []byte, error) {
+	return p.readRGB11StrictSnapshot(walletID, false)
+}
+
+// Keep the existing strict export validation and proof-fault gate. A local
+// publisher additionally needs the exact raw DB baseline, including rehydrated
+// pending payloads. Both local reads share the same reservation read gate;
+// the raw record values are never derived by re-encoding the backup view.
+func (p *rgb11Manager) readRGB11StrictSnapshot(walletID string, rawLocal bool) (*RGB11WalletSnapshot, []byte, error) {
+	snapshot, _, err := p.readRGB11StrictViews(walletID, rawLocal)
+	return snapshot, nil, err
+}
+
+// Retain the normalized backup beside the selected local view from the same
+// strict read. Recovery comparisons use backup bytes; atomic CAS uses raw bytes.
+func (p *rgb11Manager) readRGB11StrictViews(walletID string, rawLocal bool) (*RGB11WalletSnapshot, *RGB11WalletSnapshot, error) {
 	if p == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil || p.rgbManager.engineStore == nil || p.wallet == nil || walletID == "" {
 		return nil, nil, ErrRGB11Inconsistent
 	}
 	releaseRGB11Snapshot := p.beginRGB11ReservationRead()
 	defer releaseRGB11Snapshot()
-	snapshot, raw, err := p.exportRGB11WalletSnapshotLocked(walletID)
+	snapshot, _, err := p.exportRGB11WalletSnapshotLocked(walletID)
+	backup := snapshot
+	if err == nil {
+		faults := p.rgb11ScopeState().ProofFaults
+		if len(faults) != 0 {
+			causes := []error{ErrRGB11Inconsistent}
+			for _, fault := range faults {
+				causes = append(causes, fault)
+			}
+			return nil, nil, fmt.Errorf("complete RGB11 backup pending: %w", errors.Join(causes...))
+		}
+	}
+	if err == nil && rawLocal {
+		snapshot, err = p.readRGB11LocalLocked(walletID)
+	}
 	if err != nil {
-		p.markRGB11ProjectionUnavailable()
+		// A strict backup failure must not revoke independently fresh A.
+		// Unknown/unreadable material still closes the entire scope gate.
+		local, readErr := p.readRGB11LocalLocked(walletID)
+		var view *rgb11wallet.LocalProjection
+		if readErr == nil {
+			view, readErr = rgb11wallet.SplitLocalProjection(local.ProjectionRecords)
+		}
+		if readErr != nil || len(view.Faults) == 0 {
+			p.markRGB11ProjectionUnavailable()
+		} else {
+			p.noteRGB11ProofFaults(view)
+		}
 		p.consistencyStatus = "broken"
 	}
-	return snapshot, raw, err
+	return snapshot, backup, err
 }
 
 // exportRGB11WalletSnapshotLocked is local-only. The caller owns the shared
@@ -1630,13 +1719,11 @@ func (p *rgb11Manager) hasActiveRGB11Transition() (bool, error) {
 // only an optional cache and is never the recovery authority.
 func (p *rgb11Manager) autoBackupRGB11AfterMutation() error {
 	if owner := p.accountManagementOwner(); owner != nil {
-		if inOperation, firstMutation := p.Manager.noteRGB11ManagedOperationMutation(); inOperation {
-			if firstMutation {
-				return owner.markAccountManagedDataDirtyDeferred(rgb11AccountManagedProviderID)
-			}
-			return nil
+		// The reservation transaction already persisted the dirty generation
+		// with its business records. This hook only coalesces background work.
+		if inOperation, _ := p.Manager.noteRGB11ManagedOperationMutation(); !inOperation {
+			owner.scheduleAccountManagedStateSync()
 		}
-		return owner.markAccountManagedDataDirty(rgb11AccountManagedProviderID)
 	}
 	return nil
 }
@@ -1660,9 +1747,268 @@ func (p *rgb11Manager) ResumeRGB11PreparedTransfer(transferID string) (*RGB11Pre
 		len(pending.RecipientConsignment) == 0 || pending.State.WitnessTxID == "" {
 		return nil, ErrRGB11Inconsistent
 	}
-	decoded, err := coreconsignment.DecodeArmor(string(pending.RecipientConsignment))
+	p.traceRGB11Broadcast("cold-package-loaded", pending.State.WitnessTxID, nil)
+	return rgb11RecipientTransferPackage(pending, pending.RecipientConsignment)
+}
+
+// ExportRGB11SettledConsignment retrieves the immutable recipient object after
+// runtime delivery bytes have been compacted. It never resumes or changes the
+// settled transfer, so a sender can hand the same consignment to a receiver
+// whose out-of-band delivery was missed before account recovery.
+func (p *rgb11Manager) ExportRGB11SettledConsignment(transferID string) (*RGB11PreparedTransferPackage, error) {
+	if p == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil {
+		return nil, ErrRGB11Inconsistent
+	}
+	store := p.rgbManager.projectionStore
+	pending, err := store.LoadPendingTransfer(transferID)
 	if err != nil {
 		return nil, err
+	}
+	if pending.State.TransportMode != "out-of-band" || pending.State.Direction != "send" ||
+		pending.State.Status != "settled" || pending.State.WitnessTxID == "" ||
+		pending.State.ConsignmentHash == "" || pending.RecipientObjectHash != pending.State.ConsignmentHash {
+		return nil, ErrRGB11Inconsistent
+	}
+	recipient, err := store.LoadObject(pending.RecipientObjectHash)
+	if err != nil {
+		return nil, err
+	}
+	hash := sha256.Sum256(recipient)
+	if hex.EncodeToString(hash[:]) != pending.RecipientObjectHash {
+		return nil, ErrRGB11Inconsistent
+	}
+	if err := validateRGB11PendingTransaction(pending); err != nil {
+		return nil, err
+	}
+	decoded, err := coreconsignment.DecodeArmor(string(recipient))
+	if err != nil || decoded == nil || decoded.Armor == nil || decoded.Armor.Type != "transfer" {
+		return nil, ErrRGB11Inconsistent
+	}
+	if err := rgb11SettledRecipientMatches(pending, decoded); err != nil {
+		return nil, err
+	}
+	// The recipient needs the invoice, amount and public witness, not the
+	// sender's batch siblings, local outputs or delivery bookkeeping.
+	selected := *pending
+	selected.State = rgb11wallet.TransferState{
+		TransferID: pending.State.TransferID, Direction: pending.State.Direction,
+		Status: pending.State.Status, TransportMode: pending.State.TransportMode,
+		Asset: pending.State.Asset, RecipientID: pending.State.RecipientID,
+		RecipientVout: pending.State.RecipientVout, Invoice: pending.State.Invoice,
+		ConsignmentHash: pending.State.ConsignmentHash,
+		WitnessTxID:     pending.State.WitnessTxID,
+	}
+	return rgb11RecipientTransferPackage(&selected, recipient)
+}
+
+// This is a local proof-binding check for historical delivery, not a new
+// chain-validation or receive path. No remote evidence or wallet-owned seal is
+// required to hand the original recipient its existing transfer object.
+func rgb11SettledRecipientMatches(pending *rgb11wallet.PendingTransfer,
+	decoded *coreconsignment.Container) error {
+	if pending == nil || decoded == nil || decoded.Armor == nil {
+		return ErrRGB11Inconsistent
+	}
+	invoice, err := invoicing.Parse(pending.State.Invoice)
+	if err != nil {
+		return ErrRGB11InvoiceMismatch
+	}
+	storedAmount, err := decimalUint64(&pending.State.Asset.Amount)
+	if err != nil || storedAmount == 0 {
+		return ErrRGB11InvoiceMismatch
+	}
+	storedContract, err := consensus.ParseContractID(decoded.ContractID)
+	if err != nil {
+		return ErrRGB11InvoiceMismatch
+	}
+	contract, amount, recipientID, _, _, transport, err := validateRGB11SendInvoice(invoice, &storedContract, &storedAmount)
+	if err != nil || contract.String() != decoded.ContractID || transport != "out-of-band" ||
+		recipientID != pending.State.RecipientID ||
+		!rgb11wallet.ContractAssetKeyMatches(pending.State.Asset.Name, decoded.ContractID) {
+		return ErrRGB11InvoiceMismatch
+	}
+	if storedAmount != amount {
+		return ErrRGB11InvoiceMismatch
+	}
+	tx := wire.NewMsgTx(wire.TxVersion)
+	if tx.Deserialize(bytes.NewReader(pending.SignedTx)) != nil {
+		return ErrRGB11Inconsistent
+	}
+	if invoice.Beneficiary.Kind == invoicing.BeneficiaryWitnessVout {
+		script, err := invoice.Beneficiary.WitnessScript()
+		if err != nil || pending.State.RecipientVout == 0 ||
+			int(pending.State.RecipientVout) >= len(tx.TxOut) ||
+			!bytes.Equal(script, tx.TxOut[pending.State.RecipientVout].PkScript) {
+			return ErrRGB11InvoiceMismatch
+		}
+	} else if pending.State.RecipientVout != 0 {
+		return ErrRGB11InvoiceMismatch
+	}
+	bundles, ok := decoded.Value.Field("bundles")
+	bundles = bundles.Unwrap()
+	if !ok || bundles.Kind != strict_types.ValueList || len(bundles.Items) == 0 {
+		return ErrRGB11Inconsistent
+	}
+	last := bundles.Items[len(bundles.Items)-1].Unwrap()
+	witness, witnessOK := last.Field("pubWitness")
+	bundleValue, bundleOK := last.Field("bundle")
+	if !witnessOK || !bundleOK || !rgb11EmbeddedWitnessMatches(witness, tx) {
+		return ErrRGB11Inconsistent
+	}
+	bundle, err := operations.CommitBundle(bundleValue)
+	if err != nil {
+		return ErrRGB11Inconsistent
+	}
+	matches := 0
+	for _, transition := range bundle.Transitions {
+		contractField, ok := transition.Field("contractId")
+		contractBytes, bytesOK := contractField.Bytes()
+		if !ok || !bytesOK || !bytes.Equal(contractBytes, contract[:]) {
+			return ErrRGB11Inconsistent
+		}
+		assignments, ok := transition.Field("assignments")
+		assignments = assignments.Unwrap()
+		if !ok || assignments.Kind != strict_types.ValueMap {
+			return ErrRGB11Inconsistent
+		}
+		for _, group := range assignments.Entries {
+			assignmentType, ok := rgb11StrictUint(group.Key)
+			if !ok || assignmentType != 4000 {
+				continue
+			}
+			typed := group.Value.Unwrap()
+			if typed.Kind != strict_types.ValueUnion || typed.Inner == nil {
+				return ErrRGB11Inconsistent
+			}
+			items := typed.Inner.Unwrap()
+			if items.Kind != strict_types.ValueList && items.Kind != strict_types.ValueSet {
+				return ErrRGB11Inconsistent
+			}
+			for _, item := range items.Items {
+				item = item.Unwrap()
+				if item.Kind != strict_types.ValueUnion || item.Inner == nil {
+					return ErrRGB11Inconsistent
+				}
+				fields := item.Inner.Unwrap()
+				sealValue, sealOK := fields.Field("seal")
+				stateValue, stateOK := fields.Field("state")
+				if !sealOK || !stateOK || !rgb11SettledAmountMatches(stateValue, typed.Name, amount) {
+					continue
+				}
+				switch invoice.Beneficiary.Kind {
+				case invoicing.BeneficiaryBlindedSeal:
+					secret, ok := sealValue.Bytes()
+					if item.Name == "confidentialSeal" && ok &&
+						bytes.Equal(secret, invoice.Beneficiary.BlindedSeal[:]) {
+						matches++
+					}
+				case invoicing.BeneficiaryWitnessVout:
+					graph, err := seals.DecodeGraphBlindSeal(sealValue.Encoded)
+					if item.Name == "revealed" && err == nil && graph.TxID == nil &&
+						graph.Vout == pending.State.RecipientVout {
+						matches++
+					}
+				}
+			}
+		}
+	}
+	if matches != 1 {
+		return ErrRGB11InvoiceMismatch
+	}
+	return nil
+}
+
+func rgb11SettledAmountMatches(value strict_types.Value, class string, amount uint64) bool {
+	if class == "structured" {
+		return amount == 1
+	}
+	value = value.Unwrap()
+	if class != "fungible" || value.Kind != strict_types.ValueUnion || value.Tag != 8 || value.Inner == nil {
+		return false
+	}
+	actual, ok := rgb11StrictUint(*value.Inner)
+	return ok && actual == amount
+}
+
+func rgb11StrictUint(value strict_types.Value) (uint64, bool) {
+	value = value.Unwrap()
+	if value.Kind == strict_types.ValueUnion && value.Inner != nil {
+		return rgb11StrictUint(*value.Inner)
+	}
+	return value.Uint64()
+}
+
+// Match the embedded public witness to the original locally retained tx.
+// RGB commitments bind its txid; the output check above then binds vout/script.
+func rgb11EmbeddedWitnessMatches(value strict_types.Value, tx *wire.MsgTx) bool {
+	value = value.Unwrap()
+	if tx == nil || value.Kind != strict_types.ValueUnion || value.Name != "tx" || value.Inner == nil {
+		return false
+	}
+	fields := value.Inner.Unwrap()
+	version, versionOK := fields.Field("version")
+	lockTime, lockOK := fields.Field("lockTime")
+	inputs, inputsOK := fields.Field("inputs")
+	outputs, outputsOK := fields.Field("outputs")
+	inputs, outputs = inputs.Unwrap(), outputs.Unwrap()
+	version = version.Unwrap()
+	versionNumber := int64(0)
+	if version.Signed != nil {
+		versionNumber = *version.Signed
+	} else if number, ok := version.Uint64(); ok && number <= 1<<31-1 {
+		versionNumber = int64(number)
+	} else {
+		return false
+	}
+	lockNumber, validLock := rgb11StrictUint(lockTime)
+	if !versionOK || !lockOK || !inputsOK || !outputsOK || !validLock ||
+		versionNumber != int64(tx.Version) || lockNumber != uint64(tx.LockTime) ||
+		inputs.Kind != strict_types.ValueList || outputs.Kind != strict_types.ValueList ||
+		len(inputs.Items) != len(tx.TxIn) || len(outputs.Items) != len(tx.TxOut) {
+		return false
+	}
+	for index, entry := range inputs.Items {
+		entry = entry.Unwrap()
+		prev, prevOK := entry.Field("prevOutput")
+		scriptValue, scriptOK := entry.Field("sigScript")
+		sequenceValue, sequenceOK := entry.Field("sequence")
+		prev = prev.Unwrap()
+		hashValue, hashOK := prev.Field("txid")
+		voutValue, voutOK := prev.Field("vout")
+		hash, hashBytesOK := hashValue.Bytes()
+		vout, validVout := rgb11StrictUint(voutValue)
+		sequence, validSequence := rgb11StrictUint(sequenceValue)
+		script, scriptBytesOK := scriptValue.Bytes()
+		if !prevOK || !scriptOK || !sequenceOK || !hashOK || !voutOK || !hashBytesOK ||
+			!validVout || !validSequence || !scriptBytesOK ||
+			!bytes.Equal(hash, tx.TxIn[index].PreviousOutPoint.Hash[:]) ||
+			vout != uint64(tx.TxIn[index].PreviousOutPoint.Index) ||
+			sequence != uint64(tx.TxIn[index].Sequence) ||
+			!bytes.Equal(script, tx.TxIn[index].SignatureScript) {
+			return false
+		}
+	}
+	for index, entry := range outputs.Items {
+		entry = entry.Unwrap()
+		amountValue, amountOK := entry.Field("value")
+		scriptValue, scriptOK := entry.Field("scriptPubkey")
+		amount, validAmount := rgb11StrictUint(amountValue)
+		script, scriptBytesOK := scriptValue.Bytes()
+		if !amountOK || !scriptOK || !validAmount || !scriptBytesOK ||
+			amount != uint64(tx.TxOut[index].Value) || !bytes.Equal(script, tx.TxOut[index].PkScript) {
+			return false
+		}
+	}
+	return true
+}
+
+func rgb11RecipientTransferPackage(pending *rgb11wallet.PendingTransfer, recipient []byte) (*RGB11PreparedTransferPackage, error) {
+	decoded, err := coreconsignment.DecodeArmor(string(recipient))
+	if err != nil {
+		return nil, err
+	}
+	if decoded.Armor == nil || decoded.Armor.Type != "transfer" {
+		return nil, ErrRGB11Inconsistent
 	}
 	transferFile, err := coreconsignment.EncodeFile(decoded)
 	if err != nil {
@@ -1673,7 +2019,7 @@ func (p *rgb11Manager) ResumeRGB11PreparedTransfer(transferID string) (*RGB11Pre
 	state.OutputOutPoints = append([]string(nil), pending.State.OutputOutPoints...)
 	state.BatchTransferIDs = append([]string(nil), pending.State.BatchTransferIDs...)
 	return &RGB11PreparedTransferPackage{
-		State: &state, RecipientConsignment: string(pending.RecipientConsignment),
+		State: &state, RecipientConsignment: string(recipient),
 		RecipientConsignmentBase64: base64.StdEncoding.EncodeToString(transferFile),
 		TxID:                       pending.State.WitnessTxID,
 	}, nil
@@ -2179,4 +2525,64 @@ func (p *rgb11Manager) cancelRGB11PendingBatchMode(pendingList []*rgb11wallet.Pe
 		return err
 	}
 	return p.autoBackupRGB11AfterMutation()
+}
+
+// Complete local bytes, including damaged records; never used by backup Export.
+// The caller owns the reservation read or commit gate.
+func (p *rgb11Manager) readRGB11LocalLocked(walletID string) (*RGB11WalletSnapshot, error) {
+	projection, err := p.projectionStore.ReadLocalRecords()
+	if err != nil {
+		return nil, err
+	}
+	engine, err := p.engineStore.ExportSnapshot()
+	if err != nil {
+		return nil, err
+	}
+	return &RGB11WalletSnapshot{Version: rgb11WalletSnapshotVersion, WalletID: walletID,
+		AccountIndex: p.wallet.GetSubAccount(), EngineBuildID: rgb11wallet.NativeEngineBuildID,
+		ProjectionRecords: projection, EngineRecords: engine}, nil
+}
+
+func (p *rgb11Manager) readRGB11Local(walletID string) (*RGB11WalletSnapshot, error) {
+	release := p.beginRGB11ReservationRead()
+	defer release()
+	snapshot, err := p.readRGB11LocalLocked(walletID)
+	if err == nil {
+		var view *rgb11wallet.LocalProjection
+		view, err = rgb11wallet.SplitLocalProjection(snapshot.ProjectionRecords)
+		if err == nil {
+			p.noteRGB11ProofFaults(view)
+		}
+	}
+	if err != nil {
+		p.markRGB11ProjectionUnavailable()
+		return nil, err
+	}
+	return snapshot, nil
+}
+
+func (p *rgb11Manager) localRGB11ProofView() ([]*rgb11wallet.AllocationProof, map[string]bool, error) {
+	walletID, err := p.RGB11WalletID()
+	if err != nil {
+		return nil, nil, err
+	}
+	full, err := p.readRGB11LocalLocked(walletID)
+	if err != nil {
+		p.markRGB11ProjectionUnavailable()
+		return nil, nil, err
+	}
+	view, err := rgb11wallet.SplitLocalProjection(full.ProjectionRecords, p.rgb11ScopeState().ProofFaults...)
+	if err != nil {
+		p.markRGB11ProjectionUnavailable()
+		return nil, nil, err
+	}
+	p.noteRGB11ProofFaults(view)
+	proofs, err := rgb11wallet.ProofsFromProjectionSnapshot(view.Records)
+	return proofs, view.Points, err
+}
+
+func (p *rgb11Manager) readRGB11ProofView() ([]*rgb11wallet.AllocationProof, map[string]bool, error) {
+	release := p.beginRGB11ReservationRead()
+	defer release()
+	return p.localRGB11ProofView()
 }

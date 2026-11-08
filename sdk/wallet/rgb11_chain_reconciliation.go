@@ -196,7 +196,7 @@ func (p *rgb11Manager) scheduleRGB11ChainReconciliation() {
 	if !started {
 		return
 	}
-	scoped, err := p.newScopedRGB11Manager(account)
+	scoped, err := p.accountManagementOwner().newScopedRGB11Manager(account)
 	if err != nil {
 		p.scopeStates.finishReconciliation(scope, worker)
 		p.setRGB11ReconciliationState("error")

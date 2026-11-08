@@ -102,6 +102,7 @@ func NewManager(cfg *common.Config, db db.KVDB) *Manager {
 
 	mgr := &Manager{
 		cfg:                  cfg,
+		debugID:              managerDiagSeq.Add(1),
 		walletInfoMap:        nil,
 		tickerInfoMap:        make(map[string]*indexer.TickerInfo),
 		utxoLockerL1:         NewUtxoLocker(db, l1, L1_NETWORK_BITCOIN),
@@ -324,8 +325,7 @@ func (p *Manager) ImportWallet(mnemonic string, password string) (int64, error) 
 		return -1, err
 	}
 
-	authorizedNewAccount := p.consumeAccountRootNotFoundAuthorizationLocked(wallet)
-	if p.accountProfile == nil && len(p.walletInfoMap) == 0 && authorizedNewAccount {
+	if p.accountProfile == nil && len(p.walletInfoMap) == 0 {
 		if err := p.activateFirstMnemonicWalletLocked(wallet, mnemonic, password); err != nil {
 			p.mutex.Unlock()
 			return -1, err
@@ -352,7 +352,11 @@ func (p *Manager) ImportWallet(mnemonic string, password string) (int64, error) 
 // commitMnemonicWalletLocked adds a wallet, selects it and queues its sync
 // mutation in one transaction. The first-wallet activation uses its own batch.
 func (p *Manager) commitMnemonicWalletLocked(wallet common.Wallet, mnemonic, password string) error {
-	record, err := p.prepareWalletSecret(mnemonic, password, WALLET_TYPE_MNEMONIC, wallet)
+	return p.commitTypedWalletLocked(wallet, mnemonic, password, WALLET_TYPE_MNEMONIC)
+}
+
+func (p *Manager) commitTypedWalletLocked(wallet common.Wallet, secret, password string, typ int) error {
+	record, err := p.prepareWalletSecret(secret, password, typ, wallet)
 	if err != nil {
 		return err
 	}
@@ -442,9 +446,11 @@ func (p *Manager) ImportWalletWithPrivateKey(privKey string, password string) (i
 	defer releaseRGB11Scope()
 
 	privKeyBytes, err := hex.DecodeString(privKey)
-	if err != nil {
-		return 0, err
+	if err != nil || account.ValidatePrivateKey(privKeyBytes) != nil {
+		zeroBytes(privKeyBytes)
+		return -1, fmt.Errorf("invalid private key")
 	}
+	defer zeroBytes(privKeyBytes)
 
 	wallet, _, err := NewInternalWalletWithPrivKey(privKeyBytes, GetChainParam())
 	if err != nil {
@@ -452,27 +458,36 @@ func (p *Manager) ImportWalletWithPrivateKey(privKey string, password string) (i
 	}
 
 	p.mutex.Lock()
-	if p.accountProfile != nil {
-		p.mutex.Unlock()
-		return -1, fmt.Errorf("private-key wallets cannot be added to a managed mnemonic account")
+	// The first key is the minimum identity needed for discovery. Subsequent
+	// imports are ordinary local business and require that discovery baseline.
+	if len(p.walletInfoMap) != 0 {
+		if err := p.prepareAccountWriteLocked(); err != nil {
+			p.mutex.Unlock()
+			return -1, err
+		}
 	}
 	if err := p.rejectDuplicateWalletLocked(wallet, password); err != nil {
 		p.mutex.Unlock()
 		return -1, err
 	}
 
-	err = p.saveSecret(privKey, password, WALLET_TYPE_PRIVKEY, wallet)
+	if len(p.walletInfoMap) == 0 {
+		// Keep existing first-private-wallet behavior; no new root protocol.
+		err = p.saveSecret(hex.EncodeToString(privKeyBytes), password, WALLET_TYPE_PRIVKEY, wallet)
+		if err == nil {
+			p.wallet = wallet
+			p.status.CurrentWallet, p.status.CurrentAccount = wallet.GetId(), 0
+			err = p.saveStatus()
+		}
+	} else if err = p.refreshWalletCredentialCacheLocked(password); err == nil {
+		err = p.commitTypedWalletLocked(wallet, hex.EncodeToString(privKeyBytes), password, WALLET_TYPE_PRIVKEY)
+	}
 	if err != nil {
 		p.mutex.Unlock()
 		return -1, err
 	}
-
-	p.wallet = wallet
-	p.status.CurrentWallet = wallet.GetId()
-	p.status.CurrentAccount = 0
 	_ = p.rgbManager.selectRGB11Scope()
 	_ = p.rgbManager.rebuildRGB11Locks()
-	p.saveStatus()
 	p.markDKVSStateDirty()
 
 	id := p.status.CurrentWallet
@@ -487,6 +502,9 @@ func (p *Manager) ImportWalletWithPrivateKey(privKey string, password string) (i
 func (p *Manager) ChangePassword(oldPS, newPS string) error {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
+	if err := p.prepareAccountWriteLocked(); err != nil {
+		return err
+	}
 
 	if p.accountProfile != nil && len(p.accountSecret) != 32 {
 		return fmt.Errorf("account management is locked")
@@ -616,8 +634,8 @@ func (p *Manager) UnlockWallet(password string) (int64, error) {
 			p.mutex.Unlock()
 			return -1, err
 		}
-		pendingAccountSync := p.accountProfile != nil &&
-			(p.accountProfile.ManagedDataDirty || len(p.accountProfile.Pending) != 0)
+		pendingAccountSync := p.accountProfile != nil && (!p.accountProfile.RecoveryConfigured ||
+			p.accountProfile.Activation != nil || p.accountProfile.ManagedDataDirty || len(p.accountProfile.Pending) != 0)
 		p.mutex.Unlock()
 		if pendingAccountSync || marker != nil {
 			p.scheduleAccountManagedStateSync()
@@ -632,8 +650,7 @@ func (p *Manager) UnlockWallet(password string) (int64, error) {
 	defer releaseRGB11Scope()
 	p.mutex.Lock()
 	id, err := p.unlockWallet(password)
-	pendingAccountSync := err == nil && p.accountProfile != nil &&
-		(p.accountProfile.ManagedDataDirty || len(p.accountProfile.Pending) != 0)
+	pendingAccountSync := err == nil && p.accountProfile != nil
 	p.mutex.Unlock()
 	if err == nil {
 		p.rehydratePendingFundingRuntime()
@@ -661,8 +678,8 @@ func (p *Manager) UnlockWallet(password string) (int64, error) {
 		p.wakeChannelHeartbeat()
 	}
 	if err == nil && (pendingAccountSync || marker != nil) {
-		// Runtime jobs disappear on a PWA reload. Requeue persisted work only
-		// after authentication, using the existing account synchronization job.
+		// Runtime jobs and write qualification disappear on a PWA reload.
+		// Even a clean account needs real synchronization after authentication.
 		p.scheduleAccountManagedStateSync()
 	}
 	if err == nil && marker != nil {
@@ -959,6 +976,10 @@ func (p *Manager) SwitchAccount(id uint32) error {
 	if err := p.checkAccountManagedDataImport(); err != nil {
 		p.mutex.Unlock()
 		return err
+	}
+	if current := p.walletInfoMap[p.status.CurrentWallet]; current != nil && current.Type == WALLET_TYPE_PRIVKEY && id != 0 {
+		p.mutex.Unlock()
+		return fmt.Errorf("private wallet has only account zero")
 	}
 	if p.status.CurrentAccount == id {
 		p.mutex.Unlock()

@@ -85,9 +85,49 @@ type expiredCancelFixture struct {
 	transferIDs []string
 	input       string
 	witnessTxID string
+	dbPath      string
 }
 
-func newExpiredCancelFixture(t *testing.T, batchSize int) *expiredCancelFixture {
+func newExpiredCancelFixture(t *testing.T, batchSize int, states ...accountGroupState) *expiredCancelFixture {
+	t.Helper()
+	if len(states) > 1 {
+		t.Fatal("cancel fixture accepts one instance account state")
+	}
+	state := accountGroupInactive
+	if len(states) == 1 {
+		state = states[0]
+	}
+	if state != accountGroupInactive && state != accountGroupUnprepared {
+		t.Fatal("cancel fixture requires KnownInactive or explicit Unprepared")
+	}
+	oldChain := _chain
+	_chain = "testnet"
+	t.Cleanup(func() { _chain = oldChain })
+	fixture, pending := buildExpiredCancelFixture(t, batchSize)
+	if state == accountGroupInactive {
+		prepareRGBGroup(t, fixture.manager, state)
+	}
+	seedExpiredCancelFixture(t, fixture, pending)
+	return fixture
+}
+
+// Only the selected local-cancellation group establishes account discovery.
+// These synthetic records are unit-state seeds, not portable recovery proofs.
+func newExpiredCancelGroup(t *testing.T, batchSize int) *expiredCancelFixture {
+	t.Helper()
+	oldChain := _chain
+	_chain = "testnet"
+	t.Cleanup(func() { _chain = oldChain })
+	fixture, pending := buildExpiredCancelFixture(t, batchSize)
+	prepareAccountGroup(t, fixture.manager, accountGroupInactive,
+		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", "password")
+	seedExpiredCancelFixture(t, fixture, pending)
+	return fixture
+}
+
+// Construct identity, evidence and pending values without persisting an RGB
+// mutation. The outer group may now coordinate its real account baseline.
+func buildExpiredCancelFixture(t *testing.T, batchSize int) (*expiredCancelFixture, []*rgb11wallet.PendingTransfer) {
 	t.Helper()
 	testWallet := NewInternalWalletWithMnemonic(
 		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire",
@@ -124,7 +164,8 @@ func newExpiredCancelFixture(t *testing.T, batchSize int) *expiredCancelFixture 
 			inputText: {OutPoint: inputText, Value: 10_000, Confirmations: 6},
 		},
 	}
-	manager := newRGB11FlowManager(t, testWallet, &rgb11FlowIndexer{outputs: make(map[string]*TxOutput)}, evidence, 201)
+	dbPath := t.TempDir()
+	manager := newRGB11FlowManagerAt(t, testWallet, &rgb11FlowIndexer{outputs: make(map[string]*TxOutput)}, evidence, 201, dbPath, accountGroupUnprepared)
 	ids := make([]string, batchSize)
 	for i := range ids {
 		ids[i] = testRGB11ConsignmentID(t, fmt.Sprintf("expired-transfer-%d", i))
@@ -177,13 +218,17 @@ func newExpiredCancelFixture(t *testing.T, batchSize int) *expiredCancelFixture 
 			ReservationID: "expired-reservation", CreatedAt: time.Now().Add(-2 * time.Hour).Unix(),
 		})
 	}
-	if err := manager.rgbManager.projectionStore.SavePendingTransfers(pendingList); err != nil {
+	return &expiredCancelFixture{manager: manager, evidence: evidence, transferIDs: ids, input: inputText, witnessTxID: witnessTxID, dbPath: dbPath}, pendingList
+}
+
+func seedExpiredCancelFixture(t *testing.T, fixture *expiredCancelFixture, pending []*rgb11wallet.PendingTransfer) {
+	t.Helper()
+	if err := fixture.manager.rgbManager.projectionStore.SavePendingTransfers(pending); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.utxoLockerL1.TryReserve([]string{inputText}, rgb11wallet.LockReasonPending, "expired-reservation"); err != nil {
+	if err := fixture.manager.utxoLockerL1.TryReserve([]string{fixture.input}, rgb11wallet.LockReasonPending, "expired-reservation"); err != nil {
 		t.Fatal(err)
 	}
-	return &expiredCancelFixture{manager: manager, evidence: evidence, transferIDs: ids, input: inputText, witnessTxID: witnessTxID}
 }
 
 func assertExpiredTombstone(t *testing.T, fixture *expiredCancelFixture) {
@@ -213,7 +258,7 @@ func assertExpiredTombstone(t *testing.T, fixture *expiredCancelFixture) {
 func TestCancelExpiredRGB11TransferSuccessBatchAndIdempotent(t *testing.T) {
 	for _, batchSize := range []int{1, 2} {
 		t.Run(fmt.Sprintf("batch-%d", batchSize), func(t *testing.T) {
-			fixture := newExpiredCancelFixture(t, batchSize)
+			fixture := newExpiredCancelGroup(t, batchSize)
 			if err := fixture.manager.rgbManager.CancelExpiredRGB11Transfer(fixture.transferIDs[0]); err != nil {
 				t.Fatal(err)
 			}
@@ -512,7 +557,7 @@ func TestCancelExpiredRGB11TransferRejectsPartialUnexpiredBatch(t *testing.T) {
 }
 
 func TestCancelExpiredRGB11TransferRejectsDamagedTerminalTombstone(t *testing.T) {
-	fixture := newExpiredCancelFixture(t, 1)
+	fixture := newExpiredCancelGroup(t, 1)
 	if err := fixture.manager.rgbManager.CancelExpiredRGB11Transfer(fixture.transferIDs[0]); err != nil {
 		t.Fatal(err)
 	}
@@ -643,8 +688,13 @@ func TestCancelExpiredRGB11TransferKeepsLocalOperationsAvailable(t *testing.T) {
 }
 
 func TestCancelExpiredRGB11TransferRequiresConfiguredRecovery(t *testing.T) {
-	fixture := newExpiredCancelFixture(t, 1)
-	if err := fixture.manager.CancelExpiredRGB11Transfer(fixture.transferIDs[0]); !errors.Is(err, ErrDKVSPathNotSynced) {
-		t.Fatalf("unconfigured public cancellation: %v", err)
+	fixture := newExpiredCancelGroup(t, 1)
+	if err := fixture.manager.CancelExpiredRGB11Transfer(fixture.transferIDs[0]); err != nil {
+		t.Fatalf("local-only public cancellation: %v", err)
 	}
+	assertExpiredTombstone(t, fixture)
+	if err := fixture.manager.CancelExpiredRGB11Transfer(fixture.transferIDs[0]); err != nil {
+		t.Fatalf("idempotent public cancellation: %v", err)
+	}
+	assertExpiredTombstone(t, fixture)
 }

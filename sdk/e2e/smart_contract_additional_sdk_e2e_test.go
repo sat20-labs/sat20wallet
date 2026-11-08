@@ -3,6 +3,7 @@ package e2e
 import (
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet"
 	contract "github.com/sat20-labs/satoshinet/contract"
+	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
 )
 
@@ -56,6 +58,11 @@ func sdkReviewRestartCore(t *testing.T, f *sdkContractReviewFixture) {
 
 func TestSDKSmartContractsAdditional(t *testing.T) {
 	f := newSDKContractReviewFixture(t)
+	runSDKSmartContractsAdditional(t, f)
+}
+
+func runSDKSmartContractsAdditional(t *testing.T, f *sdkContractReviewFixture) {
+	t.Helper()
 	artifact, err := LoadSolidityArtifact("testdata/contracts/SDKReviewProbe.sol", "SDKReviewProbe")
 	require.NoError(t, err)
 	code := appendSolidityConstructorArgs(artifact.Bytecode, evmABIString(reviewAssetA), evmABIString(reviewAssetB))
@@ -132,22 +139,33 @@ func TestSDKSmartContractsAdditional(t *testing.T) {
 }
 
 func TestSDKSmartContractsFunding(t *testing.T) {
-	const boundAsset = "ordx:f:sdkreviewbound"
-	const decimalAsset = "runes:f:SDKREVIEWDECIMAL"
-	profiles := []templateAssetProfile{
-		{Name: "bound", Asset: boundAsset, BindingSat: 1, Supply: "20000"},
-		{Name: "decimal", Asset: decimalAsset, Precision: 2, Supply: "20000"},
-	}
-	base := newTemplateFixtureWithProfiles(t, profiles)
-	key := newDKVSKeyPathActor(t, keyFromMnemonic(t, dkvsClientMnemonic, 0))
-	splitToDKVSKeyPathActors(t, base, base.gasAnchor, wallet.GetGasAssetName(),
-		[]int64{50000000, 50000000}, []int64{1000000, 1000000}, []*dkvsKeyPathActor{key, key})
+	base := newTemplateFixtureWithProfiles(t, sdkSmartContractFundingProfiles())
 	owner, _ := newWalletManagerForNode(t, base.Network.Core, dkvsClientMnemonic)
 	reader, _ := newWalletManagerForNode(t, base.Network.Bootstrap, "")
+	runSDKSmartContractsFunding(t, base, owner, reader, false)
+}
+
+func sdkSmartContractFundingProfiles() []templateAssetProfile {
+	return []templateAssetProfile{
+		{Name: "bound", Asset: "ordx:f:sdkreviewbound", BindingSat: 1, Supply: "20000"},
+		{Name: "decimal", Asset: "runes:f:SDKREVIEWDECIMAL", Precision: 2, Supply: "20000"},
+	}
+}
+
+func runSDKSmartContractsFunding(t *testing.T, base *templateFixture, owner, reader *wallet.Manager, gasAlreadyFunded bool) {
+	t.Helper()
+	const boundAsset = "ordx:f:sdkreviewbound"
+	const decimalAsset = "runes:f:SDKREVIEWDECIMAL"
+	key := newDKVSKeyPathActor(t, keyFromMnemonic(t, dkvsClientMnemonic, 0))
+	require.Equal(t, key.Address, owner.GetWallet().GetAddress())
+	if !gasAlreadyFunded {
+		splitToDKVSKeyPathActors(t, base, base.gasAnchor, wallet.GetGasAssetName(),
+			[]int64{50000000, 50000000}, []int64{1000000, 1000000}, []*dkvsKeyPathActor{key, key})
+	}
 	script, err := wallet.GetP2TRpkScript(owner.GetWallet().GetPaymentPubKey())
 	require.NoError(t, err)
 	recipient := &templateActor{PkScript: script}
-	for _, profile := range profiles {
+	for _, profile := range sdkSmartContractFundingProfiles() {
 		base.splitProfile(t, base.A, base.assetAnchors[profile.Asset], profile,
 			[]string{"20000"}, []int64{100000}, []*templateActor{recipient})
 	}
@@ -199,4 +217,126 @@ func TestSDKSmartContractsFunding(t *testing.T) {
 		require.True(t, found)
 		require.Equal(t, float64(1), sdkReviewStateField(t, reader, pool, "activeSellCount"))
 	})
+}
+
+type sdkSmartContractSharedSnapshot struct {
+	height int32
+	tip    string
+	assets map[string]string
+}
+
+func TestSDKSmartContractsReviewSharedNetworkGroup(t *testing.T) {
+	setupDone := e2ePhase(t, "smart_contract_review_shared_network_setup")
+	profiles := append([]templateAssetProfile{
+		{Name: reviewAssetA, Asset: reviewAssetA, Supply: "20000"},
+		{Name: reviewAssetB, Asset: reviewAssetB, Supply: "20000"},
+	}, sdkSmartContractFundingProfiles()...)
+	base := newTemplateFixtureWithProfilesAndArgsAndLockedValueAndGasSupply(
+		t, profiles, nil, nil, nil, 20000000, 200000000)
+	// Both gas anchors are mined before Additional. Its Core restart reuses the
+	// existing node directory and database; it does not reset this chain state.
+	sharedGas := splitSDKSmartContractSharedGas(t, base)
+
+	reviewBase := *base
+	reviewBase.gasAnchor = sharedGas
+	additional := newSDKContractReviewFixtureForTemplate(t, &reviewBase)
+
+	fundingBase := *base
+	fundingBase.gasAnchor = sharedGas
+	setupDone()
+
+	before := captureSDKSmartContractSharedSnapshot(t, additional.network, additional.owner)
+	passed := t.Run("Additional", func(t *testing.T) {
+		runSDKSmartContractsAdditional(t, additional)
+	})
+	if !passed {
+		t.Fatalf("stopped smart-contract shared group after Additional failed; rerun its original isolated root with -run '^TestSDKSmartContractsAdditional$' or rerun the shared case with -run '^TestSDKSmartContractsReviewSharedNetworkGroup$/^Additional$'; rerun the whole fresh group with -run '^TestSDKSmartContractsReviewSharedNetworkGroup$'")
+	}
+	after := captureSDKSmartContractSharedSnapshot(t, additional.network, additional.owner)
+	requireSDKSmartContractSnapshotAdvanced(t, "Additional", before, after)
+
+	before = captureSDKSmartContractSharedSnapshot(t, additional.network, additional.owner)
+	passed = t.Run("Funding", func(t *testing.T) {
+		runSDKSmartContractsFunding(t, &fundingBase, additional.owner, additional.reader, true)
+	})
+	if !passed {
+		t.Fatalf("stopped smart-contract shared group after Funding failed; rerun its original isolated root with -run '^TestSDKSmartContractsFunding$' or rerun the shared case with -run '^TestSDKSmartContractsReviewSharedNetworkGroup$/^Funding$'; rerun the whole fresh group with -run '^TestSDKSmartContractsReviewSharedNetworkGroup$'")
+	}
+	after = captureSDKSmartContractSharedSnapshot(t, additional.network, additional.owner)
+	requireSDKSmartContractSnapshotAdvanced(t, "Funding", before, after)
+}
+
+func newSDKContractReviewFixtureForTemplate(t *testing.T, f *templateFixture) *sdkContractReviewFixture {
+	t.Helper()
+	owner, _ := newWalletManagerForNode(t, f.Network.Core, dkvsClientMnemonic)
+	other, _ := newWalletManagerForNode(t, f.Network.Core, messageTopicMemberMnemonic)
+	reader, _ := newWalletManagerForNode(t, f.Network.Bootstrap, "")
+	ownerKey := newDKVSKeyPathActor(t, keyFromMnemonic(t, dkvsClientMnemonic, 0))
+	otherKey := newDKVSKeyPathActor(t, keyFromMnemonic(t, messageTopicMemberMnemonic, 0))
+	var amounts, values []int64
+	var actors []*dkvsKeyPathActor
+	for i := 0; i < 10; i++ {
+		amounts = append(amounts, 10000000)
+		values = append(values, 1000000)
+		if i < 6 {
+			actors = append(actors, ownerKey)
+		} else {
+			actors = append(actors, otherKey)
+		}
+	}
+	splitToDKVSKeyPathActors(t, f, f.gasAnchor, wallet.GetGasAssetName(), amounts, values, actors)
+	for _, asset := range []string{reviewAssetA, reviewAssetB} {
+		splitToDKVSKeyPathActors(t, f, f.assetAnchors[asset], asset,
+			[]int64{10000, 10000}, []int64{100000, 100000}, []*dkvsKeyPathActor{ownerKey, otherKey})
+	}
+	require.Equal(t, ownerKey.Address, owner.GetWallet().GetAddress())
+	require.Equal(t, otherKey.Address, other.GetWallet().GetAddress())
+	return &sdkContractReviewFixture{network: f.Network, owner: owner, other: other, reader: reader}
+}
+
+func splitSDKSmartContractSharedGas(t *testing.T, f *templateFixture) *wire.MsgTx {
+	t.Helper()
+	const (
+		reviewGasSupply  = int64(100000000)
+		fundingGasSupply = int64(50000000)
+	)
+	ownerKey := newDKVSKeyPathActor(t, keyFromMnemonic(t, dkvsClientMnemonic, 0))
+	outputs := []*wire.TxOut{
+		wire.NewTxOut(15000000, txAsset(wallet.GetGasAssetName(), reviewGasSupply), f.A.PkScript),
+		wire.NewTxOut(1000000, txAsset(wallet.GetGasAssetName(), fundingGasSupply), ownerKey.PkScript),
+		wire.NewTxOut(1000000, txAsset(wallet.GetGasAssetName(), fundingGasSupply), ownerKey.PkScript),
+	}
+	split := wire.NewMsgTx(2)
+	split.AddTxIn(&wire.TxIn{PreviousOutPoint: wire.OutPoint{Hash: f.gasAnchor.TxHash(), Index: 0}})
+	for _, output := range outputs {
+		split.AddTxOut(output)
+	}
+	signTaprootInputs(t, split, f.A.Key, f.A.RedeemScript, f.A.ControlBlock)
+	f.Network.sendAndMine(t, split, 1)
+	outpoints := collectSpendableOutPoints(t, split, outputs)
+	require.Len(t, outpoints, 3)
+	return split
+}
+
+func captureSDKSmartContractSharedSnapshot(t *testing.T, network *realSatoshiNet, owner *wallet.Manager) sdkSmartContractSharedSnapshot {
+	t.Helper()
+	tip, height, err := network.Bootstrap.Client.GetBestBlock()
+	require.NoError(t, err)
+	assets, err := fetchAssetSummary(network.Core, owner.GetWallet().GetAddress())
+	require.NoError(t, err)
+	return sdkSmartContractSharedSnapshot{height: height, tip: tip.String(), assets: assets}
+}
+
+func requireSDKSmartContractSnapshotAdvanced(t *testing.T, name string,
+	before, after sdkSmartContractSharedSnapshot) {
+	t.Helper()
+	require.Greater(t, after.height, before.height, "%s must advance the shared chain", name)
+	require.NotEqual(t, before.tip, after.tip, "%s must change the shared tip", name)
+	beforeAssets, err := json.Marshal(before.assets)
+	require.NoError(t, err)
+	afterAssets, err := json.Marshal(after.assets)
+	require.NoError(t, err)
+	require.NotEqual(t, string(beforeAssets), string(afterAssets), "%s must change the funded owner's asset state", name)
+	t.Logf("smart-contract-shared-case=%s tip=%d:%s->%d:%s assets=%s->%s", name,
+		before.height, before.tip, after.height, after.tip, beforeAssets, afterAssets)
 }

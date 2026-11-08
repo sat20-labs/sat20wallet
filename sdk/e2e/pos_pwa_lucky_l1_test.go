@@ -22,15 +22,15 @@ import (
 // submitted header independently; no success response or wallet status is
 // injected into the browser. This does not assert Bitcoin network rewards.
 type posPWALuckyL1 struct {
-	mu sync.Mutex
+	mu       sync.Mutex
 	sequence uint64
-	jobs map[string]*posPWALuckyJob
-	found []btclucky.FoundBlockRecord
+	jobs     map[string]*posPWALuckyJob
+	found    []btclucky.FoundBlockRecord
 }
 
 type posPWALuckyJob struct {
-	job btclucky.CompactMiningJob
-	coinbase *btcwire.MsgTx
+	job       btclucky.CompactMiningJob
+	coinbase  *btcwire.MsgTx
 	submitted bool
 }
 
@@ -39,30 +39,50 @@ func newPOSPWALuckyL1() *posPWALuckyL1 {
 }
 
 func (f *posPWALuckyL1) serveHTTP(w http.ResponseWriter, r *http.Request, path string, height int64, tipHash string) bool {
-	if path != "/btc/lucky/job" && path != "/btc/lucky/submit" && path != "/btc/lucky/info" { return false }
+	if path != "/btc/lucky/job" && path != "/btc/lucky/submit" && path != "/btc/lucky/info" {
+		return false
+	}
 	if path == "/btc/lucky/info" {
-		if r.Method != http.MethodGet { w.WriteHeader(http.StatusMethodNotAllowed); return true }
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return true
+		}
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		posPWAL1JSON(w, btclucky.APIResponse[map[string]any]{Code: 0, Msg: "ok", Data: map[string]any{
 			"foundBlocks": append([]btclucky.FoundBlockRecord{}, f.found...),
-			"jobCount": f.sequence, "evidence": "independently verified proof of work on fake L1",
+			"jobCount":    f.sequence, "evidence": "independently verified proof of work on fake L1",
 		}})
 		return true
 	}
-	if r.Method != http.MethodPost { w.WriteHeader(http.StatusMethodNotAllowed); return true }
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return true
+	}
 	if path == "/btc/lucky/job" {
 		var req btclucky.JobRequest
-		if err := posPWAL1Decode(r, &req); err != nil { posPWAL1Error(w, err); return true }
+		if err := posPWAL1Decode(r, &req); err != nil {
+			posPWAL1Error(w, err)
+			return true
+		}
 		job, err := f.newJob(req, height, tipHash)
-		if err != nil { posPWAL1Error(w, err); return true }
+		if err != nil {
+			posPWAL1Error(w, err)
+			return true
+		}
 		posPWAL1JSON(w, btclucky.APIResponse[*btclucky.CompactMiningJob]{Code: 0, Msg: "ok", Data: job})
 		return true
 	}
 	var solution btclucky.MiningSolution
-	if err := posPWAL1Decode(r, &solution); err != nil { posPWAL1Error(w, err); return true }
+	if err := posPWAL1Decode(r, &solution); err != nil {
+		posPWAL1Error(w, err)
+		return true
+	}
 	record, err := f.submit(&solution)
-	if err != nil { posPWAL1Error(w, err); return true }
+	if err != nil {
+		posPWAL1Error(w, err)
+		return true
+	}
 	posPWAL1JSON(w, btclucky.APIResponse[*btclucky.FoundBlockRecord]{Code: 0, Msg: "ok", Data: record})
 	return true
 }
@@ -72,17 +92,25 @@ func (f *posPWALuckyL1) newJob(req btclucky.JobRequest, height int64, tipHash st
 		return nil, fmt.Errorf("PWA acceptance requires testnet4 and one real worker")
 	}
 	address, err := btcutil.DecodeAddress(req.RewardAddress, &btcchaincfg.TestNet4Params)
-	if err != nil { return nil, err }
-	if !address.IsForNet(&btcchaincfg.TestNet4Params) { return nil, fmt.Errorf("non-testnet reward address") }
+	if err != nil {
+		return nil, err
+	}
+	if !address.IsForNet(&btcchaincfg.TestNet4Params) {
+		return nil, fmt.Errorf("non-testnet reward address")
+	}
 	script, err := btctxscript.PayToAddrScript(address)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sequence++
 	extra := make([]byte, 8)
 	binary.LittleEndian.PutUint64(extra, f.sequence)
-	coinbaseScript, err := btctxscript.NewScriptBuilder().AddInt64(height+1).AddData([]byte("pwa-l1-test")).AddData(extra).Script()
-	if err != nil { return nil, err }
+	coinbaseScript, err := btctxscript.NewScriptBuilder().AddInt64(height + 1).AddData([]byte("pwa-l1-test")).AddData(extra).Script()
+	if err != nil {
+		return nil, err
+	}
 	coinbase := btcwire.NewMsgTx(1)
 	coinbase.AddTxIn(btcwire.NewTxIn(&btcwire.OutPoint{Index: ^uint32(0)}, coinbaseScript, nil))
 	// Keep ordinary Bitcoin subsidy semantics even though accepted PoW is
@@ -92,7 +120,7 @@ func (f *posPWALuckyL1) newJob(req btclucky.JobRequest, height int64, tipHash st
 	id := fmt.Sprintf("pwa-l1-%d", f.sequence)
 	now := time.Now().Unix()
 	job := btclucky.CompactMiningJob{
-		JobID: id, TemplateID: id, Network: "testnet4", Height: height+1,
+		JobID: id, TemplateID: id, Network: "testnet4", Height: height + 1,
 		PreviousBlockHash: tipHash, Version: 0x20000000,
 		Bits: "207fffff", Target: fmt.Sprintf("%064x", btcblockchain.CompactToBig(0x207fffff)),
 		CurTime: now, MinTime: now, RewardAddress: req.RewardAddress, MinerID: req.MinerID,
@@ -101,7 +129,9 @@ func (f *posPWALuckyL1) newJob(req btclucky.JobRequest, height int64, tipHash st
 	f.jobs[id] = &posPWALuckyJob{job: job, coinbase: coinbase}
 	// One active browser worker only needs its current job; retain a bounded
 	// history to reject duplicate/unknown submissions and diagnose failures.
-	if f.sequence > 64 { delete(f.jobs, fmt.Sprintf("pwa-l1-%d", f.sequence-64)) }
+	if f.sequence > 64 {
+		delete(f.jobs, fmt.Sprintf("pwa-l1-%d", f.sequence-64))
+	}
 	return &job, nil
 }
 
@@ -109,7 +139,9 @@ func (f *posPWALuckyL1) submit(solution *btclucky.MiningSolution) (*btclucky.Fou
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	entry := f.jobs[solution.JobID]
-	if entry == nil || entry.submitted { return nil, fmt.Errorf("unknown or already submitted mining job") }
+	if entry == nil || entry.submitted {
+		return nil, fmt.Errorf("unknown or already submitted mining job")
+	}
 	job := entry.job
 	worker := job.WorkerRanges[0]
 	if solution.TemplateID != job.TemplateID || solution.Network != job.Network || solution.RewardAddress != job.RewardAddress ||
@@ -117,9 +149,13 @@ func (f *posPWALuckyL1) submit(solution *btclucky.MiningSolution) (*btclucky.Fou
 		return nil, fmt.Errorf("mining solution changed its assigned job, reward, or worker")
 	}
 	previous, err := btcchainhash.NewHashFromStr(job.PreviousBlockHash)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	bits, err := strconv.ParseUint(job.Bits, 16, 32)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	header := btcwire.BlockHeader{Version: job.Version, PrevBlock: *previous, MerkleRoot: entry.coinbase.TxHash(),
 		Timestamp: time.Unix(job.CurTime, 0), Bits: uint32(bits), Nonce: solution.Nonce}
 	hash := header.BlockHash()
@@ -133,6 +169,8 @@ func (f *posPWALuckyL1) submit(solution *btclucky.MiningSolution) (*btclucky.Fou
 	}
 	entry.submitted = true
 	f.found = append(f.found, record)
-	if len(f.found) > 32 { f.found = f.found[len(f.found)-32:] }
+	if len(f.found) > 32 {
+		f.found = f.found[len(f.found)-32:]
+	}
 	return &record, nil
 }

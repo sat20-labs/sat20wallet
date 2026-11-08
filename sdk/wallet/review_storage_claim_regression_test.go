@@ -24,8 +24,7 @@ func TestReviewStorageAuthorizationOperationOwnership(t *testing.T) {
 	defer func() { _chain = oldChain }()
 
 	t.Run("one_authorization_one_consumer", func(t *testing.T) {
-		manager, _, secret := buildRootWrapperSource(t)
-		defer zeroBytes(secret)
+		manager, _, _ := newInactiveAccountGroup(t, accountRootWrapperTestMnemonic, "password")
 		authorization := reviewStorageAuthorization(t, manager)
 		entered, resume := make(chan struct{}), make(chan struct{})
 		var releaseOnce sync.Once
@@ -50,7 +49,10 @@ func TestReviewStorageAuthorizationOperationOwnership(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatal("first operation did not enter")
 		}
-		type attempt struct { called bool; err error }
+		type attempt struct {
+			called bool
+			err    error
+		}
 		second := make(chan attempt, 1)
 		go func() {
 			called := false
@@ -69,7 +71,9 @@ func TestReviewStorageAuthorizationOperationOwnership(t *testing.T) {
 		release()
 		select {
 		case err := <-first:
-			if err != nil { t.Fatalf("original owner failed: %v", err) }
+			if err != nil {
+				t.Fatalf("original owner failed: %v", err)
+			}
 		case <-time.After(5 * time.Second):
 			t.Fatal("original owner did not complete")
 		}
@@ -79,8 +83,7 @@ func TestReviewStorageAuthorizationOperationOwnership(t *testing.T) {
 	})
 
 	t.Run("cancelled_old_completion_cannot_clear_new_authorization", func(t *testing.T) {
-		manager, _, secret := buildRootWrapperSource(t)
-		defer zeroBytes(secret)
+		manager, _, _ := newInactiveAccountGroup(t, accountRootWrapperTestMnemonic, "password")
 		old := reviewStorageAuthorization(t, manager)
 		entered, resume := make(chan struct{}), make(chan struct{})
 		var releaseOnce sync.Once
@@ -100,7 +103,9 @@ func TestReviewStorageAuthorizationOperationOwnership(t *testing.T) {
 		}
 		manager.CancelPendingAccountStorageAuthorization()
 		fresh := reviewStorageAuthorization(t, manager)
-		if fresh.ID == old.ID { t.Fatal("fixture did not create a new authorization") }
+		if fresh.ID == old.ID {
+			t.Fatal("fixture did not create a new authorization")
+		}
 		release()
 		select {
 		case err := <-done:
@@ -117,13 +122,14 @@ func TestReviewStorageAuthorizationOperationOwnership(t *testing.T) {
 	})
 
 	t.Run("failed_use_stays_bound_to_its_purpose_and_can_retry", func(t *testing.T) {
-		manager, _, secret := buildRootWrapperSource(t)
-		defer zeroBytes(secret)
+		manager, _, _ := newInactiveAccountGroup(t, accountRootWrapperTestMnemonic, "password")
 		original := reviewStorageAuthorization(t, manager)
 		failure := errors.New("simulated recoverable publication failure")
 		err := manager.UseAccountStorageAuthorization(AccountStoragePurposeRecovery,
 			func(*AccountStorageAuthorization) error { return failure })
-		if !errors.Is(err, failure) { t.Fatalf("lost operation failure: %v", err) }
+		if !errors.Is(err, failure) {
+			t.Fatalf("lost operation failure: %v", err)
+		}
 		called := false
 		err = manager.UseAccountStorageAuthorization(AccountStoragePurposeGuardian,
 			func(*AccountStorageAuthorization) error { called = true; return nil })
@@ -132,9 +138,13 @@ func TestReviewStorageAuthorizationOperationOwnership(t *testing.T) {
 		}
 		err = manager.UseAccountStorageAuthorization(AccountStoragePurposeRecovery,
 			func(value *AccountStorageAuthorization) error {
-				if value.ID != original.ID { return errors.New("retry received a different authorization") }
+				if value.ID != original.ID {
+					return errors.New("retry received a different authorization")
+				}
 				return nil
 			})
-		if err != nil { t.Fatalf("same-purpose retry failed: %v", err) }
+		if err != nil {
+			t.Fatalf("same-purpose retry failed: %v", err)
+		}
 	})
 }

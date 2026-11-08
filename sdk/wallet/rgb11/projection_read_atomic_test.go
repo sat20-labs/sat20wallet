@@ -89,6 +89,10 @@ func (db *projectionReadBarrierDB) NewWriteBatch() indexer.WriteBatch {
 	return &projectionReadObservedBatch{WriteBatch: batch, owner: db}
 }
 
+func (db *projectionReadBarrierDB) NewAtomicWriteBatch() indexer.WriteBatch {
+	return &projectionReadObservedBatch{WriteBatch: db.KVDB.(indexer.AtomicWriteBatchDB).NewAtomicWriteBatch(), owner: db}
+}
+
 type projectionReadObservedBatch struct {
 	indexer.WriteBatch
 	owner *projectionReadBarrierDB
@@ -285,6 +289,10 @@ func (db *projectionFailFlushDB) NewWriteBatch() indexer.WriteBatch {
 	return &projectionFailFlushBatch{WriteBatch: batch, owner: db}
 }
 
+func (db *projectionFailFlushDB) NewAtomicWriteBatch() indexer.WriteBatch {
+	return &projectionFailFlushBatch{WriteBatch: db.KVDB.(indexer.AtomicWriteBatchDB).NewAtomicWriteBatch(), owner: db}
+}
+
 type projectionFailFlushBatch struct {
 	indexer.WriteBatch
 	owner *projectionFailFlushDB
@@ -399,7 +407,10 @@ func TestReservationFlushStagePublishesOnlyAfterSuccessfulFlush(t *testing.T) {
 		}
 	}
 	newBatch := func(persistence *projectionStageCallbackPersistence, transferID string) indexer.WriteBatch {
-		batch := NewReservationWriteBatch(database, scope, persistence)
+		batch, err := NewReservationWriteBatch(database, scope, persistence)
+		if err != nil {
+			t.Fatal(err)
+		}
 		pending := &PendingTransfer{State: TransferState{TransferID: transferID, Direction: "send", Status: "pending"}}
 		encoded, err := encode(pending)
 		if err != nil {

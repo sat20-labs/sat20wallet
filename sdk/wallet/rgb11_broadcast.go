@@ -3,9 +3,12 @@ package wallet
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
+	"strings"
 
 	"github.com/btcsuite/btcd/btcutil/psbt"
 	"github.com/btcsuite/btcd/txscript"
@@ -14,6 +17,71 @@ import (
 )
 
 const rgb11StatusBroadcastAttempted = "broadcast-attempted"
+
+// This trace only reads RAM qualification and emits fixed categories.
+// Raw transactions, signatures, consignments and account identities stay private.
+func (p *rgb11Manager) traceRGB11Broadcast(phase, txID string, err error) {
+	if p == nil || p.wallet == nil || p.rgb11ReservationOwner() == nil {
+		return
+	}
+	txHash := sha256.Sum256([]byte(txID))
+	scopeHash := sha256.Sum256([]byte(p.rgb11ScopeKey()))
+	state := p.rgb11ScopeState()
+	errorKind := "none"
+	switch {
+	case errors.Is(err, errRGB11StaleLocal):
+		errorKind = "stale-local"
+	case errors.Is(err, ErrRGB11Inconsistent):
+		errorKind = "inconsistent"
+	case errors.Is(err, ErrDKVSPathNotSynced):
+		errorKind = "account-not-synced"
+	case errors.Is(err, ErrRGB11OperationScopeChanged):
+		errorKind = "scope-changed"
+	case err != nil:
+		errorKind = "other"
+	}
+	Log.Debugf("RGB broadcast diagnostic: manager=%d scope=%x tx=%x phase=%s verified=%t ready=%d faults=%d error=%s",
+		p.rgb11ReservationOwner().debugID, scopeHash[:8], txHash[:8], phase,
+		state.ProjectionVerified, len(state.ReadyCarriers), len(state.ProofFaults), errorKind)
+}
+
+// Inspect only the already-read rejected pair. No raw transaction or private
+// material is logged, and validation does not sign, persist or contact a peer.
+func (p *rgb11Manager) logRGB11PendingCompare(branch string,
+	before, after *rgb11wallet.PendingTransfer, allowSigning bool) {
+	if p == nil || before == nil || after == nil || p.rgb11ReservationOwner() == nil {
+		return
+	}
+	oldTx := sha256.Sum256(before.SignedTx)
+	newTx := sha256.Sum256(after.SignedTx)
+	Log.Warnf("RGB pending comparison rejected: branch=%s manager=%d scope_tag=%s before_transfer_tag=%s after_transfer_tag=%s before_status=%q after_status=%q before_ack=%q after_ack=%q before_address=%t after_address=%t batch_equal=%t txid_equal=%t tx_equal=%t before_tx_tag=%x after_tx_tag=%x psbt_equal=%t owner_equal=%t channel_equal=%t operation_equal=%t before_witness=%t after_witness=%t allow_signing=%t valid_signing_transition=%t",
+		branch, p.rgb11ReservationOwner().debugID, accountTraceScope(p.rgb11ScopeKey()),
+		accountTraceScope(before.State.TransferID), accountTraceScope(after.State.TransferID),
+		rgb11DiffEnum(before.State.Status), rgb11DiffEnum(after.State.Status),
+		rgb11DiffEnum(before.State.AckStatus), rgb11DiffEnum(after.State.AckStatus),
+		before.State.AddressMode, after.State.AddressMode, before.State.BatchID == after.State.BatchID,
+		before.State.WitnessTxID == after.State.WitnessTxID, bytes.Equal(before.SignedTx, after.SignedTx), oldTx[:6], newTx[:6],
+		bytes.Equal(before.SignedPSBT, after.SignedPSBT), before.ReservationID == after.ReservationID,
+		sameRGB11ChannelSend(before.ChannelSend, after.ChannelSend), sameRGB11BroadcastOperation(before, after),
+		rgb11PendingHasWitness(before), rgb11PendingHasWitness(after), allowSigning,
+		validRGB11SigningTransition(before, after))
+	fields := make([]string, 0)
+	a, b := reflect.ValueOf(*before), reflect.ValueOf(*after)
+	for i := 0; i < a.NumField(); i++ {
+		if a.Type().Field(i).Name != "State" && !reflect.DeepEqual(a.Field(i).Interface(), b.Field(i).Interface()) {
+			fields = append(fields, a.Type().Field(i).Name)
+		}
+	}
+	a, b = reflect.ValueOf(before.State), reflect.ValueOf(after.State)
+	for i := 0; i < a.NumField(); i++ {
+		if !reflect.DeepEqual(a.Field(i).Interface(), b.Field(i).Interface()) {
+			fields = append(fields, "State."+a.Type().Field(i).Name)
+		}
+	}
+	Log.Warnf("RGB pending comparison fields: branch=%s manager=%d scope_tag=%s transfer_tag=%s changed_fields=%s",
+		branch, p.rgb11ReservationOwner().debugID, accountTraceScope(p.rgb11ScopeKey()),
+		accountTraceScope(before.State.TransferID), strings.Join(fields, ","))
+}
 
 var ErrRGB11BroadcastResultUnknown = errors.New("RGB11 transaction broadcast result is unknown")
 
@@ -217,6 +285,7 @@ func (p *rgb11Manager) reloadRGB11BroadcastIntentWithSigning(
 			sameIntent = validRGB11SigningTransition(old, pending)
 		}
 		if !sameIntent {
+			p.logRGB11PendingCompare("broadcast-intent-reload", old, pending, allowSigning)
 			return nil, false, ErrRGB11Inconsistent
 		}
 		if rgb11BroadcastCompleteStatus(pending.State.Status) {
@@ -225,6 +294,7 @@ func (p *rgb11Manager) reloadRGB11BroadcastIntentWithSigning(
 		}
 		allComplete = false
 		if pending.State.Status != rgb11StatusBroadcastAttempted {
+			p.logRGB11PendingCompare("broadcast-phase-reload", old, pending, allowSigning)
 			return nil, false, ErrRGB11Inconsistent
 		}
 		current = append(current, pending)
@@ -248,6 +318,7 @@ func (p *rgb11Manager) broadcastRGB11PendingBatch(
 		return "", ErrRGB11Inconsistent
 	}
 	expectedTxID := first.State.WitnessTxID
+	p.traceRGB11Broadcast("managed-operation-admitted", expectedTxID, nil)
 	allComplete := true
 	intentChanged := false
 	intentBaseline := cloneRGB11PendingBatch(pendingList)
@@ -279,6 +350,7 @@ func (p *rgb11Manager) broadcastRGB11PendingBatch(
 	}
 	if intentChanged {
 		if err := p.projectionStore.CompareAndSavePendingTransferStates(intentBaseline, pendingList); err != nil {
+			p.traceRGB11Broadcast("intent-persist-failed", expectedTxID, err)
 			// No backend call has occurred, so a normal persistence error is
 			// sufficient and the caller may safely retry after repairing storage.
 			return "", err
@@ -295,6 +367,7 @@ func (p *rgb11Manager) broadcastRGB11PendingBatch(
 		}
 	}
 	currentPending, allComplete, reloadErr := p.reloadRGB11BroadcastIntent(pendingList)
+	p.traceRGB11Broadcast("intent-reloaded", expectedTxID, reloadErr)
 	if reloadErr != nil {
 		return "", reloadErr
 	}
@@ -328,11 +401,13 @@ func (p *rgb11Manager) broadcastRGB11PendingBatch(
 		for _, pending := range pendingList {
 			signBaseline = append(signBaseline, cloneRGB11BroadcastIntent(pending))
 		}
+		p.traceRGB11Broadcast("sign-entered", expectedTxID, nil)
 		if first.ChannelSend != nil {
 			broadcastErr = p.signRGB11ChannelBatch(pendingList)
 		} else {
 			broadcastErr = p.signRGB11OrdinaryBatch(pendingList)
 		}
+		p.traceRGB11Broadcast("sign-returned", expectedTxID, broadcastErr)
 		if broadcastErr == nil {
 			// Signing changes the private pending payload after the initial
 			// intent barrier. Persist that exact signed witness under the same
@@ -344,6 +419,7 @@ func (p *rgb11Manager) broadcastRGB11PendingBatch(
 				var allCompleteAfterSign bool
 				pendingList, allCompleteAfterSign, broadcastErr =
 					p.reloadRGB11BroadcastIntentWithSigning(signBaseline, true)
+				p.traceRGB11Broadcast("signed-intent-reloaded", expectedTxID, broadcastErr)
 				if broadcastErr == nil && allCompleteAfterSign {
 					// A peer or another device may already have completed this exact
 					// witness while joint signing was in flight.
@@ -358,7 +434,9 @@ func (p *rgb11Manager) broadcastRGB11PendingBatch(
 	if !visible && broadcastErr == nil {
 		broadcastErr = p.checkRGB11OperationSource()
 		if broadcastErr == nil {
+			p.traceRGB11Broadcast("sdk-backend-entered", expectedTxID, nil)
 			backendTxID, broadcastErr = p.evidence.Broadcast(first.SignedTx)
+			p.traceRGB11Broadcast("sdk-backend-returned", expectedTxID, broadcastErr)
 		}
 		if broadcastErr == nil && backendTxID != expectedTxID {
 			broadcastErr = fmt.Errorf("RGB11 backend returned witness txid %s, expected %s",
@@ -366,6 +444,7 @@ func (p *rgb11Manager) broadcastRGB11PendingBatch(
 		}
 	}
 	if broadcastErr != nil {
+		p.traceRGB11Broadcast("before-result-reconciliation", expectedTxID, broadcastErr)
 		// The response may have been lost after the backend accepted the raw
 		// transaction. Resolve immediately when evidence already sees it;
 		// otherwise retain the durable ambiguous state for reconciliation.
@@ -393,6 +472,38 @@ func (p *rgb11Manager) broadcastRGB11PendingBatch(
 		}
 	}
 	if err := p.projectionStore.CompareAndSavePendingTransferStates(completionBaseline, pendingList); err != nil {
+		if errors.Is(err, rgb11wallet.ErrLocalSnapshotChanged) {
+			// Observe the same raw row representation used by completion CAS,
+			// without reservation-state overlays.
+			release := p.beginRGB11ReservationRead()
+			records, readErr := p.projectionStore.ReadLocalRecords()
+			release()
+			var currentRows []*rgb11wallet.PendingTransfer
+			if readErr == nil {
+				currentRows, readErr = rgb11wallet.PendingTransfersFromProjectionSnapshot(records)
+			}
+			for _, previous := range completionBaseline {
+				if readErr != nil {
+					Log.Warnf("RGB completion comparison unreadable: manager=%d scope_tag=%s transfer_tag=%s read_error=%T",
+						p.rgb11ReservationOwner().debugID, accountTraceScope(p.rgb11ScopeKey()),
+						accountTraceScope(previous.State.TransferID), readErr)
+					continue
+				}
+				found := false
+				for _, current := range currentRows {
+					if current.State.TransferID == previous.State.TransferID {
+						p.logRGB11PendingCompare("broadcast-completion", previous, current, false)
+						found = true
+						break
+					}
+				}
+				if !found {
+					Log.Warnf("RGB completion comparison missing: manager=%d scope_tag=%s transfer_tag=%s",
+						p.rgb11ReservationOwner().debugID, accountTraceScope(p.rgb11ScopeKey()),
+						accountTraceScope(previous.State.TransferID))
+				}
+			}
+		}
 		backupErr := p.autoBackupRGB11AfterMutation()
 		p.scheduleRGB11ChainReconciliation()
 		return expectedTxID, &RGB11BroadcastPersistenceError{TxID: expectedTxID, Err: errors.Join(err, backupErr)}
@@ -441,9 +552,10 @@ func (p *rgb11Manager) signRGB11OrdinaryBatch(batch []*rgb11wallet.PendingTransf
 	}
 	unsigned, err := decodeRGB11BroadcastTx(first.SignedTx)
 	if err != nil || unsigned.HasWitness() || !sameRGB11UnsignedTx(unsigned, packet.UnsignedTx) || len(packet.Inputs) != len(unsigned.TxIn) {
+		p.traceRGB11Broadcast("sign-unsigned-shape", first.State.WitnessTxID, ErrRGB11Inconsistent)
 		return ErrRGB11Inconsistent
 	}
-	proofs, err := p.projectionStore.ListProofs()
+	proofs, blocked, err := p.readRGB11ProofView()
 	if err != nil {
 		return err
 	}
@@ -454,8 +566,20 @@ func (p *rgb11Manager) signRGB11OrdinaryBatch(batch []*rgb11wallet.PendingTransf
 	keys := make(map[int]RGB11InputSigningKey)
 	prev := txscript.NewMultiPrevOutFetcher(nil)
 	for i, input := range unsigned.TxIn {
+		point := input.PreviousOutPoint.String()
+		if blocked[point] {
+			p.traceRGB11Broadcast("sign-blocked-carrier", first.State.WitnessTxID, ErrRGB11Inconsistent)
+			return ErrRGB11Inconsistent
+		}
+		for _, proof := range proofs {
+			if proof.OutPoint == point && !p.rgb11CarrierAvailable(point) {
+				p.traceRGB11Broadcast("sign-carrier-not-ready", first.State.WitnessTxID, ErrRGB11Inconsistent)
+				return ErrRGB11Inconsistent
+			}
+		}
 		utxo := packet.Inputs[i].WitnessUtxo
 		if utxo == nil || len(input.SignatureScript) != 0 {
+			p.traceRGB11Broadcast("sign-input-shape", first.State.WitnessTxID, ErrRGB11Inconsistent)
 			return ErrRGB11Inconsistent
 		}
 		key := RGB11InputSigningKey{Index: p.wallet.GetSubAccount()}

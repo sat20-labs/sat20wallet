@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -105,6 +106,9 @@ func TestAccountPersistenceFailureReview20261006(t *testing.T) {
 			return
 		}
 		outDir := filepath.Join(filepath.Dir(dir), "review-evidence")
+		if output := flag.Lookup("test.outputdir"); output != nil && output.Value.String() != "" {
+			outDir = output.Value.String()
+		}
 		if err := os.MkdirAll(outDir, 0700); err != nil {
 			t.Error(err)
 			return

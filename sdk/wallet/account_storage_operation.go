@@ -97,8 +97,17 @@ func (p *Manager) resumeAccountStorageRuntime() {
 // consumable grant. Cancellation/expiry of that grant cannot release live
 // funding. These locks protect only the flag, never network work.
 func (p *Manager) beginAccountAutopayFunding() (func(), error) {
+	if err := p.accountDBFailure(); err != nil {
+		return nil, err
+	}
 	_, release, err := p.lockAccountStorageState()
 	if err != nil {
+		return nil, err
+	}
+	// Funding repairs expired storage entitlement. Requiring a successful
+	// backup here would prevent the payment needed to resume that backup.
+	if err := p.checkAccountRestore("wallets", AccountManagedDataGlobalScope); err != nil {
+		release()
 		return nil, err
 	}
 	if p.accountAutopayFundingActive {
@@ -119,6 +128,9 @@ func (p *Manager) beginAccountAutopayFunding() (func(), error) {
 // that result. An in-use authorization cannot be silently replaced by Confirm
 // or ReusePaidStorage, including a second request which might fund AUTOPAY.
 func (p *Manager) beginAccountStoragePreparation() (*accountStorageAuthorizationSession, error) {
+	if err := p.prepareAccountWrite(); err != nil {
+		return nil, err
+	}
 	id, err := newAccountStorageAuthorizationID()
 	if err != nil {
 		return nil, err
@@ -128,6 +140,9 @@ func (p *Manager) beginAccountStoragePreparation() (*accountStorageAuthorization
 		return nil, err
 	}
 	defer release()
+	if err := p.requireAccountManagedWriteLocked(); err != nil {
+		return nil, err
+	}
 	if current := p.accountStorageAuthorization; current != nil &&
 		!time.Now().After(current.ExpiresAt) && (current.Preparing || current.InUse) {
 		return nil, ErrAccountStorageAuthorizationBusy

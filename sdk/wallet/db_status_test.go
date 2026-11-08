@@ -86,6 +86,9 @@ func (m *memoryKVDB) Delete(key []byte) error {
 
 func (m *memoryKVDB) Close() error { return nil }
 
+// The in-memory batch stages all operations until its locked Flush.
+func (m *memoryKVDB) NewAtomicWriteBatch() db.WriteBatch { return m.NewWriteBatch() }
+
 func (m *memoryKVDB) NewWriteBatch() db.WriteBatch {
 	return &memoryWriteBatch{db: m}
 }
@@ -252,6 +255,10 @@ func (b *memoryWriteBatch) Close() {}
 
 func TestLoadStatusMigratesLegacySTPStatus(t *testing.T) {
 	kv := newMemoryKVDB()
+	legacyWallet := &WalletInDB{Id: 7, Accounts: 1}
+	if err := saveWallet(kv, legacyWallet); err != nil {
+		t.Fatal(err)
+	}
 	legacy := &Status{
 		DBver:                   "0.1.2",
 		SyncHeight:              11,
@@ -271,7 +278,16 @@ func TestLoadStatusMigratesLegacySTPStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	status := loadStatusWithLegacyMigration(kv)
+	status, loaded, err := loadStatusWithLegacyMigrationResult(kv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded || status == nil {
+		t.Fatal("legacy STP status was not loaded")
+	}
+	if status.CurrentWallet != legacyWallet.Id || status.CurrentAccount != 0 || status.TotalWallet != 1 {
+		t.Fatal("legacy STP selection did not use its unique wallet and account zero")
+	}
 	assertMigratedSTPStatus(t, status, legacy)
 	if status.DBver != legacy.DBver {
 		t.Fatalf("legacy STP DB version lost: got %q want %q", status.DBver, legacy.DBver)
@@ -286,6 +302,10 @@ func TestLoadStatusMigratesLegacySTPStatus(t *testing.T) {
 
 func TestLoadStatusLegacySTPStatusOverridesWalletStatus(t *testing.T) {
 	kv := newMemoryKVDB()
+	legacyWallet := &WalletInDB{Id: 9, Accounts: 1}
+	if err := saveWallet(kv, legacyWallet); err != nil {
+		t.Fatal(err)
+	}
 	current := newDefaultStatus()
 	current.DBver = DB_VERSION
 	current.CurrentWallet = 42
@@ -322,13 +342,19 @@ func TestLoadStatusLegacySTPStatusOverridesWalletStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	status := loadStatusWithLegacyMigration(kv)
+	status, loaded, err := loadStatusWithLegacyMigrationResult(kv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded || status == nil {
+		t.Fatal("legacy STP status was not loaded")
+	}
 	if status.DBver != legacy.DBver {
 		t.Fatalf("legacy STP DB version lost: got %q want %q", status.DBver, legacy.DBver)
 	}
-	if status.CurrentWallet != legacy.CurrentWallet || status.CurrentAccount != legacy.CurrentAccount {
-		t.Fatalf("legacy STP status was not authoritative: got wallet=%d account=%d want wallet=%d account=%d",
-			status.CurrentWallet, status.CurrentAccount, legacy.CurrentWallet, legacy.CurrentAccount)
+	if status.CurrentWallet != legacyWallet.Id || status.CurrentAccount != 0 || status.TotalWallet != 1 {
+		t.Fatalf("legacy STP selection ignored its wallet catalog: got wallet=%d account=%d total=%d want wallet=%d account=0 total=1",
+			status.CurrentWallet, status.CurrentAccount, status.TotalWallet, legacyWallet.Id)
 	}
 	assertMigratedSTPStatus(t, status, legacy)
 
@@ -339,6 +365,9 @@ func TestLoadStatusLegacySTPStatusOverridesWalletStatus(t *testing.T) {
 	if !ok || persisted.DBver != legacy.DBver || persisted.SyncHeightL1 != legacy.SyncHeightL1 {
 		t.Fatalf("wallet-status did not persist authoritative legacy STP status: %+v", persisted)
 	}
+	if persisted.CurrentWallet != legacyWallet.Id || persisted.CurrentAccount != 0 || persisted.TotalWallet != 1 {
+		t.Fatal("wallet-status did not persist the unique wallet and account-zero selection")
+	}
 	if _, err := kv.Read([]byte(legacySTPStatusDBKey())); err == nil {
 		t.Fatal("legacy status key was not deleted after successful migration")
 	}
@@ -346,6 +375,10 @@ func TestLoadStatusLegacySTPStatusOverridesWalletStatus(t *testing.T) {
 
 func TestLoadStatusMigratesLegacySyncHeightAsL1Height(t *testing.T) {
 	kv := newMemoryKVDB()
+	legacyWallet := &WalletInDB{Id: 7, Accounts: 1}
+	if err := saveWallet(kv, legacyWallet); err != nil {
+		t.Fatal(err)
+	}
 	legacy := &Status{
 		SyncHeight:     900321,
 		SyncHeightL2:   3600,
@@ -360,7 +393,13 @@ func TestLoadStatusMigratesLegacySyncHeightAsL1Height(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	status := loadStatusWithLegacyMigration(kv)
+	status, loaded, err := loadStatusWithLegacyMigrationResult(kv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded || status == nil {
+		t.Fatal("legacy STP status was not loaded")
+	}
 	if status.SyncHeightL1 != legacy.SyncHeight {
 		t.Fatalf("legacy SyncHeight not migrated as L1 height: got %d want %d",
 			status.SyncHeightL1, legacy.SyncHeight)

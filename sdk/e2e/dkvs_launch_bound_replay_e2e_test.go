@@ -19,9 +19,14 @@ import (
 func TestSDKDKVSLaunchBoundReplay(t *testing.T) {
 	f := newTemplateFixtureWithArgs(t, map[string]int64{}, nil, nil, dkvsMinerArgs(t))
 	waitForDKVSPeerReady(t, f.Network)
+	runSDKDKVSLaunchBoundReplay(t, f, dkvsClientMnemonic)
+}
+
+func runSDKDKVSLaunchBoundReplay(t *testing.T, f *templateFixture, mnemonic string) {
+	t.Helper()
 	core := dkvsClientForNode(t, f.Network.Core)
-	owner := newDKVSKeyPathActor(t, keyFromMnemonic(t, dkvsClientMnemonic, 0))
-	manager, _ := newWalletManagerForNode(t, f.Network.Core, dkvsClientMnemonic)
+	owner := newDKVSKeyPathActor(t, keyFromMnemonic(t, mnemonic, 0))
+	manager, _ := newWalletManagerForNode(t, f.Network.Core, mnemonic)
 	require.NoError(t, manager.InitializeAccountManagement("123456"))
 	require.NoError(t, manager.BindAccountToCurrentCoreNode())
 	key, err := dkvs.PersonalKey(owner.Wallet.GetPubKey().SerializeCompressed(), "launch-bound-replay/value")

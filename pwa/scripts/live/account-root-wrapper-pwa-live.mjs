@@ -151,7 +151,7 @@ const createDKVSWriteObserver = (page) => {
   const markers = new Map([
     ['state', '/account/state'],
     ['blob', '/account-managed-data'],
-    ['wrapper', '/account/root-key-wrapper/current'],
+    ['wrapper', '/account/root'],
   ])
   page.on('request', (request) => {
     if (request.method() !== 'POST' || !request.url().includes('/v3/dkvs/')) return

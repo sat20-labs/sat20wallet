@@ -30,7 +30,9 @@ func sdkAdmissionInputs(t *testing.T, f *sdkContractReviewFixture, name string, 
 	for _, text := range selected {
 		outpoint, err := wire.NewOutPointFromString(text)
 		require.NoError(t, err)
-		if seen[*outpoint] { continue }
+		if seen[*outpoint] {
+			continue
+		}
 		seen[*outpoint] = true
 		raw, err := f.network.Bootstrap.Client.GetRawTransaction(&outpoint.Hash)
 		require.NoError(t, err)
@@ -52,7 +54,10 @@ func sdkAdmissionOrdinaryTx(t *testing.T, f *sdkContractReviewFixture, name stri
 	script, err := wallet.GetP2TRpkScript(f.owner.GetWallet().GetPaymentPubKey())
 	require.NoError(t, err)
 	tx := wire.NewMsgTx(wire.TxVersion)
-	for _, input := range inputs { in := input; tx.AddTxIn(wire.NewTxIn(&in, nil, nil)) }
+	for _, input := range inputs {
+		in := input
+		tx.AddTxIn(wire.NewTxIn(&in, nil, nil))
+	}
 	tx.AddTxOut(wire.NewTxOut(total.Value-1000, total.Assets.Clone(), script))
 	return tx, prev
 }
@@ -73,7 +78,9 @@ func sdkAdmissionMustReject(t *testing.T, f *sdkContractReviewFixture, tx *wire.
 		"contract-review: rejection must be the intended policy, not missing funds or a transport failure")
 	inPool, poolErr := f.network.Bootstrap.Client.GetRawMempool()
 	require.NoError(t, poolErr)
-	for _, hash := range inPool { require.NotEqual(t, signed.TxHash(), *hash) }
+	for _, hash := range inPool {
+		require.NotEqual(t, signed.TxHash(), *hash)
+	}
 }
 
 func TestSDKSmartContractsAdmission(t *testing.T) {
@@ -137,20 +144,24 @@ func TestSDKSmartContractsAdmission(t *testing.T) {
 		require.NoError(t, err)
 		address := f.deployEVM(t, appendSolidityConstructorArgs(artifact.Bytecode, evmABIString(bound), evmABIString(bound)))
 		inputs, total, prev := sdkAdmissionInputs(t, f, wallet.GetGasAssetName(), 10000)
-		height, err := f.network.Bootstrap.Client.GetBlockCount(); require.NoError(t, err)
-		baseFee, err := contract.GasFeeAtHeight(contract.InvokeBaseGas, uint64(height+1)); require.NoError(t, err)
+		height, err := f.network.Bootstrap.Client.GetBlockCount()
+		require.NoError(t, err)
+		baseFee, err := contract.GasFeeAtHeight(contract.InvokeBaseGas, uint64(height+1))
+		require.NoError(t, err)
 		gasName := wire.NewAssetNameFromString(wallet.GetGasAssetName())
 		fundingAssets := wire.TxAssets{{Name: *gasName, Amount: *indexer.NewDefaultDecimal(1000)}}
 		changeAssets := total.Assets.Clone()
-		require.NoError(t, changeAssets.Split(wire.TxAssets{{Name: *gasName, Amount: *indexer.NewDefaultDecimal(1000+baseFee)}}))
-		contractAddress, err := contract.DecodeContractAddress(address); require.NoError(t, err)
+		require.NoError(t, changeAssets.Split(wire.TxAssets{{Name: *gasName, Amount: *indexer.NewDefaultDecimal(1000 + baseFee)}}))
+		contractAddress, err := contract.DecodeContractAddress(address)
+		require.NoError(t, err)
 		tx, err := contract.BuildInvokeTx(contract.InvokeTxBuildRequest{
-			Contract: contractAddress, GasLimit: contract.InvokeBaseGas-1, CallNonce: 99001, Action: "call",
+			Contract: contractAddress, GasLimit: contract.InvokeBaseGas - 1, CallNonce: 99001, Action: "call",
 			Param: solidityCall("inc()"), Funding: *wire.NewTxOut(100, fundingAssets, nil), Inputs: inputs,
 			ExtraOutputs: []*wire.TxOut{wire.NewTxOut(total.Value-100, changeAssets, script)},
 		})
 		require.NoError(t, err)
-		signed, err := owner.SignContractTx_SatsNet(tx, prev, wallet.GetGasAssetName(), baseFee); require.NoError(t, err)
+		signed, err := owner.SignContractTx_SatsNet(tx, prev, wallet.GetGasAssetName(), baseFee)
+		require.NoError(t, err)
 		_, err = owner.BroadcastTx_SatsNet(signed)
 		require.Error(t, err, "contract-review: node admitted below-floor gas after bypassing the SDK request encoder")
 		require.Regexp(t, "(?i)gas", err.Error())

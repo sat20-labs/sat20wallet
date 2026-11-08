@@ -3,8 +3,11 @@ import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { runInNewContext } from 'node:vm'
 import { transformSync } from 'esbuild'
+import { createPinia, defineStore, setActivePinia } from 'pinia'
 import { tryit } from 'radash'
 import ts from 'typescript'
+import * as Vue from 'vue'
+import { createI18n } from 'vue-i18n'
 
 function load(source, deps = {}, globals = {}) {
   const module = { exports: {} }
@@ -17,13 +20,48 @@ function load(source, deps = {}, globals = {}) {
 const source = path => readFileSync(new URL(path, import.meta.url), 'utf8')
 const script = source('../../components/wallet/RGB11InvoiceDialog.vue').match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1]
 const ast = ts.createSourceFile('dialog.ts', script, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
-let generateSource
+let generateSource, displayOperationErrorSource
 ast.forEachChild(node => {
   if (ts.isVariableStatement(node)) for (const d of node.declarationList.declarations) {
     if (d.name.getText(ast) === 'generateInvoice') generateSource = d.initializer.getText(ast)
+    if (d.name.getText(ast) === 'displayOperationError') displayOperationErrorSource = d.initializer.getText(ast)
   }
 })
 assert.ok(generateSource)
+assert.ok(displayOperationErrorSource, 'displayOperationError missing')
+
+const zh = JSON.parse(source('../../locales/zh.json'))
+const i18n = createI18n({ legacy: false, locale: 'zh', fallbackLocale: false, messages: { zh } })
+const walletStore = Vue.reactive({
+  hasWallet: true, locked: false, isSwitchingWallet: false, isSwitchingAccount: false,
+  isSwitchingNetwork: false, rootAccountId: 'root', walletId: 'wallet', accountIndex: 1,
+  network: 'testnet', wallet: { fingerprint: 'test-fingerprint' },
+})
+const useAccountManagementStore = load(source('../../store/accountManagement.ts'), {
+  vue: Vue,
+  pinia: { defineStore },
+  '@/utils/accountManagement': { default: {} },
+  './wallet': { useWalletStore: () => walletStore },
+}).useAccountManagementStore
+
+function productionErrorDisplay() {
+  setActivePinia(createPinia())
+  const accountManagementState = useAccountManagementStore()
+  const t = i18n.global.t.bind(i18n.global)
+  const displayOperationError = load(`export const displayOperationError = ${displayOperationErrorSource}`, {}, {
+    accountManagementState, t,
+  }).displayOperationError
+  return { accountManagementState, displayOperationError, t }
+}
+
+test('operation error display uses account quota guidance and Chinese messages', () => {
+  const { displayOperationError, t } = productionErrorDisplay()
+  assert.equal(
+    displayOperationError({ code: 'DKVS_QUOTA_EXCEEDED', message: 'quota detail' }, 'rgb11Invoice.generateFailed'),
+    `quota detail ${t('accountManagement.quota.review')}`,
+  )
+  assert.equal(displayOperationError(undefined, 'rgb11Invoice.generateFailed'), t('rgb11Invoice.generateFailed'))
+})
 
 for (const stage of ['none', 'before_dispatch', 'native_pending', 'finish_log']) {
   test(`receive handle survives session change: ${stage}`, async () => {
@@ -48,6 +86,7 @@ for (const stage of ['none', 'before_dispatch', 'native_pending', 'finish_log'])
       '@/utils/pwaVersionPolicy': { beginVersionDispatch: () => () => {} },
       '@/utils/walletAwaitTrace': { beginWalletAwaitTrace: () => () => {} },
       '@/utils/wasmRuntimeDiagnostics': { noteWasmOperation: () => {} },
+      '@/utils/wasmError': load(source('../../utils/wasmError.ts')),
     }, { sat20wallet_wasm: { createRGB11Invoice: async () => {
       calls++
       // Only the external WASM boundary is mocked. The actual SDK persists
@@ -57,8 +96,8 @@ for (const stage of ['none', 'before_dispatch', 'native_pending', 'finish_log'])
       return nativeResult
     } } }).default
     const globals = {
-      restoring: ref(false), restoreFailed: ref(false), scopeKey, requestId: ref(''),
-      assetContractID: ref('rgb:fixture'), errorMessage: ref(''), t: x => x,
+      rgb11WriteAllowed: ref(true), restoring: ref(false), restoreFailed: ref(false), scopeKey, requestId: ref(''),
+      assetContractID: ref('rgb:fixture'), errorMessage: ref(''), ...productionErrorDisplay(),
       props: { asset: { ticker: 'fixture', precision: 0 } }, amount: ref('5'), decimalToRaw: () => '5',
       proxyEndpoint: ref('rpc://fixture.invalid'), proxyStorageKey: () => 'proxy-key',
       transportMode: ref('rgb-json-rpc'), loading: ref(false), receiveMode: ref('blind'), walletManager,
@@ -75,6 +114,10 @@ for (const stage of ['none', 'before_dispatch', 'native_pending', 'finish_log'])
     }
     await pending
     assert.equal(calls, stage === 'before_dispatch' ? 0 : 1)
+    assert.equal(globals.errorMessage.value, stage === 'none'
+      ? ''
+      : 'Wallet session changed; request is no longer valid',
+    'the real operation-error display must preserve the session-boundary message')
     if (stage === 'before_dispatch') {
       assert.equal(nativeRequests.size, 0)
       assert.equal(saved.has(key), false)

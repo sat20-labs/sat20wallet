@@ -114,8 +114,11 @@ import walletManager from '@/utils/sat20'
 import { sendAccountsChangedEvent } from '@/lib/utils'
 import { useNameManager } from '@/composables/useNameManager'
 import { useDebounceFn } from '@vueuse/core'
+import { useI18n } from 'vue-i18n'
+import { confirmPendingBackupRisk } from '@/utils/pendingBackupRisk'
 
 const router = useRouter()
+const { t } = useI18n()
 const { toast } = useToast()
 const walletStore = useWalletStore()
 const { isSwitchingAccount } = storeToRefs(walletStore)
@@ -175,7 +178,7 @@ watch(accounts, async (newAccounts) => {
 
 function showCreateAccountDialog() {
   isCreateAccountDialogOpen.value = true
-  newAccountName.value = `Account ${(accounts.value?.length || 0) + 1}`
+  newAccountName.value = t('walletComponents.accountNumber', { number: (accounts.value?.length || 0) + 1 })
 }
 
 function showEditNameDialog(account: WalletAccountWithDisplay) {
@@ -186,8 +189,8 @@ function showEditNameDialog(account: WalletAccountWithDisplay) {
 async function createAccount() {
   if (!newAccountName.value) {
     toast({
-      title: '错误',
-      description: '请输入账户名称',
+      title: t('walletComponents.error'),
+      description: t('walletComponents.enterAccountName'),
       variant: 'destructive',
     })
     return
@@ -196,7 +199,7 @@ async function createAccount() {
   try {
     isCreating.value = true
     const newAccountId = accounts.value?.length || 0
-    const accountName = newAccountName.value.trim() || `Account ${newAccountId + 1}`
+    const accountName = newAccountName.value.trim() || t('walletComponents.accountNumber', { number: newAccountId + 1 })
     await walletStore.addAccount(accountName, newAccountId)
     try {
       await sendAccountsChangedEvent(newAccountId)
@@ -204,8 +207,8 @@ async function createAccount() {
       console.error('sendAccountsChangedEvent error', error);
     }
     toast({
-      title: '成功',
-      description: '账户创建成功',
+      title: t('walletComponents.success'),
+      description: t('walletComponents.accountCreated'),
       variant: 'success'
     })
     isCreateAccountDialogOpen.value = false
@@ -216,8 +219,8 @@ async function createAccount() {
 
     isCreating.value = false
     toast({
-      title: '错误',
-      description: '账户创建失败',
+      title: t('walletComponents.error'),
+      description: t('walletComponents.accountCreateFailed'),
       variant: 'destructive',
     })
   } finally {
@@ -228,10 +231,11 @@ async function createAccount() {
 // 创建防抖的切换账户函数
 const debouncedSelectAccount = useDebounceFn(async (account: WalletAccountWithDisplay) => {
   try {
+    if (!await confirmPendingBackupRisk(key => t(key))) return
     await walletStore.switchToAccount(account.index)
     toast({
-      title: '成功',
-      description: '切换账户成功',
+      title: t('walletComponents.success'),
+      description: t('walletComponents.accountSwitched'),
       variant: 'success'
     })
     console.log(router.currentRoute.value.path);
@@ -240,8 +244,8 @@ const debouncedSelectAccount = useDebounceFn(async (account: WalletAccountWithDi
     }, 300)
   } catch (error) {
     toast({
-      title: '错误',
-      description: '切换账户失败',
+      title: t('walletComponents.error'),
+      description: t('walletComponents.accountSwitchFailed'),
       variant: 'destructive',
     })
   }
@@ -251,8 +255,8 @@ async function selectAccount(account: WalletAccountWithDisplay) {
   // 如果正在切换账户，直接返回
   if (isSwitchingAccount.value) {
     toast({
-      title: '请稍等',
-      description: '账户切换进行中',
+      title: t('walletComponents.wait'),
+      description: t('walletComponents.accountSwitching'),
       variant: 'default'
     })
     return
@@ -266,13 +270,13 @@ async function copyAddress(address: string) {
   try {
     await navigator.clipboard.writeText(address)
     toast({
-      title: '成功',
-      description: '地址已复制',
+      title: t('walletComponents.success'),
+      description: t('walletComponents.addressCopied'),
     })
   } catch (error) {
     toast({
-      title: '错误',
-      description: '复制失败',
+      title: t('walletComponents.error'),
+      description: t('walletComponents.copyFailed'),
       variant: 'destructive',
     })
   }

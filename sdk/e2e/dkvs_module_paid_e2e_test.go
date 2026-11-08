@@ -16,6 +16,12 @@ import (
 // wallet SDK interfaces, production CoreNode RPC and real P2P replication.
 func TestSDKDKVSModulePaid(t *testing.T) {
 	f, owner, successor, payment := sdkDKVSReviewPaidFixture(t)
+	runSDKDKVSModulePaid(t, f, owner, successor, payment)
+}
+
+func runSDKDKVSModulePaid(t *testing.T, f *templateFixture, owner, successor *dkvsKeyPathActor,
+	payment wallet.DKVSAutopayOptions) {
+	t.Helper()
 	client := dkvsClientForNode(t, f.Network.Core)
 	peer := dkvsClientForNode(t, f.Network.Bootstrap)
 	personal := func(t *testing.T, path string) string {

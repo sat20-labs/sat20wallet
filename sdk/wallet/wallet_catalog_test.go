@@ -8,55 +8,37 @@ import (
 )
 
 func TestManagedRootWalletCannotBeDeleted(t *testing.T) {
-	database := newMemoryKVDB()
-	rootWallet := NewInternalWalletWithMnemonic(
-		"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
-		"", &chaincfg.TestNet4Params,
-	)
-	childWallet := NewInternalWalletWithMnemonic(
-		"legal winner thank year wave sausage worth useful legal winner thank yellow",
-		"", &chaincfg.TestNet4Params,
-	)
-	if rootWallet == nil || childWallet == nil {
-		t.Fatal("create test wallets")
-	}
-	rootWallet.id = 1
-	childWallet.id = 2
-	rootInfo := &WalletInfo{WalletInDB: WalletInDB{
-		Id: 1, Accounts: 1, Type: WALLET_TYPE_MNEMONIC, Name: "Root",
-		AccountNames: map[uint32]string{0: "Account 1"}, AccountDIDs: map[uint32]string{},
-	}, Wallet: rootWallet}
-	childInfo := &WalletInfo{WalletInDB: WalletInDB{
-		Id: 2, Accounts: 1, Type: WALLET_TYPE_MNEMONIC, Name: "Child",
-		AccountNames: map[uint32]string{0: "Account 1"}, AccountDIDs: map[uint32]string{},
-	}, Wallet: childWallet}
-	if err := saveWallet(database, &rootInfo.WalletInDB); err != nil {
+	old := _chain
+	_chain = "testnet"
+	t.Cleanup(func() { _chain = old })
+	manager, _, _, _ := accountTTLNoopFixture(t)
+	manager.accountBackgroundWG.Wait()
+	rootID := manager.GetCurrentWalletId()
+	rootWallet := manager.wallet
+	childID, _, err := manager.CreateWallet("password")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := saveWallet(database, &childInfo.WalletInDB); err != nil {
+	childWallet := manager.wallet
+	if err := manager.SyncAccountManagementState(nil); err != nil {
 		t.Fatal(err)
 	}
-	manager := &Manager{
-		db: database, wallet: rootWallet, status: &Status{CurrentWallet: 1},
-		walletInfoMap: map[int64]*WalletInfo{1: rootInfo, 2: childInfo},
-		accountProfile: &accountManagementProfile{
-			Version: accountManagementProfileVersion, RootFingerprint: walletFingerprint(rootWallet),
-			AccountID: strings.Repeat("a", 64), DeviceID: make([]byte, accountManagementDeviceIDSize),
-		},
+	if err := manager.SwitchWallet(rootID, "password"); err != nil {
+		t.Fatal(err)
 	}
-
-	if err := manager.DeleteWallet(1); err == nil {
+	if err := manager.DeleteWallet(rootID); err == nil {
 		t.Fatal("account management root wallet was deleted")
 	}
 	if len(manager.walletInfoMap) != 2 {
 		t.Fatal("root deletion changed the wallet catalog")
 	}
-	manager.wallet = childWallet
-	manager.status.CurrentWallet = 2
-	if err := manager.DeleteWallet(2); err != nil {
+	if err := manager.SwitchWallet(childID, "password"); err != nil {
 		t.Fatal(err)
 	}
-	if len(manager.walletInfoMap) != 1 || manager.walletInfoMap[1] == nil {
+	if err := manager.DeleteWallet(childID); err != nil {
+		t.Fatal(err)
+	}
+	if len(manager.walletInfoMap) != 1 || manager.walletInfoMap[rootID] == nil {
 		t.Fatal("non-root wallet deletion damaged the root wallet")
 	}
 	if len(manager.accountProfile.Pending) != 1 ||
@@ -64,38 +46,25 @@ func TestManagedRootWalletCannotBeDeleted(t *testing.T) {
 		manager.accountProfile.Pending[0].Fingerprint != walletFingerprint(childWallet) {
 		t.Fatal("non-root wallet deletion was not queued for DKVS")
 	}
-	if manager.wallet != rootWallet || manager.status.CurrentWallet != 1 {
+	if manager.wallet != rootWallet || manager.status.CurrentWallet != rootID {
 		t.Fatal("deleting the current wallet did not select the root wallet")
 	}
 }
 
 func TestEnsureAccountOnlyExtendsAccountIndexes(t *testing.T) {
-	database := newMemoryKVDB()
-	value := NewInternalWalletWithMnemonic(
-		"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
-		"", &chaincfg.TestNet4Params,
-	)
-	if value == nil {
-		t.Fatal("create test wallet")
-	}
-	value.id = 1
-	info := &WalletInfo{WalletInDB: WalletInDB{
-		Id: 1, Accounts: 1, Type: WALLET_TYPE_MNEMONIC, Name: "Root",
-		AccountNames: map[uint32]string{0: "Account 1"}, AccountDIDs: map[uint32]string{},
-	}, Wallet: value}
-	if err := saveWallet(database, &info.WalletInDB); err != nil {
+	manager, _, _ := newInactiveAccountGroup(t, "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about", "password")
+	id := manager.GetCurrentWalletId()
+	if err := manager.EnsureAccount(id, 2, "Third", ""); err != nil {
 		t.Fatal(err)
 	}
-	manager := &Manager{db: database, walletInfoMap: map[int64]*WalletInfo{1: info}}
-	if err := manager.EnsureAccount(1, 2, "Third", ""); err != nil {
-		t.Fatal(err)
-	}
+	info := manager.walletInfoMap[id]
 	if info.Accounts != 3 || info.AccountNames[2] != "Third" {
 		t.Fatal("account index was not extended")
 	}
-	if err := manager.EnsureAccount(1, 0, "Renamed", ""); err != nil {
+	if err := manager.EnsureAccount(id, 0, "Renamed", ""); err != nil {
 		t.Fatal(err)
 	}
+	info = manager.walletInfoMap[id]
 	if info.Accounts != 3 || info.AccountNames[0] != "Renamed" {
 		t.Fatal("updating an existing index changed account count")
 	}

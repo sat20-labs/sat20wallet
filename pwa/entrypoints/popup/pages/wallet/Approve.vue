@@ -23,6 +23,8 @@
 </template>
 
 <script setup lang="ts">
+const { t } = useI18n()
+import { useI18n } from 'vue-i18n'
 import RequestAccounts from "@/components/approve/RequestAccounts.vue";
 import SwitchNetwork from "@/components/approve/SwitchNetwork.vue";
 import SignMessage from "@/components/approve/SignMessage.vue";
@@ -95,34 +97,34 @@ const componentName = computed(() => {
 
 const title = computed(() => {
   if (!currentRequest.value?.action) {
-    return "Authorization Request";
+    return t('pwaUi.approvalTitles.authorization');
   }
   // 简单的标题映射，可以根据需要扩展
   const actionToTitle: Record<string, string> = {
-    [Message.MessageAction.REQUEST_ACCOUNTS]: "Connect Wallet",
-    [Message.MessageAction.SWITCH_NETWORK]: "Switch Network",
-    [Message.MessageAction.SIGN_MESSAGE]: "Sign Message",
-    [Message.MessageAction.SIGN_DATA]: "Sign Data",
-    [Message.MessageAction.SIGN_PSBT]: "Sign Transaction",
-    [Message.MessageAction.SIGN_PSBTS]: "Sign Transactions",
-    [Message.MessageAction.LOCK_UTXO]: "Lock UTXO",
-    [Message.MessageAction.LOCK_UTXO_SATSNET]: "Lock UTXO",
-    [Message.MessageAction.UNLOCK_UTXO]: "Unlock UTXO",
-    [Message.MessageAction.UNLOCK_UTXO_SATSNET]: "Unlock UTXO",
-    [Message.MessageAction.PUSH_TX]: "Broadcast Transaction",
-    [Message.MessageAction.PUSH_PSBT]: "Broadcast Transaction",
-    [Message.MessageAction.BATCH_SEND_ASSETS_SATSNET]: "Send Assets",
-    [Message.MessageAction.SPLIT_ASSET]: "Split Asset",
-    [Message.MessageAction.DEPLOY_CONTRACT_REMOTE]: "Deploy Contract",
-    [Message.MessageAction.INVOKE_CONTRACT_SATSNET]: "Execute Contract",
-    [Message.MessageAction.INVOKE_UNIFIED_CONTRACT]: "Execute Contract",
-    [Message.MessageAction.INVOKE_CONTRACT_V2_SATSNET]: "Execute Contract",
-    [Message.MessageAction.INVOKE_CONTRACT_V2]: "Execute Contract",
-    [Message.MessageAction.REGISTER_AS_REFERRER]: "Register as Referrer",
-    [Message.MessageAction.SEND_ASSETS_SATSNET]: "Send Assets",
-    [Message.MessageAction.BATCH_SEND_ASSETS_V2_SATSNET]: "Send Assets",
+    [Message.MessageAction.REQUEST_ACCOUNTS]: t('pwaUi.approvalTitles.connect'),
+    [Message.MessageAction.SWITCH_NETWORK]: t('pwaUi.approvalTitles.switchNetwork'),
+    [Message.MessageAction.SIGN_MESSAGE]: t('pwaUi.approvalTitles.signMessage'),
+    [Message.MessageAction.SIGN_DATA]: t('pwaUi.approvalTitles.signData'),
+    [Message.MessageAction.SIGN_PSBT]: t('pwaUi.approvalTitles.signTransaction'),
+    [Message.MessageAction.SIGN_PSBTS]: t('pwaUi.approvalTitles.signTransactions'),
+    [Message.MessageAction.LOCK_UTXO]: t('pwaUi.approvalTitles.lock'),
+    [Message.MessageAction.LOCK_UTXO_SATSNET]: t('pwaUi.approvalTitles.lock'),
+    [Message.MessageAction.UNLOCK_UTXO]: t('pwaUi.approvalTitles.unlock'),
+    [Message.MessageAction.UNLOCK_UTXO_SATSNET]: t('pwaUi.approvalTitles.unlock'),
+    [Message.MessageAction.PUSH_TX]: t('pwaUi.approvalTitles.broadcast'),
+    [Message.MessageAction.PUSH_PSBT]: t('pwaUi.approvalTitles.broadcast'),
+    [Message.MessageAction.BATCH_SEND_ASSETS_SATSNET]: t('pwaUi.approvalTitles.send'),
+    [Message.MessageAction.SPLIT_ASSET]: t('pwaUi.approvalTitles.split'),
+    [Message.MessageAction.DEPLOY_CONTRACT_REMOTE]: t('pwaUi.approvalTitles.deploy'),
+    [Message.MessageAction.INVOKE_CONTRACT_SATSNET]: t('pwaUi.approvalTitles.execute'),
+    [Message.MessageAction.INVOKE_UNIFIED_CONTRACT]: t('pwaUi.approvalTitles.execute'),
+    [Message.MessageAction.INVOKE_CONTRACT_V2_SATSNET]: t('pwaUi.approvalTitles.execute'),
+    [Message.MessageAction.INVOKE_CONTRACT_V2]: t('pwaUi.approvalTitles.execute'),
+    [Message.MessageAction.REGISTER_AS_REFERRER]: t('pwaUi.approvalTitles.referrer'),
+    [Message.MessageAction.SEND_ASSETS_SATSNET]: t('pwaUi.approvalTitles.send'),
+    [Message.MessageAction.BATCH_SEND_ASSETS_V2_SATSNET]: t('pwaUi.approvalTitles.send'),
   };
-  return actionToTitle[currentRequest.value.action] || "Authorization Request";
+  return actionToTitle[currentRequest.value.action] || t('pwaUi.approvalTitles.authorization');
 });
 
 // Each rendered component retains callbacks for its own request, including

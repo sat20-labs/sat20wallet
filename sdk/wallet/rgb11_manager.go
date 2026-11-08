@@ -806,7 +806,7 @@ func (p *rgb11Manager) projectRGB11Allocation(outpoint string, asset *indexer.As
 	if err != nil {
 		return err
 	}
-	current, _, err := p.exportRGB11WalletSnapshot(walletID)
+	current, err := p.readRGB11Local(walletID)
 	if err != nil {
 		return err
 	}
@@ -924,7 +924,7 @@ func (p *rgb11Manager) projectRGB11Allocation(outpoint string, asset *indexer.As
 			return hashErr
 		}
 		if selectedHash != baseHash {
-			projectionRecords, err = rgb11wallet.RebindValidatedConsignmentReceiptSnapshot(
+			projectionRecords, err = rgb11wallet.RebindLocalReceipt(
 				projectionRecords, base, selectedReceipt)
 			if err != nil {
 				return err
@@ -945,7 +945,7 @@ func (p *rgb11Manager) projectRGB11Allocation(outpoint string, asset *indexer.As
 	projectedAsset := &indexer.AssetInfo{Name: allocation.AssetName,
 		Amount: *allocation.Amount.Clone(), BindingSat: 0}
 	candidate := *current
-	candidate.ProjectionRecords, err = rgb11wallet.AddValidatedConsignmentProjectionSnapshot(
+	candidate.ProjectionRecords, err = rgb11wallet.AddLocalConsignment(
 		projectionRecords, raw, selectedReceipt,
 		[]rgb11wallet.ProjectionReplacement{{Output: output, Asset: projectedAsset, Proof: projectedProof}})
 	if err != nil {
@@ -1103,7 +1103,7 @@ func (p *rgb11Manager) GetRGB11State() (*RGB11State, error) {
 	if err != nil {
 		return nil, err
 	}
-	proofs, err := p.rgbManager.projectionStore.ListProofs()
+	proofs, blocked, err := p.localRGB11ProofView()
 	if err != nil {
 		return nil, err
 	}
@@ -1117,7 +1117,6 @@ func (p *rgb11Manager) GetRGB11State() (*RGB11State, error) {
 	}
 	requirements := rgb11ProofConfirmationRequirements(transfers)
 	reservedInputs := rgb11ReservedInputOutpoints(transfers)
-	projectionAvailable := p.rgb11ProjectionAvailable()
 	carrierLocks := p.utxoLockerL1.GetLockedUtxoList()
 
 	var assets indexer.TxAssets
@@ -1139,7 +1138,16 @@ func (p *rgb11Manager) GetRGB11State() (*RGB11State, error) {
 			}
 			proof := proofIndex[fmt.Sprintf("%s|%s", output.OutPointStr, asset.Name.String())]
 			if proof == nil {
-				return nil, fmt.Errorf("%w: proof missing for %s %s", ErrRGB11Inconsistent, output.OutPointStr, asset.Name.String())
+				if !blocked[output.OutPointStr] {
+					return nil, fmt.Errorf("%w: proof missing for %s %s", ErrRGB11Inconsistent, output.OutPointStr, asset.Name.String())
+				}
+				if err := assets.Add(asset); err != nil {
+					return nil, err
+				}
+				if err := pendingAssets.Add(asset); err != nil {
+					return nil, err
+				}
+				continue
 			}
 			if !rgb11ProofIsCurrent(proof) {
 				continue
@@ -1148,7 +1156,7 @@ func (p *rgb11Manager) GetRGB11State() (*RGB11State, error) {
 				return nil, err
 			}
 			target := &pendingAssets
-			if projectionAvailable && !reservedInputs[proof.OutPoint] &&
+			if p.rgb11CarrierAvailable(proof.OutPoint) && !blocked[proof.OutPoint] && !reservedInputs[proof.OutPoint] &&
 				rgb11CarrierLockAllowsSpend(carrierLocks[proof.OutPoint]) &&
 				rgb11ProofIsAvailable(proof, requirements) {
 				target = &availableAssets
@@ -1196,10 +1204,14 @@ func (p *rgb11Manager) GetRGB11State() (*RGB11State, error) {
 		tickers = append(tickers, presentation)
 	}
 
+	consistency := p.GetRGB11ConsistencyStatus()
+	if len(blocked) != 0 {
+		consistency = "broken"
+	}
 	return &RGB11State{
 		Initialized:       true,
 		SyncStatus:        p.rgb11ScopeState().ReconciliationState,
-		ConsistencyStatus: p.GetRGB11ConsistencyStatus(),
+		ConsistencyStatus: consistency,
 		TickerInfos:       tickers,
 		Assets:            assets,
 		AvailableAssets:   availableAssets,
@@ -1910,7 +1922,7 @@ func (p *rgb11Manager) importRGB11Contract(ctx context.Context, raw []byte,
 	if err != nil {
 		return nil, err
 	}
-	current, _, err := p.exportRGB11WalletSnapshot(walletID)
+	current, err := p.readRGB11Local(walletID)
 	if err != nil {
 		return nil, err
 	}
@@ -1962,7 +1974,7 @@ func (p *rgb11Manager) importRGB11Contract(ctx context.Context, raw []byte,
 			return nil, hashErr
 		}
 		if oldHash != newHash {
-			projectionRecords, err = rgb11wallet.RebindValidatedConsignmentReceiptSnapshot(
+			projectionRecords, err = rgb11wallet.RebindLocalReceipt(
 				projectionRecords, existing, projectionReceipt,
 			)
 			if err != nil {
@@ -1999,7 +2011,7 @@ func (p *rgb11Manager) importRGB11Contract(ctx context.Context, raw []byte,
 			Output: output, Asset: asset, Proof: proof,
 		})
 	}
-	projectionRecords, err = rgb11wallet.AddValidatedConsignmentProjectionSnapshot(
+	projectionRecords, err = rgb11wallet.AddLocalConsignment(
 		projectionRecords, raw, projectionReceipt, replacements,
 	)
 	if err != nil {
@@ -2009,7 +2021,7 @@ func (p *rgb11Manager) importRGB11Contract(ctx context.Context, raw []byte,
 	if err != nil {
 		return nil, err
 	}
-	projectionRecords, err = rgb11wallet.AddContractObjectSnapshotReference(
+	projectionRecords, err = rgb11wallet.AddLocalContract(
 		projectionRecords, receipt.ContractID, contractFile,
 	)
 	if err != nil {
@@ -2224,13 +2236,7 @@ func (p *rgb11Manager) rgb11TickerPresentation(info *indexer.TickerInfo) (*RGB11
 	if label == "" {
 		label, status = contractID, "origin-unavailable"
 	}
-	canonicalName := ""
-	verified := false
-	if registered, err := p.projectionStore.LoadRegisteredAssetName(contractID); err == nil {
-		label, status, canonicalName, verified = registered, "satoshinet-registered", registered, true
-	} else if !errors.Is(err, indexer.ErrKeyNotFound) {
-		return nil, err
-	} else if local, err := p.projectionStore.LoadLocalAssetName(contractID); err == nil {
+	if local, err := p.projectionStore.LoadLocalAssetName(contractID); err == nil {
 		label, status = local, "local-custom"
 	} else if !errors.Is(err, indexer.ErrKeyNotFound) {
 		return nil, err
@@ -2238,7 +2244,7 @@ func (p *rgb11Manager) rgb11TickerPresentation(info *indexer.TickerInfo) (*RGB11
 	return &RGB11TickerInfo{
 		TickerInfo: info, Ticker: label, AssetKey: info.AssetName.String(),
 		ContractID: contractID, GenesisAddress: ext.GenesisAddress, NamingStatus: status,
-		CanonicalName: canonicalName, Verified: verified,
+		CanonicalName: "", Verified: false,
 	}, nil
 }
 
@@ -2273,11 +2279,6 @@ func (p *rgb11Manager) SetRGB11LocalAssetName(contractID, name string) error {
 		}
 		return err
 	}
-	if _, err := p.projectionStore.LoadRegisteredAssetName(contractID); err == nil {
-		return rgb11wallet.ErrRegisteredNameFrozen
-	} else if !errors.Is(err, indexer.ErrKeyNotFound) {
-		return err
-	}
 	if ext.CanonicalName != "" {
 		return rgb11wallet.ErrRegisteredNameFrozen
 	}
@@ -2291,10 +2292,17 @@ func (p *rgb11Manager) rgb11ContractIDForAssetName(name indexer.AssetName) (stri
 	if p == nil || name.Protocol != rgb11wallet.Protocol {
 		return "", rgb11wallet.ErrInvalidRGB11Asset
 	}
+	lookupName := name
+	if name.Type == "control" {
+		// An IFA control allocation has a separate projection key, but its
+		// authenticated ticker metadata belongs to the fungible asset. Keep
+		// the full ContractID check on the original control key below.
+		lookupName.Type = indexer.ASSET_TYPE_FT
+	}
 	p.mutex.RLock()
-	info := p.tickerInfoMap[name.String()]
+	info := p.tickerInfoMap[lookupName.String()]
 	p.mutex.RUnlock()
-	if info != nil {
+	if info != nil && info.AssetName == lookupName {
 		var ext rgb11wallet.TickerExt
 		if err := json.Unmarshal(info.Content, &ext); err != nil {
 			return "", err
@@ -2644,7 +2652,7 @@ func (p *rgb11Manager) CreateRGB11Invoice(request RGB11InvoiceRequest) (*corewal
 	if err != nil {
 		return nil, err
 	}
-	current, _, err := p.exportRGB11WalletSnapshot(walletID)
+	current, err := p.readRGB11Local(walletID)
 	if err != nil {
 		return nil, err
 	}
@@ -2656,7 +2664,7 @@ func (p *rgb11Manager) CreateRGB11Invoice(request RGB11InvoiceRequest) (*corewal
 		return nil, err
 	}
 	if reservedOutpoint != "" {
-		candidate.ProjectionRecords, err = rgb11wallet.UpsertProjectionSnapshotReceiveReservation(
+		candidate.ProjectionRecords, err = rgb11wallet.UpsertLocalReservation(
 			candidate.ProjectionRecords, &rgb11wallet.ReceiveReservation{
 				Version: 1, RequestID: receive.RequestID,
 				OutPoint: reservedOutpoint, ReservationID: reservationID, Expiry: request.Expiry,
@@ -2668,7 +2676,7 @@ func (p *rgb11Manager) CreateRGB11Invoice(request RGB11InvoiceRequest) (*corewal
 	}
 	if receiveKey != nil {
 		receiveKey.RequestID = receive.RequestID
-		candidate.ProjectionRecords, err = rgb11wallet.UpsertProjectionSnapshotReceiveKey(
+		candidate.ProjectionRecords, err = rgb11wallet.UpsertLocalReceiveKey(
 			candidate.ProjectionRecords, receiveKey,
 		)
 		if err != nil {
@@ -2778,29 +2786,21 @@ func (p *rgb11Manager) acceptRGB11ConsignmentWithID(ctx context.Context, request
 	if p == nil || p.rgbManager == nil || p.rgbManager.engine == nil {
 		return nil, ErrRGB11Inconsistent
 	}
-	walletID, err := p.RGB11WalletID()
+	Log.Debugf("RGB snapshot operation: manager=%d source=accept phase=begin", p.rgb11ReservationOwner().debugID)
+	result, err := p.runRGB11Candidate(ctx, rgb11CandidateOp{
+		kind: rgb11AcceptCandidate, requestID: requestID, raw: raw,
+		expectedTxID: expectedTxID, expectedVout: expectedVout, localTransferID: localTransferID,
+	})
 	if err != nil {
 		return nil, err
 	}
-	current, _, err := p.exportRGB11WalletSnapshot(walletID)
-	if err != nil {
-		return nil, err
-	}
-	candidate, receipt, _, err := p.buildRGB11AcceptedConsignmentCandidateWithID(
-		ctx, current, requestID, raw, expectedTxID, expectedVout, localTransferID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := p.applyRGB11CandidateSnapshot(ctx, current, candidate); err != nil {
-		return nil, err
-	}
+	Log.Debugf("RGB snapshot operation: manager=%d source=accept phase=committed", p.rgb11ReservationOwner().debugID)
 	if autoBackup {
 		if err := p.autoBackupRGB11AfterMutation(); err != nil {
 			return nil, err
 		}
 	}
-	return receipt, nil
+	return result.receipt, nil
 }
 
 func (p *rgb11Manager) prepareRGB11Consignment(ctx context.Context, requestID string, raw []byte,
@@ -2813,30 +2813,11 @@ func (p *rgb11Manager) prepareRGB11ConsignmentWithID(ctx context.Context, reques
 	if p == nil || p.rgbManager == nil || p.rgbManager.engine == nil {
 		return nil, ErrRGB11Inconsistent
 	}
-	walletID, err := p.RGB11WalletID()
+	result, err := p.runRGB11Candidate(ctx, rgb11CandidateOp{
+		kind: rgb11PrepareCandidate, requestID: requestID, raw: raw,
+		expectedTxID: expectedTxID, expectedVout: expectedVout, localTransferID: localTransferID,
+	})
 	if err != nil {
-		return nil, err
-	}
-	current, _, err := p.exportRGB11WalletSnapshot(walletID)
-	if err != nil {
-		return nil, err
-	}
-	candidate, receipt, err := p.buildRGB11PreparedReceiveCandidate(
-		ctx, current, requestID, raw, expectedTxID, expectedVout, localTransferID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	if owner := p.accountManagementOwner(); owner != nil {
-		scopeID, scopeErr := p.rgb11AccountManagedScopeID()
-		if scopeErr != nil {
-			return nil, scopeErr
-		}
-		if _, err := owner.preflightRGB11TerminalRecovery(scopeID, candidate); err != nil {
-			return nil, err
-		}
-	}
-	if _, err := p.applyRGB11CandidateSnapshot(ctx, current, candidate); err != nil {
 		return nil, err
 	}
 	if autoBackup {
@@ -2844,7 +2825,7 @@ func (p *rgb11Manager) prepareRGB11ConsignmentWithID(ctx context.Context, reques
 			return nil, err
 		}
 	}
-	return receipt, nil
+	return result.receipt, nil
 }
 
 type rgb11ReceiveAllocationMatch struct {
@@ -3085,8 +3066,22 @@ func (p *rgb11Manager) prepareRGB11Transfer(ctx context.Context, request RGB11Se
 	return p.prepareRGB11TransferForEndpoints(ctx, request, direct, nil)
 }
 
+func (p *rgb11Manager) PrepareRGB11Inflation(ctx context.Context, request RGB11InflationRequest) (*RGB11PreparedTransfer, error) {
+	if strings.TrimSpace(request.Invoice) == "" {
+		return nil, invoicing.ErrInvalidInvoice
+	}
+	return p.prepareRGB11TransferForEndpointsMode(ctx, RGB11SendRequest{
+		Invoice: request.Invoice, FeeRate: request.FeeRate, MinConfirmations: request.MinConfirmations,
+	}, false, nil, true)
+}
+
 func (p *rgb11Manager) prepareRGB11TransferForEndpoints(ctx context.Context, request RGB11SendRequest,
 	direct bool, endpoints []*RGB11AddressEndpoint) (*RGB11PreparedTransfer, error) {
+	return p.prepareRGB11TransferForEndpointsMode(ctx, request, direct, endpoints, false)
+}
+
+func (p *rgb11Manager) prepareRGB11TransferForEndpointsMode(ctx context.Context, request RGB11SendRequest,
+	direct bool, endpoints []*RGB11AddressEndpoint, inflation bool) (*RGB11PreparedTransfer, error) {
 	if p == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil || p.rgbManager.evidence == nil || p.wallet == nil {
 		return nil, ErrRGB11Inconsistent
 	}
@@ -3098,6 +3093,9 @@ func (p *rgb11Manager) prepareRGB11TransferForEndpoints(ctx context.Context, req
 		invoiceTexts = []string{request.Invoice}
 	}
 	if len(invoiceTexts) == 0 || len(invoiceTexts) > 32 {
+		return nil, invoicing.ErrInvalidInvoice
+	}
+	if inflation && len(invoiceTexts) != 1 {
 		return nil, invoicing.ErrInvalidInvoice
 	}
 	if endpoints != nil && len(endpoints) != len(invoiceTexts) {
@@ -3195,10 +3193,23 @@ func (p *rgb11Manager) prepareRGB11TransferForEndpoints(ctx context.Context, req
 		request.MinConfirmations = 1
 	}
 
+	targetAssignment := uint32(4000)
+	if inflation {
+		targetAssignment = 4010
+	}
 	selected, _, targetAsset, targetClass, targetType, targetTotal, err :=
-		p.selectRGB11Allocations(contractID.String(), totalAmount, request.MinConfirmations)
+		p.selectRGB11AllocationsForAssignment(contractID.String(), totalAmount, request.MinConfirmations, targetAssignment)
 	if err != nil {
 		return nil, err
+	}
+	if inflation {
+		if targetClass != "fungible" || targetType != 4010 {
+			return nil, rgb11wallet.ErrInvalidProof
+		}
+		targetAsset, err = rgb11wallet.NewContractAssetKey(contractID.String(), indexer.ASSET_TYPE_FT)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if len(recipients) > 1 && targetClass != "fungible" {
 		return nil, fmt.Errorf("RGB11 batch send supports fungible state only")
@@ -3207,9 +3218,14 @@ func (p *rgb11Manager) prepareRGB11TransferForEndpoints(ctx context.Context, req
 	if err != nil {
 		return nil, err
 	}
+	if inflation && (base == nil || base.GenesisReport.Kind != schemas.IFA) {
+		return nil, fmt.Errorf("RGB11 inflation requires an IFA contract")
+	}
 
 	reveals := make([]seals.GraphBlindSeal, 0, len(selected))
 	inputs := make([]operations.TransitionInput, 0, len(selected))
+	inflationInputs := make([]operations.TransitionInput, 0, len(selected))
+	preservationInputs := make([]operations.TransitionInput, 0, len(selected))
 	for _, allocation := range selected {
 		operationID, err := hex.DecodeString(allocation.proof.OperationID)
 		if err != nil || len(operationID) != 32 || allocation.proof.AssignmentType > 0xffff || allocation.proof.AssignmentIndex > 0xffff {
@@ -3217,10 +3233,18 @@ func (p *rgb11Manager) prepareRGB11TransferForEndpoints(ctx context.Context, req
 		}
 		var operation [32]byte
 		copy(operation[:], operationID)
-		inputs = append(inputs, operations.TransitionInput{
+		input := operations.TransitionInput{
 			OperationID: operation, AssignmentType: uint16(allocation.proof.AssignmentType),
 			Index: uint16(allocation.proof.AssignmentIndex),
-		})
+		}
+		inputs = append(inputs, input)
+		if inflation {
+			if allocation.target {
+				inflationInputs = append(inflationInputs, input)
+			} else {
+				preservationInputs = append(preservationInputs, input)
+			}
+		}
 		graph, err := seals.DecodeGraphBlindSeal(allocation.proof.SealDisclosure)
 		if err != nil {
 			return nil, rgb11wallet.ErrInvalidProof
@@ -3237,6 +3261,7 @@ func (p *rgb11Manager) prepareRGB11TransferForEndpoints(ctx context.Context, req
 	changeSecrets := make([][32]byte, 0)
 	recipientSecrets := make([][32]byte, 0, 1)
 	outputs := make([]operations.TransitionOutput, 0, len(recipients)+1)
+	preservationOutputs := make([]operations.TransitionOutput, 0)
 	var structuredData []byte
 	if targetClass == "structured" {
 		for _, allocation := range selected {
@@ -3247,8 +3272,12 @@ func (p *rgb11Manager) prepareRGB11TransferForEndpoints(ctx context.Context, req
 		}
 	}
 	for _, recipient := range recipients {
+		outputType := uint16(targetType)
+		if inflation {
+			outputType = 4000
+		}
 		output := operations.TransitionOutput{
-			AssignmentType: uint16(targetType), Class: targetClass, Amount: recipient.amount,
+			AssignmentType: outputType, Class: targetClass, Amount: recipient.amount,
 			Data: append([]byte(nil), structuredData...),
 		}
 		switch recipient.invoice.Beneficiary.Kind {
@@ -3287,6 +3316,29 @@ func (p *rgb11Manager) prepareRGB11TransferForEndpoints(ctx context.Context, req
 		if err != nil {
 			return nil, err
 		}
+		// One carrier and AssetName have one projection key. Preserve several
+		// compatible fungible inputs as one output rather than creating distinct
+		// seals that would overwrite that key during refresh.
+		merged := false
+		for index := range preservationOutputs {
+			previous := &preservationOutputs[index]
+			if previous.AssignmentType != uint16(allocation.proof.AssignmentType) {
+				continue
+			}
+			if previous.Class != "fungible" || allocation.proof.StateClass != "fungible" ||
+				!bytes.Equal(previous.Data, allocation.proof.StateData) {
+				return nil, fmt.Errorf("%w: same-asset local change requires distinct carrier outputs", rgb11wallet.ErrInvalidProof)
+			}
+			if ^uint64(0)-previous.Amount < stateAmount {
+				return nil, rgb11wallet.ErrInvalidProof
+			}
+			previous.Amount += stateAmount
+			merged = true
+			break
+		}
+		if merged {
+			continue
+		}
 		change, secret, err := newRGB11ChangeOutput(
 			changeVout, uint16(allocation.proof.AssignmentType), allocation.proof.StateClass,
 			stateAmount, allocation.proof.StateData,
@@ -3294,19 +3346,57 @@ func (p *rgb11Manager) prepareRGB11TransferForEndpoints(ctx context.Context, req
 		if err != nil {
 			return nil, err
 		}
-		outputs = append(outputs, change)
+		preservationOutputs = append(preservationOutputs, change)
 		changeSeals = append(changeSeals, secret.seal)
 		changeSecrets = append(changeSecrets, secret.secret)
 	}
 
+	transitionInputs := inputs
+	transitionType := uint16(10_000)
+	var metadata map[uint16][]byte
+	var globals map[uint16][][]byte
+	if inflation {
+		transitionInputs = inflationInputs
+		transitionType = 8000
+		remaining := make([]byte, 8)
+		issued := make([]byte, 8)
+		binary.LittleEndian.PutUint64(remaining, targetTotal-totalAmount)
+		binary.LittleEndian.PutUint64(issued, totalAmount)
+		metadata = map[uint16][]byte{1000: remaining}
+		globals = map[uint16][][]byte{2010: [][]byte{issued}}
+	}
+	if !inflation {
+		outputs = append(outputs, preservationOutputs...)
+	}
 	transition, transitionCommitment, err := operations.BuildTransition(operations.TransitionSpec{
 		ContractID: [32]byte(contractID), Nonce: uint64(time.Now().UnixNano()),
-		TransitionType: 10_000, Inputs: inputs, Outputs: outputs,
+		TransitionType: transitionType, Inputs: transitionInputs, Outputs: outputs,
+		Metadata: metadata, Globals: globals,
 	})
 	if err != nil {
 		return nil, err
 	}
-	bundleValue, bundleCommitment, err := operations.BuildBundle(inputs, transition)
+	var preservationTransition strict_types.Value
+	var preservationCommitment operations.TransitionCommitment
+	if inflation && len(preservationInputs) > 0 {
+		preservationTransition, preservationCommitment, err = operations.BuildTransition(operations.TransitionSpec{
+			ContractID: [32]byte(contractID), Nonce: uint64(time.Now().UnixNano()) + 1,
+			TransitionType: 10_000, Inputs: preservationInputs, Outputs: preservationOutputs,
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	var bundleValue strict_types.Value
+	var bundleCommitment operations.BundleCommitment
+	if inflation && len(preservationInputs) > 0 {
+		bundleValue, bundleCommitment, err = buildRGB11TwoTransitionBundle(
+			inflationInputs, transition, transitionCommitment,
+			preservationInputs, preservationTransition, preservationCommitment,
+		)
+	} else {
+		bundleValue, bundleCommitment, err = operations.BuildBundle(inputs, transition)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -3357,6 +3447,7 @@ func (p *rgb11Manager) prepareRGB11TransferForEndpoints(ctx context.Context, req
 	packet, signedTx, signedPSBT, err := p.buildRGB11PSBT(
 		tx, prevFetcher, [32]byte(contractID), transitionCommitment.OperationID,
 		transition.Encoded, bundleCommitment.BundleID, mpcProof, mpcCommitment, inputs,
+		rgb11PSBTTransition{ID: preservationCommitment.OperationID, Encoded: preservationTransition.Encoded},
 	)
 	if err != nil {
 		return nil, err
@@ -3473,13 +3564,13 @@ func (p *rgb11Manager) prepareRGB11TransferForEndpoints(ctx context.Context, req
 	if err != nil {
 		return nil, err
 	}
-	current, _, err := p.exportRGB11WalletSnapshot(walletID)
+	current, err := p.readRGB11Local(walletID)
 	if err != nil {
 		return nil, err
 	}
 	candidate := *current
 	for _, pending := range pendingList {
-		candidate.ProjectionRecords, err = rgb11wallet.UpsertProjectionSnapshotPending(
+		candidate.ProjectionRecords, err = rgb11wallet.UpsertLocalPending(
 			candidate.ProjectionRecords, pending,
 		)
 		if err != nil {
@@ -3593,10 +3684,17 @@ func rgb11InvoiceTransportMode(invoice *invoicing.Invoice) (string, error) {
 func (p *rgb11Manager) selectRGB11Allocations(contractID string, amount uint64, minConfirmations uint8) (
 	[]rgb11SpendAllocation, string, indexer.AssetName, string, uint32, uint64, error,
 ) {
+	return p.selectRGB11AllocationsForAssignment(contractID, amount, minConfirmations, 4000)
+}
+
+func (p *rgb11Manager) selectRGB11AllocationsForAssignment(contractID string, amount uint64,
+	minConfirmations uint8, assignmentType uint32) (
+	[]rgb11SpendAllocation, string, indexer.AssetName, string, uint32, uint64, error,
+) {
 	excluded := make(map[string]struct{})
 	for {
 		selected, baseHash, targetAsset, targetClass, targetType, total, err :=
-			p.selectRGB11AllocationsOnce(contractID, amount, minConfirmations, excluded)
+			p.selectRGB11AllocationsOnceForAssignment(contractID, amount, minConfirmations, excluded, assignmentType)
 		if err != nil {
 			return nil, "", indexer.AssetName{}, "", 0, total, err
 		}
@@ -3651,7 +3749,14 @@ func (p *rgb11Manager) selectRGB11AllocationsOnce(contractID string, amount uint
 	excluded map[string]struct{}) (
 	[]rgb11SpendAllocation, string, indexer.AssetName, string, uint32, uint64, error,
 ) {
-	proofs, err := p.rgbManager.projectionStore.ListProofs()
+	return p.selectRGB11AllocationsOnceForAssignment(contractID, amount, minConfirmations, excluded, 4000)
+}
+
+func (p *rgb11Manager) selectRGB11AllocationsOnceForAssignment(contractID string, amount uint64, minConfirmations uint8,
+	excluded map[string]struct{}, assignmentType uint32) (
+	[]rgb11SpendAllocation, string, indexer.AssetName, string, uint32, uint64, error,
+) {
+	proofs, blocked, err := p.readRGB11ProofView()
 	if err != nil {
 		return nil, "", indexer.AssetName{}, "", 0, 0, err
 	}
@@ -3665,7 +3770,9 @@ func (p *rgb11Manager) selectRGB11AllocationsOnce(contractID string, amount uint
 			continue
 		}
 		official, err := p.rgb11ContractIDForAssetName(proof.AssetName)
-		if err == nil && official == contractID && proof.AssignmentType == 4000 && proof.AssetName.Type != "control" {
+		if err == nil && official == contractID && proof.AssignmentType == assignmentType &&
+			((assignmentType == 4000 && proof.AssetName.Type != "control") ||
+				(assignmentType == 4010 && proof.AssetName.Type == "control")) {
 			targets = append(targets, proof)
 		}
 	}
@@ -3681,7 +3788,7 @@ func (p *rgb11Manager) selectRGB11AllocationsOnce(contractID string, amount uint
 		if _, skip := excluded[target.OutPoint]; skip {
 			continue
 		}
-		if !rgb11CarrierLockAllowsSpend(locked[target.OutPoint]) {
+		if blocked[target.OutPoint] || !p.rgb11CarrierAvailable(target.OutPoint) || !rgb11CarrierLockAllowsSpend(locked[target.OutPoint]) {
 			continue
 		}
 		if selectedOutpoints[target.OutPoint] {
@@ -4004,10 +4111,15 @@ func (p *rgb11Manager) buildRGB11WitnessTx(selected []rgb11SpendAllocation, reci
 	}
 }
 
+type rgb11PSBTTransition struct {
+	ID      [32]byte
+	Encoded []byte
+}
+
 func (p *rgb11Manager) buildRGB11PSBT(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher,
 	contractID, transitionID [32]byte, transition []byte, bundleID [32]byte,
 	mpcProof anchors.MPCProof, mpcCommitment [32]byte,
-	inputs []operations.TransitionInput) (*psbt.Packet, *wire.MsgTx, []byte, error) {
+	inputs []operations.TransitionInput, additional ...rgb11PSBTTransition) (*psbt.Packet, *wire.MsgTx, []byte, error) {
 	packet, err := CreatePsbt(tx, prevFetcher, nil)
 	if err != nil {
 		return nil, nil, nil, err
@@ -4024,6 +4136,18 @@ func (p *rgb11Manager) buildRGB11PSBT(tx *wire.MsgTx, prevFetcher txscript.PrevO
 		&psbt.Unknown{Key: transitionKey, Value: append([]byte(nil), transition...)},
 		&psbt.Unknown{Key: closeKey, Value: []byte{2}},
 	)
+	for _, item := range additional {
+		if len(item.Encoded) == 0 {
+			continue
+		}
+		key, err := corepsbt.RGBTransition(item.ID).RawKey()
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		packet.Unknowns = append(packet.Unknowns, &psbt.Unknown{
+			Key: key, Value: append([]byte(nil), item.Encoded...),
+		})
+	}
 	consumedKey, err := corepsbt.RGBConsumedBy(contractID).RawKey()
 	if err != nil {
 		return nil, nil, nil, err
@@ -4174,47 +4298,38 @@ func (p *rgb11Manager) RefreshRGB11State(ctx context.Context) (result *RGB11Refr
 // refreshRGB11State uses a fixed scope. Bitcoin calls run without a shared
 // lock; applyRGB11CandidateSnapshot checks the captured local baseline.
 func (p *rgb11Manager) refreshRGB11State(ctx context.Context) (result *RGB11RefreshResult, err error) {
-	defer func() {
-		if err != nil {
-			p.markRGB11ProjectionUnavailable()
-		}
-	}()
 	if p == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil ||
 		p.rgbManager.engineStore == nil || p.rgbManager.evidence == nil {
 		return nil, ErrRGB11Inconsistent
 	}
-	walletID, err := p.RGB11WalletID()
+	Log.Debugf("RGB snapshot operation: manager=%d source=refresh phase=begin", p.rgb11ReservationOwner().debugID)
+	opResult, err := p.runRGB11Candidate(ctx, rgb11CandidateOp{kind: rgb11RefreshCandidate})
 	if err != nil {
-		return nil, err
-	}
-	current, _, err := p.exportRGB11WalletSnapshot(walletID)
-	if err != nil {
-		return nil, err
-	}
-	candidate, result, err := p.buildRGB11RefreshCandidate(ctx, current, time.Now().Unix())
-	if err != nil {
-		if errors.Is(err, ErrRGB11Inconsistent) {
-			p.rgbManager.consistencyStatus = "broken"
-		} else {
-			p.rgbManager.consistencyStatus = "warning"
-		}
-		return result, fmt.Errorf("build RGB11 refresh candidate: %w", err)
-	}
-	resolved, err := p.applyRGB11CandidateSnapshot(ctx, current, candidate)
-	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return result, err
+		if errors.Is(err, errRGB11StaleLocal) || errors.Is(err, context.Canceled) ||
+			errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
 		}
 		if errors.Is(err, ErrRGB11Inconsistent) {
 			p.rgbManager.consistencyStatus = "broken"
 		} else {
 			p.rgbManager.consistencyStatus = "warning"
 		}
-		return result, fmt.Errorf("apply RGB11 refresh candidate: %w", err)
+		if opResult != nil {
+			return opResult.refresh, err
+		}
+		return nil, err
 	}
+	current, candidate, resolved := opResult.current, opResult.candidate, opResult.resolved
+	result = opResult.refresh
+	Log.Debugf("RGB snapshot operation: manager=%d source=refresh phase=committed", p.rgb11ReservationOwner().debugID)
 	inconsistent, err := rgb11SnapshotInconsistentOutpoints(resolved)
 	if err != nil {
 		return result, err
+	}
+	for _, fault := range p.rgb11ScopeState().ProofFaults {
+		if !containsString(inconsistent, fault.OutPoint) {
+			inconsistent = append(inconsistent, fault.OutPoint)
+		}
 	}
 	result.Inconsistent = inconsistent
 	// Count only transitions actually committed by the unified resolver.
@@ -4268,7 +4383,11 @@ func (p *rgb11Manager) refreshRGB11State(ctx context.Context) (result *RGB11Refr
 	}
 	if len(inconsistent) != 0 {
 		p.rgbManager.consistencyStatus = "broken"
-		return result, ErrRGB11Inconsistent
+		causes := []error{ErrRGB11Inconsistent}
+		for _, fault := range p.rgb11ScopeState().ProofFaults {
+			causes = append(causes, fault)
+		}
+		return result, errors.Join(causes...)
 	}
 	if result.Unresolved > 0 {
 		p.rgbManager.consistencyStatus = "warning"

@@ -10,27 +10,24 @@ import (
 	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 )
 
-
 type MonitorWallet struct {
 	address string
 	id      int64
 }
 
-
-func NewMonitorWallet(address string,) (*MonitorWallet) {
+func NewMonitorWallet(address string) *MonitorWallet {
 	return &MonitorWallet{
 		address: address,
-		id: time.Now().UnixMicro(),
+		id:      time.Now().UnixMicro(),
 	}
 }
 
 func (p *MonitorWallet) Clone() common.Wallet {
 	return &MonitorWallet{
 		address: p.address,
-		id: p.id,
+		id:      p.id,
 	}
 }
-
 
 func (p *MonitorWallet) GetId() int64 {
 	return p.id
@@ -38,7 +35,7 @@ func (p *MonitorWallet) GetId() int64 {
 
 func (p *MonitorWallet) GetWalletId() common.WalletId {
 	return common.WalletId{
-		Id: p.id,
+		Id:           p.id,
 		SubAccountId: 0,
 	}
 }
@@ -47,13 +44,12 @@ func (p *MonitorWallet) CloneByPubKey(pubkey []byte) common.Wallet {
 	return nil
 }
 
-
 func (p *MonitorWallet) SetSubAccount(id uint32) {
 }
 func (p *MonitorWallet) GetSubAccount() uint32 {
 	return 0
 }
-	
+
 func (p *MonitorWallet) GetPubKey() *secp256k1.PublicKey {
 	return nil
 }
@@ -90,13 +86,13 @@ func (p *MonitorWallet) SignMessage(msg []byte) ([]byte, error) {
 func (p *MonitorWallet) SignWalletMessage(msg string) ([]byte, error) {
 	return nil, fmt.Errorf("not implemented")
 }
-func (p *MonitorWallet) SignPsbt(packet *psbt.Packet) (error) {
+func (p *MonitorWallet) SignPsbt(packet *psbt.Packet) error {
 	return fmt.Errorf("not implemented")
 }
 func (p *MonitorWallet) SignPsbt_SatsNet(packet *spsbt.Packet) error {
 	return fmt.Errorf("not implemented")
 }
-func (p *MonitorWallet) SignPsbts(packet []*psbt.Packet) (error) {
+func (p *MonitorWallet) SignPsbts(packet []*psbt.Packet) error {
 	return fmt.Errorf("not implemented")
 }
 func (p *MonitorWallet) SignPsbts_SatsNet(packet []*spsbt.Packet) error {
@@ -109,19 +105,19 @@ func (p *MonitorWallet) SignMessageWithIndex(msg []byte, index uint32) ([]byte, 
 func (p *MonitorWallet) SignWalletMessageWithIndex(msg string, index uint32) ([]byte, error) {
 	return nil, fmt.Errorf("not implemented")
 }
-func (p *MonitorWallet) SignPsbtWithIndex(packet *psbt.Packet, index uint32) (error) {
+func (p *MonitorWallet) SignPsbtWithIndex(packet *psbt.Packet, index uint32) error {
 	return fmt.Errorf("not implemented")
 }
 func (p *MonitorWallet) SignPsbtWithIndex_SatsNet(packet *spsbt.Packet, index uint32) error {
 	return fmt.Errorf("not implemented")
 }
-func (p *MonitorWallet) SignPsbtsWithIndex(packet []*psbt.Packet, index uint32) (error) {
+func (p *MonitorWallet) SignPsbtsWithIndex(packet []*psbt.Packet, index uint32) error {
 	return fmt.Errorf("not implemented")
 }
 func (p *MonitorWallet) SignPsbtsWithIndex_SatsNet(packet []*spsbt.Packet, index uint32) error {
 	return fmt.Errorf("not implemented")
 }
-	
+
 // special channel wallet
 func (p *MonitorWallet) CreateChannelWallet(peer []byte, id uint32) common.ChannelWallet {
 	return nil

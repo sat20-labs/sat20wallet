@@ -20,50 +20,33 @@ type RGB11RegistryBackend interface {
 // RGB11Registrar is owned once by the selected CoreNode registration service.
 // All registrations for this network must pass through that instance. This is
 // a single-writer policy, not coordination between separate service processes.
-// Ordinals are derived from committed records; no counter or reverse index is
-// persisted. Restart must use the same authoritative database.
 type RGB11Registrar struct {
 	mu        sync.Mutex
 	backend   RGB11RegistryBackend
 	signer    common.Wallet
-	resolver  dkvsindexer.DIDResolver
 	authority dkvsindexer.SystemVerifier
 }
 
-func NewRGB11Registrar(backend RGB11RegistryBackend, signer common.Wallet, resolver dkvsindexer.DIDResolver, authority dkvsindexer.SystemVerifier) (*RGB11Registrar, error) {
-	if backend == nil || signer == nil || resolver == nil || authority == nil {
+func NewRGB11Registrar(backend RGB11RegistryBackend, signer common.Wallet, authority dkvsindexer.SystemVerifier) (*RGB11Registrar, error) {
+	if backend == nil || signer == nil || authority == nil {
 		return nil, dkvsindexer.ErrPermissionDenied
 	}
 	if err := authority.CanWriteSystem(rgb11wallet.RGB11RegistryPath+"/"+"1111111111111111111111111111111111111111111111111111111111111111", signer.GetPubKey().SerializeCompressed()); err != nil {
 		return nil, err
 	}
-	return &RGB11Registrar{backend: backend, signer: signer, resolver: resolver, authority: authority}, nil
+	return &RGB11Registrar{backend: backend, signer: signer, authority: authority}, nil
 }
 
-// Register accepts the provider public key from the service's authenticated
-// request context. The caller must first validate the bridge/genesis ownership
-// evidence; a caller-supplied public key alone is not request authentication.
-// Ordinary wallet and WASM APIs do not expose this authority operation.
-func (r *RGB11Registrar) Register(provider string, providerPubKey, content []byte) (*RGB11NameRegistration, error) {
+// Register stores an independently validated public contract. Any caller may
+// submit public material through the future Core route; this authority object
+// is not exposed by ordinary wallet/WASM APIs and grants no DID name rights.
+func (r *RGB11Registrar) Register(content []byte) (*rgb11wallet.RGB11Registration, error) {
 	if r == nil {
 		return nil, dkvsindexer.ErrPermissionDenied
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if err := rgb11wallet.ValidatePrimaryDIDName(provider); err != nil {
-		return nil, err
-	}
-	identity, err := r.resolver.ResolveName(provider)
-	if err != nil {
-		return nil, err
-	}
-	if !identity.Active || identity.CanonicalName != provider {
-		return nil, dkvsindexer.ErrPermissionDenied
-	}
-	if err := identity.CanSign(providerPubKey); err != nil {
-		return nil, err
-	}
-	value, proposed, err := rgb11wallet.NewRGB11ContractValue(provider, content)
+	value, proposed, err := rgb11wallet.NewRGB11ContractValue(content)
 	if err != nil {
 		return nil, err
 	}
@@ -78,23 +61,18 @@ func (r *RGB11Registrar) Register(provider string, providerPubKey, content []byt
 	if err != nil {
 		return nil, err
 	}
-	ordinal := uint64(1)
 	for n, registration := range registrations {
 		if registration.ContractID == proposed.ContractID {
 			existing, err := rgb11wallet.DecodeRGB11RegistryValue(snapshot.Records[n].Value)
 			if err != nil {
 				return nil, err
 			}
-			if existing.ProviderDID != provider || existing.Ticker != value.Ticker || !bytes.Equal(existing.ContractContent, content) {
+			if !bytes.Equal(existing.ContractContent, value.ContractContent) {
 				return nil, dkvsindexer.ErrWriteConflict
 			}
 			return registration, nil
 		}
-		if registration.ProviderDID == provider && registration.BaseTicker == value.Ticker {
-			ordinal++
-		}
 	}
-	value.Ordinal = ordinal
 	encoded, err := rgb11wallet.EncodeRGB11RegistryValue(value)
 	if err != nil {
 		return nil, err

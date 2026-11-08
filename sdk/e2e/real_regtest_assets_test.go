@@ -180,6 +180,7 @@ func prepareSDKPWARegtestAssetsWithClose(t *testing.T, existingOnly ...bool) (*w
 func prepareSDKPWARegtestAssetsInternal(t *testing.T, existingOnly ...bool) (*wallet.Manager, *wallet.Manager,
 	func(address string, blocks int), func(*wallet.Manager)) {
 	t.Helper()
+	portBase := sdkPWARegtestSatoshiNetPortBase(t)
 	require.LessOrEqual(t, len(existingOnly), 1)
 	require.True(t, len(existingOnly) == 0 || existingOnly[0], "optional existingOnly argument can only require existing wallet state")
 	reuseExistingWallets := len(existingOnly) == 1 && existingOnly[0]
@@ -200,8 +201,8 @@ func prepareSDKPWARegtestAssetsInternal(t *testing.T, existingOnly ...bool) (*wa
 	bootstrapKey := keyFromMnemonic(t, seeds["bootstrap"], 0)
 	coreKey := keyFromMnemonic(t, seeds["core"], 0)
 	peers := []string{
-		"b@" + hex.EncodeToString(bootstrapKey.PubKey().SerializeCompressed()) + "@http://127.0.0.1:30253/regtest",
-		"s@" + hex.EncodeToString(coreKey.PubKey().SerializeCompressed()) + "@http://127.0.0.1:30263/regtest",
+		fmt.Sprintf("b@%s@http://127.0.0.1:%d/regtest", hex.EncodeToString(bootstrapKey.PubKey().SerializeCompressed()), portBase+3),
+		fmt.Sprintf("s@%s@http://127.0.0.1:%d/regtest", hex.EncodeToString(coreKey.PubKey().SerializeCompressed()), portBase+13),
 	}
 	const password = "regtest-acceptance-only"
 	closeWallets := make(map[*wallet.Manager]func())
@@ -222,7 +223,7 @@ func prepareSDKPWARegtestAssetsInternal(t *testing.T, existingOnly ...bool) (*wa
 		}
 		cfg := &sdkcommon.Config{Env: "dev", Chain: "regtest", Mode: "client", Peers: peers,
 			IndexerL1: &sdkcommon.Indexer{Scheme: l1.Scheme, Host: l1.Host, Proxy: "btc/regtest"},
-			IndexerL2: &sdkcommon.Indexer{Scheme: "http", Host: "127.0.0.1:30262", Proxy: "regtest"}}
+			IndexerL2: &sdkcommon.Indexer{Scheme: "http", Host: fmt.Sprintf("127.0.0.1:%d", portBase+12), Proxy: "regtest"}}
 		database := indexerdb.NewKVDB(dir)
 		require.NotNil(t, database)
 		manager := wallet.NewManager(cfg, database)

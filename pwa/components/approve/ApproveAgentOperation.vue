@@ -2,35 +2,35 @@
   <LayoutApprove @confirm="confirm" @cancel="cancel" :loading="loading">
     <div class="space-y-4">
       <div class="space-y-2">
-        <h3 class="text-lg font-semibold">Agent Operation</h3>
+        <h3 class="text-lg font-semibold">{{ t('approvalUi.agentTitle') }}</h3>
         <p class="text-sm text-muted-foreground">
-          Review this wallet or STP operation before allowing the Agent to execute it.
+          {{ t('approvalUi.agentReview') }}
         </p>
       </div>
 
       <div class="rounded-md border p-3 space-y-1">
         <div class="flex items-center justify-between gap-3">
-          <p class="text-xs text-muted-foreground">Risk category</p>
+          <p class="text-xs text-muted-foreground">{{ t('approvalUi.riskCategory') }}</p>
           <span class="rounded-sm border px-2 py-0.5 text-xs font-medium">{{ riskCategory.label }}</span>
         </div>
         <p class="text-sm text-muted-foreground">{{ riskCategory.description }}</p>
       </div>
 
       <div v-if="riskAssessment.flags.length" class="rounded-md border border-amber-500/40 p-3 space-y-2 bg-amber-500/10">
-        <p class="text-xs font-medium text-amber-300">Risk checks</p>
+        <p class="text-xs font-medium text-amber-300">{{ t('approvalUi.riskChecks') }}</p>
         <div v-for="flag in riskAssessment.flags" :key="flag.code" class="space-y-0.5">
-          <p class="text-sm font-medium">{{ flag.label }}</p>
-          <p class="text-xs text-muted-foreground">{{ flag.detail }}</p>
+          <p class="text-sm font-medium">{{ t(`approvalUi.risks.${flag.code}.label`) }}</p>
+          <p class="text-xs text-muted-foreground">{{ t(`approvalUi.risks.${flag.code}.detail`, flag.detailValues || {}) }}</p>
         </div>
       </div>
 
       <div class="rounded-md border p-4 space-y-3 bg-muted/50">
         <div>
-          <p class="text-xs text-muted-foreground">Operation</p>
+          <p class="text-xs text-muted-foreground">{{ t('approvalUi.operation') }}</p>
           <p class="text-sm font-mono break-all">{{ operation }}</p>
         </div>
         <div v-for="item in summaryRows" :key="item.key">
-          <p class="text-xs text-muted-foreground">{{ item.key }}</p>
+          <p class="text-xs text-muted-foreground">{{ t(`approvalUi.fields.${item.key}`) }}</p>
           <p class="text-sm font-mono break-all">{{ item.value }}</p>
         </div>
       </div>
@@ -44,7 +44,7 @@
           :disabled="loading"
           @update:checked="riskAcknowledged = $event"
         />
-        <span>I reviewed the destination, amount, asset, origin, and risk checks for this Agent request.</span>
+        <span>{{ t('approvalUi.riskAcknowledgment') }}</span>
       </label>
 
       <p v-if="errorMessage" class="text-sm text-destructive">{{ errorMessage }}</p>
@@ -58,14 +58,14 @@
           class="text-sm sm:text-base h-full min-h-[44px] touch-manipulation"
           @click="cancel"
         >
-          Cancel
+          {{ t('approvalUi.cancel') }}
         </Button>
         <Button
           :disabled="loading || (riskAssessment.requiresSecondConfirmation && !riskAcknowledged)"
           class="text-sm sm:text-base h-full min-h-[44px] touch-manipulation"
           @click="confirm"
         >
-          Confirm
+          {{ t('approvalUi.confirm') }}
         </Button>
       </div>
     </template>
@@ -73,6 +73,8 @@
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
+const { t } = useI18n()
 import { computed, ref, watch } from 'vue'
 import LayoutApprove from '@/components/layout/LayoutApprove.vue'
 import { Button } from '@/components/ui/button'
@@ -111,25 +113,25 @@ const riskCategory = computed(() => {
   const op = operation.value
   if (['wallet.status', 'stp.status', 'wallet.transaction', 'stp.transaction', 'stp.safety_snapshot', 'stp.commitment_export', 'stp.punish_status', 'stp.force_close_plan'].includes(op)) {
     return {
-      label: 'Read-only safety',
-      description: 'This operation reads wallet, transaction, channel, or safety evidence without moving assets.',
+      label: t('approvalUi.readOnly'),
+      description: t('approvalUi.readOnlyDescription'),
     }
   }
   if (['wallet.export_mnemonic', 'wallet.change_password', 'wallet.import', 'wallet.create'].includes(op)) {
     return {
-      label: 'Secret-moving',
-      description: 'This operation can create, reveal, import, or modify wallet secrets. Verify it carefully.',
+      label: t('approvalUi.secretMoving'),
+      description: t('approvalUi.secretDescription'),
     }
   }
   if (['stp.punish_build', 'stp.punish_broadcast', 'stp.sweep_build'].includes(op)) {
     return {
-      label: 'Protective safety',
-      description: 'This operation protects user assets during force-close or revoked-commitment recovery.',
+      label: t('approvalUi.protective'),
+      description: t('approvalUi.protectiveDescription'),
     }
   }
   return {
-    label: 'Value-moving',
-    description: 'This operation may move BTC, SatoshiNet assets, or STP channel state. Check the asset, amount, destination, and channel.',
+    label: t('approvalUi.valueMoving'),
+    description: t('approvalUi.valueDescription'),
   }
 })
 
@@ -160,17 +162,17 @@ const summaryRows = computed(() => {
 const confirm = async () => {
   errorMessage.value = null
   if (riskAssessment.value.requiresSecondConfirmation && !riskAcknowledged.value) {
-    errorMessage.value = 'Review and acknowledge the risk checks before confirming.'
+    errorMessage.value = t('approvalUi.acknowledgeRisk')
     return
   }
   loading.value = true
   try {
     if (!operation.value) {
-      throw new Error('Missing Agent operation.')
+      throw new Error(t('approvalUi.missingAgentOperation'))
     }
     const result = await executePwaAgentOperation(operation.value, params.value, { approved: true })
     if (!result.ok) {
-      throw new Error((result as any).error?.message || 'Agent operation failed.')
+      throw new Error((result as any).error?.message || t('approvalUi.agentFailed'))
     }
     appendAgentAuditLog({
       operation: operation.value,
@@ -180,8 +182,8 @@ const confirm = async () => {
       confirmed_at: new Date().toISOString(),
     })
     toast({
-      title: 'Success',
-      description: 'Agent operation executed.',
+      title: t('approvalUi.success'),
+      description: t('approvalUi.agentExecuted'),
       variant: 'success',
     })
     emit('confirm', result)
@@ -189,7 +191,7 @@ const confirm = async () => {
     const message = error?.message || String(error)
     errorMessage.value = message
     toast({
-      title: 'Error',
+      title: t('approvalUi.error'),
       description: message,
       variant: 'destructive',
     })

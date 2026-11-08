@@ -12,6 +12,7 @@ import (
 
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
+	"github.com/stretchr/testify/require"
 )
 
 var errRGBNetworkAuditBoundary = errors.New("test reached network transport boundary")
@@ -103,24 +104,34 @@ func (e *rgbNetworkAuditEvidence) Broadcast([]byte) (string, error) {
 // fixtures can start readiness workers that read the same manager mutex; those
 // workers are not part of the transport operation being checked.
 func TestRGBNetworkBoundariesHoldNoWalletLocks(t *testing.T) {
-	for _, entry := range []string{"public-refresh-dkvs", "background-mailbox-dkvs", "background-enable-dkvs", "read-only-resolve-dkvs"} {
+	for _, entry := range []string{"public-refresh-bitcoin", "background-mailbox-dkvs", "background-enable-dkvs", "read-only-resolve-dkvs"} {
 		t.Run(entry, func(t *testing.T) {
 			old := _chain
 			_chain = "testnet"
 			defer func() { _chain = old }()
-			manager, _, secret := buildRootWrapperSource(t)
-			defer zeroBytes(secret)
+			var evidence rgb11wallet.BitcoinEvidenceProvider
+			manager, remote, _, _ := accountTTLWithSeed(t, func(owner *Manager, endpoint *rgb11MemoryDKVSHTTP) {
+				if entry == "public-refresh-bitcoin" {
+					evidence = prepareWarmUnlockRGBEvidence(t, owner, endpoint)
+				}
+			})
+			if entry == "public-refresh-bitcoin" {
+				require.NoError(t, manager.SyncAccountManagementState(context.Background()))
+			}
+			manager.accountBackgroundWG.Wait()
 			manager.stopAccountBackgroundTasks()
+			manager.rgbManager.scopeStates.stopReconciliations()
 			probe := &rgbNetworkAuditProbe{owner: manager}
-			remote := newRGB11MemoryDKVSHTTP()
-			manager.http = &rgbNetworkAuditHTTP{rgb11MemoryDKVSHTTP: remote, probe: probe}
-			manager.dkvs.mu.Lock()
-			manager.dkvs.clients = make(map[string]*SatsNetDKVSClient)
-			manager.dkvs.mu.Unlock()
-			manager.accountProfile.RecoveryConfigured = true
-			manager.accountProfile.ManagedDataDirty = true
+			client, err := manager.GetDKVSClient()
+			if err != nil {
+				t.Fatal(err)
+			}
+			client.Http = &rgbNetworkAuditHTTP{rgb11MemoryDKVSHTTP: remote, probe: probe}
+			if entry == "public-refresh-bitcoin" {
+				manager.rgbManager.evidence = &rgbNetworkAuditEvidence{BitcoinEvidenceProvider: evidence, probe: probe}
+			}
 			switch entry {
-			case "public-refresh-dkvs":
+			case "public-refresh-bitcoin":
 				_, _ = manager.RefreshRGB11State(context.Background())
 			case "background-mailbox-dkvs":
 				_, _ = manager.syncRootRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
@@ -129,6 +140,11 @@ func TestRGBNetworkBoundariesHoldNoWalletLocks(t *testing.T) {
 				manager.serverNode = NewNode(client, "message.test", SERVER_NODE, client.CoreNodePubKey(), client.CoreNodePubKey())
 				_, _ = manager.enableRootRGB11AddressReceive(RGB11ReceiveCapabilityOptions{})
 			case "read-only-resolve-dkvs":
+				// A warm mapping is intentionally local-only; audit the cold
+				// source-validation request instead of demanding redundant I/O.
+				releaseDKVSManagerRuntime(manager.dkvs)
+				manager.dkvs = nil
+				manager.http = &rgbNetworkAuditHTTP{rgb11MemoryDKVSHTTP: remote, probe: probe}
 				_, _ = manager.ResolveConfiguredRGB11AddressEndpoint(manager.wallet.GetAddress(), dkvsindexer.RecordVerificationOptions{})
 			}
 			probe.assertUnlocked(t)
@@ -259,4 +275,13 @@ func TestRGB11ExactRestoreNamingTransportHoldsNoWalletLocks(t *testing.T) {
 		t.Fatalf("restore: %v", err)
 	}
 	probe.assertUnlocked(t)
+}
+
+func (h *rgbNetworkAuditHTTP) SendDKVSGetContext(context.Context, string, map[string]string) ([]byte, error) {
+	h.probe.record()
+	return nil, errRGBNetworkAuditBoundary
+}
+func (h *rgbNetworkAuditHTTP) SendDKVSPostContext(context.Context, string, []byte) ([]byte, error) {
+	h.probe.record()
+	return nil, errRGBNetworkAuditBoundary
 }

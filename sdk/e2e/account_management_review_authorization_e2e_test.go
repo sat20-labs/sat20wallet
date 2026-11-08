@@ -13,12 +13,20 @@ import (
 )
 
 func TestSDKAccountReviewAuthorization(t *testing.T) {
-	network := newDKVSNoPluginTemplateFixtureWithArgs(t, map[string]int64{}, nil, nil, dkvsMinerArgs(t)).Network
+	network := newDKVSNoPluginUnfundedNetwork(t)
 	waitForDKVSPeerReady(t, network)
 	newAuthorized := func(t *testing.T) (*wallet.Manager, *wallet.AccountStorageAuthorization) {
 		t.Helper()
 		manager, _ := accountReviewDevice(t, network, dkvsClientMnemonic)
 		require.NoError(t, manager.InitializeAccountManagement(accountReviewPassword))
+		require.NoError(t, manager.StartDKVSSync())
+		t.Cleanup(manager.StopDKVSSync)
+		require.Eventually(t, func() bool {
+			status := manager.GetAccountManagementStatus()
+			return status.DiscoveryStatus == "inactive" && status.LocalOnly &&
+				!status.RecoveryConfigured && !status.ActivationPending
+		}, 30*time.Second, 20*time.Millisecond, "authorization fixture requires authenticated inactive discovery")
+		require.False(t, manager.GetAccountManagementStatus().DKVSWriteAllowed)
 		auth, err := manager.ConfirmAccountStorage(wallet.AccountStorageTemporary, 0)
 		require.NoError(t, err)
 		return manager, auth
@@ -89,7 +97,11 @@ func TestSDKAccountReviewAuthorization(t *testing.T) {
 			done <- manager.UseAccountStorageAuthorization(wallet.AccountStoragePurposeRecovery,
 				func(*wallet.AccountStorageAuthorization) error { close(entered); <-release; return nil })
 		}()
-		select { case <-entered: case <-time.After(5*time.Second): t.Fatal("authorization callback did not start") }
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("authorization callback did not start")
+		}
 		called := false
 		err := manager.UseAccountStorageAuthorization(wallet.AccountStoragePurposeRecovery,
 			func(*wallet.AccountStorageAuthorization) error { called = true; return nil })
@@ -98,7 +110,12 @@ func TestSDKAccountReviewAuthorization(t *testing.T) {
 		_, err = manager.ConfirmAccountStorage(wallet.AccountStorageTemporary, 0)
 		require.ErrorIs(t, err, wallet.ErrAccountStorageAuthorizationBusy)
 		unblock()
-		select { case err := <-done: require.NoError(t, err); case <-time.After(5*time.Second): t.Fatal("authorization callback did not finish") }
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("authorization callback did not finish")
+		}
 		_, err = manager.PendingAccountStorageAuthorization()
 		require.ErrorIs(t, err, wallet.ErrAccountStorageAuthorizationMissing)
 	})
@@ -115,15 +132,21 @@ func TestSDKAccountReviewAuthorization(t *testing.T) {
 			done <- manager.UseAccountStorageAuthorization(wallet.AccountStoragePurposeRecovery,
 				func(*wallet.AccountStorageAuthorization) error { close(entered); <-release; return nil })
 		}()
-		select { case <-entered: case <-time.After(5*time.Second): t.Fatal("authorization callback did not start") }
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("authorization callback did not start")
+		}
 		manager.CancelPendingAccountStorageAuthorization()
 		replacement, err := manager.ConfirmAccountStorage(wallet.AccountStorageTemporary, 0)
 		require.NoError(t, err)
 		require.NotEqual(t, original.ID, replacement.ID)
 		unblock()
 		select {
-		case err := <-done: require.ErrorIs(t, err, wallet.ErrAccountStorageAuthorizationMissing)
-		case <-time.After(5*time.Second): t.Fatal("canceled operation did not finish")
+		case err := <-done:
+			require.ErrorIs(t, err, wallet.ErrAccountStorageAuthorizationMissing)
+		case <-time.After(5 * time.Second):
+			t.Fatal("canceled operation did not finish")
 		}
 		pending, err := manager.PendingAccountStorageAuthorization()
 		require.NoError(t, err)

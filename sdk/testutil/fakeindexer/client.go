@@ -512,6 +512,11 @@ func (p *Client) IsMinerNode(pubkey []byte) (bool, error) {
 	if _, ok := p.Network.State.CoreNodes[pkStr]; ok {
 		return true, nil
 	}
+	for _, childMap := range p.Network.State.CoreChildren {
+		if _, ok := childMap[pkStr]; ok {
+			return true, nil
+		}
+	}
 	return false, nil
 }
 
@@ -2336,6 +2341,8 @@ func (p *Client) SendDKVSPost(path string, body []byte) ([]byte, error) {
 	switch path {
 	case "/v3/dkvs/active/sync", "/v3/dkvs/active/watch":
 		return p.SendDKVSPostContext(context.Background(), path, body)
+	case "/v3/rgb11/contracts/register":
+		return p.fakeRGB11Register(body)
 	case "/v3/dkvs/records/batch-cas":
 		var req wallet.DKVSBatchCASRequest
 		if err := json.Unmarshal(body, &req); err != nil {

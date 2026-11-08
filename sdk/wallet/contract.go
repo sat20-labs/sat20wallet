@@ -2182,6 +2182,11 @@ func (p *ContractRuntimeBase) CheckInvokeTx(invokeTx *InvokeTx) error {
 }
 
 func (p *ContractRuntimeBase) IsMyInvoke_SatsNet(invoke *InvokeTx_SatsNet) bool {
+	// Deployment funding is checked by activation, not a no-parameter purchase
+	// or deposit. Match only this reservation's authenticated deployment.
+	if p.resv != nil && invoke.Tx != nil && invoke.Tx.TxID() == p.resv.GetDeployContractTxId() {
+		return false
+	}
 	// 输出地址是合约地址
 	if p.ChannelAddr != invoke.Address { // 有些特殊指令只有op_return，没有对应的output，比如合约激活指令
 		if invoke.Address == "" && invoke.InvokeParam != nil {

@@ -35,7 +35,7 @@ try {
           const key = localStorage.key(index)
           if (!key) continue
           let category = ''
-          if (key === 'prd-testnet-account-management-profile-v2') category = 'profile'
+          if (key === 'prd-testnet-account-management-profile-v1') category = 'profile'
           else if (key === 'wallet-status') category = 'status'
           else if (key.startsWith('wallet-id-')) category = 'wallet'
           else if (key.startsWith('rgb11-engine-wallet-')) category = 'engine'

@@ -15,6 +15,11 @@ replace github.com/sat20-labs/satoshinet => ../../satoshinet
 
 replace github.com/sat20-labs/indexer => ../../indexer
 
+// Shared raw-chain framing has no third-party dependencies.
+replace github.com/sat20-labs/xaplib/chainindex => ../../xaplib/chainindex
+
+require github.com/sat20-labs/xaplib/chainindex v0.0.0 // indirect
+
 require (
 	github.com/andybalholm/brotli v1.1.0
 	github.com/btcsuite/btcd v0.24.2

@@ -13,7 +13,7 @@
         <RouterLink to="/import"> {{ $t('index.importWallet') }} </RouterLink>
       </Button>
       <Button size="lg" variant="outline" class="w-full" as-child>
-        <RouterLink to="/restore-account">恢复自托管账户</RouterLink>
+        <RouterLink to="/restore-account">{{ $t('pwaUi.onboarding.restoreAccount') }}</RouterLink>
       </Button>
     </div>
     <p class="text-center text-sm text-muted-foreground/80 mt-6">

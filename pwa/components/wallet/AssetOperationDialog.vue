@@ -115,7 +115,7 @@
         <div v-if="resolvedInfo && !resolvedInfo.isDomain && !resolvedInfo.resolvedAddress"
           class="text-sm text-red-400 flex items-center justify-center gap-2 mb-2">
           <Icon icon="lucide:alert-circle" class="w-4 h-4" />
-          {{ $t('assetOperationDialog.domainNotFound', { name: resolvedInfo.domainName }) }}
+          {{ $t('assetOperationDialog.domainNotFound', { name: resolvedInfo.originalInput }) }}
         </div>
       </DialogFooter>
 
@@ -176,7 +176,7 @@
       <!-- 显示 btcFeeRate 信息 -->
       <div v-if="!isResolving && needsBtcFeeRate && !review" class="mt-4 p-3 bg-zinc-800 rounded-lg border border-zinc-700">
         <div class="flex items-center justify-between text-sm">
-          <span class="text-zinc-300">BTC Fee Rate:</span>
+          <span class="text-zinc-300">{{ $t('walletComponents.btcFeeRate') }}</span>
           <span class="text-primary font-semibold">{{ btcFeeRate }} sats/vB</span>
         </div>
         <!-- 显示固定手续费 -->
@@ -218,6 +218,8 @@
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
+const { t } = useI18n()
 import { computed, ref, watch, toRefs, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
 import { Separator } from '@/components/ui/separator'
@@ -469,7 +471,7 @@ const getAssetDisplayName = () => {
     const key = props.assetKey.toUpperCase()
     return key === '::' ? 'BTC' : key
   }
-  return 'Unknown Asset'
+  return t('walletComponents.unknownAsset')
 }
 
 // 获取资产类型

@@ -96,7 +96,7 @@
           <Loader2Icon v-if="loading" class="mr-2 h-4 w-4 animate-spin" />
           {{ loading ? $t('create.creatingButton') : $t('create.continueButton') }}
         </Button>
-        <Button v-else-if="committedReadError" type="button" @click="reloadCommittedWallet">I saved my phrase, reload wallet</Button>
+        <Button v-else-if="committedReadError" type="button" @click="reloadCommittedWallet">{{ $t('pwaUi.create.reload') }}</Button>
         <Button v-else @click="handleConfirmSaved" as-child>
           <RouterLink to="/wallet">{{ $t('create.savedButton') }}</RouterLink>
         </Button>
@@ -106,6 +106,7 @@
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import { ref } from 'vue'
 import { useForm } from 'vee-validate'
 import { toTypedSchema } from '@vee-validate/zod'
@@ -129,6 +130,8 @@ import { Eye, EyeOff, Copy, AlertTriangle, Loader2Icon } from 'lucide-vue-next'
 import walletManager from '@/utils/sat20'
 import { useWalletStore } from '@/store'
 import { createPasswordSchema } from '@/utils/validation'
+
+const { t } = useI18n()
 
 const { toast } = useToast()
 const loading = ref(false)
@@ -159,20 +162,20 @@ const onSubmit = form.handleSubmit(async (values) => {
     // 添加创建成功的提示
     toast({
       variant: err ? 'info' : 'success',
-      title: 'Wallet Created Successfully',
-      description: err ? 'Wallet saved. Please save your recovery phrase, then reload to unlock the wallet.'
-        : 'Your wallet has been created. Please save your recovery phrase.',
+      title: t('pwaUi.create.created'),
+      description: err ? t('pwaUi.create.savedReload')
+        : t('pwaUi.create.savePhrase'),
     })
     return
   }
 
   toast({
     variant: 'destructive',
-    title: 'Error',
-    description: err instanceof Error ? err.message : 'Failed to create wallet',
+    title: t('common.error'),
+    description: err instanceof Error ? err.message : t('pwaUi.create.failed'),
   })
   } catch (error: any) {
-    toast({ variant: 'destructive', title: 'Error', description: error?.message || 'Failed to create wallet' })
+    toast({ variant: 'destructive', title: t('common.error'), description: error?.message || t('pwaUi.create.failed') })
   } finally {
     loading.value = false
   }
@@ -182,8 +185,8 @@ const handleCopyMnemonic = async () => {
   if (!isSupported.value) {
     toast({
       variant: 'destructive',
-      title: 'Copy Failed',
-      description: 'Clipboard not supported in this browser',
+      title: t('pwaUi.create.copyFailed'),
+      description: t('pwaUi.create.clipboardUnsupported'),
     })
     return
   }
@@ -191,8 +194,8 @@ const handleCopyMnemonic = async () => {
   await copy(mnemonic.value)
   toast({
     variant: 'success',
-    title: 'Recovery Phrase Copied',
-    description: 'Your recovery phrase has been copied to clipboard. Keep it safe!',
+    title: t('pwaUi.create.phraseCopied'),
+    description: t('pwaUi.create.phraseCopiedWarning'),
   })
 }
 
@@ -203,8 +206,8 @@ const toggleShowMnemonic = () => {
 const handleConfirmSaved = () => {
   toast({
     variant: 'info',
-    title: 'Proceeding to Wallet',
-    description: 'Taking you to your new wallet. Welcome!',
+    title: t('pwaUi.create.proceeding'),
+    description: t('pwaUi.create.welcome'),
   })
 }
 </script>

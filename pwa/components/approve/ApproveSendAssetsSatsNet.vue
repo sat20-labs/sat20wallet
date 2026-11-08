@@ -44,6 +44,8 @@
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
+const { t } = useI18n()
 import { ref, computed } from 'vue'
 import { z } from 'zod'
 import LayoutApprove from '@/components/layout/LayoutApprove.vue'
@@ -51,15 +53,15 @@ import { useToast } from '@/components/ui/toast-new'
 import sat20 from '@/utils/sat20'
 
 // Define Zod schema for validation
-const sendAssetsSchema = z.object({
-  address: z.string().min(1, 'Destination address is required'),
-  assetName: z.string().min(1, 'Asset name is required'),
-  amt: z.number().positive('Amount must be positive'),
+const sendAssetsSchema = computed(() => z.object({
+  address: z.string().min(1, t('approvalUi.addressRequired')),
+  assetName: z.string().min(1, t('approvalUi.assetRequired')),
+  amt: z.number().positive(t('approvalUi.amountPositive')),
   memo: z.string().optional()
-})
+}))
 
 // Infer TypeScript type from Zod schema
-type SendAssetsData = z.infer<typeof sendAssetsSchema>
+type SendAssetsData = z.infer<typeof sendAssetsSchema.value>
 
 interface Props {
   data: SendAssetsData
@@ -74,17 +76,17 @@ const errorMessage = ref<string | null>(null)
 
 // Computed property to check data validity
 const isValidData = computed(() => {
-  const result = sendAssetsSchema.safeParse(props.data)
+  const result = sendAssetsSchema.value.safeParse(props.data)
   return result.success
 })
 
 const validateData = () => {
-  const result = sendAssetsSchema.safeParse(props.data)
+  const result = sendAssetsSchema.value.safeParse(props.data)
   if (!result.success) {
     const errors = result.error.errors.map(e => e.message).join(', ')
     errorMessage.value = errors
     toast({
-      title: 'Validation Error',
+      title: t('approvalUi.validationError'),
       description: errors,
       variant: 'destructive'
     })
@@ -111,7 +113,7 @@ const confirm = async () => {
     )
 
     if (err) {
-      let detail = 'Failed to send assets on SatsNet.'
+      let detail = t('approvalUi.sendFailed')
       if (err.message) {
         detail = err.message
       } else if (typeof err === 'string') {
@@ -121,8 +123,8 @@ const confirm = async () => {
     }
 
     toast({
-      title: 'Success',
-      description: `Successfully sent ${props.data.amt} ${props.data.assetName} to ${props.data.address}.`,
+      title: t('approvalUi.success'),
+      description: t('approvalUi.sendSuccess', { amount: props.data.amt, asset: props.data.assetName, address: props.data.address }),
       variant: 'success'
     })
 
@@ -130,9 +132,9 @@ const confirm = async () => {
 
   } catch (error: any) {
     console.error('Send Assets SatsNet Error:', error)
-    const description = error.message || 'An unexpected error occurred during the send.'
+    const description = error.message || t('approvalUi.sendException')
     toast({
-      title: 'Error',
+      title: t('approvalUi.error'),
       description: description,
       variant: 'destructive',
     })

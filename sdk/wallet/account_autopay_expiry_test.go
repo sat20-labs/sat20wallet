@@ -31,7 +31,7 @@ func requireAutopayExpiryNumber(t *testing.T, fields map[string]any, key string,
 
 func TestReadyAccountAutopayCanBeFundedForRenewal(t *testing.T) {
 	defaults, state := accountAutopayReadyFixture()
-	status := accountAutopayStateFundingStatus(state, defaults, "payer", "5")
+	status := accountAutopayStateFundingStatus(state, defaults, "payer", "5", 1)
 	require.True(t, status.Ready)
 	require.False(t, status.NeedsFunding, "a healthy delegate does not need emergency funding")
 	require.True(t, status.CanFund, "the existing payment flow must remain available for an explicit renewal")
@@ -76,7 +76,7 @@ func TestAccountAutopayCurrentExpiryUsesExactDecimalBlocks(t *testing.T) {
 			delegate.LastPayHeight = tc.current
 			state.Delegates["payer"] = delegate
 
-			status := accountAutopayStateFundingStatus(state, defaults, "payer", tc.rate)
+			status := accountAutopayStateFundingStatus(state, defaults, "payer", tc.rate, 1)
 			require.True(t, status.Ready)
 			require.Equal(t, tc.current, status.LastPayHeight, "actual paid-through height must remain authoritative")
 			fields := autopayExpiryFields(t, status)
@@ -130,7 +130,7 @@ func TestAccountAutopayCurrentExpiryIsOmittedWhenStatusIsUntrusted(t *testing.T)
 		t.Run(tc.name, func(t *testing.T) {
 			defaults, state := accountAutopayReadyFixture()
 			tc.mutate(state)
-			status := accountAutopayStateFundingStatus(state, defaults, "payer", "5")
+			status := accountAutopayStateFundingStatus(state, defaults, "payer", "5", 1)
 			fields := autopayExpiryFields(t, status)
 			require.NotContains(t, fields, "estimated_expiry_height", "untrusted state must not publish a current expiry: %s", fields)
 		})
@@ -150,11 +150,7 @@ func accountAutopayExpiryManagerAt(t *testing.T, stateStatus, balance, rate stri
 	_chain = "testnet"
 	t.Cleanup(func() { _chain = oldChain })
 
-	manager := newAccountManagementAutoTestManager(t)
-	_, err := manager.ImportWallet(accountRootWrapperTestMnemonic, "password")
-	require.NoError(t, err)
-	require.NoError(t, manager.InitializeAccountManagement("password"))
-	manager.accountProfile.StorageMode = AccountStoragePaid
+	manager := newAutopayWriteFixture(t, true)
 	defaults := dkvsindexer.NetworkDefaultsForParams(GetChainParam_SatsNet())
 	payer := PublicKeyToP2TRAddress_SatsNet(manager.GetWallet().GetPubKey())
 	state := &dkvsindexer.AutopayContractState{
@@ -189,7 +185,7 @@ func TestGetAccountAutopayFundingStatusOmitsExpiryForUntrustedStates(t *testing.
 		record, err := manager.BeginOperationLog(OperationLogCreate{
 			Category: "account", Action: "account_autopay_fund", Title: "充值 AUTOPAY",
 			Parameters: map[string]string{"network": _chain, "payer": payer, "contract": defaults.AutopayContract,
-				"asset": defaults.AutopayFeeAssetName, "amount_per_block": "10", "amount": "10000"},
+				"asset": defaults.AutopayFeeAssetName, "amount_per_block": "10", "amount": "10000", "blob_key_limit": "1"},
 		})
 		require.NoError(t, err)
 		_, err = manager.UpdateOperationLog(record.ID, OperationLogUpdate{Status: OperationLogPending, TxID: strings.Repeat("a", 64)})
@@ -275,7 +271,7 @@ func TestAccountAutopayTipFailurePreventsReadinessAndFunding(t *testing.T) {
 
 	_, fundErr := manager.FundAccountAutopay(AccountAutopayFundingStatus{
 		Payer: payer, ContractAddress: defaults.AutopayContract, FeeAsset: defaults.AutopayFeeAssetName,
-		EffectiveAmountPerBlock: "10", RecommendedFundingAmount: "10000",
+		EffectiveAmountPerBlock: "10", EffectiveBlobKeyLimit: 1, RecommendedFundingAmount: "10000",
 		RecommendedFundingBlocks: accountPaidDefaultFundingBlocks,
 	})
 	assert.ErrorContains(t, fundErr, "height", "funding must stop on the unavailable tip")

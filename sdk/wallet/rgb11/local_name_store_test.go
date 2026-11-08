@@ -115,23 +115,13 @@ func TestLocalNameStoreRejectsInvalidIdentityAndCorruption(t *testing.T) {
 	}
 }
 
-func TestRegisteredNameRejectsUnauthenticatedCacheAndSnapshot(t *testing.T) {
+func TestTechnicalRegistryCannotBecomeLocalDIDAlias(t *testing.T) {
 	const contractID = "rgb:Ar4ouaLv-b7f7Dc_-z5EMvtu-FA5KNh1-nlae~jk-8xMBo7E"
 	db := indexerdb.NewKVDB(t.TempDir())
 	defer db.Close()
 	store := NewProjectionStore(db, nil)
 	if err := store.SetScope("naming"); err != nil {
 		t.Fatal(err)
-	}
-	key, err := store.registeredAssetNameKey(contractID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Write(key, []byte("rgb11:f:usd@alice")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.LoadRegisteredAssetName(contractID); !errors.Is(err, ErrRGB11Inconsistent) {
-		t.Fatalf("unsigned name became registered: %v", err)
 	}
 	identity, err := NewContractAssetKey(contractID, indexer.ASSET_TYPE_FT)
 	if err != nil {

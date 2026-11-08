@@ -130,6 +130,7 @@ func TestRGB11LockPlanPreservesAndRejectsUnrelatedCarrierLocks(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		consumed  bool
+		claim     bool
 		seed      func(*UtxoLocker) error
 		wantError error
 	}{
@@ -139,6 +140,22 @@ func TestRGB11LockPlanPreservesAndRejectsUnrelatedCarrierLocks(t *testing.T) {
 				return locker.LockUtxo(outpoint, "user-manual")
 			},
 			wantError: ErrUtxoReserved,
+		},
+		{
+			name:  "RGB change claim cannot replace manual lock",
+			claim: true,
+			seed: func(locker *UtxoLocker) error {
+				return locker.LockUtxo(outpoint, "user-manual")
+			},
+			wantError: ErrUtxoReserved,
+		},
+		{
+			name:  "RGB change claim cannot replace external owner",
+			claim: true,
+			seed: func(locker *UtxoLocker) error {
+				return locker.TryReserve([]string{outpoint}, rgb11wallet.LockReasonPending, "outside-owner")
+			},
+			wantError: ErrUtxoReservationOwner,
 		},
 		{
 			name:     "consumed carrier with external owner",
@@ -176,9 +193,15 @@ func TestRGB11LockPlanPreservesAndRejectsUnrelatedCarrierLocks(t *testing.T) {
 			if tc.consumed {
 				consumed[outpoint] = struct{}{}
 			}
+			desired := make(map[string]rgb11ReservationLockTarget)
+			if tc.claim {
+				desired[outpoint] = rgb11ReservationLockTarget{
+					ReservationID: "rgb-operation", PreviousReason: rgb11wallet.LockReasonRGB,
+				}
+			}
 			_, stageErr := locker.stageRGB11LockPlan(batch, rgb11LockPlan{
 				ReplacedOwners: map[string]struct{}{},
-				DesiredOwners:  map[string]rgb11ReservationLockTarget{},
+				DesiredOwners:  desired,
 				Consumed:       consumed,
 				Reasons:        map[string]string{outpoint: rgb11wallet.LockReasonRGB},
 			})
@@ -454,9 +477,8 @@ func runRGB11RecoveryProjectionPeerSpend(t *testing.T, scenario rgb11ProjectionS
 	}
 	if scenario.receiptAmountMismatch {
 		forgedSource := newRGB11FlowManager(t, ownerWallet.Clone(), rpc, evidence, 483)
-		if err := forgedSource.rgbManager.projectionStore.SetScope("receipt-amount-mismatch"); err != nil {
-			t.Fatalf("select independent forged-snapshot scope: %v", err)
-		}
+		// This manager already owns an independent DB and storage scope. Keep
+		// engine, projection and atomic reservation metadata on that identity.
 		peerSnapshot = makeRGB11ProjectionReceiptAmountMismatchSnapshot(
 			t, peer, forgedSource, evidence, issued.AssetName, qOutpoint, secondPending.ChangeSeals,
 		)
@@ -578,7 +600,7 @@ func runRGB11RecoveryProjectionPeerSpend(t *testing.T, scenario rgb11ProjectionS
 			t.Fatalf("close owner DB before restart: %v", err)
 		}
 		owner.db = nil // prevent the fixture cleanup from closing this handle twice.
-		reopened := newRGB11FlowManagerAt(t, ownerWallet.Clone(), rpc, evidence, 480, ownerDBPath)
+		reopened := newRGB11FlowManagerAt(t, ownerWallet.Clone(), rpc, evidence, 480, ownerDBPath, accountGroupUnprepared)
 		// The fixture helper normally marks new test managers verified. A
 		// restart after a failed remote projection commit must instead start
 		// unverified until its chain evidence is reconciled.
@@ -1359,4 +1381,9 @@ func (e *rgb11ProjectionFinalTipChangeEvidence) callCount() int {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.calls
+}
+
+// Preserve the real atomic backend while retaining this fixture's fault hook.
+func (db *rgb11ProjectionFailOnceDB) NewAtomicWriteBatch() indexer.WriteBatch {
+	return &rgb11ProjectionFailOnceBatch{WriteBatch: db.KVDB.(indexer.AtomicWriteBatchDB).NewAtomicWriteBatch(), owner: db}
 }

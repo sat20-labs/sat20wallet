@@ -14,11 +14,14 @@ import (
 )
 
 const (
-	accountManagementProfileVersion = uint32(2)
-	accountManagementProfileDBKey   = "account-management-profile-v2"
+	accountManagementProfileVersion = uint32(1)
+	accountManagementProfileDBKey   = "account-management-profile-v1"
 	accountManagementDeviceIDSize   = 16
 )
 
+// Business rows and ManagedDataGeneration/Pending are current local state.
+// State* and ManagedData* envelope fields are the server-confirmed baseline;
+// they advance from a verified ACK independently of outbox cleanup.
 type accountManagementProfile struct {
 	Version               uint32
 	RootFingerprint       string
@@ -43,7 +46,32 @@ type accountManagementProfile struct {
 	ManagedDataDirty      bool
 	ManagedDataGeneration uint64
 	RecoveryConfigured    bool
-	Pending               []accountManagementMutation
+	// ManagedEntered is durable before the first remote activation attempt.
+	// An interrupted attempt must not return to ordinary local-only writes.
+	ManagedEntered       bool
+	Activation           *accountActivationIntent
+	InitialBackupPending bool
+	InitWrapperHash      string
+	Pending              []accountManagementMutation
+}
+
+// This device-local intent owns service initialization, not a private backup
+// snapshot. Business generations are deliberately absent from its identity.
+type accountActivationIntent struct {
+	AccountID       string
+	RootFingerprint string
+	Network         string
+	Environment     string
+	PackageID       string
+	RecoveryMode    account.RecoveryMode
+	StorageMode     string
+	Location        AccountIndexerLocation
+	RecordTTL       uint64
+	AutopayContract string
+	PublicLocator   string
+	BaseWrapperHash string
+	Wrapper         []byte
+	Initial         bool
 }
 
 type accountManagementMutation struct {

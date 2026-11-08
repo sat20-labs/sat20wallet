@@ -27,6 +27,8 @@
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
+const { t } = useI18n()
 import { ref, computed, watch } from 'vue'
 import { useL2Assets } from '@/composables/hooks/useL2Assets'
 import { storeToRefs } from 'pinia'
@@ -37,14 +39,14 @@ import { useToast } from '@/components/ui/toast-new'
 import walletManager from '@/utils/sat20'
 
 // Define Zod schema for validation
-const splitAssetSchema = z.object({
-  assetName: z.string().min(1, 'Asset name is required'),
-  amt: z.number().positive('Amount must be positive'),
+const splitAssetSchema = computed(() => z.object({
+  assetName: z.string().min(1, t('approvalUi.assetRequired')),
+  amt: z.number().positive(t('approvalUi.amountPositive')),
   n: z.number()
-})
+}))
 
 // Infer TypeScript type from Zod schema
-type SplitAssetData = z.infer<typeof splitAssetSchema>
+type SplitAssetData = z.infer<typeof splitAssetSchema.value>
 
 interface Props {
   data: SplitAssetData
@@ -73,18 +75,18 @@ watch(props.data, async (newData) => {
 }, { immediate: true })
 // Computed property to check data validity
 const isValidData = computed(() => {
-  const result = splitAssetSchema.safeParse(props.data)
+  const result = splitAssetSchema.value.safeParse(props.data)
   return result.success
 })
 
 const validateData = (): boolean => {
-  const result = splitAssetSchema.safeParse(props.data)
+  const result = splitAssetSchema.value.safeParse(props.data)
 
   if (!result.success) {
     const errors = result.error.errors.map(err => err.message).join(', ')
-    errorMessage.value = `Validation failed: ${errors}`
+    errorMessage.value = t('approvalUi.validationFailed', { errors })
     toast({
-      title: 'Error',
+      title: t('approvalUi.error'),
       description: errorMessage.value,
       variant: 'destructive'
     })
@@ -101,8 +103,8 @@ const confirm = async () => {
 
   if (l2Loading.value) {
      toast({
-       title: 'Info',
-       description: 'L2 assets are currently refreshing, please wait.',
+       title: t('approvalUi.info'),
+       description: t('approvalUi.refreshingAssets'),
        variant: 'default'
      })
      return
@@ -112,9 +114,9 @@ const confirm = async () => {
     return
   }
   if (!address.value) {
-    errorMessage.value = 'Wallet address is required'
+    errorMessage.value = t('approvalUi.walletAddressRequired')
     toast({
-      title: 'Error',
+      title: t('approvalUi.error'),
       description: errorMessage.value,
       variant: 'destructive'
     })
@@ -131,7 +133,7 @@ const confirm = async () => {
     )
 
     if (err) {
-      let detail = 'Failed to send asset on L2.'
+      let detail = t('approvalUi.sendL2Failed')
       if (err.message) {
           detail = err.message
       } else if (typeof err === 'string') {
@@ -141,8 +143,8 @@ const confirm = async () => {
     }
 
     toast({
-      title: 'Success',
-      description: `Successfully initiated split for ${props.data.amt} units of asset ${props.data.assetName}.`,
+      title: t('approvalUi.success'),
+      description: t('approvalUi.splitSuccess', { amount: props.data.amt, asset: props.data.assetName }),
       variant: 'success'
     })
 
@@ -151,9 +153,9 @@ const confirm = async () => {
 
   } catch (error: any) {
     console.error('L2 Send Error (Split Asset):', error)
-    const description = error.message || 'An unexpected error occurred during the split.'
+    const description = error.message || t('approvalUi.splitException')
     toast({
-      title: 'Error',
+      title: t('approvalUi.error'),
       description: description,
       variant: 'destructive',
     })

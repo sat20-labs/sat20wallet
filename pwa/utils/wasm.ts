@@ -163,9 +163,14 @@ const instantiateGoWasm = async () => {
   return { runtimeFailure }
 }
 
+let runtimeTask: Promise<{ runtimeFailure: Promise<never> }> | undefined
+let loadTask: Promise<void> | undefined
+
+const loadRuntime = () => runtimeTask ??= instantiateGoWasm()
+
 const loadWalletWasm = async () => {
   const config = await getRuntimeConfig()
-  const { runtimeFailure } = await instantiateGoWasm()
+  const { runtimeFailure } = await loadRuntime()
   const [initError] = await Promise.race([
     walletManager.init(config, logLevel),
     runtimeFailure,
@@ -173,6 +178,13 @@ const loadWalletWasm = async () => {
   if (initError) throw runtimeError('Wallet WASM initialization failed', initError)
 }
 
-export const loadWasm = async () => {
-  await loadWalletWasm()
+export const loadWasm = () => {
+  if (loadTask) return loadTask
+  const task = loadWalletWasm()
+  loadTask = task
+  void task.then(
+    () => { if (loadTask === task) loadTask = undefined },
+    () => { if (loadTask === task) loadTask = undefined },
+  )
+  return task
 }

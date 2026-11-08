@@ -31,6 +31,7 @@ var _callback interface{}
 var managerLifecycleMu sync.Mutex
 var managerAsyncTasks sync.WaitGroup
 var managerClosing bool
+var managerInitializing bool
 
 type AsyncTaskFunc func() (interface{}, int, string)
 
@@ -91,11 +92,16 @@ func createUntrackedAsyncJsHandler(task AsyncTaskFunc) js.Func {
 }
 
 var createJsRet = func(data any, code int, msg string) map[string]any {
-	return map[string]any{
+	result := map[string]any{
 		"data": data,
 		"code": code,
 		"msg":  msg,
 	}
+	if failure, ok := data.(accountErrorData); ok && code != 0 {
+		result["data"] = failure.data
+		result["error_code"] = failure.code
+	}
+	return result
 }
 
 func jsonObject(value any) (map[string]any, error) {
@@ -111,13 +117,15 @@ func jsonObject(value any) (map[string]any, error) {
 }
 
 func registerWalletDataUpdateCallback() {
-	_mgr.SetDKVSUpdateCallback(func() {
+	dispatch := func(name string) {
 		window := js.Global().Get("window")
 		customEvent := js.Global().Get("CustomEvent")
 		if window.Type() == js.TypeObject && customEvent.Type() == js.TypeFunction {
-			window.Call("dispatchEvent", customEvent.New("sat20:wallet-data-updated"))
+			window.Call("dispatchEvent", customEvent.New(name))
 		}
-	})
+	}
+	_mgr.SetDKVSUpdateCallback(func() { dispatch("sat20:wallet-data-updated") })
+	_mgr.SetDKVSStatusUpdateCallback(func() { dispatch("sat20:account-status-updated") })
 }
 
 func parseIndexerConfig(indexer js.Value) (*common.Indexer, error) {
@@ -207,6 +215,10 @@ func initManager(this js.Value, p []js.Value) any {
 		managerLifecycleMu.Unlock()
 		return createJsRet(nil, -1, "Manager is closing")
 	}
+	if managerInitializing {
+		managerLifecycleMu.Unlock()
+		return createJsRet(nil, -1, "Manager is initializing")
+	}
 	if _mgr != nil {
 		managerLifecycleMu.Unlock()
 		return createJsRet(nil, -1, "Manager is initialized")
@@ -238,14 +250,33 @@ func initManager(this js.Value, p []js.Value) any {
 	}
 	wallet.Log.SetLevel(logLevel)
 
-	// _mgr = wallet.NewManager(cfg, make(chan struct{}))
-	// if _mgr == nil {
-	// 	return createJsRet(nil, -1, "NewManager failed")
-	// }
-	// wallet.Log.Info("Manager created")
-	// return createJsRet(nil, 0, "ok")
+	// Reserve exactly once after config validation. The lock also orders this
+	// Add against releaseManager setting managerClosing and starting Wait.
+	managerLifecycleMu.Lock()
+	if managerClosing {
+		managerLifecycleMu.Unlock()
+		return createJsRet(nil, -1, "Manager is closing")
+	}
+	if managerInitializing {
+		managerLifecycleMu.Unlock()
+		return createJsRet(nil, -1, "Manager is initializing")
+	}
+	if _mgr != nil {
+		managerLifecycleMu.Unlock()
+		return createJsRet(nil, -1, "Manager is initialized")
+	}
+	managerInitializing = true
+	managerAsyncTasks.Add(1)
+	managerLifecycleMu.Unlock()
 
-	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+	handler := createUntrackedAsyncJsHandler(func() (interface{}, int, string) {
+		defer managerAsyncTasks.Done()
+		defer func() {
+			managerLifecycleMu.Lock()
+			managerInitializing = false
+			managerLifecycleMu.Unlock()
+		}()
+
 		db := wallet.NewKVDB(cfg.DB)
 		if db == nil {
 			wallet.Log.Errorf("NewKVDB failed")
@@ -5368,6 +5399,63 @@ func exportRGB11Contract(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(jsHandler)
 }
 
+func exportPublicRGB11Contract(this js.Value, p []js.Value) any {
+	if _mgr == nil || len(p) < 1 {
+		return createJsRet(nil, -1, "missing RGB11 contract id")
+	}
+	contractID := p[0].String()
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		result, err := _mgr.ExportPublicRGB11Contract(contractID)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{"result": string(encoded)}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func verifyRGB11PublicContract(this js.Value, p []js.Value) any {
+	if _mgr == nil || len(p) < 2 {
+		return createJsRet(nil, -1, "missing RGB11 public contract identity or content")
+	}
+	contractID, content := p[0].String(), p[1].String()
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		result, err := _mgr.VerifyRGB11PublicContract(contractID, content)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{"result": string(encoded)}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func exportRGB11SettledConsignment(this js.Value, p []js.Value) any {
+	if _mgr == nil || len(p) < 1 {
+		return createJsRet(nil, -1, "missing RGB11 transfer id")
+	}
+	transferID := p[0].String()
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		result, err := _mgr.ExportRGB11SettledConsignment(transferID)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{"transfer": string(encoded)}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
 func issueRGB11Asset(this js.Value, p []js.Value) any {
 	if _mgr == nil || len(p) < 1 {
 		return createJsRet(nil, -1, "missing RGB11 issuance request")
@@ -5400,6 +5488,28 @@ func prepareRGB11Transfer(this js.Value, p []js.Value) any {
 	}
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
 		result, err := _mgr.PrepareRGB11Transfer(context.Background(), request)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{"transfer": string(encoded)}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func prepareRGB11Inflation(this js.Value, p []js.Value) any {
+	if _mgr == nil || len(p) < 1 {
+		return createJsRet(nil, -1, "missing RGB11 inflation request")
+	}
+	var request wallet.RGB11InflationRequest
+	if err := json.Unmarshal([]byte(p[0].String()), &request); err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		result, err := _mgr.PrepareRGB11Inflation(context.Background(), request)
 		if err != nil {
 			return nil, -1, err.Error()
 		}
@@ -5689,6 +5799,7 @@ func main() {
 	obj.Set("getAssetAmount_SatsNet", js.FuncOf(getAssetAmount_SatsNet))
 	obj.Set("getAssetSummary", js.FuncOf(getAssetSummary))
 	obj.Set("getRGB11State", js.FuncOf(getRGB11State))
+	obj.Set("getRGB11TransferOutboxMetadata", js.FuncOf(getRGB11TransferOutboxMetadata))
 	obj.Set("createRGB11Invoice", js.FuncOf(createRGB11Invoice))
 	obj.Set("prepareRGB11Consignment", js.FuncOf(prepareRGB11Consignment))
 	obj.Set("acceptRGB11Consignment", js.FuncOf(acceptRGB11Consignment))
@@ -5696,8 +5807,12 @@ func main() {
 	obj.Set("importRGB11Contract", js.FuncOf(importRGB11Contract))
 	obj.Set("importRGB11ContractFile", js.FuncOf(importRGB11ContractFile))
 	obj.Set("exportRGB11Contract", js.FuncOf(exportRGB11Contract))
+	obj.Set("exportPublicRGB11Contract", js.FuncOf(exportPublicRGB11Contract))
+	obj.Set("verifyRGB11PublicContract", js.FuncOf(verifyRGB11PublicContract))
+	obj.Set("exportRGB11SettledConsignment", js.FuncOf(exportRGB11SettledConsignment))
 	obj.Set("issueRGB11Asset", js.FuncOf(issueRGB11Asset))
 	obj.Set("prepareRGB11Transfer", js.FuncOf(prepareRGB11Transfer))
+	obj.Set("prepareRGB11Inflation", js.FuncOf(prepareRGB11Inflation))
 	obj.Set("resumeRGB11PreparedTransfer", js.FuncOf(resumeRGB11PreparedTransfer))
 	obj.Set("cancelRGB11OutOfBandTransfer", js.FuncOf(cancelRGB11OutOfBandTransfer))
 	obj.Set("cancelExpiredRGB11Transfer", js.FuncOf(cancelExpiredRGB11Transfer))

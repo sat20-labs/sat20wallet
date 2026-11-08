@@ -173,7 +173,8 @@ func TestRGB11MailboxConsumerUsesGenerationBeforeReplicaRead(t *testing.T) {
 	remote.mu.Unlock()
 	// Active sync returns metadata and current values together. The old
 	// status-then-delta round trip must not be reintroduced by RGB consumers.
-	if statusCalls != initialStatus || snapshots != initialSnapshots || deltas != initialDeltas+1 {
+	// One additional metadata check validates the multi-collection publication vector.
+	if statusCalls != initialStatus || snapshots != initialSnapshots || deltas != initialDeltas+2 {
 		t.Fatalf("changed mailbox status=%d snapshot=%d delta=%d initial_status=%d initial_snapshot=%d initial_delta=%d",
 			statusCalls, snapshots, deltas, initialStatus, initialSnapshots, initialDeltas)
 	}

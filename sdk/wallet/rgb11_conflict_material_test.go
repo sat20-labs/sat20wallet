@@ -42,7 +42,7 @@ func TestRGB11ConflictCandidateRejectsChangedMaterial(t *testing.T) {
 			f := newRGB11ConflictFixture(t, false)
 			f.publish(t, true)
 			ctx := context.Background()
-			current := f.snapshot(t)
+			current := localConflictSnap(t, f)
 			candidate, _, err := f.sender.rgbManager.buildRGB11RefreshCandidate(ctx, current, 0)
 			if err != nil {
 				t.Fatal(err)
@@ -63,7 +63,7 @@ func TestRGB11ConflictCandidateRejectsChangedMaterial(t *testing.T) {
 			if _, err = f.sender.rgbManager.applyRGB11CandidateSnapshot(ctx, current, candidate); err == nil {
 				t.Fatal("changed authenticated material bypassed quarantine validation")
 			}
-			if !reflect.DeepEqual(current.ProjectionRecords, f.snapshot(t).ProjectionRecords) {
+			if !reflect.DeepEqual(current.ProjectionRecords, localConflictSnap(t, f).ProjectionRecords) {
 				t.Fatal("bad material changed persistent projection")
 			}
 			f.assertProtected(t)

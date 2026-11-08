@@ -74,7 +74,16 @@ func TestSilentPayRealSignedOutputSweepAndRebroadcastSafetyE2E(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
-	mgr, receiver := spE2EAccountManager(t)
+	for _, state := range []accountGroupState{accountGroupInactive, accountGroupReady} {
+		t.Run(string(state), func(t *testing.T) {
+			mgr, receiver := spAccountGroup(t, state)
+			runSPSignedSweep(t, mgr, receiver)
+		})
+	}
+}
+
+func runSPSignedSweep(t *testing.T, mgr *Manager, receiver *InternalWallet) {
+	t.Helper()
 	if _, err := mgr.EnableSilentPay(receiver.GetId(), 0); err != nil {
 		t.Fatal(err)
 	}

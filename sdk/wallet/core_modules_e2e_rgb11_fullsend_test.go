@@ -12,11 +12,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	indexerdb "github.com/sat20-labs/indexer/indexer/db"
+	"github.com/sat20-labs/rgb11/invoicing"
 	corewallet "github.com/sat20-labs/rgb11/wallet"
-	"github.com/sat20-labs/sat20wallet/sdk/account"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
@@ -28,6 +29,7 @@ import (
 func coreRGBFullSendRecoveryColdRestoreE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 	sender, receiver *Manager, senderMaterial, receiverMaterial *coreRecoveryMaterial) {
 	t.Helper()
+	coreTransferDeviceCleanup(t, sender, receiver)
 
 	issued, err := sender.IssueRGB11Asset(context.Background(), RGB11IssueRequest{
 		Schema: "NIA", Ticker: "E2EF", Name: "E2E full-send recovery asset", Amounts: []uint64{777},
@@ -38,13 +40,20 @@ func coreRGBFullSendRecoveryColdRestoreE2E(t *testing.T, cfg coreE2EConfig, chai
 	// Keep an independent database on the pre-send account revision. Its next
 	// operation must adopt the account-selected pending phase before it may
 	// reserve the same input.
-	staleDevice := coreRestoreE2E(t, cfg, chain, senderMaterial)
+	coreSuspendRGBDevice(t, sender)
+	staleDevice := coreRestoreE2E(t, cfg, chain, senderMaterial, false)
 	coreSynchronizeRestoredAccount(t, staleDevice)
 	coreVerifyRGB11DirectProviderRoundTrip(t, sender, staleDevice, issued.AssetName)
 	initialBalance, err := staleDevice.GetRGB11AssetBalance(&issued.AssetName)
 	coreRequire(t, "read pre-send amount on independent device", err)
 	coreAssert(t, initialBalance != nil && initialBalance.Value.Uint64() == 777,
 		"independent device did not restore the full pre-send allocation")
+	coreRequire(t, "confirm healthy stale-device provider roundtrip",
+		staleDevice.SyncAccountManagementState(context.Background()))
+	coreWaitPrivateBackup(t, staleDevice)
+	coreRequire(t, "resume full-send source after offline copy initialized", sender.StartDKVSSync())
+	coreSynchronizeRestoredAccount(t, sender)
+	coreWaitPrivateBackup(t, sender)
 
 	_, err = sender.EnableConfiguredRGB11AddressReceive(RGB11ReceiveCapabilityOptions{})
 	coreRequire(t, "publish sender receive capability", err)
@@ -66,6 +75,25 @@ func coreRGBFullSendRecoveryColdRestoreE2E(t *testing.T, cfg coreE2EConfig, chai
 				if hop != 1 {
 					return
 				}
+				// The other device must actually receive this persisted intent
+				// before it can test its input lock. Only one root device is online.
+				coreSuspendRGBDevice(t, sender)
+				coreRequire(t, "resume stale device for selected pending check", staleDevice.StartDKVSSync())
+				coreSynchronizeRestoredAccount(t, staleDevice)
+				_, refreshErr := staleDevice.RefreshRGB11State(context.Background())
+				coreRequire(t, "refresh selected full-send pending on stale device", refreshErr)
+				original, loadErr := sender.rgbManager.projectionStore.LoadPendingTransfer(value.State.TransferID)
+				coreRequire(t, "read original full-send pending before handoff", loadErr)
+				selected, loadErr := staleDevice.rgbManager.projectionStore.LoadPendingTransfer(value.State.TransferID)
+				coreRequire(t, "read synchronized full-send pending on stale device", loadErr)
+				coreAssert(t, original != nil && selected != nil && selected.State.WitnessTxID == value.TxID &&
+					selected.State.ConsignmentHash == value.State.ConsignmentHash &&
+					coreDigest(selected.State.InputOutPoints) == coreDigest(value.State.InputOutPoints) &&
+					bytes.Equal(selected.SignedTx, original.SignedTx),
+					"stale device did not adopt the exact selected pending transaction")
+				coreAssertRGB11Reservation(t, staleDevice, value.State.TransferID, true)
+				coreRequire(t, "authorize synchronized competing-device check",
+					staleDevice.CheckAccountWrite(rgb11AccountManagedProviderID, coreSelectedRGBScope(staleDevice)))
 				_, _, conflictErr := staleDevice.PrepareConfiguredRGB11AddressTransfer(context.Background(), RGB11AddressSendRequest{
 					ReceiverAddress: receiver.GetWallet().GetAddress(), AssetName: issued.AssetName,
 					AmountRaw: "1", FeeRate: 2, MinConfirmations: 1,
@@ -74,6 +102,9 @@ func coreRGBFullSendRecoveryColdRestoreE2E(t *testing.T, cfg coreE2EConfig, chai
 					"a second device prepared a competing spend against the account-selected pending full send")
 				coreAssert(t, chain.broadcastCount() == beforeBroadcast,
 					"competing preparation broadcast a transaction")
+				coreSuspendRGBDevice(t, staleDevice)
+				coreRequire(t, "resume selected full-send source after lock check", sender.StartDKVSSync())
+				coreSynchronizeRestoredAccount(t, sender)
 			})
 		lastPrepared = prepared
 		if hop == 20 {
@@ -95,6 +126,7 @@ func coreRGBFullSendRecoveryColdRestoreE2E(t *testing.T, cfg coreE2EConfig, chai
 	// This database did not exist before the settled full sends. In particular,
 	// it has no old active mailbox or local consumer journal to mask package
 	// omissions.
+	coreSuspendRGBDevice(t, receiver)
 	coldRestoreStarted := time.Now()
 	coldDevice := coreRestoreE2E(t, cfg, chain, receiverMaterial)
 	coreSynchronizeRestoredAccount(t, coldDevice)
@@ -146,9 +178,11 @@ func coreRGBFullSendRecoveryColdRestoreE2E(t *testing.T, cfg coreE2EConfig, chai
 	coreAssert(t, foundReactivatedInput,
 		"reorg recovery did not restore the last consumer's prior allocation proof")
 
-	// Both live accounts refresh after the controlled reorg: the former receiver
-	// regains its input, while the former sender loses the now-orphaned recipient
-	// output. The cold receiver then spends to that separate sender account.
+	// Return the receiver root to its original device for the existing reorg
+	// comparison, then hand it back to the cold device for the real re-spend.
+	coreSuspendRGBDevice(t, coldDevice)
+	coreRequire(t, "resume original receiver for reorg comparison", receiver.StartDKVSSync())
+	coreSynchronizeRestoredAccount(t, receiver)
 	_, err = sender.RefreshRGB11State(context.Background())
 	coreRequire(t, "remove reorged recipient allocation from sender", err)
 	_, err = receiver.RefreshRGB11State(context.Background())
@@ -160,6 +194,11 @@ func coreRGBFullSendRecoveryColdRestoreE2E(t *testing.T, cfg coreE2EConfig, chai
 	coreAssert(t, coreRGB11BalanceIsZero(senderAfterReorg) && receiverAfterReorg != nil &&
 		receiverAfterReorg.Value.Uint64() == 777,
 		"controlled reorg did not restore sender/receiver balances before cold re-spend")
+	coreSuspendRGBDevice(t, receiver)
+	coreRequire(t, "resume cold receiver after original-device reorg comparison", coldDevice.StartDKVSSync())
+	coreSynchronizeRestoredAccount(t, coldDevice)
+	_, err = coldDevice.RefreshRGB11State(context.Background())
+	coreRequire(t, "refresh cold receiver after real device handoff", err)
 
 	// Re-spend after recovery. This is a transfer from the cold receiver account
 	// to the distinct sender account, proving the restored proof can be consumed.
@@ -175,6 +214,8 @@ func coreRGBFullSendRecoveryColdRestoreE2E(t *testing.T, cfg coreE2EConfig, chai
 	coreAssert(t, coreRGB11BalanceIsZero(afterSend) && receivedAgain != nil &&
 		receivedAgain.Value.Uint64() == 777,
 		"cold-restored proof did not survive a complete second send")
+	coreSuspendRGBDevice(t, coldDevice)
+	coreSuspendRGBDevice(t, sender)
 }
 
 // A wallet with no current allocation has no aggregate Decimal to return.
@@ -253,25 +294,164 @@ func coreSendRGB11Amount(t *testing.T, chain *coreE2EChain, source, destination 
 	if afterPrepare != nil {
 		afterPrepare(prepared)
 	}
-	delivery, err := source.DeliverAndBroadcastConfiguredRGB11AddressTransfer(
-		prepared.State.TransferID, RGB11AddressDeliveryOptions{})
-	coreRequire(t, "deliver full-send consignment", err)
-	coreAssert(t, delivery.AwaitingACK && !delivery.Broadcast,
-		"full-send crossed the receiver ACK boundary")
-	coreWaitRGB11MailboxACK(t, chain, destination, prepared, beforeBroadcast)
-	coreAssertRGB11ACKRecoveryPublished(t, destination, prepared)
-	coreAssert(t, chain.broadcastCount() == beforeBroadcast,
-		"passive receiver ACK caused an early sender broadcast")
-	coreWaitRGB11MailboxBroadcast(t, chain, source, prepared, beforeBroadcast)
+	coreDeliverRGB11OfflineACK(t, chain, source, destination, prepared, beforeBroadcast)
 
 	chain.confirm(prepared.TxID)
 	_, err = source.RefreshRGB11State(context.Background())
 	coreRequire(t, "settle full-send source", err)
 	_, err = destination.RefreshRGB11State(context.Background())
 	coreRequire(t, "settle full-send destination", err)
+	coreSyncRGBCheckpoint(t, source, destination)
 	coreAssertRGB11SettledRecoveryPublished(t, destination, prepared)
 	coreAssertRGB11Balances(t, source, destination, assetName, wantSource, wantDestination)
 	return prepared
+}
+
+// Healthy recovery checkpoints need confirmed data, not a particular worker
+// tick. Keep fault/outbox tests on their original asynchronous worker paths.
+func coreSyncRGBCheckpoint(t *testing.T, managers ...*Manager) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	for _, manager := range managers {
+		// Direct send/receive operates on the account root, independently of UI
+		// selection. Its local commit already staged this scope's generation.
+		view, err := manager.captureRGB11NetworkScope(true)
+		coreRequire(t, "capture RGB recovery checkpoint scope", err)
+		scope, err := view.rgb11AccountManagedScopeID()
+		coreRequire(t, "read RGB recovery checkpoint scope", err)
+		accountID, err := manager.RootAccountID()
+		coreRequire(t, "read RGB recovery checkpoint account", err)
+		targets, err := manager.captureAccountBackup(rgb11AccountManagedProviderID, scope)
+		coreRequire(t, "capture committed RGB checkpoint generation", err)
+		target, exists := targets[rgb11AccountManagedProviderID+"\x00"+scope]
+		coreAssert(t, exists && target > 0, "RGB checkpoint has no committed module generation")
+		waitErr := manager.WaitAccountBackup(ctx, rgb11AccountManagedProviderID, scope)
+		if waitErr != nil {
+			// Failure-only local observations. Do not retry, change readiness,
+			// or log account identifiers, recovery bytes, or error payloads.
+			status := manager.GetAccountManagementStatus()
+			t.Logf("core-e2e: RGB checkpoint backup failure: actor=%d scope_tag=%s target=%d error_type=%T account_state=%q discovery=%q dkvs=%q writable=%t backup=%q pending_requests=%d error_code=%q has_error=%t",
+				manager.debugID, coreCASTag(scope), target, waitErr, status.AccountState,
+				status.DiscoveryStatus, status.DKVSStatus, status.DKVSWriteAllowed, status.BackupState,
+				status.DKVSPendingRequests, status.LastDKVSSyncErrorCode, status.LastDKVSSyncError != "")
+			manager.mutex.RLock()
+			local, readErr := manager.readAccountLocal(accountID, rgb11AccountManagedProviderID, scope)
+			manager.mutex.RUnlock()
+			if readErr != nil || local == nil {
+				t.Logf("core-e2e: RGB checkpoint backup local: present=%t read_error_type=%T", local != nil, readErr)
+			} else {
+				t.Logf("core-e2e: RGB checkpoint backup local: generation=%d captured=%d confirmed=%d baseline=%t restoring=%t conflict=%t has_error=%t",
+					local.Generation, local.Captured, local.Confirmed, local.Baseline != nil,
+					local.Restoring, local.Conflict, local.LastError != "")
+			}
+			if coordinator := manager.dkvs; coordinator != nil {
+				coordinator.mu.Lock()
+				worker, stopping := coordinator.done, coordinator.stopping
+				jobQueued := coordinator.jobs[accountManagedStateJobID] != nil
+				due := coordinator.jobDue[accountManagedStateJobID]
+				requestCanceled := coordinator.requestCtx != nil && coordinator.requestCtx.Err() != nil
+				coordinator.mu.Unlock()
+				running := worker != nil
+				select {
+				case <-worker:
+					running = false
+				default:
+				}
+				t.Logf("core-e2e: RGB checkpoint backup worker: running=%t stopping=%t account_job_queued=%t job_due=%t job_overdue=%t request_canceled=%t",
+					running, stopping, jobQueued, !due.IsZero(), !due.IsZero() && !due.After(time.Now()), requestCanceled)
+			}
+		}
+		coreRequire(t, "confirm RGB recovery checkpoint backup", waitErr)
+		manager.mutex.RLock()
+		value, err := manager.readAccountLocal(accountID, rgb11AccountManagedProviderID, scope)
+		manager.mutex.RUnlock()
+		coreRequire(t, "read confirmed RGB checkpoint baseline", err)
+		coreAssert(t, value != nil && !value.Deleted && value.Captured >= target && value.Confirmed >= target &&
+			value.Baseline != nil && value.Baseline.Seq > 0 && value.Baseline.Key == value.Key,
+			"RGB checkpoint did not capture and confirm its committed generation with a module baseline")
+		coreRequire(t, "verify confirmed RGB checkpoint signature", dkvsindexer.VerifySignature(value.Baseline))
+	}
+}
+
+// Observe the existing recovery boundaries by bringing the real devices online
+// in order. Production may consume an ACK automatically whenever its sender is
+// online; explicit frontend synchronization is not a broadcast barrier.
+func coreDeliverRGB11OfflineACK(t *testing.T, chain *coreE2EChain,
+	source, destination *Manager, prepared *RGB11PreparedTransfer, beforeBroadcast int) {
+	t.Helper()
+	sourceID, err := source.RootAccountID()
+	coreRequire(t, "read offline-ACK sender identity", err)
+	destinationID, err := destination.RootAccountID()
+	coreRequire(t, "read offline-ACK receiver identity", err)
+	coreAssert(t, sourceID != destinationID && prepared != nil && prepared.State != nil &&
+		prepared.State.SenderAccountID == sourceID && prepared.State.ReceiverAccountID == destinationID,
+		"offline-ACK transfer is not bound to two independent device roots")
+	sourceOffline, destinationOffline := false, false
+	defer func() {
+		if sourceOffline {
+			coreRequire(t, "resume sender after interrupted offline-ACK flow", source.StartDKVSSync())
+			coreSynchronizeRestoredAccount(t, source)
+		}
+	}()
+	defer func() {
+		if destinationOffline {
+			coreRequire(t, "resume receiver after interrupted offline-ACK flow", destination.StartDKVSSync())
+			coreSynchronizeRestoredAccount(t, destination)
+		}
+	}()
+	// The receiver goes offline before delivery, so its worker cannot publish an
+	// ACK while the foreground delivery call still checks for that ACK.
+	destinationOffline = true
+	coreSuspendRGBDevice(t, destination)
+	sourceOffline = true
+	coreSuspendRGBDevice(t, source)
+	sourceView, err := source.captureRGB11NetworkScope(true)
+	coreRequire(t, "capture offline-ACK original sender scope", err)
+	store := sourceView.rgbManager.projectionStore
+	unsigned, err := store.LoadPendingTransfer(prepared.State.TransferID)
+	coreRequire(t, "read original unsigned transfer before delivery", err)
+	coreAssert(t, unsigned != nil && unsigned.State.Direction == "send" &&
+		unsigned.State.SenderAccountID == sourceID && unsigned.State.ReceiverAccountID == destinationID &&
+		unsigned.State.WitnessTxID == prepared.TxID && unsigned.State.ConsignmentHash == prepared.State.ConsignmentHash &&
+		len(unsigned.State.InputOutPoints) > 0 && !unsigned.State.DeliveryAcknowledged &&
+		unsigned.State.AckStatus != "accepted" && !rgb11PendingHasWitness(unsigned) &&
+		chain.broadcastCount() == beforeBroadcast,
+		"offline-ACK delivery lost its original unsigned, unacknowledged intent")
+	delivery, err := source.DeliverAndBroadcastConfiguredRGB11AddressTransfer(
+		prepared.State.TransferID, RGB11AddressDeliveryOptions{})
+	coreRequire(t, "deliver consignment while receiver is offline", err)
+	coreAssert(t, delivery != nil && delivery.TransferID == prepared.State.TransferID &&
+		delivery.AwaitingACK && !delivery.Broadcast && chain.broadcastCount() == beforeBroadcast,
+		"delivery crossed the offline receiver ACK boundary")
+	coreRequire(t, "bring receiver online to accept its consignment", destination.StartDKVSSync())
+	destinationOffline = false
+	coreSynchronizeRestoredAccount(t, destination)
+	coreWaitRGB11MailboxACK(t, chain, destination, prepared, beforeBroadcast)
+	coreSyncRGBCheckpoint(t, destination)
+	coreAssertRGB11ACKRecoveryPublished(t, destination, prepared)
+	coreAssert(t, chain.broadcastCount() == beforeBroadcast,
+		"offline sender broadcast before its receiver recovery checkpoint completed")
+	coreRequire(t, "bring sender online to consume its accepted ACK", source.StartDKVSSync())
+	sourceOffline = false
+	coreSynchronizeRestoredAccount(t, source)
+	coreWaitRGB11MailboxBroadcast(t, chain, source, prepared, beforeBroadcast)
+	signed, err := store.LoadPendingTransfer(prepared.State.TransferID)
+	coreRequire(t, "read durable signed transfer after accepted ACK", err)
+	coreAssert(t, signed != nil && signed.State.SenderAccountID == sourceID &&
+		signed.State.ReceiverAccountID == destinationID && signed.State.DeliveryAcknowledged &&
+		signed.State.AckStatus == "accepted" && validRGB11SigningTransition(unsigned, signed),
+		"ACK consumption changed the original transaction or lost its verified signed witness")
+	raw, err := chain.GetRawTx(prepared.TxID)
+	coreRequire(t, "read actual offline-ACK Bitcoin transaction", err)
+	coreAssert(t, bytes.Equal(raw, signed.SignedTx) && chain.broadcastCount() == beforeBroadcast+1,
+		"offline-ACK flow did not broadcast exactly its original signed transaction once")
+	locks := source.utxoLockerL1.GetLockedUtxoList()
+	for _, outpoint := range signed.State.InputOutPoints {
+		lock := locks[outpoint]
+		coreAssert(t, lock != nil && lock.ReservationID == signed.ReservationID,
+			"broadcast transfer released its original input reservation before confirmation")
+	}
 }
 
 // A cold database replays its account mailbox, including historical sends
@@ -356,23 +536,268 @@ func coreWaitRGB11MailboxBroadcast(t *testing.T, chain *coreE2EChain, sender *Ma
 		state, err := sender.GetRGB11State()
 		coreRequire(t, "read target broadcast lifecycle", err)
 		matches := 0
+		var target *rgb11wallet.TransferState
 		for _, transfer := range state.Transfers {
 			if transfer != nil && transfer.Direction == "send" &&
 				transfer.TransferID == prepared.State.TransferID && transfer.WitnessTxID == prepared.TxID &&
-				transfer.ConsignmentHash == prepared.State.ConsignmentHash && transfer.Status == "broadcast" {
+				transfer.ConsignmentHash == prepared.State.ConsignmentHash {
 				matches++
+				target = transfer
 			}
 		}
 		coreAssert(t, matches <= 1 && chain.broadcastCount() <= beforeBroadcast+1,
 			"target ACK caused duplicate lifecycle or transaction broadcasts")
-		if matches == 1 {
+		status := ""
+		if target != nil {
+			status = target.Status
+		}
+		// A normal chain refresh can already have advanced broadcast to pending.
+		// Require the actual signed witness and positive ACK, not a transient label.
+		if matches == 1 && (status == "broadcast" || status == "pending") {
+			pending, err := sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
+			coreRequire(t, "read exact signed target after ACK", err)
+			coreAssert(t, pending != nil, "target broadcast lost its signed pending record")
+			txStatus, err := chain.GetTxStatus(prepared.TxID)
+			coreRequire(t, "read target witness mempool status", err)
+			raw, err := chain.GetRawTx(prepared.TxID)
+			coreRequire(t, "read actual target signed transaction", err)
+			mempool := txStatus != nil && txStatus.TxID == prepared.TxID &&
+				txStatus.InMempool && !txStatus.Confirmed && txStatus.Confirmations == 0
+			identity := pending.State.Direction == "send" && pending.State.TransferID == prepared.State.TransferID &&
+				pending.State.WitnessTxID == prepared.TxID && pending.State.ConsignmentHash == prepared.State.ConsignmentHash
+			acknowledged := target.DeliveryAcknowledged && target.AckStatus == "accepted" &&
+				pending.State.DeliveryAcknowledged && pending.State.AckStatus == "accepted"
+			rawEqual := len(raw) > 0 && bytes.Equal(raw, pending.SignedTx)
+			hasWitness := rgb11PendingHasWitness(pending)
+			t.Logf("core-e2e: target broadcast facts: status=%q pending_status=%q identity=%t acknowledged=%t mempool=%t raw_equal=%t has_witness=%t broadcasts=%d",
+				status, pending.State.Status, identity, acknowledged, mempool, rawEqual, hasWitness, chain.broadcastCount()-beforeBroadcast)
+			coreAssert(t, identity && acknowledged && mempool && rawEqual && hasWitness,
+				"target lifecycle has no exact ACK-backed signed transaction in the mempool")
 			coreAssert(t, chain.broadcastCount() == beforeBroadcast+1,
 				"target ACK did not broadcast exactly once")
 			return
 		}
-		coreAssert(t, time.Now().Before(deadline), "target ACK did not produce its broadcast lifecycle")
+		coreAssert(t, time.Now().Before(deadline), fmt.Sprintf(
+			"target ACK did not produce its broadcast lifecycle: status=%q matches=%d broadcasts=%d",
+			status, matches, chain.broadcastCount()-beforeBroadcast))
 		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+func coreRGBManagerRole(t *testing.T, role string, manager *Manager) {
+	t.Helper()
+	manager.mutex.RLock()
+	accountID, root := "", ""
+	if manager.accountProfile != nil {
+		accountID, root = manager.accountProfile.AccountID, manager.accountProfile.RootFingerprint
+	}
+	manager.mutex.RUnlock()
+	t.Logf("RGB actor: role=%s manager=%d account_present=%t account_tag=%s root_tag=%s",
+		role, manager.debugID, accountID != "", accountTraceScope(accountID), accountTraceScope(root))
+}
+
+// Failure-only observation: inspect existing local rows and one authoritative
+// record. Never refresh, import, repair, publish or change projection readiness.
+func coreRGBBackupFacts(t *testing.T, ctx context.Context, manager *Manager) {
+	t.Helper()
+	scope, err := manager.rgbManager.rgb11AccountManagedScopeID()
+	if err != nil {
+		t.Logf("RGB backup facts: manager=%d scope_error=%T", manager.debugID, err)
+		return
+	}
+	manager.mutex.RLock()
+	if manager.accountProfile == nil || manager.cfg == nil {
+		manager.mutex.RUnlock()
+		t.Logf("RGB backup facts: manager=%d profile_present=false", manager.debugID)
+		return
+	}
+	accountID, network := manager.accountProfile.AccountID, manager.cfg.Chain
+	secret := append([]byte(nil), manager.accountSecret...)
+	manager.mutex.RUnlock()
+	defer zeroBytes(secret)
+	module, readErr := manager.readAccountLocal(accountID, rgb11AccountManagedProviderID, scope)
+	if readErr != nil || module == nil {
+		t.Logf("RGB backup facts: manager=%d scope_tag=%s module_present=%t read_error=%T",
+			manager.debugID, accountTraceScope(scope), module != nil, readErr)
+		return
+	}
+	entry, err := accountEntry(accountID, rgb11AccountManagedProviderID, scope)
+	if err != nil {
+		t.Logf("RGB backup facts: manager=%d entry_error=%T", manager.debugID, err)
+		return
+	}
+	baseSeq, remoteSeq := uint64(0), uint64(0)
+	baseHash, remoteHash := "", ""
+	var baseValue, remoteValue []byte
+	if module.Baseline != nil {
+		baseSeq, baseHash = module.Baseline.Seq, dkvsindexer.RecordHash(module.Baseline).String()
+		baseValue = module.Baseline.Value
+	}
+	client, remoteErr := manager.dkvs.primaryClient()
+	if remoteErr == nil {
+		readCtx, cancelRead := context.WithTimeout(ctx, 2*time.Second)
+		defer cancelRead()
+		record, err := client.GetRecordDirectContext(readCtx, entry.Key)
+		remoteErr = err
+		if err == nil && record != nil {
+			remoteSeq, remoteHash = record.Seq, dkvsindexer.RecordHash(record).String()
+			remoteValue = record.Value
+		}
+	}
+	decode := func(encoded []byte) ([]byte, bool) {
+		if len(encoded) == 0 {
+			return nil, false
+		}
+		payload, err := openAccountPayload(secret, accountID, network, entry, encoded)
+		return payload, err == nil
+	}
+	base, baseOK := decode(baseValue)
+	defer zeroBytes(base)
+	conflict, conflictOK := decode(module.ConflictValue)
+	defer zeroBytes(conflict)
+	remote, remoteOK := decode(remoteValue)
+	defer zeroBytes(remote)
+	catalog, localErr := manager.accountManagedDataCatalog()
+	var local []byte
+	if localErr == nil {
+		local, localErr = manager.exportAccountPayload(entry, catalog)
+	}
+	defer zeroBytes(local)
+	localOK := localErr == nil && len(local) != 0
+	latest, latestErr := manager.readAccountLocal(accountID, rgb11AccountManagedProviderID, scope)
+	latestHash := ""
+	if latest != nil && latest.Baseline != nil {
+		latestHash = dkvsindexer.RecordHash(latest.Baseline).String()
+	}
+	unchanged := latestErr == nil && latest != nil && latest.Generation == module.Generation &&
+		latest.Captured == module.Captured && latest.Confirmed == module.Confirmed && latest.Conflict == module.Conflict &&
+		latestHash == baseHash && bytes.Equal(latest.ConflictValue, module.ConflictValue)
+	t.Logf("RGB backup facts: manager=%d scope_tag=%s same_module=%t generation=%d captured=%d confirmed=%d conflict=%t baseline_seq=%d baseline_hash=%s authoritative_seq=%d authoritative_hash=%s authoritative_error=%T conflict_value_bytes=%d conflict_value_digest=%s local_error=%T local_ok=%t baseline_ok=%t conflict_ok=%t authoritative_ok=%t local_eq_base=%t local_eq_conflict=%t base_eq_conflict=%t base_eq_authoritative=%t conflict_eq_authoritative=%t local_eq_authoritative=%t",
+		manager.debugID, accountTraceScope(scope), unchanged, module.Generation, module.Captured, module.Confirmed, module.Conflict,
+		baseSeq, baseHash, remoteSeq, remoteHash, remoteErr, len(module.ConflictValue), coreDigest(module.ConflictValue), localErr,
+		localOK, baseOK, conflictOK, remoteOK, localOK && baseOK && bytes.Equal(local, base),
+		localOK && conflictOK && bytes.Equal(local, conflict), baseOK && conflictOK && bytes.Equal(base, conflict),
+		baseOK && remoteOK && bytes.Equal(base, remote), conflictOK && remoteOK && bytes.Equal(conflict, remote),
+		localOK && remoteOK && bytes.Equal(local, remote))
+}
+
+func coreReceiveIdentityMatches(request *corewallet.ReceiveRequest, transfer *rgb11wallet.TransferState,
+	invoice *invoicing.Invoice, wantHash, ack string, acknowledged bool) bool {
+	if request == nil || transfer == nil || invoice == nil {
+		return false
+	}
+	requestInvoiceMatches := request.Invoice != ""
+	switch transfer.TransportMode {
+	case RGB11ProxyTransport:
+		requestInvoiceMatches = requestInvoiceMatches && !transfer.AddressMode &&
+			!transfer.SyntheticInvoiceRemoved && request.Invoice == transfer.Invoice
+	case RGB11AddressTransport:
+		// Address delivery keeps the synthetic receive request (and its invoice)
+		// in the engine snapshot, but deliberately removes that invoice from the
+		// public transfer row. Bind this exception to the address-mode markers.
+		requestInvoiceMatches = requestInvoiceMatches && transfer.AddressMode &&
+			transfer.SyntheticInvoiceRemoved && transfer.Invoice == ""
+	default:
+		requestInvoiceMatches = false
+	}
+	return request.Version == corewallet.ReceiveVersion &&
+		request.RequestID != "" && request.RequestID == transfer.ReceiveRequestID &&
+		request.RecipientID != "" && request.RecipientID == transfer.RecipientID &&
+		request.Status == corewallet.ReceiveAcknowledged &&
+		request.TransferID != "" && request.TransferID == transfer.TransferID && request.ObjectHash == wantHash &&
+		request.ObjectHash == transfer.ConsignmentHash && request.WitnessTxID == transfer.WitnessTxID &&
+		requestInvoiceMatches &&
+		request.Expiry > 0 && request.Expiry == transfer.Expiry &&
+		invoice.Expiry != nil && *invoice.Expiry == request.Expiry &&
+		invoice.Beneficiary.Network == rgb11InvoiceNetwork(GetChainParam()) &&
+		transfer.Direction == "receive" && transfer.Status == "awaiting_broadcast" &&
+		transfer.AckStatus == ack && transfer.DeliveryAcknowledged == acknowledged &&
+		transfer.ReceiveRequestID == request.RequestID && transfer.WitnessTxID != "" &&
+		transfer.ConsignmentHash == wantHash
+}
+
+func coreSameReceiveRequest(left, right *corewallet.ReceiveRequest) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	leftSeal, leftErr := left.Seal.StrictBytes()
+	rightSeal, rightErr := right.Seal.StrictBytes()
+	return leftErr == nil && rightErr == nil && bytes.Equal(leftSeal, rightSeal) &&
+		left.Version == right.Version && left.Mode == right.Mode && left.RequestID == right.RequestID &&
+		left.RecipientID == right.RecipientID && bytes.Equal(left.WitnessScript, right.WitnessScript) &&
+		left.Invoice == right.Invoice && left.RelayKey == right.RelayKey && left.AckKey == right.AckKey &&
+		left.CreatedAt == right.CreatedAt && left.Expiry == right.Expiry && left.Status == right.Status &&
+		left.TransferID == right.TransferID && left.ObjectHash == right.ObjectHash &&
+		left.WitnessTxID == right.WitnessTxID && left.FailureCode == right.FailureCode
+}
+
+func coreReceiveReservationMatches(reservation *rgb11wallet.ReceiveReservation,
+	request *corewallet.ReceiveRequest) bool {
+	if reservation == nil || request == nil || request.Seal.TxID == nil || request.RequestID == "" {
+		return false
+	}
+	expectedOutpoint := (wire.OutPoint{
+		Hash: chainhash.Hash(*request.Seal.TxID), Index: request.Seal.Vout,
+	}).String()
+	return reservation.Version == 1 && reservation.RequestID == request.RequestID &&
+		reservation.OutPoint == expectedOutpoint && reservation.ReservationID != "" &&
+		reservation.Expiry == request.Expiry && reservation.Expiry > 0
+}
+
+func coreSameReceiveReservation(left, right *rgb11wallet.ReceiveReservation) bool {
+	return left != nil && right != nil && left.Version == right.Version &&
+		left.RequestID == right.RequestID && left.OutPoint == right.OutPoint &&
+		left.ReservationID == right.ReservationID && left.Expiry == right.Expiry
+}
+
+func coreReceiveKeyMatches(key *rgb11wallet.ReceiveKey, request *corewallet.ReceiveRequest,
+	invoice *invoicing.Invoice, receiver *Manager, accountIndex uint32) bool {
+	if key == nil || request == nil || invoice == nil || receiver == nil || receiver.GetWallet() == nil ||
+		key.Version != 1 || key.RequestID != request.RequestID || key.ScopeIndex != accountIndex ||
+		key.Change != 1 || key.LogicalAddress == "" ||
+		key.LogicalAddress != receiver.GetWallet().GetAddress() ||
+		!bytes.Equal(key.WitnessScript, request.WitnessScript) || len(key.InternalPubKey) != 32 {
+		return false
+	}
+	pathWallet, ok := receiver.GetWallet().(rgb11PathWallet)
+	if !ok {
+		return false
+	}
+	pubKey := pathWallet.GetPubKeyByPath(key.Change, key.Index)
+	address := pathWallet.GetAddressByPath(key.Change, key.Index)
+	if pubKey == nil || address == "" {
+		return false
+	}
+	script, err := AddrToPkScript(address, GetChainParam())
+	if err != nil || !bytes.Equal(script, key.WitnessScript) {
+		return false
+	}
+	compressed := pubKey.SerializeCompressed()
+	if len(compressed) != 33 || !bytes.Equal(key.InternalPubKey, compressed[1:]) {
+		return false
+	}
+	return invoice.Beneficiary.InternalXOnly == nil ||
+		bytes.Equal(invoice.Beneficiary.InternalXOnly[:], key.InternalPubKey)
+}
+
+func coreActiveWitnessMatches(request *corewallet.ReceiveRequest,
+	invoice *invoicing.Invoice, receiver *Manager) bool {
+	if request == nil || invoice == nil || receiver == nil || receiver.GetWallet() == nil {
+		return false
+	}
+	script, err := AddrToPkScript(receiver.GetWallet().GetAddress(), GetChainParam())
+	if err != nil || !bytes.Equal(script, request.WitnessScript) {
+		return false
+	}
+	if invoice.Beneficiary.InternalXOnly == nil {
+		return true
+	}
+	pubKey := receiver.GetWallet().GetPubKey()
+	if pubKey == nil {
+		return false
+	}
+	compressed := pubKey.SerializeCompressed()
+	return len(compressed) == 33 && bytes.Equal(invoice.Beneficiary.InternalXOnly[:], compressed[1:])
 }
 
 func coreAssertRGB11ACKRecoveryPublished(t *testing.T, receiver *Manager,
@@ -382,6 +807,15 @@ func coreAssertRGB11ACKRecoveryPublished(t *testing.T, receiver *Manager,
 		prepared.TxID == "" || prepared.State.TransferID == "" || prepared.State.ConsignmentHash == "" {
 		t.Fatal("core-e2e: missing accepted transfer identity for pre-broadcast recovery assertion")
 	}
+	// This assertion concerns this receive scope. An unrelated provider's
+	// failed backup must not prevent an otherwise complete RGB ACK recovery.
+	backupCtx, cancelBackup := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancelBackup()
+	backupErr := receiver.WaitAccountBackup(backupCtx, rgb11AccountManagedProviderID, coreSelectedRGBScope(receiver))
+	if backupErr != nil {
+		coreRGBBackupFacts(t, backupCtx, receiver)
+	}
+	coreRequire(t, "complete this receiver scope's real asynchronous backup", backupErr)
 	state, err := receiver.GetRGB11State()
 	coreRequire(t, "read staged receiver transition after ACK", err)
 	if state == nil {
@@ -432,44 +866,13 @@ func coreAssertRGB11ACKRecoveryPublished(t *testing.T, receiver *Manager,
 		packagesChecked++
 		packageValue, err := rgb11wallet.DecodeRecoveryPackage(payload.Payload)
 		coreRequire(t, "decode receiver stable package after ACK", err)
-		foundTransfer, foundObject, foundPreparedReceive, foundRequest := false, false, false, false
-		foundCurrentReceipt := false
-		receiveRequestRecords, decodedReceiveRequests, matchingReceiveRequests := 0, 0, 0
+		transferRecords, objectRecords, preparedReceiveRecords, receiptRecords := 0, 0, 0, 0
+		objectHashMatches, preparedReceiveMatches := false, false
+		receiveRequestRecords, decodedReceiveRequests := 0, 0
 		receiveRequestDecodeFailures := 0
 		foundReceiveKey, foundReceiveReservation := false, false
+		var stableReservations []*rgb11wallet.ReceiveReservation
 		var stableRequest *corewallet.ReceiveRequest
-		for _, record := range packageValue.EngineRecords {
-			if record.Key != "wallet/receive/"+staged.ReceiveRequestID {
-				continue
-			}
-			stableRequest, err = corewallet.DecodeReceiveRequest(record.Value)
-			coreRequire(t, "decode exact receiver request for stable path checks", err)
-			break
-		}
-		for _, record := range packageValue.ProjectionRecords {
-			switch record.Key {
-			case "transfer-" + staged.TransferID:
-				foundTransfer = true
-			case "object-" + wantHash:
-				objectHash := sha256.Sum256(record.Value)
-				foundObject = hex.EncodeToString(objectHash[:]) == wantHash
-			case "validation-" + wantHash:
-				foundCurrentReceipt = true
-			case "prepared-receive-" + staged.TransferID:
-				foundPreparedReceive = string(record.Value) == staged.ReceiveRequestID
-			}
-			if strings.HasPrefix(record.Key, "receive-key-") {
-				if stableRequest != nil && len(stableRequest.WitnessScript) != 0 {
-					witnessHash := sha256.Sum256(stableRequest.WitnessScript)
-					if record.Key == "receive-key-"+hex.EncodeToString(witnessHash[:]) {
-						foundReceiveKey = true
-					}
-				}
-			}
-			if record.Key == "receive-reservation-"+staged.ReceiveRequestID {
-				foundReceiveReservation = true
-			}
-		}
 		for _, record := range packageValue.EngineRecords {
 			if record.Key != "wallet/receive/"+staged.ReceiveRequestID {
 				continue
@@ -481,21 +884,100 @@ func coreAssertRGB11ACKRecoveryPublished(t *testing.T, receiver *Manager,
 				continue
 			}
 			decodedReceiveRequests++
-			if request.RequestID == staged.ReceiveRequestID && request.Status == corewallet.ReceiveAcknowledged &&
-				request.TransferID == staged.TransferID && request.ObjectHash == staged.ConsignmentHash &&
-				request.WitnessTxID == staged.WitnessTxID && request.Invoice != "" &&
-				request.Mode == corewallet.ReceiveWitness && len(request.WitnessScript) != 0 {
-				matchingReceiveRequests++
-				foundRequest = true
+			if stableRequest == nil {
+				stableRequest = request
 			}
 		}
-		if !foundTransfer && !foundObject && !foundPreparedReceive &&
-			receiveRequestRecords == 0 && !foundCurrentReceipt {
+		for _, record := range packageValue.ProjectionRecords {
+			switch record.Key {
+			case "transfer-" + staged.TransferID:
+				transferRecords++
+			case "object-" + wantHash:
+				objectRecords++
+				objectHash := sha256.Sum256(record.Value)
+				objectHashMatches = hex.EncodeToString(objectHash[:]) == wantHash
+			case "validation-" + wantHash:
+				receiptRecords++
+			case "prepared-receive-" + staged.TransferID:
+				preparedReceiveRecords++
+				preparedReceiveMatches = string(record.Value) == staged.ReceiveRequestID
+			}
+		}
+		if transferRecords == 0 && objectRecords == 0 && preparedReceiveRecords == 0 &&
+			receiveRequestRecords == 0 && receiptRecords == 0 {
 			continue
 		}
 		relevantPackages++
+		stableTransfers, transferErr := rgb11wallet.TransfersFromProjectionSnapshot(packageValue.ProjectionRecords)
+		coreRequire(t, "decode receiver transfer from stable package", transferErr)
+		var stableTransfer *rgb11wallet.TransferState
+		stableTransferRecords := 0
+		for _, transfer := range stableTransfers {
+			if transfer != nil && transfer.TransferID == staged.TransferID && transfer.Direction == "receive" {
+				stableTransferRecords++
+				stableTransfer = transfer
+			}
+		}
+		var invoice *invoicing.Invoice
+		var invoiceErr error
+		if stableRequest != nil {
+			invoice, invoiceErr = invoicing.Parse(stableRequest.Invoice)
+		} else {
+			invoiceErr = fmt.Errorf("stable receive request is missing")
+		}
+		requestMatches := invoiceErr == nil &&
+			coreReceiveIdentityMatches(stableRequest, stableTransfer, invoice, wantHash, wantAck, wantAcknowledged)
+		branchMatches, receiveKeyRequired := false, false
+		switch {
+		case requestMatches && stableRequest.Mode == corewallet.ReceiveWitness &&
+			invoice.Beneficiary.Kind == invoicing.BeneficiaryWitnessVout && len(stableRequest.WitnessScript) != 0:
+			beneficiaryScript, beneficiaryErr := invoice.Beneficiary.WitnessScript()
+			activeScript, activeErr := AddrToPkScript(receiver.GetWallet().GetAddress(), GetChainParam())
+			witnessScriptMatches := beneficiaryErr == nil && activeErr == nil &&
+				bytes.Equal(beneficiaryScript, stableRequest.WitnessScript)
+			if witnessScriptMatches {
+				receiveKeyRequired = !bytes.Equal(activeScript, stableRequest.WitnessScript)
+				witnessHash := sha256.Sum256(stableRequest.WitnessScript)
+				expectedKeyRecord := "receive-key-" + hex.EncodeToString(witnessHash[:])
+				keyRecords := 0
+				for _, record := range packageValue.ProjectionRecords {
+					if record.Key == expectedKeyRecord {
+						keyRecords++
+					}
+				}
+				foundReceiveKey = keyRecords == 1
+				branchMatches = (!receiveKeyRequired || keyRecords == 1) && keyRecords <= 1
+			}
+		case requestMatches && stableRequest.Mode == corewallet.ReceiveBlind &&
+			invoice.Beneficiary.Kind == invoicing.BeneficiaryBlindedSeal && len(stableRequest.WitnessScript) == 0:
+			concealed, concealErr := stableRequest.Seal.Conceal()
+			reservations, reservationErr := rgb11wallet.ReceiveReservationsFromProjectionSnapshot(packageValue.ProjectionRecords)
+			matchingReservations := 0
+			for _, reservation := range reservations {
+				if reservation != nil && reservation.RequestID == stableRequest.RequestID {
+					matchingReservations++
+					stableReservations = append(stableReservations, reservation)
+				}
+			}
+			foundReceiveReservation = matchingReservations == 1 && len(stableReservations) == 1 &&
+				coreReceiveReservationMatches(stableReservations[0], stableRequest)
+			branchMatches = concealErr == nil &&
+				bytes.Equal(invoice.Beneficiary.BlindedSeal[:], concealed[:]) &&
+				reservationErr == nil && foundReceiveReservation
+		}
+		matchingReceiveRequests := 0
+		if requestMatches && branchMatches {
+			matchingReceiveRequests = 1
+		}
+		foundRequest := receiveRequestRecords == 1 && decodedReceiveRequests == 1 &&
+			receiveRequestDecodeFailures == 0 && matchingReceiveRequests == 1
+		foundTransfer := transferRecords == 1 && stableTransferRecords == 1 && stableTransfer != nil
+		foundObject := objectRecords == 1 && objectHashMatches
+		foundPreparedReceive := preparedReceiveRecords == 1 && preparedReceiveMatches
+		foundCurrentReceipt := receiptRecords != 0
 		if !foundTransfer || !foundObject || !foundPreparedReceive || !foundRequest || foundCurrentReceipt ||
-			receiveRequestRecords != 1 || receiveRequestDecodeFailures != 0 {
+			receiveRequestRecords != 1 || receiveRequestDecodeFailures != 0 ||
+			stableTransferRecords != 1 || (stableRequest != nil && stableRequest.Mode == corewallet.ReceiveBlind && !foundReceiveReservation) {
 			t.Errorf("core-e2e: ACK stable-package checks failed (package=%d/%d transfer=%t object_raw_hash_matches=%t prepared_receive=%t receive_request=%t receive_request_records=%d decoded=%d identity_matches=%d decode_failures=%d receive_key_material=%t receive_reservation_material=%t premature_validation_receipt=%t)",
 				packagesChecked, len(payloads), foundTransfer, foundObject,
 				foundPreparedReceive, foundRequest, receiveRequestRecords, decodedReceiveRequests,
@@ -516,12 +998,14 @@ func coreAssertRGB11ACKRecoveryPublished(t *testing.T, receiver *Manager,
 			t.Fatalf("import acknowledged RGB11 projection snapshot: %v", err)
 		}
 		recoveredTransfer, err := projection.LoadTransferState(staged.TransferID)
-		if err != nil || recoveredTransfer.Direction != "receive" ||
+		if err != nil || recoveredTransfer == nil || recoveredTransfer.Direction != "receive" ||
 			recoveredTransfer.Status != "awaiting_broadcast" ||
 			recoveredTransfer.AckStatus != wantAck || recoveredTransfer.DeliveryAcknowledged != wantAcknowledged ||
 			recoveredTransfer.ConsignmentHash != wantHash ||
 			recoveredTransfer.ReceiveRequestID != staged.ReceiveRequestID ||
-			recoveredTransfer.WitnessTxID != staged.WitnessTxID {
+			recoveredTransfer.WitnessTxID != staged.WitnessTxID ||
+			recoveredTransfer.RecipientID != staged.RecipientID || recoveredTransfer.Invoice != staged.Invoice ||
+			recoveredTransfer.Expiry != staged.Expiry {
 			t.Fatalf("stable ACK package did not cold-restore its awaiting-broadcast lifecycle: err=%v", err)
 		}
 		recoveredObject, err := projection.LoadObject(wantHash)
@@ -548,26 +1032,31 @@ func coreAssertRGB11ACKRecoveryPublished(t *testing.T, receiver *Manager,
 			t.Fatalf("reopen acknowledged RGB11 receive engine: %v", err)
 		}
 		recoveredRequest, err := recoveredEngine.LoadReceive(staged.ReceiveRequestID)
-		if err != nil || recoveredRequest.Status != corewallet.ReceiveAcknowledged ||
-			recoveredRequest.TransferID != staged.TransferID ||
-			recoveredRequest.ObjectHash != wantHash ||
-			recoveredRequest.WitnessTxID != staged.WitnessTxID ||
-			recoveredRequest.Invoice == "" || len(recoveredRequest.WitnessScript) == 0 {
-			t.Fatalf("stable ACK package did not cold-restore its receive request and witness path: err=%v", err)
+		if err != nil || !coreSameReceiveRequest(stableRequest, recoveredRequest) ||
+			!coreReceiveIdentityMatches(recoveredRequest, recoveredTransfer, invoice, wantHash, wantAck, wantAcknowledged) {
+			t.Fatalf("stable ACK package did not cold-restore the exact acknowledged receive request: err=%v", err)
 		}
-		if foundReceiveKey {
-			key, err := projection.LoadReceiveKey(recoveredRequest.WitnessScript)
-			if err != nil || key.RequestID != staged.ReceiveRequestID ||
-				!bytes.Equal(key.WitnessScript, recoveredRequest.WitnessScript) {
-				t.Fatalf("stable ACK package did not cold-restore its receiver key path: err=%v", err)
+		switch recoveredRequest.Mode {
+		case corewallet.ReceiveWitness:
+			if receiveKeyRequired {
+				key, err := projection.LoadReceiveKey(recoveredRequest.WitnessScript)
+				if err != nil || !coreReceiveKeyMatches(key, recoveredRequest, invoice, receiver, snapshot.AccountIndex) {
+					t.Fatalf("stable ACK package did not cold-restore the actual independent receive-key path: err=%v", err)
+				}
+			} else if !coreActiveWitnessMatches(recoveredRequest, invoice, receiver) {
+				t.Fatal("stable ACK package witness does not match the active receiver wallet path")
 			}
-		}
-		if foundReceiveReservation {
+		case corewallet.ReceiveBlind:
+			if !foundReceiveReservation || len(stableReservations) != 1 {
+				t.Fatal("stable ACK package omitted the blind receive's exact outpoint reservation")
+			}
 			reservation, err := projection.LoadReceiveReservation(staged.ReceiveRequestID)
-			if err != nil || reservation.RequestID != staged.ReceiveRequestID ||
-				reservation.OutPoint == "" || reservation.ReservationID == "" {
-				t.Fatalf("stable ACK package did not cold-restore its receive reservation: err=%v", err)
+			if err != nil || !coreReceiveReservationMatches(reservation, recoveredRequest) ||
+				!coreSameReceiveReservation(stableReservations[0], reservation) {
+				t.Fatalf("stable ACK package did not cold-restore the exact blind receive reservation: err=%v", err)
 			}
+		default:
+			t.Fatalf("stable ACK package cold-restored unsupported receive mode %q", recoveredRequest.Mode)
 		}
 		for _, outpoint := range staged.OutputOutPoints {
 			proofPrefix := "proof-" + outpoint + "-"
@@ -590,6 +1079,15 @@ func coreAssertRGB11SettledRecoveryPublished(t *testing.T, receiver *Manager,
 	if receiver == nil || prepared == nil || prepared.State == nil || prepared.State.ConsignmentHash == "" {
 		t.Fatal("core-e2e: missing settled transfer identity for recovery assertion")
 	}
+	scopeID, err := receiver.rgbManager.rgb11AccountManagedScopeID()
+	coreRequire(t, "resolve settled receiver recovery scope", err)
+	backupCtx, cancelBackup := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancelBackup()
+	backupErr := receiver.WaitAccountBackup(backupCtx, rgb11AccountManagedProviderID, scopeID)
+	if backupErr != nil {
+		coreRGBBackupFacts(t, backupCtx, receiver)
+	}
+	coreRequire(t, "complete this receiver scope's settled asynchronous backup", backupErr)
 	state, err := receiver.GetRGB11State()
 	coreRequire(t, "read settled receiver proof state", err)
 	if state == nil {
@@ -608,8 +1106,6 @@ func coreAssertRGB11SettledRecoveryPublished(t *testing.T, receiver *Manager,
 	}
 	payloads, err := receiver.currentAccountManagedProviderPayloads(rgb11AccountManagedProviderID)
 	coreRequire(t, "read settled receiver stable RGB11 package", err)
-	scopeID, err := receiver.rgbManager.rgb11AccountManagedScopeID()
-	coreRequire(t, "resolve settled receiver recovery scope", err)
 	payload, ok := payloads[scopeID]
 	coreAssert(t, ok && payload.Scope == scopeID,
 		"settled receiver scope is absent from its stable RGB11 package")
@@ -627,6 +1123,10 @@ func coreAssertRGB11SettledRecoveryPublished(t *testing.T, receiver *Manager,
 		case "transfer-" + prepared.State.TransferID:
 			foundTransfer = true
 		}
+	}
+	if !foundProof || !foundObject || !foundReceipt || !foundTransfer {
+		t.Logf("settled recovery closure: proof=%t object=%t receipt=%t transfer=%t",
+			foundProof, foundObject, foundReceipt, foundTransfer)
 	}
 	coreAssert(t, foundProof && foundObject && foundReceipt && foundTransfer,
 		"settled stable package omitted proof, consumer, validation receipt, or transfer lifecycle")
@@ -887,32 +1387,29 @@ func coreLogManagedRecoverySize(t *testing.T, hop int, role string, manager *Man
 		t.Fatal("core-e2e: account secret unavailable for managed-data size sample")
 	}
 	accountID := manager.accountProfile.AccountID
-	revision := manager.accountProfile.ManagedDataRevision
+	network := manager.cfg.Chain
 	secret := append([]byte(nil), manager.accountSecret...)
 	manager.mutex.RUnlock()
 	defer zeroBytes(secret)
-	bundle, _, err := manager.exportAccountManagedData(catalog, revision)
-	coreRequire(t, "export complete account bundle for size sample", err)
-	plain, err := account.EncodeManagedDataBundle(bundle)
-	coreRequire(t, "encode account bundle for size sample", err)
-	defer zeroBytes(plain)
-	size.amd = len(plain)
-	envelope, info, err := account.SealManagedDataBundleWithInfo(secret, accountID, bundle, nil)
-	coreRequire(t, "seal account bundle for size sample", err)
-	defer zeroBytes(envelope)
-	size.ade = len(envelope)
-	blob, err := EncodeDKVSBlobValue(envelope, nil)
-	coreRequire(t, "wrap account envelope for size sample", err)
-	defer zeroBytes(blob)
-	size.dkb1 = len(blob)
+	for _, payload := range providerPayloads {
+		entry, err := accountEntry(accountID, rgb11AccountManagedProviderID, payload.Scope)
+		coreRequire(t, "resolve independent RGB module for size sample", err)
+		blob, err := sealAccountPayload(secret, accountID, network, entry, payload.Payload)
+		coreRequire(t, "encode independent RGB module for size sample", err)
+		decoded, err := DecodeDKVSBlobValue(blob)
+		coreRequire(t, "measure independent RGB module envelope", err)
+		size.amd += len(payload.Payload)
+		size.ade += len(decoded.Data)
+		size.dkb1 += len(blob)
+	}
 	previousSize := previous[role]
 	previous[role] = size
-	t.Logf("core-e2e: RGB11 recovery-size role=%s hop=%d packages=%d RPK_raw=%d delta=%+d RPK_deflate_stream=%d delta=%+d RPK_encoded=%d delta=%+d AMD=%d delta=%+d ADE=%d delta=%+d DKB1=%d delta=%+d account_bundle_compressed=%t",
+	t.Logf("core-e2e: RGB11 recovery-size role=%s hop=%d packages=%d RPK_raw=%d delta=%+d RPK_deflate_stream=%d delta=%+d RPK_encoded=%d delta=%+d RGB_payload_total=%d delta=%+d AMOE_total=%d delta=%+d DKB1_total=%d delta=%+d",
 		role, hop, size.packages, size.rpkRaw, size.rpkRaw-previousSize.rpkRaw,
 		size.rpkDeflate, size.rpkDeflate-previousSize.rpkDeflate,
 		size.rpkEncoded, size.rpkEncoded-previousSize.rpkEncoded,
 		size.amd, size.amd-previousSize.amd, size.ade, size.ade-previousSize.ade,
-		size.dkb1, size.dkb1-previousSize.dkb1, info.Compressed)
+		size.dkb1, size.dkb1-previousSize.dkb1)
 	t.Logf("core-e2e: RGB11 recovery-records role=%s hop=%d required_rows=%d required_kv_bytes=%d proofs=%d receipts=%d object_rows=%d unique_object_hashes=%d duplicate_object_rows=%d object_value_bytes=%d unique_object_value_bytes=%d duplicate_content_distinct_keys=%d outputs=%d terminal_transfers=%d terminal_transfer_kv_bytes=%d terminal_pending=%d terminal_pending_kv_bytes=%d terminal_pending_signed_psbt_bytes=%d active_pending_signed_psbt_bytes=%d terminal_used_requests=%d terminal_used_request_kv_bytes=%d active_used_requests=%d active_used_request_kv_bytes=%d unknown_used_requests=%d unknown_used_request_kv_bytes=%d terminal_receive_material_rows=%d terminal_receive_material_kv_bytes=%d active_lifecycle_rows=%d active_lifecycle_kv_bytes=%d unknown_lifecycle_rows=%d unknown_lifecycle_kv_bytes=%d unreferenced_local_rows=%d unreferenced_local_kv_bytes=%d chain_rebuildable_unreferenced_outputs=%d chain_rebuildable_unreferenced_output_kv_bytes=%d canonicalized_proof_receipt_rows=%d canonicalized_value_byte_delta=%+d uncategorized_rows=%d uncategorized_kv_bytes=%d record_bytes_exclude_codec_framing runtime_caches=not_in_snapshot_schema embedded_ancestor_repeat_bytes=not_separately_exposed_by_consignment_codec",
 		role, hop, size.requiredRows, size.requiredKVBytes,
 		size.proofRows, size.receiptRows, size.objectRows, size.uniqueObjects,

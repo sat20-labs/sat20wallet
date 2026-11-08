@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
-	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -21,16 +20,13 @@ import (
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
-// coreRGBRecoveryCapacityBoundaryE2E exercises real cross-scope recovery
-// material through the connected CoreModules/DKVS harness. Capacity noise is
-// only a deterministic boundary fault-injection provider; the RGB material,
-// ACK, proof, and transaction use the real native path.
+// Independent module capacity failures must not block real RGB invoice, ACK,
+// broadcast, or terminal recovery. RGB sizing still includes its own closure.
 func coreRGBRecoveryCapacityBoundaryE2E(t *testing.T, cfg coreE2EConfig,
 	chain *coreE2EChain, sender, receiver *Manager,
 	senderMaterial, receiverMaterial *coreRecoveryMaterial) {
 	t.Helper()
-	_ = receiverMaterial // The second scope is created on this receiver during the case.
-	t.Run("R21_full_bundle_prepare_and_cross_scope_invoice_capacity", func(t *testing.T) {
+	t.Run("R21_independent_module_failure_preserves_cross_scope_RGB", func(t *testing.T) {
 		proxy := &rgb11ProxyTestServer{}
 		proxyHTTP := httptest.NewServer(http.HandlerFunc(proxy.serveHTTP))
 		defer proxyHTTP.Close()
@@ -59,12 +55,8 @@ func coreRGBRecoveryCapacityBoundaryE2E(t *testing.T, cfg coreE2EConfig,
 		_, err = receiver.ImportRGB11ContractFile(context.Background(), contract)
 		coreRequire(t, "import contract into receiver account scope 1", err)
 		coreRequire(t, "select receiver root account", receiver.SwitchAccount(0))
-		capacityInvoice, err := receiver.CreateRGB11Invoice(RGB11InvoiceRequest{
-			Mode: "witness", TransportMode: "out-of-band", ContractID: issued.ContractID,
-			AmountRaw: "1", WitnessVout: 1, Expiry: time.Now().Add(time.Hour).Unix(),
-		})
-		coreRequire(t, "create receiver invoice for capacity-bound prepare", err)
-		coreAssert(t, capacityInvoice != nil, "receiver capacity invoice was not created")
+		cleanupSenderCapacity := coreInstallUnrelatedCapacityFailure(t, sender, cfg)
+		cleanupReceiverCapacity := coreInstallUnrelatedCapacityFailure(t, receiver, cfg)
 
 		coreRequire(t, "select receiver account scope 1 for standard receive", receiver.SwitchAccount(1))
 		receiveInvoice, err := receiver.CreateRGB11Invoice(RGB11InvoiceRequest{
@@ -112,158 +104,53 @@ func coreRGBRecoveryCapacityBoundaryE2E(t *testing.T, cfg coreE2EConfig,
 		coreAssert(t, chain.broadcastCount() == beforeBroadcast+1,
 			"sender refresh unexpectedly rebroadcast a transaction")
 
-		// R21: an already-published nonempty RGB history cannot sign another
-		// transfer whose final full-account bundle is at the exact wire limit.
-		senderRGBBefore := coreLocalRGBBundleDigests(t, sender)
-		cleanupSenderCapacity := coreInstallCapacityProviderAtWireBoundary(t, sender, cfg)
-		senderAtBoundary := coreManagedRemoteRecords(t, sender, cfg)
-		senderProfileAtBoundary := coreCaptureManagedProfile(sender)
-		coreAssert(t, !senderProfileAtBoundary.dirty && senderProfileAtBoundary.revision > 0 &&
-			senderProfileAtBoundary.hash != "", "sender capacity baseline is not a confirmed account package")
-		senderSemanticBefore := coreDigest(coreRGBSemantic(t, sender))
-		senderBroadcasts := chain.broadcastCount()
-		_, createInvoiceErr := sender.CreateRGB11Invoice(RGB11InvoiceRequest{
-			Mode: "witness", TransportMode: "out-of-band", ContractID: issued.ContractID,
-			AmountRaw:   "1",
-			WitnessVout: 1, Expiry: time.Now().Add(time.Hour).Unix(),
-		})
-		coreAssertCapacityRejected(t, createInvoiceErr,
-			"new invoice at the exact account capacity boundary")
-		_, prepareErr := sender.PrepareRGB11Transfer(context.Background(), RGB11SendRequest{
-			Invoice: capacityInvoice.Invoice, FeeRate: 2, MinConfirmations: 1,
-		})
-		coreAssertCapacityRejected(t, prepareErr,
-			"new send prepare at the exact account capacity boundary")
-		coreAssert(t, chain.broadcastCount() == senderBroadcasts,
-			"capacity-rejected invoice/prepare caused a transaction broadcast")
-		coreAssert(t, coreDigest(coreRGBSemantic(t, sender)) == senderSemanticBefore,
-			"capacity-rejected invoice/prepare changed sender proof, task, invoice, or lock state")
-		coreAssertMapEqual(t, "sender local recovery package after R21 rejection",
-			senderRGBBefore, coreLocalRGBBundleDigests(t, sender))
-		coreAssertManagedRemoteEqual(t, "sender remote records after R21 rejection",
-			senderAtBoundary, coreManagedRemoteRecords(t, sender, cfg))
-		coreAssertManagedProfileUnchanged(t, "sender account metadata after R21 rejection",
-			senderProfileAtBoundary, coreCaptureManagedProfile(sender))
-		if err := cleanupSenderCapacity(); err != nil {
-			t.Fatalf("remove sender capacity fault provider: %v", err)
-		}
-
-		// The receiver's scope 1 contains the accepted request and prepared
-		// consignment. Sizing a new invoice in scope 0 must include this known
-		// future receipt/proof/output/contract-reference closure.
-		receiverCatalog, err := receiver.accountManagedDataCatalog()
-		coreRequire(t, "enumerate receiver scopes for R21/R22", err)
-		rootID = receiver.GetAccountManagementStatus().RootWalletID
-		var rootScope0, rootScope1 AccountManagedDataScope
-		for _, scope := range receiverCatalog.Scopes {
-			if scope.WalletID == rootID && scope.AccountIndex == 0 {
-				rootScope0 = scope
-			}
-			if scope.WalletID == rootID && scope.AccountIndex == 1 {
-				rootScope1 = scope
-			}
-		}
-		coreAssert(t, rootScope0.ID() != "" && rootScope1.ID() != "" && rootScope0.ID() != rootScope1.ID(),
-			"receiver did not retain two distinct root-account scopes")
-		receiverProvider := &rgb11AccountManagedDataProvider{owner: receiver}
-		receiverAccounts, err := receiverProvider.accountsByScope()
-		coreRequire(t, "enumerate receiver local RGB11 scopes", err)
-		targetScopeManager, err := receiver.newScopedRGB11Manager(receiverAccounts[rootScope0.ID()])
-		coreRequire(t, "open receiver target scope 0", err)
-		targetWalletID, err := targetScopeManager.RGB11WalletID()
-		coreRequire(t, "resolve receiver scope 0 wallet", err)
-		targetSnapshot, _, err := targetScopeManager.exportRGB11WalletSnapshot(targetWalletID)
-		coreRequire(t, "export target scope 0 candidate baseline", err)
-		withoutPreviewBundle, err := coreNextManagedBundle(receiver, receiverCatalog)
-		coreRequire(t, "build receiver no-preview baseline bundle", err)
-		withoutPreview, err := coreMeasureManagedBundle(t, receiver, withoutPreviewBundle)
-		coreRequire(t, "measure receiver no-preview baseline", err)
-		withPreview, err := receiver.preflightRGB11TerminalRecovery(rootScope0.ID(), targetSnapshot)
-		coreRequire(t, "size cross-scope known receive terminal closure", err)
-		// The high-entropy capacity provider disables outer AMD compression.
-		// Its exact ADE growth is therefore the canonical AMD byte delta.
-		previewDelta := withPreview.AMDBytes - withoutPreview.AMDBytes
-		coreAssert(t, previewDelta > 0,
-			"cross-scope accepted receive did not add measurable future proof/receipt/output bytes")
-		coreAssert(t, withoutPreview.DKB1Bytes < swire.MaxDKVSBlobValueSize,
-			"receiver ACK baseline is already beyond the DKB1 limit")
-		t.Logf("core-e2e: cross-scope capacity preview baseline_RPK_raw=%d baseline_RPK_deflate=%d baseline_AMD=%d baseline_ADE=%d baseline_DKB1=%d preview_RPK_raw=%d preview_RPK_deflate=%d preview_AMD=%d preview_ADE=%d preview_DKB1=%d preview_delta_DKB1=%d",
-			withoutPreview.RPKRawBytes, withoutPreview.RPKEncodedBytes, withoutPreview.AMDBytes,
-			withoutPreview.ADEBytes, withoutPreview.DKB1Bytes, withPreview.RPKRawBytes,
-			withPreview.RPKEncodedBytes, withPreview.AMDBytes, withPreview.ADEBytes,
-			withPreview.DKB1Bytes, previewDelta)
-
-		targetADE := swire.MaxDKVSBlobValueSize - 8 - previewDelta/2
-		if targetADE <= 0 || targetADE >= swire.MaxDKVSBlobValueSize-8 {
-			t.Fatalf("invalid cross-scope capacity target ADE=%d preview delta=%d", targetADE, previewDelta)
-		}
-		cleanupReceiverCapacity := coreInstallCapacityProviderAtEnvelopeTarget(t, receiver, cfg,
-			targetADE, withoutPreviewBundle)
-		receiverAtBoundary := coreManagedRemoteRecords(t, receiver, cfg)
-		receiverProfileAtBoundary := coreCaptureManagedProfile(receiver)
-		coreAssert(t, receiverProfileAtBoundary.envelopeBytes == targetADE,
-			"receiver stable ACK baseline did not reach calibrated ADE boundary")
-		coreAssert(t, !receiverProfileAtBoundary.dirty && receiverProfileAtBoundary.revision > 0 &&
-			receiverProfileAtBoundary.hash != "", "receiver capacity baseline is not a confirmed ACK package")
-		capacityInvoicesBefore := coreLocalRGBBundleDigests(t, receiver)
-		coreRequire(t, "select receiver target scope 0", receiver.SwitchAccount(0))
-		_, invoiceErr := receiver.CreateRGB11Invoice(RGB11InvoiceRequest{
-			Mode: "witness", TransportMode: "out-of-band", ContractID: issued.ContractID,
-			AmountRaw: "1", WitnessVout: 1, Expiry: time.Now().Add(time.Hour).Unix(),
-		})
-		coreAssertCapacityRejected(t, invoiceErr,
-			"new scope-0 invoice while scope-1 ACK has known terminal recovery growth")
-		coreAssertMapEqual(t, "receiver local recovery package after R21 invoice rejection",
-			capacityInvoicesBefore, coreLocalRGBBundleDigests(t, receiver))
-		coreAssertManagedRemoteEqual(t, "receiver remote ACK bundle after R21 invoice rejection",
-			receiverAtBoundary, coreManagedRemoteRecords(t, receiver, cfg))
-		coreAssertManagedProfileUnchanged(t, "receiver account metadata after R21 invoice rejection",
-			receiverProfileAtBoundary, coreCaptureManagedProfile(receiver))
-
-		// R22: the confirmed receive proof is materialized locally, but its
-		// final account CAS is forced over the limit by later provider growth.
-		// The last accepted ACK bundle and revision remain authoritative.
-		coreRequire(t, "return to receiver scope 1 for chain reconciliation", receiver.SwitchAccount(1))
-		beforeLateProofBroadcasts := chain.broadcastCount()
-		_, refreshErr := receiver.RefreshRGB11State(context.Background())
-		coreAssertCapacityRejected(t, refreshErr, "late receive proof publication after ACK")
-		coreAssert(t, chain.broadcastCount() == beforeLateProofBroadcasts,
-			"late proof capacity failure caused an additional broadcast")
+		// The unrelated failed module cannot prevent the accepted receive from
+		// materializing and backing up its real proof and validation receipt.
+		_, err = receiver.RefreshRGB11State(context.Background())
+		coreRequire(t, "settle receiver despite unrelated capacity failure", err)
 		lateState, err := receiver.GetRGB11State()
-		coreRequire(t, "read local receive proof after R22 capacity rejection", err)
+		coreRequire(t, "read settled receive proof", err)
 		foundLocalProof, foundReceipt := false, false
 		for _, proof := range lateState.Proofs {
 			if proof != nil && proof.ConsignmentHash == receiveHash && rgb11ProofIsCurrent(proof) {
 				foundLocalProof = true
 			}
 		}
-		localPayloads, err := receiverProvider.Export(receiverCatalog)
-		coreRequire(t, "export local receiver closure after R22 rejection", err)
-		for _, payload := range localPayloads {
-			packageValue, decodeErr := rgb11wallet.DecodeRecoveryPackage(payload.Payload)
-			coreRequire(t, "decode local receiver closure after R22 rejection", decodeErr)
-			for _, record := range packageValue.ProjectionRecords {
-				if record.Key == "validation-"+receiveHash {
-					foundReceipt = true
-				}
+		catalog, err := receiver.accountManagedDataCatalog()
+		coreRequire(t, "enumerate receive recovery scopes", err)
+		payloads, err := (&rgb11AccountManagedDataProvider{owner: receiver}).Export(catalog)
+		coreRequire(t, "export settled local receive recovery", err)
+		for _, payload := range payloads {
+			value, decodeErr := rgb11wallet.DecodeRecoveryPackage(payload.Payload)
+			coreRequire(t, "decode settled receive recovery", decodeErr)
+			for _, record := range value.ProjectionRecords {
+				foundReceipt = foundReceipt || record.Key == "validation-"+receiveHash
 			}
 		}
-		coreAssert(t, foundLocalProof && foundReceipt,
-			"R22 overflow discarded the locally validated receive proof/receipt")
-		receiverProfileAfter := coreCaptureManagedProfile(receiver)
-		coreAssert(t, receiverProfileAfter.dirty &&
-			receiverProfileAfter.revision == receiverProfileAtBoundary.revision &&
-			receiverProfileAfter.hash == receiverProfileAtBoundary.hash &&
-			bytes.Equal(receiverProfileAfter.envelope, receiverProfileAtBoundary.envelope),
-			"R22 overflow cleared dirty state or advanced/replaced the last confirmed account package")
-		coreAssertManagedRemoteEqual(t, "remote records after R22 late proof rejection",
-			receiverAtBoundary, coreManagedRemoteRecords(t, receiver, cfg))
-		if err := cleanupReceiverCapacity(); err != nil {
-			t.Fatalf("remove receiver capacity fault provider: %v", err)
+		coreAssert(t, foundLocalProof && foundReceipt, "unrelated failure lost receive proof or receipt")
+		coreRequire(t, "confirm selected receive recovery", receiver.WaitAccountBackup(
+			context.Background(), rgb11AccountManagedProviderID, coreSelectedRGBScope(receiver)))
+		confirmed, err := receiver.currentAccountManagedProviderPayloads(rgb11AccountManagedProviderID)
+		coreRequire(t, "read confirmed terminal recovery", err)
+		confirmedPackage, err := rgb11wallet.DecodeRecoveryPackage(confirmed[coreSelectedRGBScope(receiver)].Payload)
+		coreRequire(t, "decode confirmed terminal recovery", err)
+		confirmedReceipt := false
+		for _, record := range confirmedPackage.ProjectionRecords {
+			confirmedReceipt = confirmedReceipt || record.Key == "validation-"+receiveHash
 		}
+		coreAssert(t, confirmedReceipt, "confirmed RGB module omitted terminal validation receipt")
+		coreAssert(t, chain.broadcastCount() == beforeBroadcast+1,
+			"terminal reconciliation repeated the original broadcast")
+		coreRequire(t, "remove sender capacity fault", cleanupSenderCapacity())
+		coreRequire(t, "remove receiver capacity fault", cleanupReceiverCapacity())
 		coreVerifyPaidRecords(t, receiver, cfg)
 	})
-	t.Run("R21_blind_proxy_terminal_preview_blocks_positive_ack", func(t *testing.T) {
+	t.Run("R21_blind_terminal_preview_and_independent_capacity_failure", func(t *testing.T) {
+		// This case hands the same accounts to independent devices; it is not
+		// a concurrent-writer test. Resume originals only after those devices close.
+		coreTransferDeviceCleanup(t, sender, receiver)
+		coreSuspendRGBDevice(t, sender)
+		coreSuspendRGBDevice(t, receiver)
 		coreRGB11BlindCapacityBoundaryE2E(t, cfg, chain, senderMaterial, receiverMaterial)
 	})
 }
@@ -368,13 +255,9 @@ func coreRGB11BlindCapacityBoundaryE2E(t *testing.T, cfg coreE2EConfig,
 
 	preparedBundle, err := coreManagedBundleWithRGB11Snapshot(t, receiver, catalog,
 		targetScope.ID(), candidate)
-	coreRequire(t, "build prepared-only full account bundle for blind capacity", err)
+	coreRequire(t, "build prepared-only RGB module for blind capacity", err)
 	preparedSize, err := coreMeasureManagedBundle(t, receiver, preparedBundle)
-	coreRequire(t, "measure prepared-only blind account bundle", err)
-	currentBundle, err := coreNextManagedBundle(receiver, catalog)
-	coreRequire(t, "build invoice-only full bundle for blind capacity fault", err)
-	currentSize, err := coreMeasureManagedBundle(t, receiver, currentBundle)
-	coreRequire(t, "measure invoice-only full bundle for blind capacity", err)
+	coreRequire(t, "measure prepared-only blind RGB module", err)
 	terminalSize, err := receiver.preflightRGB11TerminalRecovery(targetScope.ID(), candidate)
 	coreRequire(t, "measure blind terminal recovery closure", err)
 	coreAssert(t, preparedSize.DKB1Bytes < terminalSize.DKB1Bytes,
@@ -383,66 +266,47 @@ func coreRGB11BlindCapacityBoundaryE2E(t *testing.T, cfg coreE2EConfig,
 		"blind terminal closure does not fit without the explicit capacity fault injection")
 	coreAssert(t, preparedSize.DKB1Bytes < swire.MaxDKVSBlobValueSize,
 		"blind prepared-only bundle is already over the stable blob limit")
-	// Capacity noise makes the outer envelope uncompressed; use AMD deltas
-	// rather than compression-sensitive ADE sizes of the unfilled bundles.
-	preparedGrowth := preparedSize.AMDBytes - currentSize.AMDBytes
-	terminalGrowth := terminalSize.AMDBytes - currentSize.AMDBytes
-	coreAssert(t, preparedGrowth > 0 && terminalGrowth > preparedGrowth,
-		fmt.Sprintf("blind ADE sizes: current=%d prepared=%d terminal=%d", currentSize.ADEBytes, preparedSize.ADEBytes, terminalSize.ADEBytes))
-	maxADE := swire.MaxDKVSBlobValueSize - 8
-	// Preserve the prepared-only candidate under the limit, but put its known
-	// terminal closure one byte over the final DKB1 wire limit. The ADE itself
-	// remains below its independent 1 MiB ceiling in this boundary case.
-	targetADE := maxADE - terminalGrowth + 1
-	coreAssert(t, targetADE >= currentSize.ADEBytes && targetADE < maxADE,
-		"blind capacity boundary cannot preserve the actual invoice-only baseline")
-	coreAssert(t, targetADE+preparedGrowth < maxADE && targetADE+terminalGrowth == maxADE+1 &&
-		targetADE+terminalGrowth+8 == swire.MaxDKVSBlobValueSize+1,
-		"blind capacity boundary does not isolate terminal growth above the final ADE limit")
-	coreLogRGB11AccountPackageSize(t, "R21_blind_invoice_stable_before_capacity_fault", receiver)
-	preparedEncoded := mustEncodeRecoveryPackage(t, candidate)
-	t.Logf("core-e2e: R21 blind-capacity carrier_equals_witness=false prepared_RPK_raw=%d prepared_RPK_deflate=%d prepared_AMD=%d prepared_ADE=%d prepared_DKB1=%d terminal_RPK_raw=%d terminal_RPK_deflate=%d terminal_AMD=%d terminal_ADE=%d terminal_DKB1=%d target_ADE=%d preview_ADE_growth=%d final_DKB1_overage=1",
-		coreRecoveryPackageRawSize(t, preparedEncoded),
-		len(preparedEncoded), preparedSize.AMDBytes, preparedSize.ADEBytes,
-		preparedSize.DKB1Bytes, terminalSize.RPKRawBytes, terminalSize.RPKEncodedBytes,
-		terminalSize.AMDBytes, terminalSize.ADEBytes, terminalSize.DKB1Bytes, targetADE, terminalGrowth)
-
-	cleanup := coreInstallCapacityProviderAtEnvelopeTarget(t, receiver, cfg, targetADE, currentBundle)
-	remoteBefore := coreManagedRemoteRecords(t, receiver, cfg)
-	profileBefore := coreCaptureManagedProfile(receiver)
-	coreAssert(t, profileBefore.envelopeBytes == targetADE && !profileBefore.dirty &&
-		profileBefore.revision > 0 && profileBefore.hash != "",
-		"blind capacity fault baseline was not a confirmed envelope below the wire ceiling")
+	// Keep the genuine terminal closure and sizing-only receipt checks above.
+	// Noise in another provider is not part of this RGB module's wire budget.
+	cleanup := coreInstallUnrelatedCapacityFailure(t, receiver, cfg)
 	beforeAttemptBroadcasts := chain.broadcastCount()
-	_, receiveErr := receiver.ReceiveRGB11ProxyConsignment(context.Background(), invoice.RequestID)
-	coreAssertCapacityRejected(t, receiveErr, "blind receive terminal closure before positive ACK")
+	received, err := receiver.ReceiveRGB11ProxyConsignment(context.Background(), invoice.RequestID)
+	coreRequire(t, "accept blind receive despite unrelated capacity failure", err)
+	coreAssert(t, received.AckPosted && received.AwaitingBroadcast && received.TxID == prepared.TxID,
+		"unrelated module failure blocked the exact blind ACK")
+	coreAssertRGB11ACKRecoveryPublished(t, receiver, prepared)
 	coreAssert(t, chain.broadcastCount() == beforeAttemptBroadcasts,
-		"blind receive capacity failure caused a transaction broadcast")
-	proxy.mu.Lock()
-	ackHistory := append([]bool(nil), proxy.ackHistory...)
-	proxy.mu.Unlock()
-	positiveAck, negativeAck := false, false
-	for _, ack := range ackHistory {
-		if ack {
-			positiveAck = true
-		} else {
-			negativeAck = true
-		}
-	}
-	coreAssert(t, !positiveAck && negativeAck,
-		"blind receive capacity failure did not produce a negative-only ACK decision")
-	coreAssertManagedRemoteEqual(t, "remote stable package after blind capacity rejection",
-		remoteBefore, coreManagedRemoteRecords(t, receiver, cfg))
-	coreAssertManagedProfileUnchanged(t, "receiver profile after blind capacity rejection",
-		profileBefore, coreCaptureManagedProfile(receiver))
+		"blind receive ACK broadcast the transaction")
 	pending, err := sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
-	coreRequire(t, "read sender pending operation after receiver capacity rejection", err)
+	coreRequire(t, "read sender pending operation before blind broadcast", err)
 	coreAssert(t, pending != nil && pending.State.WitnessTxID == prepared.TxID &&
 		len(pending.RecipientConsignment) != 0 && len(pending.LocalConsignment) != 0 &&
-		len(pending.SignedTx) != 0,
-		"capacity rejection discarded sender's unbroadcast recovery materials")
-	if err := cleanup(); err != nil {
-		t.Fatalf("remove blind capacity fault provider: %v", err)
+		len(pending.SignedTx) != 0, "unrelated failure lost sender recovery materials")
+	delivery, err = sender.DeliverAndBroadcastRGB11ProxyTransfer(context.Background(),
+		[]string{prepared.State.TransferID})
+	coreRequire(t, "broadcast blind transfer after positive ACK", err)
+	coreAssert(t, delivery.Broadcast && delivery.TxID == prepared.TxID &&
+		chain.broadcastCount() == beforeAttemptBroadcasts+1, "blind ACK did not authorize exactly one broadcast")
+	chain.confirm(prepared.TxID)
+	_, err = sender.RefreshRGB11State(context.Background())
+	coreRequire(t, "settle blind sender before device handoff", err)
+	_, err = receiver.RefreshRGB11State(context.Background())
+	coreRequire(t, "settle blind receiver despite unrelated capacity failure", err)
+	coreRequire(t, "confirm blind terminal recovery", receiver.WaitAccountBackup(context.Background(),
+		rgb11AccountManagedProviderID, targetScope.ID()))
+	coreRequire(t, "remove blind capacity fault", cleanup())
+	// A local broadcast is not a completed asynchronous backup. Finish both
+	// devices' actual recovery closures before cleanup returns to the originals.
+	coreSuspendRGBDevice(t, sender)
+	coreSuspendRGBDevice(t, receiver)
+	coreAssert(t, chain.broadcastCount() == beforeAttemptBroadcasts+1,
+		"blind device handoff repeated the original broadcast")
+	// Correlate a later source-refresh failure with this independent device's
+	// confirmed spend without logging transaction or recovery payloads.
+	t.Logf("core-e2e: blind capacity handoff: actor=%d scope_tag=%s witness_tag=%s input_count=%d",
+		sender.debugID, coreCASTag(coreSelectedRGBScope(sender)), coreCASTag(prepared.TxID), len(prepared.State.InputOutPoints))
+	for _, point := range prepared.State.InputOutPoints {
+		t.Logf("core-e2e: blind capacity spent input: point_tag=%s witness_tag=%s", coreCASTag(point), coreCASTag(prepared.TxID))
 	}
 }
 
@@ -607,25 +471,18 @@ type coreManagedProfileFingerprint struct {
 func coreManagedRemoteRecords(t *testing.T, manager *Manager,
 	cfg coreE2EConfig) map[string]coreManagedRecordFingerprint {
 	t.Helper()
-	root, err := manager.accountManagementRootWallet()
-	coreRequire(t, "resolve account-managed root for capacity snapshot", err)
-	stateKey, err := manager.accountManagedStateKey(root)
-	coreRequire(t, "derive account-managed state key", err)
-	blobKey, err := manager.accountManagedDataBlobKey(root)
-	coreRequire(t, "derive account-managed blob key", err)
-	wrapperKey, err := accountRootWrapperKey(root)
-	coreRequire(t, "derive account-root wrapper key", err)
+	manager.mutex.RLock()
+	accountID := manager.accountProfile.AccountID
+	manager.mutex.RUnlock()
+	key, err := account.ManagedModuleKey(accountID, rgb11AccountManagedProviderID, coreSelectedRGBScope(manager))
+	coreRequire(t, "derive selected RGB module key", err)
 	client := NewSatsNetDKVSClient(cfg.Core.Scheme, cfg.Core.Host, cfg.Core.Proxy, nil)
-	result := make(map[string]coreManagedRecordFingerprint, 3)
-	for _, key := range []string{stateKey, blobKey, wrapperKey} {
-		record, err := client.GetRecordDirect(key)
-		coreRequire(t, "read authoritative record for capacity snapshot", err)
-		result[string(key)] = coreManagedRecordFingerprint{
-			seq: record.Seq, hash: dkvsindexer.RecordHash(record).String(),
-			digest: coreDigest(record.Value), bytes: len(record.Value),
-		}
-	}
-	return result
+	record, err := client.GetRecordDirect(key)
+	coreRequire(t, "read authoritative RGB module", err)
+	return map[string]coreManagedRecordFingerprint{key: {
+		seq: record.Seq, hash: dkvsindexer.RecordHash(record).String(),
+		digest: coreDigest(record.Value), bytes: len(record.Value),
+	}}
 }
 
 func coreAssertManagedRemoteEqual(t *testing.T, label string,
@@ -647,19 +504,40 @@ func coreAssertMapEqual(t *testing.T, label string, want, got map[string]string)
 	}
 }
 
+func coreSelectedRGBScope(manager *Manager) string {
+	scope, err := manager.rgbManager.rgb11AccountManagedScopeID()
+	if err != nil {
+		panic(err)
+	}
+	return scope
+}
+
 func coreCaptureManagedProfile(manager *Manager) coreManagedProfileFingerprint {
+	scope := coreSelectedRGBScope(manager)
 	manager.mutex.RLock()
 	defer manager.mutex.RUnlock()
 	if manager.accountProfile == nil {
 		return coreManagedProfileFingerprint{}
 	}
-	envelope := append([]byte(nil), manager.accountProfile.ManagedDataEnvelope...)
-	return coreManagedProfileFingerprint{
-		dirty:    manager.accountProfile.ManagedDataDirty,
-		revision: manager.accountProfile.ManagedDataRevision,
-		hash:     manager.accountProfile.ManagedDataHash,
-		envelope: envelope, envelopeBytes: len(envelope),
+	value, err := manager.readAccountLocal(manager.accountProfile.AccountID, rgb11AccountManagedProviderID, scope)
+	if err != nil {
+		panic(err)
 	}
+	if value == nil {
+		return coreManagedProfileFingerprint{}
+	}
+	result := coreManagedProfileFingerprint{dirty: value.Generation > value.Confirmed}
+	if value.Baseline != nil {
+		blob, err := DecodeDKVSBlobValue(value.Baseline.Value)
+		if err != nil {
+			panic(err)
+		}
+		result.revision = value.Baseline.Seq
+		result.hash = dkvsindexer.RecordHash(value.Baseline).String()
+		result.envelope = bytes.Clone(blob.Data)
+		result.envelopeBytes = len(blob.Data)
+	}
+	return result
 }
 
 func coreLocalRGBBundleDigests(t *testing.T, manager *Manager) map[string]string {
@@ -678,36 +556,28 @@ func coreLocalRGBBundleDigests(t *testing.T, manager *Manager) map[string]string
 
 func coreNextManagedBundle(manager *Manager,
 	catalog AccountManagedDataCatalog) (account.ManagedDataBundle, error) {
-	manager.mutex.RLock()
-	if manager.accountProfile == nil {
-		manager.mutex.RUnlock()
-		return account.ManagedDataBundle{}, errors.New("account profile unavailable")
-	}
-	revision := manager.accountProfile.ManagedDataRevision
-	manager.mutex.RUnlock()
-	if revision == ^uint64(0) {
-		return account.ManagedDataBundle{}, errors.New("account-managed revision overflow")
-	}
-	if revision == 0 {
-		revision = 1
-	} else {
-		revision++
-	}
-	bundle, _, err := manager.exportAccountManagedData(catalog, revision)
-	return bundle, err
+	return coreCurrentManagedBundle(manager, catalog)
 }
 
 func coreCurrentManagedBundle(manager *Manager,
 	catalog AccountManagedDataCatalog) (account.ManagedDataBundle, error) {
-	manager.mutex.RLock()
-	if manager.accountProfile == nil {
-		manager.mutex.RUnlock()
-		return account.ManagedDataBundle{}, errors.New("account profile unavailable")
+	selected, err := accountScopeCatalog(catalog, coreSelectedRGBScope(manager))
+	if err != nil {
+		return account.ManagedDataBundle{}, err
 	}
-	revision := manager.accountProfile.ManagedDataRevision
-	manager.mutex.RUnlock()
-	bundle, _, err := manager.exportAccountManagedData(catalog, revision)
-	return bundle, err
+	payloads, err := (&rgb11AccountManagedDataProvider{owner: manager}).Export(selected)
+	if err != nil {
+		return account.ManagedDataBundle{}, err
+	}
+	// Bundle is only an in-memory provider payload container. Its codec revision
+	// is not a remote version; only the module's confirmed DKVS record has one.
+	bundle := account.ManagedDataBundle{Version: account.ManagedDataBundleVersion, Revision: 1}
+	for _, payload := range payloads {
+		bundle.Items = append(bundle.Items, account.ManagedDataItem{
+			Provider: rgb11AccountManagedProviderID, Scope: payload.Scope, Payload: payload.Payload,
+		})
+	}
+	return bundle, nil
 }
 
 func coreLogRGB11AccountPackageSize(t *testing.T, label string, manager *Manager) {
@@ -715,11 +585,13 @@ func coreLogRGB11AccountPackageSize(t *testing.T, label string, manager *Manager
 	catalog, err := manager.accountManagedDataCatalog()
 	coreRequire(t, "enumerate account scopes for RGB11 size sample", err)
 	bundle, err := coreCurrentManagedBundle(manager, catalog)
-	coreRequire(t, "export full account bundle for RGB11 size sample", err)
+	coreRequire(t, "export selected RGB module for RGB11 size sample", err)
 	size, err := coreMeasureManagedBundle(t, manager, bundle)
-	coreRequire(t, "measure full account bundle for RGB11 size sample", err)
+	coreRequire(t, "measure selected RGB module for RGB11 size sample", err)
 	provider := &rgb11AccountManagedDataProvider{owner: manager}
-	payloads, err := provider.Export(catalog)
+	selected, err := accountScopeCatalog(catalog, coreSelectedRGBScope(manager))
+	coreRequire(t, "select RGB11 scope for size sample", err)
+	payloads, err := provider.Export(selected)
 	coreRequire(t, "export RGB11 packages for account size sample", err)
 	rpkRaw, rpkEncoded := 0, 0
 	for _, payload := range payloads {
@@ -733,122 +605,146 @@ func coreLogRGB11AccountPackageSize(t *testing.T, label string, manager *Manager
 func coreMeasureManagedBundle(t *testing.T, manager *Manager,
 	bundle account.ManagedDataBundle) (rgb11RecoveryBundleSize, error) {
 	t.Helper()
-	var size rgb11RecoveryBundleSize
 	manager.mutex.RLock()
 	if manager.accountProfile == nil {
 		manager.mutex.RUnlock()
-		return size, errors.New("account profile unavailable")
+		return rgb11RecoveryBundleSize{}, errors.New("account profile unavailable")
 	}
-	accountID := manager.accountProfile.AccountID
-	secret := append([]byte(nil), manager.accountSecret...)
+	accountID, network := manager.accountProfile.AccountID, manager.cfg.Chain
+	secret := bytes.Clone(manager.accountSecret)
 	manager.mutex.RUnlock()
 	defer zeroBytes(secret)
-	plain, err := account.EncodeManagedDataBundle(bundle)
-	if err != nil {
-		return size, err
+	scope := coreSelectedRGBScope(manager)
+	for _, item := range bundle.Items {
+		if item.Provider == rgb11AccountManagedProviderID && item.Scope == scope {
+			return measureRGB11ModuleCapacity(rgb11RecoveryBundleSize{}, secret, accountID, network, scope, item.Payload)
+		}
 	}
-	size.AMDBytes = len(plain)
-	defer zeroBytes(plain)
-	envelope, _, err := account.SealManagedDataBundleWithInfo(secret, accountID, bundle, nil)
-	if err != nil {
-		return size, err
-	}
-	size.ADEBytes = len(envelope)
-	defer zeroBytes(envelope)
-	blob, err := EncodeDKVSBlobValue(envelope, nil)
-	if err != nil {
-		return size, err
-	}
-	size.DKB1Bytes = len(blob)
-	defer zeroBytes(blob)
-	return size, nil
+	return rgb11RecoveryBundleSize{}, errors.New("selected RGB module payload unavailable")
 }
 
-func coreInstallCapacityProviderAtWireBoundary(t *testing.T, manager *Manager,
-	cfg coreE2EConfig) func() error {
-	t.Helper()
-	catalog, err := manager.accountManagedDataCatalog()
-	coreRequire(t, "enumerate scopes before capacity provider injection", err)
-	base, err := coreNextManagedBundle(manager, catalog)
-	coreRequire(t, "export full account baseline before capacity injection", err)
-	return coreInstallCapacityProviderAtEnvelopeTarget(t, manager, cfg,
-		swire.MaxDKVSBlobValueSize-8, base)
+// This provider fails only its own module. Export honors the selected scope
+// catalog used by production independent-module synchronization.
+type coreUnrelatedCapacityProvider struct {
+	id      string
+	payload []byte
 }
 
-func coreInstallCapacityProviderAtEnvelopeTarget(t *testing.T, manager *Manager,
-	cfg coreE2EConfig, wantEnvelopeBytes int,
-	base account.ManagedDataBundle) func() error {
+func (p *coreUnrelatedCapacityProvider) ID() string { return p.id }
+func (p *coreUnrelatedCapacityProvider) Export(catalog AccountManagedDataCatalog) ([]AccountManagedDataPayload, error) {
+	var result []AccountManagedDataPayload
+	for _, scope := range catalog.Scopes {
+		result = append(result, AccountManagedDataPayload{Scope: scope.ID(), Payload: bytes.Clone(p.payload)})
+	}
+	return result, nil
+}
+func (*coreUnrelatedCapacityProvider) Validate(AccountManagedDataCatalog, []AccountManagedDataPayload) error {
+	return nil
+}
+func (*coreUnrelatedCapacityProvider) Import(AccountManagedDataCatalog, []AccountManagedDataPayload) error {
+	return nil
+}
+
+func coreInstallUnrelatedCapacityFailure(t *testing.T, manager *Manager, cfg coreE2EConfig) func() error {
 	t.Helper()
+	coreRequire(t, "publish RGB baseline before independent fault", manager.SyncAccountManagementState(context.Background()))
+	beforeLocal := coreLocalRGBBundleDigests(t, manager)
+	beforeRemote := coreManagedRemoteRecords(t, manager, cfg)
+	beforeProfile := coreCaptureManagedProfile(manager)
 	manager.mutex.RLock()
-	if manager.accountProfile == nil || len(manager.accountSecret) != 32 {
-		manager.mutex.RUnlock()
-		t.Fatal("core-e2e: account secret unavailable for capacity fixture")
-	}
-	accountID := manager.accountProfile.AccountID
-	secret := append([]byte(nil), manager.accountSecret...)
+	accountID, network := manager.accountProfile.AccountID, manager.cfg.Chain
+	secret := bytes.Clone(manager.accountSecret)
 	manager.mutex.RUnlock()
 	defer zeroBytes(secret)
-	catalog, err := manager.accountManagedDataCatalog()
-	coreRequire(t, "enumerate scope for capacity provider", err)
-	if len(catalog.Scopes) == 0 {
-		t.Fatal("core-e2e: account capacity fixture has no wallet scopes")
+	scope := coreSelectedRGBScope(manager)
+	// Verify RGB's own real AMOE + DKB1 framing still accepts exactly the wire
+	// limit and rejects one extra byte, without mutating any recovery payload.
+	sample := make([]byte, 1)
+	for {
+		size, err := measureRGB11ModuleCapacity(rgb11RecoveryBundleSize{}, secret, accountID, network, scope, sample)
+		if err != nil && !errors.Is(err, dkvsindexer.ErrRecordTooLarge) {
+			coreRequire(t, "measure RGB module capacity framing", err)
+		}
+		delta := swire.MaxDKVSBlobValueSize - size.DKB1Bytes
+		if delta == 0 {
+			coreRequire(t, "accept exact RGB wire capacity", err)
+			break
+		}
+		sample = make([]byte, len(sample)+delta)
 	}
-	payload := accountManagedPayloadForEnvelopeSize(t, secret, accountID, base,
-		"zz-capacity", catalog.Scopes[0].ID(), wantEnvelopeBytes)
-	provider := &accountManagedCapacityProvider{scope: catalog.Scopes[0].ID(), payload: payload}
-	manager.managedDataMu.RLock()
-	_, exists := manager.managedDataProviders[provider.ID()]
-	manager.managedDataMu.RUnlock()
-	if exists {
-		zeroBytes(payload)
-		t.Fatal("core-e2e: capacity test provider is already registered")
+	_, err := measureRGB11ModuleCapacity(rgb11RecoveryBundleSize{}, secret, accountID, network, scope, append(sample, 0))
+	coreAssertCapacityRejected(t, err, "RGB module exceeds its own DKB1 limit")
+	// Match the same real module envelope framing for the independent provider.
+	providerID := "zz-capacity-" + coreDigest(t.Name())[:12]
+	payload := make([]byte, len(sample)-len(providerID))
+	for {
+		envelope, err := account.SealManagedModule(secret, accountID, network, account.ManagedModule{
+			Provider: providerID, Scope: scope, Codec: "v1", Payload: payload,
+		}, nil)
+		coreRequire(t, "seal unrelated capacity module", err)
+		delta := swire.MaxDKVSBlobValueSize + 1 - (len(envelope) + 8)
+		if delta == 0 {
+			break
+		}
+		payload = make([]byte, len(payload)+delta)
 	}
-	if err := manager.RegisterAccountManagedDataProvider(provider); err != nil {
-		zeroBytes(payload)
-		t.Fatal(err)
-	}
+	provider := &coreUnrelatedCapacityProvider{id: providerID, payload: payload}
+	coreRequire(t, "register independent capacity provider", manager.RegisterAccountManagedDataProvider(provider))
 	cleaned := false
 	cleanup := func() error {
 		if cleaned {
 			return nil
 		}
-		cleaned = true
+		// Retire the fixture through explicit module tombstones, never by
+		// interpreting a provider's missing Export item as deletion.
+		manager.mutex.Lock()
+		values, err := manager.listAccountLocal(accountID)
+		if err == nil {
+			for _, value := range values {
+				if value.Provider != provider.ID() || value.Deleted {
+					continue
+				}
+				entry, entryErr := accountEntry(accountID, value.Provider, value.Scope)
+				if entryErr != nil {
+					err = entryErr
+					break
+				}
+				value.Key, value.Codec = entry.Key, entry.Codec
+				value.Deleted = true
+				value.Generation++
+				value.Captured = value.Generation
+				value.LastError, value.Conflict, value.Restoring = "", false, false
+				if err = manager.writeAccountLocal(nil, value); err != nil {
+					break
+				}
+			}
+		}
+		manager.mutex.Unlock()
+		if err != nil {
+			return err
+		}
+		if err := manager.SyncAccountManagementState(context.Background()); err != nil {
+			return err
+		}
 		manager.managedDataMu.Lock()
 		delete(manager.managedDataProviders, provider.ID())
 		manager.managedDataMu.Unlock()
-		zeroBytes(payload)
-		if err := manager.markAccountManagedDataDirtyDeferred(provider.ID()); err != nil {
-			return err
-		}
-		return manager.SyncAccountManagementState(context.Background())
+		cleaned = true
+		return nil
 	}
-	t.Cleanup(func() {
-		if err := cleanup(); err != nil {
-			t.Errorf("remove capacity test provider and restore compact bundle: %v", err)
-		}
-	})
-	if err := manager.markAccountManagedDataDirtyDeferred(provider.ID()); err != nil {
-		t.Fatal(err)
-	}
-	if err := manager.SyncAccountManagementState(context.Background()); err != nil {
-		t.Fatalf("publish capacity test baseline: %v", err)
-	}
-	profile := coreCaptureManagedProfile(manager)
-	if profile.envelopeBytes != wantEnvelopeBytes {
-		t.Fatalf("capacity fixture ADE=%d want=%d", profile.envelopeBytes, wantEnvelopeBytes)
-	}
-	coreLogRGB11AccountPackageSize(t, "capacity_injected_account_bundle", manager)
-	remote := coreManagedRemoteRecords(t, manager, cfg)
-	root, err := manager.accountManagementRootWallet()
-	coreRequire(t, "read root after capacity baseline", err)
-	blobKey, err := manager.accountManagedDataBlobKey(root)
-	coreRequire(t, "derive blob key after capacity baseline", err)
-	blob, ok := remote[string(blobKey)]
-	encodedBlob, err := EncodeDKVSBlobValue(profile.envelope, nil)
-	coreRequire(t, "encode actual target ADE as DKB1", err)
-	if !ok || blob.bytes != len(encodedBlob) || blob.bytes > swire.MaxDKVSBlobValueSize {
-		t.Fatalf("capacity fixture DKB1=%d want=%d limit=%d", blob.bytes, len(encodedBlob), swire.MaxDKVSBlobValueSize)
-	}
+	t.Cleanup(func() { coreRequire(t, "retire independent capacity fixture", cleanup()) })
+	err = manager.SyncAccountManagementState(context.Background())
+	coreAssertCapacityRejected(t, err, "independent provider exceeds DKB1 capacity")
+	coreAssert(t, accountModuleOnly(err), "independent capacity error escaped its module boundary")
+	manager.mutex.RLock()
+	failed, readErr := manager.readAccountLocal(accountID, provider.ID(), scope)
+	manager.mutex.RUnlock()
+	coreRequire(t, "read independently failed module", readErr)
+	coreAssert(t, failed != nil && failed.Generation > failed.Confirmed && failed.LastError != "",
+		"capacity failure lost the independent module pending/error state")
+	coreAssertMapEqual(t, "local RGB recovery after independent failure", beforeLocal, coreLocalRGBBundleDigests(t, manager))
+	coreAssertManagedRemoteEqual(t, "remote RGB recovery after independent failure", beforeRemote, coreManagedRemoteRecords(t, manager, cfg))
+	coreAssertManagedProfileUnchanged(t, "confirmed RGB receipt after independent failure", beforeProfile, coreCaptureManagedProfile(manager))
 	return cleanup
 }
 

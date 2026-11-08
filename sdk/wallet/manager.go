@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/btcsuite/btcd/wire"
@@ -16,6 +17,7 @@ import (
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
+	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
 	"lukechampine.com/uint128"
 
@@ -122,6 +124,9 @@ type Manager struct {
 	monitorTicks          []MonitorTickCallback
 	channelBackupHandler  ChannelBackupHandler
 	tickerInfoMap         map[string]*indexer.TickerInfo // 缓存数据, key: AssetName.String()
+	// An in-process trust-root override for isolated SDK fixtures. Production
+	// managers leave this nil and use the network's fixed Core public key.
+	rgb11RegistryVerifier dkvsindexer.SystemVerifier
 
 	db              db.KVDB
 	http            HttpClient
@@ -140,19 +145,20 @@ type Manager struct {
 	dkvsInitMu   sync.Mutex
 	dkvs         *dkvsManager
 
-	accountProfile                   *accountManagementProfile
-	accountSecret                    []byte
-	accountPassword                  string
-	accountSyncMu                    sync.Mutex
-	accountSyncActive                bool
-	accountSyncDone                  chan struct{}
-	accountGeneration                uint64
-	messageSendMu                    sync.Mutex
-	accountRootNotFoundAuthorization *accountRootNotFoundAuthorization
-	accountStorageMu                 sync.Mutex
-	accountStorageAuthorization      *accountStorageAuthorizationSession
-	accountStorageStopped            bool
-	accountAutopayFundingActive      bool
+	accountProfile              *accountManagementProfile
+	accountSecret               []byte
+	accountPassword             string
+	accountSyncMu               sync.Mutex
+	accountSyncActive           bool
+	accountSyncDone             chan struct{}
+	accountDBFault              atomic.Pointer[error]
+	accountGeneration           uint64
+	debugID                     uint64
+	messageSendMu               sync.Mutex
+	accountStorageMu            sync.Mutex
+	accountStorageAuthorization *accountStorageAuthorizationSession
+	accountStorageStopped       bool
+	accountAutopayFundingActive bool
 
 	managedDataMu             sync.RWMutex
 	managedDataProviders      map[string]AccountManagedDataProvider

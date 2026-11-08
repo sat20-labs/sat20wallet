@@ -1,6 +1,6 @@
 # DKVS 本地读写视图偏差：延后处理
 
-状态：2026-10-26，用户要求先完成当前验收、独立审核与提交，再单独修复。本文不代表生产修复获批。原激活层 80–140 行方案暂停，不实施。
+状态：2026-10-26，前一轮验收候选已本地提交；用户随后批准 DKVS 模块契约修复，现正在实施和回归，尚未通过最终验收及独立审核。原激活层 80–140 行补偿方案不实施。
 
 ## 设计契约与偏差
 
@@ -31,3 +31,19 @@ TestAccountActivationRejectsNewOwnerSignedWrapperBaseline 走原生产激活代�
 当前 sdk/wallet/account_management_state.go 的 12 行失败分支脱敏 Warning 曾单独获批，仅观测；最终是否纳入本轮提交待独立审核，不视为业务修复授权。
 
 当前验收允许明确保留缺陷，所有 FAIL/SKIP/未执行仍按真实结果报告；分组通过不替代完整门禁。
+
+## 已批准实施边界（2026-10-26）
+
+离线允许读取已验证的完整缓存，必须保留缓存时间/高度并显示只读；已有 managed profile 不因恢复功能尚未配置而获得离线修改资格。在线启动重新建立 session 同步屏障后开放业务修改，断连撤销写资格，恢复连接先接收、再核对原 outbox、必要时原样重放，再恢复写资格。
+
+Get、Update builder 和激活三键捕获统一读取本地事务快照。跨 collection 候选校验后通过 AtomicWriteBatchDB 发布；网络不持有数据 mutex。已确认 ACK 保留为原 outbox 的 acknowledged 状态，验证受影响 collection 后完成，不重发已确认请求；未知请求保留原签名和 requestID，不重签旧意图，不能据当前值承诺历史 exactly-once。
+
+历史自然失败的 capture 时序缺口及多资产 UDA warning 保留。原 stale-capture 注入诊断及其断言保留，观测点适配实际 View。ACK-before-capture 已完成的场景应成功；capture 后的真实竞争继续拒绝。定向结果、故障重复、race 与最终 SDK/PWA 结果以本轮独立收据为准，不能将阶段通过替代完整门禁。
+
+### 审查修正与回滚边界（2026-10-26）
+
+ACK 的结果分为：未通过来源/回执校验（未确认）、已验证但未持久化（仅本进程知道提交）、acknowledged 已持久化但尚待安装。前两者保留原 requestID、签名、前置条件和授权；重启只能依据真实持久状态处理，不能将内存中的已知提交误称为重启后保证不重发。已持久 acknowledged 只安装，不重发。
+
+新 acknowledged 使用 outbox 紧凑状态码 5。旧版本虽使用相同 codec 版本号，但不识别该状态；存在此状态时不可直接用旧程序打开该数据目录。回滚前须在新版本完成原请求的核对安装，或保留当前版本及原数据等待恢复；不得删除 outbox 来回滚。
+
+PWA 的 dkvs_cache_at_ms 暂沿用字段名，值来自 LastSyncAtMS，只表示同步状态更新时间，不是缓存内容发布时间。缓存高度单独显示；ERROR 与 RESET_REQUIRED 显示对应只读原因，不伪装正在同步。

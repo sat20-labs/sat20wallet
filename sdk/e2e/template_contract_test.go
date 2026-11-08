@@ -27,6 +27,11 @@ import (
 
 func TestRealSatoshiNetTemplateLimitOrder(t *testing.T) {
 	f := newTemplateFixture(t, map[string]int64{"ordx:f:e2elimit": 1000})
+	runTemplateLimitOrder(t, f)
+}
+
+func runTemplateLimitOrder(t *testing.T, f *templateFixture) {
+	t.Helper()
 	const asset = "ordx:f:e2elimit"
 	gas := contractcommon.GetGasAssetName()
 
@@ -40,7 +45,7 @@ func TestRealSatoshiNetTemplateLimitOrder(t *testing.T) {
 	content, err := contractcommon.EncodeTemplateLimitOrderContent(asset)
 	require.NoError(t, err)
 	deployTx, contract := buildTemplateDeployFor(t, f.A,
-		contractcommon.TemplateLimitOrder, content, f.A.Address, []byte("limit-order"),
+		contractcommon.TemplateLimitOrder, content, f.A.Address, []byte("LOBASE01"),
 		[]wire.OutPoint{gasOuts[0]}, wire.TxOut{
 			Value:  1,
 			Assets: wire.TxAssets{templateFunding(t, gas, 100000)},
@@ -69,6 +74,11 @@ func TestRealSatoshiNetTemplateLimitOrder(t *testing.T) {
 
 func TestTemplateLimitRefundBuy(t *testing.T) {
 	f := newTemplateFixture(t, map[string]int64{"ordx:f:e2erefund": 1000})
+	runTemplateLimitRefundBuy(t, f)
+}
+
+func runTemplateLimitRefundBuy(t *testing.T, f *templateFixture) {
+	t.Helper()
 	const asset = "ordx:f:e2erefund"
 	gas := contractcommon.GetGasAssetName()
 
@@ -79,7 +89,7 @@ func TestTemplateLimitRefundBuy(t *testing.T) {
 	content, err := contractcommon.EncodeTemplateLimitOrderContent(asset)
 	require.NoError(t, err)
 	deployTx, contract := buildTemplateDeployFor(t, f.A,
-		contractcommon.TemplateLimitOrder, content, f.A.Address, []byte("limit-refund-buy"),
+		contractcommon.TemplateLimitOrder, content, f.A.Address, []byte("LRBUY001"),
 		[]wire.OutPoint{gasOuts[0]}, wire.TxOut{
 			Value:  1,
 			Assets: wire.TxAssets{templateFunding(t, gas, 100000)},
@@ -133,6 +143,11 @@ func templateDeployNonce(random []byte) uint64 {
 
 func TestRealSatoshiNetTemplateAMMMultiLiquidity(t *testing.T) {
 	f := newTemplateFixture(t, map[string]int64{"ordx:f:e2eamm": 100000})
+	runTemplateAMMMultiLiquidity(t, f)
+}
+
+func runTemplateAMMMultiLiquidity(t *testing.T, f *templateFixture) {
+	t.Helper()
 	const asset = "ordx:f:e2eamm"
 	gas := contractcommon.GetGasAssetName()
 
@@ -148,7 +163,7 @@ func TestRealSatoshiNetTemplateAMMMultiLiquidity(t *testing.T) {
 	content, err := contractcommon.EncodeTemplateAMMContent(asset, "1000", 1000, "1000000")
 	require.NoError(t, err)
 	deployTx, contract := buildTemplateDeployFor(t, f.A,
-		contractcommon.TemplateAMM, content, f.A.Address, []byte("amm-multi"),
+		contractcommon.TemplateAMM, content, f.A.Address, []byte("AMMMULT1"),
 		[]wire.OutPoint{assetOuts[0], gasOuts[0]}, wire.TxOut{
 			Value: 1000,
 			Assets: txAssets(
@@ -192,6 +207,11 @@ func TestRealSatoshiNetTemplateAMMMultiLiquidity(t *testing.T) {
 
 func TestRealSatoshiNetTemplateExchangeGasForSatoshiAndClose(t *testing.T) {
 	f := newTemplateFixture(t, nil)
+	runTemplateExchangeGasForSatoshiAndClose(t, f)
+}
+
+func runTemplateExchangeGasForSatoshiAndClose(t *testing.T, f *templateFixture) {
+	t.Helper()
 	gas := contractcommon.GetGasAssetName()
 	plainSat := contractcommon.SatoshiAssetName
 
@@ -223,7 +243,7 @@ func TestRealSatoshiNetTemplateExchangeGasForSatoshiAndClose(t *testing.T) {
 		Steps:      steps,
 	})
 	require.NoError(t, err)
-	deployTx, contract := buildTemplateDeployFor(t, f.A, contractcommon.TemplateExchange, content, f.A.Address, []byte("exchange-gas-sat"),
+	deployTx, contract := buildTemplateDeployFor(t, f.A, contractcommon.TemplateExchange, content, f.A.Address, []byte("EXGAS001"),
 		[]wire.OutPoint{gasOuts[0]}, wire.TxOut{
 			Value:  1,
 			Assets: wire.TxAssets{templateFunding(t, gas, 100000)},
@@ -260,6 +280,12 @@ func TestRealSatoshiNetTemplateExchangeGasForSatoshiAndClose(t *testing.T) {
 func TestTemplateAutopayPaysAndCloses(t *testing.T) {
 	const feeAsset = "ordx:f:e2eautopay"
 	f, gasBank, feeOuts := newAutopaySignedFixture(t, feeAsset)
+	runTemplateAutopayPaysAndCloses(t, f, gasBank, feeOuts)
+}
+
+func runTemplateAutopayPaysAndCloses(t *testing.T, f *templateFixture, gasBank *templateGasBank, feeOuts []wire.OutPoint) {
+	t.Helper()
+	const feeAsset = "ordx:f:e2eautopay"
 	gas := contractcommon.GetGasAssetName()
 	deployerAddr := f.A.Address
 	recipientAddr := f.B.Address
@@ -274,7 +300,7 @@ func TestTemplateAutopayPaysAndCloses(t *testing.T) {
 	deployAssets := txAsset(gas, 290000)
 	deployAssets = append(deployAssets, txAsset(feeAsset, 30)...)
 	deployTx, contract := buildTemplateDeployFor(t, f.A,
-		contractcommon.TemplateAutopay, content, deployerAddr, []byte("autopay"),
+		contractcommon.TemplateAutopay, content, deployerAddr, []byte("AUTOPAY1"),
 		[]wire.OutPoint{gasBank.take(t, f.A), feeOuts[0]},
 		wire.TxOut{Value: 10000, Assets: deployAssets})
 	signAutopayKeyInputs(t, f, deployTx, f.A)
@@ -315,15 +341,22 @@ func TestTemplateAutopayPaysAndCloses(t *testing.T) {
 
 func TestTemplateLimitOrderAssetMatrix(t *testing.T) {
 	f := newTemplateFixtureWithProfiles(t, templateProfiles())
-	gas := contractcommon.GetGasAssetName()
-	gasBank := f.splitGasBank(t, 24)
+	runTemplateLimitOrderAssetMatrix(t, f)
+}
 
-	for _, profile := range sortedProfiles(templateProfiles()) {
-		t.Run(profile.Name, func(t *testing.T) {
+func runTemplateLimitOrderAssetMatrix(t *testing.T, f *templateFixture) {
+	t.Helper()
+	gas := contractcommon.GetGasAssetName()
+	// Six outputs per actor cover the six profile cases below: one deploy,
+	// sell/buy inputs for each participating actor, and no unused bank tail.
+	gasBank := f.splitGasBank(t, 6)
+
+	for profileIndex, profile := range sortedProfiles(templateProfiles()) {
+		passed := t.Run(profile.Name, func(t *testing.T) {
 			content, err := contractcommon.EncodeTemplateLimitOrderContent(profile.Asset)
 			require.NoError(t, err)
 			deployTx, contract := buildTemplateDeployFor(t, f.A,
-				contractcommon.TemplateLimitOrder, content, f.A.Address, []byte("limit-"+profile.Name),
+				contractcommon.TemplateLimitOrder, content, f.A.Address, []byte(fmt.Sprintf("LOM%05d", profileIndex)),
 				[]wire.OutPoint{gasBank.take(t, f.A)}, wire.TxOut{
 					Value:  1,
 					Assets: wire.TxAssets{templateFunding(t, gas, 100000)},
@@ -389,17 +422,26 @@ func TestTemplateLimitOrderAssetMatrix(t *testing.T) {
 			requireAssetSummaryAtLeast(t, f.Network.Bootstrap, f.D.Address, profile.Asset, "600")
 			requireAssetSummaryAtLeast(t, f.Network.Bootstrap, f.E.Address, profile.Asset, "800")
 		})
+		if !passed {
+			return
+		}
 	}
 	f.requireSynced(t)
 }
 
 func TestTemplateAMMAssetMatrix(t *testing.T) {
 	f := newTemplateFixtureWithProfiles(t, templateProfiles())
-	gas := contractcommon.GetGasAssetName()
-	gasBank := f.splitGasBank(t, 40)
+	runTemplateAMMAssetMatrix(t, f)
+}
 
-	for _, profile := range sortedProfiles(templateProfiles()) {
-		t.Run(profile.Name, func(t *testing.T) {
+func runTemplateAMMAssetMatrix(t *testing.T, f *templateFixture) {
+	t.Helper()
+	gas := contractcommon.GetGasAssetName()
+	// At most twelve outputs are consumed by any actor across six profiles.
+	gasBank := f.splitGasBank(t, 12)
+
+	for profileIndex, profile := range sortedProfiles(templateProfiles()) {
+		passed := t.Run(profile.Name, func(t *testing.T) {
 			assetOuts := f.splitProfile(t, f.A, f.assetAnchors[profile.Asset], profile,
 				[]string{"1000000", "220000", "500000", "10000", "8270000"},
 				[]int64{
@@ -414,7 +456,7 @@ func TestTemplateAMMAssetMatrix(t *testing.T) {
 			content, err := contractcommon.EncodeTemplateAMMContent(profile.Asset, "1000000", 100000, "100000000000")
 			require.NoError(t, err)
 			deployTx, contract := buildTemplateDeployFor(t, f.A,
-				contractcommon.TemplateAMM, content, f.A.Address, []byte("amm-"+profile.Name),
+				contractcommon.TemplateAMM, content, f.A.Address, []byte(fmt.Sprintf("AMM%05d", profileIndex)),
 				[]wire.OutPoint{assetOuts[0], gasBank.take(t, f.A)}, wire.TxOut{
 					Value: profileAssetCarrierValue(profile, "1000000") + 100000,
 					Assets: txAssets(
@@ -518,8 +560,170 @@ func TestTemplateAMMAssetMatrix(t *testing.T) {
 			requireZeroDecimalText(t, state.LPBalances[f.B.Address])
 			requirePositiveDecimalText(t, state.LPBalances[f.C.Address])
 		})
+		if !passed {
+			return
+		}
 	}
 	f.requireSynced(t)
+}
+
+func TestSDKTemplateContractSharedNetwork(t *testing.T) {
+	setupDone := e2ePhase(t, "template_contract_shared_network_setup")
+	cases := newTemplateContractSharedCases(t)
+	setupDone()
+	testCases := []struct {
+		name string
+		run  func(*testing.T, *templateFixture)
+	}{
+		{name: "TemplateLimitOrder", run: runTemplateLimitOrder},
+		{name: "TemplateLimitRefundBuy", run: runTemplateLimitRefundBuy},
+		{name: "TemplateAMMMultiLiquidity", run: runTemplateAMMMultiLiquidity},
+		{name: "TemplateExchangeGasForSatoshiAndClose", run: runTemplateExchangeGasForSatoshiAndClose},
+		{name: "TemplateAutopayPaysAndCloses", run: runTemplateAutopayCase},
+		{name: "TemplateLimitOrderAssetMatrix", run: runTemplateLimitOrderAssetMatrix},
+		{name: "TemplateAMMAssetMatrix", run: runTemplateAMMAssetMatrix},
+	}
+	for _, testCase := range testCases {
+		passed := t.Run(testCase.name, func(t *testing.T) {
+			f := cases[testCase.name]
+			before := templateNetworkCheckpoint(t, f)
+			testCase.run(t, f)
+			if t.Failed() {
+				return
+			}
+			after := templateNetworkCheckpoint(t, f)
+			require.Greater(t, after.height, before.height, "shared template case must advance the network")
+			require.NotEqual(t, before.hash, after.hash, "shared template case must change the canonical tip")
+			f.requireSynced(t)
+			t.Logf("template-shared-state: case=%s before_height=%d before_hash=%s after_height=%d after_hash=%s",
+				testCase.name, before.height, before.hash, after.height, after.hash)
+		})
+		if !passed {
+			t.Fatalf("stopped shared-network template group after %s failed; rerun only it with -run '^TestSDKTemplateContractSharedNetwork$/^%s$' or rerun the whole fresh group with -run '^TestSDKTemplateContractSharedNetwork$'",
+				testCase.name, testCase.name)
+		}
+	}
+}
+
+type templateNetworkState struct {
+	height int32
+	hash   chainhash.Hash
+}
+
+func templateNetworkCheckpoint(t *testing.T, f *templateFixture) templateNetworkState {
+	t.Helper()
+	hash, height, err := f.Network.Bootstrap.Client.GetBestBlock()
+	require.NoError(t, err)
+	require.NotNil(t, hash)
+	return templateNetworkState{height: height, hash: *hash}
+}
+
+func runTemplateAutopayCase(t *testing.T, f *templateFixture) {
+	t.Helper()
+	prepared, gasBank, feeOuts := prepareAutopaySignedFixture(t, f, *f.gasInput, "ordx:f:e2eautopay")
+	runTemplateAutopayPaysAndCloses(t, prepared, gasBank, feeOuts)
+}
+
+func newTemplateContractSharedCases(t *testing.T) map[string]*templateFixture {
+	t.Helper()
+	const (
+		limitOrder  = "TemplateLimitOrder"
+		refundBuy   = "TemplateLimitRefundBuy"
+		ammMulti    = "TemplateAMMMultiLiquidity"
+		exchange    = "TemplateExchangeGasForSatoshiAndClose"
+		autopay     = "TemplateAutopayPaysAndCloses"
+		limitMatrix = "TemplateLimitOrderAssetMatrix"
+		ammMatrix   = "TemplateAMMAssetMatrix"
+	)
+
+	profiles := sharedTemplateContractProfiles()
+	base := newTemplateFixtureWithProfilesAndArgsAndLockedValue(t, profiles, nil, nil, nil, 40000000)
+	caseNames := []string{limitOrder, refundBuy, ammMulti, exchange, autopay, limitMatrix, ammMatrix}
+	actors := make(map[string][6]*templateActor, len(caseNames))
+	cases := make(map[string]*templateFixture, len(caseNames))
+	for i, name := range caseNames {
+		var caseActors [6]*templateActor
+		for actorIndex := range caseActors {
+			keyIndex := uint32(100 + i*10 + actorIndex)
+			caseActors[actorIndex] = newTemplateActor(t, keyFromMnemonic(t, bootstrapMnemonic, keyIndex))
+		}
+		actors[name] = caseActors
+	}
+
+	gas := contractcommon.GetGasAssetName()
+	gasAmounts := []int64{600000, 600000, 1000000, 3900000, 1200000, 10800000, 21600000}
+	gasValues := []int64{100000, 100000, 100000, 100000, 100000, 500000, 1000000}
+	gasRecipients := make([]*templateActor, len(caseNames))
+	for i, name := range caseNames {
+		caseActors := actors[name]
+		gasRecipients[i] = caseActors[0]
+	}
+	gasSeeds := base.split(t, base.A, base.gasAnchor, gas, gasAmounts, gasValues, gasRecipients)
+	for i, name := range caseNames {
+		caseActors := actors[name]
+		fixture := *base
+		fixture.A, fixture.B, fixture.C = caseActors[0], caseActors[1], caseActors[2]
+		fixture.D, fixture.E, fixture.F = caseActors[3], caseActors[4], caseActors[5]
+		gasInput := gasSeeds[i]
+		fixture.gasInput = &gasInput
+		fixture.assetInputs = make(map[string]wire.OutPoint)
+		cases[name] = &fixture
+	}
+
+	for _, assetCase := range []struct {
+		name   string
+		asset  string
+		amount int64
+	}{
+		{name: limitOrder, asset: "ordx:f:e2elimit", amount: 1000},
+		{name: refundBuy, asset: "ordx:f:e2erefund", amount: 1000},
+		{name: ammMulti, asset: "ordx:f:e2eamm", amount: 100000},
+		{name: autopay, asset: "ordx:f:e2eautopay", amount: 1000},
+	} {
+		actor := actors[assetCase.name][0]
+		seed := base.split(t, base.A, base.assetAnchors[assetCase.asset], assetCase.asset,
+			[]int64{assetCase.amount}, []int64{100000}, []*templateActor{actor})
+		cases[assetCase.name].assetInputs[assetCase.asset] = seed[0]
+	}
+
+	limitProfileInputs := make(map[string]wire.OutPoint, len(templateProfiles()))
+	ammProfileInputs := make(map[string]wire.OutPoint, len(templateProfiles()))
+	// The later profile splits need a real native-fee reserve even for
+	// BindingSat=0 assets, whose carrier value is otherwise zero.
+	const matrixProfileFeeReserve = int64(1_000_000)
+	for _, profile := range sortedProfiles(templateProfiles()) {
+		carrier := profileAssetCarrierValue(profile, "10000000")
+		inputs := base.splitProfile(t, base.A, base.assetAnchors[profile.Asset], profile,
+			[]string{"10000000", "10000000"},
+			[]int64{carrier + matrixProfileFeeReserve, carrier + matrixProfileFeeReserve},
+			[]*templateActor{actors[limitMatrix][0], actors[ammMatrix][0]})
+		limitProfileInputs[profile.Asset] = inputs[0]
+		ammProfileInputs[profile.Asset] = inputs[1]
+	}
+	for asset, input := range limitProfileInputs {
+		cases[limitMatrix].assetInputs[asset] = input
+	}
+	for asset, input := range ammProfileInputs {
+		cases[ammMatrix].assetInputs[asset] = input
+	}
+
+	base.requireSynced(t)
+	return cases
+}
+
+func sharedTemplateContractProfiles() []templateAssetProfile {
+	profiles := sortedProfiles(templateProfiles())
+	for i := range profiles {
+		// Both asset-matrix roots need a private 10M source UTXO per asset.
+		profiles[i].Supply = "20000000"
+	}
+	profiles = append(profiles,
+		templateAssetProfile{Name: "template_limit_basic", Asset: "ordx:f:e2elimit", Supply: "1000"},
+		templateAssetProfile{Name: "template_refund_basic", Asset: "ordx:f:e2erefund", Supply: "1000"},
+		templateAssetProfile{Name: "template_amm_basic", Asset: "ordx:f:e2eamm", Supply: "100000"},
+		templateAssetProfile{Name: "template_autopay_fee", Asset: "ordx:f:e2eautopay", Supply: "1000"},
+	)
+	return profiles
 }
 
 type templateActor struct {
@@ -549,10 +753,26 @@ type templateFixture struct {
 	gasAnchor    *wire.MsgTx
 	assetAnchors map[string]*wire.MsgTx
 	profiles     map[string]templateAssetProfile
+	gasInput     *wire.OutPoint
+	assetInputs  map[string]wire.OutPoint
 }
 
 func newTemplateFixture(t *testing.T, assets map[string]int64) *templateFixture {
 	return newTemplateFixtureWithArgs(t, assets, nil, nil, nil)
+}
+
+func newTemplateFixtureWithGasSupply(t *testing.T, assets map[string]int64, gasSupply int64) *templateFixture {
+	t.Helper()
+	profiles := make([]templateAssetProfile, 0, len(assets))
+	for _, asset := range sortedAssetNames(assets) {
+		profiles = append(profiles, templateAssetProfile{
+			Name:      asset,
+			Asset:     asset,
+			Precision: 0,
+			Supply:    fmt.Sprintf("%d", assets[asset]),
+		})
+	}
+	return newTemplateFixtureWithProfilesAndArgsAndLockedValueAndGasSupply(t, profiles, nil, nil, nil, 20000000, gasSupply)
 }
 
 func newTemplateFixtureWithArgs(t *testing.T, assets map[string]int64, bootstrapArgs, coreArgs, minerArgs []string) *templateFixture {
@@ -574,15 +794,26 @@ func newTemplateFixtureWithProfiles(t *testing.T, profiles []templateAssetProfil
 }
 
 func newTemplateFixtureWithProfilesAndArgs(t *testing.T, profiles []templateAssetProfile, bootstrapArgs, coreArgs, minerArgs []string) *templateFixture {
+	return newTemplateFixtureWithProfilesAndArgsAndLockedValue(t, profiles, bootstrapArgs, coreArgs, minerArgs, 20000000)
+}
+
+func newTemplateFixtureWithProfilesAndArgsAndLockedValue(t *testing.T, profiles []templateAssetProfile, bootstrapArgs, coreArgs, minerArgs []string, lockedValue int64) *templateFixture {
+	return newTemplateFixtureWithProfilesAndArgsAndLockedValueAndGasSupply(
+		t, profiles, bootstrapArgs, coreArgs, minerArgs, lockedValue, 100000000)
+}
+
+func newTemplateFixtureWithProfilesAndArgsAndLockedValueAndGasSupply(t *testing.T, profiles []templateAssetProfile,
+	bootstrapArgs, coreArgs, minerArgs []string, lockedValue, gasSupply int64) *templateFixture {
 	t.Helper()
+	require.Positive(t, gasSupply)
 	oldEnableTesting := indexercommon.ENABLE_TESTING
 	indexercommon.ENABLE_TESTING = true
 	t.Cleanup(func() {
 		indexercommon.ENABLE_TESTING = oldEnableTesting
 	})
 
-	const lockedValue = int64(20_000_000)
 	gas := contractcommon.GetGasAssetName()
+	gasSupplyText := fmt.Sprintf("%d", gasSupply)
 	bootstrapKey := keyFromMnemonic(t, bootstrapMnemonic, 0)
 	coreKey := keyFromMnemonic(t, coreMnemonic, 0)
 	actorA := newTemplateActor(t, keyFromMnemonic(t, bootstrapMnemonic, 1))
@@ -602,7 +833,7 @@ func newTemplateFixtureWithProfilesAndArgs(t *testing.T, profiles []templateAsse
 		Utxo:  templateLockedOutPoint("gas", 0),
 		Value: lockedValue,
 		Assets: map[string]string{
-			gas: "100000000",
+			gas: gasSupplyText,
 		},
 	}}
 	profileMap := make(map[string]templateAssetProfile, len(profiles))
@@ -626,7 +857,7 @@ func newTemplateFixtureWithProfilesAndArgs(t *testing.T, profiles []templateAsse
 	network := newRealSatoshiNetWithArgs(t, fakeL1, bootstrapArgs, coreArgs, minerArgs)
 
 	gasAnchor := buildAnchorTx(t, templateLockedOutPoint("gas", 0), lockedValue,
-		txAsset(gas, 100000000), gas+"-100000000-0-0",
+		txAsset(gas, gasSupply), gas+"-"+gasSupplyText+"-0-0",
 		witnessScript, bootstrapKey, actorA.PkScript)
 	network.sendAndMine(t, gasAnchor, 1)
 
@@ -676,7 +907,13 @@ func (f *templateFixture) split(t *testing.T, owner *templateActor, tx *wire.Msg
 		outputs = append(outputs, wire.NewTxOut(values[i], txAsset(asset, amounts[i]), recipients[i].PkScript))
 	}
 	splitTx := wire.NewMsgTx(2)
-	splitTx.AddTxIn(&wire.TxIn{PreviousOutPoint: wire.OutPoint{Hash: tx.TxHash(), Index: 0}})
+	previous := wire.OutPoint{Hash: tx.TxHash(), Index: 0}
+	if tx == f.gasAnchor && f.gasInput != nil {
+		previous = *f.gasInput
+	} else if input, ok := f.assetInputs[asset]; ok {
+		previous = input
+	}
+	splitTx.AddTxIn(&wire.TxIn{PreviousOutPoint: previous})
 	for _, output := range outputs {
 		splitTx.AddTxOut(output)
 	}
@@ -696,7 +933,11 @@ func (f *templateFixture) splitProfile(t *testing.T, owner *templateActor, tx *w
 		outputs = append(outputs, wire.NewTxOut(values[i], txAssetProfile(t, profile, amounts[i]), recipients[i].PkScript))
 	}
 	splitTx := wire.NewMsgTx(2)
-	splitTx.AddTxIn(&wire.TxIn{PreviousOutPoint: wire.OutPoint{Hash: tx.TxHash(), Index: 0}})
+	previous := wire.OutPoint{Hash: tx.TxHash(), Index: 0}
+	if input, ok := f.assetInputs[profile.Asset]; ok {
+		previous = input
+	}
+	splitTx.AddTxIn(&wire.TxIn{PreviousOutPoint: previous})
 	for _, output := range outputs {
 		splitTx.AddTxOut(output)
 	}

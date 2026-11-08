@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/sat20-labs/sat20wallet/sdk/common"
+	"github.com/stretchr/testify/require"
 )
 
 func remoteActionRestartConfig() *common.Config {
@@ -34,7 +35,9 @@ func TestUnlockWalletRehydratesInitiatorRemoteActionSigningWallet(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	source.SwitchAccount(2)
+	prepareRemoteActionAccountSelection(t, source)
+	require.NoError(t, source.SwitchAccount(2))
+	require.Equal(t, uint32(2), source.GetWallet().GetWalletId().SubAccountId)
 	signer := source.GetWallet().Clone()
 	if signer == nil || signer.GetPaymentPubKey() == nil {
 		t.Fatal("derive source signer")
@@ -52,7 +55,7 @@ func TestUnlockWalletRehydratesInitiatorRemoteActionSigningWallet(t *testing.T) 
 		t.Fatal(err)
 	}
 	// The selected wallet intentionally differs from the persisted signer.
-	source.SwitchAccount(0)
+	require.NoError(t, source.SwitchAccount(0))
 	source.Close()
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
@@ -108,7 +111,9 @@ func TestUnlockWalletRemoteActionSignerMismatchFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	rootSigner := source.GetWallet().Clone()
-	source.SwitchAccount(2)
+	prepareRemoteActionAccountSelection(t, source)
+	require.NoError(t, source.SwitchAccount(2))
+	require.Equal(t, uint32(2), source.GetWallet().GetWalletId().SubAccountId)
 	accountSigner := source.GetWallet().Clone()
 	const reservationID = int64(9201)
 	resv := &RemoteActionPerformReservation{
@@ -189,4 +194,21 @@ func TestRestartDoesNotActivateClosedRemoteAction(t *testing.T) {
 	if _, ok := restarted.GetRemoteActionReservation(reservationID); ok {
 		t.Fatal("closed remote action was activated after restart")
 	}
+}
+
+func prepareRemoteActionAccountSelection(t *testing.T, manager *Manager) {
+	t.Helper()
+	remote := newRGB11MemoryDKVSHTTP()
+	configureRGB11DKVSTestManager(manager, remote)
+	nodeClient := newRGB11MessageNodeClient(remote)
+	manager.serverNode = NewNode(nodeClient, "message.test", SERVER_NODE, nodeClient.CoreNodePubKey(), nodeClient.CoreNodePubKey())
+	require.NoError(t, manager.InitializeAccountManagement("password"))
+	pkg, auth, secret := rereviewRecoveryPackage(t, manager)
+	defer zeroBytes(secret)
+	require.NoError(t, manager.ActivateAccountManagement(secret, "password", *auth, pkg.Envelope.Locator, "account://"+pkg.Envelope.Locator.PackageID))
+	client, err := manager.GetDKVSClient()
+	require.NoError(t, err)
+	require.NoError(t, manager.dkvs.ensureCurrentSubscription(client))
+	require.NoError(t, manager.SyncAccountManagementState(nil))
+	manager.accountBackgroundWG.Wait()
 }

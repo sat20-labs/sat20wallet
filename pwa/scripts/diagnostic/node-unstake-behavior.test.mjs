@@ -9,6 +9,9 @@ const require = createRequire(`${pwa}/package.json`)
 const { parse, compileScript } = require('@vue/compiler-sfc')
 const Vue = require('vue')
 const ts = require('typescript')
+const { createI18n } = require('vue-i18n')
+const zh = JSON.parse(readFileSync(`${pwa}/locales/zh.json`, 'utf8'))
+const i18n = createI18n({ legacy: false, locale: 'zh', fallbackLocale: false, messages: { zh } })
 const sourcePath = `${pwa}/entrypoints/popup/pages/wallet/settings/node.vue`
 const source = readFileSync(sourcePath, 'utf8')
 const compiled = compileScript(parse(source).descriptor, { id: 'node-unstake-behavior-test' }).content
@@ -47,6 +50,7 @@ function fixture({ minerInfo = { data: { ServerNode: 'core' } }, pending = false
     '@/components/ui/accordion': { Accordion: generic, AccordionItem: generic, AccordionTrigger: generic, AccordionContent: generic },
     '@/components/ui/dialog': { Dialog: generic, DialogContent: generic, DialogHeader: generic, DialogTitle: generic, DialogDescription: generic, DialogFooter: generic },
     '@/store/wallet': { useWalletStore: () => store },
+    'vue-i18n': { useI18n: () => i18n.global },
     pinia: { storeToRefs: Vue.toRefs },
     '@/utils': { hideAddress: x => x, generateMempoolUrl: () => '' },
     '@/lib/nodeStakeStorage': { nodeStakeStorage: {

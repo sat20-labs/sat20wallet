@@ -1,3 +1,4 @@
+import { createI18n } from 'vue-i18n'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
@@ -421,6 +422,8 @@ const updateWorker = (state) => {
 }
 
 const loadUpdater = async (registration) => {
+  const en = JSON.parse(await readFile(new URL('../../locales/en.json', import.meta.url), 'utf8'))
+  const i18n = createI18n({ legacy: false, locale: 'en', messages: { en } })
   const source = await readFile(new URL('../../composables/usePwaUpdate.ts', import.meta.url), 'utf8')
   const { outputText } = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -440,6 +443,7 @@ const loadUpdater = async (registration) => {
     exports,
     require: (name) => {
       if (name === 'vue') return { ref: (value) => ({ value }), computed: (get) => ({ get value() { return get() } }) }
+      if (name === 'vue-i18n') return { useI18n: () => i18n.global }
       if (name === '@/utils/pwaVersionPolicy') return { versionPolicy, policyRevision }
       if (name === '@/components/ui/toast-new/use-toast') return { useToast: () => ({ toast: () => {} }) }
       throw new Error(`Unexpected import: ${name}`)

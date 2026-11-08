@@ -2,17 +2,17 @@
   <Dialog :open="isOpen" @update:open="isOpen = $event">
     <DialogContent class="max-h-[90vh] w-[380px] overflow-y-auto rounded-lg bg-black">
       <DialogHeader>
-        <DialogTitle>{{ $t('rgb11Transfer.sendTitle') }}</DialogTitle>
+        <DialogTitle>{{ $t(props.inflation ? 'rgb11Transfer.inflate' : 'rgb11Transfer.sendTitle') }}</DialogTitle>
         <DialogDescription class="break-all font-mono text-xs">
           {{ assetContractID }}
         </DialogDescription>
       </DialogHeader>
 
       <div class="space-y-4">
-        <p v-if="!directAddressAvailable" class="rounded-md border border-zinc-700 bg-zinc-900 p-3 text-xs text-zinc-400">
+        <p v-if="!props.inflation && !directAddressAvailable" class="rounded-md border border-zinc-700 bg-zinc-900 p-3 text-xs text-zinc-400">
           {{ $t('rgb11Transfer.directRootOnly') }}
         </p>
-        <div class="grid grid-cols-2 gap-2 rounded-lg bg-zinc-900 p-1">
+        <div v-if="!props.inflation" class="grid grid-cols-2 gap-2 rounded-lg bg-zinc-900 p-1">
           <button
             type="button"
             class="rounded-md px-3 py-2 text-xs"
@@ -66,11 +66,14 @@
 
           <Button
             class="w-full"
-            :disabled="loading || !receiverAddress || !validRawAmount"
+            :disabled="loading || (!transferId && !rgb11WriteAllowed) || !receiverAddress || !validRawAmount"
             @click="sendByAddress"
           >
             {{ loading ? $t('rgb11Transfer.broadcasting') : $t('rgb11Transfer.sendByAddress') }}
           </Button>
+          <p v-if="!transferId && !rgb11WriteAllowed" class="text-xs text-amber-400" role="status">
+            {{ $t('accountManagement.readiness.moduleBlocked') }}
+          </p>
 
           <p v-if="temporaryDelivery" class="text-xs text-amber-500">
             {{ $t('rgb11Transfer.temporaryTtlWarning') }}
@@ -78,7 +81,7 @@
         </template>
 
         <template v-else>
-          <div class="space-y-2">
+          <div v-if="!props.inflation" class="space-y-2">
             <Label>{{ $t('rgb11Transfer.amountRaw') }}</Label>
             <input
               :disabled="loading || !!transferId"
@@ -94,12 +97,13 @@
           <div class="space-y-2">
             <Label>{{ $t('rgb11Transfer.invoice') }}</Label>
             <Textarea :disabled="loading || !!transferId" v-model="invoice" spellcheck="false" class="min-h-28 bg-zinc-900 font-mono text-xs" />
-            <p class="text-xs text-zinc-500">{{ $t('rgb11Transfer.batchHint') }}</p>
+            <p v-if="!props.inflation" class="text-xs text-zinc-500">{{ $t('rgb11Transfer.batchHint') }}</p>
           </div>
 
+          <p v-if="!pendingPrepared && !rgb11WriteAllowed" class="text-xs text-amber-400" role="status">{{ $t('accountManagement.readiness.moduleBlocked') }}</p>
           <Button
             class="w-full"
-            :disabled="loading || !invoice.trim() || !traditionalAmountValid || !!transferId"
+            :disabled="loading || (!pendingPrepared && !rgb11WriteAllowed) || !invoice.trim() || !traditionalAmountValid || !!transferId"
             @click="prepareTraditional"
           >
             {{ loading ? $t('rgb11Transfer.preparing') : $t('rgb11Transfer.prepare') }}
@@ -166,6 +170,7 @@ import { updateOperationLog } from '@/utils/operationLog'
 import { matchesRGB11Summary, rgb11Schema, rgb11ResumedPackageSetMatches } from '@/utils/rgb11Oob'
 import { useGlobalStore } from '@/store/global'
 import { useWalletStore } from '@/store'
+import { useAccountManagementStore } from '@/store/accountManagement'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
@@ -179,7 +184,7 @@ type RGB11Asset = {
   contract_id?: string
 }
 
-const props = defineProps<{ asset: RGB11Asset | null; resumeTransferId?: string }>()
+const props = defineProps<{ asset: RGB11Asset | null; resumeTransferId?: string; inflation?: boolean }>()
 const emit = defineEmits<{ (e: 'completed'): void }>()
 const isOpen = defineModel('open', { type: Boolean })
 const transferMode = ref<'address' | 'invoice'>('address')
@@ -205,6 +210,13 @@ const proxyTransport = ref(false)
 const proxyBroadcasted = ref(false)
 const { t } = useI18n()
 const walletStore = useWalletStore()
+const accountManagementState = useAccountManagementStore()
+const { rgb11WriteAllowed } = storeToRefs(accountManagementState)
+const displayOperationError = (error: any, fallbackKey: string) => {
+  const quotaKey = accountManagementState.quotaMessageKeyForCode(error?.code)
+  if (quotaKey) return [error?.message, t(quotaKey)].filter(Boolean).join(' ')
+  return error?.message || t(fallbackKey)
+}
 const scopeKey = computed(() => JSON.stringify([globalStore.env, walletStore.network, walletStore.rootAccountId,
   walletStore.walletId, walletStore.accountIndex, assetContractID.value]))
 const allRecipientsConfirmed = computed(() => batchItems.value.length > 0 && batchItems.value.every((item) =>
@@ -219,7 +231,7 @@ const directAddressAvailable = computed(() => (
 ))
 
 watch([isOpen, directAddressAvailable], ([open, available]) => {
-  if (open && !available && transferMode.value === 'address') {
+  if (open && (props.inflation || !available) && transferMode.value === 'address') {
     transferMode.value = 'invoice'
   }
 }, { immediate: true })
@@ -236,7 +248,7 @@ const assetName = computed(() => {
 
 const validRawAmount = computed(() => /^[1-9]\d*$/.test(amountRaw.value))
 const invoiceCount = computed(() => invoice.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean).length)
-const traditionalAmountValid = computed(() => invoiceCount.value > 1 || validRawAmount.value)
+const traditionalAmountValid = computed(() => props.inflation ? invoiceCount.value === 1 : invoiceCount.value > 1 || validRawAmount.value)
 
 const loadCarrierWarning = async () => {
   const [, result] = await rgb11Address.carrierWarning()
@@ -244,6 +256,10 @@ const loadCarrierWarning = async () => {
 }
 
 const sendByAddress = async () => {
+  if (!transferId.value && !rgb11WriteAllowed.value) {
+    message.value = t('accountManagement.readiness.moduleBlocked')
+    return
+  }
   loading.value = true
   message.value = ''
   success.value = false
@@ -254,8 +270,8 @@ const sendByAddress = async () => {
     operation = await beginNamedPwaOperation({
       category: 'rgb11',
       action: 'rgb11_send_address',
-      title: 'Send RGB asset',
-      summary: 'Sending an RGB asset to a wallet address',
+      title: t('walletComponents.sendRgb'),
+      summary: t('walletComponents.sendRgbSummary'),
       parameters: {
         contract_id: assetContractID.value,
         asset: assetName.value,
@@ -263,7 +279,7 @@ const sendByAddress = async () => {
         destination: receiverAddress.value,
         fee_rate: String(Number(btcFeeRate.value || 1)),
       },
-      successMessage: 'RGB address transfer broadcast',
+      successMessage: t('walletComponents.rgbAddressBroadcast'),
     })
     checkSession()
     let id = transferId.value
@@ -292,7 +308,7 @@ const sendByAddress = async () => {
     if (operation) {
       await updateOperationLog(operation.id, {
         status: 'running',
-        message: 'RGB transfer prepared',
+        message: t('walletComponents.rgbPrepared'),
         details: { transfer_id: id },
       })
     }
@@ -308,7 +324,7 @@ const sendByAddress = async () => {
 	  if (operation) {
 		await updateOperationLog(operation.id, {
 		  status: 'running',
-		  message: 'RGB address consignment delivered; waiting for recipient ACK',
+		  message: t('walletComponents.addressAck'),
 		  details: { transfer_id: id },
 		})
 	  }
@@ -324,33 +340,39 @@ const sendByAddress = async () => {
   } catch (error: any) {
     const sendError = error instanceof Error ? error : new Error(error?.message || t('rgb11Transfer.broadcastFailed'))
     await finishPwaOperation(operation, sendError)
-    message.value = sendError.message
+    message.value = displayOperationError(sendError, 'rgb11Transfer.broadcastFailed')
   } finally {
     loading.value = false
   }
 }
 
 const prepareTraditional = async () => {
+  if (!pendingPrepared.value && !rgb11WriteAllowed.value) {
+    message.value = t('accountManagement.readiness.moduleBlocked')
+    return
+  }
   const scope = scopeKey.value
   loading.value = true
   message.value = ''
   success.value = false
   const operation = await beginNamedPwaOperation({
     category: 'rgb11',
-    action: 'rgb11_prepare_send',
-    title: 'Prepare RGB transfer',
-    summary: 'Preparing an RGB transfer from the send dialog',
+    action: props.inflation ? 'rgb11_prepare_inflation' : 'rgb11_prepare_send',
+    title: props.inflation ? t('walletComponents.prepareInflation') : t('walletComponents.prepareRgb'),
+    summary: props.inflation ? t('walletComponents.inflationSummary') : t('walletComponents.prepareSummary'),
     parameters: {
       contract_id: assetContractID.value,
       amount_raw: amountRaw.value,
       invoice_count: String(invoiceCount.value),
       fee_rate: String(Number(btcFeeRate.value || 1)),
     },
-    successMessage: 'RGB transfer prepared',
+    successMessage: t('walletComponents.rgbPrepared'),
   })
   if (!pendingPrepared.value) {
     const invoices = invoice.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean)
-    const [err, result] = await walletManager.prepareRGB11Transfer({
+    const [err, result] = props.inflation ? await walletManager.prepareRGB11Inflation({
+      invoice: invoices[0], fee_rate: Number(btcFeeRate.value || 1), min_confirmations: 1,
+    }) : await walletManager.prepareRGB11Transfer({
       ...(invoices.length === 1 ? { invoice: invoices[0] } : { invoices }),
       ...(invoices.length === 1 ? {
         contract_id: assetContractID.value,
@@ -363,7 +385,7 @@ const prepareTraditional = async () => {
       loading.value = false
       const prepareError = err || new Error(t('rgb11Transfer.prepareFailed'))
       await finishPwaOperation(operation, prepareError)
-      message.value = prepareError.message
+      message.value = displayOperationError(prepareError, 'rgb11Transfer.prepareFailed')
       return
     }
     pendingPrepared.value = JSON.parse(result.transfer)
@@ -372,6 +394,20 @@ const prepareTraditional = async () => {
     const prepared = pendingPrepared.value
     const states = Array.isArray(prepared?.states) && prepared.states.length ? prepared.states : [prepared?.state]
     if (!states.length || states.some((state: any) => !state?.transfer_id)) throw new Error(t('rgb11Transfer.prepareFailed'))
+    if (props.inflation) {
+      const name = states[0]?.asset?.Name || states[0]?.asset?.name || {}
+      const actual = `${name.Protocol || name.protocol || ''}:${name.Type || name.type || ''}:${name.Ticker || name.ticker || ''}`
+      if (states.length !== 1 || actual !== assetName.value) {
+        // Only a still-prepared OOB intent has a safe local cancellation API.
+        // Keep other prepared journals available for recovery instead of
+        // discarding their transfer ID after a failed cancellation attempt.
+        if (states.length === 1 && states[0]?.transport_mode === 'out-of-band') {
+          const [cancelError] = await walletManager.cancelRGB11OutOfBandTransfer(String(states[0].transfer_id))
+          if (!cancelError) pendingPrepared.value = null
+        }
+        throw new Error(t('rgb11Transfer.scopeChanged'))
+      }
+    }
     const items: BatchItem[] = []
     for (const state of states) {
       const transportMode = state.transport_mode || ''
@@ -380,7 +416,7 @@ const prepareTraditional = async () => {
       } else if (transportMode === 'out-of-band') {
         items.push({ transferId: state.transfer_id, transportMode, state, summary: '', matched: '', confirmed: false })
       } else {
-        throw new Error(`unsupported RGB invoice transport: ${transportMode || 'missing'}`)
+        throw new Error(t('walletComponents.unsupportedTransport', { transport: transportMode || t('walletComponents.missingTransport') }))
       }
     }
     if (scope !== scopeKey.value) throw new Error(t('rgb11Transfer.scopeChanged'))
@@ -399,7 +435,7 @@ const prepareTraditional = async () => {
     if (operation) {
       await updateOperationLog(operation.id, {
         status: 'running',
-        message: 'RGB transfer prepared',
+        message: t('walletComponents.rgbPrepared'),
         details: {
           transfer_id: transferId.value,
           transport_mode: items[0].transportMode,
@@ -428,7 +464,7 @@ const prepareTraditional = async () => {
   } catch (error: any) {
     const prepareError = error instanceof Error ? error : new Error(error?.message || t('rgb11Transfer.prepareFailed'))
     await finishPwaOperation(operation, prepareError)
-    message.value = prepareError.message
+    message.value = displayOperationError(prepareError, 'rgb11Transfer.prepareFailed')
   } finally {
     loading.value = false
   }
@@ -441,13 +477,13 @@ const deliverProxyTransfer = async (parentOperation: PwaOperationContext | null 
   const operation = parentOperation || await beginNamedPwaOperation({
     category: 'rgb11',
     action: 'rgb11_retry_proxy_delivery',
-    title: 'Retry RGB proxy delivery',
-    summary: 'Retrying delivery and broadcast for an RGB proxy transfer',
+    title: t('walletComponents.retryProxy'),
+    summary: t('walletComponents.retryProxySummary'),
     parameters: {
       transfer_id: transferId.value,
       transfer_count: String(batchItems.value.length),
     },
-    successMessage: 'RGB proxy transfer delivered and broadcast',
+    successMessage: t('walletComponents.proxyBroadcast'),
   })
   try {
     const [proxyErr, proxyResult] = await walletManager.deliverAndBroadcastRGB11ProxyTransfer(
@@ -465,7 +501,7 @@ const deliverProxyTransfer = async (parentOperation: PwaOperationContext | null 
 	  if (operation) {
 		await updateOperationLog(operation.id, {
 		  status: 'running',
-		  message: 'RGB proxy consignment delivered; waiting for recipient ACK',
+		  message: t('walletComponents.proxyAck'),
 		  details: { transfer_id: transferId.value },
 		})
 	  }
@@ -478,7 +514,7 @@ const deliverProxyTransfer = async (parentOperation: PwaOperationContext | null 
     if (operation) {
       await updateOperationLog(operation.id, {
         status: 'running',
-        message: 'RGB proxy consignment delivered; transaction broadcast',
+        message: t('walletComponents.proxyDelivered'),
         txid: proxyResult.txid,
         details: { txid: proxyResult.txid },
       })
@@ -487,7 +523,7 @@ const deliverProxyTransfer = async (parentOperation: PwaOperationContext | null 
   } catch (error: any) {
     const deliveryError = error instanceof Error ? error : new Error(error?.message || t('rgb11Transfer.broadcastFailed'))
     await finishPwaOperation(operation, deliveryError)
-    message.value = deliveryError.message
+    message.value = displayOperationError(deliveryError, 'rgb11Transfer.broadcastFailed')
   } finally {
     loading.value = false
   }
@@ -525,7 +561,7 @@ const checkProxyAck = async () => {
     await refreshRGB11State()
     emit('completed')
   } catch (error: any) {
-    message.value = error?.message || t('rgb11Transfer.fetchAckFailed')
+    message.value = displayOperationError(error, 'rgb11Transfer.fetchAckFailed')
   } finally {
     loading.value = false
   }
@@ -581,7 +617,7 @@ const resumeExistingTransfer = async (id: string) => {
     pendingPrepared.value = null
     success.value = true
     message.value = t('rgb11Transfer.preparedOutOfBand')
-  } catch (error: any) { message.value = error?.message || t('rgb11Transfer.taskResumeFailed') }
+  } catch (error: any) { message.value = displayOperationError(error, 'rgb11Transfer.taskResumeFailed') }
   finally { loading.value = false }
 }
 
@@ -589,7 +625,7 @@ const verifyRecipientSummary = async (item: BatchItem) => {
   const input = item.summary
   item.matched = ''
   item.confirmed = false
-  const matched = await matchesRGB11Summary(input, item.state, assetContractID.value, schemaID.value, armoredConsignment.value)
+  const matched = await matchesRGB11Summary(input, item.state, assetContractID.value, schemaID.value)
   if (input !== item.summary || preparedScope.value !== scopeKey.value) return
   if (matched) item.matched = input
   else { success.value = false; message.value = t('rgb11Transfer.summaryMismatch') }
@@ -602,21 +638,21 @@ const broadcastTraditional = async () => {
   const operation = await beginNamedPwaOperation({
     category: 'rgb11',
     action: 'rgb11_broadcast_out_of_band',
-    title: 'Broadcast RGB transfer',
-    summary: 'Broadcasting a prepared out-of-band RGB transfer',
+    title: t('walletComponents.broadcastRgb'),
+    summary: t('walletComponents.broadcastRgbSummary'),
     parameters: {
       transfer_id: transferId.value,
       transfer_count: String(batchItems.value.length),
     },
-    successMessage: 'RGB transfer transaction broadcast',
+    successMessage: t('walletComponents.rgbBroadcast'),
   })
   try {
-    if (!outOfBand.value) throw new Error('prepared transfer is not out-of-band')
+    if (!outOfBand.value) throw new Error(t('walletComponents.notOutOfBand'))
     if (preparedScope.value !== scopeKey.value || walletStore.locked || walletStore.isSwitchingWallet ||
         walletStore.isSwitchingAccount || walletStore.isSwitchingNetwork) throw new Error(t('rgb11Transfer.scopeChanged'))
     if (!allRecipientsConfirmed.value) throw new Error(t('rgb11Transfer.summaryMismatch'))
     for (const item of batchItems.value) {
-      if (!await matchesRGB11Summary(item.summary, item.state, assetContractID.value, schemaID.value, armoredConsignment.value)) throw new Error(t('rgb11Transfer.summaryMismatch'))
+      if (!await matchesRGB11Summary(item.summary, item.state, assetContractID.value, schemaID.value)) throw new Error(t('rgb11Transfer.summaryMismatch'))
     }
     if (preparedScope.value !== scopeKey.value || !allRecipientsConfirmed.value || walletStore.locked) throw new Error(t('rgb11Transfer.scopeChanged'))
     const [err, result] = await walletManager.broadcastRGB11OutOfBand(
@@ -628,7 +664,7 @@ const broadcastTraditional = async () => {
   } catch (error: any) {
     const broadcastError = error instanceof Error ? error : new Error(error?.message || t('rgb11Transfer.broadcastFailed'))
     await finishPwaOperation(operation, broadcastError)
-    message.value = broadcastError.message
+    message.value = displayOperationError(broadcastError, 'rgb11Transfer.broadcastFailed')
   } finally {
     loading.value = false
   }

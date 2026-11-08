@@ -451,13 +451,13 @@ func (p *Manager) retryPeerNativeObservationLocked(resv *ClosingReservation) err
 // with the server/bootstrap signer; its completed package must then be handed
 // to HandleNativeForceCloseSweep before the first broadcast.
 func (p *Manager) RetryNativeForceClose(resv *ClosingReservation) (bool, error) {
-	if !nativeForceClose(resv) {
-		return false, nil
-	}
 	// This entrypoint is also called directly by peer-close observation. Route
 	// the explicit owner before taking locks, just as the ordinary monitor does.
 	if handled, err := p.retryClosedWithdrawalChild(resv); handled {
 		return true, err
+	}
+	if !nativeForceClose(resv) {
+		return false, nil
 	}
 	resv.Lock()
 	defer resv.Unlock()

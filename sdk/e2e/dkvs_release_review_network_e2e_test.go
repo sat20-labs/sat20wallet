@@ -3,6 +3,7 @@ package e2e
 import (
 	"testing"
 
+	"github.com/sat20-labs/sat20wallet/sdk/wallet"
 	dkvs "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	"github.com/stretchr/testify/require"
 )
@@ -11,6 +12,12 @@ import (
 // ownership are fixtures. Peers are read-only from the wallet's point of view.
 func TestSDKDKVSReleaseReviewNetwork(t *testing.T) {
 	f, owner, successor, payment := sdkDKVSReviewPaidFixture(t)
+	runSDKDKVSReleaseReviewNetwork(t, f, owner, successor, payment)
+}
+
+func runSDKDKVSReleaseReviewNetwork(t *testing.T, f *templateFixture, owner, successor *dkvsKeyPathActor,
+	payment wallet.DKVSAutopayOptions) {
+	t.Helper()
 	peer := dkvsClientForNode(t, f.Network.Bootstrap)
 	core := dkvsClientForNode(t, f.Network.Core)
 
@@ -80,7 +87,9 @@ func TestSDKDKVSReleaseReviewNetwork(t *testing.T) {
 		requireDKVSValue(t, f.Network.Bootstrap, x, updatedX.Value)
 		requireDKVSValue(t, f.Network.Bootstrap, y, []byte("old-owner-value"))
 		for _, r := range resigned {
-			if r.Key == y { sdkDKVSReviewUnchanged(t, peer, r) }
+			if r.Key == y {
+				sdkDKVSReviewUnchanged(t, peer, r)
+			}
 		}
 	})
 }

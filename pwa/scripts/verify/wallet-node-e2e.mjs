@@ -37,6 +37,11 @@ export async function runPwaNodeCases(t, fixture) {
   const readLocalAction = async (page, reservationID) => page.evaluate(async id => {
     const [error, response] = await (await import('/utils/stp.ts')).default.allReservations()
     if (error) throw error
+    if (!Array.isArray(response?.reservations)) {
+      const { snapshotWasmRuntimeDiagnostics } = await import('/utils/wasmRuntimeDiagnostics.ts')
+      const steps = snapshotWasmRuntimeDiagnostics().slice(-8)
+      throw new Error(`allReservations missing list: response=${typeof response}; keys=${Object.keys(response || {}).join(',')}; ready=${document.readyState}; wasm=${JSON.stringify(steps)}`)
+    }
     const item = response.reservations.find(entry => String(entry.reservation_id) === String(id))
     if (!item?.json) return null
     return { outerStatus: item.status, action: JSON.parse(item.json) }

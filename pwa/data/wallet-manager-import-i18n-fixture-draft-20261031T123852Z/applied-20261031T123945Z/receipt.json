@@ -1,0 +1,15 @@
+{
+  "status": "approved one-line fixture applied; ready for Luna2 single-file run",
+  "source": "/Users/yingfeng/github/sat20wallet/pwa/scripts/diagnostic/wallet-manager-import.test.mjs",
+  "source_sha256": "12f91bf3c5b4aaaff0b70ac01d3d131ca36a9f9e745a5ef136caf4a7f2a9d908",
+  "patch_sha256": "4f281554aa692dd9b2b3884da1b04366b884ebfee303aa93d99dacfaa73d8aa6",
+  "tests_executed": false,
+  "product_or_assertions_modified": false,
+  "cwd": "/Users/yingfeng/github/sat20wallet/pwa",
+  "validation_command": [
+    "node",
+    "--test",
+    "scripts/diagnostic/wallet-manager-import.test.mjs"
+  ],
+  "expected_test_count": 5
+}

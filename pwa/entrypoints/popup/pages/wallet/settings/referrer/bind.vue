@@ -9,14 +9,9 @@
       <!-- 显示已绑定的推荐人 -->
       <div v-if="localBoundReferrer" class="mb-4">
         <Alert variant="default">
-          <AlertTitle>已绑定推荐人</AlertTitle>
+          <AlertTitle>{{ t('settingsUi.boundReferrer') }}</AlertTitle>
           <AlertDescription>
-            您已绑定推荐人：<span class="font-medium text-green-400">{{ localBoundReferrer }}</span>
-            <div class="mt-2">
-              <Button variant="outline" size="sm" @click="handleUnbind" :loading="isUnbinding">
-                解除绑定
-              </Button>
-            </div>
+            {{ t('settingsUi.boundReferrerLabel') }}<span class="font-medium text-green-400">{{ localBoundReferrer }}</span>
           </AlertDescription>
         </Alert>
       </div>
@@ -24,29 +19,29 @@
       <div class="flex flex-col gap-4">
         <div class="grid w-full items-center gap-1.5">
           <Label for="referrerName">{{ $t('referrerManagement.referrerName') }}</Label>
-          <Input id="referrerName" v-model="referrerName" :placeholder="$t('referrerManagement.referrerNamePlaceholder')" :disabled="!!localBoundReferrer" />
+          <Input id="referrerName" v-model="referrerName" :placeholder="$t('referrerManagement.referrerNamePlaceholder')" :disabled="isLoading || !bindingKnown || !!localBoundReferrer" />
         </div>
         <!-- <div class="grid w-full items-center gap-1.5">
           <Label for="serverPubKey">{{ $t('referrerManagement.serverPubKey') }}</Label>
           <Input id="serverPubKey" v-model="serverPubKey" :placeholder="$t('referrerManagement.serverPubKeyPlaceholder')" />
         </div> -->
-        <Button aria-label="Bind Referrer" @click="onBind" :loading="isLoading" :disabled="!!localBoundReferrer">
-          {{ localBoundReferrer ? '已绑定' : '绑定推荐人' }}
+        <Button :aria-label="t('settingsUi.bindReferrer')" @click="onBind" :loading="isLoading" :disabled="isLoading || !bindingKnown || !!localBoundReferrer">
+          {{ localBoundReferrer ? t('settingsUi.alreadyBound') : t('settingsUi.bindReferrer') }}
         </Button>
       </div>
       <div v-if="resultMsg" class="mt-4">
         <Alert :variant="resultSuccess ? 'default' : 'destructive'">
-          <AlertTitle>{{ resultSuccess ? $t('referrerManagement.BindSuccess') :
+          <AlertTitle>{{ resultSuccess ? $t(resultTxId ? 'referrerManagement.BindSuccess' : 'common.success') :
             $t('referrerManagement.BindFailure') }}</AlertTitle>
           <AlertDescription class="break-all">
             <div v-if="resultSuccess && resultTxId" class="space-y-2">
-              <div>绑定成功！</div>
+              <div>{{ t('settingsUi.bindSuccess') }}</div>
               <div class="flex items-center gap-2">
-                <span class="text-sm">交易ID:</span>
+                <span class="text-sm">{{ t('settingsUi.transactionId') }}</span>
                 <button
                   @click="handleMempoolClick(resultTxId)"
                   class="text-primary hover:text-primary/80 underline text-left"
-                  :title="`查看交易 ${resultTxId}`"
+                  :title="t('settingsUi.viewTransaction', { txid: resultTxId })"
                 >
                   {{ shortenTxId(resultTxId) }}
                 </button>
@@ -89,7 +84,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useI18n } from 'vue-i18n'
 import sat20 from '@/utils/sat20'
@@ -105,11 +100,11 @@ import { useWalletStore } from '@/store/wallet'
 import { useReferrerManager } from '@/composables/useReferrerManager'
 import { getConfig } from '@/config/wasm'
 import { openMempoolLink } from '@/utils/browser'
+import satnetApi from '@/apis/satnet'
 
 
 const { t } = useI18n()
 const isLoading = ref(false)
-const isUnbinding = ref(false)
 const showConfirm = ref(false)
 const resultMsg = ref('')
 const resultSuccess = ref(false)
@@ -117,12 +112,14 @@ const resultTxId = ref('')
 const referrerName = ref('')
 const serverPubKey = ref('')
 const localBoundReferrer = ref<string | null>(null)
+const bindingKnown = ref(false)
 
 const globalStore = useGlobalStore()
 const walletStore = useWalletStore()
 const { env } = storeToRefs(globalStore)
 const { network, address } = storeToRefs(walletStore)
-const { getLocalBoundReferrer, addLocalBoundReferrer, removeLocalBoundReferrer, cacheBoundReferrerTxId, removeBoundReferrerTxId, getLocalBoundReferrerTxId } = useReferrerManager()
+const statusContext = () => [env.value, network.value, address.value].join('|')
+const { getLocalBoundReferrer, addLocalBoundReferrer, cacheBoundReferrerTxId, getLocalBoundReferrerTxId } = useReferrerManager()
 
 // 获取配置中的第一个Peer的公钥
 const config = getConfig(env.value, network.value)
@@ -157,32 +154,43 @@ async function handleMempoolClick(txId: string) {
 
 // 加载本地绑定的推荐人
 async function loadLocalBoundReferrer() {
+  const context = statusContext()
+  bindingKnown.value = false
   if (!address.value) return
-
+  isLoading.value = true
   try {
     const boundReferrer = await getLocalBoundReferrer(address.value)
     const boundReferrerTxId = await getLocalBoundReferrerTxId(address.value)
 
-    // 只有当本地有绑定推荐人且有对应的txId时，才认为绑定有效
+    if (context !== statusContext()) return false
+    // A pending local binding also prevents a duplicate submission.
     if (boundReferrer && boundReferrerTxId) {
       localBoundReferrer.value = boundReferrer
-      console.log('本地绑定的推荐人:', boundReferrer)
-    } else if (boundReferrer && !boundReferrerTxId) {
-      // 如果本地有绑定推荐人但没有txId，说明绑定无效，清除本地缓存
-      console.log('本地绑定推荐人无效（无txId），清除缓存:', boundReferrer)
-      await removeLocalBoundReferrer(address.value)
-      await removeBoundReferrerTxId(address.value)
-      localBoundReferrer.value = null
     } else {
-      localBoundReferrer.value = null
+      const response = await satnetApi.getReferrerByAddress({ address: address.value, network: network.value })
+      if (context !== statusContext()) return false
+      if (response?.code === 0 && typeof response.referrer?.Name === 'string' && response.referrer.Name.trim()) {
+        localBoundReferrer.value = response.referrer.Name
+      } else if (response?.code === -1 && response.msg === 'key not found') {
+        localBoundReferrer.value = null
+      } else {
+        throw new Error(t('referrerManagement.bindingLookupFailed'))
+      }
     }
+    bindingKnown.value = true
+    return true
   } catch (error) {
     console.error('加载本地绑定推荐人失败:', error)
-    localBoundReferrer.value = null
+    resultMsg.value = t('referrerManagement.bindingLookupFailed')
+    resultSuccess.value = false
+    return false
+  } finally {
+    if (context === statusContext()) isLoading.value = false
   }
 }
 
 function onBind() {
+  if (!bindingKnown.value || isLoading.value) return
   if (localBoundReferrer.value) {
     resultMsg.value = t('referrerManagement.cannotRebind')
     resultSuccess.value = false
@@ -190,7 +198,7 @@ function onBind() {
   }
 
   if (!referrerName.value || !serverPubKey.value) {
-    resultMsg.value = '请填写完整信息'
+    resultMsg.value = t('settingsUi.completeInfo')
     resultSuccess.value = false
     return
   }
@@ -198,6 +206,7 @@ function onBind() {
 }
 
 async function confirmBind() {
+  if (!bindingKnown.value || localBoundReferrer.value || isLoading.value) return
   isLoading.value = true
   resultMsg.value = ''
   resultTxId.value = ''
@@ -225,37 +234,17 @@ async function confirmBind() {
       serverPubKey.value = ''
     }
   } catch (e: any) {
-    resultMsg.value = e.message || '未知错误'
+    resultMsg.value = e.message || t('settingsUi.unknownError')
     resultSuccess.value = false
   } finally {
     isLoading.value = false
   }
 }
 
-async function handleUnbind() {
-  isUnbinding.value = true
-  resultMsg.value = ''
-  try {
-    if (!address.value) {
-      resultMsg.value = '钱包地址不存在'
-      return
-    }
-
-    // 只清除本地记录，不调用后端API
-    await removeLocalBoundReferrer(address.value)
-    localBoundReferrer.value = null
-    resultMsg.value = t('referrerManagement.clearLocalRecord')
-    resultSuccess.value = true
-
-  } catch (e: any) {
-    resultMsg.value = t('referrerManagement.clearLocalRecordFailed')
-    resultSuccess.value = false
-  } finally {
-    isUnbinding.value = false
-  }
-}
-
-onMounted(() => {
+watch([address, network, env], () => {
+  showConfirm.value = false
+  localBoundReferrer.value = null
+  bindingKnown.value = false
   loadLocalBoundReferrer()
-})
+}, { immediate: true })
 </script>

@@ -1,29 +1,29 @@
 <template>
-  <LayoutSecond title="Public Key">
+  <LayoutSecond :title="t('settingsUi.publicKeyTitle')">
     <div class="max-w-xl mx-auto mt-6">
       <div class="flex items-center gap-2 mb-4">
         <div class="flex-1 break-all select-all text-sm text-muted-foreground">
-          {{ publicKey || '未获取到公钥' }}
+          {{ publicKey || t('settingsUi.noPublicKey') }}
         </div>
         <CopyButton :text="publicKey" v-if="publicKey" />
       </div>
       <div class="space-y-2">
-        <Label for="peer-pubkey">请输入服务节点公钥（hex）</Label>
-        <Input id="peer-pubkey" v-model="peerPubkeyInput" placeholder="服务节点公钥 hex" autocomplete="off" />
+        <Label for="peer-pubkey">{{ t('settingsUi.peerPublicKey') }}</Label>
+        <Input id="peer-pubkey" v-model="peerPubkeyInput" :placeholder="t('settingsUi.peerPlaceholder')" autocomplete="off" />
         <Button class="w-full mt-2" :disabled="!peerPubkeyInput || loading" @click="calcChannelPubkey">
-          {{ loading ? '计算中...' : '计算通道公钥' }}
+          {{ loading ? t('settingsUi.calculating') : t('settingsUi.calculateChannelKey') }}
         </Button>
         <Alert v-if="error" variant="destructive" class="mt-2">
           {{ error }}
         </Alert>
         <div v-if="channelAddr || peerAddr" class="mt-2 space-y-2">
           <div class="flex items-center gap-2">
-            <span class="font-semibold">通道地址：</span>
+            <span class="font-semibold">{{ t('settingsUi.channelAddress') }}</span>
             <span class="break-all select-all text-sm">{{ channelAddr }}</span>
             <CopyButton :text="channelAddr" v-if="channelAddr" />
           </div>
           <div class="flex items-center gap-2">
-            <span class="font-semibold">服务节点地址：</span>
+            <span class="font-semibold">{{ t('settingsUi.serviceNodeAddress') }}</span>
             <span class="break-all select-all text-sm">{{ peerAddr }}</span>
             <CopyButton :text="peerAddr" v-if="peerAddr" />
           </div>
@@ -34,6 +34,8 @@
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
+const { t } = useI18n()
 import LayoutSecond from '@/components/layout/LayoutSecond.vue'
 import { ref, computed } from 'vue'
 import { useWalletStore } from '@/store'
@@ -69,12 +71,12 @@ async function calcChannelPubkey() {
     const peerPubkey = peerPubkeyInput.value.trim()
     const [err, result] = await walletManager.getChannelAddrByPeerPubkey(peerPubkey)
     if (err || !result) {
-      throw new Error(err?.message || '计算失败')
+      throw new Error(err?.message || t('settingsUi.calculationFailed'))
     }
     channelAddr.value = result.channelAddr
     peerAddr.value = result.peerAddr
   } catch (e: any) {
-    error.value = e.message || '未知错误'
+    error.value = e.message || t('settingsUi.unknownError')
   } finally {
     loading.value = false
   }

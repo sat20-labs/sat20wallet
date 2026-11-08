@@ -48,7 +48,24 @@ func TestSilentPaySDKHTTPScanEnablesAndRestoresAccountBalancesE2E(t *testing.T) 
 	originalChain := _chain
 	_chain = "testnet"
 	t.Cleanup(func() { _chain = originalChain })
-	mgr, wallet := spE2EAccountManager(t)
+	for _, state := range []accountGroupState{accountGroupInactive, accountGroupReady} {
+		t.Run(string(state), func(t *testing.T) {
+			mgr, wallet := spAccountGroup(t, state)
+			runSPAccountScan(t, mgr, wallet)
+		})
+	}
+}
+
+func spAccountGroup(t *testing.T, state accountGroupState) (*Manager, *InternalWallet) {
+	t.Helper()
+	manager, wallet := spE2EAccountManager(t)
+	manager.status.CurrentWallet = wallet.GetId()
+	prepareAccountGroup(t, manager, state, silentPayE2EMnemonic, "password")
+	return manager, wallet
+}
+
+func runSPAccountScan(t *testing.T, mgr *Manager, wallet *InternalWallet) {
+	t.Helper()
 	if _, err := mgr.LastSyncedSilentPay(wallet.GetId(), 1); err == nil {
 		t.Fatal("unknown balance was incorrectly displayed as zero")
 	}
@@ -206,7 +223,7 @@ func TestSilentPayManagedDataRestoresMonotonicAccountFlag(t *testing.T) {
 	originalChain := _chain
 	_chain = "testnet"
 	t.Cleanup(func() { _chain = originalChain })
-	mgr, w := spE2EAccountManager(t)
+	mgr, w := spAccountGroup(t, accountGroupInactive)
 	if _, err := mgr.EnableSilentPay(w.GetId(), 1); err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +236,7 @@ func TestSilentPayManagedDataRestoresMonotonicAccountFlag(t *testing.T) {
 	if err != nil || len(payload) != 1 || payload[0].Scope != catalog.Scopes[1].ID() {
 		t.Fatal("SP opt-in not exported", err)
 	}
-	other, otherWallet := spE2EAccountManager(t)
+	other, otherWallet := spAccountGroup(t, accountGroupInactive)
 	otherProvider := &silentPayAccountManagedDataProvider{owner: other}
 	restoredCatalog := AccountManagedDataCatalog{Network: "testnet", Scopes: []AccountManagedDataScope{
 		{WalletFingerprint: walletFingerprint(otherWallet), AccountIndex: 0, Network: "testnet"},
@@ -245,27 +262,52 @@ func TestSilentPayManagedDataRestoresMonotonicAccountFlag(t *testing.T) {
 	}
 }
 
-type spFailCommitDB struct{ db.KVDB }
+var errSPCommitInjected = errors.New("silentpay: injected wallet persistence failure")
 
-func (d *spFailCommitDB) NewWriteBatch() db.WriteBatch {
-	return &spFailCommitBatch{WriteBatch: d.KVDB.NewWriteBatch()}
+type spFailCommitDB struct {
+	db.KVDB
+	hits atomic.Uint32
 }
 
-type spFailCommitBatch struct{ db.WriteBatch }
+func (d *spFailCommitDB) NewWriteBatch() db.WriteBatch {
+	return &spFailCommitBatch{WriteBatch: d.KVDB.NewWriteBatch(), owner: d}
+}
+
+func (d *spFailCommitDB) NewAtomicWriteBatch() db.WriteBatch {
+	atomicDB, ok := d.KVDB.(db.AtomicWriteBatchDB)
+	if !ok {
+		return nil
+	}
+	batch := atomicDB.NewAtomicWriteBatch()
+	if batch == nil {
+		return nil
+	}
+	return &spFailCommitBatch{WriteBatch: batch, owner: d}
+}
+
+type spFailCommitBatch struct {
+	db.WriteBatch
+	owner *spFailCommitDB
+}
 
 func (b *spFailCommitBatch) Flush() error {
-	return errors.New("silentpay: injected wallet persistence failure")
+	b.owner.hits.Add(1)
+	return errSPCommitInjected
 }
 
 func TestSilentPayActivationFailsAtomicallyOnStorageError(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
-	manager, w := spE2EAccountManager(t)
+	manager, w := spAccountGroup(t, accountGroupInactive)
 	original := manager.db
-	manager.db = &spFailCommitDB{KVDB: original}
-	if address, err := manager.EnableSilentPay(w.GetId(), 1); err == nil || address != "" {
-		t.Fatalf("failed transaction published SP address: %s %v", address, err)
+	faultDB := &spFailCommitDB{KVDB: original}
+	manager.db = faultDB
+	if address, err := manager.EnableSilentPay(w.GetId(), 1); !errors.Is(err, errSPCommitInjected) || address != "" {
+		t.Fatalf("failed transaction did not preserve the injected SP error: address_empty=%t injected_match=%t", address == "", errors.Is(err, errSPCommitInjected))
+	}
+	if faultDB.hits.Load() != 1 {
+		t.Fatalf("SP atomic commit fault hits=%d, want 1", faultDB.hits.Load())
 	}
 	if manager.GetWalletCatalog()[0].Accounts[1].SPEnabled {
 		t.Fatal("failed SP activation changed the live account catalog")
@@ -298,17 +340,7 @@ func TestSilentPayEnabledWalletCannotBeDeleted(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
-	mgr, first := spE2EAccountManager(t)
-	second := NewInternalWalletWithMnemonic(silentPayOtherMnemonic, "", &chaincfg.TestNet4Params)
-	if second == nil {
-		t.Fatal("second mnemonic unavailable")
-	}
-	mgr.walletInfoMap[second.GetId()] = &WalletInfo{WalletInDB: WalletInDB{
-		Id: second.GetId(), Accounts: 1, Type: WALLET_TYPE_MNEMONIC, Name: "Secondary",
-		AccountNames: map[uint32]string{0: "Income"}, AccountDIDs: map[uint32]string{},
-	}, Wallet: second}
-	mgr.status.CurrentWallet = first.GetId()
-	mgr.status.TotalWallet = 2
+	mgr, _, second := newSPWalletPairGroup(t, []string{"Income"})
 	if _, err := mgr.EnableSilentPay(second.GetId(), 0); err != nil {
 		t.Fatal(err)
 	}

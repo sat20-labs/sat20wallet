@@ -16,6 +16,8 @@ import (
 )
 
 const (
+	// Only version 1 is supported. Compression is an encoding choice within
+	// this authenticated format, not a way to identify obsolete bundles.
 	ManagedDataBundleVersion         = uint32(1)
 	managedDataMaxItems              = 4096
 	managedDataMaxProvider           = 128
@@ -151,7 +153,7 @@ func DecodeManagedDataBundle(value []byte) (ManagedDataBundle, error) {
 		return ManagedDataBundle{}, ErrRecoveryFailed
 	}
 	version, err := readStateUvarint(reader)
-	if err != nil || uint32(version) != ManagedDataBundleVersion {
+	if err != nil || version != uint64(ManagedDataBundleVersion) {
 		return ManagedDataBundle{}, ErrRecoveryFailed
 	}
 	revision, err := readStateUvarint(reader)
@@ -245,8 +247,6 @@ func prepareManagedDataPlaintext(value []byte) ([]byte, bool, error) {
 
 func restoreManagedDataPlaintext(value []byte) ([]byte, bool, error) {
 	if bytes.HasPrefix(value, managedDataPlainMagic) {
-		// Uncompressed envelopes, including records written before compression
-		// support was added, remain canonical input.
 		return value, false, nil
 	}
 	if !bytes.HasPrefix(value, managedDataCompressedMagic) {

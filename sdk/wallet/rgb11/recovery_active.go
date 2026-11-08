@@ -158,7 +158,7 @@ func ActiveRecoveryPackageFromSnapshot(snapshot *RGB11WalletSnapshot) (*ActiveRe
 
 func ValidateActiveRecoveryPackage(value *ActiveRecoveryPackage) error {
 	if value == nil || value.Version != ActiveRecoveryPackageVersion || value.WalletID == "" ||
-		!CompatibleEngineBuildID(value.EngineBuildID) {
+		value.EngineBuildID != NativeEngineBuildID {
 		return ErrRGB11Inconsistent
 	}
 	snapshot := &RGB11WalletSnapshot{
@@ -221,7 +221,7 @@ func (p *ActiveRecoveryPackage) WalletSnapshot() (*RGB11WalletSnapshot, error) {
 func MergeActiveRecoverySnapshot(current, active *RGB11WalletSnapshot) (*RGB11WalletSnapshot, error) {
 	if current == nil || active == nil || current.WalletID != active.WalletID ||
 		current.AccountIndex != active.AccountIndex ||
-		!CompatibleEngineBuildID(current.EngineBuildID) || !CompatibleEngineBuildID(active.EngineBuildID) {
+		current.EngineBuildID != NativeEngineBuildID || active.EngineBuildID != NativeEngineBuildID {
 		return nil, ErrRGB11Inconsistent
 	}
 	if err := ValidateWalletSnapshot(current); err != nil {

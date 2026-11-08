@@ -23,7 +23,10 @@
           :class="warning ? 'text-amber-500' : success ? 'text-emerald-400' : 'text-red-400'">
           {{ message }}
         </p>
-        <Button class="w-full" :disabled="loading || (!consignment.trim() && !selectedFile)" @click="runImport">
+        <p v-if="!rgb11WriteAllowed" class="text-xs text-amber-400" role="status">
+          {{ t('accountManagement.readiness.moduleBlocked') }}
+        </p>
+        <Button class="w-full" :disabled="loading || !rgb11WriteAllowed || (!consignment.trim() && !selectedFile)" @click="runImport">
           {{ loading ? $t('rgb11Transfer.importing') : $t('rgb11Transfer.import') }}
         </Button>
       </div>
@@ -34,7 +37,9 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { storeToRefs } from 'pinia'
 import walletManager from '@/utils/sat20'
+import { useAccountManagementStore } from '@/store/accountManagement'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -48,6 +53,13 @@ const message = ref('')
 const success = ref(false)
 const warning = ref(false)
 const { t } = useI18n()
+const accountManagementState = useAccountManagementStore()
+const { rgb11WriteAllowed } = storeToRefs(accountManagementState)
+const displayOperationError = (error: any, fallbackKey: string) => {
+  const quotaKey = accountManagementState.quotaMessageKeyForCode(error?.code)
+  if (quotaKey) return [error?.message, t(quotaKey)].filter(Boolean).join(' ')
+  return error?.message || t(fallbackKey)
+}
 const MAX_RGB11_CONSIGNMENT_FILE_SIZE = 4 * 1024 * 1024
 
 const selectFile = (event: Event) => {
@@ -77,6 +89,12 @@ const encodeBase64 = (raw: ArrayBuffer) => {
 }
 
 const runImport = async () => {
+  if (!rgb11WriteAllowed.value) {
+    message.value = t('accountManagement.readiness.moduleBlocked')
+    success.value = false
+    warning.value = false
+    return
+  }
   loading.value = true
   message.value = ''
   success.value = false
@@ -94,7 +112,7 @@ const runImport = async () => {
     message.value = t('rgb11Transfer.imported', { count: imported.projected || 0 })
     emit('completed')
   } catch (error: any) {
-    message.value = error?.message || t('rgb11Transfer.importFailed')
+    message.value = displayOperationError(error, 'rgb11Transfer.importFailed')
   } finally {
     loading.value = false
   }

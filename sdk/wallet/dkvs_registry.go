@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"errors"
+	"github.com/sat20-labs/sat20wallet/sdk/account"
 	"strings"
 
 	indexercommon "github.com/sat20-labs/indexer/common"
@@ -35,6 +36,9 @@ func (p *Manager) refreshDKVSRegistrations() error {
 	if p == nil || p.ensureDKVSManager() == nil {
 		return nil
 	}
+	p.mutex.RLock()
+	configured := p.accountProfile != nil && p.accountProfile.RecoveryConfigured
+	p.mutex.RUnlock()
 	if p.cfg == nil || p.cfg.IndexerL2 == nil || strings.TrimSpace(p.cfg.IndexerL2.Host) == "" {
 		return nil
 	}
@@ -42,7 +46,9 @@ func (p *Manager) refreshDKVSRegistrations() error {
 	p.mutex.RLock()
 	accountActive := p.accountProfile != nil && len(p.accountSecret) == 32
 	p.mutex.RUnlock()
-	root, rootErr := p.accountManagementRootWallet()
+	p.mutex.RLock()
+	root, rootErr := p.accountDiscoveryRootLocked()
+	p.mutex.RUnlock()
 	if rootErr != nil {
 		if accountActive {
 			return rootErr
@@ -54,12 +60,12 @@ func (p *Manager) refreshDKVSRegistrations() error {
 		return err
 	}
 	address := root.GetAddress()
-	if accountActive {
+	if root != nil {
 		stateKey, err := p.accountManagedStateKey(root)
 		if err != nil {
 			return err
 		}
-		dataKey, err := p.accountManagedDataBlobKey(root)
+		dataKey, err := account.ManagedIndexKey(accountID)
 		if err != nil {
 			return err
 		}
@@ -82,6 +88,10 @@ func (p *Manager) refreshDKVSRegistrations() error {
 		if err := p.ensureOwnedDKVSPrefix(prefix); err != nil {
 			return err
 		}
+	}
+	if !configured {
+		p.scheduleAccountManagedStateSync()
+		return nil
 	}
 	if accountID != "" {
 		mailboxPrefix, err := mailboxSubscriptionTarget(accountID)

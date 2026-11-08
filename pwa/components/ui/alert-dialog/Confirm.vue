@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 import {
   Dialog,
   DialogContent,
@@ -20,9 +23,6 @@ interface ConfirmProps {
 }
 
 const props = withDefaults(defineProps<ConfirmProps>(), {
-  title: '确认操作',
-  confirmText: '确定',
-  cancelText: '取消',
   type: 'warning',
 })
 
@@ -74,7 +74,7 @@ const getIconAndColor = (type: string) => {
             :class="getIconAndColor(props.type).colorClass"
             class="h-6 w-6"
           />
-          <DialogTitle>{{ props.title }}</DialogTitle>
+          <DialogTitle>{{ props.title ?? t('settingsUi.confirmOperation') }}</DialogTitle>
         </div>
       </DialogHeader>
 
@@ -86,10 +86,10 @@ const getIconAndColor = (type: string) => {
 
       <DialogFooter class="gap-2">
         <Button variant="outline" @click="handleCancel" class="flex-1">
-          {{ props.cancelText }}
+          {{ props.cancelText ?? t('common.cancel') }}
         </Button>
         <Button :variant="getIconAndColor(props.type).confirmVariant" @click="handleConfirm" class="flex-1">
-          {{ props.confirmText }}
+          {{ props.confirmText ?? t('common.confirm') }}
         </Button>
       </DialogFooter>
     </DialogContent>

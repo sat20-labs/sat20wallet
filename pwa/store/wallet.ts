@@ -442,6 +442,9 @@ export const useWalletStore = defineStore('wallet', () => {
         rootAccountId: snapshot.rootAccountId,
         address: identity?.address ?? null, pubkey: identity?.pubKey ?? null,
       })
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('sat20:account-status-updated'))
+      }
       if (selectionChanged) {
         channelStore.invalidateCurrentChannel()
         if (generation !== undefined) completeWalletIdentityTransition(generation)

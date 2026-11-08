@@ -1,0 +1,102 @@
+PWA final status-read retry race — data-only test draft
+Date: 2026-10-31
+
+Scope
+-----
+Candidate changes only the assertion flow in
+scripts/verify/account-management-usage-e2e.mjs, scenario
+"usage: verified setup survives final status read failure without replaying rehearsal".
+No Vue/UI, SDK, timeout, business behavior, or existing source file is changed here.
+
+Observed run
+------------
+- Failure evidence: sdk/data/final-20261031T1421Z-e2e/failure-details-current.json.
+- Browser case: /private/tmp/sat20-sdk-e2e-full-20261031T1421Z/sat20-e2e-case-3280284974.
+- The real rehearsal returned verified=true; setupCompletionFault showed
+  verified=1 and hits=1, and the injected status-read error was displayed.
+- Playwright resolved the exact “重试读取备份状态” button, then logged that it
+  was detached while waiting for click actionability. It did not report a
+  persistent disabled state.
+- Failure-state UI had already recovered to configured/Synchronized/Writable,
+  pending_changes=0; DKVS cache verification time was 22:39:17 local. A successful
+  refresh clears statusReadError, which removes the v-if button.
+- The captured trace does not identify whether the successful refresh came from
+  sat20:account-status-updated or the page's 30-second visible-page poll.
+
+Related retry coverage
+----------------------
+The existing usage scenario "usage: account page refreshes background backup
+failure and success without navigation" at lines 1042-1154 explicitly clicks
+“立即重试同步” (1139-1143), confirms another held backup POST is attempted,
+keeps the error/dirty state visible while the endpoint is unavailable, then
+removes the outage and waits for background convergence. It verifies the
+committed wallet name remains present (1152-1153). This is coverage for the
+user-requested immediate DKVS sync retry and its automatic retry after network
+recovery. It is a different control from “重试读取备份状态”; it does not
+measure rehearsal calls. Keep the current scenario's own verified counter for
+the no-replay property.
+
+Proposed assertion flow
+-----------------------
+Keep the existing assertions before retry unchanged:
+1. setupCompletionFault is exactly {armed:false, hits:1, verified:1}.
+2. The exact injected error was visible.
+3. The “执行恢复演练” button is absent after successful setup.
+
+Replace the unconditional retry-button click with a bounded outcome poll using
+the existing Playwright 30-second click window (do not extend it):
+
+  const readError = page.getByText(
+    'usage injected final configuration status read failure', { exact: true })
+  const readRetry = page.getByRole('button', {
+    name: '重试读取备份状态', exact: true })
+  const card = page.getByRole('alert', { name: '账户备份状态', exact: true })
+  let retryPath
+  await expect.poll(async () => {
+    if (await readError.count() === 0) return (retryPath = 'automatic')
+    if (await readRetry.isVisible() && await readRetry.isEnabled()) {
+      return (retryPath = 'manual')
+    }
+    return 'waiting'
+  }, { timeout: 30_000 }).not.toBe('waiting')
+
+  if (retryPath === 'manual') {
+    try {
+      await readRetry.click()
+    } catch (error) {
+      // A successful auto-refresh can remove this v-if button during Playwright's
+      // stable-click wait. Accept that race only if the error is already gone;
+      // otherwise preserve the original click failure.
+      if (await readError.count() !== 0) throw error
+      retryPath = 'automatic'
+    }
+  }
+
+  await expect.poll(async () => {
+    const text = await card.textContent() || ''
+    return await readError.count() === 0 && text.includes('恢复配置：已配置')
+  }, { timeout: 30_000 }).toBe(true)
+  assert.deepEqual(await page.evaluate(() => window.setupCompletionFault),
+    { armed: false, hits: 1, verified: 1 },
+    'status refresh or manual read retry replayed recovery rehearsal')
+
+Retain the later direct accountSDK status assertion and secret checks. The UI
+card requirement proves a successful page status read populated configured
+state; the fixed verified count proves neither recovery path replayed rehearsal.
+
+Coverage boundary / reviewer decision
+-------------------------------------
+This keeps the “重试读取备份状态” click when it remains actionable and accepts
+automatic recovery when the button has already disappeared. The independent I
+scenario above continues to require an explicit “立即重试同步” click. If review
+requires a separate direct click test for the status-read button itself, use a
+distinct controlled-read-failure scenario that holds status reads failed until
+that button is clicked; do not make a forced click inside this race-prone
+one-shot failure case and do not count the sync button as the exact read button.
+
+Verification boundary
+---------------------
+Data-only proposal, not applied. No tests or builds were run. Source hashes at
+draft time:
+- account-management-usage-e2e.mjs: 29827df16e7e14616767b3227920c068b0886797e6532f96cd037eccc0017a58
+- account-management Index.vue: 5910af9f4b7f898bea84231dc88680dbf87e10115fb6a10a3632d8c0b3973fe3

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/sat20-labs/sat20wallet/sdk/account"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/satoshinet/btcec"
 	"github.com/sat20-labs/satoshinet/btcec/schnorr"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
@@ -43,6 +44,22 @@ type unsignedAccountPublicLocator struct {
 	AutopayContract  string                  `json:"autopay_contract,omitempty"`
 	GuardianLocation *AccountIndexerLocation `json:"guardian_location,omitempty"`
 	Locator          account.Locator         `json:"locator"`
+}
+
+// The verified wrapper and recovery package supply the recoverable public
+// fields. Reuse this construction for ordinary sync and a fresh device restore.
+func buildAccountPublicLocator(root common.Wallet, network string, location AccountIndexerLocation,
+	config accountRootWrapperPayload, locator account.Locator) (string, error) {
+	if config.PackageID != locator.PackageID {
+		return "", ErrRootAccountWrapperInvalid
+	}
+	public := AccountPublicLocator{Version: account.Version, Network: network,
+		StorageLocation: location, StorageMode: config.StorageMode, RecordTTL: config.RecordTTL,
+		AutopayContract: config.AutopayContract, GuardianLocation: config.GuardianLocation, Locator: locator}
+	if err := signAccountLocator(root, &public); err != nil {
+		return "", err
+	}
+	return EncodeAccountPublicLocator(public, network)
 }
 
 func accountPublicLocatorMessage(value AccountPublicLocator) ([]byte, error) {
@@ -115,6 +132,10 @@ func (p *Manager) SignAccountPublicLocator(value *AccountPublicLocator) error {
 	if err != nil {
 		return err
 	}
+	return signAccountLocator(root, value)
+}
+
+func signAccountLocator(root common.Wallet, value *AccountPublicLocator) error {
 	accountID, err := dkvsAccountID(root)
 	if err != nil {
 		return err

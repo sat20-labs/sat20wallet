@@ -3,6 +3,8 @@ package wallet
 import (
 	"fmt"
 
+	"github.com/sat20-labs/sat20wallet/sdk/account"
+
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 )
 
@@ -20,6 +22,11 @@ func (*silentPayAccountManagedDataProvider) ID() string { return silentPayManage
 
 func (*silentPayAccountManagedDataProvider) Validate(catalog AccountManagedDataCatalog, payloads []AccountManagedDataPayload) error {
 	allowed := accountManagedScopeSet(catalog)
+	for _, scope := range catalog.Scopes {
+		if scope.Type == account.WalletPrivateKey {
+			delete(allowed, scope.ID())
+		}
+	}
 	seen := make(map[string]bool, len(payloads))
 	for _, item := range payloads {
 		if _, valid := allowed[item.Scope]; !valid || item.Scope == AccountManagedDataGlobalScope ||
@@ -40,6 +47,9 @@ func (p *silentPayAccountManagedDataProvider) Export(catalog AccountManagedDataC
 	var result []AccountManagedDataPayload
 	for _, scope := range catalog.Scopes {
 		info := walletInfoByFingerprintInMap(p.owner.walletInfoMap, scope.WalletFingerprint)
+		if info != nil && info.Type == WALLET_TYPE_PRIVKEY && info.Accounts == 1 && scope.AccountIndex == 0 && !info.SPEnabled[0] {
+			continue
+		}
 		if info == nil || info.Type != WALLET_TYPE_MNEMONIC ||
 			int(scope.AccountIndex) >= info.Accounts {
 			return nil, fmt.Errorf("silentpay: managed account %s is unavailable", scope.ID())

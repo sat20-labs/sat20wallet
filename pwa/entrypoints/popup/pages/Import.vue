@@ -103,14 +103,15 @@
         </div>
       </form>
       <Alert v-if="importCommitted && committedReadError" class="mt-4" role="status">
-        <AlertDescription>Wallet imported successfully. Reload to unlock the saved wallet.</AlertDescription>
-        <Button type="button" variant="outline" class="mt-2" @click="reloadCommittedWallet">Reload wallet</Button>
+        <AlertDescription>{{ $t('pwaUi.import.reloadHint') }}</AlertDescription>
+        <Button type="button" variant="outline" class="mt-2" @click="reloadCommittedWallet">{{ $t('pwaUi.import.reload') }}</Button>
       </Alert>
     </div>
   </LayoutScroll>
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useToast } from '@/components/ui/toast-new'
@@ -136,6 +137,8 @@ import { useWalletStore } from '@/store'
 import { passwordSchema, mnemonicSchema, privateKeySchema } from '@/utils/validation'
 import {KeyRound, Loader2Icon} from 'lucide-vue-next'
 
+const { t } = useI18n()
+
 const { toast } = useToast()
 const router = useRouter()
 const walletStore = useWalletStore()
@@ -159,10 +162,10 @@ const formSchema = toTypedSchema(
       mnemonic: mnemonicSchema.optional(),
       privateKey: privateKeySchema.optional(),
       password: passwordSchema,
-      confirmPassword: z.string().min(1, 'Please confirm your password'),
+      confirmPassword: z.string().min(1, 'pwaUi.import.confirmPassword'),
     })
     .refine((data) => data.password === data.confirmPassword, {
-      message: "Passwords do not match",
+      message: 'pwaUi.import.passwordMismatch',
       path: ['confirmPassword'],
     })
     .refine(
@@ -171,7 +174,7 @@ const formSchema = toTypedSchema(
         return data.mnemonic || data.privateKey
       },
       {
-        message: 'Please provide either recovery phrase or private key',
+        message: 'pwaUi.import.credentialsRequired',
         path: ['mnemonic'],
       }
     )
@@ -194,25 +197,25 @@ const onSubmit = form.handleSubmit(async (values) => {
       if (result) importCommitted.value = true
       if (err && result) {
         committedReadError.value = true
-        showToast('info', 'Wallet Imported', 'Wallet saved. Reload to unlock the wallet.')
+        showToast('info', t('pwaUi.import.imported'), t('pwaUi.import.savedReload'))
         return
       }
       if (err) {
-        showToast('destructive', 'Error', err)
+        showToast('destructive', t('common.error'), err)
         loading.value = false
         return
       }
 
 	  const identity = result
-		? `\nAddress: ${result.address}\nFingerprint: ${result.fingerprint}`
+		? t('pwaUi.import.identity', { address: result.address, fingerprint: result.fingerprint })
 		: ''
-	  showToast('success', 'Success', `Wallet imported successfully${identity}`)
+	  showToast('success', t('common.success'), t('pwaUi.import.success', { identity }))
       router.push('/wallet')
     }
   }
 
   } catch (error: any) {
-    showToast('destructive', 'Error', error?.message || 'Failed to import wallet')
+    showToast('destructive', t('common.error'), error?.message || t('pwaUi.import.failed'))
   } finally {
     loading.value = false
   }

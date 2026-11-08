@@ -1,0 +1,92 @@
+[
+  {
+    "scenario": "rebuild risk, buttons and amounts",
+    "locale": "en",
+    "text": "rebuild funding requires approvalReview rebuild or withdrawalChoose closed-channel recoveryOnly the currently selected account may confirm. Closing this window never sends a transaction.Channel: closed-channel-0Account: 0New channel output: 40000 satsWallet transfer fee: 770 satsTotal wallet debit: 40770 satsFee rate: 5 sat/vBThis is one full new UTXO, not your old balance's shortfall. Your old signed recovery package does not protect this new money. Rebuilding waits for this exact output to confirm; asset restoration may remain pending separately.If a payment is already recorded, confirmation only resumes that same transaction. If the server goes offline, do not add a second payment.Rebuild with this exact funding paymentReview withdrawal of old channel fundsCancelFixturefixture-addressL1 assets stay selected",
+    "financialCalls": 0
+  },
+  {
+    "scenario": "rebuild risk, buttons and amounts",
+    "locale": "zh",
+    "text": "rebuild funding requires approval核对重建或提款方案选择已关闭通道的恢复方式仅当前选中的账户可以确认。关闭此窗口不会发送任何交易。通道：closed-channel-0账户：0新通道输出：40000 sats钱包转账手续费：770 sats钱包扣款总额：40770 sats费率：5 sat/vB这是一笔完整的新 UTXO，并非旧余额的差额。您原有的已签名恢复交易包不保护这笔新资金。重建须等待此特定输出确认；资产恢复可能仍需单独完成。若已记录付款，确认操作只会继续处理同一笔交易。若服务器离线，请勿再次付款。使用这笔指定注资付款重建核对原通道资金的提款方案取消Fixturefixture-addressL1 assets stay selected",
+    "financialCalls": 0
+  },
+  {
+    "scenario": "rebuild risk, buttons and amounts",
+    "locale": "en",
+    "text": "rebuild funding requires approvalReview rebuild or withdrawalChoose closed-channel recoveryOnly the currently selected account may confirm. Closing this window never sends a transaction.Channel: closed-channel-0Account: 0New channel output: 40000 satsWallet transfer fee: 770 satsTotal wallet debit: 40770 satsFee rate: 5 sat/vBThis is one full new UTXO, not your old balance's shortfall. Your old signed recovery package does not protect this new money. Rebuilding waits for this exact output to confirm; asset restoration may remain pending separately.If a payment is already recorded, confirmation only resumes that same transaction. If the server goes offline, do not add a second payment.Rebuild with this exact funding paymentReview withdrawal of old channel fundsCancelFixturefixture-addressL1 assets stay selected",
+    "financialCalls": 0
+  },
+  {
+    "scenario": "dynamic funding status",
+    "locale": "en",
+    "text": "rebuild funding requires approvalFunding 4444444444444444444444444444444444444444444444444444444444444444 has been broadcast. Only this same transaction may be retried.Review rebuild or withdrawalFixturefixture-addressL1 assets stay selected",
+    "financialCalls": 1
+  },
+  {
+    "scenario": "dynamic funding status",
+    "locale": "zh",
+    "text": "rebuild funding requires approval注资交易 4444444444444444444444444444444444444444444444444444444444444444 已广播。仅可重试同一笔交易。核对重建或提款方案Fixturefixture-addressL1 assets stay selected",
+    "financialCalls": 1
+  },
+  {
+    "scenario": "dynamic funding status",
+    "locale": "en",
+    "text": "rebuild funding requires approvalFunding 4444444444444444444444444444444444444444444444444444444444444444 has been broadcast. Only this same transaction may be retried.Review rebuild or withdrawalFixturefixture-addressL1 assets stay selected",
+    "financialCalls": 1
+  },
+  {
+    "scenario": "withdrawal risk, count and exact parent",
+    "locale": "en",
+    "text": "rebuild funding requires approvalserver is offline; you may explicitly broadcast your local OthersReview rebuild or withdrawalConfirm local withdrawalOnly the currently selected account may confirm. Closing this window never sends a transaction.Reviewed server parent: 1111111111111111111111111111111111111111111111111111111111111111Already-signed recovery transactions: 1Total miner fee already fixed in the signed successor transaction package (excluding the confirmed parent): 500 satsThis broadcasts only your complete already-signed local recovery package. It does not create a fresh wallet-funded transaction.CancelBroadcast this reviewed local packageFixturefixture-addressL1 assets stay selected",
+    "financialCalls": 0
+  },
+  {
+    "scenario": "withdrawal risk, count and exact parent",
+    "locale": "zh",
+    "text": "rebuild funding requires approvalserver is offline; you may explicitly broadcast your local Others核对重建或提款方案确认本地提款仅当前选中的账户可以确认。关闭此窗口不会发送任何交易。已核对的服务器父交易：1111111111111111111111111111111111111111111111111111111111111111已签名的恢复交易数：1已签名后继交易包中已确定的矿工费总额（不含已确认的父交易）：500 sats此操作仅广播您本地完整且已签名的恢复交易包，不会创建新的钱包出资交易。取消广播已核对的本地交易包Fixturefixture-addressL1 assets stay selected",
+    "financialCalls": 0
+  },
+  {
+    "scenario": "withdrawal risk, count and exact parent",
+    "locale": "en",
+    "text": "rebuild funding requires approvalserver is offline; you may explicitly broadcast your local OthersReview rebuild or withdrawalConfirm local withdrawalOnly the currently selected account may confirm. Closing this window never sends a transaction.Reviewed server parent: 1111111111111111111111111111111111111111111111111111111111111111Already-signed recovery transactions: 1Total miner fee already fixed in the signed successor transaction package (excluding the confirmed parent): 500 satsThis broadcasts only your complete already-signed local recovery package. It does not create a fresh wallet-funded transaction.CancelBroadcast this reviewed local packageFixturefixture-addressL1 assets stay selected",
+    "financialCalls": 0
+  },
+  {
+    "scenario": "dynamic submitted withdrawal status",
+    "locale": "en",
+    "text": "rebuild funding requires approvalWithdrawal 88 submitted. Waiting for the original signed package to confirm.server is offline; you may explicitly broadcast your local OthersReview rebuild or withdrawalFixturefixture-addressL1 assets stay selected",
+    "financialCalls": 1
+  },
+  {
+    "scenario": "dynamic submitted withdrawal status",
+    "locale": "zh",
+    "text": "rebuild funding requires approval提款 88 已提交，正在等待原始已签名交易包确认。server is offline; you may explicitly broadcast your local Others核对重建或提款方案Fixturefixture-addressL1 assets stay selected",
+    "financialCalls": 1
+  },
+  {
+    "scenario": "dynamic submitted withdrawal status",
+    "locale": "en",
+    "text": "rebuild funding requires approvalWithdrawal 88 submitted. Waiting for the original signed package to confirm.server is offline; you may explicitly broadcast your local OthersReview rebuild or withdrawalFixturefixture-addressL1 assets stay selected",
+    "financialCalls": 1
+  },
+  {
+    "scenario": "READY asset restoration approval notice",
+    "locale": "en",
+    "text": "channel READY; asset restoration paused for separate stub approvalThe channel is READY. Asset restoration needs separate approval; no automatic account BTC transfer was made.Fixturefixture-addressL1 assets stay selected",
+    "financialCalls": 0
+  },
+  {
+    "scenario": "READY asset restoration approval notice",
+    "locale": "zh",
+    "text": "channel READY; asset restoration paused for separate stub approval通道已就绪。资产恢复需要单独授权；未自动转出账户中的 BTC。Fixturefixture-addressL1 assets stay selected",
+    "financialCalls": 0
+  },
+  {
+    "scenario": "READY asset restoration approval notice",
+    "locale": "en",
+    "text": "channel READY; asset restoration paused for separate stub approvalThe channel is READY. Asset restoration needs separate approval; no automatic account BTC transfer was made.Fixturefixture-addressL1 assets stay selected",
+    "financialCalls": 0
+  }
+]

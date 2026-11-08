@@ -770,7 +770,7 @@ func TestPsbtFullFlow(t *testing.T) {
 
 func TestChangePassword(t *testing.T) {
 	const mnemonic = "inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire"
-	manager := newManagerTestWallet(t, mnemonic)
+	manager, _, _ := newInactiveAccountGroup(t, mnemonic, "123456")
 	id := manager.status.CurrentWallet
 	require.Equal(t, mnemonic, manager.GetMnemonic(id, "123456"))
 	require.Error(t, manager.ChangePassword("wrong-password", "abcdefgh"))
@@ -849,6 +849,7 @@ func TestImportPrivKeyWallet(t *testing.T) {
 	const privateKey = "cd8deaf4d6f66edca13370f823de0b36fa7e911d1391f3967479e02e066a7cd3"
 	id, err := manager.ImportWalletWithPrivateKey(privateKey, "123456")
 	require.NoError(t, err)
+	prepareLocalAccountGroup(t, manager)
 	require.Equal(t, "tb1prfcqz85l0x9r03fnxkfs3r78g2ap6afp5740m0c9h7g6xd0s5xkqgzjh4q", manager.wallet.GetAddress())
 	require.NoError(t, manager.ChangePassword("123456", "abcdefgh"))
 	require.Empty(t, manager.GetMnemonic(id, "123456"))
@@ -856,7 +857,7 @@ func TestImportPrivKeyWallet(t *testing.T) {
 }
 
 func TestSend_privKeyWallet(t *testing.T) {
-	manager := newManagerTestWallet(t, "inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire")
+	manager, _, _ := newInactiveAccountGroup(t, "inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", "123456")
 	previousScripts := append([]string(nil), _pkScripts...)
 	previousTesting, previousNotSend := ENABLE_TESTING, NOT_SEND_TX
 	ENABLE_TESTING, NOT_SEND_TX = true, false
@@ -867,7 +868,7 @@ func TestSend_privKeyWallet(t *testing.T) {
 	script, err := GetP2TRpkScript(manager.wallet.GetPaymentPubKey())
 	require.NoError(t, err)
 	// Reuse the existing component Indexer client with one fresh, owned funding
-	// output. No shared network state, filesystem DB or public endpoint is used.
+	// output. No shared network state or public endpoint is used.
 	chain := &network{
 		name: "bitcoin", height: 1,
 		blocks: make(map[int][]string), txBroadcasted: make(map[string]string),
@@ -898,11 +899,11 @@ func TestSend_privKeyWallet(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(10000), manager.GetAssetBalance(address, plain).Int64())
 
-	// A managed mnemonic account cannot import private-key wallets. Use a
-	// separate wallet catalog, as an actual private-key-only user does.
+	// Use an independent private-key-only catalog for the second real signer.
 	privateManager := newAccountManagementAutoTestManager(t)
 	_, err = privateManager.ImportWalletWithPrivateKey(hex.EncodeToString(key), "123456")
 	require.NoError(t, err)
+	prepareLocalAccountGroup(t, privateManager)
 	require.Equal(t, address, privateManager.wallet.GetAddress())
 	configure(privateManager)
 	recipient := manager.wallet.GetAddress()

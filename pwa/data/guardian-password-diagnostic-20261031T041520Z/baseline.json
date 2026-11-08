@@ -1,0 +1,21 @@
+{
+  "authorization": "J test-only location and redacted diagnostics; no product changes; no self-test",
+  "created_utc": "2026-10-31T04:15:20.255128+00:00",
+  "target": "/Users/yingfeng/github/sat20wallet/pwa/scripts/verify/account-management-usage-e2e.mjs",
+  "source_sha256_before": "01596bbd82f4fda900e154b3589cbb9a0cd0480ba555bc11e3111574625ff1a3",
+  "watched_source_sha256_before": {
+    "/Users/yingfeng/github/sat20wallet/pwa/scripts/verify/account-management-usage-e2e.mjs": "01596bbd82f4fda900e154b3589cbb9a0cd0480ba555bc11e3111574625ff1a3",
+    "/Users/yingfeng/github/sat20wallet/sdk/e2e/account_management_browser_e2e_test.go": "28b75b17c890b776aa1d63f1c88915b846696456b7c80f31bd67341759d5a575",
+    "/Users/yingfeng/github/sat20wallet/sdk/e2e/pwa_real_regtest_browser_e2e_test.go": "2e0bc469d2c77295871df1d945133970d8a497a60384bdf4472d01ea9f40a4f5",
+    "/Users/yingfeng/github/sat20wallet/sdk/e2e/account_management_dkvs_sync_gate_e2e_test.go": "397d355169a2dbcc2537c338b1efc8c6871a470732d19aa5358a8314001d5e71",
+    "/Users/yingfeng/github/sat20wallet/pwa/entrypoints/popup/pages/RestoreAccount.vue": "f6ea0c566683a362e21986e77e35655e661fb00f5c6bac53ba1b2d3236ac6cdd",
+    "/Users/yingfeng/github/sat20wallet/pwa/scripts/verify/account-management-e2e.mjs": "3b2edd17441f4577eb2c0dd4b156b724cef2e6777eb5fd6ae816f446f2f2540f",
+    "/Users/yingfeng/github/sat20wallet/pwa/scripts/verify/workspace-e2e.mjs": "bb6e7f4cfdd64c0d98c598b38dbf79a78ac38a84313842b4746937e671963818"
+  },
+  "index_sha256_before": "e3a5450b02efbeed038cb9233c0750f4de89adf1d7ba995706e869de687e1ca9",
+  "existing_go_single_case": "TestSDKPWARealRegtestGuardianRecoveryBrowser",
+  "existing_go_entry_exact_usage_case": true,
+  "new_go_entry_needed": false,
+  "compiled": false,
+  "tests_executed": false
+}

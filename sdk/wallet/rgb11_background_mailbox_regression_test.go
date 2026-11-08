@@ -10,7 +10,8 @@ import (
 )
 
 func TestRGB11BackgroundMailboxWithoutRecoveryPreservesPublicGate(t *testing.T) {
-	manager, _ := finalDKVSTestManager(t)
+	manager, remote := finalDKVSTestManager(t)
+	prepareRGBEndpoint(t, manager, remote)
 	if manager.accountManagedRecoveryConfigured() {
 		t.Fatal("fixture unexpectedly configured recovery")
 	}
@@ -27,9 +28,10 @@ func TestRGB11BackgroundMailboxWithoutRecoveryPreservesPublicGate(t *testing.T) 
 	if err != nil || !reflect.DeepEqual(result, &RGB11AddressMailboxSyncResult{}) {
 		t.Fatalf("unconfigured background RGB polling obstructed ordinary mailbox sync: %v", err)
 	}
-	if _, err := manager.SyncConfiguredRGB11AddressMailbox(context.Background(),
-		dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{}); !errors.Is(err, ErrDKVSPathNotSynced) {
-		t.Fatalf("public RGB operation bypassed the recovery barrier: %v", err)
+	public, err := manager.SyncConfiguredRGB11AddressMailbox(context.Background(),
+		dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+	if err != nil || !reflect.DeepEqual(public, &RGB11AddressMailboxSyncResult{}) {
+		t.Fatalf("local-only RGB mailbox changed or failed: result=%+v err=%v", public, err)
 	}
 	after, _, err := manager.rgbManager.exportRGB11WalletSnapshot(walletID)
 	if err != nil || !reflect.DeepEqual(before, after) {

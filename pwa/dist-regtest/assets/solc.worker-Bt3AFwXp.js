@@ -1,0 +1,1 @@
+let s;self.onmessage=async({data:e})=>{if(!(!Number.isSafeInteger(e?.id)||typeof e.input!="string"))try{s??=import("./solc-browser-bkLe_NDp.js");const{default:i}=await s,o=i.version(),r=i.compile(e.input);self.postMessage({id:e.id,version:o,output:r})}catch(i){self.postMessage({id:e.id,error:i instanceof Error?i.message:"Solidity compiler failed"})}};

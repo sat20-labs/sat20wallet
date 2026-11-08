@@ -123,7 +123,7 @@ func TestRGB11L1MonitorReconcilesOnHealthyTicksAndReorg(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager := newRGB11MultiDeviceManager(t, privateKey, 701)
+	manager := newRGB11MultiDeviceManager(t, privateKey, 701, accountGroupInactive)
 	evidence := &rgb11L1MonitorEvidence{statuses: make(map[string]*rgb11wallet.BitcoinTxStatus)}
 	manager.rgbManager.evidence = evidence
 
@@ -207,7 +207,7 @@ func TestRGB11L1MonitorRetriesSameForkOnlyUntilRefreshSucceeds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager := newRGB11MultiDeviceManager(t, privateKey, 704)
+	manager := newRGB11MultiDeviceManager(t, privateKey, 704, accountGroupInactive)
 	evidence := &rgb11L1MonitorEvidence{statuses: map[string]*rgb11wallet.BitcoinTxStatus{
 		"fork-witness": {TxID: "fork-witness", Confirmed: true, Confirmations: 2},
 	}}
@@ -267,11 +267,14 @@ func TestRGB11L1MonitorRetriesSameForkOnlyUntilRefreshSucceeds(t *testing.T) {
 }
 
 func TestRGB11L1MonitorDoesNotBlockAccountSwitchDuringRemoteQuery(t *testing.T) {
-	privateKey, err := btcec.NewPrivateKey()
-	if err != nil {
+	oldChain := _chain
+	_chain = "testnet"
+	t.Cleanup(func() { _chain = oldChain })
+	manager := newAccountManagementAutoTestManager(t)
+	if _, err := manager.ImportWallet(coreE2ESenderMnemonic, "password"); err != nil {
 		t.Fatal(err)
 	}
-	manager := newRGB11MultiDeviceManager(t, privateKey, 702)
+	prepareRGBEndpoint(t, manager, manager.http.(*rgb11MemoryDKVSHTTP))
 	chain := &rgb11L1MonitorIndexer{
 		height: 10, hashes: rgb11MonitorHashes("main-", 10),
 		blockStarted: make(chan struct{}), blockRelease: make(chan struct{}),
@@ -288,13 +291,13 @@ func TestRGB11L1MonitorDoesNotBlockAccountSwitchDuringRemoteQuery(t *testing.T) 
 		t.Fatal("monitor did not start remote block hash query")
 	}
 
-	switchDone := make(chan struct{})
-	go func() {
-		manager.SwitchAccount(1)
-		close(switchDone)
-	}()
+	switchDone := make(chan error, 1)
+	go func() { switchDone <- manager.SwitchAccount(1) }()
 	select {
-	case <-switchDone:
+	case err := <-switchDone:
+		if err != nil {
+			t.Fatalf("switch derivable account during monitor query: %v", err)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("account switch waited for monitor remote query")
 	}

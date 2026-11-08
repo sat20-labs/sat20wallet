@@ -2,8 +2,10 @@ package account
 
 import (
 	"bytes"
+	"compress/zlib"
 	"crypto/aes"
 	"crypto/cipher"
+	"encoding/binary"
 	"encoding/hex"
 	"math/rand"
 	"reflect"
@@ -101,18 +103,15 @@ func TestManagedDataRejectsMalformedCompressedPlaintext(t *testing.T) {
 	}
 }
 
-func sealLegacyManagedDataEnvelopeForTest(t *testing.T, secret []byte, accountID string,
-	bundle ManagedDataBundle) []byte {
+func sealManagedDataInnerForTest(t *testing.T, secret []byte, accountID string,
+	inner []byte) []byte {
 
 	t.Helper()
-	plaintext, err := EncodeManagedDataBundle(bundle)
-	if err != nil {
-		t.Fatal(err)
-	}
 	key, err := managedDataKey(secret, accountID)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer zero(key)
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		t.Fatal(err)
@@ -122,44 +121,73 @@ func sealLegacyManagedDataEnvelopeForTest(t *testing.T, secret []byte, accountID
 		t.Fatal(err)
 	}
 	nonce := bytes.Repeat([]byte{0x19}, gcm.NonceSize())
-	ciphertext := gcm.Seal(nil, nonce, plaintext, managedDataAAD(accountID))
+	ciphertext := gcm.Seal(nil, nonce, inner, managedDataAAD(accountID))
 	result := append(append(append([]byte(nil), managedDataEnvelopeMagic...), nonce...), ciphertext...)
-	zero(plaintext)
-	zero(key)
 	return result
 }
 
-func TestManagedDataLegacyEnvelopeReportsCompressionMigration(t *testing.T) {
-	bundle := managedDataCompressionFixture(
-		bytes.Repeat([]byte("legacy-rgb11-proof-allocation|"), 4096))
+func TestManagedDataEnvelopeRequiresCurrentBundleVersion(t *testing.T) {
+	bundle := managedDataCompressionFixture(bytes.Repeat([]byte("rgb11-proof-allocation|"), 4096))
 	secret, accountID := managedDataCompressionSecrets()
-	legacy := sealLegacyManagedDataEnvelopeForTest(t, secret, accountID, bundle)
-
-	restored, info, err := OpenManagedDataBundleWithInfo(secret, accountID, legacy)
+	canonical, err := EncodeManagedDataBundle(bundle)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Compressed {
-		t.Fatal("legacy uncompressed envelope reported compressed")
+	versionOffset := len(managedDataPlainMagic)
+	_, versionSize := binary.Uvarint(canonical[versionOffset:])
+	if versionSize <= 0 {
+		t.Fatal("current bundle has no explicit version")
 	}
-	if !reflect.DeepEqual(restored, bundle) {
-		t.Fatal("legacy envelope payload mismatch")
-	}
-	beneficial, err := ManagedDataBundleCompressionBeneficial(restored)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !beneficial {
-		t.Fatal("legacy envelope was not identified as a beneficial compression candidate")
-	}
-
-	migrated, migratedInfo, err := SealManagedDataBundleWithInfo(secret, accountID, restored,
-		bytes.NewReader(bytes.Repeat([]byte{0x27}, 64)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !migratedInfo.Compressed || len(migrated) >= len(legacy) {
-		t.Fatalf("migration compressed=%v legacy=%d migrated=%d",
-			migratedInfo.Compressed, len(legacy), len(migrated))
+	for _, test := range []struct {
+		name    string
+		version uint64
+		valid   bool
+	}{
+		{name: "current", version: uint64(ManagedDataBundleVersion), valid: true},
+		{name: "obsolete-v1", version: 1},
+		{name: "unknown", version: uint64(ManagedDataBundleVersion) + 1},
+		{name: "wrapped-version", version: uint64(ManagedDataBundleVersion) + 1<<32},
+	} {
+		for _, compressed := range []bool{false, true} {
+			encodingName := "plain"
+			if compressed {
+				encodingName = "compressed"
+			}
+			t.Run(test.name+"/"+encodingName, func(t *testing.T) {
+				// Replace only the version varint in an otherwise valid bundle,
+				// then authenticate it with a valid envelope. A version rejection
+				// must not be explained by a broken ciphertext or payload shape.
+				var version [binary.MaxVarintLen64]byte
+				size := binary.PutUvarint(version[:], test.version)
+				inner := append([]byte(nil), canonical[:versionOffset]...)
+				inner = append(inner, version[:size]...)
+				inner = append(inner, canonical[versionOffset+versionSize:]...)
+				if compressed {
+					var encoded bytes.Buffer
+					encoded.Write(managedDataCompressedMagic)
+					writer := zlib.NewWriter(&encoded)
+					if _, err := writer.Write(inner); err != nil {
+						t.Fatal(err)
+					}
+					if err := writer.Close(); err != nil {
+						t.Fatal(err)
+					}
+					inner = encoded.Bytes()
+				}
+				sealed := sealManagedDataInnerForTest(t, secret, accountID, inner)
+				restored, info, err := OpenManagedDataBundleWithInfo(secret, accountID, sealed)
+				if !test.valid {
+					if err != ErrRecoveryFailed {
+						t.Fatalf("unsupported bundle version %d was not rejected: %v", test.version, err)
+					}
+					return
+				}
+				// The current large, compressible bundle is valid in either inner
+				// representation. Compression selection belongs to the writer.
+				if err != nil || info.Compressed != compressed || !reflect.DeepEqual(restored, bundle) {
+					t.Fatalf("current bundle encoding rejected or changed: compressed=%v info=%+v err=%v", compressed, info, err)
+				}
+			})
+		}
 	}
 }

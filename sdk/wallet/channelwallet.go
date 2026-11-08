@@ -18,7 +18,7 @@ func NewChannelWallet(wallet *InternalWallet, peerId []byte, id uint32) *channel
 	return &channelWallet{
 		wallet: wallet,
 		peerId: peerId,
-		id: id, // 对支付签名而言，是index；对通道签名而言，是change
+		id:     id, // 对支付签名而言，是index；对通道签名而言，是change
 	}
 }
 
@@ -65,7 +65,7 @@ func (p *channelWallet) SignMessage(msg []byte) ([]byte, error) {
 	return p.wallet.signMessage(privKey, msg).Serialize(), nil
 }
 
-func (p *channelWallet) SignPsbt(packet *psbt.Packet) (error) {
+func (p *channelWallet) SignPsbt(packet *psbt.Packet) error {
 	privKey := p.wallet.getPaymentPrivKeyWithIndex(p.id)
 	return p.wallet.signPsbt(privKey, packet)
 }
@@ -75,7 +75,7 @@ func (p *channelWallet) SignPsbt_SatsNet(packet *spsbt.Packet) error {
 	return p.wallet.signPsbt_SatsNet(privKey, packet)
 }
 
-func (p *channelWallet) SignPsbts(packet []*psbt.Packet) (error) {
+func (p *channelWallet) SignPsbts(packet []*psbt.Packet) error {
 	privKey := p.wallet.getPaymentPrivKeyWithIndex(p.id)
 	return p.wallet.signPsbts(privKey, packet)
 }

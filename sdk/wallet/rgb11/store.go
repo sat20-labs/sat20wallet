@@ -266,7 +266,9 @@ func (s *ProjectionStore) SaveLocalMetadata(name string, value []byte) error {
 	if err != nil {
 		return err
 	}
-	return s.writeReservationRecord(key, append([]byte(nil), value...))
+	// Local cursors never enter the portable RGB recovery snapshot. A single
+	// KVDB.Write is atomic and must not advance its backup generation.
+	return s.db.Write(key, append([]byte(nil), value...))
 }
 
 func (s *ProjectionStore) LoadLocalMetadata(name string) ([]byte, error) {
@@ -323,9 +325,9 @@ func (s *ProjectionStore) ValidateAndStoreConsignment(ctx context.Context, valid
 	if err != nil {
 		return nil, err
 	}
-	batch := s.newWriteBatch()
-	if batch == nil {
-		return nil, errors.New("RGB11 KVDB returned nil write batch")
+	batch, err := s.newWriteBatch()
+	if err != nil {
+		return nil, err
 	}
 	defer batch.Close()
 	if err := batch.Put(objectKey, append([]byte(nil), raw...)); err != nil {
@@ -546,9 +548,9 @@ func (s *ProjectionStore) SavePendingTransfers(pendingList []*PendingTransfer) e
 	if len(pendingList) == 0 {
 		return ErrValidationReceipt
 	}
-	batch := s.newWriteBatch()
-	if batch == nil {
-		return errors.New("RGB11 KVDB returned nil write batch")
+	batch, err := s.newWriteBatch()
+	if err != nil {
+		return err
 	}
 	defer batch.Close()
 	seen := make(map[string]struct{}, len(pendingList))
@@ -641,9 +643,9 @@ func (s *ProjectionStore) savePendingTransferStates(pendingList, expected []*Pen
 	if len(pendingList) == 0 {
 		return ErrValidationReceipt
 	}
-	batch := s.newWriteBatch()
-	if batch == nil {
-		return errors.New("RGB11 KVDB returned nil write batch")
+	batch, err := s.newWriteBatch()
+	if err != nil {
+		return err
 	}
 	defer batch.Close()
 	seen := make(map[string]struct{}, len(pendingList))
@@ -743,9 +745,9 @@ func (s *ProjectionStore) CompactSettledRecipientConsignments(transferIDs []stri
 		pending.RecipientConsignment = nil
 		pendingList = append(pendingList, pending)
 	}
-	batch := s.newWriteBatch()
-	if batch == nil {
-		return errors.New("RGB11 KVDB returned nil write batch")
+	batch, err := s.newWriteBatch()
+	if err != nil {
+		return err
 	}
 	defer batch.Close()
 	for _, pending := range pendingList {
@@ -800,9 +802,9 @@ func (s *ProjectionStore) CompactRejectedTransfers(transferIDs []string) error {
 	if err != nil {
 		return err
 	}
-	batch := s.db.NewWriteBatch()
-	if batch == nil {
-		return errors.New("RGB11 KVDB returned nil write batch")
+	batch, err := s.newWriteBatch()
+	if err != nil {
+		return err
 	}
 	defer batch.Close()
 	for _, pending := range pendingList {
@@ -941,9 +943,9 @@ func (s *ProjectionStore) CompareAndSaveTransferState(expected, state *TransferS
 	if err != nil {
 		return err
 	}
-	batch := s.newWriteBatch()
-	if batch == nil {
-		return ErrValidationReceipt
+	batch, err := s.newWriteBatch()
+	if err != nil {
+		return err
 	}
 	defer batch.Close()
 	if err := batch.Put(key, encoded); err != nil {
@@ -1115,9 +1117,9 @@ func (s *ProjectionStore) CommitProjection(output *indexer.TxOutput, asset *inde
 	if err != nil {
 		return err
 	}
-	batch := s.newWriteBatch()
-	if batch == nil {
-		return errors.New("RGB11 KVDB returned nil write batch")
+	batch, err := s.newWriteBatch()
+	if err != nil {
+		return err
 	}
 	defer batch.Close()
 	if err := batch.Put(outputDBKey, encodedOutput); err != nil {
@@ -1184,9 +1186,9 @@ func (s *ProjectionStore) SaveProofState(proof *AllocationProof) error {
 	if err != nil {
 		return err
 	}
-	batch := s.newWriteBatch()
-	if batch == nil {
-		return errors.New("RGB11 KVDB returned nil write batch")
+	batch, err := s.newWriteBatch()
+	if err != nil {
+		return err
 	}
 	defer batch.Close()
 	if err := batch.Put(key, encoded); err != nil {
@@ -1271,9 +1273,9 @@ func (s *ProjectionStore) StageProjections(replacements []ProjectionReplacement)
 	if err != nil {
 		return err
 	}
-	batch := s.newWriteBatch()
-	if batch == nil {
-		return errors.New("RGB11 KVDB returned nil write batch")
+	batch, err := s.newWriteBatch()
+	if err != nil {
+		return err
 	}
 	defer batch.Close()
 	for outpoint, output := range outputs {
@@ -1325,9 +1327,9 @@ func (s *ProjectionStore) DeleteProjections(outpoints []string) error {
 	if err != nil {
 		return err
 	}
-	batch := s.newWriteBatch()
-	if batch == nil {
-		return errors.New("RGB11 KVDB returned nil write batch")
+	batch, err := s.newWriteBatch()
+	if err != nil {
+		return err
 	}
 	defer batch.Close()
 	for outpoint := range remove {
@@ -1373,9 +1375,9 @@ func (s *ProjectionStore) ReplaceProjections(consumedOutpoints []string, replace
 	for _, outpoint := range consumedOutpoints {
 		consumed[outpoint] = true
 	}
-	batch := s.newWriteBatch()
-	if batch == nil {
-		return errors.New("RGB11 KVDB returned nil write batch")
+	batch, err := s.newWriteBatch()
+	if err != nil {
+		return err
 	}
 	defer batch.Close()
 	for outpoint := range consumed {

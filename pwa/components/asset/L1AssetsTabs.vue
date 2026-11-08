@@ -64,9 +64,9 @@
             <div v-for="task in rgb11PendingTasks" :key="task.key"
               class="rounded border border-amber-800/60 bg-amber-950/20 p-2">
               <div class="flex items-center justify-between gap-2">
-                <span>{{ task.representative.asset?.Name?.Ticker || 'RGB' }} · {{ rgb11TaskMode(task) }}</span>
+                <span>{{ rgb11DisplayLabel(task.representative.asset) }} · {{ rgb11TaskMode(task) }}</span>
                 <span :class="rgb11TransferStatusClass(task.representative.status)">
-                  {{ task.representative.status }}
+                  {{ displayRGB11State(task.representative.status) }}
                 </span>
               </div>
               <div>{{ $t('rgb11Transfer.pendingTaskCount', { count: task.members.length }) }}</div>
@@ -105,19 +105,31 @@
             <div v-for="transfer in rgb11Transfers" :key="transfer.transfer_id"
               class="rounded border border-zinc-700/60 p-2">
               <div class="flex items-center justify-between gap-2">
-                <span class="min-w-0 flex-1 break-all">{{ transfer.direction }} · {{ transfer.asset?.Name?.Ticker || 'RGB' }}</span>
-                <span class="shrink-0" :class="rgb11TransferStatusClass(transfer.status)">{{ transfer.status }}</span>
+                <span class="min-w-0 flex-1 break-all">{{ displayRGB11State(transfer.direction) }} · {{ rgb11DisplayLabel(transfer.asset) }}</span>
+                <span class="shrink-0" :class="rgb11TransferStatusClass(transfer.status)">{{ displayRGB11State(transfer.status) }}</span>
               </div>
-              <div>{{ $t('rgb11Transfer.ackStatus') }}: {{ transfer.ack_status || 'pending' }}</div>
+              <div>{{ $t('rgb11Transfer.ackStatus') }}: {{ displayRGB11State(transfer.ack_status || 'pending') }}</div>
               <div v-if="transfer.reject_reason" class="text-red-400">
                 {{ $t('rgb11Transfer.rejectReason') }}: {{ transfer.reject_reason }}
               </div>
-              <div>{{ $t('rgb11Transfer.durability') }}: {{ transfer.relay_durability || 'local' }}</div>
+              <div>{{ $t('rgb11Transfer.durability') }}: {{ displayRGB11State(transfer.relay_durability || 'local') }}</div>
               <div v-if="transfer.witness_txid" class="break-all">
                 TX: {{ transfer.witness_txid }}
               </div>
               <div v-else class="break-all">ID: {{ transfer.transfer_id }}</div>
+              <Button v-if="transfer.direction === 'send' && transfer.status === 'settled' && transfer.transport_mode === 'out-of-band'"
+                size="sm" variant="outline" class="mt-2"
+                :disabled="rgb11TransferExporting === transfer.transfer_id"
+                @click="exportRGB11SettledTransfer(transfer)">
+                {{ $t('rgb11Transfer.downloadConsignment') }}
+              </Button>
+              <div v-if="rgb11TransferExportMessages[transfer.transfer_id]" class="mt-1 break-all"
+                :class="rgb11TransferExportMessages[transfer.transfer_id].success ? 'text-emerald-400' : 'text-red-400'">
+                {{ rgb11TransferExportMessages[transfer.transfer_id].text }}
+              </div>
             </div>
+            <Button v-if="hasMoreRGB11Transfers" size="sm" variant="outline" class="w-full"
+              @click="rgb11TransferLimit += 8">{{ $t('rgb11Transfer.loadMore') }}</Button>
           </div>
         </div>
       </div>
@@ -137,7 +149,7 @@
               <div class="truncate font-medium text-zinc-400">
                 {{ asset.protocol === 'rgb11' ? asset.label : asset.label.toLocaleUpperCase() }}
               </div>
-              <div v-if="asset.protocol === 'rgb11' && asset.display_name && asset.display_name !== asset.ticker"
+              <div v-if="asset.protocol === 'rgb11' && asset.display_name && asset.display_name !== asset.label"
                 class="truncate text-xs text-zinc-400" :title="asset.display_name">
                 {{ asset.display_name }}
               </div>
@@ -224,6 +236,11 @@
               <Icon icon="lucide:download" class="w-4 h-4 mr-1" />
               {{ $t('rgb11Transfer.downloadContract') }}
             </Button>
+            <Button v-if="asset.protocol === 'rgb11' && asset.type === 'f' && hasIFAControl(asset)"
+              size="sm" variant="outline" :disabled="rgb11State.consistency_status !== 'ok' || !!rgb11Error"
+              @click="inflationAsset = asset; showInflation = true">
+              {{ $t('rgb11Transfer.inflate') }}
+            </Button>
           </div>
           <div v-if="asset.protocol === 'rgb11' && rgb11ExportMessages[asset.contract_id || '']"
             class="mt-1 break-all text-right text-[11px]"
@@ -233,15 +250,15 @@
           <div v-if="asset.protocol === 'rgb11'" class="mt-2 space-y-1 text-[11px] text-zinc-500">
             <div v-for="proof in rgb11Proofs(asset)" :key="`${proof.outpoint}:${proof.operation_id}`"
               class="min-w-0 rounded border border-zinc-700/60 p-2">
-              <div class="break-all">Carrier: {{ proof.outpoint }}</div>
-              <div>Method: {{ proof.carrier_binding?.commitment_method || 'unknown' }}</div>
-              <div>Confirmations: {{ proof.confirmations || 0 }}</div>
+              <div class="break-all">{{ $t('walletComponents.carrier') }} {{ proof.outpoint }}</div>
+              <div>{{ $t('walletComponents.method') }} {{ proof.carrier_binding?.commitment_method || $t('walletComponents.states_unknown') }}</div>
+              <div>{{ $t('walletComponents.confirmations') }} {{ proof.confirmations || 0 }}</div>
               <div :class="proof.policy_status === 'rejected' ? 'text-red-400' : ''">
-                Policy: {{ proof.policy_status || 'unchecked' }}
+                {{ $t('walletComponents.policy') }} {{ displayRGB11State(proof.policy_status || 'unchecked') }}
               </div>
-              <div v-if="proof.policy_reason" class="break-all">Policy reason: {{ proof.policy_reason }}</div>
-              <div class="break-all">Consignment: {{ proof.consignment_hash || 'local-only' }}</div>
-              <div>UTXO lock: reason={{ rgb11ProofLockReason(proof) }}</div>
+              <div v-if="proof.policy_reason" class="break-all">{{ $t('walletComponents.policyReason') }} {{ proof.policy_reason }}</div>
+              <div class="break-all">{{ $t('walletComponents.consignment') }} {{ proof.consignment_hash || $t('walletComponents.states_local_only') }}</div>
+              <div>{{ $t('walletComponents.utxoLockReason') }}{{ displayRGB11State(rgb11ProofLockReason(proof)) }}</div>
             </div>
           </div>
         </div>
@@ -257,6 +274,8 @@
     </div>
     <RGB11SendDialog v-if="resumeTaskAsset" :key="resumeTaskId" v-model:open="showResumeTask"
       :asset="resumeTaskAsset" :resume-transfer-id="resumeTaskId" @completed="refreshRGB11TaskState" />
+    <RGB11SendDialog v-if="inflationAsset" :key="inflationAsset.id" v-model:open="showInflation"
+      :asset="inflationAsset" inflation @completed="refreshRGB11TaskState" />
   </div>
 </template>
 
@@ -281,6 +300,7 @@ import { useI18n } from 'vue-i18n'
 interface Asset {
   id: string
   key?: string
+  asset_key?: string
   ticker: string
   label: string
   amount: number | string
@@ -321,7 +341,12 @@ const globalStore = useGlobalStore()
 const { address, network } = storeToRefs(walletStore)
 const { env, hideBalance } = storeToRefs(globalStore)
 const { state: rgb11State, error: rgb11Error } = storeToRefs(rgb11Store)
-const { t } = useI18n()
+const { t, te } = useI18n()
+const displayRGB11State = (value: unknown) => {
+  const raw = String(value ?? '')
+  const key = `walletComponents.states_${raw.replace(/-/g, '_')}`
+  return te(key) ? t(key) : raw
+}
 
 const mempoolUrl = computed(() => {
   return generateMempoolUrl({
@@ -381,13 +406,28 @@ const rgb11AssetIdentity = (value: any) => {
   return protocol && type && ticker ? `${protocol}:${type}:${ticker}` : ''
 }
 
+const rgb11DisplayLabel = (value: any) => {
+  const key = rgb11AssetIdentity(value)
+  const asset = props.assets.find(item => item.protocol === 'rgb11' &&
+    (item.asset_key || item.key || item.id) === key)
+  if (asset?.label) return asset.label
+  const info = (rgb11State.value.ticker_infos || []).find((item: any) =>
+    rgb11AssetIdentity(item?.name || item?.Name || item?.AssetName) === key)
+  return String(info?.ticker || info?.Ticker || value?.Name?.Ticker || 'RGB')
+}
+
 const rgb11Proofs = (asset: Asset) => {
-  const expected = String(asset.canonical_name || asset.key || asset.id || '')
+  const expected = String(asset.asset_key || asset.key || asset.id || '')
   if (!expected.startsWith('rgb11:')) return []
   return (rgb11State.value.proofs || []).filter((proof: any) => (
     rgb11AssetIdentity(proof) === expected && proof?.status !== 'spending'
   ))
 }
+const hasIFAControl = (asset: Asset) => (rgb11State.value.proofs || []).some((proof: any) => {
+  const name = proof?.asset_name || proof?.AssetName || proof?.name || proof?.Name || {}
+  return name.Protocol === 'rgb11' && name.Type === 'control' &&
+    name.Ticker === asset.ticker && String(proof?.status || '') === 'settled'
+})
 
 type RGB11Task = {
   key: string
@@ -405,6 +445,11 @@ const resumeTaskAsset = ref<any>(null)
 const rgb11TaskMessages = ref<Record<string, RGB11TaskMessage>>({})
 const rgb11Exporting = ref('')
 const rgb11ExportMessages = ref<Record<string, RGB11TaskMessage>>({})
+const rgb11TransferExporting = ref('')
+const rgb11TransferExportMessages = ref<Record<string, RGB11TaskMessage>>({})
+const rgb11TransferLimit = ref(8)
+const showInflation = ref(false)
+const inflationAsset = ref<Asset | null>(null)
 const directMailboxRetryDelays = [0, 1_000, 2_000, 4_000, 8_000, 16_000]
 let directMailboxTimer: ReturnType<typeof setTimeout> | undefined
 let directMailboxGeneration = 0
@@ -456,6 +501,44 @@ const exportRGB11Contract = async (asset: Asset) => {
   }
 }
 
+const exportRGB11SettledTransfer = async (transfer: any) => {
+  const transferId = String(transfer?.transfer_id || '')
+  if (!transferId || rgb11TransferExporting.value) return
+  const scope = directScope.value
+  rgb11TransferExporting.value = transferId
+  try {
+    const identity = assertWalletIdentityReady()
+    const [error, response] = await walletManager.exportRGB11SettledConsignment(transferId)
+    if (error || !response?.transfer) throw error || new Error(t('rgb11Transfer.taskResumeFailed'))
+    if (scope !== directScope.value) throw new Error(t('rgb11Transfer.scopeChanged'))
+    assertWalletIdentityReady(identity)
+    const pkg = JSON.parse(response.transfer)
+    if (pkg?.state?.transfer_id !== transferId || pkg.state?.direction !== 'send' ||
+      pkg.state?.status !== 'settled' || pkg.state?.transport_mode !== 'out-of-band' ||
+      typeof pkg.recipient_consignment_base64 !== 'string' || !pkg.recipient_consignment_base64) {
+      throw new Error(t('rgb11Transfer.taskResumeFailed'))
+    }
+    const bytes = Uint8Array.from(atob(pkg.recipient_consignment_base64), (value) => value.charCodeAt(0))
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `rgb11-transfer-${transferId.slice(0, 24)}.rgbc`
+    link.click()
+    URL.revokeObjectURL(url)
+    rgb11TransferExportMessages.value = {
+      ...rgb11TransferExportMessages.value,
+      [transferId]: { success: true, text: t('rgb11Transfer.downloadConsignment') },
+    }
+  } catch (error: any) {
+    rgb11TransferExportMessages.value = {
+      ...rgb11TransferExportMessages.value,
+      [transferId]: { success: false, text: error?.message || t('rgb11Transfer.taskResumeFailed') },
+    }
+  } finally {
+    rgb11TransferExporting.value = ''
+  }
+}
+
 const rgb11PendingTasks = computed<RGB11Task[]>(() => {
   const groups = new Map<string, any[]>()
   for (const transfer of rgb11State.value.transfers || []) {
@@ -475,8 +558,9 @@ const rgb11PendingTasks = computed<RGB11Task[]>(() => {
 })
 
 const rgb11Transfers = computed(() => (
-  [...(rgb11State.value.transfers || [])].reverse().slice(0, 8)
+  [...(rgb11State.value.transfers || [])].reverse().slice(0, rgb11TransferLimit.value)
 ))
+const hasMoreRGB11Transfers = computed(() => (rgb11State.value.transfers || []).length > rgb11TransferLimit.value)
 
 const nonTerminalDirectTransfers = computed(() => (
   (rgb11State.value.transfers || []).filter((transfer: any) => (
@@ -746,6 +830,9 @@ watch(directMailboxFingerprint, () => {
 
 watch([directScope, directAllowed], () => {
   directContextGeneration++
+  rgb11TransferLimit.value = 8
+  showInflation.value = false
+  inflationAsset.value = null
   directStateInvalid = true
   stopDirectMailboxRetry()
   if (directAllowed.value) startDirectMailboxRetry(true)

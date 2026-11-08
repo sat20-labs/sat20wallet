@@ -10,7 +10,7 @@ import (
 )
 
 func TestRGB11RefreshLockContext(t *testing.T) {
-	manager := newRGB11MultiDeviceManager(t, newRGB11StatusPrivateKey(t), 57)
+	manager := newRGB11MultiDeviceManager(t, newRGB11StatusPrivateKey(t), 57, accountGroupInactive)
 	manager.rgbManager.evidence = &rgb11StatusEvidence{
 		statuses:  make(map[string]*rgb11wallet.BitcoinTxStatus),
 		outspends: make(map[string]*rgb11wallet.BitcoinOutspend),

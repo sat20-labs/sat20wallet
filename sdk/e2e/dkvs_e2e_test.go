@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	bitcoinchaincfg "github.com/btcsuite/btcd/chaincfg"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet"
 	"github.com/sat20-labs/satoshinet/btcec"
 	"github.com/sat20-labs/satoshinet/chaincfg"
@@ -77,31 +78,38 @@ func TestRealSatoshiNetDKVSAutopayNameAndMailboxSync(t *testing.T) {
 	require.Contains(t, coreState.Delegates, actorA.Address)
 	require.Contains(t, coreState.Delegates, actorB.Address)
 	require.Equal(t, templateruntime.AutopayStatusActive, coreState.Delegates[actorB.Address].Status)
+	payment := wallet.DKVSAutopayOptions{AddressParams: &chaincfg.TestNetParams, PoolContract: contractA.MustEncode()}
+	runRealSatoshiNetDKVSAutopayNameAndMailboxSync(t, f, actorA, actorB, payment, senderManager, recipientManager)
+}
 
+func runRealSatoshiNetDKVSAutopayNameAndMailboxSync(t *testing.T, f *templateFixture,
+	owner, successor *dkvsKeyPathActor, payment wallet.DKVSAutopayOptions,
+	senderManager, recipientManager *wallet.Manager) string {
+	t.Helper()
 	fakeL1 := f.NetworkFakeL1()
-	fakeL1.setNameOwner(dkvsE2EName, actorA.Address)
+	fakeL1.setNameOwner(dkvsE2EName, owner.Address)
 	clientA := dkvsClientForNode(t, f.Network.Core)
 	nameKey, err := dkvsindexer.NameKey(dkvsE2EName)
 	require.NoError(t, err)
-	autopayA := wallet.DKVSAutopayOptions{AddressParams: &chaincfg.TestNetParams, PoolContract: contractA.MustEncode()}
-	_, err = clientA.PutSignedRecordWithAutopay(actorA.Wallet, nameKey, []byte("owner-a"), dkvsindexer.RecordOptions{Seq: 1}, autopayA)
+	autopayA := payment
+	_, err = clientA.PutSignedRecordWithAutopay(owner.Wallet, nameKey, []byte("owner-a"), dkvsindexer.RecordOptions{Seq: 1}, autopayA)
 	require.NoError(t, err)
 	requireDKVSValue(t, f.Network.Bootstrap, nameKey, []byte("owner-a"))
 	require.NoError(t, subscribeDKVSNodeInternal(t, f.Network.Miner, dkvsindexer.Subscription{Type: dkvsindexer.SubscriptionKey, Target: nameKey}))
 	require.NoError(t, connectNode(f.Network.Miner, f.Network.Core))
 	requireDKVSValue(t, f.Network.Miner, nameKey, []byte("owner-a"))
 
-	fakeL1.setNameOwner(dkvsE2EName, actorB.Address)
+	fakeL1.setNameOwner(dkvsE2EName, successor.Address)
 	clientB := dkvsClientForNode(t, f.Network.Core)
-	actorBRecordPayer, err := dkvsindexer.P2TRAddressFromPubKeyBytes(actorB.Wallet.GetPubKey().SerializeCompressed(), &chaincfg.TestNetParams)
+	actorBRecordPayer, err := dkvsindexer.P2TRAddressFromPubKeyBytes(successor.Wallet.GetPubKey().SerializeCompressed(), &chaincfg.TestNetParams)
 	require.NoError(t, err)
-	require.Equal(t, actorB.Address, actorBRecordPayer)
-	autopayB := wallet.DKVSAutopayOptions{AddressParams: &chaincfg.TestNetParams, PoolContract: contractA.MustEncode()}
-	_, err = clientB.PutSignedRecordWithAutopay(actorB.Wallet, nameKey, []byte("owner-b"), dkvsindexer.RecordOptions{Seq: 2}, autopayB)
+	require.Equal(t, successor.Address, actorBRecordPayer)
+	autopayB := payment
+	_, err = clientB.PutSignedRecordWithAutopay(successor.Wallet, nameKey, []byte("owner-b"), dkvsindexer.RecordOptions{Seq: 2}, autopayB)
 	require.NoError(t, err)
 	requireDKVSValue(t, f.Network.Bootstrap, nameKey, []byte("owner-b"))
 	requireDKVSValue(t, f.Network.Miner, nameKey, []byte("owner-b"))
-	deletedName, err := clientB.DeleteCurrentRecord(actorB.Wallet, nameKey, 0)
+	deletedName, err := clientB.DeleteCurrentRecord(successor.Wallet, nameKey, 0)
 	require.NoError(t, err)
 	require.Equal(t, uint64(3), deletedName.Seq)
 	requireDKVSAbsent(t, f.Network.Bootstrap, nameKey)
@@ -109,13 +117,15 @@ func TestRealSatoshiNetDKVSAutopayNameAndMailboxSync(t *testing.T) {
 	absent, err := clientB.GetKeyState(nameKey)
 	require.NoError(t, err)
 	require.Equal(t, dkvsindexer.KeyStateNeverSeen, absent.Status)
-	rewrittenName, err := clientB.PutSignedRecordWithAutopay(actorB.Wallet, nameKey,
+	rewrittenName, err := clientB.PutSignedRecordWithAutopay(successor.Wallet, nameKey,
 		[]byte("owner-b-rewritten"), dkvsindexer.RecordOptions{}, autopayB)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), rewrittenName.Seq)
 	requireDKVSValue(t, f.Network.Bootstrap, nameKey, rewrittenName.Value)
 	requireDKVSValue(t, f.Network.Core, nameKey, rewrittenName.Value)
 	requireDKVSValue(t, f.Network.Miner, nameKey, rewrittenName.Value)
+	t.Logf("dkvs-autopay-name-lifecycle: key=%s deleted_seq=%d deleted_status=%s rewritten_seq=%d rewritten_hash=%s",
+		nameKey, deletedName.Seq, absent.Status, rewrittenName.Seq, dkvsindexer.RecordHash(rewrittenName).String())
 
 	// Message entries use MessageService -> AccountBound mailbox, not generic
 	// KV admission. Both wallet accounts were explicitly bound at setup.
@@ -152,6 +162,8 @@ func TestRealSatoshiNetDKVSAutopayNameAndMailboxSync(t *testing.T) {
 	require.Equal(t, "sender-paid-message", string(messages[0].Payload.Body))
 	require.NoError(t, recipientManager.DeleteMailboxMessage(recipientManager.GetWallet(), mailKey))
 	requireDKVSAbsent(t, f.Network.Core, mailKey)
+	t.Logf("dkvs-autopay-mailbox-lifecycle: recipient=%s key=%s after_delete=absent", recipientID, mailKey)
+	return mailKey
 }
 
 func mustSerializeDirectForE2E(t *testing.T, message *wire.DirectMessage) []byte {
@@ -250,12 +262,14 @@ func newDKVSKeyPathActor(t *testing.T, key *btcec.PrivateKey) *dkvsKeyPathActor 
 	t.Helper()
 	pkScript, err := wallet.PubKeyToPkScript(key.PubKey())
 	require.NoError(t, err)
-	address, err := wallet.AddrFromPkScript_SatsNet(pkScript)
+	// This actor belongs to the fixed testnet node fixture, independently of
+	// a preceding SDK Manager's process-wide network selection (e.g. regtest).
+	address, err := wallet.AddressFromPkScript_SatsNet(pkScript, &chaincfg.TestNetParams)
 	require.NoError(t, err)
 	payer, err := dkvsindexer.P2TRAddressFromPubKeyBytes(key.PubKey().SerializeCompressed(), &chaincfg.TestNetParams)
 	require.NoError(t, err)
 	require.Equal(t, payer, address)
-	w, _, err := wallet.NewInternalWalletWithPrivKey(key.Serialize(), wallet.GetChainParam())
+	w, _, err := wallet.NewInternalWalletWithPrivKey(key.Serialize(), &bitcoinchaincfg.TestNet4Params)
 	require.NoError(t, err)
 	return &dkvsKeyPathActor{Key: key, Wallet: w, PkScript: pkScript, Address: address}
 }

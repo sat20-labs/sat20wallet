@@ -1,16 +1,11 @@
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { versionPolicy, policyRevision } from '@/utils/pwaVersionPolicy'
 import { useToast } from '@/components/ui/toast-new/use-toast'
 
 const APP_CACHE_PREFIX = 'sat20-wallet-pwa-'
 
-const showRestartRequiredScreen = () => {
-  const isChinese = navigator.language.toLowerCase().startsWith('zh')
-  const title = isChinese ? '更新已准备完成' : 'Update ready'
-  const description = isChinese
-    ? '请关闭所有 SAT20 Wallet 窗口，然后重新打开应用。钱包数据已保留。'
-    : 'Close all SAT20 Wallet windows, then open the app again. Your wallet data is preserved.'
-
+const showRestartRequiredScreen = (title: string, description: string) => {
   document.title = title
   document.body.innerHTML = `
     <main style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#09090b;color:#f4f4f5;padding:24px;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
@@ -27,6 +22,7 @@ const showRestartRequiredScreen = () => {
 }
 
 export function usePwaUpdate() {
+  const { t } = useI18n()
   const { toast } = useToast()
   const isUpdating = computed(() => { void policyRevision.value; return versionPolicy.updating })
 
@@ -49,7 +45,7 @@ export function usePwaUpdate() {
       if (registration.waiting) {
         return registration.waiting
       }
-      throw new Error('No new PWA update worker was found')
+      throw new Error(t('pwaUi.update.noWorker'))
     }
     await new Promise<void>((resolve, reject) => {
       const finish = (error?: Error) => {
@@ -59,7 +55,7 @@ export function usePwaUpdate() {
       }
       const onStateChange = () => {
         if (installing.state === 'installed' || installing.state === 'activated') finish()
-        else if (installing.state === 'redundant') finish(new Error('PWA update worker became redundant'))
+        else if (installing.state === 'redundant') finish(new Error(t('pwaUi.update.redundant')))
       }
       installing.addEventListener('statechange', onStateChange)
       onStateChange()
@@ -77,7 +73,7 @@ export function usePwaUpdate() {
       }
       const onStateChange = () => {
         if (worker.state === 'activated') finish()
-        else if (worker.state === 'redundant') finish(new Error('PWA update worker became redundant'))
+        else if (worker.state === 'redundant') finish(new Error(t('pwaUi.update.redundant')))
       }
       // Observe the selected worker before requesting activation, including
       // the case where it has already activated while installation settled.
@@ -102,17 +98,17 @@ export function usePwaUpdate() {
     try {
       await drained
       if (!('serviceWorker' in navigator)) {
-        throw new Error('Service Worker is unavailable')
+        throw new Error(t('pwaUi.update.unavailable'))
       }
 
       const registration = await navigator.serviceWorker.getRegistration()
       if (!registration) {
-        throw new Error('PWA Service Worker is not registered')
+        throw new Error(t('pwaUi.update.unregistered'))
       }
 
       await registration.update()
       await prepareUpdateForRestart(registration)
-      showRestartRequiredScreen()
+      showRestartRequiredScreen(t('pwaUi.update.ready'), t('pwaUi.update.restartHint'))
     } catch (error) {
       versionPolicy.updateFailed()
       throw error
@@ -122,11 +118,11 @@ export function usePwaUpdate() {
   const notifyUpdateAvailable = (description?: string) => {
     toast({
       variant: 'info',
-      title: '发现新版本',
-      description: description || '点击“立即更新”刷新到最新版本，钱包数据会保留。',
+      title: t('pwaUi.update.available'),
+      description: description || t('pwaUi.update.installHint'),
       duration: 15000,
       action: {
-        label: '立即更新',
+        label: t('pwaUi.update.now'),
         onClick: () => {
           void reloadApp().catch((error) => {
             console.warn('PWA update failed:', error)

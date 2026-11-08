@@ -18,8 +18,12 @@ import (
 func TestRealSatoshiNetDKVSManagerFreeLocalIsolationAndRecovery(t *testing.T) {
 	fixture := newDKVSNoPluginTemplateFixtureWithArgs(t, map[string]int64{}, nil, nil, dkvsMinerArgs(t))
 	waitForDKVSPeerReady(t, fixture.Network)
+	runRealSatoshiNetDKVSManagerFreeLocalIsolationAndRecovery(t, fixture, dkvsClientMnemonic)
+}
 
-	primary, primaryLocation := newWalletManagerForNode(t, fixture.Network.Core, dkvsClientMnemonic)
+func runRealSatoshiNetDKVSManagerFreeLocalIsolationAndRecovery(t *testing.T, fixture *templateFixture, mnemonic string) {
+	t.Helper()
+	primary, primaryLocation := newWalletManagerForNode(t, fixture.Network.Core, mnemonic)
 	require.NoError(t, primary.InitializeAccountManagement("123456"))
 	require.NoError(t, primary.BindAccountToCurrentCoreNode())
 	authorization, err := primary.ConfirmAccountStorage(wallet.AccountStorageTemporary, 0)
@@ -40,8 +44,8 @@ func TestRealSatoshiNetDKVSManagerFreeLocalIsolationAndRecovery(t *testing.T) {
 	require.NoError(t, err)
 
 	questions := e2eKnowledgeQuestions()
-	backup := account.Backup{Version: account.Version, Wallets: []account.WalletBackup{{
-		Name: "Free Local Root", Mnemonic: dkvsClientMnemonic, AccountCount: 2,
+	backup := account.Backup{Version: account.BackupVersion, Wallets: []account.WalletBackup{{
+		Name: "Free Local Root", Type: account.WalletMnemonic, Secret: []byte(mnemonic), AccountCount: 2,
 		SubAccounts: []account.SubAccount{{Index: 0, Name: "Primary", DID: "did:free:0"},
 			{Index: 1, Name: "Savings", DID: "did:free:1"}},
 	}}}
@@ -68,7 +72,7 @@ func TestRealSatoshiNetDKVSManagerFreeLocalIsolationAndRecovery(t *testing.T) {
 
 	// A fresh SDK manager connected to the bound CoreNode must reconstruct the
 	// confirmed replica and recover the complete atomic package.
-	sameEndpoint, _ := newWalletManagerForNode(t, fixture.Network.Core, dkvsClientMnemonic)
+	sameEndpoint, _ := newWalletManagerForNode(t, fixture.Network.Core, mnemonic)
 	loaded, err := sameEndpoint.LoadAccountRecoveryPackage(primaryLocation, pkg.Envelope.Locator)
 	require.NoError(t, err)
 	dkvsShare, err := account.RecoverDKVSShare(loaded.DKVSShareCapsule, loaded.KnowledgeBundle,
@@ -86,7 +90,7 @@ func TestRealSatoshiNetDKVSManagerFreeLocalIsolationAndRecovery(t *testing.T) {
 	require.Error(t, err)
 
 	// Identity and locator do not make endpoint-local data available on a peer.
-	otherEndpoint, otherLocation := newWalletManagerForNode(t, fixture.Network.Bootstrap, dkvsClientMnemonic)
+	otherEndpoint, otherLocation := newWalletManagerForNode(t, fixture.Network.Bootstrap, mnemonic)
 	_, err = otherEndpoint.LoadAccountRecoveryPackage(otherLocation, pkg.Envelope.Locator)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, wallet.ErrDKVSRecordNotFound) ||

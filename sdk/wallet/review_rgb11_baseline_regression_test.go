@@ -19,7 +19,7 @@ func reviewEnableRecovery(t *testing.T, manager *Manager) {
 	}
 }
 
-func TestReviewRGB11BaselineRechecksOperationPreconditions(t *testing.T) {
+func TestReviewRGB11ExplicitSyncControlsRemoteRecoveryApplication(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
@@ -59,12 +59,21 @@ func TestReviewRGB11BaselineRechecksOperationPreconditions(t *testing.T) {
 				executedFingerprint = walletFingerprint(manager.wallet)
 				return struct{}{}, nil
 			})
-		if reviewCatalogWallet(t, local, fingerprint) != nil {
-			t.Fatal("fixture did not apply the remote deletion during baseline sync")
-		}
-		if called || err == nil {
-			t.Fatalf("source changed during baseline sync but operation executed: called=%v requested=%s executed=%s err=%v",
+		if !called || err != nil || executedFingerprint != fingerprint {
+			t.Fatalf("local operation did not use its confirmed captured source: called=%v requested=%s executed=%s err=%v",
 				called, fingerprint, executedFingerprint, err)
+		}
+		if reviewCatalogWallet(t, local, fingerprint) == nil {
+			t.Fatal("local operation unexpectedly performed remote catalog synchronization")
+		}
+		if err := local.SyncAccountManagementState(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if reviewCatalogWallet(t, local, fingerprint) != nil {
+			t.Fatal("explicit synchronization did not apply the remote deletion")
+		}
+		if walletFingerprint(local.wallet) == fingerprint {
+			t.Fatal("explicit deletion left the removed source selected")
 		}
 	})
 
@@ -97,6 +106,9 @@ func TestReviewRGB11BaselineRechecksOperationPreconditions(t *testing.T) {
 		}
 		if active, err := local.hasAccountManagedRGB11Transition(); err != nil || active {
 			t.Fatalf("local fixture must start without active state: active=%v err=%v", active, err)
+		}
+		if err := local.SyncAccountManagementState(context.Background()); err != nil {
+			t.Fatal(err)
 		}
 		called := false
 		_, err = runRGB11ManagedOperation(local, context.Background(), rgb11ManagedOperationNew,

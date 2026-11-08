@@ -32,6 +32,9 @@ func (p *Manager) scheduleRootAccountDKVSServices(accountID string) {
 		return
 	}
 	p.dkvs.schedule(dkvsAccountServiceJobPrefix+accountID, func(store *dkvsStore) error {
+		if !p.accountManagedRecoveryConfigured() {
+			return nil
+		}
 		if p.rootDKVSAccountID() != accountID {
 			return nil
 		}
@@ -73,6 +76,9 @@ func (m *dkvsManager) markMailboxPolled(accountID string) {
 
 func (p *Manager) pollRootAccountMailboxIfDue(client *SatsNetDKVSClient) (bool, error) {
 	if p == nil || p.dkvs == nil || client == nil {
+		return false, nil
+	}
+	if !p.accountManagedRecoveryConfigured() {
 		return false, nil
 	}
 	accountID := p.rootDKVSAccountID()

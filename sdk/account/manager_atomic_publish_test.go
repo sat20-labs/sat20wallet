@@ -27,8 +27,8 @@ func TestManagerPublishUsesAtomicRepositoryCapability(t *testing.T) {
 	}
 	value, err := manager.CreateRecoveryPackage(CreateOptions{
 		AccountID: "0000000000000000000000000000000000000000000000000000000000000000",
-		Backup: Backup{Version: Version, Wallets: []WalletBackup{{
-			Name: "wallet", Mnemonic: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+		Backup: Backup{Version: BackupVersion, Wallets: []WalletBackup{{
+			Name: "wallet", Type: WalletMnemonic, Secret: []byte("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"),
 			AccountCount: 1, SubAccounts: []SubAccount{{Index: 0, DID: "did"}},
 		}}},
 		RecoveryMode: RecoveryMode2Of2,

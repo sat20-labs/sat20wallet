@@ -11,7 +11,6 @@ import (
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 	coreissuance "github.com/sat20-labs/rgb11/issuance"
 	"github.com/sat20-labs/rgb11/schemas"
-	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	"os"
@@ -51,8 +50,11 @@ func newRGB11GenericSendFixture(t *testing.T) (*Manager, *Manager, *RGB11ImportR
 
 // Public send cases use genuine account activation and stable synchronization.
 // The local-only maintenance fixture below remains independent of this setup.
-func newRGB11GenericSendFixtureWithCarrier(t *testing.T, carrierValue int64) (*Manager, *Manager, *RGB11ImportResult, *rgb11AddressEvidence, *rgb11FlowIndexer) {
+func newRGB11GenericSendFixtureWithCarrier(t *testing.T, carrierValue int64, prepare ...rgbColdPrepare) (*Manager, *Manager, *RGB11ImportResult, *rgb11AddressEvidence, *rgb11FlowIndexer) {
 	t.Helper()
+	if len(prepare) > 1 {
+		t.Fatal("RGB source group accepts one preparation phase")
+	}
 	oldChain := _chain
 	_chain = "testnet"
 	t.Cleanup(func() { _chain = oldChain })
@@ -64,6 +66,9 @@ func newRGB11GenericSendFixtureWithCarrier(t *testing.T, carrierValue int64) (*M
 
 	sender := newRGB11ActivatedFlowAccount(t, "inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", remote, client, evidence, rpc)
 	recipient := newRGB11ActivatedFlowAccount(t, "comfort very add tuition senior run eight snap burst appear exile dutch", remote, client, evidence, rpc)
+	if len(prepare) == 1 && prepare[0] != nil {
+		prepare[0](sender, remote, evidence, rpc)
+	}
 	script, err := AddrToPkScript(sender.wallet.GetAddress(), GetChainParam())
 	if err != nil {
 		t.Fatal(err)
@@ -83,6 +88,9 @@ func newRGB11GenericSendFixtureWithCarrier(t *testing.T, carrierValue int64) (*M
 	if err != nil || issued == nil || len(issued.OutPoints) != 1 || issued.OutPoints[0] != source {
 		t.Fatalf("issue exact controlled carrier: issued=%v err=%v", issued, err)
 	}
+	// Public account backups reference the shared, authenticated genesis object.
+	installRGB11PublicContractFixture(t, sender, remote, issued.ContractID)
+	useRGB11TestCoreAuthority(t, recipient)
 	addOutput(100_000, 92)
 	endpoint, err := recipient.EnableConfiguredRGB11AddressReceive(RGB11ReceiveCapabilityOptions{RecordOptions: dkvsindexer.RecordOptions{TTL: testRGB11FreeLocalTTL}})
 	if err != nil {
@@ -115,6 +123,9 @@ func rgb11GenericFixtureSource(t *testing.T, sender *Manager, imported *RGB11Imp
 
 func newRGB11SendFixture(t *testing.T, native bool) (*Manager, *Manager, *RGB11ImportResult, *rgb11AddressEvidence, *rgb11FlowIndexer) {
 	t.Helper()
+	oldChain := _chain
+	_chain = "testnet"
+	t.Cleanup(func() { _chain = oldChain })
 	senderWallet := NewInternalWalletWithMnemonic(
 		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", "", &chaincfg.TestNet4Params,
 	)
@@ -155,8 +166,19 @@ func newRGB11SendFixture(t *testing.T, native bool) (*Manager, *Manager, *RGB11I
 		{OutPoint: plainOutpoint, Value: 100_000, PkScript: senderScript},
 	}
 
-	sender := newRGB11FlowManager(t, senderWallet, rpc, evidence, 101)
-	recipient := newRGB11FlowManager(t, recipientWallet, rpc, evidence, 102)
+	sender := newRGB11FlowManager(t, senderWallet, rpc, evidence, 101, accountGroupUnprepared)
+	recipient := newRGB11FlowManager(t, recipientWallet, rpc, evidence, 102, accountGroupUnprepared)
+	remote := newRGB11MemoryDKVSHTTP()
+	messageClient := newRGB11MessageNodeClient(remote)
+	configure := func(manager *Manager) {
+		manager.serverNode = NewNode(
+			messageClient, "message.test", SERVER_NODE,
+			messageClient.CoreNodePubKey(), messageClient.CoreNodePubKey(),
+		)
+		prepareRGBEndpoint(t, manager, remote)
+	}
+	configure(sender)
+	configure(recipient)
 	var imported *RGB11ImportResult
 	if native {
 		issued, issueErr := sender.rgbManager.IssueRGB11Asset(context.Background(), RGB11IssueRequest{
@@ -176,21 +198,6 @@ func newRGB11SendFixture(t *testing.T, native bool) (*Manager, *Manager, *RGB11I
 	if err != nil {
 		t.Fatal(err)
 	}
-	remote := newRGB11MemoryDKVSHTTP()
-	messageClient := newRGB11MessageNodeClient(remote)
-	configure := func(manager *Manager) {
-		manager.cfg = &sdkcommon.Config{
-			Env: "test", Chain: "testnet",
-			IndexerL2: &sdkcommon.Indexer{Scheme: "http", Host: "dkvs.test", Proxy: "testnet"},
-		}
-		manager.http = remote
-		manager.serverNode = NewNode(
-			messageClient, "message.test", SERVER_NODE,
-			messageClient.CoreNodePubKey(), messageClient.CoreNodePubKey(),
-		)
-	}
-	configure(sender)
-	configure(recipient)
 
 	endpoint, err := recipient.rgbManager.EnableConfiguredRGB11AddressReceive(RGB11ReceiveCapabilityOptions{RecordOptions: dkvsindexer.RecordOptions{TTL: testRGB11FreeLocalTTL}})
 	if err != nil {
@@ -578,7 +585,10 @@ func TestRGB11SendPreservesOtherContractOnSameCarrier(t *testing.T) {
 }
 
 func TestRGB11DirectReservationResumesAfterSDKRestart(t *testing.T) {
-	sender, recipient, imported, evidence, _ := newRGB11GenericSendFixture(t)
+	sender, recipient, imported, evidence, rpc := newRGB11GenericSendFixture(t)
+	sourceOutpoint := rgb11GenericFixtureSource(t, sender, imported)
+	accepted := newRGB11AcceptedEvidence(evidence, rpc)
+	sender.rgbManager.evidence = accepted
 	request := RGB11AddressSendRequest{
 		ReceiverAddress:  recipient.wallet.GetAddress(),
 		AssetName:        imported.AssetName,
@@ -618,7 +628,7 @@ func TestRGB11DirectReservationResumesAfterSDKRestart(t *testing.T) {
 	// workers first, just as a real runtime shutdown must do before DB teardown.
 	oldRGB := sender.rgbManager
 	oldRGB.scopeStates.stopReconciliations()
-	restarted, err := newRGB11Manager(sender, sender.db, sender.utxoLockerL1, evidence)
+	restarted, err := newRGB11Manager(sender, sender.db, sender.utxoLockerL1, accepted)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -626,9 +636,21 @@ func TestRGB11DirectReservationResumesAfterSDKRestart(t *testing.T) {
 	if err := restarted.selectRGB11Scope(); err != nil {
 		t.Fatal(err)
 	}
+	// A new RGB module starts unverified, like a cold wallet runtime. Obtain
+	// fresh chain evidence through the public API before resuming the ACK.
+	if _, err := sender.RefreshRGB11State(context.Background()); err != nil {
+		t.Fatalf("refresh restarted source before ACK: %v", err)
+	}
+	sourceProof, err := restarted.projectionStore.LoadProof(sourceOutpoint, imported.AssetName)
+	if err != nil || sourceProof == nil || sourceProof.OutPoint != sourceOutpoint ||
+		!restarted.rgb11CarrierAvailable(sourceOutpoint) {
+		t.Fatalf("restarted original source is not verified: proof_present=%t err=%v", sourceProof != nil, err)
+	}
+	logRGB11BroadcastState(t, "before-restart-ack", sender, prepared.State.TransferID, accepted)
 	resumed, err := sender.SyncConfiguredRGB11AddressMailbox(
 		context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{},
 	)
+	logRGB11BroadcastState(t, "after-restart-ack", sender, prepared.State.TransferID, accepted)
 	if err != nil || resumed == nil || resumed.ACKs != 1 || resumed.Invalid != 0 {
 		t.Fatalf("restarted module did not consume the original ACK: result=%+v err=%v", resumed, err)
 	}

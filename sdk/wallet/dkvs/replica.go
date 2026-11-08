@@ -2,6 +2,7 @@ package dkvs
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -23,6 +24,7 @@ const (
 	DKVSSubscriptionError         = "ERROR"
 	DKVSOutboxPending             = "pending"
 	DKVSOutboxInflight            = "inflight"
+	DKVSOutboxAcknowledged        = "acknowledged"
 	DKVSOutboxConflict            = "conflict"
 	DKVSOutboxTerminal            = "terminal"
 )
@@ -367,6 +369,57 @@ func (s *ReplicaStore) QueueOutbox(entry *BatchOutboxEntry) error {
 	}
 	return s.writeOutboxEntry(entry)
 }
+
+// ReplaceOutbox is used only after a definite height refusal. Publishing the
+// newly signed request and retiring the rejected one form one transaction.
+func (s *ReplicaStore) ReplaceOutbox(entry *BatchOutboxEntry, mutations []dkvsindexer.CASMutation,
+	requestID string, authorization *dkvsindexer.WalletWriteAuthorization) error {
+	if s == nil || s.db == nil || entry == nil || entry.Namespace == "" ||
+		entry.RequestID == "" || requestID == "" || requestID == entry.RequestID {
+		return dkvsindexer.ErrInvalidRecord
+	}
+	copyEntry := *entry
+	copyEntry.RequestID = requestID
+	copyEntry.Authorization = dkvsindexer.CloneWalletWriteAuthorization(authorization)
+	copyEntry.Mutations = make([]PersistedMutation, len(mutations))
+	for i, mutation := range mutations {
+		stored, err := persistedMutationFromCASFinal(mutation)
+		if err != nil {
+			return err
+		}
+		copyEntry.Mutations[i] = stored
+	}
+	if _, err := copyEntry.DecodeMutations(); err != nil {
+		return err
+	}
+	copyEntry.State, copyEntry.UpdatedAtMS = DKVSOutboxInflight, uint64(time.Now().UnixMilli())
+	copyEntry.Attempts++
+	encoded, err := encodeDKVSOutboxEntry(&copyEntry)
+	if err != nil {
+		return err
+	}
+	atomic, ok := s.db.(indexercommon.AtomicWriteBatchDB)
+	if !ok {
+		return errors.New("DKVS requires atomic write transactions")
+	}
+	batch := atomic.NewAtomicWriteBatch()
+	if batch == nil {
+		return ErrReplicaNotReady
+	}
+	defer batch.Close()
+	if err := batch.Put(dkvsOutboxKey(entry.Namespace, requestID), encoded); err != nil {
+		return err
+	}
+	if err := batch.Delete(dkvsOutboxKey(entry.Namespace, entry.RequestID)); err != nil {
+		return err
+	}
+	if err := batch.Flush(); err != nil {
+		return err
+	}
+	*entry = copyEntry
+	return nil
+}
+
 func (s *ReplicaStore) LoadOutbox(namespace string) ([]*BatchOutboxEntry, error) {
 	prefix := dkvsOutboxNamespacePrefix(namespace)
 	var entries []*BatchOutboxEntry
@@ -399,15 +452,27 @@ func (s *ReplicaStore) UpdateOutboxState(entry *BatchOutboxEntry, state string, 
 	if state == DKVSOutboxInflight {
 		copyEntry.Attempts++
 	}
-	copyEntry.LastErrorCode, copyEntry.LastError = "", ""
+	// A retry in flight is not successful recovery. Keep its preceding failure
+	// until a verified ACK establishes the original request outcome.
 	if cause != nil {
 		copyEntry.LastErrorCode, copyEntry.LastError = string(dkvsindexer.ErrorCodeOf(cause)), cause.Error()
 	}
 	if err := s.writeOutboxEntry(&copyEntry); err != nil {
 		return err
 	}
+	traceAccountOutbox(&copyEntry, entry.State, state)
 	*entry = copyEntry
 	return nil
+}
+
+func traceAccountOutbox(entry *BatchOutboxEntry, before, after string) {
+	if entry.OriginDomain != "account" {
+		return
+	}
+	requestTag := sha256.Sum256([]byte(entry.RequestID))
+	keyTag := sha256.Sum256([]byte(entry.OriginKey))
+	indexercommon.Log.Infof("account outbox diagnostic: at_ns=%d request_tag=%x key_tag=%x before=%s after=%s attempts=%d error_code=%s local_count=%d",
+		time.Now().UnixNano(), requestTag[:6], keyTag[:6], before, after, entry.Attempts, entry.LastErrorCode, entry.OriginGeneration)
 }
 
 // A rejected request can be discarded. Unknown delivery retains its signed
@@ -416,13 +481,26 @@ func (s *ReplicaStore) DiscardOutbox(entry *BatchOutboxEntry) error {
 	if s == nil || s.db == nil || entry == nil || entry.Namespace == "" || entry.RequestID == "" {
 		return dkvsindexer.ErrInvalidRecord
 	}
-	return s.db.Delete(dkvsOutboxKey(entry.Namespace, entry.RequestID))
+	err := s.db.Delete(dkvsOutboxKey(entry.Namespace, entry.RequestID))
+	if err == nil {
+		traceAccountOutbox(entry, entry.State, "discarded")
+	}
+	return err
 }
 
 // ApplyWriteResultAndAck confirms REQUEST completion only. It never creates,
 // overwrites or deletes a confirmed KV, even if the ACK arrived before the
 // subscription update. InstallActiveState is the single replica commit path.
-func (s *ReplicaStore) ApplyWriteResultAndAck(entry *BatchOutboxEntry, result *dkvsindexer.WriteResult) error {
+// AckPersistenceError means ACK validation succeeded but durable acknowledgement
+// did not. After restart only the retained original request is authoritative.
+type AckPersistenceError struct{ Cause error }
+
+func (e *AckPersistenceError) Error() string {
+	return "verified DKVS ACK not persisted: " + e.Cause.Error()
+}
+func (e *AckPersistenceError) Unwrap() error { return e.Cause }
+
+func (s *ReplicaStore) ApplyWriteResultAndAck(entry *BatchOutboxEntry, result *dkvsindexer.WriteResult) (err error) {
 	if s == nil || s.db == nil || entry == nil || result == nil {
 		return dkvsindexer.ErrInvalidRecord
 	}
@@ -479,17 +557,41 @@ func (s *ReplicaStore) ApplyWriteResultAndAck(entry *BatchOutboxEntry, result *d
 			return dkvsindexer.ErrEndpointMismatch
 		}
 	}
-	batch := s.db.NewWriteBatch()
+	defer func() {
+		if err != nil {
+			err = &AckPersistenceError{Cause: err}
+		}
+	}()
+	atomic, ok := s.db.(indexercommon.AtomicWriteBatchDB)
+	if !ok {
+		return errors.New("DKVS requires atomic write transactions")
+	}
+	batch := atomic.NewAtomicWriteBatch()
+	if batch == nil {
+		return ErrReplicaNotReady
+	}
 	defer batch.Close()
 	// This request-completion bound only invalidates an older in-flight full
 	// view. It is not a completed sync cursor and does not materialize values.
 	if err := s.NoteActiveAckBatch(batch, entry.Namespace, result); err != nil {
 		return err
 	}
-	if err := batch.Delete(dkvsOutboxKey(entry.Namespace, entry.RequestID)); err != nil {
+	copyEntry := *entry
+	copyEntry.State = DKVSOutboxAcknowledged
+	copyEntry.LastErrorCode, copyEntry.LastError = "", ""
+	encoded, err := encodeDKVSOutboxEntry(&copyEntry)
+	if err != nil {
 		return err
 	}
-	return batch.Flush()
+	if err := batch.Put(dkvsOutboxKey(entry.Namespace, entry.RequestID), encoded); err != nil {
+		return err
+	}
+	if err := batch.Flush(); err != nil {
+		return err
+	}
+	traceAccountOutbox(&copyEntry, entry.State, DKVSOutboxAcknowledged)
+	*entry = copyEntry
+	return nil
 }
 
 func (s *ReplicaStore) HasPendingOutbox(namespace string) (bool, error) {
@@ -498,7 +600,7 @@ func (s *ReplicaStore) HasPendingOutbox(namespace string) (bool, error) {
 		return false, err
 	}
 	for _, entry := range entries {
-		if entry.State == DKVSOutboxPending || entry.State == DKVSOutboxInflight {
+		if entry.State == DKVSOutboxPending || entry.State == DKVSOutboxInflight || entry.State == DKVSOutboxAcknowledged {
 			return true, nil
 		}
 	}
@@ -506,6 +608,9 @@ func (s *ReplicaStore) HasPendingOutbox(namespace string) (bool, error) {
 }
 func (s *ReplicaStore) SetSubscriptionError(namespace, status, code string) error {
 	state, err := s.LoadSubscriptionState(namespace)
+	if err == nil && state.Status == status && state.LastErrorCode == code {
+		return nil
+	}
 	if err != nil {
 		if errors.Is(err, indexercommon.ErrKeyNotFound) {
 			state = &SubscriptionState{}
@@ -529,6 +634,9 @@ func (s *ReplicaStore) MarkOfflineReady(namespace string) error {
 	if state.Status != DKVSSubscriptionReady && state.Status != DKVSSubscriptionOfflineReady {
 		return ErrReplicaNotReady
 	}
+	if state.Status == DKVSSubscriptionOfflineReady {
+		return nil
+	}
 	state.Status = DKVSSubscriptionOfflineReady
 	batch := s.db.NewWriteBatch()
 	defer batch.Close()
@@ -549,4 +657,37 @@ func (s *ReplicaStore) ValidateStorage() error {
 		return fmt.Errorf("DKVS replica store is unavailable")
 	}
 	return nil
+}
+
+// ReadSnapshot returns owned records from a single local read transaction.
+func (s *ReplicaStore) ReadSnapshot(namespace string, keys []string) (map[string]*swire.DKVSRecord, error) {
+	values := make(map[string]*swire.DKVSRecord, len(keys))
+	if len(keys) == 1 {
+		record, err := s.LoadSubscriptionRecord(namespace, keys[0])
+		if errors.Is(err, indexercommon.ErrKeyNotFound) {
+			return values, nil
+		}
+		if err == nil {
+			values[keys[0]] = record
+		}
+		return values, err
+	}
+	err := s.db.View(func(view indexercommon.ReadBatch) error {
+		for _, key := range keys {
+			data, err := view.Get(dkvsSubscriptionRecordKey(namespace, key))
+			if errors.Is(err, indexercommon.ErrKeyNotFound) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			record, err := dkvsindexer.UnmarshalRecord(data)
+			if err != nil {
+				return err
+			}
+			values[key] = record
+		}
+		return nil
+	})
+	return values, err
 }

@@ -64,13 +64,18 @@ func (p *Manager) ExportAccountBackup(password string, metadata map[int64]Accoun
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
 	infos := p.canonicalWalletInfosLocked()
-	backup := account.Backup{Version: account.Version, Wallets: make([]account.WalletBackup, 0, len(infos))}
+	backup := account.Backup{Version: account.BackupVersion, Wallets: make([]account.WalletBackup, 0, len(infos))}
 	for _, info := range infos {
-		id := info.Id
-		if info == nil || info.Type != WALLET_TYPE_MNEMONIC {
-			return account.Backup{}, fmt.Errorf("wallet %d is not a mnemonic wallet", id)
+		if info == nil {
+			return account.Backup{}, fmt.Errorf("wallet is unavailable")
 		}
-		mnemonic, err := p.loadWalletSecret(info, password)
+		id := info.Id
+		localSecret, err := p.loadWalletSecretBytes(info, password)
+		if err != nil {
+			return account.Backup{}, err
+		}
+		typ, material, err := accountRecordMaterial(info.Type, localSecret)
+		zeroBytes(localSecret)
 		if err != nil {
 			return account.Backup{}, err
 		}
@@ -100,47 +105,12 @@ func (p *Manager) ExportAccountBackup(password string, metadata map[int64]Accoun
 				Index: uint32(index), Name: accountName, DID: did,
 			}
 		}
-		backup.Wallets = append(backup.Wallets, account.WalletBackup{Name: name, Mnemonic: mnemonic, AccountCount: uint32(info.Accounts), SubAccounts: subAccounts, SPEnabled: spEnabled})
+		backup.Wallets = append(backup.Wallets, account.WalletBackup{Name: name, Type: typ, Secret: material, AccountCount: uint32(info.Accounts), SubAccounts: subAccounts, SPEnabled: spEnabled})
 	}
 	return account.NormalizeBackup(backup)
 }
 
 func (p *Manager) RestoreAccountBackup(value account.Backup, password string) error {
-	backup, err := account.NormalizeBackup(value)
-	if err != nil {
-		return err
-	}
-	if p.IsWalletExist() {
-		return fmt.Errorf("account restore requires an empty wallet database")
-	}
-	for _, item := range backup.Wallets {
-		id, err := p.ImportWallet(item.Mnemonic, password)
-		if err != nil {
-			return err
-		}
-		p.mutex.Lock()
-		info := p.walletInfoMap[id]
-		if info == nil {
-			p.mutex.Unlock()
-			return fmt.Errorf("restored wallet %d was not persisted", id)
-		}
-		info.Name = item.Name
-		info.Accounts = int(item.AccountCount)
-		info.AccountNames = make(map[uint32]string, len(item.SubAccounts))
-		info.AccountDIDs = make(map[uint32]string, len(item.SubAccounts))
-		for _, sub := range item.SubAccounts {
-			info.AccountNames[sub.Index] = sub.Name
-			info.AccountDIDs[sub.Index] = sub.DID
-		}
-		info.SPEnabled = make(map[uint32]bool, len(item.SPEnabled))
-		for _, index := range item.SPEnabled {
-			info.SPEnabled[index] = true
-		}
-		err = saveWallet(p.db, &info.WalletInDB)
-		p.mutex.Unlock()
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	_, err := p.RestoreAccountBackupWithResult(value, password)
+	return err
 }

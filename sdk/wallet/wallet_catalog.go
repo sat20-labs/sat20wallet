@@ -3,6 +3,7 @@ package wallet
 import (
 	"crypto/sha256"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -228,6 +229,9 @@ func (p *Manager) validateWalletCatalogChangeLocked(candidate *WalletInfo) error
 	}
 	names := make(map[string]struct{}, len(infos))
 	for _, info := range infos {
+		if info.Type == WALLET_TYPE_PRIVKEY && info.Accounts != 1 {
+			return fmt.Errorf("private wallet has only account zero")
+		}
 		name := strings.Join(strings.Fields(info.Name), " ")
 		if name == "" || len(name) > account.MaxManagedStateString ||
 			info.Accounts < 1 || info.Accounts > account.MaxManagedStateItems {
@@ -251,7 +255,8 @@ func (p *Manager) validateWalletCatalogChangeLocked(candidate *WalletInfo) error
 		}
 		defer func() {
 			for index := range state.Wallets {
-				state.Wallets[index].Mnemonic = ""
+				zeroBytes(state.Wallets[index].Secret)
+				state.Wallets[index].Secret = nil
 			}
 		}()
 		// Admission must include the published data reference and retained
@@ -260,19 +265,10 @@ func (p *Manager) validateWalletCatalogChangeLocked(candidate *WalletInfo) error
 		if err != nil {
 			return err
 		}
-		state.Revision = base.Revision + 1
-		state.DataRevision = p.accountProfile.ManagedDataRevision + 1
-		if state.Revision == 0 || state.DataRevision == 0 {
-			return fmt.Errorf("account management revision overflow")
-		}
-		state.DataHash = strings.Repeat("0", 64)
-		for index := range state.Wallets {
-			state.Wallets[index].Revision = state.Revision
-		}
 		for _, previous := range base.Wallets {
 			if findManagedWallet(&state, previous.Fingerprint) == nil {
 				state.Wallets = append(state.Wallets, account.ManagedWallet{
-					Fingerprint: previous.Fingerprint, Revision: state.Revision, Deleted: true,
+					Fingerprint: previous.Fingerprint, Deleted: true,
 				})
 			}
 		}
@@ -396,9 +392,9 @@ func (p *Manager) commitWalletCatalogMutationLocked(candidate *WalletInfo, statu
 	if err != nil {
 		return err
 	}
-	batch := p.db.NewWriteBatch()
-	if batch == nil {
-		return fmt.Errorf("create wallet catalog batch")
+	batch, err := NewAtomicWriteBatch(p.db)
+	if err != nil {
+		return err
 	}
 	defer batch.Close()
 	if err := batch.Put([]byte(getWalletDBKey(candidate.Id)), encoded); err != nil {
@@ -422,6 +418,23 @@ func (p *Manager) commitWalletCatalogMutationLocked(candidate *WalletInfo, statu
 			return err
 		}
 	}
+	live := p.walletInfoMap[candidate.Id]
+	walletChanged := live == nil || live.Name != candidate.Name || live.Accounts != candidate.Accounts ||
+		!reflect.DeepEqual(live.AccountNames, candidate.AccountNames) || !reflect.DeepEqual(live.AccountDIDs, candidate.AccountDIDs)
+	if walletChanged {
+		if err := p.stageAccountChange(batch, "wallets", AccountManagedDataGlobalScope); err != nil {
+			return err
+		}
+	}
+	for index, enabled := range candidate.SPEnabled {
+		if !enabled || live != nil && live.SPEnabled[index] {
+			continue
+		}
+		scope := AccountManagedDataScope{Network: p.cfg.Chain, WalletFingerprint: walletFingerprint(candidate.Wallet), AccountIndex: index}
+		if err := p.stageAccountChange(batch, silentPayManagedProviderID, scope.ID()); err != nil {
+			return err
+		}
+	}
 	if err := batch.Flush(); err != nil {
 		return err
 	}
@@ -431,6 +444,10 @@ func (p *Manager) commitWalletCatalogMutationLocked(candidate *WalletInfo, statu
 		p.walletInfoMap[candidate.Id] = candidate
 	}
 	p.accountProfile = profile
+	if profile != nil {
+		Log.Debugf("account generation advanced: source=catalog_batch activation_pending=%t data_generation=%d",
+			profile.ManagedEntered && !profile.RecoveryConfigured, profile.ManagedDataGeneration)
+	}
 	if status != nil {
 		applyStatusSnapshot(p.status, status)
 	}
@@ -522,6 +539,12 @@ func (p *Manager) DeleteWallet(id int64) error {
 		return err
 	}
 	if err := batch.Put([]byte(DB_KEY_STATUS), encodedStatus); err != nil {
+		return err
+	}
+	if err := p.stageAccountChange(batch, "wallets", AccountManagedDataGlobalScope); err != nil {
+		return err
+	}
+	if err := p.stageAccountWalletDelete(batch, walletFingerprint(info.Wallet)); err != nil {
 		return err
 	}
 	if err := batch.Flush(); err != nil {

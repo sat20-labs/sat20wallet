@@ -1,19 +1,19 @@
 <template>
   <div class="max-w-md w-full mx-auto space-y-6">
-    <h1 class="text-2xl font-bold text-center text-foreground">Send BTC</h1>
+    <h1 class="text-2xl font-bold text-center text-foreground">{{ $t('walletComponents.sendBtc') }}</h1>
 
     <div class="space-y-4">
       <div class="space-y-2">
-        <Label for="address">Receiving Address</Label>
+        <Label for="address">{{ $t('walletComponents.receivingAddress') }}</Label>
         <Input
           id="address"
           v-model="modelAddress"
-          placeholder="Enter BTC address"
+          :placeholder="$t('walletComponents.enterBtcAddress')"
         />
       </div>
 
       <div class="space-y-2">
-        <Label for="amount">Amount (BTC)</Label>
+        <Label for="amount">{{ $t('walletComponents.btcAmount') }}</Label>
         <Input
           id="amount"
           v-model="modelAmount"

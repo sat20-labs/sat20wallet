@@ -106,6 +106,19 @@ func (p *rgb11Manager) prepareRGB11AddressBatch(ctx context.Context, requests []
 	}, true, endpoints)
 }
 
+// Read only local records under the existing commit gate; release it before
+// any delivery, signing or evidence request.
+func (p *rgb11Manager) readRGB11AddressBatch(transferID string) (*rgb11wallet.PendingTransfer, []*rgb11wallet.PendingTransfer, error) {
+	release := p.beginRGB11ReservationRead()
+	defer release()
+	first, err := p.projectionStore.LoadPendingTransfer(transferID)
+	if err != nil {
+		return nil, nil, err
+	}
+	batch, err := p.loadRGB11AddressBatch(first)
+	return first, batch, err
+}
+
 // loadRGB11AddressBatch requires the full persisted group. One ACK cannot
 // authorize broadcasting inputs shared with another, unacknowledged output.
 func (p *rgb11Manager) loadRGB11AddressBatch(first *rgb11wallet.PendingTransfer) ([]*rgb11wallet.PendingTransfer, error) {
@@ -131,6 +144,7 @@ func (p *rgb11Manager) loadRGB11AddressBatch(first *rgb11wallet.PendingTransfer)
 			return nil, err
 		}
 		if !pending.State.AddressMode || pending.State.BatchID != first.State.BatchID || pending.State.WitnessTxID != first.State.WitnessTxID || !bytes.Equal(pending.SignedTx, first.SignedTx) || !sameRGB11ChannelSend(pending.ChannelSend, first.ChannelSend) {
+			p.logRGB11PendingCompare("address-batch-reload", first, pending, false)
 			return nil, ErrRGB11Inconsistent
 		}
 		if len(ids) > 1 && (id != rgb11BatchRecipientID(first.State.BatchID, uint32(i)) ||

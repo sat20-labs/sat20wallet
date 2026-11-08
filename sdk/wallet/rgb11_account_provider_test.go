@@ -44,6 +44,7 @@ func TestRGB11AccountManagedProviderIncludesReceiveRequestsInStableRecovery(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
+	discoverInactiveAccount(t, manager)
 	if err := manager.EnsureAccount(firstID, 1, "first-1", "did:first:1"); err != nil {
 		t.Fatal(err)
 	}
@@ -54,6 +55,7 @@ func TestRGB11AccountManagedProviderIncludesReceiveRequestsInStableRecovery(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
+	discoverInactiveAccount(t, manager)
 	if err := manager.EnsureAccount(secondID, 2, "second-2", "did:second:2"); err != nil {
 		t.Fatal(err)
 	}
@@ -116,6 +118,7 @@ func TestRGB11AccountManagedProviderMissingScopeCannotDropRecoveryMaterial(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
+	discoverInactiveAccount(t, manager)
 	catalog, err := manager.accountManagedDataCatalog()
 	if err != nil {
 		t.Fatal(err)
@@ -241,6 +244,7 @@ func TestRGB11AccountManagedProviderRejectsUnverifiableRecoveryClosure(t *testin
 	if _, err := source.ImportWallet(mnemonic, "password"); err != nil {
 		t.Fatal(err)
 	}
+	discoverInactiveAccount(t, source)
 	catalog, err := source.accountManagedDataCatalog()
 	if err != nil {
 		t.Fatal(err)

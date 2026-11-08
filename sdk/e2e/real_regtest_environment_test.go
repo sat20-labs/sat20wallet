@@ -31,10 +31,30 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Keep the default fixture endpoints while allowing an isolated local run.
+func sdkPWARegtestSatoshiNetPortBase(t *testing.T) int {
+	t.Helper()
+	const defaultPortBase = 30250
+	portBase := defaultPortBase
+	if value := os.Getenv("SAT20_REAL_SATOSHINET_PORT_BASE"); value != "" {
+		var err error
+		portBase, err = strconv.Atoi(value)
+		require.NoError(t, err, "SAT20_REAL_SATOSHINET_PORT_BASE must be an integer")
+		require.True(t, portBase >= 1024 && portBase <= 65511,
+			"SAT20_REAL_SATOSHINET_PORT_BASE must leave room for all node ports (1024..65511)")
+	}
+	if os.Getenv("SAT20_REAL_SATOSHINET_ATTACH") != "" {
+		require.Equal(t, defaultPortBase, portBase,
+			"the existing SSH attach fixture requires the default SatoshiNet ports")
+	}
+	return portBase
+}
+
 // This uses the existing plugin/node runner and real L1 outputs. The separate
 // nodes-anchor directory preserves the earlier empty-template diagnostic DB.
 func prepareSDKPWARegtestNodes(t *testing.T) *realSatoshiNet {
 	t.Helper()
+	portBase := sdkPWARegtestSatoshiNetPortBase(t)
 	raw := os.Getenv("SAT20_REAL_L1_INDEXER")
 	if raw == "" {
 		t.Skip("requires the existing Bitcoin Core 31.0 and real regtest indexer")
@@ -64,7 +84,7 @@ func prepareSDKPWARegtestNodes(t *testing.T) *realSatoshiNet {
 	require.NotEmpty(t, seeds["bootstrap"], "missing fixed bootstrap role")
 	bootstrapKey := keyFromMnemonic(t, seeds["bootstrap"], 0)
 	bootstrapPubkey := hex.EncodeToString(bootstrapKey.PubKey().SerializeCompressed())
-	localBootstrapPeer := "b@" + bootstrapPubkey + "@http://127.0.0.1:30253/regtest"
+	localBootstrapPeer := fmt.Sprintf("b@%s@http://127.0.0.1:%d/regtest", bootstrapPubkey, portBase+3)
 	artifacts := satoshinetCoreBuildArtifacts(t)
 	start := func(role string, port int) *testHarness {
 		mnemonic := seeds[role]
@@ -112,7 +132,7 @@ func prepareSDKPWARegtestNodes(t *testing.T) *realSatoshiNet {
 		})
 		return h
 	}
-	bootstrap, core := start("bootstrap", 30250), start("core", 30260)
+	bootstrap, core := start("bootstrap", portBase), start("core", portBase+10)
 	require.NoError(t, connectNode(core, bootstrap))
 	network := &realSatoshiNet{Bootstrap: bootstrap, Core: core, Nodes: []*testHarness{bootstrap, core}}
 	require.NoError(t, joinBlocks(network.Nodes))
@@ -137,6 +157,7 @@ func prepareSDKPWARegtestNodes(t *testing.T) *realSatoshiNet {
 func preseedSDKPWARegtestMinerWallet(t *testing.T, network *realSatoshiNet, nodeDir, mnemonic string) (
 	*wallet.Manager, string, func()) {
 	t.Helper()
+	portBase := sdkPWARegtestSatoshiNetPortBase(t)
 	require.NotNil(t, network)
 	require.NotEmpty(t, mnemonic)
 	endpoint, err := url.Parse(os.Getenv("SAT20_REAL_L1_INDEXER"))
@@ -145,12 +166,12 @@ func preseedSDKPWARegtestMinerWallet(t *testing.T, network *realSatoshiNet, node
 	bootstrapKey := keyFromMnemonic(t, readSDKPWARegtestMnemonics(t)["bootstrap"], 0)
 	bootstrapPubkey := hex.EncodeToString(bootstrapKey.PubKey().SerializeCompressed())
 	peers := []string{
-		"b@" + bootstrapPubkey + "@http://127.0.0.1:30253/regtest",
-		"s@" + network.Core.nodePubKey + "@http://127.0.0.1:30263/regtest",
+		fmt.Sprintf("b@%s@http://127.0.0.1:%d/regtest", bootstrapPubkey, portBase+3),
+		fmt.Sprintf("s@%s@http://127.0.0.1:%d/regtest", network.Core.nodePubKey, portBase+13),
 	}
 	cfg := &sdkcommon.Config{Env: "dev", Chain: "regtest", Mode: "client", Peers: peers,
 		IndexerL1: &sdkcommon.Indexer{Scheme: endpoint.Scheme, Host: endpoint.Host, Proxy: "btc/regtest"},
-		IndexerL2: &sdkcommon.Indexer{Scheme: "http", Host: "127.0.0.1:30262", Proxy: "regtest"}}
+		IndexerL2: &sdkcommon.Indexer{Scheme: "http", Host: fmt.Sprintf("127.0.0.1:%d", portBase+12), Proxy: "regtest"}}
 	// btcd's default home is ./data under newTestHarness's nodeDir cwd.
 	// LoadSTP stores plugin state beneath that home, so seed the exact DB the
 	// Miner process will open rather than a parallel nodeDir/db tree.
@@ -286,6 +307,7 @@ func mineSDKPWARegtestL1(t *testing.T, manager *wallet.Manager, address string) 
 
 func startSDKPWARegtestMinerNode(t *testing.T, network *realSatoshiNet, mnemonic, minerPubkey string) *testHarness {
 	t.Helper()
+	portBase := sdkPWARegtestSatoshiNetPortBase(t)
 	require.NotNil(t, network)
 	require.NotNil(t, network.Bootstrap)
 	require.NotNil(t, network.Core)
@@ -301,7 +323,7 @@ func startSDKPWARegtestMinerNode(t *testing.T, network *realSatoshiNet, mnemonic
 	copySatoshiNetRuntimeFile(t, artifacts.minerExecutable, exe)
 	copySatoshiNetRuntimeFile(t, artifacts.minerPlugin, filepath.Join(nodeDir, "wallet.so"))
 	stageSatoshiNetNodeConfig(t, nodeDir)
-	const port = 30270
+	port := portBase + 20
 	addr := func(offset int) string { return fmt.Sprintf("127.0.0.1:%d", port+offset) }
 	p2p, rpc, stp, management := addr(0), addr(1), addr(3), addr(4)
 	conf := fmt.Sprintf(satoshinetTestConf, satoshinetSTPMode("miner"), endpoint.Host, addr(2), stp, management, mnemonic)
@@ -312,8 +334,8 @@ func startSDKPWARegtestMinerNode(t *testing.T, network *realSatoshiNet, mnemonic
 	seeds := readSDKPWARegtestMnemonics(t)
 	bootstrapPubkey := hex.EncodeToString(keyFromMnemonic(t, seeds["bootstrap"], 0).PubKey().SerializeCompressed())
 	conf += fmt.Sprintf("\npeers:\n  - %q\n  - %q\n",
-		"b@"+bootstrapPubkey+"@http://127.0.0.1:30253/regtest",
-		"s@"+network.Core.nodePubKey+"@http://127.0.0.1:30263/regtest")
+		fmt.Sprintf("b@%s@http://127.0.0.1:%d/regtest", bootstrapPubkey, portBase+3),
+		fmt.Sprintf("s@%s@http://127.0.0.1:%d/regtest", network.Core.nodePubKey, portBase+13))
 	conf += fmt.Sprintf("\npublic_rpc:\n  browser_allowed_origins: [%q]\n", sdkPWARegtestBrowserOrigin(t))
 	require.NoError(t, os.WriteFile(filepath.Join(nodeDir, "conf.yaml"), []byte(conf), 0o600))
 	args := []string{"--regtest", "--notls", "--nodnsseed", "--txindex", "--generate",

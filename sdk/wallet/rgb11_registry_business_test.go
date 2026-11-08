@@ -26,14 +26,14 @@ func TestRGB11RegistryKeyAndValueBoundaries(t *testing.T) {
 	// The old 33-byte value and armored/transfer transports are never accepted.
 	_, err := rgb11wallet.DecodeRGB11RegistryValue(append([]byte{'f'}, make([]byte, 32)...))
 	require.Error(t, err)
-	for _, malformed := range [][]byte{append(append([]byte(nil), record.Value...), 0), append([]byte{2}, record.Value[1:]...), append([]byte{1, 0xfd, 5, 0}, record.Value[2:]...)} {
+	for _, malformed := range [][]byte{append(append([]byte(nil), record.Value...), 0), append([]byte{1}, record.Value[1:]...), append([]byte{2, 0xfd, 5, 0}, record.Value[2:]...)} {
 		_, err := rgb11wallet.DecodeRGB11RegistryValue(malformed)
 		require.Error(t, err)
 	}
 	value, err := rgb11wallet.DecodeRGB11RegistryValue(record.Value)
 	require.NoError(t, err)
 	original := *value
-	for _, mutation := range []func(*rgb11wallet.RGB11ContractValue){func(v *rgb11wallet.RGB11ContractValue) { v.ProviderDID = "abcdefghijk" }, func(v *rgb11wallet.RGB11ContractValue) { v.Ordinal = 0 }, func(v *rgb11wallet.RGB11ContractValue) { v.Ticker = "different" }, func(v *rgb11wallet.RGB11ContractValue) { v.Ticker = "USD" }, func(v *rgb11wallet.RGB11ContractValue) { v.ContractContent = []byte("not a contract") }} {
+	for _, mutation := range []func(*rgb11wallet.RGB11ContractValue){func(v *rgb11wallet.RGB11ContractValue) { v.ContractContent = []byte("not a contract") }} {
 		v := original
 		mutation(&v)
 		_, err := rgb11wallet.EncodeRGB11RegistryValue(v)

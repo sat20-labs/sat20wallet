@@ -30,9 +30,9 @@ func TestRGB11RegistryReviewE2EFullSnapshotAndReopen(t *testing.T) {
 	assertRead := func(t *testing.T) {
 		client, reads := newRGB11RegistryE2EHTTPClient(t, target, nil)
 		for _, i := range []int{0, 1, 9, 11} {
-			got, err := client.GetRGB11Registration("alice", "USD", rgb11RegistryRecordID(records[i]))
+			got, err := client.GetRGB11Registration(rgb11RegistryRecordID(records[i]))
 			require.NoError(t, err)
-			require.EqualValues(t, i+1, got.Ordinal)
+			require.Equal(t, rgb11RegistryRecordID(records[i]), got.ContractID)
 		}
 		require.EqualValues(t, 4, reads.Load())
 	}

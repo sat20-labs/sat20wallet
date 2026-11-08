@@ -12,6 +12,7 @@ const (
 	recoveryStorageMagic        = "ACRP"
 	guardianStorageMagic        = "AGRD"
 	recoveryStorageCodecVersion = uint8(1)
+	recoveryPackageCodecVersion = uint8(1)
 	maxRecoveryQuestions        = 16
 )
 
@@ -130,7 +131,7 @@ func EncodeRecoveryPackageStorage(value RecoveryPackage) ([]byte, error) {
 	encoder := strict.NewEncoder(&buf)
 	for _, encode := range []func() error{
 		func() error { return encoder.Raw([]byte(recoveryStorageMagic)) },
-		func() error { return encoder.U8(recoveryStorageCodecVersion) },
+		func() error { return encoder.U8(recoveryPackageCodecVersion) },
 		func() error { return encoder.Raw(accountID) },
 		func() error { return encoder.Raw(packageID) },
 		func() error { return encoder.U8(recoveryModeCode(value.Envelope.Locator.RecoveryMode)) },
@@ -155,6 +156,16 @@ func EncodeRecoveryPackageStorage(value RecoveryPackage) ([]byte, error) {
 		if err := encoder.Raw(capsuleHash); err != nil {
 			return nil, err
 		}
+	}
+	var guardianBytes []byte
+	if value.GuardianCapsule != nil {
+		guardianBytes, err = EncodeGuardianCapsuleStorage(*value.GuardianCapsule)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := encoder.Bytes(guardianBytes, 0, MaxRecoveryObjectSize); err != nil {
+		return nil, err
 	}
 	if err := encoder.Bytes(dkvsNonce, 1, 64); err != nil {
 		return nil, err
@@ -221,7 +232,7 @@ func DecodeRecoveryPackageStorage(value []byte) (*RecoveryPackage, error) {
 		return nil, ErrInvalidRecoveryPackage
 	}
 	codecVersion, err := decoder.U8()
-	if err != nil || codecVersion != recoveryStorageCodecVersion {
+	if err != nil || codecVersion != recoveryPackageCodecVersion {
 		return nil, ErrInvalidRecoveryPackage
 	}
 	accountID, err := decoder.Raw(32)
@@ -277,6 +288,17 @@ func DecodeRecoveryPackageStorage(value []byte) (*RecoveryPackage, error) {
 		guardian = &GuardianReference{
 			MailboxID: hex.EncodeToString(mailboxID), ShareID: shareID,
 			CapsuleHash: hex.EncodeToString(capsuleHash),
+		}
+	}
+	guardianBytes, err := decoder.Bytes(0, MaxRecoveryObjectSize)
+	if err != nil {
+		return nil, err
+	}
+	var guardianCapsule *GuardianShareCapsule
+	if len(guardianBytes) != 0 {
+		guardianCapsule, err = DecodeGuardianCapsuleStorage(guardianBytes)
+		if err != nil {
+			return nil, err
 		}
 	}
 	dkvsNonce, err := decoder.Bytes(1, 64)
@@ -353,7 +375,7 @@ func DecodeRecoveryPackageStorage(value []byte) (*RecoveryPackage, error) {
 		total = 3
 	}
 	result := &RecoveryPackage{
-		Envelope: envelope,
+		Envelope: envelope, GuardianCapsule: guardianCapsule,
 		Manifest: Manifest{
 			Version: Version, Locator: locator, Threshold: 2, Total: total,
 			EnvelopeHash: envelopeHash, CreatedAt: int64(createdAt), Guardian: guardian,
@@ -393,16 +415,26 @@ func validateStoredRecoveryPackage(value RecoveryPackage) error {
 		len(value.KnowledgeBundle.QuestionShares) > maxRecoveryQuestions {
 		return ErrInvalidRecoveryPackage
 	}
-	if value.Envelope.Locator.RecoveryMode == RecoveryMode2Of3 && value.Manifest.Guardian == nil {
+	if value.Envelope.Locator.RecoveryMode == RecoveryMode2Of3 &&
+		(value.Manifest.Guardian == nil || value.GuardianCapsule == nil) {
 		return ErrInvalidRecoveryPackage
 	}
-	if value.Envelope.Locator.RecoveryMode == RecoveryMode2Of2 && value.Manifest.Guardian != nil {
+	if value.Envelope.Locator.RecoveryMode == RecoveryMode2Of2 &&
+		(value.Manifest.Guardian != nil || value.GuardianCapsule != nil) {
 		return ErrInvalidRecoveryPackage
 	}
 	if value.Manifest.Guardian != nil &&
 		(!validHex(value.Manifest.Guardian.MailboxID, 64) ||
 			!validHex(value.Manifest.Guardian.CapsuleHash, 64) || value.Manifest.Guardian.ShareID == "") {
 		return ErrInvalidRecoveryPackage
+	}
+	if value.GuardianCapsule != nil {
+		capsule := value.GuardianCapsule
+		hash, err := HashGuardianCapsule(*capsule)
+		if err != nil || capsule.PackageID != packageID ||
+			capsule.ShareID != value.Manifest.Guardian.ShareID || hash != value.Manifest.Guardian.CapsuleHash {
+			return ErrInvalidRecoveryPackage
+		}
 	}
 	return nil
 }

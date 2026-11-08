@@ -1,0 +1,488 @@
+diff --git a/pwa/scripts/verify/account-management-e2e.mjs b/pwa/scripts/verify/account-management-e2e.mjs
+--- a/pwa/scripts/verify/account-management-e2e.mjs
++++ b/pwa/scripts/verify/account-management-e2e.mjs
+@@ -11,6 +11,7 @@
+ import { createServer } from 'vite'
+ import {
+   regtestAccountUsageCaseNames,
++  installWalletStartProbe,
+   runPwaUsageCases,
+   runRgbPwaCases,
+   runAutopayPwaReviewCases,
+@@ -526,10 +527,12 @@
+   "usage: newly created account publishes first recovery package after initial sync settles",
+   "usage: account page refreshes background backup failure and success without navigation",
+   "usage: offline catalog is read-only and resumes synchronization after reconnect",
+-  "usage: shared IndexedDB tabs invalidate pending writes when another tab locks",
+-  "usage: shared IndexedDB subaccount switch discards another tab previous-identity response",
+-  "usage: shared IndexedDB wallet switch survives another tab rebuilding before commit",
+-  "usage: shared IndexedDB password change cannot authorize an old-password tab",
++  "usage: active Manager rejects a pending account write after same-page lock",
++  "usage: same-page subaccount switch discards a stale account response",
++  "usage: committed wallet selection survives single Manager handoff",
++  "usage: password changes apply on single Manager handoff",
++  "usage: same-context PWA pages serialize Manager lifetime",
++  "usage: refresh serializes PWA Manager startup",
+   "usage: real 2of2 setup page validates answers and completes rehearsal",
+   "usage: verified setup survives final status read failure without replaying rehearsal",
+   "usage: same temporary mode reconfiguration converges across cold devices and root recovery",
+@@ -721,7 +724,7 @@
+   })
+ }
+ 
+-async function device(sharedContext) {
++async function device(sharedContext, waitForReady = true, beforeGoto) {
+   const context = sharedContext ?? await browser.newContext()
+   if (!sharedContext && posFixture && process.env.SAT20_PWA_DIAGNOSTIC === '1') auditAccountCAS(context)
+   context.setDefaultTimeout(30000)
+@@ -849,9 +852,10 @@
+     pageErrors.push(error.message)
+     console.error(`[PWA page error] ${error.message}`)
+   })
++  if (beforeGoto) await page.addInitScript(beforeGoto)
+   await page.goto(server.resolvedUrls.local[0], { waitUntil: 'domcontentloaded', timeout: 90000 })
+-  await ready(page)
+-  if (regtestMode) await page.evaluate(async () => {
++  if (waitForReady) await ready(page)
++  if (waitForReady && regtestMode) await page.evaluate(async () => {
+     const manager = (await import('/utils/sat20.ts')).default
+     window.__observedAssetReads = []
+     for (const method of ['getRGB11State', 'getAssetSummary']) {
+@@ -894,6 +898,13 @@
+       return result
+     }
+   })
++  return page
++}
++async function waitingDevice(sharedContext) {
++  const page = await device(sharedContext, false, installWalletStartProbe)
++  // The caller must already hold the wallet lock; install the probe before navigation.
++  await page.getByTestId('wallet-startup-shell').waitFor()
++  await expect(page.getByTestId('wallet-startup-shell')).toHaveAttribute('data-state', 'waiting')
+   return page
+ }
+ async function walletCall(page, method, ...args) {
+@@ -1549,7 +1560,7 @@
+     console.error(JSON.stringify({ suite: 'runPwaBiometricCases', status: 'fail', message: error.message }))
+     process.exitCode = 1
+   }
+-  await runPwaUsageCases({ check, device, ready, unlock, catalog, walletCall, accountCall,
++  await runPwaUsageCases({ check, device, waitingDevice, ready, unlock, catalog, walletCall, accountCall,
+     password, newPassword, questions, answers, rootMnemonic, nodeAPIOrigins, material: three })
+   assert.deepEqual(pageErrors, [], 'PWA must not produce unhandled page errors')
+   console.log(JSON.stringify({ passed: true, cases: verdicts.length, backend: 'real local SatoshiNet', browser: 'real PWA and WASM' }))
+@@ -1595,7 +1606,7 @@
+     assert.deepEqual(pageErrors, [], 'paid Guardian review must not produce unhandled page errors')
+   }
+   else if (focusedUsageCases) {
+-    await runPwaUsageCases({ check, device, ready, unlock, catalog, walletCall, accountCall,
++    await runPwaUsageCases({ check, device, waitingDevice, ready, unlock, catalog, walletCall, accountCall,
+       password, newPassword, questions, answers, nodeAPIOrigins, regtestMode, preserveBrowserFailureState,
+       focusedUsageCases,
+       fixedAccountManagement: regtestMode ? regtestWalletFixture?.fixedAccountManagement : undefined })
+diff --git a/pwa/scripts/verify/account-management-usage-e2e.mjs b/pwa/scripts/verify/account-management-usage-e2e.mjs
+--- a/pwa/scripts/verify/account-management-usage-e2e.mjs
++++ b/pwa/scripts/verify/account-management-usage-e2e.mjs
+@@ -9,6 +9,31 @@
+   return page.locator('[aria-label="账户备份状态"]').getByRole('button', {
+     name: quote.ready ? /^(Renew DKVS storage|续费 DKVS 存储)$/ : /^(Pay DKVS storage fees|支付 DKVS 存储费用)$/,
+   })
++}
++
++export function installWalletStartProbe() {
++  if (window.__walletStartProbe) return
++  const probe = { wasm: 0, dbOpen: 0, dbWrite: 0, storageWrite: 0 }
++  Object.defineProperty(window, '__walletStartProbe', { value: probe, configurable: true })
++  const wrap = (owner, key, field) => {
++    if (!owner) return
++    const descriptor = Object.getOwnPropertyDescriptor(owner, key)
++    if (!descriptor || typeof descriptor.value !== 'function' || descriptor.value.__walletStartProbeWrapped) return
++    const original = descriptor.value
++    const wrapped = function (...args) {
++      probe[field]++
++      return Reflect.apply(original, this, args)
++    }
++    Object.defineProperty(wrapped, '__walletStartProbeWrapped', { value: true })
++    Object.defineProperty(owner, key, { ...descriptor, value: wrapped })
++  }
++  wrap(WebAssembly, 'instantiate', 'wasm')
++  wrap(WebAssembly, 'instantiateStreaming', 'wasm')
++  wrap(IDBFactory.prototype, 'open', 'dbOpen')
++  wrap(IDBFactory.prototype, 'deleteDatabase', 'dbWrite')
++  for (const method of ['put', 'add', 'delete', 'clear']) wrap(IDBObjectStore.prototype, method, 'dbWrite')
++  if (typeof IDBCursor !== 'undefined') wrap(IDBCursor.prototype, 'update', 'dbWrite')
++  for (const method of ['setItem', 'removeItem', 'clear']) wrap(Storage.prototype, method, 'storageWrite')
+ }
+ 
+ export const fixedRegtestAccountUsageCaseNames = [
+@@ -170,7 +195,7 @@
+ // fixture. Faults intercept only the failing browser boundary, never replace
+ // the account/crypto/RGB implementation or its successful responses.
+ export async function runPwaUsageCases(t) {
+-  const { check, device, ready, unlock, catalog, walletCall, accountCall, password, newPassword, questions, answers } = t
++  const { check, device, waitingDevice, ready, unlock, catalog, walletCall, accountCall, password, newPassword, questions, answers } = t
+   const importMnemonic = t.rootMnemonic || 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
+   const fixedOwner = t.fixedAccountManagement == null
+     ? null
+@@ -1117,125 +1142,238 @@
+     } finally { await page.context().close() }
+   })
+ 
+-  await scenario('usage: shared IndexedDB tabs invalidate pending writes when another tab locks', () => using(async page => {
+-    const second = await device(page.context())
+-    // Authentication alone keeps the same SDK selection and does not require
+-    // a peer reload. The lock below is the identity transition under test.
+-    await unlock(second)
+-    const held = second.evaluate(async () => {
++  const assertWaitingStart = async page => {
++    await expect(page.getByTestId('wallet-startup-shell')).toBeVisible()
++    await expect(page.getByTestId('wallet-startup-shell')).toHaveAttribute('data-state', 'waiting')
++    assert.equal(await page.evaluate(() => Boolean(window.__SAT20_PWA_VERIFY__)), false,
++      'waiting page must not create the PWA Manager')
++    assert.deepEqual(await page.evaluate(() => window.__walletStartProbe),
++      { wasm: 0, dbOpen: 0, dbWrite: 0, storageWrite: 0 },
++      'waiting page must not instantiate WASM, open IndexedDB or write wallet storage')
++  }
++
++  await scenario('usage: same-context PWA pages serialize Manager lifetime', async () => {
++    const owner = await fresh()
++    const context = owner.context()
++    const before = await catalog(owner)
++    try {
++      const waiting = await waitingDevice(context)
++      await assertWaitingStart(waiting)
++      const focus = waiting.getByTestId('wallet-focus-existing')
++      assert.equal(await focus.isEnabled(), true, 'same-origin focus request should be available')
++      await focus.click()
++      await expect(waiting.getByTestId('wallet-startup-status')).toHaveAttribute('data-state', 'focus-requested')
++
++      await owner.evaluate(() => window.__SAT20_PWA_VERIFY__?.useWalletStore().lockWallet())
++      await assertWaitingStart(waiting)
++      await unlock(owner, password)
++
++      const reinitialized = await owner.evaluate(async () => {
++        const [releaseError] = await window.sat20.release()
++        if (releaseError) throw releaseError
++        let wasmCalls = 0
++        let initCalls = 0
++        const originalInstantiate = WebAssembly.instantiate
++        const originalInit = window.sat20wallet_wasm.init
++        WebAssembly.instantiate = function (...args) {
++          wasmCalls++
++          return Reflect.apply(originalInstantiate, this, args)
++        }
++        window.sat20wallet_wasm.init = function (...args) {
++          initCalls++
++          return Reflect.apply(originalInit, this, args)
++        }
++        try {
++          const wasm = await import('/utils/wasm.ts')
++          await Promise.all([wasm.loadWasm(), wasm.loadWasm(), wasm.loadWasm()])
++          return { wasmCalls, initCalls }
++        } finally {
++          WebAssembly.instantiate = originalInstantiate
++          window.sat20wallet_wasm.init = originalInit
++        }
++      })
++      assert.deepEqual(reinitialized, { wasmCalls: 0, initCalls: 1 },
++        'same-page release/reinit must reuse Go runtime and collapse repeated Manager init')
++      await assertWaitingStart(waiting)
++
++      await owner.close()
++      await ready(waiting)
++      await unlock(waiting, password)
++      const probe = await waiting.evaluate(() => window.__walletStartProbe)
++      assert.equal(probe.wasm, 1, 'the handoff page should instantiate one wallet WASM runtime')
++      assert.ok(probe.dbOpen > 0, 'the handoff page should initialize the wallet database')
++      assert.ok(probe.dbWrite > 0 || probe.storageWrite > 0,
++        'the handoff page should complete real wallet initialization/unlock writes')
++      assert.deepEqual(await catalog(waiting), before, 'handoff must reopen the same persisted wallet')
++    } finally {
++      await context.close().catch(() => {})
++    }
++  })
++
++  await scenario('usage: refresh serializes PWA Manager startup', async () => {
++    const owner = await fresh()
++    const context = owner.context()
++    try {
++      await context.addInitScript(installWalletStartProbe)
++      const waiting = await waitingDevice(context)
++      await assertWaitingStart(waiting)
++
++      await owner.reload({ waitUntil: 'domcontentloaded', timeout: 90000 })
++      await owner.waitForFunction(() =>
++        Boolean(window.__walletStartProbe) &&
++        document.querySelector('[data-testid="wallet-startup-shell"]')?.getAttribute('data-state') === 'waiting' &&
++        !window.__SAT20_PWA_VERIFY__,
++      undefined, { timeout: 90000 })
++      await assertWaitingStart(owner)
++
++      await ready(waiting)
++      await unlock(waiting, password)
++      const first = await waiting.evaluate(() => window.__walletStartProbe)
++      assert.equal(first.wasm, 1, 'the first queued page should create one wallet WASM runtime')
++      assert.ok(first.dbOpen > 0, 'the first queued page should initialize the wallet database')
++
++      await waiting.close()
++      await ready(owner)
++      await unlock(owner, password)
++      const second = await owner.evaluate(() => window.__walletStartProbe)
++      assert.equal(second.wasm, 1, 'the refreshed page should create one runtime only after handoff')
++      assert.ok(second.dbOpen > 0, 'the refreshed page should complete database initialization')
++    } finally {
++      await context.close().catch(() => {})
++    }
++  })
++
++  await scenario('usage: active Manager rejects a pending account write after same-page lock', () => using(async page => {
++    const held = page.evaluate(async () => {
+       const api = window.accountE2E
+       const original = api.confirmStorage.bind(api)
+-      // Hold the real operation before dispatch through the existing facade.
+       const { walletRequestSessionGuard } = await import('/lib/walletSession.ts')
+       const checkSession = walletRequestSessionGuard('account.confirmStorage')
+       window.releaseUsageRequest = null
+       await new Promise(resolve => { window.releaseUsageRequest = resolve })
+-      try { checkSession(); await original('temporary'); return { rejected: false } }
+-      catch { return { rejected: true } }
+-    }).catch(error => ({ rejected: /context|closed|navigation|destroyed/i.test(error.message) }))
+-    await second.waitForFunction(() => typeof window.releaseUsageRequest === 'function')
+-    // BroadcastChannel delivery should quiesce the second page before reload.
+-    const reloaded = second.waitForEvent('domcontentloaded', { timeout: 90000 })
+-    await Promise.all([page.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().lockWallet()), reloaded])
+-    const result = await held
+-    assert.equal(result.rejected, true)
+-    await ready(second)
+-    assert.equal(await second.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().locked), true)
+-    assert.equal(await accountCall(second, 'resumePendingStorageAuthorization'), null)
+-    await assert.rejects(accountCall(second, 'confirmStorage', 'temporary'), /unlocked|session/i)
+-    assert.equal((await catalog(second)).length, 1)
++      let dispatched = false
++      try {
++        checkSession()
++        dispatched = true
++        await original('temporary')
++        return { rejected: false, dispatched }
++      } catch {
++        return { rejected: true, dispatched }
++      }
++    })
++    await page.waitForFunction(() => typeof window.releaseUsageRequest === 'function')
++    await page.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().lockWallet())
++    await page.evaluate(() => window.releaseUsageRequest())
++    assert.deepEqual(await held, { rejected: true, dispatched: false },
++      'a request captured before lock must fail its session guard before dispatch')
++    assert.equal(await page.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().locked), true)
++    assert.equal(await accountCall(page, 'resumePendingStorageAuthorization'), null)
++    await assert.rejects(accountCall(page, 'confirmStorage', 'temporary'), /unlocked|session/i)
++    assert.equal((await catalog(page)).length, 1)
+   }))
+ 
+-  await scenario('usage: shared IndexedDB subaccount switch discards another tab previous-identity response', () => using(async page => {
++  await scenario('usage: same-page subaccount switch discards a stale account response', () => using(async page => {
+     await page.evaluate(async () => {
+       const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
+-      await store.addAccount('Shared tab savings', 1)
++      await store.addAccount('Same page savings', 1)
+       await store.switchToAccount(0)
+     })
+-    const second = await device(page.context())
+-    const held = second.evaluate(async () => {
++    const held = page.evaluate(async () => {
+       const { walletRequestSessionGuard } = await import('/lib/walletSession.ts')
+       const checkSession = walletRequestSessionGuard('account.status')
+       const previous = await window.accountE2E.status()
+       await new Promise(resolve => { window.releaseUsageRequest = resolve })
+       try { checkSession(); return { accepted: true, previous } }
+       catch { return { accepted: false } }
+-    }).catch(error => ({ accepted: !/context|closed|navigation|destroyed/i.test(error.message) }))
+-    await second.waitForFunction(() => typeof window.releaseUsageRequest === 'function')
+-    const reloaded = second.waitForEvent('domcontentloaded', { timeout: 90000 })
+-    await Promise.all([page.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().switchToAccount(1)), reloaded])
+-    assert.equal((await held).accepted, false, 'old subaccount response was accepted after the other tab switched')
+-    await ready(second); await unlock(second)
+-    const selected = await second.evaluate(() => {
++    })
++    await page.waitForFunction(() => typeof window.releaseUsageRequest === 'function')
++    await page.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().switchToAccount(1))
++    await page.evaluate(() => window.releaseUsageRequest())
++    assert.equal((await held).accepted, false, 'old subaccount response was accepted after the same-page switch')
++    const selected = await page.evaluate(() => {
+       const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
+       return { index: store.accountIndex, address: store.address, pubKey: store.publicKey }
+     })
+     assert.equal(selected.index, 1)
+-    assert.equal(selected.address, (await walletCall(second, 'getWalletAddress', 1)).address)
+-    assert.equal(selected.pubKey, (await walletCall(second, 'getWalletPubkey', 1)).pubKey)
++    assert.equal(selected.address, (await walletCall(page, 'getWalletAddress', 1)).address)
++    assert.equal(selected.pubKey, (await walletCall(page, 'getWalletPubkey', 1)).pubKey)
+   }))
+ 
+-  await scenario('usage: shared IndexedDB wallet switch survives another tab rebuilding before commit', () => using(async page => {
+-    const rootId = await page.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().walletId)
+-    const childId = await page.evaluate(async ({ credential, rootId }) => {
+-      const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
+-      const [error] = await store.createWallet(credential)
+-      if (error) throw error
+-      const childId = store.walletId
+-      await store.switchWallet(rootId)
+-      return childId
+-    }, { credential: password, rootId })
+-    assert.notEqual(childId, rootId)
+-    const second = await device(page.context())
+-    const rebuilt = second.waitForEvent('domcontentloaded', { timeout: 90000 }).then(() => null, error => error)
+-    // Keep the real SDK switch pending before its durable commit. The peer's
+-    // existing cross-tab reload then rebuilds from the previous selection.
+-    const switching = page.evaluate(async id => {
+-      const api = window.sat20wallet_wasm
+-      const original = api.switchWallet
+-      api.switchWallet = async (...args) => {
+-        await new Promise(resolve => { window.releaseUsageWalletSwitch = resolve })
+-        return original(...args)
+-      }
+-      try { await window.__SAT20_PWA_VERIFY__.useWalletStore().switchWallet(id) }
+-      finally { api.switchWallet = original }
+-    }, childId).then(() => null, error => error)
++  await scenario('usage: committed wallet selection survives single Manager handoff', async () => {
++    const owner = await fresh()
++    const context = owner.context()
+     try {
+-      await page.waitForFunction(() => typeof window.releaseUsageWalletSwitch === 'function')
+-      assert.equal(await rebuilt, null, 'peer did not reload during the pending wallet switch')
+-      await ready(second)
+-      await page.evaluate(() => window.releaseUsageWalletSwitch())
+-      assert.equal(await switching, null, 'real SDK wallet switch failed')
+-      const selected = await second.evaluate(async credential => {
++      const rootId = await owner.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().walletId)
++      const childId = await owner.evaluate(async ({ credential, rootId }) => {
+         const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
+-        const [error, result] = await store.unlockWallet(credential)
++        const [error] = await store.createWallet(credential)
+         if (error) throw error
+-        return { displayed: store.walletId, manager: result.walletId, address: store.address }
+-      }, password)
+-      assert.equal(selected.displayed, childId, 'peer overwrote the committed wallet selection')
+-      assert.equal(selected.manager, childId, 'peer SDK unlocked the previous wallet')
+-      assert.equal(selected.address, (await walletCall(second, 'getWalletAddress', 0)).address)
++        const childId = store.walletId
++        await store.switchWallet(rootId)
++        return childId
++      }, { credential: password, rootId })
++      assert.notEqual(childId, rootId)
++      const waiting = await waitingDevice(context)
++      await assertWaitingStart(waiting)
++
++      const switching = owner.evaluate(async id => {
++        const api = window.sat20wallet_wasm
++        const original = api.switchWallet
++        api.switchWallet = async (...args) => {
++          await new Promise(resolve => { window.releaseUsageWalletSwitch = resolve })
++          return Reflect.apply(original, api, args)
++        }
++        try { await window.__SAT20_PWA_VERIFY__.useWalletStore().switchWallet(id) }
++        finally { api.switchWallet = original }
++      }, childId).then(() => null, error => error)
++      try {
++        await owner.waitForFunction(() => typeof window.releaseUsageWalletSwitch === 'function')
++        await owner.evaluate(() => window.releaseUsageWalletSwitch())
++        assert.equal(await switching, null, 'real SDK wallet switch failed')
++        assert.equal(await owner.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().walletId), childId)
++        await owner.close()
++
++        await ready(waiting)
++        const [error, result] = await waiting.evaluate(async credential => {
++          const [error, result] = await window.__SAT20_PWA_VERIFY__.useWalletStore().unlockWallet(credential)
++          return [error?.message, result]
++        }, password)
++        if (error) throw new Error(error)
++        assert.equal(result.walletId, childId, 'handoff SDK Manager did not open committed selected wallet')
++        assert.equal(await waiting.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().walletId), childId)
++        assert.equal((await walletCall(waiting, 'getWalletAddress', 0)).address,
++          await waiting.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().address))
++      } finally {
++        await owner.evaluate(() => window.releaseUsageWalletSwitch?.()).catch(() => {})
++        await switching.catch(() => {})
++      }
+     } finally {
+-      await page.evaluate(() => window.releaseUsageWalletSwitch?.()).catch(() => {})
+-      await switching.catch(() => {})
++      await context.close().catch(() => {})
+     }
+-  }))
+-
+-  await scenario('usage: shared IndexedDB password change cannot authorize an old-password tab', () => using(async page => {
+-    const guardianIdentity = await accountCall(page, 'guardianIdentity', password)
+-    const second = await device(page.context())
+-    await unlock(second)
+-    await walletCall(page, 'changePassword', password, newPassword)
+-    // Another Manager must not authenticate using its stale cached ciphertext.
+-    const acceptedOld = await walletCall(second, 'unlockWallet', password).then(() => true, () => false)
+-    await second.reload(); await ready(second)
+-    await assert.rejects(walletCall(second, 'unlockWallet', password))
+-    await unlock(second, newPassword)
+-    assert.equal((await catalog(second)).length, 1)
+-    assert.equal(acceptedOld, false, 'second tab authenticated with the replaced password')
+-    await assert.rejects(accountCall(second, 'guardianIdentity', password))
+-    assert.deepEqual(await accountCall(second, 'guardianIdentity', newPassword), guardianIdentity)
+-  }))
++  })
++
++  await scenario('usage: password changes apply on single Manager handoff', async () => {
++    const owner = await fresh()
++    const context = owner.context()
++    try {
++      const guardianIdentity = await accountCall(owner, 'guardianIdentity', password)
++      const waiting = await waitingDevice(context)
++      await assertWaitingStart(waiting)
++      await walletCall(owner, 'changePassword', password, newPassword)
++      await owner.close()
++
++      await ready(waiting)
++      const acceptedOld = await walletCall(waiting, 'unlockWallet', password).then(() => true, () => false)
++      await assert.rejects(walletCall(waiting, 'unlockWallet', password))
++      await unlock(waiting, newPassword)
++      assert.equal((await catalog(waiting)).length, 1)
++      assert.equal(acceptedOld, false, 'handoff Manager authenticated with a replaced password')
++      await assert.rejects(accountCall(waiting, 'guardianIdentity', password))
++      assert.deepEqual(await accountCall(waiting, 'guardianIdentity', newPassword), guardianIdentity)
++    } finally {
++      await context.close().catch(() => {})
++    }
++  })
+ 
+   const realTwoFactorSetupUI = async (page, failStatus = false) => {
+     await preflightUI(page)
+diff --git a/sdk/e2e/account_management_browser_e2e_test.go b/sdk/e2e/account_management_browser_e2e_test.go
+--- a/sdk/e2e/account_management_browser_e2e_test.go
++++ b/sdk/e2e/account_management_browser_e2e_test.go
+@@ -50,13 +50,27 @@
+ 
+ func TestPWATabAccountSwitch(t *testing.T) {
+ 	runAccountPWABrowser(t,
+-		"usage: shared IndexedDB subaccount switch discards another tab previous-identity response",
++		"usage: same-page subaccount switch discards a stale account response",
+ 	)
+ }
+ 
+ func TestPWATabWalletSwitch(t *testing.T) {
+ 	runAccountPWABrowser(t,
+-		"usage: shared IndexedDB wallet switch survives another tab rebuilding before commit",
++		"usage: committed wallet selection survives single Manager handoff",
++	)
++}
++
++func TestPWASingleManager(t *testing.T) {
++	runAccountPWABrowser(t,
++		"usage: same-context PWA pages serialize Manager lifetime",
++		"usage: refresh serializes PWA Manager startup",
++		"usage: active Manager rejects a pending account write after same-page lock",
++	)
++}
++
++func TestPWATabPasswordHandoff(t *testing.T) {
++	runAccountPWABrowser(t,
++		"usage: password changes apply on single Manager handoff",
+ 	)
+ }
+ 

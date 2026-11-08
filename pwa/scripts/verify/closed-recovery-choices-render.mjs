@@ -1,5 +1,6 @@
+import * as I18n from 'vue-i18n'
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import vm from 'node:vm'
 import ts from 'typescript'
 import { parse, compileScript } from '@vue/compiler-sfc'
@@ -43,6 +44,7 @@ const Dialog = V.defineComponent({ props: { open: Boolean }, setup(props, { slot
 const AssetList = V.defineComponent({ setup() { return () => V.h('div', { 'data-testid': 'l1-assets-page' }, 'L1 assets stay selected') } })
 
 async function fixture({ offline = false, native = false, ready = false, deferQuote = false, deferChannel = false, noLocal = false, deferActions = false, nativeWithdraw = false, optionsWalletId = 11, quoteWalletId = 11, optionsAccountIndex = null, quoteAccountIndex = null } = {}) {
+  const i18n = I18n.createI18n({ legacy: false, locale: 'en', messages: { en: JSON.parse(readFileSync('locales/en.json', 'utf8')), zh: JSON.parse(readFileSync('locales/zh.json', 'utf8')) } })
   const pinia = P.createPinia(); P.setActivePinia(pinia)
   const calls = [], notices = [], errors = [], callbacks = { current: null }, cache = new Map()
   const route = V.reactive({ query: { tab: 'l1' } })
@@ -103,12 +105,14 @@ async function fixture({ offline = false, native = false, ready = false, deferQu
   const walletManager = { registerCallback: async callback => { callbacks.current = callback; return [undefined, {}] }, getTickerInfo: async () => [undefined, undefined] }
   function resolveModule(name) {
     if (name === 'vue') return V
+    if (name === 'vue-i18n') return I18n
     if (name === 'pinia') return P
     if (name === 'radash') return { tryit, parallel }
     if (name === '@/lib/identity-boundary' || name === './identity-boundary') return loadTS('lib/identity-boundary.ts')
     if (name === '@/lib/wire-wallet-id') return loadTS('lib/wire-wallet-id.ts')
     if (name === '@/lib/walletSession') return loadTS('lib/walletSession.ts')
     if (name === '@/utils/stp') return loadTS('utils/stp.ts')
+    if (name === '@/utils/wasmError') return loadTS('utils/wasmError.ts')
     if (name === '@/utils/sat20') return { default: walletManager, __esModule: true }
     if (name === '@/utils/pwaVersionPolicy') return { beginVersionDispatch: () => () => {} }
     if (name === '@/utils/pwaOperationLog') return { beginPwaWalletOperation: async () => null, finishPwaOperation: async () => {} }
@@ -153,7 +157,7 @@ async function fixture({ offline = false, native = false, ready = false, deferQu
   const useChannelStore = loadTS('store/channel.ts').useChannelStore
   bundle = { useWalletStore, useChannelStore, useL1Store, useL2Store, useTranscendingModeStore, useGlobalStore }
   const app = renderer.createApp(loadSFC('entrypoints/popup/pages/wallet/index.vue'))
-  app.use(pinia); app.config.globalProperties.$t = key => key; app.config.errorHandler = error => errors.push(error); app.config.warnHandler = () => {}
+  app.use(pinia); app.use(i18n); app.config.errorHandler = error => errors.push(error); app.config.warnHandler = () => {}
   app.mount(root); await flush()
   const financialCalls = () => calls.filter(call => ['confirmClosedChannelSingleUTXOTopup', 'withdrawClosedChannelExact'].includes(call.method))
   const emitRaw = async payload => {
@@ -176,6 +180,7 @@ async function fixture({ offline = false, native = false, ready = false, deferQu
   return { root, wallet, state, calls, notices, errors, facade, identity, emit, emitRaw, switchAccount, financialCalls,
     channelStore: useChannelStore(), wireWalletIdToStoreId: existsSync('lib/wire-wallet-id.ts') ? loadTS('lib/wire-wallet-id.ts').wireWalletIdToStoreId : null,
     node: id => find(root, id), text: () => textOf(root),
+    async switchLanguage(locale) { i18n.global.locale.value = locale; await flush() },
     async click(id) { await clickNode(find(root, id)); assert.deepEqual(errors, [], 'render/event execution must not hide Vue errors') },
     dispose() { app.unmount(); if (typeof P.disposePinia === 'function') P.disposePinia(pinia) },
   }
@@ -196,9 +201,14 @@ await localStart.click('withdraw-confirm'); assert.deepEqual(localStart.financia
 assert.deepEqual(localStart.financialCalls()[0].args, ['closed-channel-0', '1'.repeat(64)])
 localStart.dispose()
 const missingStart = await fixture({ offline: true, noLocal: true })
-assert.match(missingStart.text(), /material.*unavailable|online/i, 'first restoration without a real local package must explain its limitation')
+assert.equal(missingStart.node('closed-recovery-card'), undefined, 'a deterministic locator without local state does not prove this account had a closed channel')
 assert.equal(missingStart.node('closed-recovery-dialog'), undefined)
-assert.equal(Boolean(missingStart.node('recovery-choices-open')?.props.disabled), true, 'missing local state cannot offer an actionable closed recovery review')
+assert.equal(missingStart.node('recovery-choices-open'), undefined, 'a never-opened channel must not offer a recovery action')
+assert.equal(missingStart.financialCalls().length, 0)
+await missingStart.emit()
+assert.ok(missingStart.node('closed-recovery-card'), 'an account-bound server closure notice remains visible without local material')
+assert.match(missingStart.text(), /material.*unavailable|online/i, 'a known closed channel without a real local package must explain its limitation')
+assert.equal(Boolean(missingStart.node('withdraw-choice')?.props.disabled), true, 'missing local state cannot offer withdrawal')
 assert.equal(missingStart.financialCalls().length, 0); missingStart.dispose()
 
 const rebuild = await fixture(); await rebuild.emit()
@@ -552,3 +562,120 @@ assert.ok(actionResults.length > 0, 'the optional --f3-case filter must match at
 console.log('F3 action isolation matrix', JSON.stringify(actionResults))
 assert.deepEqual(actionFailures, [], 'all current-action account/generation/token isolation controls must pass')
 console.log('Closed recovery action isolation: PASS (real mounted Vue/callback/Pinia/facade, account+generation, late resolve/reject, cross-kind token/finally, current double-click, context/unmount, explicit native-capability adapter)')
+
+// The same mounted production recovery UI must react to locale changes without
+// requesting a new quote, changing its owner, or dispatching an adapter action.
+const languageEvidence = []
+const languageText = {
+  en: {
+    risk: 'Your old signed recovery package does not protect this new money.',
+    duplicate: 'If the server goes offline, do not add a second payment.',
+    account: 'Only the currently selected account may confirm.',
+    rebuild: 'Rebuild with this exact funding payment',
+    withdrawChoice: 'Review withdrawal of old channel funds', cancel: 'Cancel',
+    amount: 'New channel output: 40000 sats', fee: 'Wallet transfer fee: 770 sats',
+    total: 'Total wallet debit: 40770 sats', rate: 'Fee rate: 5 sat/vB',
+    withdrawal: 'This broadcasts only your complete already-signed local recovery package.',
+    count: 'Already-signed recovery transactions: 1',
+    package: 'Broadcast this reviewed local package',
+    funding: `Funding ${'4'.repeat(64)} has been broadcast. Only this same transaction may be retried.`,
+    submitted: 'Withdrawal 88 submitted. Waiting for the original signed package to confirm.',
+    ready: 'The channel is READY. Asset restoration needs separate approval; no automatic account BTC transfer was made.',
+  },
+  zh: {
+    risk: '您原有的已签名恢复交易包不保护这笔新资金。',
+    duplicate: '若服务器离线，请勿再次付款。', account: '仅当前选中的账户可以确认。',
+    rebuild: '使用这笔指定注资付款重建', withdrawChoice: '核对原通道资金的提款方案', cancel: '取消',
+    amount: '新通道输出：40000 sats', fee: '钱包转账手续费：770 sats',
+    total: '钱包扣款总额：40770 sats', rate: '费率：5 sat/vB',
+    withdrawal: '此操作仅广播您本地完整且已签名的恢复交易包',
+    count: '已签名的恢复交易数：1', package: '广播已核对的本地交易包',
+    funding: `注资交易 ${'4'.repeat(64)} 已广播。仅可重试同一笔交易。`,
+    submitted: '提款 88 已提交，正在等待原始已签名交易包确认。',
+    ready: '通道已就绪。资产恢复需要单独授权；未自动转出账户中的 BTC。',
+  },
+}
+let languageCasesPassed = 0
+async function checkLocaleRoundTrip(f, scenario, inspect) {
+  const before = JSON.stringify({ calls: f.calls, quote: f.state.lastQuote,
+    walletId: f.wallet.walletId, accountIndex: f.wallet.accountIndex, network: f.wallet.network,
+    generation: f.identity.getWalletIdentityState().generation,
+    topups: f.state.acceptedTopups, withdrawals: f.state.acceptedWithdrawals })
+  let initialEnglish
+  for (const locale of ['en', 'zh', 'en']) {
+    await f.switchLanguage(locale)
+    const text = f.text()
+    inspect(languageText[locale], text)
+    assert.doesNotMatch(text, /walletComponents\./, 'locale keys must never appear as UI copy')
+    assert.equal(JSON.stringify({ calls: f.calls, quote: f.state.lastQuote,
+      walletId: f.wallet.walletId, accountIndex: f.wallet.accountIndex, network: f.wallet.network,
+      generation: f.identity.getWalletIdentityState().generation,
+      topups: f.state.acceptedTopups, withdrawals: f.state.acceptedWithdrawals }), before,
+    'switching locale must preserve exact identifiers, quote bytes, amounts, protocol context, and all calls')
+    assert.deepEqual(f.errors, [])
+    if (locale === 'en') {
+      if (initialEnglish === undefined) initialEnglish = text
+      else assert.equal(text, initialEnglish, 'switching back restores the exact English render')
+    } else assert.notEqual(text, initialEnglish)
+    languageEvidence.push({ scenario, locale, text, financialCalls: f.financialCalls().length })
+  }
+  languageCasesPassed++
+  console.log(`Closed recovery locale roundtrip PASS: ${scenario}`)
+}
+const bilingualRebuild = await fixture()
+try {
+  await bilingualRebuild.emit()
+  await checkLocaleRoundTrip(bilingualRebuild, 'rebuild risk, buttons and amounts', (copy, text) => {
+    for (const field of ['risk', 'duplicate', 'account', 'amount', 'fee', 'total', 'rate']) assert.ok(text.includes(copy[field]), field)
+    assert.ok(text.includes('closed-channel-0'))
+    assert.equal(textOf(bilingualRebuild.node('rebuild-confirm')), copy.rebuild)
+    assert.equal(textOf(bilingualRebuild.node('withdraw-choice')), copy.withdrawChoice)
+    assert.equal(textOf(bilingualRebuild.node('recovery-cancel')), copy.cancel)
+    assert.equal(Boolean(bilingualRebuild.node('rebuild-confirm').props.disabled), false)
+    assert.equal(bilingualRebuild.financialCalls().length, 0)
+  })
+  await bilingualRebuild.click('rebuild-confirm')
+  assert.equal(bilingualRebuild.financialCalls().length, 1)
+  assert.equal(bilingualRebuild.financialCalls()[0].args[0], bilingualRebuild.state.lastQuote)
+  await checkLocaleRoundTrip(bilingualRebuild, 'dynamic funding status', (copy, text) => {
+    assert.ok(text.includes(copy.funding))
+    assert.equal(bilingualRebuild.node('closed-recovery-dialog'), undefined)
+    assert.equal(bilingualRebuild.state.acceptedTopups, 1)
+    assert.equal(bilingualRebuild.state.acceptedWithdrawals, 0)
+  })
+} finally { bilingualRebuild.dispose() }
+const bilingualWithdrawal = await fixture({ offline: true })
+try {
+  await bilingualWithdrawal.emit()
+  assert.equal(Boolean(bilingualWithdrawal.node('rebuild-confirm').props.disabled), true)
+  await bilingualWithdrawal.click('withdraw-choice')
+  await checkLocaleRoundTrip(bilingualWithdrawal, 'withdrawal risk, count and exact parent', (copy, text) => {
+    assert.ok(text.includes(copy.withdrawal)); assert.ok(text.includes(copy.count))
+    assert.ok(text.includes('1'.repeat(64))); assert.ok(text.includes('500 sats'))
+    assert.equal(textOf(bilingualWithdrawal.node('withdraw-confirm')), copy.package)
+    assert.equal(textOf(bilingualWithdrawal.node('recovery-cancel')), copy.cancel)
+    assert.equal(bilingualWithdrawal.financialCalls().length, 0)
+  })
+  await bilingualWithdrawal.click('withdraw-confirm')
+  assert.deepEqual(bilingualWithdrawal.financialCalls()[0].args, ['closed-channel-0', '1'.repeat(64)])
+  await checkLocaleRoundTrip(bilingualWithdrawal, 'dynamic submitted withdrawal status', (copy, text) => {
+    assert.ok(text.includes(copy.submitted))
+    assert.equal(bilingualWithdrawal.node('closed-recovery-dialog'), undefined)
+    assert.equal(bilingualWithdrawal.state.acceptedWithdrawals, 1)
+    assert.equal(bilingualWithdrawal.state.acceptedTopups, 0)
+  })
+} finally { bilingualWithdrawal.dispose() }
+const bilingualReady = await fixture({ ready: true })
+try {
+  await bilingualReady.emit()
+  await checkLocaleRoundTrip(bilingualReady, 'READY asset restoration approval notice', (copy, text) => {
+    assert.ok(text.includes(copy.ready))
+    assert.equal(bilingualReady.node('closed-recovery-dialog'), undefined)
+    assert.equal(bilingualReady.financialCalls().length, 0)
+  })
+} finally { bilingualReady.dispose() }
+assert.equal(languageCasesPassed, 5)
+assert.equal(languageEvidence.length, 15)
+mkdirSync('/tmp/sat20-wallet-i18n-tests', { recursive: true })
+writeFileSync('/tmp/sat20-wallet-i18n-tests/locale-render-evidence.json', JSON.stringify(languageEvidence, null, 2))
+console.log('Closed recovery locale acceptance: PASS (5 scenarios, 15 rendered checkpoints, en → zh → en, no real transactions)')

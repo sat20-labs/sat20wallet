@@ -1264,7 +1264,7 @@ func ensureRGB11RegtestRecoveryPackage(t *testing.T, manager *wallet.Manager,
 	rootBackup, err := account.RootBootstrapBackup(backup)
 	require.NoError(t, err)
 	require.NotEmpty(t, rootBackup.Wallets)
-	rootMnemonic := rootBackup.Wallets[0].Mnemonic
+	rootMnemonic := string(rootBackup.Wallets[0].Secret)
 	require.NotEmpty(t, rootMnemonic)
 	userSharePath := rgb11RegtestUserSharePath(t, accountID)
 	if status.RecoveryConfigured {
@@ -1282,7 +1282,7 @@ func ensureRGB11RegtestRecoveryPackage(t *testing.T, manager *wallet.Manager,
 		require.NoError(t, recoveryErr)
 		defer clearBytes(secret)
 		require.NotEmpty(t, backup.Wallets)
-		require.True(t, rootMnemonic == backup.Wallets[0].Mnemonic,
+		require.True(t, rootMnemonic == string(backup.Wallets[0].Secret),
 			"stored recovery package must reproduce this wallet's current root mnemonic")
 		status = manager.GetAccountManagementStatus()
 		require.True(t, status.RecoveryConfigured)
@@ -1316,7 +1316,7 @@ func ensureRGB11RegtestRecoveryPackage(t *testing.T, manager *wallet.Manager,
 				return loadErr
 			}
 			defer clearBytes(secret)
-			if len(recoveredBackup.Wallets) == 0 || recoveredBackup.Wallets[0].Mnemonic != rootMnemonic {
+			if len(recoveredBackup.Wallets) == 0 || string(recoveredBackup.Wallets[0].Secret) != rootMnemonic {
 				return errors.New("recovery package did not reproduce the root wallet mnemonic")
 			}
 			recoveredSecret = append([]byte(nil), secret...)
@@ -1326,7 +1326,7 @@ func ensureRGB11RegtestRecoveryPackage(t *testing.T, manager *wallet.Manager,
 		})
 	require.NoError(t, err)
 	defer clearBytes(recoveredSecret)
-	require.True(t, rootMnemonic == rootBackup.Wallets[0].Mnemonic,
+	require.True(t, rootMnemonic == string(rootBackup.Wallets[0].Secret),
 		"root mnemonic must remain unchanged during recovery package activation")
 	status = manager.GetAccountManagementStatus()
 	require.True(t, status.RecoveryConfigured)
@@ -1439,7 +1439,7 @@ func restoreRGB11RegtestAccount(t *testing.T, network *realSatoshiNet,
 	defer clearBytes(secret)
 	require.NotEmpty(t, recoveredBackup.Wallets)
 	recoveredState, err := manager.LoadAccountManagementStateForRecovery(
-		location, locator, secret, recoveredBackup.Wallets[0].Mnemonic)
+		location, locator, secret, string(recoveredBackup.Wallets[0].Secret))
 	require.NoError(t, err)
 	_, err = manager.RestoreAccountManagementState(*recoveredState, secret,
 		rgb11RegtestWalletPassword, locator, wallet.AccountManagementRestoreOptions{

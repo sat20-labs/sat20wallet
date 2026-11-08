@@ -2,74 +2,28 @@ package rgb11wallet
 
 import "testing"
 
-func TestStableEngineReadsRC11RecoveryAndRewritesStableID(t *testing.T) {
-	old := &RecoveryPackage{
-		Version: RecoveryPackageVersion, WalletID: "upgrade-wallet",
-		EngineBuildID: legacyRC11EngineBuildID,
-	}
-	encoded, err := EncodeRecoveryPackage(old)
-	if err != nil {
-		t.Fatal(err)
-	}
-	decoded, err := DecodeRecoveryPackage(encoded)
-	if err != nil {
-		t.Fatal(err)
-	}
-	oldSnapshot, err := decoded.WalletSnapshot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	current := &RGB11WalletSnapshot{
-		Version: WalletSnapshotVersion, WalletID: oldSnapshot.WalletID,
-		EngineBuildID: NativeEngineBuildID,
-	}
-	merged, err := MergeRecoverySnapshot(current, oldSnapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if merged.EngineBuildID != NativeEngineBuildID {
-		t.Fatalf("merge rc.11 recovery into stable wallet: id=%q", merged.EngineBuildID)
-	}
-
-	unknown := *old
-	unknown.EngineBuildID = "rgb11-go-unknown"
-	if err := ValidateRecoveryPackage(&unknown); err == nil {
-		t.Fatal("unknown engine build was accepted")
-	}
-}
-
-func TestStableEngineReadsRC11ActiveRecovery(t *testing.T) {
-	old := &ActiveRecoveryPackage{
-		Version: ActiveRecoveryPackageVersion, WalletID: "upgrade-wallet",
-		EngineBuildID: legacyRC11EngineBuildID,
-	}
-	encoded, err := EncodeActiveRecoveryPackage(old)
-	if err != nil {
-		t.Fatal(err)
-	}
-	decoded, err := DecodeActiveRecoveryPackage(encoded)
-	if err != nil {
-		t.Fatal(err)
-	}
-	oldSnapshot, err := decoded.WalletSnapshot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	current := &RGB11WalletSnapshot{
-		Version: WalletSnapshotVersion, WalletID: oldSnapshot.WalletID,
-		EngineBuildID: NativeEngineBuildID,
-	}
-	merged, err := MergeActiveRecoverySnapshot(current, oldSnapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if merged.EngineBuildID != NativeEngineBuildID {
-		t.Fatalf("merge rc.11 active recovery into stable wallet: id=%q", merged.EngineBuildID)
-	}
-
-	unknown := *old
-	unknown.EngineBuildID = "rgb11-go-unknown"
-	if err := ValidateActiveRecoveryPackage(&unknown); err == nil {
-		t.Fatal("unknown active engine build was accepted")
+func TestRecoveryRequiresCurrentEngineBuild(t *testing.T) {
+	for _, build := range []string{NativeEngineBuildID, "rgb11-go-0.11.1-rc.11+sat20.1", "rgb11-go-unknown"} {
+		t.Run(build, func(t *testing.T) {
+			stable := &RecoveryPackage{Version: RecoveryPackageVersion, WalletID: "current-engine-wallet", EngineBuildID: build}
+			active := &ActiveRecoveryPackage{Version: ActiveRecoveryPackageVersion, WalletID: stable.WalletID, EngineBuildID: build}
+			encoded, stableErr := EncodeRecoveryPackage(stable)
+			activeEncoded, activeErr := EncodeActiveRecoveryPackage(active)
+			if build != NativeEngineBuildID {
+				if stableErr == nil || activeErr == nil {
+					t.Fatal("an obsolete or unknown engine build was accepted")
+				}
+				return
+			}
+			if stableErr != nil || activeErr != nil {
+				t.Fatalf("current engine rejected: stable=%v active=%v", stableErr, activeErr)
+			}
+			if _, err := DecodeRecoveryPackage(encoded); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := DecodeActiveRecoveryPackage(activeEncoded); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

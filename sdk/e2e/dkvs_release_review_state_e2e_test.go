@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	indexercommon "github.com/sat20-labs/indexer/common"
 	indexerdb "github.com/sat20-labs/indexer/indexer/db"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet"
 	sdkdkvs "github.com/sat20-labs/sat20wallet/sdk/wallet/dkvs"
@@ -55,6 +56,45 @@ func TestSDKDKVSReleaseReviewState(t *testing.T) {
 		t.Cleanup(func() { db.Close() })
 		return sdkdkvs.NewReplicaStore(db)
 	}
+
+	t.Run("UnchangedActiveReplicaDoesNotWriteOrFlush", func(t *testing.T) {
+		s := newReleaseReviewStore(t)
+		record := free(t, s, key(t, "release-noop/a"), "same")
+		scope := dkvs.ActiveScope{Prefix: prefix(t, record.Key)}
+		db := &releaseReviewCountingDB{KVDB: indexerdb.NewKVDB(t.TempDir())}
+		require.NotNil(t, db.KVDB)
+		t.Cleanup(func() { db.Close() })
+		replica := sdkdkvs.NewReplicaStore(db)
+		config := s.backend.ClientConfig()
+		require.NoError(t, replica.PreparePrefixSync("noop", config.EndpointID, []string{scope.Prefix}, true))
+		_, err := s.client.SyncActiveScope(ctx, replica, "noop", scope, true)
+		require.NoError(t, err)
+		require.NoError(t, replica.CompletePrefixSync("noop", config.EndpointID, []string{scope.Prefix}))
+		before, err := replica.LoadSubscriptionState("noop")
+		require.NoError(t, err)
+		writes, flushes := db.writes, db.flushes
+		for i := 0; i < 2; i++ {
+			changed, err := s.client.SyncActiveScope(ctx, replica, "noop", scope, false)
+			require.NoError(t, err)
+			require.Empty(t, changed)
+			require.NoError(t, replica.CompletePrefixSync("noop", config.EndpointID, []string{scope.Prefix}))
+		}
+		after, err := replica.LoadSubscriptionState("noop")
+		require.NoError(t, err)
+		require.Equal(t, writes, db.writes, "unchanged records, metadata and READY state must not be rewritten")
+		require.Equal(t, flushes, db.flushes, "an empty transaction must not be committed")
+		require.Equal(t, before, after, "a no-op receive must not advance its persisted timestamp")
+		// A changed verification height remains a safety fact even without a
+		// changed value. Persist it and keep expiry handling on the real path.
+		s.height.Store(101)
+		_, err = s.client.SyncActiveScope(ctx, replica, "noop", scope, false)
+		require.NoError(t, err)
+		require.Greater(t, db.writes, writes)
+		require.Greater(t, db.flushes, flushes)
+		meta, err := replica.LoadActiveMeta("noop", scope)
+		require.NoError(t, err)
+		require.Equal(t, uint64(101), meta.ViewHeight)
+	})
 
 	t.Run("BasicRenewalAndStaleCASProtection", func(t *testing.T) {
 		s := newReleaseReviewStore(t)
@@ -288,6 +328,46 @@ func TestSDKDKVSReleaseReviewState(t *testing.T) {
 			require.Equal(t, dkvs.RecordHash(want), dkvs.RecordHash(got))
 		}
 	})
+}
+
+// Count actual persistence calls around the real Pebble replica, including an
+// empty Flush. The existing cross-layer test still uses the real server indexer.
+type releaseReviewCountingDB struct {
+	indexercommon.KVDB
+	writes, flushes int
+}
+
+func (d *releaseReviewCountingDB) NewWriteBatch() indexercommon.WriteBatch {
+	return &releaseReviewCountingBatch{WriteBatch: d.KVDB.NewWriteBatch(), db: d}
+}
+func (d *releaseReviewCountingDB) NewAtomicWriteBatch() indexercommon.WriteBatch {
+	return &releaseReviewCountingBatch{WriteBatch: d.KVDB.(indexercommon.AtomicWriteBatchDB).NewAtomicWriteBatch(), db: d}
+}
+func (d *releaseReviewCountingDB) Write(key, value []byte) error {
+	d.writes++
+	return d.KVDB.Write(key, value)
+}
+func (d *releaseReviewCountingDB) Delete(key []byte) error {
+	d.writes++
+	return d.KVDB.Delete(key)
+}
+
+type releaseReviewCountingBatch struct {
+	indexercommon.WriteBatch
+	db *releaseReviewCountingDB
+}
+
+func (b *releaseReviewCountingBatch) Put(key, value []byte) error {
+	b.db.writes++
+	return b.WriteBatch.Put(key, value)
+}
+func (b *releaseReviewCountingBatch) Delete(key []byte) error {
+	b.db.writes++
+	return b.WriteBatch.Delete(key)
+}
+func (b *releaseReviewCountingBatch) Flush() error {
+	b.db.flushes++
+	return b.WriteBatch.Flush()
 }
 
 type releaseReviewStore struct {

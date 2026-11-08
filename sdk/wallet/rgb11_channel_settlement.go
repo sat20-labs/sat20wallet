@@ -84,7 +84,9 @@ func (protocol rgb11STPProtocol) ImportChannelSettlement(p *Manager, tx *wire.Ms
 			return err
 		}
 	}
-	_, err = runRGB11ManagedOperationWithManager(p, context.Background(), rgb11ManagedOperationContinue,
+	// This only imports an already mined, independently verified settlement.
+	// It cannot authorize a new signature or broadcast while backup is pending.
+	_, err = runRGB11ManagedOperationWithManager(p, context.Background(), rgb11ManagedOperationReconcile,
 		func() (*rgb11Manager, error) { return p.stpRGB11Scope(owner) },
 		func(manager *rgb11Manager) (*RGB11ImportResult, error) {
 			return manager.importObservedRGB11ChannelTransfer(context.Background(), tx, pkg)
@@ -163,7 +165,9 @@ func (p *rgb11Manager) importObservedRGB11ChannelTransferAttempt(ctx context.Con
 	if err != nil {
 		return nil, err
 	}
-	current, _, err := p.exportRGB11WalletSnapshot(walletID)
+	// Revalidate the complete local material with this observed consumer. An
+	// old proof fault must not prevent its actual settlement from reconciling.
+	current, err := p.readRGB11Local(walletID)
 	if err != nil {
 		return nil, err
 	}

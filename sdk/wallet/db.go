@@ -345,13 +345,22 @@ func loadStatusWithLegacyMigrationResult(kvdb db.KVDB) (*Status, bool, error) {
 		}
 	}
 
-	// Production core/bootstrap nodes historically persisted the authoritative
-	// runtime and schema state under the STP "status" key. When that key exists,
-	// migrate it wholesale and deliberately ignore any wallet-status value from
-	// intermediate builds. In particular, DBver must remain the STP DB version
-	// until STP completes its channel migration.
+	// Legacy STP nodes used one wallet and account zero. Recover that wallet
+	// ID from the catalog while preserving the STP runtime and schema fields.
 	if hasLegacy {
 		status = legacyStatus
+		wallets, err := loadAllWalletFromDB(kvdb)
+		if err != nil {
+			return nil, false, fmt.Errorf("load legacy STP wallet: %w", err)
+		}
+		if len(wallets) != 1 {
+			return nil, false, fmt.Errorf("legacy STP requires one wallet, found %d", len(wallets))
+		}
+		for id := range wallets {
+			status.CurrentWallet = id
+		}
+		status.CurrentAccount = 0
+		status.TotalWallet = 1
 	} else if !hasStatus {
 		status = newDefaultStatus()
 	}

@@ -1,11 +1,16 @@
 <template>
   <div>
-    <main class="w-full h-screen overflow-hidden" v-if="!loading">
+    <main class="w-full h-screen overflow-hidden flex flex-col" v-if="!loading">
       <div v-if="isForceUpdate || isUpdating" role="alert" class="fixed top-0 inset-x-0 z-[2000] bg-amber-950 text-white p-2 text-sm">
         {{ isUpdating ? $t('setting.updateWaitingOperations') : $t('setting.versionWriteBlocked') }}
         <button v-if="!isUpdating" class="underline ml-2" @click="checkAndUpdate">{{ $t('setting.checkAndUpdate') }}</button>
       </div>
-      <RouterView />
+      <AccountReadinessBanner
+        v-if="walletStore.hasWallet && !walletStore.locked && !walletSetupPaths.includes(router.currentRoute.value.path)"
+      />
+      <div class="min-h-0 flex-1 overflow-hidden">
+        <RouterView />
+      </div>
       <!-- 全局 Approve 弹窗 -->
       <Approve />
       <WalletPasswordDialog />
@@ -28,7 +33,7 @@
             <Icon icon="lucide:download" class="text-2xl text-primary" />
           </div>
           <div class="min-w-0 flex-1">
-            <h2 id="install-title" class="text-base font-semibold leading-6">Install SAT20 Wallet</h2>
+            <h2 id="install-title" class="text-base font-semibold leading-6">{{ $t('pwaUi.install.title') }}</h2>
             <p class="mt-1 text-sm leading-5 text-muted-foreground">{{ installMessage }}</p>
           </div>
         </div>
@@ -49,10 +54,10 @@
 
         <div class="grid gap-2">
           <Button v-if="installPromptEvent" class="w-full" @click="promptInstall">
-            Install
+            {{ $t('pwaUi.install.install') }}
           </Button>
           <Button variant="outline" class="w-full" @click="showInstallPanel = false">
-            Continue in browser
+            {{ $t('pwaUi.install.browser') }}
           </Button>
         </div>
       </div>
@@ -70,6 +75,8 @@
 </template>
 
 <script lang="ts" setup>
+const { t } = useI18n()
+import { useI18n } from 'vue-i18n'
 import { computed, ref, onBeforeMount, onBeforeUnmount, onMounted, watch } from "vue";
 import { useRouter } from "vue-router";
 import { Icon } from "@iconify/vue";
@@ -78,6 +85,8 @@ import Toaster from "@/components/ui/toast-new/Toaster.vue";
 import Approve from "@/entrypoints/popup/pages/wallet/Approve.vue";
 import WalletPasswordDialog from "@/components/common/WalletPasswordDialog.vue";
 import { useGlobalStore, useWalletStore } from "@/store";
+import { useAccountManagementStore } from "@/store/accountManagement";
+import AccountReadinessBanner from "@/components/account/AccountReadinessBanner.vue";
 import { useAppVersion } from "@/composables/useAppVersion";
 import { storeToRefs } from "pinia";
 import { Button } from "@/components/ui/button";
@@ -91,6 +100,7 @@ const loading = ref(true);
 const startupError = ref(false);
 const retryStartup = () => window.location.reload();
 const walletStore = useWalletStore();
+const accountManagementStore = useAccountManagementStore();
 const globalStore = useGlobalStore();
 const router = useRouter();
 const { checkForUpdates, isForceUpdate, isUpdating, checkAndUpdate } = useAppVersion();
@@ -166,40 +176,40 @@ const isDesktop = () => {
 const installMessage = computed(() => {
   if (installPromptEvent.value) {
     if (isAndroid() && isChrome()) {
-      return "Chrome installs the wallet through Google Play services. Make sure Google Play can connect before installing.";
+      return t('pwaUi.install.chromePlay');
     }
-    return "Install the wallet as a standalone app on this device.";
+    return t('pwaUi.install.standalone');
   }
   if (isIOS()) {
-    return "iPhone and iPad require adding the wallet from the browser share menu.";
+    return t('pwaUi.install.ios');
   }
   if (isAndroid() && isChrome()) {
-    return "Chrome may need Google Play services and Google Play network access to finish installation.";
+    return t('pwaUi.install.chromeNetwork');
   }
   if (isAndroid()) {
-    return "If the install prompt is not shown, use the browser menu to add the wallet to your phone.";
+    return t('pwaUi.install.androidMenu');
   }
-  return "If the install prompt is not shown, use the browser install icon or browser menu.";
+  return t('pwaUi.install.desktopMenu');
 });
 
 const installSteps = computed(() => {
   if (installPromptEvent.value) {
     return isAndroid() && isChrome()
-      ? ["Confirm Google Play services and Google Play are available.", "Tap Install.", "If no icon appears, check the Android app list for SAT20 Wallet."]
+      ? [t('pwaUi.install.playAvailable'), t('pwaUi.install.tapInstall'), t('pwaUi.install.checkAppList')]
       : [];
   }
 
   if (isIOS()) {
-    return ["Open this page in Safari.", "Tap Share.", "Choose Add to Home Screen."];
+    return [t('pwaUi.install.openSafari'), t('pwaUi.install.share'), t('pwaUi.install.homeScreen')];
   }
   if (isAndroid() && isChrome()) {
-    return ["Confirm Google Play services and Google Play can connect.", "Open Chrome menu.", "Choose Install app or Add to Home screen."];
+    return [t('pwaUi.install.playConnect'), t('pwaUi.install.chromeMenu'), t('pwaUi.install.installOrHome')];
   }
   if (isAndroid()) {
-    return ["Open the browser menu.", "Choose Install app or Add to phone.", "Confirm the installation."];
+    return [t('pwaUi.install.openMenu'), t('pwaUi.install.installOrPhone'), t('pwaUi.install.confirm')];
   }
   if (isDesktop()) {
-    return ["Use the install icon in the address bar.", "Or open the browser menu and choose Install app."];
+    return [t('pwaUi.install.addressBar'), t('pwaUi.install.menuInstall')];
   }
   return [];
 });
@@ -273,6 +283,7 @@ const getWalletStatus = async () => {
 onBeforeMount(async () => {
   try {
     await getWalletStatus();
+    accountManagementStore.start();
     loading.value = false;
   } catch (error) {
     console.error("Wallet startup status could not be loaded:", error);
@@ -304,6 +315,7 @@ watch(
 );
 
 onBeforeUnmount(() => {
+  accountManagementStore.stop();
   clearAutoLockTimer();
   window.removeEventListener("beforeinstallprompt", onBeforeInstallPrompt);
   window.removeEventListener("appinstalled", onAppInstalled);

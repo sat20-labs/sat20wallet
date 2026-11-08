@@ -3,6 +3,7 @@ package wallet
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -204,6 +205,9 @@ func (p *Manager) runChannelHeartbeatTick(contexts ...context.Context) {
 	}
 
 	pubKey := localWallet.GetPaymentPubKey().SerializeCompressed()
+	if hex.EncodeToString(pubKey) == indexer.GetBootstrapPubKey() {
+		return
+	}
 	channelID, err := GetP2WSHaddress(serverPubKey.SerializeCompressed(), pubKey)
 	if err != nil {
 		Log.Warningf("channel heartbeat derive channel id failed: %v", err)

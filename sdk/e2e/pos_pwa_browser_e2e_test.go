@@ -287,6 +287,38 @@ func runSDKWalletBrowserMode(t *testing.T, sdkWASM bool, cases ...string) {
 			l1.FundAddress(t, actor.Address, 1_000_000, nil)
 		}
 	}
+	gas := contractcommon.GetGasAssetName()
+	heartbeatWitness, heartbeatScript, err := getP2WSHScript(
+		bootKey.PubKey().SerializeCompressed(), coreKey.PubKey().SerializeCompressed())
+	require.NoError(t, err)
+	heartbeatHash := sha256.Sum256(heartbeatWitness)
+	heartbeatAddress, err := btcutil.NewAddressWitnessScriptHash(heartbeatHash[:], &chaincfg.TestNetParams)
+	require.NoError(t, err)
+	heartbeatAsset := displayAssetWithMeta(gas, "100000000", 0, 0)
+	if heartbeatAsset.Protocol == indexercommon.PROTOCOL_NAME_BRC20 {
+		heartbeatAsset.Offsets = indexercommon.AssetOffsets{{Start: 0, End: 1}}
+		heartbeatAsset.OffsetToAmts = []*indexercommon.OffsetToAmount{{Offset: 0, Amount: "100000000"}}
+	}
+	heartbeatFunding := l1.FundAddress(t, heartbeatAddress.EncodeAddress(), 20_000_000,
+		[]*indexercommon.DisplayAsset{heartbeatAsset})
+	stakeFund := func(first, second *btcec.PrivateKey) (string, []byte) {
+		witness, script, err := getP2WSHScript(
+			first.PubKey().SerializeCompressed(), second.PubKey().SerializeCompressed())
+		require.NoError(t, err)
+		hash := sha256.Sum256(witness)
+		address, err := btcutil.NewAddressWitnessScriptHash(hash[:], &chaincfg.TestNetParams)
+		require.NoError(t, err)
+		asset := displayAssetWithMeta(stakeL1, fmt.Sprint(stakeL1Amount), 0, 1)
+		if asset.Protocol == indexercommon.PROTOCOL_NAME_BRC20 {
+			asset.Offsets = indexercommon.AssetOffsets{{Start: 0, End: 1}}
+			asset.OffsetToAmts = []*indexercommon.OffsetToAmount{{Offset: 0, Amount: fmt.Sprint(stakeL1Amount)}}
+		}
+		funding := l1.FundAddress(t, address.EncodeAddress(), 200000,
+			[]*indexercommon.DisplayAsset{asset})
+		return funding, script
+	}
+	coreStakeFunding, coreStakeScript := stakeFund(bootKey, coreKey)
+	minerStakeFunding, minerStakeScript := stakeFund(coreKey, minerKey)
 
 	stpConfig := func(peers ...string) func(string) string {
 		return func(publicRPC string) string {
@@ -322,22 +354,26 @@ func runSDKWalletBrowserMode(t *testing.T, sdkWASM bool, cases ...string) {
 	seedAnchor := func(label string, first, second *btcec.PrivateKey, value int64, name string, amount int64) *wire.MsgTx {
 		witness, script, err := getP2WSHScript(first.PubKey().SerializeCompressed(), second.PubKey().SerializeCompressed())
 		require.NoError(t, err)
-		funding := templateLockedOutPoint("pwa-pos:"+label, 0)
+		var funding string
 		binding := 0
 		assets := txAsset(name, amount)
 		if name == stake {
 			binding = 1
 			assets[0].BindingSat = 1
 		}
-		fundingAsset := displayAssetWithMeta(name, fmt.Sprint(amount), 0, binding)
-		if fundingAsset.Protocol == indexercommon.PROTOCOL_NAME_BRC20 {
-			// The confirmed fixture BRC20 transfer inscription occupies the
-			// first sat; its amount is not bound across the whole output.
-			fundingAsset.Offsets = indexercommon.AssetOffsets{{Start: 0, End: 1}}
-			fundingAsset.OffsetToAmts = []*indexercommon.OffsetToAmount{{Offset: 0, Amount: fmt.Sprint(amount)}}
+		switch label {
+		case "heartbeat":
+			funding = heartbeatFunding
+			require.Equal(t, heartbeatScript, script)
+		case "core-stake":
+			funding = coreStakeFunding
+			require.Equal(t, coreStakeScript, script)
+		case "miner-stake":
+			funding = minerStakeFunding
+			require.Equal(t, minerStakeScript, script)
+		default:
+			t.Fatalf("unknown POS anchor fixture %q", label)
 		}
-		l1.SeedUTXO(t, &indexercommon.AssetsInUtxo{OutPoint: funding, Value: value, PkScript: script,
-			Assets: []*indexercommon.DisplayAsset{fundingAsset}})
 		tx := buildAnchorTx(t, funding, value, assets,
 			fmt.Sprintf("%s-%d-0-%d", name, amount, binding), witness, first, script)
 		network.sendAndMine(t, tx, 1)
@@ -345,7 +381,6 @@ func runSDKWalletBrowserMode(t *testing.T, sdkWASM bool, cases ...string) {
 	}
 	seedAnchor("core-stake", bootKey, coreKey, 200000, stake, stakeAmount)
 	seedAnchor("miner-stake", coreKey, minerKey, 200000, stake, stakeAmount)
-	gas := contractcommon.GetGasAssetName()
 	gasAnchor := seedAnchor("heartbeat", bootKey, coreKey, 20_000_000, gas, 100_000_000)
 	heartbeatActor := newDKVSKeyPathActor(t, keyFromMnemonic(t, bootstrapMnemonic, 7))
 	witness, _, err := getP2WSHScript(bootKey.PubKey().SerializeCompressed(), coreKey.PubKey().SerializeCompressed())

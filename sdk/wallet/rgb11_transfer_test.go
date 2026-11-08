@@ -125,13 +125,28 @@ func (e *rgb11FlowEvidence) Broadcast(raw []byte) (string, error) {
 }
 
 func newRGB11FlowManager(t *testing.T, wallet common.Wallet, rpc IndexerRPCClient,
-	evidence rgb11wallet.BitcoinEvidenceProvider, localWalletID int64) *Manager {
-	return newRGB11FlowManagerAt(t, wallet, rpc, evidence, localWalletID, t.TempDir())
+	evidence rgb11wallet.BitcoinEvidenceProvider, localWalletID int64, states ...accountGroupState) *Manager {
+	return newRGB11FlowManagerAt(t, wallet, rpc, evidence, localWalletID, t.TempDir(), states...)
 }
 
 func newRGB11FlowManagerAt(t *testing.T, wallet common.Wallet, rpc IndexerRPCClient,
-	evidence rgb11wallet.BitcoinEvidenceProvider, localWalletID int64, dbPath string) *Manager {
+	evidence rgb11wallet.BitcoinEvidenceProvider, localWalletID int64, dbPath string, states ...accountGroupState) *Manager {
 	t.Helper()
+	if len(states) > 1 {
+		t.Fatal("RGB flow fixture accepts one instance account state")
+	}
+	state := accountGroupInactive
+	if len(states) == 1 {
+		state = states[0]
+	}
+	if state != accountGroupInactive && state != accountGroupUnprepared {
+		t.Fatal("construct Unprepared before an outer ActiveReady group supplies real credentials")
+	}
+	if state == accountGroupInactive && _chain == "" {
+		oldChain := _chain
+		_chain = "testnet"
+		t.Cleanup(func() { _chain = oldChain })
+	}
 	database := indexerdb.NewKVDB(dbPath)
 	locker := NewUtxoLocker(database, rpc, L1_NETWORK_BITCOIN)
 	l1 := NewIndexerRPCClientMgr()
@@ -173,6 +188,9 @@ func newRGB11FlowManagerAt(t *testing.T, wallet common.Wallet, rpc IndexerRPCCli
 			current.scopeStates.stopReconciliations()
 		}
 	})
+	if state == accountGroupInactive {
+		prepareRGBGroup(t, manager, state)
+	}
 	return manager
 }
 
@@ -814,6 +832,7 @@ func TestRGB11IssuedUDASendReceive(t *testing.T) {
 	client := newRGB11MessageNodeClient(remote)
 	sender := newRGB11ActivatedFlowAccount(t, "inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", remote, client, evidence, rpc)
 	recipient := newRGB11ActivatedFlowAccount(t, "comfort very add tuition senior run eight snap burst appear exile dutch", remote, client, evidence, rpc)
+	recovered := newRGBColdDevice(t, recipient, remote, evidence, rpc, coreE2EReceiverMnemonic, "password")
 	issued, err := sender.IssueRGB11Asset(context.Background(), RGB11IssueRequest{
 		Schema: "UDA", Ticker: "SUDA", Name: "SAT20 Unique", Amounts: []uint64{1},
 	})
@@ -973,13 +992,7 @@ func TestRGB11IssuedUDASendReceive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	recoveredWallet := NewInternalWalletWithMnemonic(
-		"comfort very add tuition senior run eight snap burst appear exile dutch", "", &chaincfg.TestNet4Params,
-	)
-	if recoveredWallet == nil {
-		t.Fatal("create recovered recipient wallet")
-	}
-	recovered := newRGB11FlowManager(t, recoveredWallet, rpc, evidence, 33)
+	assertRGBColdEmpty(t, recovered)
 	if err := recovered.rgbManager.importRGB11WalletSnapshot(recoverySnapshot); err != nil {
 		t.Fatal(err)
 	}
@@ -1048,6 +1061,9 @@ func TestRGB11IssuedFungibleFirstReleaseSchemasSendReceive(t *testing.T) {
 			client := newRGB11MessageNodeClient(remote)
 			sender := newRGB11ActivatedFlowAccount(t, "inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", remote, client, evidence, rpc)
 			recipient := newRGB11ActivatedFlowAccount(t, "comfort very add tuition senior run eight snap burst appear exile dutch", remote, client, evidence, rpc)
+			// Fixture-controlled mempool transitions have one refresh owner.
+			sender.rgbManager.scopeStates.stopReconciliations()
+			recipient.rgbManager.scopeStates.stopReconciliations()
 			issued, err := sender.IssueRGB11Asset(context.Background(), test.request)
 			if err != nil {
 				t.Fatal(err)
@@ -1406,7 +1422,7 @@ func TestRGB11RefreshFailsClosedOnConflictingSpend(t *testing.T) {
 }
 
 func TestRGB11RefreshKeepsUnknownExpectedSpendUnresolved(t *testing.T) {
-	manager := newRGB11MultiDeviceManager(t, newRGB11StatusPrivateKey(t), 54)
+	manager := newRGB11MultiDeviceManager(t, newRGB11StatusPrivateKey(t), 54, accountGroupInactive)
 	evidence := &rgb11StatusEvidence{
 		statuses:  make(map[string]*rgb11wallet.BitcoinTxStatus),
 		outspends: make(map[string]*rgb11wallet.BitcoinOutspend),
@@ -1434,7 +1450,7 @@ func TestRGB11RefreshKeepsUnknownExpectedSpendUnresolved(t *testing.T) {
 }
 
 func TestRGB11LockRebuildDoesNotRequireBitcoinEvidence(t *testing.T) {
-	manager := newRGB11MultiDeviceManager(t, newRGB11StatusPrivateKey(t), 55)
+	manager := newRGB11MultiDeviceManager(t, newRGB11StatusPrivateKey(t), 55, accountGroupInactive)
 	manager.utxoLockerL1 = NewUtxoLocker(manager.db, nil, L1_NETWORK_BITCOIN)
 	saveRGB11StatusTransfer(t, manager, "offline-restore", "broadcast")
 	pending, err := manager.rgbManager.projectionStore.LoadPendingTransfer("offline-restore")
@@ -1453,7 +1469,7 @@ func TestRGB11LockRebuildDoesNotRequireBitcoinEvidence(t *testing.T) {
 }
 
 func TestRGB11RefreshTracksIncomingTransferConfirmationAndReorg(t *testing.T) {
-	manager := newRGB11MultiDeviceManager(t, newRGB11StatusPrivateKey(t), 53)
+	manager := newRGB11MultiDeviceManager(t, newRGB11StatusPrivateKey(t), 53, accountGroupInactive)
 	evidence := &rgb11StatusEvidence{statuses: make(map[string]*rgb11wallet.BitcoinTxStatus), outspends: make(map[string]*rgb11wallet.BitcoinOutspend)}
 	manager.rgbManager.evidence = evidence
 	state := &rgb11wallet.TransferState{
@@ -1489,7 +1505,7 @@ func TestRGB11RefreshTracksIncomingTransferConfirmationAndReorg(t *testing.T) {
 }
 
 func TestRGB11RejectedStaysTerminal(t *testing.T) {
-	manager := newRGB11MultiDeviceManager(t, newRGB11StatusPrivateKey(t), 56)
+	manager := newRGB11MultiDeviceManager(t, newRGB11StatusPrivateKey(t), 56, accountGroupInactive)
 	evidence := &rgb11StatusEvidence{
 		statuses:  make(map[string]*rgb11wallet.BitcoinTxStatus),
 		outspends: make(map[string]*rgb11wallet.BitcoinOutspend),

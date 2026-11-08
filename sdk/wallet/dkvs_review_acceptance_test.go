@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -35,7 +36,11 @@ func (h *reviewAcceptanceHTTP) SendDKVSGetContext(ctx context.Context, path stri
 }
 
 func TestDKVSReviewFundingPausedOutboxStillReceives(t *testing.T) {
-	manager, remote := finalDKVSTestManager(t)
+	oldChain := _chain
+	_chain = "testnet"
+	t.Cleanup(func() { _chain = oldChain })
+	manager := newAutopayWriteFixture(t, true)
+	remote := manager.http.(*rgb11MemoryDKVSHTTP)
 	http := &reviewAcceptanceHTTP{rgb11MemoryDKVSHTTP: remote}
 	configureRGB11DKVSTestManager(manager, http)
 	manager.l2IndexerClient = &IndexerRPCClientMgr{active: NewIndexerClient("http", "dkvs.test", "testnet", http)}
@@ -63,7 +68,6 @@ func TestDKVSReviewFundingPausedOutboxStillReceives(t *testing.T) {
 	replica := core.NewReplicaStore(manager.db)
 	require.NoError(t, replica.QueueOutbox(entry))
 	defaults := dkvs.NetworkDefaultsForParams(GetChainParam_SatsNet())
-	manager.accountProfile = &accountManagementProfile{StorageMode: AccountStoragePaid, RootFingerprint: walletFingerprint(manager.wallet)}
 	remote.autopayState = &dkvs.AutopayContractState{Contract: defaults.AutopayContract,
 		TemplateName: TEMPLATE_CONTRACT_AUTOPAY, CurrentBlock: 1, Status: "active",
 		ServiceName: defaults.AutopayServiceName, Recipient: defaults.AutopayRecipient, FeeAssetName: defaults.AutopayFeeAssetName,
@@ -81,8 +85,11 @@ func TestDKVSReviewFundingPausedOutboxStillReceives(t *testing.T) {
 	defer manager.dkvs.stopAndWait()
 	require.Eventually(t, func() bool {
 		entries, e := replica.LoadOutbox(client.replicaNamespace)
-		return e == nil && len(entries) == 1 && entries[0].LastError != ""
-	}, 2*time.Second, 10*time.Millisecond)
+		_, message, _ := manager.dkvs.lastSyncErrorStatus()
+		return e == nil && len(entries) == 1 &&
+			strings.Contains(entries[0].LastError, ErrAccountAutopayFundingRequired.Error()) &&
+			strings.Contains(message, ErrAccountAutopayFundingRequired.Error())
+	}, 2*time.Second, 10*time.Millisecond, "publish the funding prompt before testing its retention")
 	var entries []*core.BatchOutboxEntry
 	require.NoError(t, manager.dkvs.runTransport(func() error {
 		entries, err = replica.LoadOutbox(client.replicaNamespace)

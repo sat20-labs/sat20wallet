@@ -1,12 +1,12 @@
 <template>
   <div class="space-y-4 mb-4">
     <div>
-      <h3 class="text-base sm:text-lg font-semibold">Add Asset</h3>
+      <h3 class="text-base sm:text-lg font-semibold">{{ $t('walletComponents.addAsset') }}</h3>
       <div class="p-2 space-y-3 sm:space-y-4">
         <div v-for="(item, i) in inputList" :key="i">
           <div class="space-y-2 sm:space-y-3">
             <div class="flex items-center justify-between">
-              <p class="text-sm sm:text-base font-medium">Asset {{ i + 1 }}</p>
+              <p class="text-sm sm:text-base font-medium">{{ $t('walletComponents.numberedAsset', { number: i + 1 }) }}</p>
               <!-- <div class="flex space-x-1 sm:space-x-2">
                   <Button
                     variant="soft"
@@ -33,14 +33,14 @@
         </div>
       </div>
     </div>
-    <FormItem label="To Address" v-if="showAddress">
+    <FormItem :label="$t('walletComponents.toAddress')" v-if="showAddress">
       <Input
         v-model="toAddress"
         class="dark:bg-gray-800"
         placeholder="tbc1..."
       />
     </FormItem>
-    <FormItem label="Total Amount">
+    <FormItem :label="$t('walletComponents.totalAmount')">
       <Input
         v-model="totalAmount"
         type="number"
@@ -62,7 +62,7 @@
         v-if="loading || isLoading"
         class="mr-2 h-4 w-4 animate-spin"
       />
-      Submit
+      {{ $t('walletComponents.submit') }}
     </Button>
   </div>
 </template>

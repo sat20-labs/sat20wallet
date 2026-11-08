@@ -80,9 +80,9 @@ func (s *EngineStore) Begin() (corestorage.Tx, error) {
 	if scope == "" {
 		return nil, ErrWalletScope
 	}
-	batch := NewReservationWriteBatch(s.db, scope, s.reservations)
-	if batch == nil {
-		return nil, errors.New("RGB11 KVDB returned nil write batch")
+	batch, err := NewReservationWriteBatch(s.db, scope, s.reservations)
+	if err != nil {
+		return nil, err
 	}
 	return &engineTx{scope: scope, batch: batch}, nil
 }

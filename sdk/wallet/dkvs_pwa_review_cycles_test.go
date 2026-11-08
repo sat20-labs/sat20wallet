@@ -58,15 +58,25 @@ func TestDKVSPWAReviewBindingRefusalReturnsErrorAndKeepsReceiving(t *testing.T) 
 					_, rejected := admission.PutRecords([]dkvs.CASMutation{{Record: request.Mutations[0].Record,
 						Precondition: dkvs.WritePrecondition{ExpectAbsent: true}}},
 						dkvs.BatchCASOptions{EndpointID: request.EndpointID, RequestID: request.RequestID}, request.Authorization)
-					if dkvs.ErrorCodeOf(rejected) != dkvs.ErrorCodePermissionDenied {
-						http.Error(w, "binding admission did not reject this request", http.StatusInternalServerError)
+					if rejected != nil {
+						if dkvs.ErrorCodeOf(rejected) != dkvs.ErrorCodePermissionDenied {
+							http.Error(w, "unexpected wallet admission error", http.StatusInternalServerError)
+							return
+						}
+						w.Header().Set("Content-Type", "application/json")
+						w.WriteHeader(http.StatusForbidden)
+						_ = json.NewEncoder(w).Encode(map[string]any{"code": -1,
+							"error_code": dkvs.ErrorCodeOf(rejected), "msg": rejected.Error()})
 						return
 					}
-					w.Header().Set("Content-Type", "application/json")
-					w.WriteHeader(http.StatusForbidden)
-					_ = json.NewEncoder(w).Encode(map[string]any{"code": -1,
-						"error_code": dkvs.ErrorCodeOf(rejected), "msg": rejected.Error()})
-					return
+					// Only a request admitted by the production binding/authorization
+					// boundary is installed in the existing receiving endpoint.
+					body, marshalErr := json.Marshal(request)
+					if marshalErr != nil {
+						http.Error(w, marshalErr.Error(), http.StatusInternalServerError)
+						return
+					}
+					payload, err = remote.SendDKVSPostContext(r.Context(), path, body)
 				} else if r.Method == http.MethodPost {
 					body, readErr := io.ReadAll(r.Body)
 					if readErr != nil {
@@ -135,19 +145,53 @@ func TestDKVSPWAReviewBindingRefusalReturnsErrorAndKeepsReceiving(t *testing.T) 
 			replica := core.NewReplicaStore(manager.db)
 			entries, err := replica.LoadOutbox(client.replicaNamespace)
 			require.NoError(t, err)
-			require.Len(t, entries, 1)
-			require.Equal(t, core.DKVSOutboxConflict, entries[0].State)
-			require.Equal(t, string(dkvs.ErrorCodePermissionDenied), entries[0].LastErrorCode)
-			if entry != nil {
+			if mode == "foreground" {
+				require.Empty(t, entries, "a newly and definitively refused intent must end")
+			} else {
+				require.Len(t, entries, 1)
+				require.Equal(t, core.DKVSOutboxConflict, entries[0].State)
+				require.Equal(t, string(dkvs.ErrorCodePermissionDenied), entries[0].LastErrorCode)
 				require.Equal(t, entry.RequestID, entries[0].RequestID)
 				require.Equal(t, entry.Authorization, entries[0].Authorization)
 			}
+			_, err = node.Get(pendingKey)
+			require.ErrorIs(t, err, dkvs.ErrRecordNotFound, "binding refusal must not commit the business value")
+			require.Nil(t, snapshotRGB11MemoryRecords(remote)[pendingKey])
 			_, _, receiveErr := manager.syncDKVSOnceResult()
 			require.NoError(t, receiveErr)
 			current, err := replica.LoadSubscriptionRecord(client.replicaNamespace, key)
 			require.NoError(t, err)
 			require.Equal(t, dkvs.RecordHash(updated), dkvs.RecordHash(current))
 			require.Equal(t, int32(1), submissions.Load(), "a refused original request must not be automatically reauthorized or resubmitted")
+			expectedSubmissions := int32(1)
+			if mode == "foreground" {
+				accountID, err := dkvsAccountID(manager.wallet)
+				require.NoError(t, err)
+				bindingValue, err := dkvs.EncodeAccountServiceDescriptor(dkvs.AccountServiceDescriptor{
+					AccountID: accountID, CoreNodeID: remote.endpointID})
+				require.NoError(t, err)
+				binding, err := NewDKVSAccountSignedRecord(manager.wallet, bindingKey, bindingValue,
+					dkvs.RecordOptions{Seq: 1, IssueHeight: 1})
+				require.NoError(t, err)
+				_, err = admission.PutRecords([]dkvs.CASMutation{{Record: binding,
+					Precondition: dkvs.WritePrecondition{ExpectAbsent: true}}},
+					dkvs.BatchCASOptions{EndpointID: remote.endpointID}, nil)
+				require.NoError(t, err, "establish a real binding before the next explicit user intent")
+				accepted, err := client.PutSignedRecordFreeLocal(manager.wallet, pendingKey, []byte("legal-new-intent"),
+					dkvs.RecordOptions{IssueHeight: 1, TTL: testRGB11FreeLocalTTL})
+				require.NoError(t, err, "a prior definite refusal must not block a new authorized intent")
+				require.Equal(t, uint64(1), accepted.Seq, "the refused intent must not consume a key sequence")
+				require.Equal(t, []byte("legal-new-intent"), accepted.Value)
+				stored, err := node.Get(pendingKey)
+				require.NoError(t, err)
+				require.Equal(t, dkvs.RecordHash(accepted), dkvs.RecordHash(stored))
+				require.Equal(t, dkvs.RecordHash(accepted), dkvs.RecordHash(snapshotRGB11MemoryRecords(remote)[pendingKey]))
+				entries, err = replica.LoadOutbox(client.replicaNamespace)
+				require.NoError(t, err)
+				require.Empty(t, entries, "the new accepted intent must finish normally")
+				expectedSubmissions = 2
+				require.Equal(t, expectedSubmissions, submissions.Load(), "only the rejected intent and explicit new intent may be submitted")
+			}
 			manager.dkvs.start()
 			defer manager.dkvs.stopAndWait()
 			updated, err = seed.PutRecord(freeLocalRecord(t, manager, key, 3, "v3"))
@@ -156,7 +200,7 @@ func TestDKVSPWAReviewBindingRefusalReturnsErrorAndKeepsReceiving(t *testing.T) 
 				current, err := replica.LoadSubscriptionRecord(client.replicaNamespace, key)
 				return err == nil && dkvs.RecordHash(current) == dkvs.RecordHash(updated)
 			}, 3*time.Second, 10*time.Millisecond, "binding refusal must leave ongoing receiving active")
-			require.Equal(t, int32(1), submissions.Load())
+			require.Equal(t, expectedSubmissions, submissions.Load(), "receiving must not replay the refused intent")
 		})
 	}
 }

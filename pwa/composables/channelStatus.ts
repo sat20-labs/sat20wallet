@@ -36,61 +36,61 @@ export enum ChannelStatus {
   CS_CLOSED_UNEXPECTED = 512, // 0x200
 }
 
-export function getChannelStatusText(status: ChannelStatus): string {
+export function getChannelStatusText(status: ChannelStatus, t: (key: string) => string): string {
   switch (status) {
     case ChannelStatus.CS_CLOSED:
-      return 'Closed'
+      return t('walletComponents.channelStatusClosed')
     case ChannelStatus.CS_FUNDING_BROADCASTED:
-      return 'Funding Broadcasted'
+      return t('walletComponents.channelStatusFundingBroadcasted')
     case ChannelStatus.CS_FUNDING_CONFIRMED:
-      return 'Funding Confirmed'
+      return t('walletComponents.channelStatusFundingConfirmed')
     case ChannelStatus.CS_ANCHOR_BROADCASTED:
-      return 'Anchor Broadcasted'
+      return t('walletComponents.channelStatusAnchorBroadcasted')
     case ChannelStatus.CS_ANCHOR_CONFIRMED:
-      return 'Anchor Confirmed'
+      return t('walletComponents.channelStatusAnchorConfirmed')
     case ChannelStatus.CS_DEANCHOR_BROADCASTED:
-      return 'Deanchor Broadcasted'
+      return t('walletComponents.channelStatusDeanchorBroadcasted')
     case ChannelStatus.CS_DEANCHOR_CONFIRMED:
-      return 'Deanchor Confirmed'
+      return t('walletComponents.channelStatusDeanchorConfirmed')
     case ChannelStatus.CS_CLOSING_BROADCASTED:
-      return 'Closing Broadcasted'
+      return t('walletComponents.channelStatusClosingBroadcasted')
     case ChannelStatus.CS_CLOSING_CONFIRMED:
-      return 'Closing Confirmed'
+      return t('walletComponents.channelStatusClosingConfirmed')
     case ChannelStatus.CS_CLOSE_FORCELY_BROADCASTED:
-      return 'Close Forcely Broadcasted'
+      return t('walletComponents.channelStatusCloseForcelyBroadcasted')
     case ChannelStatus.CS_CLOSE_FORCELY_CONFIRMED:
-      return 'Close Forcely Confirmed'
+      return t('walletComponents.channelStatusCloseForcelyConfirmed')
     case ChannelStatus.CS_CLOSE_FORCELY_SWEEP_BROADCASTED:
-      return 'Close Forcely Sweep Broadcasted'
+      return t('walletComponents.channelStatusCloseForcelySweepBroadcasted')
     case ChannelStatus.CS_CLOSE_FORCELY_SWEEP_CONFIRMED:
-      return 'Close Forcely Sweep Confirmed'
+      return t('walletComponents.channelStatusCloseForcelySweepConfirmed')
     case ChannelStatus.CS_READY:
-      return 'Ready'
+      return t('walletComponents.channelStatusReady')
     case ChannelStatus.CS_UNLOCK_BROADCASTED:
-      return 'Unlock Broadcasted'
+      return t('walletComponents.channelStatusUnlockBroadcasted')
     case ChannelStatus.CS_LOCK_BROADCASTED:
-      return 'Lock Broadcasted'
+      return t('walletComponents.channelStatusLockBroadcasted')
     case ChannelStatus.CS_SPLICINGIN_BROADCASTED:
-      return 'Splicing In Broadcasted'
+      return t('walletComponents.channelStatusSplicingInBroadcasted')
     case ChannelStatus.CS_SPLICINGIN_CONFIRMED:
-      return 'Splicing In Confirmed'
+      return t('walletComponents.channelStatusSplicingInConfirmed')
     case ChannelStatus.CS_SPLICINGIN_ANCHOR_BROADCASTED:
-      return 'Splicing In Anchor Broadcasted'
+      return t('walletComponents.channelStatusSplicingInAnchorBroadcasted')
     case ChannelStatus.CS_SPLICINGIN_ANCHOR_CONFIRMED:
-      return 'Splicing In Anchor Confirmed'
+      return t('walletComponents.channelStatusSplicingInAnchorConfirmed')
     case ChannelStatus.CS_SPLICINGOUT_ANCHOR_BROADCASTED:
-      return 'Splicing Out Anchor Broadcasted'
+      return t('walletComponents.channelStatusSplicingOutAnchorBroadcasted')
     case ChannelStatus.CS_SPLICINGOUT_ANCHOR_CONFIRMED:
-      return 'Splicing Out Anchor Confirmed'
+      return t('walletComponents.channelStatusSplicingOutAnchorConfirmed')
     case ChannelStatus.CS_SPLICINGOUT_BROADCASTED:
-      return 'Splicing Out Broadcasted'
+      return t('walletComponents.channelStatusSplicingOutBroadcasted')
     case ChannelStatus.CS_SPLICINGOUT_CONFIRMED:
-      return 'Splicing Out Confirmed'
+      return t('walletComponents.channelStatusSplicingOutConfirmed')
     case ChannelStatus.CS_CLOSED_FORCELY:
-      return 'Closed Forcely'
+      return t('walletComponents.channelStatusClosedForcely')
     case ChannelStatus.CS_CLOSED_UNEXPECTED:
-      return 'Closed Unexpectedly'
+      return t('walletComponents.channelStatusClosedUnexpectedly')
     default:
-      return 'Unknown status'
+      return t('walletComponents.channelStatusUnknownStatus')
   }
 }

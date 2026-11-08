@@ -1,0 +1,22 @@
+{
+  "state": "COMPLETE",
+  "command": "npm run compile",
+  "pid": 90239,
+  "started_utc": "2026-10-31T14:34:47.763828+00:00",
+  "ended_utc": "2026-10-31T14:35:27.227308+00:00",
+  "exit_code": 0,
+  "log": "/Users/yingfeng/github/sat20wallet/pwa/data/final-20261031T1348Z/pwa-compile-fingerprint-recheck-20261031T1434Z/compile.log",
+  "log_bytes": 55,
+  "log_sha256": "48dacadd52d700a07293327aea0dc2f648f3db931dee8095bc7768243804f885",
+  "pre_file_count": 619,
+  "post_file_count": 619,
+  "pre_tree_sha256": "374ab24372a4cb282f6d10f4d89ad16d5e37b8fca4771478f93e2e2f83875d3c",
+  "post_tree_sha256": "374ab24372a4cb282f6d10f4d89ad16d5e37b8fca4771478f93e2e2f83875d3c",
+  "file_hashes_unchanged": true,
+  "matches_prior_postrun_inventory_before_and_after": true,
+  "dependency_metadata_hashes_unchanged": true,
+  "tool_versions_unchanged": true,
+  "changed_files": [],
+  "missing_files": [],
+  "added_files": []
+}

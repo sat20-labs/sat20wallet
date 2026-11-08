@@ -1,0 +1,10 @@
+--- a/pwa/scripts/diagnostic/wallet-manager-import.test.mjs
++++ b/pwa/scripts/diagnostic/wallet-manager-import.test.mjs
+@@ -17,6 +17,7 @@
+   })
+   const mocks = {
+     vue: { ...Vue, onUnmounted() {} },
++    'vue-i18n': { useI18n: () => ({ t: key => key }) },
+     'vue-router': { useRouter: () => ({ go() {} }) },
+     pinia: { storeToRefs: Vue.toRefs },
+     '@/store': { useWalletStore: () => store, useApproveStore: () => ({ isVisible: Vue.ref(false) }) },

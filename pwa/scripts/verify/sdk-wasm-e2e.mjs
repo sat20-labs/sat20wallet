@@ -21,7 +21,7 @@ export const requiredSDKWASMCases = [
   'SDK WASM: release rejects stale calls and reinitialization recovers the same persisted wallet',
   'SDK WASM: unknown channel status returns from database fallback without blocking later calls',
   'SDK WASM: private-key wallets sign independently and switch rename delete across cold restart',
-  'SDK WASM: managed mnemonic accounts reject private-key wallet mixing without catalog changes',
+  'SDK WASM: managed mnemonic accounts import private-key wallets with isolated identities and signatures',
   'SDK WASM: monitor wallets read funded addresses and cannot sign or disclose a mnemonic',
   'SDK WASM: invalid monitor addresses preserve the existing selected wallet',
   'SDK WASM: L1 and L2 V2 selection and balances match independently indexed outputs',
@@ -72,13 +72,27 @@ export async function runSDKWASMCases({ check, device, pageErrors, preserveBrows
     else assert.equal(result.code, 0, `${method}: ${result.msg}`)
     return result.data
   }
-  const imported = async page => {
+  const imported = async (page, localWrite = false) => {
     const result = await call(page, 'importWallet', [actor.mnemonic, actor.password])
     assert.equal(result.address, actor.address)
+    if (localWrite) await waitInactive(page)
     return String(result.walletId)
   }
   const catalog = page => call(page, 'getWalletCatalog')
   const poll = { timeout: 180000, intervals: [250, 500, 1000, 2000] }
+  // Local-write groups need authoritative discovery, not an activation or a
+  // fabricated ready flag. Poll only the public, non-sensitive account status.
+  const waitInactive = async page => {
+    await expect.poll(async () => {
+      const s = await call(page, 'status', [], 'sat20account_wasm')
+      return {
+        discovery: s.discovery_status ?? 'unknown',
+        localOnly: s.local_only === true,
+        configured: s.recovery_configured === true,
+        pending: s.activation_pending === true,
+      }
+    }, poll).toEqual({ discovery: 'inactive', localOnly: true, configured: false, pending: false })
+  }
   const control = async (action, body = {}) => {
     const response = await fetch(new URL(`/${action}`, fixture.control_url), {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -168,6 +182,7 @@ export async function runSDKWASMCases({ check, device, pageErrors, preserveBrows
     },
     async page => {
       const result = await call(page, 'createWallet', [actor.password])
+      await waitInactive(page)
       const validated = await call(page, 'validateMnemonic', [result.mnemonic, ''])
       assert.equal(validated.address, (await call(page, 'getWalletAddress', [0])).address)
       const before = await catalog(page)
@@ -181,7 +196,7 @@ export async function runSDKWASMCases({ check, device, pageErrors, preserveBrows
       assert.equal((await call(page, 'getWalletAddress', [0])).address, validated.address)
     },
     async page => {
-      const id = await imported(page)
+      const id = await imported(page, true)
       const root = (await catalog(page)).root_account_id
       await call(page, 'ensureAccount', [id, 1, 'SDK child'])
       await call(page, 'updateAccountMetadata', [id, 1, 'SDK renamed'])
@@ -191,6 +206,7 @@ export async function runSDKWASMCases({ check, device, pageErrors, preserveBrows
       assert.notEqual(address, actor.address)
       await page.reload(); await page.waitForFunction(() => Boolean(window.__SAT20_PWA_VERIFY__))
       await call(page, 'unlockWallet', [actor.password])
+      await waitInactive(page)
       assert.equal((await catalog(page)).root_account_id, root)
       assert.equal((await catalog(page)).current_account_index, 1)
       assert.equal((await call(page, 'getWalletAddress', [1])).address, address)
@@ -280,7 +296,7 @@ export async function runSDKWASMCases({ check, device, pageErrors, preserveBrows
       assert.equal((await call(page, 'getWalletAddress', [0])).address, actor.address)
     },
     async page => {
-      const id = await imported(page); await call(page, 'ensureAccount', [id, 1, 'boundary child'])
+      const id = await imported(page, true); await call(page, 'ensureAccount', [id, 1, 'boundary child'])
       for (const index of [-1, 1.25, 2 ** 32, Number.MAX_SAFE_INTEGER, NaN, Infinity, -Infinity]) {
         console.log(JSON.stringify({ observation: 'account-index boundary', index: String(index) }))
         const before = await catalog(page)
@@ -348,6 +364,7 @@ export async function runSDKWASMCases({ check, device, pageErrors, preserveBrows
       const ids = []
       for (const [index, key] of keys.entries()) {
         const imported = await call(page, 'importWalletWithPrivKey', [key.toString('hex'), password])
+        await waitInactive(page)
         assert.equal(imported.address, addresses[index]); ids.push(imported.walletId)
         const payload = `private-key signature ${index}`
         const der = Buffer.from((await call(page, 'signData', [payload])).signature, 'hex')
@@ -362,6 +379,7 @@ export async function runSDKWASMCases({ check, device, pageErrors, preserveBrows
       await call(page, 'unlockWallet', ['wrong'], undefined, true)
       await call(page, 'getWalletAddress', [0], undefined, true)
       await call(page, 'unlockWallet', [password])
+      await waitInactive(page)
       assert.deepEqual(await catalog(page), unlockedCatalog)
       assert.equal((await call(page, 'getWalletAddress', [0])).address, addresses[0])
       assert.ok((await catalog(page)).wallets.some(wallet => String(wallet.id) === ids[0] && wallet.name === 'SDK standalone key'))
@@ -373,12 +391,53 @@ export async function runSDKWASMCases({ check, device, pageErrors, preserveBrows
     async page => {
       const discovery = await call(page, 'recoverAccountManagementFromRootMnemonic', [actor.mnemonic, actor.password])
       assert.equal(discovery.status, 'not_found', 'managed import requires authoritative root discovery')
-      await imported(page); const before = await catalog(page)
+      const rootId = await imported(page, true)
+      const before = await catalog(page)
+      const rootPub = Buffer.from((await call(page, 'getWalletPubkey', [0])).pubKey, 'hex')
       assert.equal((await call(page, 'status', [], 'sat20account_wasm')).active, true)
-      for (const key of ['not-hex', '0'.repeat(64), '1'.padStart(64, '0')]) {
+      for (const key of ['not-hex', '0'.repeat(64)]) {
         await call(page, 'importWalletWithPrivKey', [key, actor.password], undefined, true)
         assert.deepEqual(await catalog(page), before)
       }
+      // Scalar one is an existing public test fixture, not an invalid key.
+      const privateKey = Buffer.from('1'.padStart(64, '0'), 'hex')
+      const privatePub = Buffer.from(secp256k1.pointFromScalar(privateKey, true))
+      const privateAddress = payments.p2tr({ internalPubkey: privatePub.subarray(1), network: bitcoinNetwork }).address
+      const added = await call(page, 'importWalletWithPrivKey', [privateKey.toString('hex'), actor.password])
+      await waitInactive(page)
+      const privateId = String(added.walletId)
+      assert.notEqual(privateId, rootId)
+      assert.notDeepEqual(privatePub, rootPub)
+      assert.equal(added.address, privateAddress)
+      assert.equal((await call(page, 'getWalletAddress', [0])).address, privateAddress)
+      const mixed = await catalog(page)
+      assert.equal(mixed.wallets.length, before.wallets.length + 1)
+      assert.equal(String(mixed.current_wallet_id), privateId)
+      assert.equal(mixed.root_account_id, before.root_account_id)
+      assert.deepEqual(mixed.wallets.find(wallet => String(wallet.id) === rootId),
+        before.wallets.find(wallet => String(wallet.id) === rootId))
+      const payload = 'SDK managed mnemonic and private signing isolation'
+      const proveSigner = async (expected, other) => {
+        assert.equal((await call(page, 'getWalletPubkey', [0])).pubKey, expected.toString('hex'))
+        const der = Buffer.from((await call(page, 'signData', [payload])).signature, 'hex')
+        const signature = script.signature.decode(Buffer.concat([der, Buffer.from([1])])).signature
+        assert.equal(secp256k1.verify(sha(payload), expected, signature), true)
+        assert.equal(secp256k1.verify(sha(payload), other, signature), false)
+      }
+      await proveSigner(privatePub, rootPub)
+      await call(page, 'switchWallet', [rootId, actor.password])
+      assert.equal((await call(page, 'getWalletAddress', [0])).address, actor.address)
+      await proveSigner(rootPub, privatePub)
+      await call(page, 'switchWallet', [privateId, actor.password])
+      const selected = await catalog(page)
+      await page.reload(); await page.waitForFunction(() => Boolean(window.__SAT20_PWA_VERIFY__))
+      await call(page, 'unlockWallet', [actor.password])
+      await waitInactive(page)
+      assert.deepEqual(await catalog(page), selected)
+      assert.equal((await call(page, 'getWalletAddress', [0])).address, privateAddress)
+      await proveSigner(privatePub, rootPub)
+      await call(page, 'switchWallet', [rootId, actor.password])
+      assert.equal((await catalog(page)).root_account_id, before.root_account_id)
       assert.equal((await call(page, 'getWalletAddress', [0])).address, actor.address)
     },
     async page => {

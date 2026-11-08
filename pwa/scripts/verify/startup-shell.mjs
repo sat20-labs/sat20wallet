@@ -49,6 +49,7 @@ for (const fail of [false, true]) {
   vm.runInNewContext(hook, {
     onBeforeMount: fn => { hookFn = fn }, loading, startupError,
     getWalletStatus: async () => { if (fail) throw new Error('status unavailable') },
+    accountManagementStore: { start() {} },
     console: { error() {} },
   })
   assert.equal(loading.value, true)

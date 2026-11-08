@@ -1,6 +1,7 @@
 package wallet
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
@@ -56,8 +57,8 @@ func accountAutopayReadyFixture() (dkvsindexer.NetworkDefaults, *dkvsindexer.Aut
 
 func TestAccountAutopayStateReadyMatchesPaidRetentionVerifier(t *testing.T) {
 	defaults, state := accountAutopayReadyFixture()
-	require.True(t, accountAutopayStateReady(state, defaults, "payer", "5"))
-	status := accountAutopayStateFundingStatus(state, defaults, "payer", "5")
+	require.True(t, accountAutopayStateReady(state, defaults, "payer", "5", 1))
+	status := accountAutopayStateFundingStatus(state, defaults, "payer", "5", 1)
 	require.True(t, status.Ready)
 	require.False(t, status.NeedsFunding)
 	require.Equal(t, AccountAutopayReasonReady, status.Reason)
@@ -69,7 +70,7 @@ func TestAccountAutopayFundingStatusExplainsRechargeReasons(t *testing.T) {
 
 	delegate.LastPayHeight = state.CurrentBlock - 1
 	state.Delegates["payer"] = delegate
-	status := accountAutopayStateFundingStatus(state, defaults, "payer", "5")
+	status := accountAutopayStateFundingStatus(state, defaults, "payer", "5", 1)
 	require.False(t, status.Ready)
 	require.True(t, status.NeedsFunding)
 	require.True(t, status.CanFund)
@@ -78,12 +79,12 @@ func TestAccountAutopayFundingStatusExplainsRechargeReasons(t *testing.T) {
 	delegate.LastPayHeight = state.CurrentBlock
 	delegate.Balance = "4"
 	state.Delegates["payer"] = delegate
-	status = accountAutopayStateFundingStatus(state, defaults, "payer", "5")
+	status = accountAutopayStateFundingStatus(state, defaults, "payer", "5", 1)
 	require.Equal(t, AccountAutopayReasonBalanceInsufficient, status.Reason)
 	require.True(t, status.CanFund)
 
 	delete(state.Delegates, "payer")
-	status = accountAutopayStateFundingStatus(state, defaults, "payer", "5")
+	status = accountAutopayStateFundingStatus(state, defaults, "payer", "5", 1)
 	require.Equal(t, AccountAutopayReasonDelegateMissing, status.Reason)
 	require.True(t, status.CanFund)
 }
@@ -92,11 +93,7 @@ func TestAccountAutopayFundingEffectiveRate(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
-	manager := newAccountManagementAutoTestManager(t)
-	_, err := manager.ImportWallet(accountRootWrapperTestMnemonic, "password")
-	require.NoError(t, err)
-	require.NoError(t, manager.InitializeAccountManagement("password"))
-	manager.accountProfile.StorageMode = AccountStoragePaid
+	manager := newAutopayWriteFixture(t, true)
 	defaults := dkvsindexer.NetworkDefaultsForParams(GetChainParam_SatsNet())
 	payer := PublicKeyToP2TRAddress_SatsNet(manager.GetWallet().GetPubKey())
 	state := &dkvsindexer.AutopayContractState{Contract: defaults.AutopayContract, TemplateName: TEMPLATE_CONTRACT_AUTOPAY,
@@ -151,7 +148,7 @@ func TestAccountAutopayFundingStatusDoesNotOfferFundingForInvalidContract(t *tes
 	defaults, state := accountAutopayReadyFixture()
 	state.Closed = true
 	state.Status = "closed"
-	status := accountAutopayStateFundingStatus(state, defaults, "payer", "5")
+	status := accountAutopayStateFundingStatus(state, defaults, "payer", "5", 1)
 	require.False(t, status.Ready)
 	require.False(t, status.CanFund)
 	require.Equal(t, AccountAutopayReasonContractInactive, status.Reason)
@@ -164,17 +161,17 @@ func TestAccountAutopayFundingContractAllowsStoppedDelegateRecharge(t *testing.T
 	delegate.Status = "closed"
 	delegate.Balance = "0"
 	state.Delegates["payer"] = delegate
-	status := accountAutopayStateFundingStatus(state, defaults, "payer", "5")
+	status := accountAutopayStateFundingStatus(state, defaults, "payer", "5", 1)
 	require.True(t, status.CanFund)
 	require.False(t, status.Ready)
 	require.Equal(t, AccountAutopayReasonDelegateInactive, status.Reason)
 	delete(state.Delegates, "payer")
-	status = accountAutopayStateFundingStatus(state, defaults, "payer", "5")
+	status = accountAutopayStateFundingStatus(state, defaults, "payer", "5", 1)
 	require.True(t, status.CanFund)
 	require.False(t, status.Ready)
 	// A funded delegate cannot imply that the whole contract has resumed.
 	state.Delegates["payer"] = dkvsindexer.AutopayDelegateState{AmountPerBlock: "5", Balance: "5", LastPayHeight: 100, Status: "active"}
-	status = accountAutopayStateFundingStatus(state, defaults, "payer", "5")
+	status = accountAutopayStateFundingStatus(state, defaults, "payer", "5", 1)
 	require.False(t, status.Ready)
 	require.False(t, status.CanFund)
 }
@@ -184,42 +181,42 @@ func TestAccountAutopayStateRejectsStaleOrInsufficientDelegate(t *testing.T) {
 	delegate := state.Delegates["payer"]
 	delegate.LastPayHeight = state.CurrentBlock - 1
 	state.Delegates["payer"] = delegate
-	require.False(t, accountAutopayStateReady(state, defaults, "payer", "5"))
+	require.False(t, accountAutopayStateReady(state, defaults, "payer", "5", 1))
 
 	delegate.LastPayHeight = state.CurrentBlock
 	delegate.AmountPerBlock = "4"
 	state.Delegates["payer"] = delegate
-	require.False(t, accountAutopayStateReady(state, defaults, "payer", "5"))
+	require.False(t, accountAutopayStateReady(state, defaults, "payer", "5", 1))
 
 	delegate.AmountPerBlock = "5"
 	delegate.Balance = "4"
 	state.Delegates["payer"] = delegate
-	require.False(t, accountAutopayStateReady(state, defaults, "payer", "5"))
+	require.False(t, accountAutopayStateReady(state, defaults, "payer", "5", 1))
 
 	delegate.Balance = "5"
 	delegate.Status = "funding"
 	state.Delegates["payer"] = delegate
-	require.False(t, accountAutopayStateReady(state, defaults, "payer", "5"))
+	require.False(t, accountAutopayStateReady(state, defaults, "payer", "5", 1))
 
 	delegate.Status = "active"
 	state.Delegates["payer"] = delegate
 	state.Status = "funding"
-	require.False(t, accountAutopayStateReady(state, defaults, "payer", "5"))
+	require.False(t, accountAutopayStateReady(state, defaults, "payer", "5", 1))
 }
 
 func TestAccountAutopayStateRejectsWrongContractConfiguration(t *testing.T) {
 	defaults, state := accountAutopayReadyFixture()
 	state.ServiceName = "other"
-	require.False(t, accountAutopayStateReady(state, defaults, "payer", "5"))
+	require.False(t, accountAutopayStateReady(state, defaults, "payer", "5", 1))
 
 	state.ServiceName = defaults.AutopayServiceName
 	state.FeeAssetName = "other"
-	require.False(t, accountAutopayStateReady(state, defaults, "payer", "5"))
+	require.False(t, accountAutopayStateReady(state, defaults, "payer", "5", 1))
 
 	state.FeeAssetName = defaults.AutopayFeeAssetName
 	state.Closed = true
 	state.Status = "closed"
-	require.False(t, accountAutopayStateReady(state, defaults, "payer", "5"))
+	require.False(t, accountAutopayStateReady(state, defaults, "payer", "5", 1))
 }
 
 // Intercept only lookup transport: production REST decoding and receipt/log
@@ -333,7 +330,7 @@ func TestHistoricalSuccessfulAutopayReceiptAllowsRechargeWhenBalanceExhausted(t 
 	manager.l2IndexerClient.SetMaster(NewIndexerClient("http", "receipt-test", "testnet", &autopayReceiptTestHTTP{height: 90, state: state,
 		history: []contractcommon.ContractHistoryRecord{{Contract: defaults.AutopayContract, Height: 91, TxID: strings.Repeat("b", 64), Kind: "result", Status: "success", Details: map[string]interface{}{"result_for_txid": txid}}}}))
 	record, err := manager.operationLogManager().Create(OperationLogCreate{Action: "account_autopay_fund", Title: "Fund AUTOPAY",
-		Parameters: map[string]string{"network": _chain, "contract": defaults.AutopayContract, "payer": payer, "amount_per_block": rate}})
+		Parameters: map[string]string{"network": _chain, "contract": defaults.AutopayContract, "payer": payer, "amount_per_block": rate, "blob_key_limit": "1"}})
 	require.NoError(t, err)
 	_, err = manager.UpdateOperationLog(record.ID, OperationLogUpdate{Status: OperationLogPending, TxID: txid})
 	require.NoError(t, err)
@@ -350,4 +347,38 @@ func TestHistoricalSuccessfulAutopayReceiptAllowsRechargeWhenBalanceExhausted(t 
 	stored, err := manager.operationLogManager().Get(record.ID)
 	require.NoError(t, err)
 	require.Equal(t, OperationLogSucceeded, stored.Status)
+}
+
+// Pricing/funding faults begin after the actual account lifecycle gate. Keep
+// temporary Guardian hosting local-only; own paid backup uses real activation.
+func newAutopayWriteFixture(t *testing.T, paid bool) *Manager {
+	t.Helper()
+	if _chain == "" {
+		_chain = "testnet"
+		t.Cleanup(func() { _chain = "" })
+	}
+	if _chain != "testnet" {
+		t.Fatal("AUTOPAY fixture requires explicit testnet context")
+	}
+	manager, _, pkg, auth, secret := newLocalActivationFixture(t)
+	if !paid {
+		require.True(t, manager.GetAccountManagementStatus().LocalOnly)
+		require.False(t, manager.accountManagedRecoveryConfigured())
+		return manager
+	}
+	defaults := dkvsindexer.NetworkDefaultsForParams(GetChainParam_SatsNet())
+	authorization := *auth
+	authorization.Mode = AccountStoragePaid
+	authorization.RecordOptions.TTL = 0
+	authorization.Autopay = &DKVSAutopayOptions{
+		AddressParams: GetChainParam_SatsNet(), PoolContract: defaults.AutopayContract,
+	}
+	require.NoError(t, manager.ActivateAccountManagement(secret, "password", authorization,
+		pkg.Envelope.Locator, "account://"+pkg.Envelope.Locator.PackageID))
+	require.NoError(t, manager.SyncAccountManagementState(context.Background()))
+	status := manager.GetAccountManagementStatus()
+	require.True(t, status.RecoveryConfigured)
+	require.True(t, status.DKVSWriteAllowed)
+	require.Equal(t, AccountStoragePaid, status.StorageMode)
+	return manager
 }

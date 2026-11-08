@@ -6,23 +6,64 @@ import { transformSync } from 'esbuild'
 import { runInNewContext } from 'node:vm'
 import { tryit } from 'radash'
 import { webcrypto } from 'node:crypto'
+import { createPinia, defineStore, setActivePinia } from 'pinia'
+import * as Vue from 'vue'
 
 const component = new URL('../../components/wallet/RGB11SendDialog.vue', import.meta.url)
+const accountWalletStore = Vue.reactive({
+  hasWallet: true, locked: false, isSwitchingWallet: false, isSwitchingAccount: false,
+  isSwitchingNetwork: false, rootAccountId: 'root', walletId: 'wallet', accountIndex: 0,
+  network: 'regtest', wallet: { fingerprint: 'fixture-fingerprint' },
+})
+const loadModule = (source, deps) => {
+  const module = { exports: {} }
+  runInNewContext(transformSync(source, { loader: 'ts', format: 'cjs', target: 'es2022' }).code, {
+    module, exports: module.exports, Error, crypto: webcrypto,
+    require(name) { assert.ok(name in deps, `missing ${name}`); return deps[name] },
+  })
+  return module.exports
+}
+const accountManagementModule = loadModule(
+  await readFile(new URL('../../store/accountManagement.ts', import.meta.url), 'utf8'),
+  {
+    vue: Vue, pinia: { defineStore }, '@/utils/accountManagement': { default: {} },
+    './wallet': { useWalletStore: () => accountWalletStore },
+  },
+)
+const createAccountManagementState = () => {
+  setActivePinia(createPinia())
+  return accountManagementModule.useAccountManagementStore()
+}
+const bindInitializer = (initializer, mocks) => {
+  assert.ok(initializer, 'component operation-error helper missing')
+  const js = ts.transpileModule(`const selected = ${initializer}`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 },
+  }).outputText
+  return Function(...Object.keys(mocks), `${js}; return selected`)(...Object.values(mocks))
+}
 
 const loadSend = async (mocks) => {
-  mocks = { walletRequestSessionGuard: () => () => {}, ...mocks }
   const source = await readFile(component, 'utf8')
   const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)?.[1]
   assert.ok(script, 'script setup block missing')
   const file = ts.createSourceFile('dialog.ts', script, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
-  let initializer = ''
+  let initializer = '', displayOperationErrorInitializer = ''
   file.forEachChild((node) => {
     if (!ts.isVariableStatement(node)) return
     for (const declaration of node.declarationList.declarations) {
       if (declaration.name.getText(file) === 'sendByAddress') initializer = declaration.initializer?.getText(file) || ''
+      if (declaration.name.getText(file) === 'displayOperationError') displayOperationErrorInitializer = declaration.initializer?.getText(file) || ''
     }
   })
   assert.ok(initializer, 'sendByAddress missing')
+  assert.ok(displayOperationErrorInitializer, 'displayOperationError missing from sender component')
+  const accountManagementState = createAccountManagementState()
+  const displayOperationError = bindInitializer(displayOperationErrorInitializer, {
+    accountManagementState, t: mocks.t,
+  })
+  mocks = {
+    walletRequestSessionGuard: () => () => {}, accountManagementState, displayOperationError, ...mocks,
+  }
   const js = ts.transpileModule(`globalThis.send = ${initializer}`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 },
   }).outputText
@@ -34,6 +75,7 @@ test('Direct retry keeps transfer ID', async () => {
   const delivered = []
   const transferId = { value: '' }
   const send = await loadSend({
+    rgb11WriteAllowed: { value: true },
     loading: { value: false }, message: { value: '' }, success: { value: false },
     temporaryDelivery: { value: false }, transferId,
     assetContractID: { value: 'rgb:contract' }, assetName: { value: 'rgb11:f:test' },
@@ -72,10 +114,12 @@ async function sessionFixture(logs = {}, native = {}) {
   }
   const identity = await load('../../lib/identity-boundary.ts')
   const session = await load('../../lib/walletSession.ts', { './identity-boundary': identity })
+  const wasmError = await load('../../utils/wasmError.ts')
   session.setWalletSessionUnlocked(true)
   const lock = () => { identity.beginWalletIdentityTransition(); session.setWalletSessionUnlocked(false) }
   const facade = (await load('../../utils/rgb11Address.ts', {
     radash: { tryit }, '@/lib/walletSession': session,
+    '@/utils/wasmError': wasmError,
     '@/utils/pwaVersionPolicy': { beginVersionDispatch: () => () => {} },
     '@/utils/pwaOperationLog': { beginPwaWalletOperation: async () => null, finishPwaOperation: async () => {}, ...logs },
   }, { sat20wallet_wasm: native })).default
@@ -93,6 +137,7 @@ for (const pause of ['begin_log', 'prepared', 'update_log']) {
     const loading = { value: false }, message = { value: '' }
     const send = await loadSend({
       walletRequestSessionGuard: session.walletRequestSessionGuard,
+      rgb11WriteAllowed: { value: true },
       loading, message, success: { value: false }, temporaryDelivery: { value: false }, transferId: { value: '' },
       assetContractID: { value: 'rgb:contract' }, assetName: { value: 'rgb11:f:test' },
       amountRaw: { value: '1' }, receiverAddress: { value: 'tb1qreceiver' }, btcFeeRate: { value: 2 },
@@ -162,6 +207,7 @@ test('Direct awaiting ACK preserves the original transfer and notifies the task 
   const loading = { value: false }
   const message = { value: '' }
   const send = await loadSend({
+    rgb11WriteAllowed: { value: true },
     loading, message, success: { value: false },
     temporaryDelivery: { value: false }, transferId,
     assetContractID: { value: 'rgb:contract' }, assetName: { value: 'rgb11:f:test' },
@@ -200,6 +246,7 @@ test('A completed Direct send starts a fresh transfer for the same asset', async
   const receiverAddress = { value: 'tb1qfirst' }
   const amountRaw = { value: '1' }
   const send = await loadSend({
+    rgb11WriteAllowed: { value: true },
     loading: { value: false }, message: { value: '' }, success: { value: false },
     temporaryDelivery: { value: false }, transferId,
     assetContractID: { value: 'rgb:contract' }, assetName: { value: 'rgb11:f:test' },

@@ -1,0 +1,17 @@
+{
+  "command": [
+    "test",
+    "-race",
+    "-count=5",
+    "-timeout=360s",
+    "./wallet",
+    "-run",
+    "^(TestReviewStorageAuthorizationOperationOwnership|TestReviewStorageCancelInvalidatesInflightConfirmation|TestReviewRGB11ReadDoesNotMixAtomicInvoiceGenerations)$"
+  ],
+  "exit_code": 1,
+  "leaf_scenarios_per_iteration": 6,
+  "output": "go: cannot find main module, but found .git/config in /Users/yingfeng/github/sat20wallet\n\tto create a module there, run:\n\tgo mod init\n",
+  "seconds": 0.022623126,
+  "started_at": "2026-10-30T20:17:35+08:00",
+  "timed_out": false
+}

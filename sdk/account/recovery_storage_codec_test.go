@@ -56,7 +56,7 @@ func TestRecoveryPackageStorageCodecIsCompactDeterministic(t *testing.T) {
 func TestRootBootstrapBackupContainsOnlyRootAccount(t *testing.T) {
 	backup := testBackup()
 	backup.Wallets = append(backup.Wallets, WalletBackup{
-		Name: "second", Mnemonic: backup.Wallets[0].Mnemonic,
+		Name: "second", Type: WalletMnemonic, Secret: []byte(string(backup.Wallets[0].Secret)),
 		AccountCount: 1, SubAccounts: []SubAccount{{Index: 0, Name: "Second", DID: "did:second"}},
 	})
 	root, err := RootBootstrapBackup(backup)

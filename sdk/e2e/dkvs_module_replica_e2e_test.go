@@ -18,9 +18,14 @@ import (
 // suites cover automatic worker scheduling; this file controls ACK interleaving.
 func TestSDKDKVSModuleReplica(t *testing.T) {
 	f := newDKVSNoPluginTemplateFixtureWithArgs(t, map[string]int64{}, nil, nil, dkvsMinerArgs(t))
-	bindDKVSReviewWallet(t, f.Network.Core, dkvsClientMnemonic)
+	runSDKDKVSModuleReplica(t, f, dkvsClientMnemonic)
+}
+
+func runSDKDKVSModuleReplica(t *testing.T, f *templateFixture, mnemonic string) {
+	t.Helper()
+	bindDKVSReviewWallet(t, f.Network.Core, mnemonic)
 	client := dkvsClientForNode(t, f.Network.Core)
-	owner := newDKVSKeyPathActor(t, keyFromMnemonic(t, dkvsClientMnemonic, 0))
+	owner := newDKVSKeyPathActor(t, keyFromMnemonic(t, mnemonic, 0))
 	key := func(t *testing.T, path string) string {
 		t.Helper()
 		k, err := dkvs.PersonalKey(owner.Wallet.GetPubKey().SerializeCompressed(), path)

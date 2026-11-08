@@ -137,6 +137,7 @@ func TestRGB11AccountManagedRecoveryIncludesBroadcastObligationAfterRestart(t *t
 	if sender.wallet.GetAddress() != senderWallet.GetAddress() || recipient.wallet.GetAddress() != recipientWallet.GetAddress() {
 		t.Fatal("activated fixture changed reconciliation wallets")
 	}
+	restored := newRGBColdDevice(t, sender, remote, evidence, rpc, coreE2ESenderMnemonic, "password")
 	issued, err := sender.IssueRGB11Asset(context.Background(), RGB11IssueRequest{
 		Schema: "NIA", Ticker: "RECON", Name: "Reconciliation Fixture", Amounts: []uint64{10},
 	})
@@ -170,10 +171,7 @@ func TestRGB11AccountManagedRecoveryIncludesBroadcastObligationAfterRestart(t *t
 	}
 	broadcastRecovery := exportRGB11RecoveryForTest(t, sender)
 	sender.rgbManager.scopeStates.stopReconciliations()
-	restoredWallet := NewInternalWalletWithMnemonic(
-		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", "", &chaincfg.TestNet4Params,
-	)
-	restored := newRGB11FlowManager(t, restoredWallet, rpc, evidence, 340)
+	assertRGBColdEmpty(t, restored)
 	restored.rgbManager.scopeStates.mu.Lock()
 	restored.rgbManager.scopeStates.retryDelay = time.Hour
 	restored.rgbManager.scopeStates.mu.Unlock()

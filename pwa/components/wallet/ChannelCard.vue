@@ -31,7 +31,7 @@
     <!-- <Progress :value="progressValue" class="w-full" /> -->
   </div>
   <div>
-    <Button @click="openHandler" v-if="!channel" class="w-full"> Open </Button>
+    <Button @click="openHandler" v-if="!channel" class="w-full"> {{ $t('walletComponents.open') }} </Button>
     <div v-if="showAmt">
       <div class="flex w-full mt-2">
         <div class="flex-1 relative">
@@ -47,7 +47,7 @@
           :class="{ 'opacity-50 pointer-events-none': loading }"
           class="ml-2"
         >
-          Confirm
+          {{ $t('walletComponents.confirm') }}
         </Button>
       </div>
     </div>
@@ -57,57 +57,57 @@
   <Dialog :open="showConfirmDialog" @update:open="showConfirmDialog = $event">
     <DialogContent class="sm:max-w-md">
       <DialogHeader>
-        <DialogTitle>Confirm Channel Opening</DialogTitle>
+        <DialogTitle>{{ $t('walletComponents.confirmOpening') }}</DialogTitle>
         <DialogDescription>
           <hr class="mb-6 mt-1 border-t-1 border-accent">
-          Please review the channel opening details before proceeding.
+          {{ $t('walletComponents.reviewOpening') }}
         </DialogDescription>
       </DialogHeader>
       <div class="space-y-4">
         <div class="space-y-2">
-          <Label>Channel Details</Label>
+          <Label>{{ $t('walletComponents.channelDetails') }}</Label>
           <div class="rounded-lg border p-3 space-y-2">
             <div class="flex justify-between text-sm">
-              <span class="text-muted-foreground">User-selected funding amount:</span>
+              <span class="text-muted-foreground">{{ $t('walletComponents.fundingAmount') }}</span>
               <span class="font-medium">{{ confirmAmount }} sats</span>
             </div>
             <div class="flex justify-between text-sm">
-              <span class="text-muted-foreground">Channel capacity:</span>
+              <span class="text-muted-foreground">{{ $t('walletComponents.capacity') }}</span>
               <span class="font-medium">{{ channelCapacityDisplay }}</span>
             </div>
             <div class="flex justify-between text-sm">
-              <span class="text-muted-foreground">Initially spendable by you:</span>
+              <span class="text-muted-foreground">{{ $t('walletComponents.spendable') }}</span>
               <span class="font-medium">{{ initialSpendableDisplay }}</span>
             </div>
             <div class="flex justify-between text-sm">
-              <span class="text-muted-foreground">Service fee paid now:</span>
+              <span class="text-muted-foreground">{{ $t('walletComponents.serviceFee') }}</span>
               <span class="font-medium">{{ feePreview?.feeToDao ?? '-' }} sats</span>
             </div>
             <div class="flex justify-between text-sm">
-              <span class="text-muted-foreground">Commitment fee reserve:</span>
+              <span class="text-muted-foreground">{{ $t('walletComponents.commitmentReserve') }}</span>
               <span class="font-medium">{{ feePreview?.openFee?.commitmentFee ?? '-' }} sats</span>
             </div>
             <div class="flex justify-between text-sm">
-              <span class="text-muted-foreground">Minimum channel reserve:</span>
+              <span class="text-muted-foreground">{{ $t('walletComponents.minimumReserve') }}</span>
               <span class="font-medium">{{ feePreview?.openFee?.minReserveSats ?? '-' }} sats</span>
             </div>
             <div class="flex justify-between text-sm">
-              <span class="text-muted-foreground">Estimated BTC network fee:</span>
+              <span class="text-muted-foreground">{{ $t('walletComponents.networkFee') }}</span>
               <span class="font-medium">{{ feePreview?.estimatedNetworkFee ?? '-' }} sats</span>
             </div>
             <div class="flex justify-between text-sm">
-              <span class="text-muted-foreground">Required wallet input:</span>
+              <span class="text-muted-foreground">{{ $t('walletComponents.requiredInput') }}</span>
               <span class="font-medium">{{ feePreview?.requiredInputSats ?? '-' }} sats</span>
             </div>
             <div v-if="feePreview?.validationError" class="text-sm text-destructive">
               {{ feePreview.validationError }}
             </div>
             <div class="flex justify-between text-sm">
-              <span class="text-muted-foreground">BTC Fee Rate:</span>
+              <span class="text-muted-foreground">{{ $t('walletComponents.btcFeeRate') }}</span>
               <span class="font-medium">{{ btcFeeRate }} sat/vB</span>
             </div>
             <p class="text-xs text-muted-foreground">
-              The commitment fee is a protocol budget; the estimated BTC network fee is paid from wallet inputs and is not added to channel capacity.
+              {{ $t('walletComponents.feeHelp') }}
             </p>
 
           </div>
@@ -115,7 +115,7 @@
       </div>
       <DialogFooter>
         <Button variant="secondary" @click="showConfirmDialog = false" class="h-11 mt-2">
-          Cancel
+          {{ $t('walletComponents.cancel') }}
         </Button>
         <Button 
           :disabled="loading || !feePreview?.valid"
@@ -123,7 +123,7 @@
           class="h-11 mt-2"
         >
           <Icon v-if="loading" icon="lucide:loader-2" class="w-4 h-4 mr-2 animate-spin" />
-          {{ loading ? 'Opening...' : 'Open Channel' }}
+          {{ $t(loading ? 'walletComponents.opening' : 'walletComponents.openChannel') }}
         </Button>
       </DialogFooter>
     </DialogContent>
@@ -131,6 +131,8 @@
 </template>
 
 <script lang="ts" setup>
+import { useI18n } from 'vue-i18n'
+const { t } = useI18n()
 import { ref, computed, onMounted, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { Button } from '@/components/ui/button'
@@ -183,11 +185,11 @@ const initialSpendableSats = computed(() => {
 })
 const channelCapacityDisplay = computed(() => {
   if (!feePreview.value) return '-'
-  if (amountBelowMinimum.value) return '— (amount below minimum)'
+  if (amountBelowMinimum.value) return t('walletComponents.belowMinimum')
   return `${feePreview.value.channelCapacity} sats`
 })
 const initialSpendableDisplay = computed(() => {
-  if (amountBelowMinimum.value) return '— (amount below minimum)'
+  if (amountBelowMinimum.value) return t('walletComponents.belowMinimum')
   return initialSpendableSats.value == null ? '-' : `${initialSpendableSats.value} sats`
 })
 
@@ -258,8 +260,8 @@ const amtConfirm = async () => {
 
   if (!Number.isSafeInteger(amt) || amt <= 0) {
     toast({
-      title: 'Error',
-      description: 'Enter a positive whole-number amount',
+      title: t('walletComponents.error'),
+      description: t('walletComponents.positiveAmount'),
       variant: 'destructive',
     })
     return
@@ -270,8 +272,8 @@ const amtConfirm = async () => {
 	loading.value = false
 	if (previewErr || !preview) {
 	  toast({
-	    title: 'Error',
-	    description: previewErr?.message || 'Unable to load channel fee configuration',
+	    title: t('walletComponents.error'),
+	    description: previewErr?.message || t('walletComponents.feeUnavailable'),
 	    variant: 'destructive',
 	  })
 	  return
@@ -297,7 +299,7 @@ const confirmOpenChannel = async () => {
 
   if (err) {
     toast({
-      title: 'Error',
+      title: t('walletComponents.error'),
       description: err.message,
       variant: 'destructive',
     })
@@ -311,8 +313,8 @@ const confirmOpenChannel = async () => {
   loading.value = false
   
   toast({
-    title: 'Success',
-    description: 'Channel opening initiated',
+    title: t('walletComponents.success'),
+    description: t('walletComponents.openingStarted'),
   })
 }
 
@@ -320,17 +322,17 @@ const channelStatusText = computed(() => {
   if (!channel.value) return ''
   const status = channel.value?.status
   if (status === 16 && channel.value.pendingSplicing === 'in') {
-    return 'Splicing in'
+    return t('walletComponents.splicingIn')
   }
   if (status === 16 && channel.value.pendingSplicing === 'out') {
-    return 'Splicing out'
+    return t('walletComponents.splicingOut')
   }
   if (status > 0 && status < 5) {
-    return 'Channel is opening'
+    return t('walletComponents.channelOpening')
   } else if (status >= 7 && status <= 15) {
-    return 'Channel is closing'
+    return t('walletComponents.channelClosing')
   } else {
-    return getChannelStatusText(status)
+    return getChannelStatusText(status, t)
   }
 })
 
@@ -358,8 +360,8 @@ const closeChannel = async (closeHanlder: any, force: boolean = false) => {
   const status = await checkChannel(force)
   if (!status) {
     toast({
-      title: 'Error',
-      description: 'Channel tx has not been confirmed',
+      title: t('walletComponents.error'),
+      description: t('walletComponents.unconfirmedChannel'),
       variant: 'destructive',
     })
     loading.value = false
@@ -369,7 +371,7 @@ const closeChannel = async (closeHanlder: any, force: boolean = false) => {
   closeHanlder()
   if (err) {
     toast({
-      title: 'Error',
+      title: t('walletComponents.error'),
       description: err.message,
       variant: 'destructive',
     })
@@ -377,8 +379,8 @@ const closeChannel = async (closeHanlder: any, force: boolean = false) => {
     return
   } else {
     toast({
-      title: 'Success',
-      description: 'Close success',
+      title: t('walletComponents.success'),
+      description: t('walletComponents.closeSuccess'),
     })
   }
   loading.value = false

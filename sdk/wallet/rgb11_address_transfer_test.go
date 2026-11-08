@@ -16,7 +16,6 @@ import (
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	indexerdb "github.com/sat20-labs/indexer/indexer/db"
-	"github.com/sat20-labs/sat20wallet/sdk/account"
 	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	"github.com/sat20-labs/satoshinet/btcec"
@@ -56,7 +55,7 @@ func (c *rgb11AddressACKObservedMessageClient) SendMessageServiceReq(
 	return c.rgb11MessageNodeClient.SendMessageServiceReq(req)
 }
 
-func verifyRGB11ACKUsesAuthoritativeRecovery(t *testing.T, manager *Manager,
+func verifyRGB11ACKUsesDurableLocalRecovery(t *testing.T, manager *Manager,
 	transferID string, expectedRecord *swire.DKVSRecord) error {
 	t.Helper()
 	if manager == nil || expectedRecord == nil || transferID == "" {
@@ -74,52 +73,58 @@ func verifyRGB11ACKUsesAuthoritativeRecovery(t *testing.T, manager *Manager,
 	if !manager.accountManagedRecoveryConfigured() {
 		return nil
 	}
-	manager.mutex.Lock()
-	snapshot, _, err := manager.captureAccountManagementSyncSnapshotBaseLocked()
-	manager.mutex.Unlock()
-	if err != nil || snapshot == nil {
-		return fmt.Errorf("capture ACK recovery snapshot: %w", err)
-	}
-	defer zeroBytes(snapshot.secret)
-	root, err := manager.accountManagementRootWallet()
+	// ACK safety depends on durable local recovery material. DKVS publication is
+	// asynchronous and must not be an extra transaction in the receive path.
+	walletID, err := manager.rgbManager.RGB11WalletID()
 	if err != nil {
 		return err
 	}
-	dataKey, err := manager.accountManagedDataBlobKey(root)
+	snapshot, _, err := manager.rgbManager.exportRGB11WalletSnapshot(walletID)
 	if err != nil {
 		return err
 	}
-	store, err := manager.accountDKVSStore()
+	recovery, err := rgb11wallet.RecoveryPackageFromSnapshot(snapshot, 0)
 	if err != nil {
+		return fmt.Errorf("ACK attempted before complete local recovery closure: %w", err)
+	}
+	found := false
+	for _, record := range recovery.ProjectionRecords {
+		if record.Key == "transfer-"+transferID {
+			found = true
+		}
+	}
+	if !found {
+		return fmt.Errorf("ACK recovery closure omitted its durable transfer")
+	}
+	if state.ReceiveRequestID == "" {
+		return fmt.Errorf("ACK omitted the durable receive request identity")
+	}
+	if _, err := manager.rgbManager.engine.LoadReceive(state.ReceiveRequestID); err != nil {
 		return err
 	}
-	remote, err := store.GetAuthoritative(dataKey)
-	if err != nil {
-		return fmt.Errorf("read remote ACK recovery package: %w", err)
+	module := rgb11LocalModuleForTest(t, manager)
+	if module.Generation == 0 {
+		return fmt.Errorf("ACK lost its durable module generation")
 	}
-	blob, err := DecodeDKVSBlobValue(remote.Value)
-	if err != nil {
-		return err
+	if module.Generation == module.Confirmed {
+		// The async worker may have already confirmed this generation. Prove
+		// that it contains this same complete closure instead of requiring dirty.
+		entry, err := accountEntry(module.AccountID, module.Provider, module.Scope)
+		if err != nil || module.Baseline == nil {
+			return fmt.Errorf("ACK has no confirmed module baseline")
+		}
+		payload, err := openAccountPayload(manager.accountSecret, module.AccountID, module.Network, entry, module.Baseline.Value)
+		if err != nil {
+			return err
+		}
+		defer zeroBytes(payload)
+		confirmed, err := rgb11wallet.DecodeRecoveryPackage(payload)
+		if err != nil || confirmed == nil || !sameRGB11SnapshotRecords(confirmed.EngineRecords, recovery.EngineRecords) ||
+			!sameRGB11SnapshotRecords(confirmed.ProjectionRecords, recovery.ProjectionRecords) {
+			return fmt.Errorf("ACK confirmed module omitted its current recovery closure")
+		}
 	}
-	defer zeroBytes(blob.Data)
-	remoteBundle, err := account.OpenManagedDataBundle(
-		snapshot.secret, snapshot.profile.AccountID, blob.Data,
-	)
-	if err != nil {
-		return err
-	}
-	catalog, err := manager.accountManagedDataCatalog()
-	if err != nil {
-		return err
-	}
-	wantBundle, _, err := manager.exportAccountManagedData(catalog,
-		snapshot.profile.ManagedDataRevision)
-	if err != nil {
-		return err
-	}
-	if !reflect.DeepEqual(remoteBundle, wantBundle) {
-		return fmt.Errorf("ACK attempted before the remote account bundle matched the complete local recovery closure")
-	}
+
 	return nil
 }
 
@@ -358,6 +363,8 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 		t.Fatal("create RGB11 address-mode wallets")
 	}
 	sender, recipient, imported, evidence, rpc := newRGB11GenericSendFixture(t)
+	accepted := newRGB11AcceptedEvidence(evidence, rpc)
+	sender.rgbManager.evidence = accepted
 	if sender.wallet.GetAddress() != senderWallet.GetAddress() || recipient.wallet.GetAddress() != recipientWallet.GetAddress() {
 		t.Fatal("activated fixture changed original wallet addresses")
 	}
@@ -505,6 +512,16 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// Snapshot restore intentionally discards old chain readiness. Run the
+	// public startup reconciliation before continuing the original ACK flow.
+	if _, err := sender.RefreshRGB11State(context.Background()); err != nil {
+		t.Fatalf("refresh restored source before ACK: %v", err)
+	}
+	sourceProof, err := sender.rgbManager.projectionStore.LoadProof(sourceOutpoint, imported.AssetName)
+	if err != nil || sourceProof == nil || sourceProof.OutPoint != sourceOutpoint ||
+		!sender.rgbManager.rgb11CarrierAvailable(sourceOutpoint) {
+		t.Fatalf("restored original source is not verified: proof_present=%t err=%v", sourceProof != nil, err)
+	}
 	foundPending := false
 	for _, record := range snapshot {
 		if record.Key != "pending-"+prepared.State.TransferID {
@@ -584,7 +601,7 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	ackClient := &rgb11AddressACKObservedMessageClient{
 		rgb11MessageNodeClient: messageClient, wallet: recipientWallet,
 		beforeAcceptedACK: func() error {
-			if err := verifyRGB11ACKUsesAuthoritativeRecovery(t, recipient,
+			if err := verifyRGB11ACKUsesDurableLocalRecovery(t, recipient,
 				prepared.State.TransferID, deliveryRecord); err != nil {
 				return err
 			}
@@ -639,9 +656,11 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	}
 	// Sender mailbox sync consumes the durable ACK and advances the Direct
 	// reservation itself. No PWA-side "already tried" state is required.
+	logRGB11BroadcastState(t, "before-ack", sender, prepared.State.TransferID, accepted)
 	senderSync, err := sender.SyncConfiguredRGB11AddressMailbox(
 		context.Background(), dkvsindexer.RecordVerificationOptions{}, deliveryOptions,
 	)
+	logRGB11BroadcastState(t, "after-ack", sender, prepared.State.TransferID, accepted)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -820,17 +839,65 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	beforeLock := recipient.utxoLockerL1.GetLockedUtxoList()[recipientOutpoint]
+	beforeLocks := recipient.utxoLockerL1.GetLockedUtxoList()
+	beforeLock := beforeLocks[recipientOutpoint]
+	if beforeLock == nil || beforeLock.Reason != rgb11wallet.LockReasonRGB {
+		t.Fatal("read-fault boundary requires the original verified RGB lock")
+	}
+	beforeRecords, err := recipient.rgbManager.projectionStore.ReadLocalRecords()
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeEngine, err := recipient.rgbManager.engineStore.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseEvidence.mu.Lock()
+	beforeBroadcasts := baseEvidence.broadcastCount
+	baseEvidence.mu.Unlock()
 	readErr := errors.New("RGB11 evidence unavailable")
 	recipient.rgbManager.evidence = &rgb11ReadFault{
 		BitcoinEvidenceProvider: evidence, txid: witnessTxID, outpoint: recipientOutpoint, err: readErr,
 	}
 	result, refreshErr := recipient.RefreshRGB11State(context.Background())
 	recipient.rgbManager.evidence = evidence
-	// Refresh results describe committed candidates; a rejected candidate must
-	// return the original read error without claiming a published transition.
-	if !errors.Is(refreshErr, readErr) || result != nil {
+	// Observe the rejected read boundary before the original fatal assertion.
+	// These reads do not retry evidence, refresh, or mutate the projection.
+	diagState, stateErr := recipient.rgbManager.projectionStore.LoadTransferState(prepared.State.TransferID)
+	diagProof, proofErr := recipient.rgbManager.projectionStore.LoadProof(recipientOutpoint, imported.AssetName)
+	diagLock := recipient.utxoLockerL1.GetLockedUtxoList()[recipientOutpoint]
+	t.Logf("rgb-read-fault-diag state_read_ok=%t state_present=%t state_equal=%t proof_read_ok=%t proof_present=%t proof_equal=%t lock_present=%t lock_equal=%t",
+		stateErr == nil, diagState != nil, stateErr == nil && reflect.DeepEqual(beforeState, diagState),
+		proofErr == nil, diagProof != nil, proofErr == nil && reflect.DeepEqual(beforeProof, diagProof),
+		diagLock != nil, reflect.DeepEqual(beforeLock, diagLock))
+	t.Logf("rgb-read-fault-diag result_nil=%t raw_error=%t inconsistent_error=%t carrier_available=%t scope_available=%t consistency=%s",
+		result == nil, errors.Is(refreshErr, readErr), errors.Is(refreshErr, ErrRGB11Inconsistent),
+		recipient.rgbManager.rgb11CarrierAvailable(recipientOutpoint), recipient.rgbManager.rgb11ProjectionAvailable(),
+		recipient.rgbManager.consistencyStatus)
+	if beforeLock != nil && diagLock != nil {
+		diagExpected := *beforeLock
+		diagExpected.Reason = diagLock.Reason
+		t.Logf("rgb-read-fault-diag reason_before=%s reason_after=%s only_reason_changed=%t owner_equal=%t reservation_equal=%t previous_reason_equal=%t assets_equal=%t value_equal=%t time_equal=%t",
+			beforeLock.Reason, diagLock.Reason, reflect.DeepEqual(&diagExpected, diagLock),
+			reflect.DeepEqual(beforeLock.Owner, diagLock.Owner), beforeLock.ReservationID == diagLock.ReservationID,
+			beforeLock.ReservationPreviousReason == diagLock.ReservationPreviousReason,
+			reflect.DeepEqual(beforeLock.Assets, diagLock.Assets), beforeLock.Value == diagLock.Value,
+			beforeLock.LockedTime == diagLock.LockedTime)
+	}
+	if result != nil {
+		t.Logf("rgb-read-fault-diag diagnostic_targets=%d target_recipient=%t settled=%d pending=%d reorged=%d conflicted=%d unresolved=%d",
+			len(result.Inconsistent), containsString(result.Inconsistent, recipientOutpoint), result.Settled,
+			result.Pending, result.Reorged, result.Conflicted, result.Unresolved)
+	}
+	// The partial diagnostic may quarantine only this carrier. It must retain
+	// the exact read error and claim no successful business transition.
+	if !errors.Is(refreshErr, readErr) || !errors.Is(refreshErr, ErrRGB11Inconsistent) || result == nil ||
+		len(result.Inconsistent) != 1 || result.Inconsistent[0] != recipientOutpoint ||
+		result.Settled != 0 || result.Pending != 0 || result.Reorged != 0 || result.Conflicted != 0 || result.Unresolved != 0 {
 		t.Fatalf("read fault result=%+v err=%v", result, refreshErr)
+	}
+	if recipient.rgbManager.rgb11CarrierAvailable(recipientOutpoint) {
+		t.Fatal("unavailable evidence left the affected carrier spendable")
 	}
 	afterState, err := recipient.rgbManager.projectionStore.LoadTransferState(prepared.State.TransferID)
 	if err != nil {
@@ -840,10 +907,60 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	afterLock := recipient.utxoLockerL1.GetLockedUtxoList()[recipientOutpoint]
+	afterLocks := recipient.utxoLockerL1.GetLockedUtxoList()
+	afterLock := afterLocks[recipientOutpoint]
+	expectedLock := *beforeLock
+	expectedLock.Reason = rgb11wallet.LockReasonPending
 	if !reflect.DeepEqual(beforeState, afterState) || !reflect.DeepEqual(beforeProof, afterProof) ||
-		!reflect.DeepEqual(beforeLock, afterLock) {
-		t.Fatal("read fault changed settled receive state")
+		!reflect.DeepEqual(&expectedLock, afterLock) {
+		t.Fatal("read fault lost data or changed more than the target carrier lock reason")
+	}
+	if len(beforeLocks) != len(afterLocks) {
+		t.Fatal("read fault changed the lock set")
+	}
+	for point, lock := range beforeLocks {
+		if point != recipientOutpoint && !reflect.DeepEqual(lock, afterLocks[point]) {
+			t.Fatal("read fault changed an unrelated lock")
+		}
+	}
+	afterRecords, err := recipient.rgbManager.projectionStore.ReadLocalRecords()
+	if err != nil || !sameRGB11SnapshotRecords(beforeRecords, afterRecords) {
+		t.Fatalf("read fault changed complete local projection material: %v", err)
+	}
+	afterEngine, err := recipient.rgbManager.engineStore.ExportSnapshot()
+	if err != nil || !sameRGB11SnapshotRecords(beforeEngine, afterEngine) {
+		t.Fatalf("read fault changed private receive recovery material: %v", err)
+	}
+	baseEvidence.mu.Lock()
+	afterBroadcasts := baseEvidence.broadcastCount
+	baseEvidence.mu.Unlock()
+	if afterBroadcasts != beforeBroadcasts {
+		t.Fatal("read fault caused another broadcast")
+	}
+
+	// Restoring evidence uses the normal public refresh once, without changing
+	// readiness by hand or replaying the original send/ACK operation.
+	if _, err := recipient.RefreshRGB11State(context.Background()); err != nil {
+		t.Fatalf("retry read fault with healthy evidence: %v", err)
+	}
+	retryState, err := recipient.rgbManager.projectionStore.LoadTransferState(prepared.State.TransferID)
+	if err != nil || !reflect.DeepEqual(beforeState, retryState) {
+		t.Fatalf("healthy retry changed settled transfer: %v", err)
+	}
+	retryProof, err := recipient.rgbManager.projectionStore.LoadProof(recipientOutpoint, imported.AssetName)
+	if err != nil || !reflect.DeepEqual(beforeProof, retryProof) {
+		t.Fatalf("healthy retry changed original proof: %v", err)
+	}
+	if !recipient.rgbManager.rgb11CarrierAvailable(recipientOutpoint) ||
+		recipient.rgbManager.consistencyStatus != "ok" ||
+		!reflect.DeepEqual(beforeLocks, recipient.utxoLockerL1.GetLockedUtxoList()) {
+		t.Fatal("healthy retry did not restore the original carrier protection")
+	}
+	baseEvidence.mu.Lock()
+	retryBroadcasts := baseEvidence.broadcastCount
+	baseEvidence.mu.Unlock()
+	if retryBroadcasts != beforeBroadcasts {
+		t.Fatal("healthy evidence retry repeated the broadcast")
 	}
 
 	// ACK is now a normal MessageManager Direct message. Reload the durable
@@ -876,6 +993,19 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 		ackDirect.SenderMsgID != 0 {
 		t.Fatalf("unexpected MessageManager ACK envelope: %+v", ackDirect)
 	}
+	outerACK, err := rgb11wallet.EncodeAddressACK(RGB11AddressACK{Status: RGB11AddressACKAccepted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldFormatACK, err := NewDKVSAccountSignedRecord(recipientWallet, ackRecord.Key, outerACK,
+		dkvsindexer.RecordOptions{Seq: 1, TTL: recordOptions.TTL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sender.rgbManager.AcceptRGB11AddressACK(oldFormatACK,
+		dkvsindexer.RecordVerificationOptions{}); !errors.Is(err, ErrRGB11AddressMailbox) {
+		t.Fatalf("outer-signed ACK format was accepted: %v", err)
+	}
 
 	if _, err := hex.DecodeString(prepared.State.AddressMessageID); err != nil {
 		t.Fatalf("address message ID is not canonical hex: %v", err)
@@ -900,7 +1030,13 @@ func TestRGB11AddressNACKCancelsBeforeBroadcast(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	messageID := strings.Repeat("ab", 32)
+	messageID, err := rgb11AddressMessageID(pending.State.TransferID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending.State.AddressMessageID != messageID {
+		t.Fatal("NACK fixture message identity differs from its transfer")
+	}
 	pending.State.AddressMode = true
 	pending.State.TransportMode = RGB11AddressTransport
 	pending.State.Status = "delivered"

@@ -170,15 +170,11 @@ func (p *Manager) resumeRGB11Send(ctx context.Context, transferID string) (*wire
 	for {
 		result, err := runRootRGB11ManagedOperation(p, ctx, rgb11ManagedOperationContinue, func(manager *rgb11Manager) (sendResult, error) {
 			var result sendResult
-			first, err := manager.projectionStore.LoadPendingTransfer(transferID)
+			first, batch, err := manager.readRGB11AddressBatch(transferID)
 			if err != nil {
 				return result, err
 			}
 			txID = first.State.WitnessTxID
-			batch, err := manager.loadRGB11AddressBatch(first)
-			if err != nil {
-				return result, err
-			}
 			tx := wire.NewMsgTx(2)
 			if err := tx.Deserialize(bytes.NewReader(first.SignedTx)); err != nil {
 				return result, err
@@ -229,19 +225,17 @@ func (p *Manager) resumeRGB11Send(ctx context.Context, transferID string) (*wire
 			}
 			result.tx, result.fee = tx, fee
 			if rgb11BroadcastCompleteStatus(first.State.Status) {
-				if !rgb11PendingHasWitness(first) {
-					if err := manager.recoverRGB11BroadcastWitness(batch); err != nil {
-						return result, err
-					}
-					// loadRGB11AddressBatch returns separately loaded records; witness
-					// recovery updates those records rather than the original first.
-					recovered, err := manager.projectionStore.LoadPendingTransfer(transferID)
-					if err != nil {
-						return result, err
-					}
-					if err := result.tx.Deserialize(bytes.NewReader(recovered.SignedTx)); err != nil {
-						return result, err
-					}
+				// Witness recovery is a write too; share the same continuation as
+				// mailbox progression rather than doing it beside an active sender.
+				if _, err := manager.BroadcastRGB11AddressTransfer(transferID); err != nil {
+					return result, err
+				}
+				recovered, err := manager.projectionStore.LoadPendingTransfer(transferID)
+				if err != nil {
+					return result, err
+				}
+				if err := result.tx.Deserialize(bytes.NewReader(recovered.SignedTx)); err != nil {
+					return result, err
 				}
 				result.done = true
 				return result, nil

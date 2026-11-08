@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -25,8 +24,8 @@ const (
 	AccountMessageKindRGB11Consignment = "RGB11_CONSIGNMENT"
 	AccountMessageKindRGB11ACK         = "RGB11_ACK"
 	AccountMessageKindManagedActive    = "ACCOUNT_MANAGED_ACTIVE"
-	accountMessageOutboxPrefix         = "message-outbox-v1/"
-	accountMessageOutboxVersion        = uint32(2)
+	accountMessageOutboxPrefix         = "message-outbox/"
+	accountMessageOutboxVersion        = uint32(1)
 )
 
 var ErrMessageServiceUnavailable = errors.New("CoreNode message service is unavailable")
@@ -109,21 +108,6 @@ func validMessageApplicationID(value string) bool {
 }
 func accountMessageOutboxKey(applicationID string) []byte {
 	return []byte(GetDBKeyPrefix() + accountMessageOutboxPrefix + applicationID)
-}
-func encodeAccountMessagePayload(kind, applicationID string, body []byte) ([]byte, error) {
-	kind = strings.TrimSpace(kind)
-	if kind == "" || !validMessageApplicationID(applicationID) || len(body) == 0 {
-		return nil, fmt.Errorf("invalid account message payload")
-	}
-	return json.Marshal(AccountMessagePayload{Version: AccountMessagePayloadVersion, Kind: kind, ApplicationID: applicationID, Body: append([]byte(nil), body...)})
-}
-func decodeAccountMessagePayload(encoded []byte) (*AccountMessagePayload, error) {
-	var payload AccountMessagePayload
-	if len(encoded) == 0 || json.Unmarshal(encoded, &payload) != nil || payload.Version != AccountMessagePayloadVersion || strings.TrimSpace(payload.Kind) == "" || !validMessageApplicationID(payload.ApplicationID) || len(payload.Body) == 0 {
-		return nil, fmt.Errorf("invalid account message payload")
-	}
-	payload.Body = append([]byte(nil), payload.Body...)
-	return &payload, nil
 }
 
 func (p *Manager) currentCoreNodeID() (string, error) {

@@ -3,8 +3,11 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { createHash, webcrypto } from 'node:crypto'
+import { runInNewContext } from 'node:vm'
+import { createPinia, defineStore, setActivePinia } from 'pinia'
 import test from 'node:test'
 import ts from 'typescript'
+import * as Vue from 'vue'
 
 if (!globalThis.crypto) globalThis.crypto = webcrypto
 const componentURL = new URL('../../components/wallet/RGB11InvoiceDialog.vue', import.meta.url)
@@ -33,6 +36,33 @@ const bind = (initializer, mocks) => {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 },
   }).outputText
   return Function(...Object.keys(mocks), `${js}; return selected`)(...Object.values(mocks))
+}
+const loadModule = (moduleSource, deps) => {
+  const module = { exports: {} }
+  const js = ts.transpileModule(moduleSource, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+  }).outputText
+  runInNewContext(js, {
+    module, exports: module.exports, Error, crypto: webcrypto, console: { error() {} },
+    require(name) { assert.ok(name in deps, `missing ${name}`); return deps[name] },
+  })
+  return module.exports
+}
+const accountWalletStore = Vue.reactive({
+  hasWallet: true, locked: false, isSwitchingWallet: false, isSwitchingAccount: false,
+  isSwitchingNetwork: false, rootAccountId: 'root', walletId: 'wallet', accountIndex: 0,
+  network: 'regtest', wallet: { fingerprint: 'fixture-fingerprint' },
+})
+const accountManagementModule = loadModule(
+  await readFile(new URL('../../store/accountManagement.ts', import.meta.url), 'utf8'),
+  {
+    vue: Vue, pinia: { defineStore }, '@/utils/accountManagement': { default: {} },
+    './wallet': { useWalletStore: () => accountWalletStore },
+  },
+)
+const createAccountManagementState = () => {
+  setActivePinia(createPinia())
+  return accountManagementModule.useAccountManagementStore()
 }
 const utilitySource = await readFile(new URL('../../utils/rgb11Oob.ts', import.meta.url), 'utf8')
 const utilityJS = ts.transpileModule(utilitySource, {
@@ -66,12 +96,14 @@ const receipt = { transfer_id: canonical, consignment_hash: hash, contract_id: c
 
 const fixture = (index, states, receiptValue = receipt) => {
   const calls = []
+  const accountManagementState = createAccountManagementState()
+  const t = (key) => key
   const mocks = {
     scopeKey: ref('review-r2-scope'), phase: ref('created'), requestId: ref(`request-${index}`),
     invoice: ref(`witness-invoice-${index}`), amount: ref(String(1000 + index)),
-    assetContractID: ref(contract), props: { asset: { precision: 0 } },
+    assetContractID: ref(contract), props: { asset: { precision: 0 } }, rgb11WriteAllowed: ref(true),
     loading: ref(false), errorMessage: ref(''), summary: ref(null), packageHash: ref(''),
-    t: (key) => key, sha256Text, rgb11Amount, rgb11Schema,
+    t, accountManagementState, sha256Text, rgb11Amount, rgb11Schema,
     packageInput: async () => ({ consignment: armor, hash }),
     ensureScope: (key) => assert.equal(key, 'review-r2-scope'),
     decimalToRaw: bind(initializers.get('decimalToRaw'), { maxUint64: '18446744073709551615' }),
@@ -84,6 +116,7 @@ const fixture = (index, states, receiptValue = receipt) => {
       getRGB11State: async () => [null, { state: JSON.stringify({ transfers: states }) }],
     },
   }
+  mocks.displayOperationError = bind(initializers.get('displayOperationError'), { accountManagementState, t })
   return { mocks, calls, prepare: bind(initializers.get('preparePackage'), mocks) }
 }
 
@@ -199,11 +232,14 @@ for (const walletLayout of ['same-wallet', 'different-wallets']) {
       receivers.push(receiver)
     }
     const calls = []
+    const senderAccountManagementState = createAccountManagementState()
+    const senderT = (key) => key
     const items = receivers.map(({ mocks }, index) => ({ transferId: childID(index),
       transportMode: 'out-of-band', state: senderState(index),
       summary: JSON.stringify(mocks.summary.value), matched: '', confirmed: false }))
     const senderMocks = {
-      loading: ref(false), message: ref(''), success: ref(false), t: (key) => key,
+      loading: ref(false), message: ref(''), success: ref(false), t: senderT,
+      accountManagementState: senderAccountManagementState,
       transferId: ref(childID(0)), batchItems: ref(items), outOfBand: ref(true),
       scopeKey: ref('scope'), preparedScope: ref('scope'),
       assetContractID: ref(contract), schemaID: ref(schema), armoredConsignment: ref(armor),
@@ -219,6 +255,9 @@ for (const walletLayout of ['same-wallet', 'different-wallets']) {
         return [null, { txid: witness }]
       } },
     }
+    senderMocks.displayOperationError = bind(senderInitializers.get('displayOperationError'), {
+      accountManagementState: senderAccountManagementState, t: senderT,
+    })
     const verify = bind(senderInitializers.get('verifyRecipientSummary'), senderMocks)
     const broadcast = bind(senderInitializers.get('broadcastTraditional'), senderMocks)
     for (const item of items) {

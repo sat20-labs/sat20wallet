@@ -68,6 +68,9 @@ func TestAccountRecoverySelectsRealRGB11WalletScope(t *testing.T) {
 	if err := restoreManagedImportTestWallet(t, target, source); err != nil {
 		t.Fatal(err)
 	}
+	if err := target.SyncAccountManagementState(nil); err != nil {
+		t.Fatal(err)
+	}
 	walletID := target.status.CurrentWallet
 	if walletID == 0 || target.wallet == nil {
 		t.Fatalf("recovery did not activate a real wallet: id=%d wallet=%v", walletID, target.wallet)

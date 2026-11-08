@@ -2,28 +2,35 @@
   <LayoutScroll>
     <div class="p-4 space-y-5 max-w-2xl mx-auto">
       <div class="flex items-center gap-2">
-        <Button variant="ghost" size="icon" @click="router.back()">
+        <Button variant="ghost" size="icon" :aria-label="t('common.back')" @click="router.back()">
           <Icon icon="lucide:arrow-left" class="h-5 w-5" />
         </Button>
         <div>
-          <h1 class="text-xl font-semibold">账户管理与恢复</h1>
-          <p class="text-sm text-muted-foreground">账户管理从第一个钱包开始生效；可在此配置恢复材料和 AUTOPAY 持久存储。</p>
+          <h1 class="text-xl font-semibold">{{ t('accountManagement.ui.managementTitle') }}</h1>
+          <p class="text-sm text-muted-foreground">{{ t('accountManagement.ui.managementIntro') }}</p>
         </div>
       </div>
 
-      <Alert v-if="savedState?.active" aria-label="账户备份状态">
+      <Alert v-if="savedState && (savedState.active || savedState.account_state === 'local' || accountManagementState.quotaNoticeKey)" :aria-label="t('accountManagement.ui.backupStatusLabel')">
         <AlertDescription class="space-y-1">
-          <div>账户管理：已启用</div>
-          <div>数据存储：{{ savedState.storage_mode === 'paid' ? 'AUTOPAY 持久存储' : '服务节点临时缓存' }}</div>
+          <div>{{ t('accountManagement.ui.accountStatus', { value: t(`accountManagement.accountState.${savedState.account_state}`) }) }}</div>
+          <div>{{ t('accountManagement.ui.managementStatus', { value: savedState.recovery_configured ? t('accountManagement.ui.enabled') : savedState.activation_pending ? t('accountManagement.ui.activationPending') : t('accountManagement.ui.notActivated') }) }}</div>
+          <div v-if="accountManagementState.hasDatabaseIssue" role="alert">{{ t('accountManagement.readiness.databaseFailed') }}</div>
+          <div v-else-if="savedState.account_state === 'local'" role="status">{{ t('accountManagement.readiness.local') }}</div>
+          <div v-else-if="savedState.account_state === 'syncing'" role="status">{{ t('accountManagement.readiness.syncing') }}</div>
+          <div v-else-if="savedState.account_state === 'error'" role="alert">{{ t('accountManagement.readiness.error') }}</div>
+          <div v-else-if="savedState.backup_state === 'pending' || savedState.backup_state === 'uploading'" role="status">{{ t(savedState.backup_state === 'pending' ? 'accountManagement.readiness.backupPending' : 'accountManagement.readiness.backupUploading') }}</div>
+          <div v-else-if="savedState.backup_state === 'cleanup'" role="status">{{ t('accountManagement.readiness.cleanup') }}</div>
+          <div v-if="savedState.recovery_configured">{{ t('accountManagement.ui.storageStatus', { value: savedState.storage_mode === 'paid' ? t('accountManagement.ui.autopayStorage') : t('accountManagement.ui.nodeCache') }) }}</div>
           <div
             v-if="autopayStatus?.required && !autopayStatus.ready"
             class="mt-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-amber-400"
           >
             <div class="font-medium">{{ t('accountManagement.dkvsPaymentNeedsAttention') }}</div>
-            <div class="mt-1">{{ autopayStatus.message || 'AUTOPAY 当前无法继续支付。' }}</div>
+            <div class="mt-1">{{ accountDisplayMessage(t, autopayStatus.message) || t('accountManagement.ui.autopayUnavailable') }}</div>
             <div v-if="autopayStatus.current_block" class="mt-1 text-amber-400/80">
-              当前高度 {{ autopayStatus.current_block }}
-              <span v-if="autopayStatus.last_pay_height">；最后支付高度 {{ autopayStatus.last_pay_height }}</span>
+              {{ t('accountManagement.ui.currentHeight', { value: autopayStatus.current_block }) }}
+              <span v-if="autopayStatus.last_pay_height">{{ t('accountManagement.ui.lastPaidHeight', { value: autopayStatus.last_pay_height }) }}</span>
             </div>
             <Button
               v-if="autopayStatus.can_fund"
@@ -46,7 +53,7 @@
             </Button>
           </div>
 
-          <div v-if="autopayStatus?.required" aria-label="DKVS 付费高度" class="mt-2 space-y-1 text-sm">
+          <div v-if="autopayStatus?.required" :aria-label="t('accountManagement.ui.paidHeightLabel')" class="mt-2 space-y-1 text-sm">
             <div v-if="autopayStatus.current_block">{{ t('accountManagement.dkvsCurrentHeight', { height: autopayStatus.current_block }) }}</div>
             <div v-if="autopayStatus.last_pay_height">{{ t('accountManagement.dkvsPaidHeight', { height: autopayStatus.last_pay_height }) }}</div>
             <div v-else>{{ t('accountManagement.dkvsPaidHeightUnknown') }}</div>
@@ -56,80 +63,152 @@
             <p class="text-xs text-muted-foreground">{{ t('accountManagement.dkvsExpiryCaveat') }}</p>
           </div>
 
-          <div>恢复配置：{{ savedState.recovery_configured ? '已配置' : '未配置' }}</div>
-          <div v-if="savedState.recovery_configured">恢复模式：{{ savedState.recovery_mode }}</div>
-          <div>托管数据版本：{{ savedState.managed_data_revision || 0 }}</div>
-          <div v-if="savedState.managed_data_dirty" class="text-amber-500">最新必要数据尚未备份，恢复仅覆盖最后确认版本</div>
-          <div v-if="savedState.last_rehearsal_at">上次演练：{{ new Date(savedState.last_rehearsal_at).toLocaleString() }}</div>
-          <div>待同步变更：{{ savedState.pending_changes || 0 }}</div>
+          <div>{{ t('accountManagement.ui.recoveryConfiguration', { value: savedState.recovery_configured ? t('accountManagement.ui.configured') : t('accountManagement.ui.notConfigured') }) }}</div>
+          <div v-if="savedState.recovery_configured">{{ t('accountManagement.ui.recoveryMode', { value: savedState.recovery_mode }) }}</div>
+          <div>{{ t('accountManagement.ui.dataRevision', { value: savedState.managed_data_revision || 0 }) }}</div>
+          <div>{{ t('accountManagement.ui.writeEligibility', { value: t(savedState.write_allowed ? 'accountManagement.dkvsWriteAllowed' : 'accountManagement.dkvsReadOnly') }) }}</div>
+          <div>{{ t('accountManagement.ui.backupState', { value: t(`accountManagement.backupState.${savedState.backup_state}`) }) }}</div>
+          <p v-if="accountManagementState.quotaNoticeKey" role="alert" class="mt-1 text-amber-500">
+            {{ t(accountManagementState.quotaNoticeKey) }}
+          </p>
+          <div v-for="module in savedState.modules || []" :key="`${module.provider}:${module.scope}`">
+            {{ t('accountManagement.ui.moduleState', { provider: module.provider, status: t(`accountManagement.backupState.${module.backup_state}`) }) }}
+            <p v-if="module.last_error" class="mt-1 break-words text-sm text-muted-foreground">
+              {{ accountDisplayMessage(t, module.last_error) }}
+            </p>
+          </div>
+          <div v-if="savedState.managed_data_dirty && savedState.recovery_configured" class="text-amber-500">{{ t('accountManagement.ui.unbackedNotice') }}</div>
+          <div v-if="savedState.last_rehearsal_at">{{ t('accountManagement.ui.lastRehearsal', { value: new Date(savedState.last_rehearsal_at).toLocaleString() }) }}</div>
+          <div>{{ t('accountManagement.ui.pendingChanges', { value: savedState.pending_changes || 0 }) }}</div>
+          <div v-if="savedState.recovery_configured">{{ t('accountManagement.dkvsStatusLabel', { status: t(`accountManagement.dkvsSyncStatus.${savedState.dkvs_status || 'unknown'}`) }) }}</div>
+          <div v-if="savedState.recovery_configured">{{ t('accountManagement.dkvsWriteLabel', { status: t(savedState.dkvs_write_allowed === true ? 'accountManagement.dkvsWriteAllowed' : savedState.dkvs_write_allowed === false ? 'accountManagement.dkvsReadOnly' : 'accountManagement.dkvsWriteUnknown') }) }}</div>
+          <div v-if="savedState.dkvs_cache_at_ms">
+            {{ t('accountManagement.dkvsCacheVerifiedAt', { time: new Date(savedState.dkvs_cache_at_ms).toLocaleString() }) }}<span v-if="savedState.dkvs_cache_height !== undefined">{{ t('accountManagement.dkvsCacheHeight', { height: savedState.dkvs_cache_height }) }}</span>
+          </div>
+          <div>{{ t('accountManagement.dkvsPendingRequestsLabel', { count: savedState.dkvs_pending_requests ?? 0 }) }}</div>
           <div
             v-if="savedState.last_dkvs_sync_error"
             class="mt-2 rounded-md border border-red-500/40 bg-red-500/10 p-2 text-red-400"
           >
-            <div class="font-medium">DKVS 同步异常：{{ savedState.last_dkvs_sync_error_code || 'DKVS_SYNC_ERROR' }}</div>
-            <div class="mt-1 break-words">{{ savedState.last_dkvs_sync_error }}</div>
+            <div class="font-medium">{{ t('accountManagement.ui.lastDiagnostic', { value: savedState.last_dkvs_sync_error_code || 'DKVS_SYNC_ERROR' }) }}</div>
+            <div class="mt-1 break-words">{{ accountDisplayMessage(t, savedState.last_dkvs_sync_error) }}</div>
             <div v-if="savedState.last_dkvs_sync_error_at" class="mt-1 text-red-400/80">
-              最近失败：{{ new Date(savedState.last_dkvs_sync_error_at).toLocaleString() }}
+              {{ t('accountManagement.ui.lastFailure', { value: new Date(savedState.last_dkvs_sync_error_at).toLocaleString() }) }}
             </div>
           </div>
+          <Button
+            v-if="!accountManagementState.hasDatabaseIssue && savedState.recovery_configured && (savedState.account_state === 'error' || ['pending', 'uploading', 'cleanup'].includes(savedState.backup_state) || accountManagementState.moduleIssues.length > 0 || accountManagementState.hasQuotaIssue)"
+            variant="outline"
+            size="sm"
+            :disabled="busy"
+            class="mt-2"
+            @click="retryDKVSSync"
+          >{{ t('accountManagement.readiness.retryNow') }}</Button>
         </AlertDescription>
       </Alert>
       <p v-if="statusReadError" class="text-sm text-destructive" role="status">{{ statusReadError }}</p>
-      <Button v-if="statusReadError" variant="outline" :disabled="busy" @click="refreshAccountStatus">重试读取备份状态</Button>
+      <Button v-if="statusReadError" variant="outline" :disabled="busy" @click="refreshAccountStatus">{{ t('accountManagement.readiness.retryReadStatus') }}</Button>
 
-      <section v-if="step === 1 && savedState?.recovery_configured && !reconfiguring" class="space-y-3">
-        <h2 class="font-medium">维护恢复配置</h2>
-        <Textarea v-if="savedState.public_locator" :model-value="savedState.public_locator" readonly rows="5" aria-label="当前公开恢复码" />
-        <Button variant="outline" class="w-full" :disabled="busy || !savedState.public_locator" @click="run(async () => { await copyText(savedState!.public_locator || '') })">复制当前公开恢复码</Button>
-        <Button variant="outline" class="w-full" :disabled="busy || !savedState.public_locator" @click="router.push('/restore-account?mode=rehearsal')">只读恢复演练</Button>
-        <p class="text-xs text-muted-foreground">演练只验证恢复材料并预览备份，不覆盖当前钱包。请核对预览中的钱包和子账户。</p>
-        <Button class="w-full" :disabled="busy" @click="reconfiguring = true">重新配置恢复或升级存储</Button>
+      <section v-if="savedState?.recovery_configured" class="space-y-3 rounded-lg border p-3" :aria-label="t('accountManagement.ui.cacheViewerLabel')">
+        <div class="flex items-center justify-between gap-2">
+          <div>
+            <h2 class="font-medium">{{ t('accountManagement.ui.cacheTitle') }}</h2>
+            <p class="text-xs text-muted-foreground">{{ t('accountManagement.ui.cacheIntro') }}</p>
+          </div>
+          <Button variant="outline" size="sm" :disabled="viewerLoading" @click="loadDKVSInspection()">
+            {{ viewerLoading ? t('accountManagement.ui.loading') : t('accountManagement.ui.readCache') }}
+          </Button>
+        </div>
+        <p v-if="viewerError" role="status" class="text-sm text-destructive break-words">{{ viewerError }}</p>
+        <template v-if="viewer">
+          <div class="space-y-1 text-xs text-muted-foreground break-all">
+            <div>{{ t('accountManagement.ui.accountId', { value: viewer.scope.account_id }) }}</div>
+            <div>{{ t('accountManagement.ui.snapshotId', { value: viewer.snapshot.id }) }}</div>
+            <div>{{ t('accountManagement.ui.cacheSummary', { status: viewer.snapshot.status, count: viewer.snapshot.total_cached_count }) }}</div>
+            <div v-if="viewer.snapshot.verified_at_ms">{{ t('accountManagement.ui.cacheVerified', { value: new Date(viewer.snapshot.verified_at_ms).toLocaleString() }) }}<span v-if="viewer.snapshot.cache_height">{{ t('accountManagement.ui.cacheHeight', { value: viewer.snapshot.cache_height }) }}</span></div>
+            <div v-if="viewer.scope.wallet_subscopes?.length">{{ t('accountManagement.ui.walletScopes', { value: viewer.scope.wallet_subscopes.join(t('accountManagement.ui.listSeparator')) }) }}</div>
+            <div v-if="!viewer.snapshot.complete" class="text-amber-500">{{ t('accountManagement.ui.incompleteCache') }}</div>
+            <div v-if="!viewer.snapshot.remote_current" class="text-amber-500">{{ t('accountManagement.ui.remoteUnverified') }}</div>
+            <div v-if="viewer.snapshot.local_dirty || viewer.snapshot.pending_changes" class="text-amber-500">{{ t('accountManagement.ui.cacheDirty') }}</div>
+          </div>
+          <div class="max-h-36 overflow-y-auto space-y-1" :aria-label="t('accountManagement.ui.recordList')">
+            <button
+              v-for="record in viewer.records" :key="record.key" type="button"
+              class="block w-full rounded border p-2 text-left text-xs break-all"
+              :class="selectedViewerKey === record.key ? 'border-primary' : 'border-muted'"
+              @click="selectedViewerKey = record.key"
+            >{{ record.key }}</button>
+            <p v-if="!viewer.records.length" class="text-xs text-muted-foreground">{{ t('accountManagement.ui.noRecords') }}</p>
+          </div>
+          <div v-if="selectedViewerRecord" class="grid gap-3 md:grid-cols-2 text-xs">
+            <div class="min-w-0 rounded border p-2" :aria-label="t('accountManagement.ui.rawHexLabel')">
+              <div class="font-medium">{{ t('accountManagement.ui.rawHex') }}</div>
+              <div class="mt-1 text-muted-foreground break-all">{{ t('accountManagement.ui.snapshotRecord', { snapshot: viewer.snapshot.id, record: selectedViewerRecord.record_hash }) }}</div>
+              <pre class="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all">{{ selectedViewerRecord.raw_hidden ? t('accountManagement.ui.hiddenRaw', { reason: selectedViewerRecord.raw_hidden_reason || 'unverified_value_type' }) : selectedViewerRecord.raw_hex || t('accountManagement.ui.emptyValue') }}</pre>
+            </div>
+            <div class="min-w-0 rounded border p-2" :aria-label="t('accountManagement.ui.safeDecodeLabel')">
+              <div class="font-medium">{{ t('accountManagement.ui.safeDecode') }}</div>
+              <div class="mt-1 text-muted-foreground break-all">{{ t('accountManagement.ui.snapshotRecord', { snapshot: viewer.snapshot.id, record: selectedViewerRecord.record_hash }) }}</div>
+              <pre class="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all">{{ JSON.stringify(selectedViewerRecord.decoded, null, 2) }}</pre>
+            </div>
+          </div>
+          <Button v-if="viewer.next_cursor" variant="outline" size="sm" :disabled="viewerLoading" @click="loadDKVSInspection(viewer.next_cursor)">{{ t('accountManagement.ui.nextPage') }}</Button>
+        </template>
       </section>
 
-      <section v-if="autopayStatus?.funding_transaction_id || autopayFundingResult?.transaction_id" aria-label="DKVS 付费交易追踪" class="rounded-lg border p-3 space-y-2 text-sm">
-        <p>{{ autopayStatus?.funding_error || (autopayStatus?.ready && !autopayStatus?.funding_pending ? '合约查询确认 AUTOPAY 支付已就绪' : (autopayStatus?.funding_pending ?? autopayFundingResult?.pending) ? '原充值交易等待提交或合约确认' : '已记录充值交易，AUTOPAY 当前未就绪') }}</p>
-        <p class="break-all">交易号：{{ autopayStatus?.funding_transaction_id || autopayFundingResult?.transaction_id }}</p>
-        <p v-if="autopayStatus?.funding_pending" class="text-xs text-muted-foreground">请查询原交易，不需要再次充值。</p>
-        <Button variant="outline" :disabled="busy" @click="run(refreshAutopayStatus)">查询充值状态</Button>
-        <Button v-if="autopayStatus?.funding_pending && autopayStatus?.funding_can_resume" variant="outline" :disabled="busy" @click="resumeAutopay">继续提交原交易</Button>
+      <section v-if="step === 1 && savedState?.recovery_configured && !reconfiguring" class="space-y-3">
+        <h2 class="font-medium">{{ t('accountManagement.ui.maintainRecovery') }}</h2>
+        <Textarea v-if="savedState.public_locator" :model-value="savedState.public_locator" readonly rows="5" :aria-label="t('accountManagement.ui.currentLocator')" />
+        <Button variant="outline" class="w-full" :disabled="busy || !savedState.public_locator" @click="run(async () => { await copyText(savedState!.public_locator || '') })">{{ t('accountManagement.ui.copyCurrentLocator') }}</Button>
+        <Button variant="outline" class="w-full" :disabled="busy || !savedState.public_locator" @click="router.push('/restore-account?mode=rehearsal')">{{ t('accountManagement.ui.rehearsalTitle') }}</Button>
+        <p class="text-xs text-muted-foreground">{{ t('accountManagement.ui.rehearsalHint') }}</p>
+        <Button class="w-full" :disabled="busy" @click="reconfiguring = true">{{ t('accountManagement.ui.reconfigure') }}</Button>
+      </section>
+
+      <section v-if="autopayStatus?.funding_transaction_id || autopayFundingResult?.transaction_id" :aria-label="t('accountManagement.ui.fundingTracking')" class="rounded-lg border p-3 space-y-2 text-sm">
+        <p>{{ accountDisplayMessage(t, autopayStatus?.funding_error) || (autopayStatus?.ready && !autopayStatus?.funding_pending ? t('accountManagement.ui.fundingReady') : (autopayStatus?.funding_pending ?? autopayFundingResult?.pending) ? t('accountManagement.ui.fundingPending') : t('accountManagement.ui.fundingNotReady')) }}</p>
+        <p class="break-all">{{ t('accountManagement.ui.transactionId', { value: autopayStatus?.funding_transaction_id || autopayFundingResult?.transaction_id }) }}</p>
+        <p v-if="autopayStatus?.funding_pending" class="text-xs text-muted-foreground">{{ t('accountManagement.ui.checkOriginalFunding') }}</p>
+        <Button variant="outline" :disabled="busy" @click="run(refreshAutopayStatus)">{{ t('accountManagement.ui.checkFunding') }}</Button>
+        <Button v-if="autopayStatus?.funding_pending && autopayStatus?.funding_can_resume" variant="outline" :disabled="busy" @click="resumeAutopay">{{ t('accountManagement.ui.resumeFunding') }}</Button>
       </section>
 
       <Alert v-if="reconfiguring">
-        <AlertDescription>重新配置后请保存新的公开恢复码和用户分片，并完成演练。旧恢复材料不会自动失效；旧备份仍按原存储期限保留。</AlertDescription>
+        <AlertDescription>{{ t('accountManagement.ui.reconfigureWarning') }}</AlertDescription>
       </Alert>
-      <Button v-if="reconfiguring && step < 4" variant="ghost" class="w-full" :disabled="busy" @click="cancelReconfiguration">返回当前配置</Button>
+      <Button v-if="reconfiguring && step < 4" variant="ghost" class="w-full" :disabled="busy" @click="cancelReconfiguration">{{ t('accountManagement.ui.backToConfiguration') }}</Button>
 
       <section v-if="step === 1 && (!savedState?.recovery_configured || reconfiguring)" class="space-y-4">
-        <h2 class="font-medium">1. 确认要备份的钱包</h2>
+        <h2 class="font-medium">{{ t('accountManagement.ui.stepWallets') }}</h2>
         <p class="text-sm text-muted-foreground">
-          SDK 管理全部子钱包、子账户 index 和已保存的地址 DID。助记词不会返回给页面。
+          {{ t('accountManagement.ui.walletBackupHint') }}
         </p>
         <div v-for="wallet in wallets" :key="wallet.id" class="rounded-lg border p-3 space-y-3">
           <div class="font-medium">{{ wallet.name }}</div>
           <div v-for="account in wallet.accounts" :key="account.index" class="space-y-1">
-            <label class="text-xs text-muted-foreground">子账户 {{ account.index }} 的地址 DID</label>
-            <Input :model-value="account.did || ''" readonly :aria-label="`子账户 ${account.index} 的已保存 DID`" />
+            <label class="text-xs text-muted-foreground">{{ t('accountManagement.ui.subaccountDid', { index: account.index }) }}</label>
+            <Input :model-value="account.did || ''" readonly :aria-label="t('accountManagement.ui.savedSubaccountDid', { index: account.index })" />
           </div>
         </div>
-        <Button variant="outline" class="w-full" :disabled="busy" @click="router.push('/wallet/name-select')">设置当前地址 DID</Button>
+        <Button variant="outline" class="w-full" :disabled="busy" @click="router.push('/wallet/name-select')">{{ t('accountManagement.ui.setDid') }}</Button>
         <Button class="w-full" :disabled="busy" @click="runPreflight">
           <Icon v-if="busy" icon="lucide:loader-2" class="mr-2 h-4 w-4 animate-spin" />
-          检查账户
+          {{ t('accountManagement.ui.checkAccount') }}
         </Button>
       </section>
 
       <section v-else-if="step === 2" class="space-y-4">
-        <h2 class="font-medium">2. 选择恢复和存储方式</h2>
+        <h2 class="font-medium">{{ t('accountManagement.ui.stepStorage') }}</h2>
         <div class="grid grid-cols-2 gap-2">
           <Button :variant="recoveryMode === '2of3' ? 'default' : 'outline'" @click="recoveryMode = '2of3'">
-            2/3 便捷恢复
+            {{ t('accountManagement.ui.modeConvenient') }}
           </Button>
           <Button :variant="recoveryMode === '2of2' ? 'default' : 'outline'" @click="recoveryMode = '2of2'">
-            2/2 增强安全
+            {{ t('accountManagement.ui.modeSecure') }}
           </Button>
         </div>
         <p class="text-xs text-muted-foreground">
-          2/3 使用私人知识、Guardian 和可选用户分片；2/2 必须同时提供私人知识和用户分片。
+          {{ t('accountManagement.ui.recoveryModesHint') }}
         </p>
         <div class="space-y-2">
           <button
@@ -141,23 +220,22 @@
             :disabled="!option.available"
             @click="selectStorage(option)"
           >
-            <div class="font-medium">{{ option.title }}</div>
-            <div class="text-sm text-muted-foreground">{{ option.description }}</div>
+            <div class="font-medium">{{ accountDisplayMessage(t, option.title) }}</div>
+            <div class="text-sm text-muted-foreground">{{ accountDisplayMessage(t, option.description) }}</div>
             <div v-if="option.estimated_cost" class="text-xs mt-1">
-              {{ option.id === 'paid' ? '默认 100 条报价' : '当前报价' }}：
-              {{ option.estimated_cost }} {{ option.fee_asset }}；年度参考：{{ option.estimated_annual_cost }}
+              {{ t('accountManagement.ui.storageQuote', { label: t(option.id === 'paid' ? 'accountManagement.ui.defaultQuote' : 'accountManagement.ui.currentQuote'), cost: option.estimated_cost, asset: option.fee_asset, annual: option.estimated_annual_cost }) }}
             </div>
             <div v-if="option.ttl_blocks" class="text-xs mt-1">
-              保留 {{ option.ttl_blocks }} 个聪网区块
-              <span v-if="option.estimated_expiry_height">；预计到期高度 {{ option.estimated_expiry_height }}</span>
+              {{ t('accountManagement.ui.retentionBlocks', { value: option.ttl_blocks }) }}
+              <span v-if="option.estimated_expiry_height">{{ t('accountManagement.ui.estimatedExpiry', { value: option.estimated_expiry_height }) }}</span>
             </div>
             <ul v-if="option.warnings?.length" class="text-xs text-amber-500 mt-1 list-disc pl-4">
-              <li v-for="warning in option.warnings" :key="warning">{{ warning }}</li>
+              <li v-for="warning in option.warnings" :key="warning">{{ accountDisplayMessage(t, warning) }}</li>
             </ul>
           </button>
         </div>
         <div v-if="selectedStorage === 'paid'" class="space-y-2">
-          <label class="text-sm font-medium" for="autopay-record-count">持久记录条数</label>
+          <label class="text-sm font-medium" for="autopay-record-count">{{ t('accountManagement.ui.recordCount') }}</label>
           <Input
             id="autopay-record-count"
             v-model.number="recordCount"
@@ -167,18 +245,15 @@
             step="1"
           />
           <p class="text-xs text-muted-foreground">
-            默认 100 条，最低 100 条。当前费率 {{ paidStorageOption?.full_record_fee_per_block || '-' }}
-            {{ paidStorageOption?.fee_asset || '' }}/条/区块。
+            {{ t('accountManagement.ui.rateHint', { rate: paidStorageOption?.full_record_fee_per_block || '-', asset: paidStorageOption?.fee_asset || '' }) }}
           </p>
           <p v-if="autopayQuote" class="text-xs text-muted-foreground">
-            每区块约支付 {{ autopayQuote.amountPerBlock }} {{ paidStorageOption?.fee_asset }}；
-            首次充值约 {{ autopayQuote.initialCost }}，可支付 1000 个区块；
-            年度参考 {{ autopayQuote.annualCost }}。
+            {{ t('accountManagement.ui.fundingQuote', { rate: autopayQuote.amountPerBlock, asset: paidStorageOption?.fee_asset, initial: autopayQuote.initialCost, annual: autopayQuote.annualCost }) }}
           </p>
         </div>
         <Button class="w-full" :disabled="busy || !selectedStorage || !recordCountValid" @click="confirmStorage">
           <Icon v-if="busy" icon="lucide:loader-2" class="mr-2 h-4 w-4 animate-spin" />
-          确认存储方式
+          {{ t('accountManagement.ui.confirmStorage') }}
         </Button>
         <Button
           v-if="selectedStorage === 'paid'"
@@ -187,119 +262,119 @@
           :disabled="busy || !recordCountValid"
           @click="reusePaidStorage"
         >
-          仅复用现有 AUTOPAY 授权（不充值）
+          {{ t('accountManagement.ui.reuseAutopay') }}
         </Button>
       </section>
 
       <section v-else-if="step === 3" class="space-y-4">
-        <h2 class="font-medium">3. 设置私人知识问题</h2>
+        <h2 class="font-medium">{{ t('accountManagement.ui.stepQuestions') }}</h2>
         <Alert>
           <AlertDescription>
-            选择对你长期明确、但其他人难以枚举的问题。答案只在本地 SDK 中处理，不会保存到 PWA。
+            {{ t('accountManagement.ui.questionHint') }}
           </AlertDescription>
         </Alert>
         <div v-for="(question, index) in questions" :key="question.id" class="rounded-lg border p-3 space-y-2">
-          <label class="text-sm font-medium">问题 {{ index + 1 }}</label>
+          <label class="text-sm font-medium">{{ t('accountManagement.ui.questionNumber', { value: index + 1 }) }}</label>
           <Input v-model="question.prompt" />
-          <Input v-model="question.answer" type="password" placeholder="答案" autocomplete="off" />
-          <Input v-model="question.confirmation" type="password" placeholder="再次输入答案" autocomplete="off" />
+          <Input v-model="question.answer" type="password" :placeholder="t('accountManagement.ui.answer')" autocomplete="off" />
+          <Input v-model="question.confirmation" type="password" :placeholder="t('accountManagement.ui.repeatAnswer')" autocomplete="off" />
         </div>
         <div v-if="recoveryMode === '2of3'" class="space-y-2">
-          <label class="text-sm font-medium">好友 Guardian 联系信息</label>
-          <Textarea v-model="guardianContact" rows="5" placeholder="粘贴好友钱包生成的 Guardian contact JSON" />
-          <p class="text-xs text-muted-foreground">请粘贴好友钱包生成的 contact JSON，不能使用自己的 Guardian 联系信息。</p>
+          <label class="text-sm font-medium">{{ t('accountManagement.ui.guardianContact') }}</label>
+          <Textarea v-model="guardianContact" rows="5" :placeholder="t('accountManagement.ui.pasteGuardianContact')" />
+          <p class="text-xs text-muted-foreground">{{ t('accountManagement.ui.guardianContactHint') }}</p>
           <p v-if="guardianContact.trim() && guardianContactError" class="text-xs text-destructive">{{ guardianContactError }}</p>
         </div>
         <Button class="w-full" :disabled="busy || !guardianContactValid" @click="createRecovery">
           <Icon v-if="busy" icon="lucide:loader-2" class="mr-2 h-4 w-4 animate-spin" />
-          创建并保存加密账户备份
+          {{ t('accountManagement.ui.createBackup') }}
         </Button>
         <Button variant="outline" class="w-full" :disabled="busy" @click="cancelStorageSetup">
-          取消本次设置
+          {{ t('accountManagement.ui.cancelSetup') }}
         </Button>
       </section>
 
       <section v-else-if="step === 4 && creation" class="space-y-4">
-        <h2 class="font-medium">4. 保存恢复材料</h2>
+        <h2 class="font-medium">{{ t('accountManagement.ui.stepSave') }}</h2>
         <div v-if="recoveryMode === '2of2' || guardianSetupVerified" class="space-y-2">
-          <label class="text-sm font-medium">公开账户恢复码</label>
-          <Textarea :model-value="creation.locator" readonly rows="5" aria-label="最终公开恢复码" />
-          <Button variant="outline" class="w-full" @click="copyText(creation.locator)">复制恢复码</Button>
+          <label class="text-sm font-medium">{{ t('accountManagement.ui.publicLocator') }}</label>
+          <Textarea :model-value="creation.locator" readonly rows="5" :aria-label="t('accountManagement.ui.finalLocator')" />
+          <Button variant="outline" class="w-full" @click="copyText(creation.locator)">{{ t('accountManagement.ui.copyLocator') }}</Button>
         </div>
         <div class="space-y-2">
-          <label class="text-sm font-medium">秘密用户分片</label>
-          <Textarea :model-value="creation.user_share" readonly rows="5" aria-label="秘密用户分片" />
-          <Button variant="outline" class="w-full" @click="copyText(creation.user_share)">复制用户分片</Button>
-          <p class="text-xs text-muted-foreground">用户分片是秘密材料，不要与公开恢复码保存在同一位置。</p>
+          <label class="text-sm font-medium">{{ t('accountManagement.ui.secretShare') }}</label>
+          <Textarea :model-value="creation.user_share" readonly rows="5" :aria-label="t('accountManagement.ui.secretShare')" />
+          <Button variant="outline" class="w-full" @click="copyText(creation.user_share)">{{ t('accountManagement.ui.copyShare') }}</Button>
+          <p class="text-xs text-muted-foreground">{{ t('accountManagement.ui.shareWarning') }}</p>
         </div>
 
         <div v-if="recoveryMode === '2of3' && !guardianSetupVerified" class="space-y-2 rounded-lg border p-3">
-          <label class="text-sm font-medium">请让 Guardian 接受托管</label>
-          <p class="text-xs text-muted-foreground">验证 Guardian receipt 后会生成最终公开恢复码，请届时保存。</p>
-          <Textarea :model-value="creation.guardian_setup" readonly rows="7" aria-label="Guardian setup" />
-          <Button variant="outline" class="w-full" @click="copyText(creation.guardian_setup)">复制 Guardian setup</Button>
-          <Textarea v-model="guardianReceipt" rows="5" placeholder="粘贴 Guardian 返回的 receipt" />
+          <label class="text-sm font-medium">{{ t('accountManagement.ui.askGuardianAccept') }}</label>
+          <p class="text-xs text-muted-foreground">{{ t('accountManagement.ui.guardianReceiptHint') }}</p>
+          <Textarea :model-value="creation.guardian_setup" readonly rows="7" :aria-label="t('accountManagement.ui.guardianSetup')" />
+          <Button variant="outline" class="w-full" @click="copyText(creation.guardian_setup)">{{ t('accountManagement.ui.copyGuardianSetup') }}</Button>
+          <Textarea v-model="guardianReceipt" rows="5" :placeholder="t('accountManagement.ui.pasteReceipt')" />
           <Button class="w-full" :disabled="busy || !guardianReceipt" @click="verifyGuardian">
-            验证 Guardian 密文已保存
+            {{ t('accountManagement.ui.verifyStored') }}
           </Button>
         </div>
-        <Button v-else class="w-full" @click="step = 5">{{ recoveryMode === '2of3' ? '我已保存最终恢复码，进入演练' : '进入恢复演练' }}</Button>
+        <Button v-else class="w-full" @click="step = 5">{{ recoveryMode === '2of3' ? t('accountManagement.ui.savedStartRehearsal') : t('accountManagement.ui.startRehearsal') }}</Button>
       </section>
 
       <section v-else-if="step === 5 && creation" class="space-y-4">
-        <h2 class="font-medium">5. 完成恢复演练</h2>
-        <p class="text-sm text-muted-foreground">请重新输入至少两个问题的答案。2/2 模式还需要重新粘贴用户分片；2/3 模式必须让 Guardian 实际解密并返回一次性加密响应。</p>
-        <Input v-for="(answer, index) in rehearsalAnswers" :key="index" v-model="rehearsalAnswers[index]" type="password" :placeholder="`问题 ${index + 1} 的答案`" autocomplete="off" />
-        <Textarea v-if="recoveryMode === '2of2'" v-model="rehearsalUserShare" rows="5" placeholder="重新粘贴用户分片" />
+        <h2 class="font-medium">{{ t('accountManagement.ui.stepRehearsal') }}</h2>
+        <p class="text-sm text-muted-foreground">{{ t('accountManagement.ui.rehearsalInstructions') }}</p>
+        <Input v-for="(answer, index) in rehearsalAnswers" :key="index" v-model="rehearsalAnswers[index]" type="password" :placeholder="t('accountManagement.ui.questionAnswer', { index: index + 1 })" autocomplete="off" />
+        <Textarea v-if="recoveryMode === '2of2'" v-model="rehearsalUserShare" rows="5" :placeholder="t('accountManagement.ui.pasteShareAgain')" />
         <div v-else class="space-y-2 rounded-lg border p-3">
-          <Textarea v-model="rehearsalLocator" rows="5" placeholder="重新粘贴已保存的最终恢复码" />
-          <Button variant="outline" class="w-full" :disabled="busy" @click="createRehearsalGuardianRequest">生成 Guardian 演练请求</Button>
+          <Textarea v-model="rehearsalLocator" rows="5" :placeholder="t('accountManagement.ui.pasteFinalLocatorAgain')" />
+          <Button variant="outline" class="w-full" :disabled="busy" @click="createRehearsalGuardianRequest">{{ t('accountManagement.ui.createRehearsalRequest') }}</Button>
           <Textarea v-if="rehearsalGuardianRequest" :model-value="rehearsalGuardianRequest" readonly rows="6" />
-          <Button v-if="rehearsalGuardianRequest" variant="ghost" class="w-full" @click="copyText(rehearsalGuardianRequest)">复制演练请求</Button>
-          <Textarea v-model="rehearsalGuardianResponse" rows="6" placeholder="粘贴 Guardian 返回的加密响应" />
-          <Button variant="outline" class="w-full" :disabled="busy || !rehearsalGuardianResponse" @click="acceptRehearsalGuardianResponse">验证 Guardian 响应</Button>
-          <p class="text-xs text-muted-foreground">密文已保存不等于分片可恢复；只有本步骤通过后，才证明 Guardian 私钥和此前生成的 share 实际可用。</p>
+          <Button v-if="rehearsalGuardianRequest" variant="ghost" class="w-full" @click="copyText(rehearsalGuardianRequest)">{{ t('accountManagement.ui.copyRehearsalRequest') }}</Button>
+          <Textarea v-model="rehearsalGuardianResponse" rows="6" :placeholder="t('accountManagement.ui.pasteGuardianResponse')" />
+          <Button variant="outline" class="w-full" :disabled="busy || !rehearsalGuardianResponse" @click="acceptRehearsalGuardianResponse">{{ t('accountManagement.ui.verifyGuardianResponse') }}</Button>
+          <p class="text-xs text-muted-foreground">{{ t('accountManagement.ui.guardianRehearsalWarning') }}</p>
         </div>
         <Button class="w-full" :disabled="busy || (recoveryMode === '2of3' && !rehearsalGuardianReady)" @click="rehearse">
           <Icon v-if="busy" icon="lucide:loader-2" class="mr-2 h-4 w-4 animate-spin" />
-          执行恢复演练
+          {{ t('accountManagement.ui.runRehearsal') }}
         </Button>
       </section>
 
       <section v-else-if="step === 6" class="space-y-3 text-center py-8">
         <Icon icon="lucide:badge-check" class="h-14 w-14 text-green-500 mx-auto" />
-        <h2 class="text-xl font-semibold">账户恢复已配置</h2>
-        <p class="text-sm text-muted-foreground">恢复配置已保存，恢复材料和真实演练均已验证。</p>
-        <Textarea :model-value="creation?.locator || savedState?.public_locator || ''" readonly rows="5" aria-label="当前公开恢复码" />
-        <Button variant="outline" :disabled="busy || !creation?.locator && !savedState?.public_locator" @click="run(async () => { await copyText(creation?.locator || savedState?.public_locator || '') })">复制当前公开恢复码</Button>
-        <Button @click="router.push('/wallet')">返回钱包</Button>
+        <h2 class="text-xl font-semibold">{{ t('accountManagement.ui.recoveryConfigured') }}</h2>
+        <p class="text-sm text-muted-foreground">{{ t('accountManagement.ui.configurationVerified') }}</p>
+        <Textarea :model-value="creation?.locator || savedState?.public_locator || ''" readonly rows="5" :aria-label="t('accountManagement.ui.currentLocator')" />
+        <Button variant="outline" :disabled="busy || !creation?.locator && !savedState?.public_locator" @click="run(async () => { await copyText(creation?.locator || savedState?.public_locator || '') })">{{ t('accountManagement.ui.copyCurrentLocator') }}</Button>
+        <Button @click="router.push('/wallet')">{{ t('accountManagement.ui.backToWallet') }}</Button>
       </section>
 
       <Separator />
 
       <section class="space-y-3">
-        <h2 class="font-medium">Guardian 工具</h2>
-        <p class="text-xs text-muted-foreground">以下工具用于你替好友保管分片或响应好友的恢复请求。</p>
-        <Button variant="outline" class="w-full" :disabled="busy" @click="generateGuardianIdentity">生成我的联系信息并发送给好友</Button>
+        <h2 class="font-medium">{{ t('accountManagement.ui.guardianTools') }}</h2>
+        <p class="text-xs text-muted-foreground">{{ t('accountManagement.ui.guardianToolsHint') }}</p>
+        <Button variant="outline" class="w-full" :disabled="busy" @click="generateGuardianIdentity">{{ t('accountManagement.ui.generateContact') }}</Button>
         <div v-if="guardianIdentity" class="space-y-2">
           <Textarea :model-value="guardianIdentity" readonly rows="5" />
           <Button variant="outline" class="w-full" :disabled="busy" @click="copyGuardianIdentity">
-            {{ guardianIdentityCopied ? '已复制联系信息' : '复制联系信息' }}
+            {{ guardianIdentityCopied ? t('accountManagement.ui.contactCopied') : t('accountManagement.ui.copyContact') }}
           </Button>
         </div>
 
-        <Textarea v-model="guardianSetupInput" rows="5" placeholder="好友发送的 Guardian setup JSON" />
+        <Textarea v-model="guardianSetupInput" rows="5" :placeholder="t('accountManagement.ui.pasteFriendSetup')" />
         <select v-model="guardianStorageChoice" class="w-full rounded-md border bg-background p-2 text-sm">
-          <option value="">选择托管存储方式</option>
-          <option v-for="option in storageOptions.filter(o => o.available)" :key="option.id" :value="option.id">{{ option.title }}</option>
+          <option value="">{{ t('accountManagement.ui.chooseGuardianStorage') }}</option>
+          <option v-for="option in storageOptions.filter(o => o.available)" :key="option.id" :value="option.id">{{ accountDisplayMessage(t, option.title) }}</option>
         </select>
-        <p v-if="guardianStorageChoice === 'paid'" class="text-xs text-amber-500">付费托管由当前 Guardian 钱包承担 AUTOPAY 费用，确认前会显示合约、资产、每区块金额和首次充值。</p>
-        <p v-else-if="guardianStorageChoice === 'temporary'" class="text-xs text-amber-500">临时托管只保存在当前连接节点；恢复时必须仍能访问同一节点。</p>
-        <Button variant="outline" class="w-full" :disabled="busy || !guardianSetupInput || !guardianStorageChoice" @click="acceptGuardianSetup">接受并保存好友分片</Button>
+        <p v-if="guardianStorageChoice === 'paid'" class="text-xs text-amber-500">{{ t('accountManagement.ui.guardianPaidHint') }}</p>
+        <p v-else-if="guardianStorageChoice === 'temporary'" class="text-xs text-amber-500">{{ t('accountManagement.ui.guardianTemporaryHint') }}</p>
+        <Button variant="outline" class="w-full" :disabled="busy || !guardianSetupInput || !guardianStorageChoice" @click="acceptGuardianSetup">{{ t('accountManagement.ui.acceptShare') }}</Button>
         <Textarea v-if="guardianReceiptOutput" :model-value="guardianReceiptOutput" readonly rows="5" />
 
-        <Textarea v-model="guardianRecoveryRequest" rows="5" placeholder="好友发送的 Guardian 恢复请求 JSON" />
-        <Button variant="outline" class="w-full" :disabled="busy || !guardianRecoveryRequest" @click="createGuardianResponse">生成加密恢复响应</Button>
+        <Textarea v-model="guardianRecoveryRequest" rows="5" :placeholder="t('accountManagement.ui.pasteFriendRequest')" />
+        <Button variant="outline" class="w-full" :disabled="busy || !guardianRecoveryRequest" @click="createGuardianResponse">{{ t('accountManagement.ui.createResponse') }}</Button>
         <Textarea v-if="guardianResponse" :model-value="guardianResponse" readonly rows="5" />
       </section>
 
@@ -341,9 +416,11 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Separator } from '@/components/ui/separator'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useWalletStore } from '@/store'
+import { useAccountManagementStore } from '@/store/accountManagement'
 import { withWalletPassword } from '@/lib/walletPasswordPrompt'
 import accountSDK, {
-  type AccountManagementStatus,
+  accountDisplayMessage,
+  type AccountDKVSInspection,
   type AccountAutopayFundingResult,
   AccountAutopayPendingError,
   type AccountAutopayFundingStatus,
@@ -355,8 +432,14 @@ const router = useRouter()
 const { t } = useI18n()
 const walletStore = useWalletStore()
 const { wallets } = storeToRefs(walletStore)
-const savedState = ref<AccountManagementStatus | null>(null)
-const statusReadError = ref('')
+const accountManagementState = useAccountManagementStore()
+const { status: savedState } = storeToRefs(accountManagementState)
+const statusReadError = computed(() => accountManagementState.statusReadFailed ? t('accountManagement.dkvsStatusReadFailed') : '')
+const viewer = ref<AccountDKVSInspection | null>(null)
+const viewerLoading = ref(false)
+const viewerError = ref('')
+const selectedViewerKey = ref('')
+const selectedViewerRecord = computed(() => viewer.value?.records.find(record => record.key === selectedViewerKey.value))
 const autopayStatus = ref<AccountAutopayFundingStatus | null>(null)
 const autopayFundingResult = ref<AccountAutopayFundingResult | null>(null)
 const busy = ref(false)
@@ -386,9 +469,9 @@ const rehearsalGuardianResponse = ref('')
 const rehearsalGuardianReady = ref(false)
 
 const questions = ref([
-  { id: 'book-page', prompt: '你指定版本的一本书，第十页最后十个字是什么？', answer: '', confirmation: '', ignore_punctuation: true },
-  { id: 'private-phrase', prompt: '你和家人约定的一句未公开的话是什么？', answer: '', confirmation: '', ignore_punctuation: true },
-  { id: 'private-note', prompt: '你长期保存的一张私人纸条上的指定句子是什么？', answer: '', confirmation: '', ignore_punctuation: true },
+  { id: 'book-page', prompt: t('accountManagement.ui.bookQuestion'), answer: '', confirmation: '', ignore_punctuation: true },
+  { id: 'private-phrase', prompt: t('accountManagement.ui.phraseQuestion'), answer: '', confirmation: '', ignore_punctuation: true },
+  { id: 'private-note', prompt: t('accountManagement.ui.noteQuestion'), answer: '', confirmation: '', ignore_punctuation: true },
 ])
 
 const guardianIdentity = ref('')
@@ -422,11 +505,11 @@ const parseGuardianContact = (value: string): GuardianContact | null => {
 
 const parsedGuardianContact = computed(() => parseGuardianContact(guardianContact.value.trim()))
 const guardianContactError = computed(() => {
-  if (!guardianContact.value.trim()) return '请先粘贴好友钱包生成的 Guardian 联系信息'
-  if (!parsedGuardianContact.value) return 'Guardian 联系信息格式无效'
+  if (!guardianContact.value.trim()) return t('accountManagement.ui.contactRequired')
+  if (!parsedGuardianContact.value) return t('accountManagement.ui.invalidContact')
   const rootAccountId = preflight.value?.account_id || savedState.value?.account_id || walletStore.rootAccountId
   if (rootAccountId && rootAccountId.toLowerCase() === parsedGuardianContact.value.mailbox_id.toLowerCase()) {
-    return '不能使用自己的 Guardian 联系信息'
+    return t('accountManagement.ui.selfGuardian')
   }
   return ''
 })
@@ -443,7 +526,12 @@ const run = async (task: () => Promise<void>) => {
     if (e instanceof AccountAutopayPendingError) {
       autopayFundingResult.value = e.data as AccountAutopayFundingResult
       try { await refreshAutopayStatus() } catch { /* preserve the known transaction receipt */ }
-    } else { error.value = e?.message || '操作失败' }
+    } else {
+      const quotaMessageKey = accountManagementState.quotaMessageKeyForCode(e?.code)
+      error.value = quotaMessageKey
+        ? t('accountManagement.ui.errorWithNotice', { error: accountDisplayMessage(t, e?.message) || t('accountManagement.ui.operationFailed'), notice: t(quotaMessageKey) })
+        : accountDisplayMessage(t, e?.message) || t('accountManagement.ui.operationFailed')
+    }
   } finally { busy.value = false }
 }
 
@@ -491,7 +579,7 @@ const paidConfirmRows = computed(() => {
     {
       label: t('tools.txConfirm.purpose'),
       value: paidConfirmContext.value === 'guardian'
-        ? '由当前 Guardian 根钱包支付好友恢复分片的 DKVS 持久存储费用'
+        ? t('accountManagement.ui.guardianPaymentPurpose')
         : funding
           ? t('accountManagement.dkvsPay')
         : t('accountManagement.autopayPurpose'),
@@ -502,7 +590,7 @@ const paidConfirmRows = computed(() => {
         value: rootWallet ? `${rootWallet.name} (${rootWallet.id})` : String(rootWalletId ?? ''),
       },
       { label: t('tools.txConfirm.account'), value: t('accountManagement.fundingSourceAccount') },
-      { label: '根账户身份', value: preflight.value?.account_id || savedState.value?.account_id || walletStore.rootAccountId },
+      { label: t('accountManagement.ui.rootIdentity'), value: preflight.value?.account_id || savedState.value?.account_id || walletStore.rootAccountId },
       { label: t('tools.txConfirm.sourceAddress'), value: funding ? fundingQuote?.payer || '' : '' },
     ],
     { label: t('tools.txConfirm.to'), value: funding ? fundingQuote?.contract_address || '' : option?.contract_address || '' },
@@ -558,7 +646,7 @@ const selectStorage = (option: AccountStorageOption) => {
 }
 
 const confirmStorage = () => run(async () => {
-  if (!recordCountValid.value) throw new Error('持久记录条数必须是不小于 100 的整数')
+  if (!recordCountValid.value) throw new Error(t('accountManagement.ui.invalidRecordCount'))
   paidConfirmContext.value = 'account'
   if (selectedStorage.value === 'paid' && !await requestPaidConfirmation()) return
   await accountSDK.confirmStorage(
@@ -569,7 +657,7 @@ const confirmStorage = () => run(async () => {
 })
 
 const reusePaidStorage = () => run(async () => {
-  if (!recordCountValid.value) throw new Error('持久记录条数必须是不小于 100 的整数')
+  if (!recordCountValid.value) throw new Error(t('accountManagement.ui.invalidRecordCount'))
   await accountSDK.reusePaidStorage(normalizedRecordCount.value)
   selectedStorage.value = 'paid'
   step.value = 3
@@ -599,27 +687,40 @@ const refreshAutopayStatus = async () => {
   if (!disposed) autopayStatus.value = status
 }
 
-const refreshAccountStatus = async () => {
+const refreshAccountStatus = () => accountManagementState.refresh()
+
+const retryDKVSSync = () => run(async () => {
+  await accountManagementState.retryNow()
+})
+
+const loadDKVSInspection = async (cursor?: string) => {
+  if (viewerLoading.value) return
+  viewerLoading.value = true
+  viewerError.value = ''
   try {
-    const status = await accountSDK.status()
+    const result = await accountSDK.inspectDKVS(cursor)
     if (disposed) return
-    savedState.value = status
-    statusReadError.value = ''
+    viewer.value = result
+    selectedViewerKey.value = result.records[0]?.key || ''
   } catch (e: any) {
-    if (!disposed) statusReadError.value = e?.message || '读取账户备份状态失败'
+    if (!disposed) {
+      viewer.value = null
+      viewerError.value = accountDisplayMessage(t, e?.message) || t('accountManagement.ui.cacheReadFailed')
+    }
+  } finally {
+    viewerLoading.value = false
   }
 }
 
 const refreshVisibleStatus = async () => {
   if (disposed || document.visibilityState !== 'visible') return
-  await refreshAccountStatus()
   try { await refreshAutopayStatus() } catch { /* preserve the last known status */ }
 }
 const onVisibilityChange = () => { void refreshVisibleStatus() }
 
 const fundAutopay = () => run(async () => {
   await refreshAutopayStatus()
-  if (!autopayStatus.value?.can_fund) throw new Error('AUTOPAY 当前不能充值')
+  if (!autopayStatus.value?.can_fund) throw new Error(t('accountManagement.ui.fundingUnavailable'))
   const confirmed = { ...autopayStatus.value }
   fundingConfirmation.value = confirmed
   paidConfirmContext.value = 'funding'
@@ -644,7 +745,7 @@ const resumeAutopay = () => run(async () => {
 
 const createRecovery = () => runWithPassword(async password => {
   for (const q of questions.value) {
-    if (!q.prompt.trim() || q.answer.length < 8 || q.answer !== q.confirmation) throw new Error('三个问题都需要至少 8 个字符且两次答案一致')
+    if (!q.prompt.trim() || q.answer.length < 8 || q.answer !== q.confirmation) throw new Error(t('accountManagement.ui.invalidAnswers'))
   }
   let guardian: any = undefined
   if (recoveryMode.value === '2of3') {
@@ -678,7 +779,7 @@ const verifyGuardian = () => run(async () => {
 
 const verifySavedLocator = () => {
   if (recoveryMode.value === '2of3' && (!guardianSetupVerified.value || rehearsalLocator.value.trim() !== creation.value?.locator)) {
-    throw new Error('请粘贴本次保存的最终恢复码')
+    throw new Error(t('accountManagement.ui.finalLocatorRequired'))
   }
 }
 
@@ -700,7 +801,7 @@ const rehearse = () => runWithPassword(async password => {
 	const result = await accountSDK.rehearse(
 	creation.value.session_id, answers, rehearsalUserShare.value, password
 	)
-  if (!result.verified) throw new Error('恢复演练未通过')
+  if (!result.verified) throw new Error(t('accountManagement.ui.rehearsalFailed'))
   rehearsalAnswers.value = ['', '', '']
   rehearsalUserShare.value = ''
   rehearsalLocator.value = ''
@@ -752,12 +853,15 @@ onMounted(async () => {
   }
   try { await refreshAutopayStatus() } catch { autopayStatus.value = null }
   if (disposed) return
-  autopayRefreshTimer = setInterval(() => void refreshVisibleStatus(), 30_000)
+  autopayRefreshTimer = setInterval(() => {
+    if (document.visibilityState === 'visible') void refreshAutopayStatus().catch(() => undefined)
+  }, 30_000)
   document.addEventListener('visibilitychange', onVisibilityChange)
 })
 
 onBeforeUnmount(() => {
   disposed = true
+  viewer.value = null
   if (autopayRefreshTimer) clearInterval(autopayRefreshTimer)
   document.removeEventListener('visibilitychange', onVisibilityChange)
   if (paidConfirmResolver) paidConfirmResolver(false)

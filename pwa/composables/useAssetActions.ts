@@ -36,7 +36,7 @@ export function useAssetActions() {
   // 错误处理函数
   const handleError = (message: string) => {
     toast({
-      title: 'Error',
+      title: t('common.error'),
       description: message,
     })
   }
@@ -64,8 +64,8 @@ export function useAssetActions() {
     refreshL1Assets()
     await channelStore.getCurrentChannel()
     toast({
-      title: 'Success',
-      description: 'Splicing In successful',
+      title: t('common.success'),
+      description: t('pwaUi.assetActions.spliceIn'),
       duration: 1500,
     })
     loading.value = false
@@ -89,8 +89,8 @@ export function useAssetActions() {
     refreshL1Assets()
     await channelStore.getCurrentChannel()
     toast({
-      title: 'Success',
-      description: 'Splicing Out successful',
+      title: t('common.success'),
+      description: t('pwaUi.assetActions.spliceOut'),
       duration: 1500,
     })
     loading.value = false
@@ -117,7 +117,7 @@ export function useAssetActions() {
     )
     if (err) {
       toast({
-        title: 'error',
+        title: t('common.error'),
         description: err.message,
         duration:1500,
       })
@@ -128,8 +128,8 @@ export function useAssetActions() {
     refreshL1Assets()
     await channelStore.getCurrentChannel()
     toast({
-      title: 'Success',
-      description: 'Deposit successful',
+      title: t('common.success'),
+      description: t('pwaUi.assetActions.deposit'),
       duration:1500,
     })
   }
@@ -153,7 +153,7 @@ export function useAssetActions() {
     )
     if (err) {
       toast({
-        title: 'error',
+        title: t('common.error'),
         description: err.message,
         duration:1500,
       })
@@ -165,8 +165,8 @@ export function useAssetActions() {
     refreshL2Assets()
     await channelStore.getCurrentChannel()
     toast({
-      title: 'Success',
-      description: 'Withdraw successful',
+      title: t('common.success'),
+      description: t('pwaUi.assetActions.withdraw'),
       duration:1500,
     })
   }
@@ -175,7 +175,7 @@ export function useAssetActions() {
     loading.value = true
     const status = await checkChannel(chanid)
     if (!status) {
-      handleError('Channel transaction has not been confirmed')
+      handleError(t('pwaUi.assetActions.channelUnconfirmed'))
       loading.value = false
       return
     }
@@ -189,8 +189,8 @@ export function useAssetActions() {
     await channelStore.getCurrentChannel()
     refreshL2Assets()
     toast({
-      title: 'Success',
-      description: 'Unlock UTXO successful',
+      title: t('common.success'),
+      description: t('pwaUi.assetActions.unlock'),
       duration: 1500,
     })
     loading.value = false
@@ -210,8 +210,8 @@ export function useAssetActions() {
     await channelStore.getCurrentChannel()
     refreshL2Assets()
     toast({
-      title: 'Success',
-      description: 'Lock UTXO successful',
+      title: t('common.success'),
+      description: t('pwaUi.assetActions.lock'),
       duration: 1500,
     })
     loading.value = false
@@ -261,7 +261,7 @@ export function useAssetActions() {
     let err: Error | undefined
     if (/^(sp1|tsp1)/i.test(String(toAddress).trim())) {
       if (asset_name !== '::') {
-        err = new Error('Silent Payments are available only for BTC')
+        err = new Error(t('pwaUi.assetActions.spBtcOnly'))
       } else {
         [err] = await walletManager.sendSilentPayment(toAddress, amt, btcFeeRate.value)
       }
@@ -275,8 +275,8 @@ export function useAssetActions() {
     }
     refreshL1Assets()
     toast({
-      title: 'Success',
-      description: 'L1 Send successful',
+      title: t('common.success'),
+      description: t('pwaUi.assetActions.l1Send'),
       duration:1500,
     })
     loading.value = false
@@ -294,8 +294,8 @@ export function useAssetActions() {
     }
     refreshL2Assets()
     toast({
-      title: 'Success',
-      description: 'L2 Send successful',
+      title: t('common.success'),
+      description: t('pwaUi.assetActions.l2Send'),
       duration:1500,
     })
     loading.value = false

@@ -43,10 +43,16 @@ func (p *Manager) OpenChannel(feeRate int64, amt int64, utxos []string, memo str
 	if !p.CheckSuperNodeStatus() {
 		return "", fmt.Errorf("peer is offline")
 	}
+	pubkey := p.wallet.GetPaymentPubKey()
+	if pubkey == nil {
+		return "", fmt.Errorf("channel payment key is unavailable")
+	}
+	if err := p.RejectStakedAddr(pubkey.SerializeCompressed(), channelAddr); err != nil {
+		return "", err
+	}
 	if p.ServerIsBootstrapNode() {
-		pubkey := p.wallet.GetPaymentPubKey().SerializeCompressed()
-		if !p.HasStaked(pubkey) {
-			addr, _ := indexer.GetCoreNodeChannelAddress(pubkey, GetChainParam())
+		if !p.HasStaked(pubkey.SerializeCompressed()) {
+			addr, _ := indexer.GetCoreNodeChannelAddress(pubkey.SerializeCompressed(), GetChainParam())
 			return "", fmt.Errorf("channel address %s has no stake assets", addr)
 		}
 	}
@@ -536,6 +542,9 @@ func (p *Manager) SplicingIn(channelId string, assetName string, amt string,
 	var rgbEvidence *STPRGBReservationEvidence
 	var rgbRequest []byte
 	preAsset := ParseAssetString(assetName)
+	if err := p.requireRGB11PublicRegistration(preAsset); err != nil {
+		return "", 0, err
+	}
 	if preAsset != nil && preAsset.Protocol == "rgb11" && len(utxos) == 0 {
 		info := p.getTickerInfo(preAsset)
 		if info == nil {
@@ -576,6 +585,10 @@ func (p *Manager) SplicingIn(channelId string, assetName string, amt string,
 	}
 	rgbEvidence, err = p.PrepareSTPRGBSplicingEvidence(channel, preAsset, utxos, nil, rgbRequest, nil)
 	if err != nil {
+		if preAsset != nil && preAsset.Protocol == "rgb11" {
+			Log.Debugf("RGB STP evidence rejected: manager=%d phase=splice-input inconsistent=%t account_unsynced=%t",
+				p.debugID, errors.Is(err, ErrRGB11Inconsistent), errors.Is(err, ErrDKVSPathNotSynced))
+		}
 		return "", 0, err
 	}
 
@@ -717,6 +730,9 @@ func (p *Manager) ExpandChannel(channelId string, assetName string, utxo string,
 	if !p.IsPeerOnline(channel.PeerNodeId) {
 		return "", "", 0, fmt.Errorf("peer is offline")
 	}
+	if err := p.requireRGB11PublicRegistration(ParseAssetString(assetName)); err != nil {
+		return "", "", 0, err
+	}
 	// Collect RGB observations before the original business lock. Expansion
 	// sources are private channel inventory, not ordinary wallet projections.
 	rgbRequest, err := json.Marshal(struct {
@@ -785,6 +801,9 @@ func (p *Manager) expandChannelSatsNet(channelId string, assetName string, utxos
 	if !p.IsPeerOnline(channel.PeerNodeId) {
 		return nil, fmt.Errorf("peer is offline")
 	}
+	if err := p.requireRGB11PublicRegistration(ParseAssetString(assetName)); err != nil {
+		return nil, err
+	}
 	// Own the exact inputs before querying RGB outside the original write lock.
 	utxos = append([]string(nil), utxos...)
 	rgbRequest, err := json.Marshal(struct {
@@ -852,8 +871,7 @@ func (p *Manager) ExpandAll_SatsNet(channelId string, assetName string) (string,
 
 	var value *Decimal
 	var itemErrors []error
-	asset := ParseAssetString(assetName)
-	if asset == nil {
+	if assetName == "" {
 		assets := p.l2IndexerClient.GetAssetSummaryWithAddress(address)
 		if assets != nil {
 			for _, u := range assets.Data {
@@ -868,6 +886,7 @@ func (p *Manager) ExpandAll_SatsNet(channelId string, assetName string) (string,
 			}
 		}
 	} else {
+		asset := ParseAssetString(assetName)
 		var err error
 		value, err = p.ExpandAssetInChannelSatsNet(channel, asset)
 		if err != nil {

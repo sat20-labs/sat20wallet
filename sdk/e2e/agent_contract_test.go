@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -30,26 +31,7 @@ func TestRealSatoshiNetAgentPredictionTenBettors(t *testing.T) {
 		indexercommon.ENABLE_TESTING = oldEnableTesting
 	})
 
-	resultServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/basketball/final", r.URL.Path)
-		w.Header().Set("Content-Type", "text/html")
-		_, _ = w.Write([]byte(`<html><body>Basketball match prediction: Home team vs away team. Home 101, Away 98. Final.</body></html>`))
-	}))
-	t.Cleanup(resultServer.Close)
-
-	llmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/v1/chat/completions", r.URL.Path)
-		var req map[string]interface{}
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
-		content := `{"result_type":"outcome","outcome_id":"home","result":"Home 101, Away 98. Final.","evidence_quote":"Home 101, Away 98. Final.","reason":"Home team won 101-98"}`
-		if llmRequestContains(req, "Review this prediction contract") {
-			content = `{"ready":true,"reason":"basketball result is verifiable"}`
-		}
-		encoded, err := json.Marshal(content)
-		require.NoError(t, err)
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":` + string(encoded) + `}}]}`))
-	}))
-	t.Cleanup(llmServer.Close)
+	resultURL, llmURL := agentPredictionServerURLs(t, "basketball")
 
 	const lockedValue = int64(300000)
 	gas := contractcommon.GetGasAssetName()
@@ -67,7 +49,7 @@ func TestRealSatoshiNetAgentPredictionTenBettors(t *testing.T) {
 	)
 	require.NoError(t, err)
 	lockedUtxo := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:0"
-	fakeL1 := newFakeL1Indexer(t, hex.EncodeToString(bootstrapKey.PubKey().SerializeCompressed()), lockedPkScript,
+	fakeL1 := agentPredictionFakeL1(t, hex.EncodeToString(bootstrapKey.PubKey().SerializeCompressed()), lockedPkScript,
 		[]fakeL1Asset{{
 			Utxo:  lockedUtxo,
 			Value: lockedValue,
@@ -75,18 +57,13 @@ func TestRealSatoshiNetAgentPredictionTenBettors(t *testing.T) {
 				gas: "4000000",
 			},
 		}})
-	network := newRealSatoshiNetWithArgs(t, fakeL1, nil, []string{
-		"--agentllmprovider=openai",
-		"--agentllmendpoint=" + llmServer.URL,
-		"--agentllmmodel=fake-agent",
-		"--agentcheckinterval=1s",
-		"--agentallowprivateevidence",
-	}, nil)
+	network := agentPredictionNetwork(t, fakeL1, llmURL)
+	baseHeight := agentPredictionTipHeight(t, network)
 
 	anchorTx := buildAnchorTx(t, lockedUtxo, lockedValue,
 		txAsset(gas, 4000000), gas+"-4000000-0-0",
 		witnessScript, bootstrapKey, deployer.PkScript)
-	network.sendAndMine(t, anchorTx, 1)
+	network.sendAndMine(t, anchorTx, baseHeight+1)
 
 	const (
 		heartbeatCount = 12
@@ -109,7 +86,7 @@ func TestRealSatoshiNetAgentPredictionTenBettors(t *testing.T) {
 		splitTx.AddTxOut(output)
 	}
 	signTaprootInputs(t, splitTx, deployer.Key, deployer.RedeemScript, deployer.ControlBlock)
-	network.sendAndMine(t, splitTx, 2)
+	network.sendAndMine(t, splitTx, baseHeight+2)
 	inputs := collectSpendableOutPoints(t, splitTx, outputs)
 
 	_, height, err := network.Bootstrap.Client.GetBestBlock()
@@ -122,7 +99,7 @@ func TestRealSatoshiNetAgentPredictionTenBettors(t *testing.T) {
 		BetDeadline:  int64(height) + 20,
 		EventTime:    int64(height) + 21,
 		ConfirmAfter: int64(height) + 22,
-		SourceURL:    resultServer.URL + "/basketball/final",
+		SourceURL:    resultURL + "/basketball/final",
 		BetAsset:     gas,
 		MinBetUnit:   "10000",
 		Outcomes: []contractcommon.AgentPredictionOutcome{
@@ -133,7 +110,7 @@ func TestRealSatoshiNetAgentPredictionTenBettors(t *testing.T) {
 	}
 	deployTx, agentAddress := buildAgentDeployTx(t, contract, deployer.Address, inputs[0], outputs[0], deployer.PkScript)
 	signTaprootInputs(t, deployTx, deployer.Key, deployer.RedeemScript, deployer.ControlBlock)
-	network.sendAndMine(t, deployTx, 3)
+	network.sendAndMine(t, deployTx, baseHeight+3)
 	waitForAgentPredictionReady(t, network.Bootstrap, agentAddress.EncodeAddress())
 
 	resultGas, err := contractcommon.GasFeeAtHeight(contractcommon.ResultBaseGas, 0)
@@ -144,7 +121,7 @@ func TestRealSatoshiNetAgentPredictionTenBettors(t *testing.T) {
 		betTx := buildAgentInvokeTx(t, agentAddress, contractcommon.AgentInvokeAPIBet, mustAgentBetParam(t, outcomes[i]),
 			inputs[bettorStart+i], txAsset(gas, 180000+resultGas), nil, bettor.PkScript)
 		signTaprootInputs(t, betTx, bettor.Key, bettor.RedeemScript, bettor.ControlBlock)
-		network.sendAndMine(t, betTx, int32(4+i))
+		network.sendAndMine(t, betTx, baseHeight+4+int32(i))
 		if outcomes[i] == "home" {
 			winnerAddresses = append(winnerAddresses, bettor.Address)
 		}
@@ -191,26 +168,7 @@ func TestRealSatoshiNetAgentPredictionPayoutByShare(t *testing.T) {
 		indexercommon.ENABLE_TESTING = oldEnableTesting
 	})
 
-	resultServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/football/final", r.URL.Path)
-		w.Header().Set("Content-Type", "text/html")
-		_, _ = w.Write([]byte(`<html><body>England 2, Croatia 1. Final.</body></html>`))
-	}))
-	t.Cleanup(resultServer.Close)
-
-	llmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/v1/chat/completions", r.URL.Path)
-		var req map[string]interface{}
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
-		content := `{"result_type":"outcome","outcome_id":"home","result":"England 2, Croatia 1. Final.","evidence_quote":"England 2, Croatia 1. Final.","reason":"England won the match"}`
-		if llmRequestContains(req, "Review this prediction contract") {
-			content = `{"ready":true,"reason":"match result is verifiable"}`
-		}
-		encoded, err := json.Marshal(content)
-		require.NoError(t, err)
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":` + string(encoded) + `}}]}`))
-	}))
-	t.Cleanup(llmServer.Close)
+	resultURL, llmURL := agentPredictionServerURLs(t, "football")
 
 	const lockedValue = int64(300000)
 	gas := contractcommon.GetGasAssetName()
@@ -246,7 +204,7 @@ func TestRealSatoshiNetAgentPredictionPayoutByShare(t *testing.T) {
 	require.NoError(t, err)
 	gasLockedUtxo := "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd:0"
 	betLockedUtxo := "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee:0"
-	fakeL1 := newFakeL1Indexer(t, hex.EncodeToString(bootstrapKey.PubKey().SerializeCompressed()), lockedPkScript,
+	fakeL1 := agentPredictionFakeL1(t, hex.EncodeToString(bootstrapKey.PubKey().SerializeCompressed()), lockedPkScript,
 		[]fakeL1Asset{
 			{
 				Utxo:  gasLockedUtxo,
@@ -263,22 +221,17 @@ func TestRealSatoshiNetAgentPredictionPayoutByShare(t *testing.T) {
 				},
 			},
 		})
-	network := newRealSatoshiNetWithArgs(t, fakeL1, nil, []string{
-		"--agentllmprovider=openai",
-		"--agentllmendpoint=" + llmServer.URL,
-		"--agentllmmodel=fake-agent",
-		"--agentcheckinterval=1s",
-		"--agentallowprivateevidence",
-	}, nil)
+	network := agentPredictionNetwork(t, fakeL1, llmURL)
+	baseHeight := agentPredictionTipHeight(t, network)
 
 	gasAnchorTx := buildAnchorTx(t, gasLockedUtxo, lockedValue,
 		txAsset(gas, 10000000), gas+"-10000000-0-0",
 		witnessScript, bootstrapKey, deployer.PkScript)
-	network.sendAndMine(t, gasAnchorTx, 1)
+	network.sendAndMine(t, gasAnchorTx, baseHeight+1)
 	betAnchorTx := buildAnchorTx(t, betLockedUtxo, lockedValue,
 		txAsset(betAsset, 1800000), betAsset+"-1800000-0-0",
 		witnessScript, bootstrapKey, deployer.PkScript)
-	network.sendAndMine(t, betAnchorTx, 2)
+	network.sendAndMine(t, betAnchorTx, baseHeight+2)
 
 	const (
 		heartbeatCount = 12
@@ -301,7 +254,7 @@ func TestRealSatoshiNetAgentPredictionPayoutByShare(t *testing.T) {
 		gasSplitTx.AddTxOut(output)
 	}
 	signTaprootInputs(t, gasSplitTx, deployer.Key, deployer.RedeemScript, deployer.ControlBlock)
-	network.sendAndMine(t, gasSplitTx, 3)
+	network.sendAndMine(t, gasSplitTx, baseHeight+3)
 	gasInputs := collectSpendableOutPoints(t, gasSplitTx, gasOutputs)
 
 	betOutputs := make([]*wire.TxOut, 0, len(bets))
@@ -314,7 +267,7 @@ func TestRealSatoshiNetAgentPredictionPayoutByShare(t *testing.T) {
 		betSplitTx.AddTxOut(output)
 	}
 	signTaprootInputs(t, betSplitTx, deployer.Key, deployer.RedeemScript, deployer.ControlBlock)
-	network.sendAndMine(t, betSplitTx, 4)
+	network.sendAndMine(t, betSplitTx, baseHeight+4)
 	betInputs := collectSpendableOutPoints(t, betSplitTx, betOutputs)
 
 	_, height, err := network.Bootstrap.Client.GetBestBlock()
@@ -327,7 +280,7 @@ func TestRealSatoshiNetAgentPredictionPayoutByShare(t *testing.T) {
 		BetDeadline:  int64(height) + 20,
 		EventTime:    int64(height) + 21,
 		ConfirmAfter: int64(height) + 22,
-		SourceURL:    resultServer.URL + "/football/final",
+		SourceURL:    resultURL + "/football/final",
 		BetAsset:     betAsset,
 		MinBetUnit:   "10000",
 		Outcomes: []contractcommon.AgentPredictionOutcome{
@@ -338,7 +291,7 @@ func TestRealSatoshiNetAgentPredictionPayoutByShare(t *testing.T) {
 	}
 	deployTx, agentAddress := buildAgentDeployTx(t, contract, deployer.Address, gasInputs[0], gasOutputs[0], deployer.PkScript)
 	signTaprootInputs(t, deployTx, deployer.Key, deployer.RedeemScript, deployer.ControlBlock)
-	network.sendAndMine(t, deployTx, 5)
+	network.sendAndMine(t, deployTx, baseHeight+5)
 	waitForAgentPredictionReady(t, network.Bootstrap, agentAddress.EncodeAddress())
 
 	for i, bettor := range bettors {
@@ -349,7 +302,7 @@ func TestRealSatoshiNetAgentPredictionPayoutByShare(t *testing.T) {
 		betTx := buildAgentInvokeTxWithInputs(t, agentAddress, contractcommon.AgentInvokeAPIBet, mustAgentBetParam(t, bets[i].outcome),
 			[]wire.OutPoint{gasInputs[gasBettorStart+i], betInputs[i]}, funding, nil, bettor.PkScript)
 		signTaprootInputs(t, betTx, bettor.Key, bettor.RedeemScript, bettor.ControlBlock)
-		network.sendAndMine(t, betTx, int32(6+i))
+		network.sendAndMine(t, betTx, baseHeight+6+int32(i))
 		requireAssetSummaryZero(t, network.Bootstrap, bettor.Address, betAsset)
 	}
 
@@ -381,6 +334,240 @@ func TestRealSatoshiNetAgentPredictionPayoutByShare(t *testing.T) {
 	for _, loserIndex := range []int{3, 4, 5, 6, 7, 8} {
 		requireAssetSummaryZero(t, network.Bootstrap, bettors[loserIndex].Address, betAsset)
 	}
+}
+
+type agentPredictionSharedEnvironment struct {
+	network   *realSatoshiNet
+	resultURL string
+	llmURL    string
+}
+
+var activeAgentPredictionSharedEnvironment *agentPredictionSharedEnvironment
+
+type agentPredictionSharedSnapshot struct {
+	height      int32
+	tipHash     string
+	actorAssets map[string]map[string]string
+}
+
+func TestSDKAgentPredictionSharedNetworkGroup(t *testing.T) {
+	oldEnableTesting := indexercommon.ENABLE_TESTING
+	indexercommon.ENABLE_TESTING = true
+	t.Cleanup(func() { indexercommon.ENABLE_TESTING = oldEnableTesting })
+	require.Nil(t, activeAgentPredictionSharedEnvironment, "nested Agent shared-network groups are unsupported")
+
+	const lockedValue = int64(300000)
+	gas := contractcommon.GetGasAssetName()
+	bootstrapKey := keyFromMnemonic(t, bootstrapMnemonic, 0)
+	coreKey := keyFromMnemonic(t, coreMnemonic, 0)
+	_, lockedPkScript, err := getP2WSHScript(
+		bootstrapKey.PubKey().SerializeCompressed(),
+		coreKey.PubKey().SerializeCompressed(),
+	)
+	require.NoError(t, err)
+	resultServer := httptest.NewServer(agentPredictionResultHandler(t, ""))
+	t.Cleanup(resultServer.Close)
+	llmServer := httptest.NewServer(agentPredictionLLMHandler(t, ""))
+	t.Cleanup(llmServer.Close)
+	fakeL1 := newFakeL1Indexer(t, hex.EncodeToString(bootstrapKey.PubKey().SerializeCompressed()), lockedPkScript,
+		[]fakeL1Asset{
+			{Utxo: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:0", Value: lockedValue,
+				Assets: map[string]string{gas: "4000000"}},
+			{Utxo: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd:0", Value: lockedValue,
+				Assets: map[string]string{gas: "10000000"}},
+			{Utxo: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee:0", Value: lockedValue,
+				Assets: map[string]string{"brc20:f:payout": "1800000"}},
+		})
+	setupDone := e2ePhase(t, "agent_shared_network_setup")
+	network := newRealSatoshiNetWithArgs(t, fakeL1, nil, agentPredictionCoreArgs(llmServer.URL), nil)
+	setupDone()
+	env := &agentPredictionSharedEnvironment{network: network, resultURL: resultServer.URL, llmURL: llmServer.URL}
+	activeAgentPredictionSharedEnvironment = env
+	t.Cleanup(func() { activeAgentPredictionSharedEnvironment = nil })
+
+	// The preserved root tests use disjoint deployers/bettors (and therefore
+	// disjoint contracts despite both using DeployNonce 10) and distinct fake-L1
+	// outpoints. Their case state can safely accumulate in this one chain.
+	testCases := []struct {
+		name         string
+		actorIndexes []uint32
+		run          func(*testing.T)
+	}{
+		{
+			name:         "TenBettors",
+			actorIndexes: []uint32{1}, // the contract deployer is the shared-state representative
+			run:          TestRealSatoshiNetAgentPredictionTenBettors,
+		},
+		{
+			name:         "PayoutByShare",
+			actorIndexes: []uint32{2}, // the contract deployer is the shared-state representative
+			run:          TestRealSatoshiNetAgentPredictionPayoutByShare,
+		},
+	}
+	for _, tc := range testCases {
+		tc := tc
+		passed := t.Run(tc.name, func(t *testing.T) {
+			addresses := agentPredictionActorAddresses(t, tc.actorIndexes)
+			before := captureAgentPredictionSnapshot(t, network.Bootstrap, addresses)
+			tc.run(t)
+			if t.Failed() {
+				return
+			}
+			after := captureAgentPredictionSnapshot(t, network.Bootstrap, addresses)
+			requireAgentPredictionSnapshotAdvanced(t, tc.name, before, after)
+		})
+		if !passed {
+			t.Fatalf("stopped Agent shared-network group after %s failed; rerun only it on a fresh network with -run '^TestSDKAgentPredictionSharedNetworkGroup$/^%s$' or rerun the full group on a fresh network with -run '^TestSDKAgentPredictionSharedNetworkGroup$'",
+				tc.name, tc.name)
+		}
+	}
+}
+
+func agentPredictionActorAddresses(t *testing.T, indexes []uint32) []string {
+	t.Helper()
+	addresses := make([]string, 0, len(indexes))
+	for _, index := range indexes {
+		actor := newTemplateActor(t, keyFromMnemonic(t, bootstrapMnemonic, index))
+		addresses = append(addresses, actor.Address)
+	}
+	return addresses
+}
+
+func captureAgentPredictionSnapshot(t *testing.T, node *testHarness, addresses []string) agentPredictionSharedSnapshot {
+	t.Helper()
+	tipHash, height, err := node.Client.GetBestBlock()
+	require.NoError(t, err)
+	assets := make(map[string]map[string]string, len(addresses))
+	for _, address := range addresses {
+		balances, err := fetchAssetSummary(node, address)
+		if err != nil && strings.Contains(err.Error(), "get UTXOs for "+address+": not found") {
+			balances = map[string]string{}
+		} else {
+			require.NoError(t, err)
+		}
+		assets[address] = balances
+	}
+	return agentPredictionSharedSnapshot{height: height, tipHash: tipHash.String(), actorAssets: assets}
+}
+
+func requireAgentPredictionSnapshotAdvanced(t *testing.T, caseName string,
+	before, after agentPredictionSharedSnapshot) {
+	t.Helper()
+	require.Greaterf(t, after.height, before.height, "%s did not advance the shared network tip", caseName)
+	require.NotEqualf(t, before.tipHash, after.tipHash, "%s left the shared network tip hash unchanged", caseName)
+	require.Falsef(t, reflect.DeepEqual(before.actorAssets, after.actorAssets),
+		"%s did not change any isolated actor asset summary", caseName)
+	beforeAssets, err := json.Marshal(before.actorAssets)
+	require.NoError(t, err)
+	afterAssets, err := json.Marshal(after.actorAssets)
+	require.NoError(t, err)
+	t.Logf("agent-shared-state: case=%s height=%d->%d tip=%s->%s representative_assets=%s->%s",
+		caseName, before.height, after.height, before.tipHash, after.tipHash, beforeAssets, afterAssets)
+}
+
+func agentPredictionServerURLs(t *testing.T, sport string) (string, string) {
+	t.Helper()
+	if env := activeAgentPredictionSharedEnvironment; env != nil {
+		return env.resultURL, env.llmURL
+	}
+	resultServer := httptest.NewServer(agentPredictionResultHandler(t, sport))
+	t.Cleanup(resultServer.Close)
+	llmServer := httptest.NewServer(agentPredictionLLMHandler(t, sport))
+	t.Cleanup(llmServer.Close)
+	return resultServer.URL, llmServer.URL
+}
+
+func agentPredictionResultHandler(t *testing.T, sport string) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body string
+		switch r.URL.Path {
+		case "/basketball/final":
+			if sport != "" {
+				require.Equal(t, "basketball", sport)
+			}
+			body = `<html><body>Basketball match prediction: Home team vs away team. Home 101, Away 98. Final.</body></html>`
+		case "/football/final":
+			if sport != "" {
+				require.Equal(t, "football", sport)
+			}
+			body = `<html><body>England 2, Croatia 1. Final.</body></html>`
+		default:
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(body))
+	}
+}
+
+func agentPredictionLLMHandler(t *testing.T, sport string) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/v1/chat/completions", r.URL.Path)
+		var req map[string]interface{}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		content := ""
+		switch {
+		case llmRequestContains(req, "Review this prediction contract"):
+			switch sport {
+			case "basketball":
+				content = `{"ready":true,"reason":"basketball result is verifiable"}`
+			case "football":
+				content = `{"ready":true,"reason":"match result is verifiable"}`
+			default:
+				content = `{"ready":true,"reason":"prediction result is verifiable"}`
+			}
+		case sport == "basketball" || sport == "" && (llmRequestContains(req, "Home 101, Away 98. Final.") ||
+			llmRequestContains(req, "/basketball/final") || llmRequestContains(req, "Home vs Away basketball prediction")):
+			content = `{"result_type":"outcome","outcome_id":"home","result":"Home 101, Away 98. Final.","evidence_quote":"Home 101, Away 98. Final.","reason":"Home team won 101-98"}`
+		case sport == "football" || sport == "" && (llmRequestContains(req, "England 2, Croatia 1. Final.") ||
+			llmRequestContains(req, "/football/final") || llmRequestContains(req, "England vs Croatia payout share test")):
+			content = `{"result_type":"outcome","outcome_id":"home","result":"England 2, Croatia 1. Final.","evidence_quote":"England 2, Croatia 1. Final.","reason":"England won the match"}`
+		default:
+			t.Errorf("unrecognized Agent prediction request for sport %q", sport)
+			http.Error(w, "unrecognized Agent prediction request", http.StatusBadRequest)
+			return
+		}
+		encoded, err := json.Marshal(content)
+		require.NoError(t, err)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":` + string(encoded) + `}}]}`))
+	}
+}
+
+func agentPredictionFakeL1(t *testing.T, bootstrapPubKey string, lockedPkScript []byte, assets []fakeL1Asset) *fakeL1Indexer {
+	t.Helper()
+	if env := activeAgentPredictionSharedEnvironment; env != nil {
+		// The group preloaded every root's outpoint into one fake L1 indexer.
+		return env.network.fakeL1
+	}
+	return newFakeL1Indexer(t, bootstrapPubKey, lockedPkScript, assets)
+}
+
+func agentPredictionCoreArgs(llmURL string) []string {
+	return []string{
+		"--agentllmprovider=openai",
+		"--agentllmendpoint=" + llmURL,
+		"--agentllmmodel=fake-agent",
+		"--agentcheckinterval=1s",
+		"--agentallowprivateevidence",
+	}
+}
+
+func agentPredictionNetwork(t *testing.T, fakeL1 *fakeL1Indexer, llmURL string) *realSatoshiNet {
+	t.Helper()
+	if env := activeAgentPredictionSharedEnvironment; env != nil {
+		return env.network
+	}
+	return newRealSatoshiNetWithArgs(t, fakeL1, nil, agentPredictionCoreArgs(llmURL), nil)
+}
+
+func agentPredictionTipHeight(t *testing.T, network *realSatoshiNet) int32 {
+	t.Helper()
+	_, height, err := network.Bootstrap.Client.GetBestBlock()
+	require.NoError(t, err)
+	return height
 }
 
 func buildAgentDeployTx(t *testing.T, contract contractcommon.AgentPredictionContract, deployer string,
@@ -459,6 +646,13 @@ func mustAgentBetParam(t *testing.T, outcome string) []byte {
 func waitForAgentPredictionReady(t *testing.T, node *testHarness, contract string) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
+	// Deployment uses discrete mining. The node's initial scheduled Start can
+	// overlap that RPC and return before starting its worker. Resume the normal
+	// scheduler after deployment; READY must be mined, not merely in the mempool.
+	require.NoError(t, node.Client.SetGenerate(true, 1))
+	mining, err := node.Client.GetGenerate()
+	require.NoError(t, err)
+	require.True(t, mining, "Agent READY requires the real scheduled miner")
 	var lastErr error
 	for time.Now().Before(deadline) {
 		baseURL, err := node.IndexerURL("testnet")

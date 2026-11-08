@@ -36,6 +36,11 @@ type legacyGobFixtureManifest struct {
 
 func legacyGobReadFixture(t *testing.T, name string) ([]byte, legacyGobFixtureEntry) {
 	t.Helper()
+	// The pinned standalone generator used the default mainnet bootstrap key.
+	// Other E2E constructors may have selected testnet in the same Go process.
+	previousChain, previousTesting := indexer.CHAIN, indexer.ENABLE_TESTING
+	indexer.CHAIN, indexer.ENABLE_TESTING = "mainnet", false
+	t.Cleanup(func() { indexer.CHAIN, indexer.ENABLE_TESTING = previousChain, previousTesting })
 	root := filepath.Join("testdata", "legacy_pre_native")
 	manifestRaw, err := os.ReadFile(filepath.Join(root, "manifest.json"))
 	if err != nil {

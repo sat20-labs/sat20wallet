@@ -52,7 +52,7 @@
     </div>
 
     <!-- Receive Address Dialog -->
-    <ReceiveQRcode v-if="showReceiveDialog" :address="receiveAddress" :chain="selectedChain"
+    <ReceiveQRcode v-if="showReceiveDialog" :address="receiveAddress" :account-name="receiveAccountName" :chain="selectedChain"
       @close="showReceiveDialog = false" />
 
   </div>
@@ -81,6 +81,7 @@ import { useQuery } from '@tanstack/vue-query'
 import { assetContextKey } from '@/lib/assetContext'
 import { validateSendDispatch } from '@/utils/sendAmount'
 
+const { t } = useI18n()
 const { toast } = useToast()
 const l1Store = useL1Store()
 const l2Store = useL2Store()
@@ -92,6 +93,7 @@ const { deposit, withdraw, splicingIn, splicingOut, unlockUtxo, lockUtxo, lockUt
 
 const showReceiveDialog = ref(false)
 const receiveAddress = ref('') // QRCode address
+const receiveAccountName = ref('')
 // Props
 const props = defineProps<{
   selectedChain: string | 'bitcoin' | 'channel' | 'satoshinet'
@@ -173,7 +175,7 @@ const sendBalanceSnapshot = ref<{ scope: string, availableAmt: string } | null>(
 const fetchAbailableSats = async () => {
   const contextKey = availableSatsContextKey.value
   const queryAddress = address.value
-  if (!queryAddress) throw new Error('Wallet address is unavailable')
+  if (!queryAddress) throw new Error(t('walletComponents.walletAddressUnavailable'))
   if (props.selectedChain.toLowerCase() === 'channel') {
     return { contextKey, balance: { availableAmt: channelStore.totalSats, lockedAmt: 0 } }
   }
@@ -181,7 +183,7 @@ const fetchAbailableSats = async () => {
   const [err, res] = await handler.bind(sat20)(queryAddress, '::')
   console.log('fetchAbailableSats', err, res);
   if (err || !res) {
-    throw err || new Error('Asset amount response is empty')
+    throw err || new Error(t('walletComponents.emptyAmount'))
   }
   return {
     contextKey,
@@ -267,7 +269,6 @@ const filteredButtons = computed(() => {
   )
 })
 
-const { t } = useI18n()
 
 // Computed Properties
 const translatedOperationTitle = computed(() => {
@@ -328,7 +329,13 @@ const handleAction = async (action: string) => {
 
 
   if (action === 'receive') {
+    const account = walletStore.accounts?.find(item => item.index === accountIndex.value)
+    if (!account) {
+      handleError(t('walletComponents.accountUnavailable'))
+      return
+    }
     receiveAddress.value = address.value ?? '' // Use the address from the store or fallback to an empty string
+    receiveAccountName.value = account.did || account.name
     showReceiveDialog.value = true
     return
   }
@@ -339,15 +346,15 @@ const handleAction = async (action: string) => {
         await openLink(mempoolUrl.value) // 使用统一的链接打开函数
       } catch (error) {
         console.error('打开历史记录链接失败:', error)
-        handleError('Failed to open history link')
+        handleError(t('walletComponents.historyFailed'))
       }
     } else {
-      handleError('Mempool URL is not available')
+      handleError(t('walletComponents.mempoolUnavailable'))
     }
     return
   }
   if (action === 'send' && (!isNativeSats(asset) || !['bitcoin', 'satoshinet'].includes(selectedChain.value))) {
-    handleError('Native sats asset is unavailable')
+    handleError(t('walletComponents.satsUnavailable'))
     return
   }
   if (action === 'send' && sendBalanceSnapshot.value?.scope !== sendScope()) {
@@ -376,12 +383,12 @@ const handleAction = async (action: string) => {
 // Handle Operation Confirm
 const handleOperationConfirm = async () => {
   if (!selectedAsset.value || !operationAmount.value) {
-    toast({ title: 'Error', description: 'Please enter a valid amount', variant: 'destructive', duration: 600 })
+    toast({ title: t('walletComponents.error'), description: t('walletComponents.validAmount'), variant: 'destructive', duration: 600 })
     return
   }
 
   if (operationType.value === 'send' && !operationAddress.value) {
-    toast({ title: 'Error', description: 'Please enter a valid address', variant: 'destructive', duration: 600 })
+    toast({ title: t('walletComponents.error'), description: t('walletComponents.validAddress'), variant: 'destructive', duration: 600 })
     return
   }
 
@@ -448,7 +455,7 @@ const handleOperationConfirm = async () => {
         await unlockUtxo({ chanid, amt: amount, asset_name: asset.id })
         break
       default:
-        handleError('Unsupported operation')
+        handleError(t('walletComponents.unsupportedOperation'))
     }
 
     // Reset dialog state
@@ -459,7 +466,7 @@ const handleOperationConfirm = async () => {
     showDialog.value = false
   } catch (error) {
     console.error('Operation error:', error)
-    handleError('Operation failed')
+    handleError(t('walletComponents.operationFailed'))
   }
 }
 

@@ -172,10 +172,10 @@ const { toast } = useToast();
 
 // Form Validation Schema
 const splitSchema = z.object({
-  assetName: z.string().min(1, 'Asset name is required'),
-  amt: z.preprocess((v) => Number(v), z.number().positive('Amount must be positive')),
-  n: z.preprocess((v) => Number(v), z.number().int().positive('Repeat count must be positive').max(100)),
-  destAddr: z.string().min(1, 'Address is required'),
+  assetName: z.string().min(1, 'pwaUi.split.assetRequired'),
+  amt: z.preprocess((v) => Number(v), z.number().positive('pwaUi.split.amountPositive')),
+  n: z.preprocess((v) => Number(v), z.number().int().positive('pwaUi.split.countPositive').max(100)),
+  destAddr: z.string().min(1, 'pwaUi.split.addressRequired'),
 });
 
 
@@ -296,15 +296,15 @@ const confirmSplit = async () => {
       snapshot.feeRate
     );
     if (err) {
-      let detail = 'L1资产拆分失败。';
+      let detail = t('pwaUi.split.failed');
       if (err.message) detail = err.message;
       else if (typeof err === 'string') detail = err;
       throw new Error(detail);
     }
 
     toast({
-      title: 'Success',
-      description: `Successfully initiated split: ${snapshot.assetName} : ${snapshot.amt} x ${snapshot.n} `,
+      title: t('common.success'),
+      description: t('pwaUi.split.submitted', { asset: snapshot.assetName, amount: snapshot.amt, count: snapshot.n }),
       variant: 'success'
     });
     review.value = null;
@@ -315,8 +315,8 @@ const confirmSplit = async () => {
     setTimeout(() => router.back(), 300);
   } catch (error: any) {
     console.error('L1 Split Error:', error);
-    const description = error.message || 'An unknown error occurred during the split.';
-    toast({ title: 'Error', description, variant: 'destructive' });
+    const description = error.message || t('pwaUi.split.unknownError');
+    toast({ title: t('common.error'), description, variant: 'destructive' });
     errorMessage.value = description;
   } finally {
     loading.value = false;

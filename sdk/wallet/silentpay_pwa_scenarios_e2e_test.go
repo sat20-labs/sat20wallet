@@ -211,20 +211,7 @@ func spPWAFindBalance(t *testing.T, values []SPAccountBalance,
 
 func TestSilentPayPWAMultiWalletIsolationRepeatRefreshAndLateActivationE2E(t *testing.T) {
 	spPWAChain(t)
-	manager, first := spE2EAccountManager(t)
-	second := NewInternalWalletWithMnemonic(silentPayOtherMnemonic, "", &chaincfg.TestNet4Params)
-	if second == nil {
-		t.Fatal("second mnemonic wallet unavailable")
-	}
-	second.id = first.GetId() + 100
-	manager.walletInfoMap[second.GetId()] = &WalletInfo{
-		WalletInDB: WalletInDB{
-			Id: second.GetId(), Accounts: 2, Type: WALLET_TYPE_MNEMONIC,
-			Name: "Secondary", AccountNames: map[uint32]string{0: "Payments", 1: "Unpublished"},
-			AccountDIDs: map[uint32]string{},
-		},
-		Wallet: second,
-	}
+	manager, first, second := newSPWalletPairGroup(t, []string{"Payments", "Unpublished"})
 	for _, item := range []struct {
 		wallet *InternalWallet
 		index  uint32
@@ -291,8 +278,21 @@ func TestSilentPayPWAMultiWalletIsolationRepeatRefreshAndLateActivationE2E(t *te
 
 func TestSilentPayPWACloseReopenRestoresScanAndEnablementE2E(t *testing.T) {
 	spPWAChain(t)
-	manager, wallet := spE2EAccountManager(t)
-	address, err := manager.EnableSilentPay(wallet.GetId(), 1)
+	path := t.TempDir()
+	remote := newRGB11MemoryDKVSHTTP()
+	assertSPLocalNoUploads(t, remote)
+	manager, close := openSPLocalDevice(t, path, "testnet", remote)
+	const password = "sp-local-reopen-only"
+	walletID, err := manager.ImportWallet(silentPayE2EMnemonic, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	discoverInactiveAccount(t, manager)
+	if err := manager.EnsureAccount(walletID, 1, "Savings", ""); err != nil {
+		t.Fatal(err)
+	}
+	wallet := manager.GetWallet().(*InternalWallet)
+	address, err := manager.EnableSilentPay(walletID, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,41 +301,28 @@ func TestSilentPayPWACloseReopenRestoresScanAndEnablementE2E(t *testing.T) {
 	if _, err := manager.SyncSilentPayLive(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	// Reconstruct a different SDK Manager from persisted wallet metadata and
-	// the same wallet storage. Do not reuse unlocked secret objects in memory.
-	walletRow, err := manager.db.Read([]byte(getWalletDBKey(wallet.GetId())))
-	if err != nil {
+	// Retire the old Manager and DB handle. Unlock the encrypted catalog on
+	// a fresh handle; no wallet/profile/secret objects are copied into it.
+	close()
+	restored, _ := openSPLocalDevice(t, path, "testnet", remote)
+	if _, err := restored.UnlockWallet(password); err != nil {
 		t.Fatal(err)
 	}
-	var stored WalletInDB
-	if err := DecodeFromBytes(walletRow, &stored); err != nil {
-		t.Fatal(err)
-	}
-	recoveredWallet := NewInternalWalletWithMnemonic(silentPayE2EMnemonic, "", &chaincfg.TestNet4Params)
-	if recoveredWallet == nil {
-		t.Fatal("restored mnemonic unavailable")
-	}
-	recoveredWallet.id = wallet.GetId()
-	restored := &Manager{
-		db: manager.db, status: newDefaultStatus(),
-		walletInfoMap: map[int64]*WalletInfo{
-			recoveredWallet.GetId(): {WalletInDB: stored, Wallet: recoveredWallet},
-		},
-	}
-	if enabled, regenerated, err := restored.SilentPayAccount(wallet.GetId(), 1); err != nil || !enabled || regenerated != address {
+	discoverInactiveAccount(t, restored)
+	if enabled, regenerated, err := restored.SilentPayAccount(walletID, 1); err != nil || !enabled || regenerated != address {
 		t.Fatalf("PWA reopen lost SP address: %q %q %v", address, regenerated, err)
 	}
-	balance, err := restored.LastSyncedSilentPay(wallet.GetId(), 1)
+	balance, err := restored.LastSyncedSilentPay(walletID, 1)
 	if err != nil || !balance.Complete || balance.Balance != 123456 ||
 		len(balance.Outputs) != 1 {
 		t.Fatalf("PWA reopen lost verified SP outputs: %+v %v", balance, err)
 	}
-	if _, err := restored.LastSyncedSilentPay(wallet.GetId(), 0); err == nil {
+	if _, err := restored.LastSyncedSilentPay(walletID, 0); err == nil {
 		t.Fatal("disabled subaccount acquired an old balance")
 	}
 	// The same persisted DB cannot be misread under another Bitcoin network.
 	_chain = "mainnet"
-	if _, err := restored.LastSyncedSilentPay(wallet.GetId(), 1); err == nil {
+	if _, err := restored.LastSyncedSilentPay(walletID, 1); err == nil {
 		t.Fatal("testnet SP balance was visible as mainnet funds")
 	}
 	_chain = "testnet"
@@ -343,7 +330,16 @@ func TestSilentPayPWACloseReopenRestoresScanAndEnablementE2E(t *testing.T) {
 
 func TestSilentPayPWAInterruptedLiveRefreshDoesNotReplaceCommittedBalanceE2E(t *testing.T) {
 	spPWAChain(t)
-	manager, wallet := spE2EAccountManager(t)
+	for _, state := range []accountGroupState{accountGroupInactive, accountGroupReady} {
+		t.Run(string(state), func(t *testing.T) {
+			manager, wallet := spAccountGroup(t, state)
+			runSPInterruptedRefresh(t, manager, wallet)
+		})
+	}
+}
+
+func runSPInterruptedRefresh(t *testing.T, manager *Manager, wallet *InternalWallet) {
+	t.Helper()
 	if _, err := manager.EnableSilentPay(wallet.GetId(), 0); err != nil {
 		t.Fatal(err)
 	}
@@ -395,7 +391,7 @@ func TestSilentPayPWAInterruptedLiveRefreshDoesNotReplaceCommittedBalanceE2E(t *
 
 func TestSilentPayPWAUntrustedIndexerDoesNotEraseBalanceE2E(t *testing.T) {
 	spPWAChain(t)
-	manager, wallet := spE2EAccountManager(t)
+	manager, wallet := spAccountGroup(t, accountGroupInactive)
 	if _, err := manager.EnableSilentPay(wallet.GetId(), 0); err != nil {
 		t.Fatal(err)
 	}
@@ -470,9 +466,13 @@ func TestSilentPayPWAUntrustedIndexerDoesNotEraseBalanceE2E(t *testing.T) {
 	reader.badLookup = false
 	reader.failCursor = ""
 	originalDB := manager.db
-	manager.db = &spFailCommitDB{KVDB: originalDB}
-	if _, err := manager.SyncSilentPayLive(context.Background()); err == nil {
-		t.Fatal("failed local write was reported as a completed PWA recovery")
+	faultDB := &spFailCommitDB{KVDB: originalDB}
+	manager.db = faultDB
+	if _, err := manager.SyncSilentPayLive(context.Background()); !errors.Is(err, errSPCommitInjected) {
+		t.Fatalf("SP recovery did not reach its injected local commit: injected_match=%t", errors.Is(err, errSPCommitInjected))
+	}
+	if faultDB.hits.Load() == 0 {
+		t.Fatal("SP recovery commit fault never fired")
 	}
 	manager.db = originalDB
 	last, err := manager.LastSyncedSilentPay(wallet.GetId(), 0)
@@ -483,7 +483,16 @@ func TestSilentPayPWAUntrustedIndexerDoesNotEraseBalanceE2E(t *testing.T) {
 
 func TestSilentPayPWAArchiveForkRecoveryDoesNotDuplicateReceiptsE2E(t *testing.T) {
 	spPWAChain(t)
-	manager, wallet := spE2EAccountManager(t)
+	for _, state := range []accountGroupState{accountGroupInactive, accountGroupReady} {
+		t.Run(string(state), func(t *testing.T) {
+			manager, wallet := spAccountGroup(t, state)
+			runSPArchiveFork(t, manager, wallet)
+		})
+	}
+}
+
+func runSPArchiveFork(t *testing.T, manager *Manager, wallet *InternalWallet) {
+	t.Helper()
 	if _, err := manager.EnableSilentPay(wallet.GetId(), 0); err != nil {
 		t.Fatal(err)
 	}

@@ -4,17 +4,20 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"reflect"
+	"sync/atomic"
 	"testing"
 
 	indexer "github.com/sat20-labs/indexer/common"
-	"github.com/sat20-labs/sat20wallet/sdk/account"
-	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
 type managedImportTestProvider struct {
 	accountManagedDataProviderStub
 	beforeImport func()
+	owner        *Manager
 }
+
+func importProviderDataKey(id string) []byte { return []byte("test-provider-data/" + id) }
 
 func (p *managedImportTestProvider) Import(catalog AccountManagedDataCatalog, payloads []AccountManagedDataPayload) error {
 	if p.beforeImport != nil {
@@ -23,7 +26,20 @@ func (p *managedImportTestProvider) Import(catalog AccountManagedDataCatalog, pa
 	if err := p.accountManagedDataProviderStub.Import(catalog, payloads); err != nil {
 		return err
 	}
-	p.payloads = payloads
+	owned := make([]AccountManagedDataPayload, len(payloads))
+	for i, payload := range payloads {
+		owned[i] = AccountManagedDataPayload{Scope: payload.Scope, Payload: bytes.Clone(payload.Payload)}
+	}
+	if p.owner != nil {
+		encoded, err := EncodeToBytes(owned)
+		if err != nil {
+			return err
+		}
+		if err := p.owner.db.Write(importProviderDataKey(p.id), encoded); err != nil {
+			return err
+		}
+	}
+	p.payloads = owned
 	return nil
 }
 
@@ -31,10 +47,28 @@ func managedImportTestManager(t *testing.T, remote *rgb11MemoryDKVSHTTP) (*Manag
 	t.Helper()
 	manager := newAccountManagementAutoTestManager(t)
 	configureRGB11DKVSTestManager(manager, remote)
-	provider := &managedImportTestProvider{accountManagedDataProviderStub: accountManagedDataProviderStub{id: "test"}}
+	provider := managedImportProvider(t, manager)
 	manager.managedDataProviders = map[string]AccountManagedDataProvider{provider.id: provider}
+	return manager, provider
+}
+
+func managedImportProvider(t *testing.T, manager *Manager) *managedImportTestProvider {
+	t.Helper()
+	return importProviderWithID(t, manager, "test")
+}
+
+func importProviderWithID(t *testing.T, manager *Manager, id string) *managedImportTestProvider {
+	t.Helper()
+	provider := &managedImportTestProvider{accountManagedDataProviderStub: accountManagedDataProviderStub{id: id}, owner: manager}
+	if encoded, err := manager.db.Read(importProviderDataKey(id)); err == nil {
+		if err := DecodeFromBytes(encoded, &provider.payloads); err != nil {
+			t.Fatal(err)
+		}
+	} else if !errors.Is(err, indexer.ErrKeyNotFound) {
+		t.Fatal(err)
+	}
 	provider.beforeImport = func() {
-		if err := manager.checkAccountManagedDataImport(); !errors.Is(err, ErrAccountManagedDataImportIncomplete) {
+		if err := manager.CheckAccountRestore(provider.id, AccountManagedDataGlobalScope); !errors.Is(err, ErrAccountManagedDataImportIncomplete) {
 			t.Fatalf("provider started without durable import marker: %v", err)
 		}
 		if !manager.accountSyncMu.TryLock() {
@@ -49,41 +83,46 @@ func managedImportTestManager(t *testing.T, remote *rgb11MemoryDKVSHTTP) (*Manag
 			t.Fatal("provider import holds the application RGB mutex across validation")
 		}
 		manager.rgbOperationMu.Unlock()
-		if err := manager.requireCurrentAccountManagedData(); !errors.Is(err, ErrDKVSPathNotSynced) {
+		if err := manager.CheckAccountWrite(provider.id, AccountManagedDataGlobalScope); !errors.Is(err, ErrDKVSPathNotSynced) &&
+			!errors.Is(err, ErrAccountManagedDataImportIncomplete) {
 			t.Fatalf("running import should wait, not report terminal failure: %v", err)
 		}
 	}
-	return manager, provider
+	return provider
 }
 
 func managedImportRecoveryValue(t *testing.T, source *Manager) RecoveredAccountManagementState {
 	t.Helper()
-	profile := source.accountProfile
-	state, err := account.OpenManagedState(source.accountSecret, profile.AccountID, profile.StateEnvelope)
+	locator, location := importGroupMaterial(t, source)
+	value, err := source.LoadAccountManagementStateForRecovery(location, locator, source.accountSecret, accountRootWrapperTestMnemonic)
 	if err != nil {
 		t.Fatal(err)
 	}
-	bundle, err := openProfileManagedDataBundle(*profile, source.accountSecret)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return RecoveredAccountManagementState{
-		State: state, Seq: profile.StateSeq, Hash: profile.StateHash, Envelope: profile.StateEnvelope,
-		ManagedData: bundle, ManagedDataHash: profile.ManagedDataHash, ManagedDataEnvelope: profile.ManagedDataEnvelope,
-	}
+	return *value
 }
 
 func restoreManagedImportTestWallet(t *testing.T, target, source *Manager) error {
 	t.Helper()
+	locator, location := importGroupMaterial(t, source)
+	target.serverNode = source.serverNode
 	_, err := target.RestoreAccountManagementState(managedImportRecoveryValue(t, source),
-		source.accountSecret, "password", account.Locator{AccountID: source.accountProfile.AccountID},
-		AccountManagementRestoreOptions{StorageMode: AccountStorageTemporary, RecordTTL: testRGB11FreeLocalTTL})
+		source.accountSecret, "password", locator,
+		AccountManagementRestoreOptions{Location: location, StorageMode: source.accountProfile.StorageMode,
+			RecordTTL: source.accountProfile.RecordTTL, PublicLocator: source.accountProfile.PublicLocator,
+			AutopayContract: source.accountProfile.AutopayContract})
 	return err
 }
 
 func managedImportTestSource(t *testing.T, remote *rgb11MemoryDKVSHTTP) (*Manager, *managedImportTestProvider) {
 	t.Helper()
+	if _chain == "" {
+		oldChain := _chain
+		_chain = "testnet"
+		t.Cleanup(func() { _chain = oldChain })
+	}
 	source, provider := managedImportTestManager(t, remote)
+	client := newRGB11MessageNodeClient(remote)
+	source.serverNode = NewNode(client, "message.test", SERVER_NODE, client.CoreNodePubKey(), client.CoreNodePubKey())
 	if _, err := source.ImportWallet(accountRootWrapperTestMnemonic, "password"); err != nil {
 		t.Fatal(err)
 	}
@@ -91,6 +130,11 @@ func managedImportTestSource(t *testing.T, remote *rgb11MemoryDKVSHTTP) (*Manage
 		t.Fatal(err)
 	}
 	provider.payloads = []AccountManagedDataPayload{{Scope: AccountManagedDataGlobalScope, Payload: []byte("A")}}
+	pkg, auth, secret := rereviewRecoveryPackage(t, source)
+	if err := source.ActivateAccountManagement(secret, "password", *auth,
+		pkg.Envelope.Locator, "account://"+pkg.Envelope.Locator.PackageID); err != nil {
+		t.Fatal(err)
+	}
 	if err := source.SyncAccountManagementState(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -101,139 +145,148 @@ func TestManagedDataImportFailureCannotOverwriteServer(t *testing.T) {
 	for _, mode := range []string{"recovery", "background-sync"} {
 		t.Run(mode, func(t *testing.T) {
 			remote := newRGB11MemoryDKVSHTTP()
-			source, sourceProvider := managedImportTestSource(t, remote)
-			target, provider := managedImportTestManager(t, remote)
+			source, sourceProvider, _ := newImportSource(t, remote)
+			target, provider, closeTarget := newImportGroup(t, remote)
 			if mode == "background-sync" {
-				if err := restoreManagedImportTestWallet(t, target, source); err != nil {
+				if err := restoreImportGroup(t, target, source); err != nil {
 					t.Fatal(err)
 				}
 			}
-			sourceProvider.payloads[0].Payload = []byte("B")
+			stageManagedImportTestPayload(t, source, sourceProvider, []byte("B"))
 			if err := source.SyncAccountManagementState(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			before := make(map[string]string)
-			for key, record := range remote.records {
-				before[key] = dkvsindexer.RecordHash(record).String()
-			}
+			before := snapshotRGB11MemoryRecords(remote)
 			failure := errors.New("provider import failed")
 			provider.importErr = failure
-			var err error
 			if mode == "recovery" {
-				err = restoreManagedImportTestWallet(t, target, source)
-			} else {
-				err = target.SyncAccountManagementState(context.Background())
+				if err := restoreImportGroup(t, target, source); err != nil {
+					t.Fatalf("module failure aborted wallet restoration: %v", err)
+				}
+			} else if err := target.SyncAccountManagementState(context.Background()); !errors.Is(err, failure) || !accountModuleOnly(err) {
+				t.Fatalf("module import error was not scoped: %v", err)
 			}
-			if !errors.Is(err, failure) {
-				t.Fatalf("import error was not returned: %v", err)
-			}
-			if target.accountProfile.ManagedDataHash != source.accountProfile.ManagedDataHash {
-				t.Fatal("test did not reach core commit before provider failure")
+			assertManagedImportModuleProtected(t, target, provider.id)
+			if !bytes.Equal(target.accountSecret, source.accountSecret) || len(target.GetWalletCatalog()) == 0 {
+				t.Fatal("module failure lost the restored account secret or wallet catalog")
 			}
 			if mode == "background-sync" && string(provider.payloads[0].Payload) != "A" {
-				t.Fatal("test did not retain old local provider data")
+				t.Fatal("failed import replaced the previous provider data")
 			}
-			// Remote apply retries its authenticated committed target before any
-			// export. Recovery-origin markers still require explicit restoration.
-			provider.importErr = nil
-			if mode == "background-sync" {
-				for attempt := 0; attempt < 2; attempt++ {
-					if err := target.SyncAccountManagementState(context.Background()); err != nil {
-						t.Fatalf("remote import retry: %v", err)
-					}
-				}
-				if len(provider.payloads) != 1 || string(provider.payloads[0].Payload) != "B" {
-					t.Fatal("retry exported stale data instead of importing the committed target")
-				}
-			} else {
-				for attempt := 0; attempt < 2; attempt++ {
-					if err := target.SyncAccountManagementState(context.Background()); !errors.Is(err, ErrAccountManagedDataImportIncomplete) {
-						t.Fatalf("unsafe sync was not blocked: %v", err)
-					}
-				}
-				if err := target.ActivateAccountManagement(source.accountSecret, "password",
-					AccountStorageAuthorization{Mode: AccountStorageTemporary}, account.Locator{}, ""); !errors.Is(err, ErrAccountManagedDataImportIncomplete) {
-					t.Fatalf("activation bypassed import protection: %v", err)
-				}
-				if err := target.WaitAccountManagedDataReady(context.Background()); !errors.Is(err, ErrAccountManagedDataImportIncomplete) {
-					t.Fatalf("incomplete import reported ready: %v", err)
-				}
-				// New Manager, same persisted database: no in-memory failure flag.
-				restarted, _ := managedImportTestManager(t, remote)
-				restarted.db = target.db
-				if err := restarted.loadAccountManagementProfileLocked(); err != nil {
-					t.Fatal(err)
-				}
-				if err := restarted.unlockAccountManagementLocked("password"); err != nil {
-					t.Fatal(err)
-				}
-				if err := restarted.SyncAccountManagementState(context.Background()); !errors.Is(err, ErrAccountManagedDataImportIncomplete) {
-					t.Fatalf("restart lost import protection: %v", err)
-				}
+			if !reflect.DeepEqual(before, snapshotRGB11MemoryRecords(remote)) {
+				t.Fatal("failed import overwrote server records")
 			}
-			if len(remote.records) != len(before) {
-				t.Fatal("failed import added remote records")
-			}
-			for key, hash := range before {
-				if dkvsindexer.RecordHash(remote.records[key]).String() != hash {
-					t.Fatal("failed import overwrote a server record")
-				}
-			}
-			// Discarding local state and importing into a fresh wallet succeeds.
-			fresh, freshProvider := managedImportTestManager(t, remote)
-			if err := restoreManagedImportTestWallet(t, fresh, source); err != nil {
+			// Reopen the actual database; the new device must retain its per-module
+			// protection until normal synchronization imports the committed target.
+			cfg := target.cfg
+			closeTarget()
+			restarted, restartedProvider, _ := openImportGroup(t, cfg, remote)
+			if _, err := restarted.UnlockWallet("password"); err != nil {
 				t.Fatal(err)
 			}
-			if err := fresh.checkAccountManagedDataImport(); err != nil {
-				t.Fatalf("successful import kept marker: %v", err)
+			assertManagedImportModuleProtected(t, restarted, restartedProvider.id)
+			if err := restarted.SyncAccountManagementState(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if err := restarted.CheckAccountRestore(restartedProvider.id, AccountManagedDataGlobalScope); err != nil {
+				t.Fatalf("completed module import remains blocked: %v", err)
+			}
+			if len(restartedProvider.payloads) != 1 || string(restartedProvider.payloads[0].Payload) != "B" {
+				t.Fatal("normal retry exported stale data instead of importing the committed target")
+			}
+			if !reflect.DeepEqual(before, snapshotRGB11MemoryRecords(remote)) {
+				t.Fatal("module retry rewrote server records")
+			}
+			fresh, freshProvider, _ := newImportGroup(t, remote)
+			if err := restoreImportGroup(t, fresh, source); err != nil {
+				t.Fatal(err)
 			}
 			if len(freshProvider.payloads) != 1 || string(freshProvider.payloads[0].Payload) != "B" {
-				t.Fatal("server no longer contains the recoverable data")
-			}
-			if err := fresh.SyncAccountManagementState(context.Background()); err != nil {
-				t.Fatalf("successful import cannot sync: %v", err)
+				t.Fatal("server no longer contains recoverable provider data")
 			}
 		})
 	}
 }
 
+func stageManagedImportTestPayload(t *testing.T, manager *Manager, provider *managedImportTestProvider, payload []byte) {
+	t.Helper()
+	batch, err := NewAtomicWriteBatch(manager.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer batch.Close()
+	done, err := manager.StageAccountChange(batch, provider.id, AccountManagedDataGlobalScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer done(false)
+	owned := []AccountManagedDataPayload{{Scope: AccountManagedDataGlobalScope, Payload: bytes.Clone(payload)}}
+	encoded, err := EncodeToBytes(owned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Put(importProviderDataKey(provider.id), encoded); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	provider.payloads = owned
+	done(true)
+}
+
+func assertManagedImportModuleProtected(t *testing.T, manager *Manager, provider string) {
+	t.Helper()
+	value, err := manager.readAccountLocal(manager.accountProfile.AccountID, provider, AccountManagedDataGlobalScope)
+	if err != nil || value == nil || !value.Restoring || len(value.Value) == 0 {
+		t.Fatalf("interrupted module lost its durable encrypted target: %v", err)
+	}
+	if err := manager.CheckAccountRestore(provider, AccountManagedDataGlobalScope); !errors.Is(err, ErrAccountManagedDataImportIncomplete) {
+		t.Fatalf("interrupted module import is not protected: %v", err)
+	}
+	if err := manager.CheckAccountWrite(provider, AccountManagedDataGlobalScope); err == nil {
+		t.Fatal("interrupted module allowed new business")
+	}
+	if err := manager.CheckAccountRestore("wallets", AccountManagedDataGlobalScope); err != nil {
+		t.Fatalf("provider failure blocked the healthy wallet module: %v", err)
+	}
+}
+
 type managedImportFaultDB struct {
 	indexer.KVDB
-	readErr, writeErr, deleteErr error
+	key               []byte
+	readErr, writeErr error
+	hits              atomic.Int64
 }
 
 func (d *managedImportFaultDB) Read(key []byte) ([]byte, error) {
-	if bytes.Equal(key, accountManagedDataImportKey()) && d.readErr != nil {
+	if bytes.Equal(key, d.key) && d.readErr != nil {
 		return nil, d.readErr
 	}
 	return d.KVDB.Read(key)
 }
 
 func (d *managedImportFaultDB) Write(key, value []byte) error {
-	if bytes.Equal(key, accountManagedDataImportKey()) && d.writeErr != nil {
+	if bytes.Equal(key, d.key) && d.writeErr != nil {
+		d.hits.Add(1)
 		return d.writeErr
 	}
 	return d.KVDB.Write(key, value)
 }
 
-func (d *managedImportFaultDB) Delete(key []byte) error {
-	if bytes.Equal(key, accountManagedDataImportKey()) && d.deleteErr != nil {
-		return d.deleteErr
-	}
-	return d.KVDB.Delete(key)
-}
-
 func TestManagedDataRecoveryReturnsErrorsAndKeepsProtection(t *testing.T) {
 	remote := newRGB11MemoryDKVSHTTP()
 	source, _ := managedImportTestSource(t, remote)
-	for _, point := range []string{"marker-write", "core-flush", "validation", "provider", "later-provider", "registrations", "marker-delete"} {
+	for _, point := range []string{"local-copy-write", "core-flush", "validation", "provider", "completion-write"} {
 		t.Run(point, func(t *testing.T) {
 			target, provider := managedImportTestManager(t, remote)
 			database := target.db
+			key := accountLocalKey(source.accountProfile.AccountID, provider.id, AccountManagedDataGlobalScope)
 			failure := errors.New("injected " + point + " failure")
+			var completionFault *managedImportFaultDB
 			switch point {
-			case "marker-write":
-				fault := &accountPersistenceReviewDB{KVDB: database, profileKey: accountManagedDataImportKey()}
+			case "local-copy-write":
+				fault := &accountPersistenceReviewDB{KVDB: database, profileKey: key}
 				fault.armed.Store(true)
 				target.db = fault
 				failure = errAccountPersistenceReview
@@ -243,57 +296,76 @@ func TestManagedDataRecoveryReturnsErrorsAndKeepsProtection(t *testing.T) {
 				provider.validateErr = failure
 			case "provider":
 				provider.importErr = failure
-			case "later-provider":
-				target.managedDataProviders["z"] = &accountManagedDataProviderStub{id: "z", importErr: failure}
-			case "registrations":
-				provider.beforeImport = func() { target.accountProfile.RootFingerprint = "unavailable" }
-				failure = ErrAccountManagementWalletUnavailable
-			case "marker-delete":
-				target.db = &managedImportFaultDB{KVDB: database, deleteErr: failure}
+			case "completion-write":
+				fault := &managedImportFaultDB{KVDB: database, key: key}
+				completionFault = fault
+				target.db = fault
+				beforeImport := provider.beforeImport
+				provider.beforeImport = func() { beforeImport(); fault.writeErr = failure }
 			}
 			err := restoreManagedImportTestWallet(t, target, source)
-			if point == "registrations" {
-				if err != nil {
-					t.Fatalf("retryable post-restore registration failure became a restore failure: %v", err)
-				}
-				target.db = database
-				if err := target.checkAccountManagedDataImport(); err != nil {
-					t.Fatalf("retryable registration failure retained recovery marker: %v", err)
-				}
-				return
-			}
-			if err == nil || (point != "core-flush" && !errors.Is(err, failure)) {
-				t.Fatalf("%s error not propagated: %v", point, err)
-			}
-			if point == "later-provider" && provider.imports != 1 {
-				t.Fatal("test did not reach a partially imported provider set")
-			}
 			target.db = database
-			if point == "marker-write" || point == "core-flush" {
+			if point == "local-copy-write" || point == "core-flush" {
+				if err == nil {
+					t.Fatal("atomic restore write failure was ignored")
+				}
 				if target.accountProfile != nil || target.wallet != nil || provider.imports != 0 {
-					t.Fatal("atomic local commit failure did not stop recovery before mutation")
+					t.Fatal("failed atomic restore mutated account or provider state")
 				}
 				if _, err := database.Read(accountManagementProfileKey()); !errors.Is(err, indexer.ErrKeyNotFound) {
-					t.Fatalf("atomic local commit failure persisted profile: %v", err)
+					t.Fatalf("failed atomic restore persisted profile: %v", err)
 				}
-				if marker, err := target.readAccountManagedDataImportMarker(); err != nil || marker != nil {
-					t.Fatalf("failed atomic local commit left import marker: %v", err)
+				if err := restoreManagedImportTestWallet(t, target, source); !errors.Is(err, ErrAccountDBStopped) {
+					t.Fatalf("failed Manager resumed after storage recovered: %v", err)
+				}
+				service := target.serverNode
+				target.Close()
+				target = newAccountManagementAutoTestManager(t)
+				target.db, target.serverNode = database, service
+				configureRGB11DKVSTestManager(target, remote)
+				if err := target.initDB(); err != nil {
+					t.Fatal(err)
+				}
+				provider = managedImportProvider(t, target)
+				target.managedDataProviders = map[string]AccountManagedDataProvider{provider.id: provider}
+				if target.accountProfile != nil || target.wallet != nil {
+					t.Fatal("restart loaded a partial account from the failed atomic restore")
 				}
 				if err := restoreManagedImportTestWallet(t, target, source); err != nil {
-					t.Fatalf("healthy retry after failed atomic local commit: %v", err)
+					t.Fatal(err)
 				}
+				assertImportComplete(t, target, provider, []byte("A"))
 				return
 			}
-			if err := target.SyncAccountManagementState(nil); !errors.Is(err, ErrAccountManagedDataImportIncomplete) {
-				t.Fatalf("%s failure allowed upload: %v", point, err)
+			if point == "completion-write" {
+				if completionFault.hits.Load() == 0 {
+					t.Fatal("completion persistence fault was not reached")
+				}
+				if !errors.Is(err, failure) {
+					t.Fatalf("completion persistence failure not propagated: %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("module failure aborted core restore: %v", err)
+			}
+			assertManagedImportModuleProtected(t, target, provider.id)
+			if !bytes.Equal(target.accountSecret, source.accountSecret) {
+				t.Fatal("failed provider import discarded the account secret")
 			}
 		})
 	}
-	t.Run("marker-read", func(t *testing.T) {
-		failure := errors.New("marker read failed")
-		manager := &Manager{db: &managedImportFaultDB{KVDB: newMemoryKVDB(), readErr: failure}}
-		if err := manager.SyncAccountManagementState(nil); !errors.Is(err, failure) {
-			t.Fatalf("unreadable marker treated as absent: %v", err)
+	t.Run("local-copy-read", func(t *testing.T) {
+		failure := errors.New("module copy read failed")
+		manager, _ := managedImportTestSource(t, newRGB11MemoryDKVSHTTP())
+		before := snapshotRGB11MemoryRecords(manager.http.(*rgb11MemoryDKVSHTTP))
+		database := manager.db
+		manager.db = &managedImportFaultDB{KVDB: database,
+			key: accountLocalKey(manager.accountProfile.AccountID, "test", AccountManagedDataGlobalScope), readErr: failure}
+		if err := manager.CheckAccountWrite("test", AccountManagedDataGlobalScope); !errors.Is(err, failure) {
+			t.Fatalf("unreadable local copy treated as ready: %v", err)
+		}
+		manager.db = database
+		if !reflect.DeepEqual(before, snapshotRGB11MemoryRecords(manager.http.(*rgb11MemoryDKVSHTTP))) {
+			t.Fatal("module read failure changed remote records")
 		}
 	})
 }

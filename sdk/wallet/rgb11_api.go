@@ -2,13 +2,53 @@ package wallet
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	indexer "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/rgb11/consensus"
 	corewallet "github.com/sat20-labs/rgb11/wallet"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
+
+type RGB11PublicContractExportResult struct {
+	ContractID                string `json:"contract_id"`
+	SchemaID                  string `json:"schema_id"`
+	ContractConsignmentBase64 string `json:"contract_consignment_base64"`
+	SHA256                    string `json:"sha256"`
+}
+
+// ExportPublicRGB11Contract reveals only the canonical public genesis/schema
+// material needed for independent technical registration. It never returns
+// the wallet's ownership seal disclosures or transfer history to a DApp.
+func (p *Manager) ExportPublicRGB11Contract(contractID string) (*RGB11PublicContractExportResult, error) {
+	full, err := p.ExportRGB11Contract(contractID)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := base64.StdEncoding.Strict().DecodeString(full.ContractConsignmentBase64)
+	if err != nil {
+		return nil, err
+	}
+	public, err := rgb11wallet.PublicRGB11Contract(raw)
+	if err != nil {
+		return nil, err
+	}
+	_, registration, err := rgb11wallet.NewRGB11ContractValue(public)
+	fullID, idErr := consensus.ParseContractID(full.ContractID)
+	if err != nil || idErr != nil || registration.ContractID != hex.EncodeToString(fullID[:]) || registration.SchemaID != full.SchemaID {
+		return nil, rgb11wallet.ErrInvalidRGB11Asset
+	}
+	digest := sha256.Sum256(public)
+	return &RGB11PublicContractExportResult{
+		ContractID: registration.ContractID, SchemaID: registration.SchemaID,
+		ContractConsignmentBase64: base64.StdEncoding.EncodeToString(public),
+		SHA256:                    hex.EncodeToString(digest[:]),
+	}, nil
+}
 
 // Public RGB11 DTOs live with the protocol package. These aliases preserve the
 // Wallet SDK surface without duplicating protocol-specific data structures in
@@ -20,12 +60,13 @@ type (
 	RGB11IssueRequest             = rgb11wallet.RGB11IssueRequest
 	RGB11IssueResult              = rgb11wallet.RGB11IssueResult
 	RGB11ContractExportResult     = rgb11wallet.RGB11ContractExportResult
-	RGB11NameRegistration         = rgb11wallet.RGB11Registration
+	RGB11TechnicalRegistration    = rgb11wallet.RGB11Registration
 	RGB11ImportResult             = rgb11wallet.RGB11ImportResult
 	RGB11RejectListProvider       = rgb11wallet.RGB11RejectListProvider
 	RGB11RejectListViolation      = rgb11wallet.RGB11RejectListViolation
 	RGB11InvoiceRequest           = rgb11wallet.RGB11InvoiceRequest
 	RGB11SendRequest              = rgb11wallet.RGB11SendRequest
+	RGB11InflationRequest         = rgb11wallet.RGB11InflationRequest
 	RGB11PreparedTransfer         = rgb11wallet.RGB11PreparedTransfer
 	RGB11PreparedTransferPackage  = rgb11wallet.RGB11PreparedTransferPackage
 	RGB11ProxyDeliveryResult      = rgb11wallet.RGB11ProxyDeliveryResult
@@ -344,6 +385,15 @@ func (p *Manager) PrepareRGB11Transfer(ctx context.Context, request RGB11SendReq
 		})
 }
 
+// PrepareRGB11Inflation consumes an existing IFA control allocation. The
+// prepared transfer follows the same signing and broadcast path as a send.
+func (p *Manager) PrepareRGB11Inflation(ctx context.Context, request RGB11InflationRequest) (*RGB11PreparedTransfer, error) {
+	return runRGB11ManagedOperation(p, ctx, rgb11ManagedOperationNew,
+		func(manager *rgb11Manager) (*RGB11PreparedTransfer, error) {
+			return manager.PrepareRGB11Inflation(ctx, request)
+		})
+}
+
 func (p *Manager) ProjectRGB11Allocation(outpoint string, asset *indexer.AssetInfo, proof *rgb11wallet.AllocationProof) error {
 	_, err := runRGB11ManagedOperation(p, context.Background(), rgb11ManagedOperationContinue,
 		func(manager *rgb11Manager) (struct{}, error) {
@@ -362,6 +412,55 @@ func (p *Manager) ResumeRGB11PreparedTransfer(transferID string) (*RGB11Prepared
 		return nil, err
 	}
 	return manager.ResumeRGB11PreparedTransfer(transferID)
+}
+
+// ExportRGB11SettledConsignment returns an immutable out-of-band recipient
+// package after settlement, including after a cold account recovery. It does
+// not retry delivery, broadcast, or modify the transfer lifecycle.
+func (p *Manager) ExportRGB11SettledConsignment(transferID string) (*RGB11PreparedTransferPackage, error) {
+	if _, err := p.synchronizedRGB11Manager(); err != nil {
+		return nil, err
+	}
+	manager, err := p.captureRGB11NetworkScope(false)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.requireRGB11ExportScope(manager); err != nil {
+		return nil, err
+	}
+	result, err := manager.ExportRGB11SettledConsignment(transferID)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.requireRGB11ExportScope(manager); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// A settled proof belongs to the unlocked selection that initiated the read.
+// The scoped manager's stores are fixed; recheck the live identity before
+// exposing its recipient package if a lifecycle change raced the local read.
+func (p *Manager) requireRGB11ExportScope(scoped *rgb11Manager) error {
+	if p == nil || scoped == nil || scoped.status == nil || scoped.wallet == nil {
+		return rgb11wallet.ErrWalletScope
+	}
+	p.channelIdentityMu.RLock()
+	defer p.channelIdentityMu.RUnlock()
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	if p.status == nil || p.wallet == nil || p.status.CurrentWallet != scoped.status.CurrentWallet ||
+		p.status.CurrentAccount != scoped.status.CurrentAccount ||
+		p.wallet.GetSubAccount() != scoped.status.CurrentAccount ||
+		walletFingerprint(p.wallet) != walletFingerprint(scoped.wallet) {
+		return rgb11wallet.ErrWalletScope
+	}
+	info := p.walletInfoMap[p.status.CurrentWallet]
+	if info == nil || info.Id != p.status.CurrentWallet || info.Wallet == nil ||
+		walletFingerprint(info.Wallet) != walletFingerprint(p.wallet) {
+		return rgb11wallet.ErrWalletScope
+	}
+	return nil
 }
 
 func (p *Manager) FetchRGB11ProxyAck(ctx context.Context,

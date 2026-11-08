@@ -19,6 +19,7 @@ function fixture({ fee = '150', feeError, simulation, autopay = false } = {}) {
   const context = {
     console, JSON, String, Error, watch,
     env: ref('test'), network: ref('testnet'),
+    isContractClosed: ref(false),
     walletStore: reactive({ rootAccountId: 'root', walletId: 'w1', accountIndex: 0, address: 'source', wallets: [{ id: 'w1', name: 'Wallet 1' }] }),
     invokeContractAddress: ref('contract'), invokeContractType: ref(autopay ? 'template' : 'evm'),
     invokeContractSubtype: ref(''), invokeAction: ref('call'), evmCallJsonText: ref('{}'),

@@ -1,0 +1,9 @@
+{
+  "state": "EXITED",
+  "pid": 77583,
+  "started_utc": "2026-10-31T12:41:32+00:00",
+  "ended_utc": "2026-10-31T12:41:34+00:00",
+  "exit_code": 0,
+  "summary": "/Users/yingfeng/github/sat20wallet/pwa/data/wallet-manager-import-20261031T124123Z/summary.json",
+  "log": "/Users/yingfeng/github/sat20wallet/pwa/data/wallet-manager-import-20261031T124123Z/test.log"
+}

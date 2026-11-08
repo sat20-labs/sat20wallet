@@ -4,40 +4,22 @@ import (
 	"encoding/json"
 	"testing"
 
-	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/account"
-	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/stretchr/testify/require"
 )
 
 func TestSilentPayStandaloneBackupRestoresEnabledAccountsE2E(t *testing.T) {
-	oldEnv, oldChain, oldMode, oldIndexerChain := _env, _chain, _mode, indexer.CHAIN
-	t.Cleanup(func() { _env, _chain, _mode, indexer.CHAIN = oldEnv, oldChain, oldMode, oldIndexerChain })
-	indexer.CHAIN = "testnet"
-	endpoint := &common.Indexer{Scheme: "http", Host: "127.0.0.1:1", Proxy: "testnet"}
-	cfg := &common.Config{Env: "test", Chain: "testnet", Mode: "client", IndexerL1: endpoint, IndexerL2: endpoint,
-		Peers: []string{"b@" + indexer.GetBootstrapPubKey() + "@http://127.0.0.1:1/testnet"}}
+	remote := newRGB11MemoryDKVSHTTP()
+	assertSPLocalNoUploads(t, remote)
 	newDevice := func() (*Manager, func()) {
-		database := NewKVDB(t.TempDir())
-		require.NotNil(t, database)
-		manager := NewManager(cfg, database)
-		require.NotNil(t, manager)
-		closed := false
-		close := func() {
-			if !closed {
-				manager.Close()
-				require.NoError(t, database.Close())
-				closed = true
-			}
-		}
-		t.Cleanup(close)
-		return manager, close
+		return openSPLocalDevice(t, t.TempDir(), "testnet", remote)
 	}
 	const oldPassword = "sp-backup-source-only"
 	const newPassword = "sp-backup-restored-only"
 	source, closeSource := newDevice()
 	id, err := source.ImportWallet(silentPayE2EMnemonic, oldPassword)
 	require.NoError(t, err)
+	discoverInactiveAccount(t, source)
 	require.NoError(t, source.SwitchAccount(2))
 	wantAddresses := make(map[uint32]string)
 	for _, index := range []uint32{0, 2} {
@@ -64,6 +46,7 @@ func TestSilentPayStandaloneBackupRestoresEnabledAccountsE2E(t *testing.T) {
 				_, err := target.RestoreAccountBackupWithResult(restoredBackup, newPassword)
 				require.NoError(t, err)
 			}
+			discoverInactiveAccount(t, target)
 			catalog := target.GetWalletCatalog()
 			require.Len(t, catalog, 1)
 			require.Len(t, catalog[0].Accounts, 3)

@@ -1,21 +1,31 @@
 package wallet
 
 func (p *Manager) beginAccountBackgroundTask() (<-chan struct{}, bool) {
-	if p == nil { return nil, false }
+	if p == nil {
+		return nil, false
+	}
 	p.accountBackgroundMu.Lock()
 	defer p.accountBackgroundMu.Unlock()
-	if p.accountBackgroundStopped { return nil, false }
-	if p.accountBackgroundStop == nil { p.accountBackgroundStop = make(chan struct{}) }
+	if p.accountBackgroundStopped {
+		return nil, false
+	}
+	if p.accountBackgroundStop == nil {
+		p.accountBackgroundStop = make(chan struct{})
+	}
 	p.accountBackgroundWG.Add(1)
 	return p.accountBackgroundStop, true
 }
 
 func (p *Manager) finishAccountBackgroundTask() {
-	if p != nil { p.accountBackgroundWG.Done() }
+	if p != nil {
+		p.accountBackgroundWG.Done()
+	}
 }
 
 func (p *Manager) stopAccountBackgroundTasks() {
-	if p == nil { return }
+	if p == nil {
+		return
+	}
 	p.accountBackgroundMu.Lock()
 	if !p.accountBackgroundStopped {
 		p.accountBackgroundStopped = true
@@ -29,7 +39,9 @@ func (p *Manager) stopAccountBackgroundTasks() {
 }
 
 func (p *Manager) resumeAccountBackgroundTasks() {
-	if p == nil { return }
+	if p == nil {
+		return
+	}
 	p.accountBackgroundMu.Lock()
 	p.accountBackgroundStopped = false
 	p.accountBackgroundMu.Unlock()

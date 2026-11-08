@@ -2,12 +2,14 @@ import { beginVersionDispatch } from '@/utils/pwaVersionPolicy'
 import { tryit } from 'radash'
 import { walletRequestSessionGuard } from '@/lib/walletSession'
 import { beginPwaWalletOperation, finishPwaOperation } from '@/utils/pwaOperationLog'
+import { wasmResponseError } from '@/utils/wasmError'
 
 // Define the expected response structure from WASM functions
 interface WasmResponse<T = any> {
   code: number;
   msg?: string;
   data?: T;
+  error_code?: string;
 }
 
 export interface CommitTxAssetUtxo {
@@ -165,7 +167,7 @@ class SatsnetStp {
         const response = await method(...args)
         checkSession()
         if (response && typeof response.code === 'number' && response.code !== 0) {
-          throw new Error(response.msg || `sat20wallet channel ${methodName} failed with code ${response.code}`)
+          throw wasmResponseError(response.msg || `sat20wallet channel ${methodName} failed with code ${response.code}`, response.error_code)
         }
         await finishPwaOperation(operation, null, response?.data)
         checkSession()

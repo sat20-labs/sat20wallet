@@ -619,6 +619,9 @@ func testRGB11ChannelSendRecoversAfterPeerResponseLoss(t *testing.T, observedBef
 	peer.mu.Unlock()
 
 	if observedBeforeResume {
+		// This branch explicitly observes before Resume. The separate public
+		// resume/refresh race test controls its competing worker with a gate.
+		sender.rgbManager.scopeStates.stopReconciliations()
 		// Reconciliation may refresh the accepted transaction before Resume;
 		// the complete peer witness must remain available.
 		if _, err := sender.RefreshRGB11State(context.Background()); err != nil {

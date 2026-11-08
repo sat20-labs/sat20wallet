@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	topicMessageOutboxVersion = uint32(2)
+	topicMessageOutboxVersion = uint32(1)
 	topicMessageOutboxPrefix  = "topic-message-outbox/"
 	topicControlOutboxVersion = uint32(1)
 	topicControlOutboxPrefix  = "topic-control-outbox/"

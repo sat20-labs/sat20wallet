@@ -32,6 +32,7 @@
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import {
   Dialog,
   DialogContent,
@@ -49,6 +50,8 @@ import { storeToRefs } from 'pinia'
 import { restartApp } from '@/utils/app-restart'
 import { useToast } from '@/components/ui/toast-new'
 import { isRegtestBuild } from '@/utils/networkMode'
+
+const { t } = useI18n()
 
 interface NetworkItem {
   name: string
@@ -97,8 +100,8 @@ const selectNetwork = async (item: NetworkItem) => {
   } catch (error) {
     console.error('Network switch failed:', error)
     toast({
-      title: 'Error',
-      description: error instanceof Error ? error.message : 'Network switch failed',
+      title: t('common.error'),
+      description: error instanceof Error ? error.message : t('pwaUi.network.switchFailed'),
       variant: 'destructive',
     })
   } finally {

@@ -152,7 +152,7 @@ func TestRGB11CandidateRejectsChangedLocalBaseline(t *testing.T) {
 				}
 				return
 			}
-			if !errors.Is(err, errAccountSnapshotChanged) {
+			if !errors.Is(err, errRGB11StaleLocal) {
 				t.Errorf("stale candidate accepted or wrong error: %v", err)
 			}
 			alias, loadErr := manager.rgbManager.projectionStore.LoadLocalAssetName(imported.ContractID)
@@ -168,7 +168,7 @@ func TestRGB11CandidateRejectsChangedLocalBaseline(t *testing.T) {
 func TestRGB11CapturedScopePublishesReservationCleanupToOwner(t *testing.T) {
 	for _, action := range []string{"expire", "discard"} {
 		t.Run(action, func(t *testing.T) {
-			manager := newRGB11MultiDeviceManager(t, newRGB11StatusPrivateKey(t), 905)
+			manager := newRGB11MultiDeviceManager(t, newRGB11StatusPrivateKey(t), 905, accountGroupInactive)
 			scoped, err := manager.captureRGB11NetworkScope(false)
 			if err != nil {
 				t.Fatal(err)

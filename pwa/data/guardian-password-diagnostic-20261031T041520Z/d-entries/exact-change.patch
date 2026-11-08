@@ -1,0 +1,39 @@
+--- a/sdk/e2e/account_management_browser_e2e_test.go
++++ b/sdk/e2e/account_management_browser_e2e_test.go
+@@ -33,6 +33,36 @@
+ func TestPWAAccountSwitch(t *testing.T) {
+ 	runAccountPWABrowser(t,
+ 		"usage: background catalog refresh cannot invalidate a subaccount switch",
++	)
++}
++
++func TestPWAAccountRemoteDelete(t *testing.T) {
++	runAccountPWABrowser(t,
++		"usage: remote deletion rejects offline edits and adopts the confirmed remote state",
++	)
++}
++
++func TestPWAPasswordTxRollback(t *testing.T) {
++	runAccountPWABrowser(t,
++		"usage: browser password transaction failure preserves every wallet and original password",
++	)
++}
++
++func TestPWATabAccountSwitch(t *testing.T) {
++	runAccountPWABrowser(t,
++		"usage: shared IndexedDB subaccount switch discards another tab previous-identity response",
++	)
++}
++
++func TestPWATabWalletSwitch(t *testing.T) {
++	runAccountPWABrowser(t,
++		"usage: shared IndexedDB wallet switch survives another tab rebuilding before commit",
++	)
++}
++
++func TestPWAGuardianPaidQuote(t *testing.T) {
++	runAccountPWABrowser(t,
++		"usage: Guardian paid confirmation uses 100 records and root identity after a 200 record child-wallet quote",
+ 	)
+ }
+ 

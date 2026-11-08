@@ -92,6 +92,14 @@ func TestSDKSmartContractReleaseAssetValidation(t *testing.T) {
 	base.splitProfile(t, base.A, base.assetAnchors[bound], profile,
 		[]string{"10000"}, []int64{100000}, []*templateActor{{PkScript: script}})
 	f := &sdkContractReviewFixture{network: base.Network, owner: owner}
+	runSDKSmartContractReleaseAssetValidation(t, f, bound)
+}
+
+func runSDKSmartContractReleaseAssetValidation(t *testing.T, f *sdkContractReviewFixture, bound string) {
+	t.Helper()
+	owner := f.owner
+	script, err := wallet.GetP2TRpkScript(owner.GetWallet().GetPaymentPubKey())
+	require.NoError(t, err)
 	for _, mode := range []string{"unchanged_control", "changed_binding", "missing_carrier", "plain_asset_alias"} {
 		t.Run(mode, func(t *testing.T) {
 			tx, prev := sdkAdmissionOrdinaryTx(t, f, bound)
@@ -111,11 +119,11 @@ func TestSDKSmartContractReleaseAssetValidation(t *testing.T) {
 			signed, err := owner.SignContractTx_SatsNet(tx, prev, "", 0)
 			require.NoError(t, err)
 			require.NoError(t, wallet.VerifySignedTx_SatsNet(signed, prev))
-			height, err := base.Network.Core.Client.GetBlockCount()
+			height, err := f.network.Core.Client.GetBlockCount()
 			require.NoError(t, err)
 			view := blockchain.NewUtxoViewpoint()
 			for _, input := range signed.TxIn {
-				original, err := base.Network.Core.Client.GetRawTransaction(&input.PreviousOutPoint.Hash)
+				original, err := f.network.Core.Client.GetRawTransaction(&input.PreviousOutPoint.Hash)
 				require.NoError(t, err)
 				view.AddTxOuts(original, int32(height))
 			}

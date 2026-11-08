@@ -1,0 +1,22 @@
+# 账户与 RGB 个人备份范围核查（2026-10-30）
+
+口径：缺少该数据是否妨碍账户恢复，或 RGB 资产在冷恢复后继续收款、签名、发送及相关通道操作。本记录依据当前源码，只盘点序列化和读取链路；不删除本地数据，也不据此裁剪尚未证明可重建的材料。
+
+个人 DKVS 当前有三个主要记录：`account/state`、`blob/<accountID>/account-managed-data` 和 `account/root-key-wrapper/current`。前两者的 key 由 `accountManagedStateKey` 与 `accountManagedDataBlobKey` 构造（`wallet/account_management_state.go:328-333`、`wallet/account_managed_data.go:355-361`）；后者见 `wallet/account_root_wrapper.go:22-63`。`state` 保存账户目录及 `DataRevision/DataHash`，managed-data blob 是加密的 provider/scope/payload 集合（`account/state.go:29-46`、`account/managed_data.go:36-50`、`wallet/account_managed_data.go:219-258`）。生产注册的 provider 为 `silentpay` 和 `rgb11`（`wallet/interface.go:136-143`）。
+
+| 字段或 key 组 | 实际位置与恢复读取方 | 缺失影响 | 判断 |
+| --- | --- | --- | --- |
+| root wrapper 中的密钥包装、package ID、恢复模式、公开 locator 等 | 个人 `account/root-key-wrapper/current`；根钱包发现与解包读取（`wallet/account_root_wrapper.go:22-63,950-975`） | 新设备可能无法定位或解开账户恢复资料 | 保留。`RecordTTL` 等配置字段与密钥包装同一对象，是否都属跨设备意图可另评估；不能单独删字段破坏读取。 |
+| 账户 state 的钱包 fingerprint、mnemonic、子账户数/目录、删除标记、修订及 data hash | 个人 `account/state`；`OpenManagedState` 与目录重建（`account/state.go:29-46,408-431`） | 无法重建钱包/子账户或验证所引用的数据包 | 保留。名称本身不是签名秘密，但属于账户管理目录的恢复结果。 |
+| `silentpay` 每作用域 opt-in 位 | 加密 managed-data blob；`silentPayAccountManagedDataProvider.Import`（`wallet/silentpay_account.go:13-51,54-96`） | 已向外公布的静默支付地址可能停止扫描 | 保留。关闭的作用域不产生 item。 |
+| RGB `proof-*`、所依赖的 `validation-*`/`object-*`、最小 `output-*` | 加密 managed-data blob 的 `rgb11`/作用域包；provider 导出、解码并导入（`wallet/rgb11_account_provider.go:74-109,185-260`；`wallet/rgb11/recovery.go:89-146,231-244`） | 仅链上 UTXO 不足以证明 RGB 分配及控制权，恢复后不可安全花费 | 保留。`output-*` 已缩为相关 RGB 资产与载体，不是整条钱包输出缓存（`wallet/rgb11/recovery.go:35-58`）。 |
+| RGB `pending-*`、`transfer-*`、发票/receive key/reservation、prepared receive 与对应对象 | 同一 RGB 恢复包；导入后 transfer、收款及刷新路径读取（`wallet/rgb11/recovery.go:89-94,147-182,303-324`） | 已有外部效果而未完成的发送/接收、找零、seal 与签名/见证边界可能无法续办 | 保留必要闭包。终态 ACK/轮询/交付 bookkeeping 已裁剪，settled owner 仍保留以处理确认回退（`wallet/rgb11/recovery.go:350-382`）。不能把所有“中间态”一律排除。 |
+| RGB `contract-object-*`、对应私有 `object-*`/validation、`local-name-*` | 同一 RGB 恢复包；零余额已导入合约也作为根（`wallet/rgb11/recovery.go:89-94,183-228`） | 仅删除名称可能连带丢失无余额的合约导入意图及其验证对象；私有合约材料是否可由公开投影无损重建未证明 | 暂保留。公开技术登记另在共享目录；它剔除私有 ownership/历史，不能把两者简单视为重复（`wallet/rgb11/public_contract.go:10-46`）。 |
+| RGB engine 的 `wallet/receive/<requestID>` | 同一 RGB 恢复包：`EngineRecords` 当前全部复制；校验器**只接受这一类 key**（`wallet/rgb11/recovery.go:77-82`、`wallet/rgb11/snapshot.go:739-757`）；恢复时还原，`GetRGB11ReceiveRequest`、收款验证及 selected-merge 会读取（`wallet/rgb11_manager.go:2714-2719,2749-2755`、`wallet/rgb11/recovery.go:1117-1168,1171-1220`） | 记录封印 reveal、Invoice、witness script、请求身份与状态；删掉后已开出的 invoice 不可重获 seal，prepared/receive-key/reservation 的跨 store 引用也会失效（`wallet/rgb11/snapshot.go:772-803`） | **保留。** 当前依赖模块 `rgb11@v1.0.0` 的 `wallet/receive_storage.go:21-52` 只持久化该 key，完整记录包含创建/过期时间、状态、失败码等生命周期信息；`RelayKey`/`AckKey` 编码为空。将来仅可单独评估已过期、从未使用且没有任何引用的 `PREPARED` 历史；当前 selected-merge 会拒绝遗漏 engine key（`wallet/rgb11/recovery.go:678-687`），不能按“全量复制”或“可链重建”直接删。 |
+| RGB L1 monitor tip/最近块窗口、地址 mailbox processed/cursor | 仅本地 `rgb11-local-<scope>-*`；L1 monitor 与 mailbox 从本地读（`wallet/rgb11_l1_monitor.go:13-37,158-177`、`wallet/rgb11_dkvs.go:179-204,275-299`） | 丢失后需重新扫描/对账，非资产所有权或签名材料 | 本地保存，不进个人备份。`ProjectionStore.ExportSnapshot` 只扫描 `rgb11-<scope>-*`（`wallet/rgb11/snapshot.go:252-265`）。 |
+| 本地 profile、dirty/generation、outbox、激活阶段标记 | 本机 DB；profile 结构见 `wallet/account_management_profile.go:22-54`，脏标记更新见 `wallet/account_managed_data.go:318-350` | 用于本机崩溃恢复、ACK 与同步安全；不是远端恢复包字段 | 本地保留，不按原样上传；不能因“不备份”删除本机故障保护。 |
+| RGB 活跃转移 mailbox 副本 | 当前账户 CoreNode mailbox，而非个人 DKVS replica；稳定包仍含完整恢复闭包（`wallet/account_managed_data.go:59-67`、`wallet/rgb11_account_provider.go:112-115`） | 可帮助活动过程跨端续办，但不应代替稳定备份 | 保持现有可选缓存语义，不把 mailbox 当作备份已完成证明。 |
+
+此前发现的多余代际触发已修：`ProjectionStore.SaveLocalMetadata` 原通过 reservation batch，虽然 key 不在恢复包，仍推进账户 dirty/generation。现使用单 key 原子本地 `Write`（`wallet/rgb11/store.go:245-271`），真正恢复材料仍走 reservation batch（`wallet/rgb11/reservation_store.go:143-180`、`wallet/rgb11_local_commit.go:10-60`）。定向红例此前证实仅 metadata 变化令旧激活快照失效；修后普通回归见 `data/contract-rgb11-dkvs-20261028/unified-acceptance-20261028/rgb-local-meta-green-v2-20261030.jsonl`，exit 0。其余本地写路径尚未逐一证明完全不触发 dirty；本轮不做额外生产裁剪。
+
+公开 RGB 技术登记仍是独立共享资料。私人恢复包中的私有合约对象目前用于核对公开投影及完整身份，备份完成前还会验证公开读回（`wallet/rgb11_public_registration.go:155-205`）；不能因公开资料可取就删除私有 seal、consignment 或尚未完成的执行材料。

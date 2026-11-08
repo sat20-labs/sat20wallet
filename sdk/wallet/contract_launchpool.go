@@ -2172,8 +2172,8 @@ func (p *LaunchPoolContractRunTime) launch() error {
 		p.stp.SaveReservation(p.resv)
 		Log.Infof("contract %s closed", p.URL())
 	} else {
-		if len(p.mintInfoMap) == 0 && len(p.invalidMintMap) == 0 {
-			// 没有任何铸造数据，那现在就是超时直接关闭
+		if len(p.mintInfoMap) == 0 && len(p.invalidMintMap) == 0 && p.canFinishClose() {
+			// 没有铸造数据且待返还资产已处理完成，才能关闭
 			p.mutex.Lock()
 			p.isSending = false
 			p.IsLaunching = false

@@ -56,7 +56,7 @@ func TestAccountPaidStorageAuthorizationCanReuseActiveDelegate(t *testing.T) {
 	defaults := dkvsindexer.NetworkDefaultsForParams(&chaincfg.TestNetParams)
 	authorization := accountPaidStorageAuthorization(AccountIndexerLocation{
 		Scheme: "https", Host: "indexer.test", Proxy: "satsnet/testnet",
-	}, defaults, 100, "10", "10000", "", true)
+	}, defaults, 100, "10", "10000", "", true, 1, 1)
 	require.Empty(t, authorization.TransactionID)
 	require.Equal(t, defaults.AutopayContract, authorization.Summary.ContractAddress)
 	require.Contains(t, authorization.Summary.Description, "复用")
@@ -70,9 +70,9 @@ func TestPrepareAccountRestoreRejectsDuplicateIdentityWithoutWriting(t *testing.
 		db: database, status: &Status{SoftwareVer: SOFTWARE_VERSION, DBver: DB_VERSION, CurrentChain: "testnet"},
 		walletInfoMap: make(map[int64]*WalletInfo),
 	}
-	backup := account.Backup{Version: account.Version, Wallets: []account.WalletBackup{
-		{Name: "Root", Mnemonic: mnemonic, AccountCount: 1, SubAccounts: []account.SubAccount{{Index: 0, Name: "Account 1"}}},
-		{Name: "Duplicate", Mnemonic: mnemonic, AccountCount: 1, SubAccounts: []account.SubAccount{{Index: 0, Name: "Account 1"}}},
+	backup := account.Backup{Version: account.BackupVersion, Wallets: []account.WalletBackup{
+		{Name: "Root", Type: account.WalletMnemonic, Secret: []byte(mnemonic), AccountCount: 1, SubAccounts: []account.SubAccount{{Index: 0, Name: "Account 1"}}},
+		{Name: "Duplicate", Type: account.WalletMnemonic, Secret: []byte(mnemonic), AccountCount: 1, SubAccounts: []account.SubAccount{{Index: 0, Name: "Account 1"}}},
 	}}
 	_, err := manager.prepareAccountRestoreLocked(backup, "password123")
 	if err == nil {
@@ -95,8 +95,8 @@ func TestPersistPreparedAccountRestoreCommitsCatalogAndStatusTogether(t *testing
 		walletInfoMap: make(map[int64]*WalletInfo),
 	}
 	originalStatus := manager.status
-	backup := account.Backup{Version: account.Version, Wallets: []account.WalletBackup{{
-		Name: "Root", Mnemonic: mnemonic, AccountCount: 2,
+	backup := account.Backup{Version: account.BackupVersion, Wallets: []account.WalletBackup{{
+		Name: "Root", Type: account.WalletMnemonic, Secret: []byte(mnemonic), AccountCount: 2,
 		SubAccounts: []account.SubAccount{{Index: 0, Name: "Primary", DID: "did:root"}, {Index: 1, Name: "Second", DID: "did:second"}},
 	}}}
 	prepared, err := manager.prepareAccountRestoreLocked(backup, "password123")

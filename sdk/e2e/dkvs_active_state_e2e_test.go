@@ -16,11 +16,16 @@ import (
 // processes and SDK databases. No production wallet or browser is used.
 func TestSDKDKVSActiveState(t *testing.T) {
 	f := newTemplateFixtureWithArgs(t, map[string]int64{}, nil, nil, dkvsMinerArgs(t))
+	runSDKDKVSActiveState(t, f, dkvsClientMnemonic)
+}
+
+func runSDKDKVSActiveState(t *testing.T, f *templateFixture, mnemonic string) {
+	t.Helper()
 	client := dkvsClientForNode(t, f.Network.Core)
 	other := dkvsClientForNode(t, f.Network.Bootstrap)
-	owner := newDKVSKeyPathActor(t, keyFromMnemonic(t, dkvsClientMnemonic, 0))
+	owner := newDKVSKeyPathActor(t, keyFromMnemonic(t, mnemonic, 0))
 	ownerWriter := client.WithWriteSigner(owner.Wallet)
-	manager, _ := newWalletManagerForNode(t, f.Network.Core, dkvsClientMnemonic)
+	manager, _ := newWalletManagerForNode(t, f.Network.Core, mnemonic)
 	require.NoError(t, manager.InitializeAccountManagement("123456"))
 	require.NoError(t, manager.BindAccountToCurrentCoreNode())
 	manager.StopDKVSSync()

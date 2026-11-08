@@ -7,6 +7,7 @@ import (
 
 const (
 	Version               = 1
+	BackupVersion         = uint32(1)
 	accountSecretSize     = 32
 	MaxRecoveryObjectSize = 10 * 1024
 )
@@ -42,9 +43,17 @@ type SubAccount struct {
 	DID   string `json:"did"`
 }
 
+type WalletType uint8
+
+const (
+	WalletMnemonic WalletType = iota
+	WalletPrivateKey
+)
+
 type WalletBackup struct {
 	Name         string       `json:"name"`
-	Mnemonic     string       `json:"mnemonic"`
+	Type         WalletType   `json:"type"`
+	Secret       []byte       `json:"secret"`
 	AccountCount uint32       `json:"account_count"`
 	SubAccounts  []SubAccount `json:"sub_accounts"`
 	// SPEnabled lists the subaccount indexes opted into Silent Payments.
@@ -180,9 +189,10 @@ type RecoverySummary struct {
 }
 
 type WalletSummary struct {
-	Name         string   `json:"name"`
-	AccountCount uint32   `json:"account_count"`
-	DIDs         []string `json:"dids"`
+	Type         WalletType `json:"type"`
+	Name         string     `json:"name"`
+	AccountCount uint32     `json:"account_count"`
+	DIDs         []string   `json:"dids"`
 }
 
 type NewDeviceRecoveryOptions struct {

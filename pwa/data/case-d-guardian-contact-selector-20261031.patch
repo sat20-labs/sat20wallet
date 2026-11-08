@@ -1,0 +1,23 @@
+--- a/pwa/scripts/verify/account-management-usage-e2e.mjs
++++ b/pwa/scripts/verify/account-management-usage-e2e.mjs
+@@ -470,8 +470,18 @@
+       await settings(guardian)
+       await guardian.getByRole('button', { name: '生成我的联系信息并发送给好友', exact: true }).click()
+       await confirmPassword(guardian)
+-      await expect.poll(() => guardian.locator('textarea[readonly]').count(), { timeout: 90000 }).toBe(2)
+-      const contact = JSON.parse(await guardian.locator('textarea[readonly]').first().inputValue())
++      const guardianTools = guardian.getByRole('heading', { name: 'Guardian 工具', exact: true }).locator('xpath=..')
++      const copyContact = guardianTools.getByRole('button', { name: '复制联系信息', exact: true })
++      await expect(copyContact).toBeVisible()
++      const contactOutput = copyContact.locator('xpath=..').locator('textarea[readonly]')
++      await expect(contactOutput).toHaveCount(1)
++      const contact = JSON.parse(await contactOutput.inputValue())
++      assert.ok(typeof contact.network === 'string' && contact.network.length > 0,
++        'Guardian contact must include its network')
++      assert.match(contact.mailbox_id, /^[0-9a-f]{64}$/i,
++        'Guardian contact must include a 32-byte mailbox id')
++      assert.ok(typeof contact.recovery_public_key === 'string' && contact.recovery_public_key.length > 0,
++        'Guardian contact must include its recovery public key')
+       const ownerStatus = await accountCall(owner, 'status')
+       const ownerReadiness = accountReadiness(ownerStatus)
+       assert.equal(ownerReadiness.discovery, 'inactive', 'Guardian quote material owner must be freshly discovered as inactive')

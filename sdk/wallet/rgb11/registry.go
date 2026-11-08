@@ -22,20 +22,15 @@ const (
 )
 
 type RGB11Registration struct {
-	ContractID  string `json:"contract_id"`
-	AssetName   string `json:"asset_name"`
-	AssetType   string `json:"asset_type"`
-	ProviderDID string `json:"provider_did"`
-	BaseTicker  string `json:"base_ticker"`
-	Ordinal     uint64 `json:"ordinal"`
+	ContractID string `json:"contract_id"`
+	SchemaID   string `json:"schema_id"`
+	AssetType  string `json:"asset_type"`
+	BaseTicker string `json:"base_ticker"`
 }
 
-// RGB11ContractValue is the only persisted registration representation. The
-// contract is a standard RGB\0CON binary file; IDs and types derive from it.
+// Technical registration contains public contract data only. DID ownership,
+// ticker ordinals and display aliases have a separate naming lifecycle.
 type RGB11ContractValue struct {
-	ProviderDID     string
-	Ticker          string
-	Ordinal         uint64
 	ContractContent []byte
 }
 
@@ -75,11 +70,7 @@ func validRGB11AssetType(assetType string) bool {
 }
 
 func (value *RGB11ContractValue) registration() (*RGB11Registration, error) {
-	if value == nil || ValidatePrimaryDIDName(value.ProviderDID) != nil || value.Ordinal == 0 {
-		return nil, dkvsindexer.ErrInvalidRecord
-	}
-	ticker, err := NormalizeRGB11Ticker(value.Ticker)
-	if err != nil || ticker != value.Ticker {
+	if value == nil {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
 	container, err := consignment.DecodeFile(value.ContractContent)
@@ -88,6 +79,10 @@ func (value *RGB11ContractValue) registration() (*RGB11Registration, error) {
 	}
 	canonical, err := consignment.EncodeFile(container)
 	if err != nil || !bytes.Equal(canonical, value.ContractContent) {
+		return nil, dkvsindexer.ErrInvalidRecord
+	}
+	public, err := PublicRGB11Contract(canonical)
+	if err != nil || !bytes.Equal(public, canonical) {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
 	schema, ok := container.Value.Field("schema")
@@ -107,7 +102,7 @@ func (value *RGB11ContractValue) registration() (*RGB11Registration, error) {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
 	actualTicker, err := NormalizeRGB11Ticker(metadata.Ticker)
-	if err != nil || actualTicker != ticker {
+	if err != nil {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
 	descriptor, err := schemas.ByKind(container.GenesisReport.Kind)
@@ -122,30 +117,23 @@ func (value *RGB11ContractValue) registration() (*RGB11Registration, error) {
 	if err != nil {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
-	name, err := BuildRGB11AssetName(value.ProviderDID, ticker, assetType, value.Ordinal)
-	if err != nil {
-		return nil, err
-	}
-	return &RGB11Registration{ContractID: hex.EncodeToString(id[:]), AssetName: name, AssetType: assetType,
-		ProviderDID: value.ProviderDID, BaseTicker: ticker, Ordinal: value.Ordinal}, nil
+	return &RGB11Registration{ContractID: hex.EncodeToString(id[:]), SchemaID: container.SchemaID,
+		AssetType: assetType, BaseTicker: actualTicker}, nil
 }
 
 // The SDK business codec uses canonical CompactSize primitives. DKVS stores
 // the resulting bytes without interpreting fields or the RGB contract.
 func EncodeRGB11RegistryValue(value RGB11ContractValue) ([]byte, error) {
+	public, err := PublicRGB11Contract(value.ContractContent)
+	if err != nil {
+		return nil, err
+	}
+	value.ContractContent = public
 	if _, err := value.registration(); err != nil {
 		return nil, err
 	}
 	var buf bytes.Buffer
 	buf.WriteByte(RGB11ContractValueVersion)
-	for _, text := range []string{value.ProviderDID, value.Ticker} {
-		if err := wire.WriteVarBytes(&buf, wire.ProtocolVersion, []byte(text)); err != nil {
-			return nil, err
-		}
-	}
-	if err := wire.WriteVarInt(&buf, wire.ProtocolVersion, value.Ordinal); err != nil {
-		return nil, err
-	}
 	if err := wire.WriteVarBytes(&buf, wire.ProtocolVersion, value.ContractContent); err != nil {
 		return nil, err
 	}
@@ -171,31 +159,11 @@ func decodeRGB11ContractFields(raw []byte) (*RGB11ContractValue, error) {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
 	buf := bytes.NewReader(raw[1:])
-	provider, err := wire.ReadVarBytes(buf, wire.ProtocolVersion, MaxPrimaryDIDLength, "provider DID")
-	if err != nil {
-		return nil, dkvsindexer.ErrInvalidRecord
-	}
-	ticker, err := wire.ReadVarBytes(buf, wire.ProtocolVersion, dkvsindexer.MaxKeySegmentSize, "ticker")
-	if err != nil {
-		return nil, dkvsindexer.ErrInvalidRecord
-	}
-	ordinal, err := wire.ReadVarInt(buf, wire.ProtocolVersion)
-	if err != nil {
-		return nil, dkvsindexer.ErrInvalidRecord
-	}
 	content, err := wire.ReadVarBytes(buf, wire.ProtocolVersion, wire.MaxDKVSBlobValueSize, "RGB11 contract")
 	if err != nil || buf.Len() != 0 {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
-	value := &RGB11ContractValue{ProviderDID: string(provider), Ticker: string(ticker), Ordinal: ordinal, ContractContent: content}
-	if ValidatePrimaryDIDName(value.ProviderDID) != nil || value.Ordinal == 0 {
-		return nil, dkvsindexer.ErrInvalidRecord
-	}
-	base, err := NormalizeRGB11Ticker(value.Ticker)
-	if err != nil || base != value.Ticker {
-		return nil, dkvsindexer.ErrInvalidRecord
-	}
-	return value, nil
+	return &RGB11ContractValue{ContractContent: content}, nil
 }
 
 func RGB11RegistrationFromRecord(record *wire.DKVSRecord) (*RGB11Registration, error) {
@@ -268,7 +236,6 @@ func IsRGB11RegistryNotFound(err error) bool { return errors.Is(err, dkvsindexer
 func ValidateRGB11Registry(records []*wire.DKVSRecord, authority dkvsindexer.SystemVerifier) ([]*RGB11Registration, error) {
 	registrations := make([]*RGB11Registration, 0, len(records))
 	seen := make(map[string]bool, len(records))
-	groups := make(map[string]map[uint64]bool)
 	for _, record := range records {
 		if record == nil || seen[record.Key] {
 			return nil, dkvsindexer.ErrInvalidRecord
@@ -279,67 +246,22 @@ func ValidateRGB11Registry(records []*wire.DKVSRecord, authority dkvsindexer.Sys
 		if err != nil {
 			return nil, err
 		}
-		group := reg.ProviderDID + "/" + reg.BaseTicker
-		if groups[group] == nil {
-			groups[group] = make(map[uint64]bool)
-		}
-		if groups[group][reg.Ordinal] {
-			return nil, dkvsindexer.ErrWriteConflict
-		}
-		groups[group][reg.Ordinal] = true
 		registrations = append(registrations, reg)
-	}
-	for _, ordinals := range groups {
-		for ordinal := uint64(1); ordinal <= uint64(len(ordinals)); ordinal++ {
-			if !ordinals[ordinal] {
-				return nil, dkvsindexer.ErrInvalidSequence
-			}
-		}
 	}
 	return registrations, nil
 }
 
-func LookupRGB11AssetName(records []*wire.DKVSRecord, name string, authority dkvsindexer.SystemVerifier) (*RGB11Registration, error) {
-	registrations, err := ValidateRGB11Registry(records, authority)
-	if err != nil {
-		return nil, err
-	}
-	for _, registration := range registrations {
-		if registration.AssetName == name {
-			return registration, nil
-		}
-	}
-	return nil, dkvsindexer.ErrRecordNotFound
-}
-
-// NewRGB11ContractValue derives canonical ticker/type/ContractID from the RGB
-// contract. Ordinal allocation remains the registration authority's operation.
-func NewRGB11ContractValue(provider string, content []byte) (RGB11ContractValue, *RGB11Registration, error) {
-	container, err := consignment.DecodeFile(content)
-	if err != nil || container.Armor == nil || container.Armor.Type != "contract" || !container.GenesisValid {
-		return RGB11ContractValue{}, nil, dkvsindexer.ErrInvalidRecord
-	}
-	schema, ok := container.Value.Field("schema")
-	if !ok {
-		return RGB11ContractValue{}, nil, dkvsindexer.ErrInvalidRecord
-	}
-	types, ok := container.Value.Field("types")
-	if !ok {
-		return RGB11ContractValue{}, nil, dkvsindexer.ErrInvalidRecord
-	}
-	genesis, ok := container.Value.Field("genesis")
-	if !ok {
-		return RGB11ContractValue{}, nil, dkvsindexer.ErrInvalidRecord
-	}
-	metadata, err := schemas.ExtractGenesisAssetMetadata(schema, types, genesis)
-	if err != nil {
-		return RGB11ContractValue{}, nil, dkvsindexer.ErrInvalidRecord
-	}
-	ticker, err := NormalizeRGB11Ticker(metadata.Ticker)
+// NewRGB11ContractValue derives technical identity from the public contract.
+// No issuer registration or DID proof is required to create the value.
+func NewRGB11ContractValue(content []byte) (RGB11ContractValue, *RGB11Registration, error) {
+	public, err := PublicRGB11Contract(content)
 	if err != nil {
 		return RGB11ContractValue{}, nil, err
 	}
-	value := RGB11ContractValue{ProviderDID: provider, Ticker: ticker, Ordinal: 1, ContractContent: append([]byte(nil), content...)}
+	value := RGB11ContractValue{ContractContent: append([]byte(nil), public...)}
 	registration, err := value.registration()
-	return value, registration, err
+	if err != nil {
+		return RGB11ContractValue{}, nil, err
+	}
+	return value, registration, nil
 }

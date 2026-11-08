@@ -1,0 +1,22 @@
+--- a/sdk/e2e/account_management_dkvs_e2e_test.go
++++ b/sdk/e2e/account_management_dkvs_e2e_test.go
+@@ -389,6 +389,19 @@
+ 		_, err = walletManager.ConfirmAccountStorage(wallet.AccountStorageTemporary, 0)
+ 		require.ErrorIs(t, err, wallet.ErrAccountStorageModeDowngrade)
+ 	})
++	ownerReadyCtx, ownerReadyCancel := context.WithTimeout(context.Background(), 30*time.Second)
++	defer ownerReadyCancel()
++	require.NoError(t, walletManager.WaitAccountManagedDataReady(ownerReadyCtx),
++		"Owner first paid backup must be confirmed locally before checking its peer copy")
++	ownerStatus := walletManager.GetAccountManagementStatus()
++	require.Equal(t, "active", ownerStatus.DiscoveryStatus)
++	require.True(t, ownerStatus.RecoveryConfigured)
++	require.False(t, ownerStatus.ActivationPending)
++	require.True(t, ownerStatus.DKVSWriteAllowed)
++	require.Equal(t, wallet.AccountStoragePaid, ownerStatus.StorageMode)
++	require.False(t, ownerStatus.ManagedDataDirty)
++	require.Zero(t, ownerStatus.PendingChanges)
++	require.Zero(t, ownerStatus.DKVSPendingRequests)
+ 	stateKey, err := dkvsindexer.PersonalKey(pubKey, "account/state")
+ 	require.NoError(t, err)
+ 	managedDataKey, err := dkvsindexer.BlobKey(accountID, "account-managed-data")

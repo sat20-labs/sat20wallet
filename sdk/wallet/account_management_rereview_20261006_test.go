@@ -1,91 +1,52 @@
 package wallet
 
 import (
+	"bytes"
 	"context"
-	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
+	"github.com/stretchr/testify/require"
 )
 
 func TestAccountRepublishMissingTemporaryState(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
-	for _, scenario := range []struct{ missingState, localAhead bool }{{true, false}, {false, false}, {false, true}} {
-		missingState := scenario.missingState
-		name := "missing-blob-fails-closed"
-		if missingState {
-			name = "all-temporary-records-missing"
-		}
-		if scenario.localAhead {
-			name = "missing-blob-with-newer-local-state-fails-closed"
-		}
-		t.Run(name, func(t *testing.T) {
+	for _, all := range []bool{false, true} {
+		t.Run(fmt.Sprintf("all=%t", all), func(t *testing.T) {
 			manager, _, remote := reviewAccountDevices(t)
 			before := manager.GetWalletCatalog()
-			root, err := manager.accountManagementRootWallet()
-			if err != nil {
-				t.Fatal(err)
-			}
-			stateKey, _ := manager.accountManagedStateKey(root)
-			dataKey, _ := manager.accountManagedDataBlobKey(root)
+			packageID := manager.accountProfile.PackageID
+			values, err := manager.listAccountLocal(manager.accountProfile.AccountID)
+			require.NoError(t, err)
+			original := make(map[string][]byte)
 			remote.mu.Lock()
-			for _, key := range []string{stateKey, dataKey} {
-				if !missingState && key == stateKey {
+			for _, value := range values {
+				if !all && value.Provider != "wallets" {
 					continue
 				}
-				delete(remote.records, key)
-				delete(remote.changedAt, key)
-				prefix, err := dkvsindexer.CollectionPathForKey(key)
-				if err != nil {
-					remote.mu.Unlock()
-					t.Fatal(err)
-				}
+				record := remote.records[value.Key]
+				require.NotNil(t, record)
+				original[value.Key] = bytes.Clone(record.Value)
+				delete(remote.records, value.Key)
+				delete(remote.changedAt, value.Key)
+				prefix, err := dkvsindexer.CollectionPathForKey(value.Key)
+				require.NoError(t, err)
 				remote.generations[prefix]++
 			}
 			remote.mu.Unlock()
-			if scenario.localAhead {
-				manager.mutex.Lock()
-				profile := manager.accountProfile
-				state, openErr := account.OpenManagedState(manager.accountSecret, profile.AccountID, profile.StateEnvelope)
-				if openErr == nil {
-					state.Revision++
-					profile.StateEnvelope, openErr = account.SealManagedState(manager.accountSecret, profile.AccountID, state, nil)
-					profile.StateSeq = state.Revision
-					profile.StateHash = accountStateDigest(profile.StateEnvelope)
-				}
-				manager.mutex.Unlock()
-				if openErr != nil {
-					t.Fatal(openErr)
-				}
-			}
-			err = manager.SyncAccountManagementState(context.Background())
-			if !missingState {
-				if !errors.Is(err, ErrDKVSRecordNotFound) {
-					t.Fatalf("existing remote state with a missing blob must reject that reference: %v", err)
-				}
-				remote.mu.Lock()
-				blob := remote.records[dataKey]
-				remote.mu.Unlock()
-				if blob != nil {
-					t.Fatal("corrupt remote baseline was repaired from local data")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(manager.GetWalletCatalog()) != len(before) {
-				t.Fatal("republish changed the wallet catalog")
-			}
+			require.NoError(t, manager.SyncAccountManagementState(context.Background()))
+			require.Equal(t, packageID, manager.accountProfile.PackageID, "TTL recovery must not activate a new package")
+			require.Equal(t, before, manager.GetWalletCatalog())
 			remote.mu.Lock()
-			state, data := remote.records[stateKey], remote.records[dataKey]
-			remote.mu.Unlock()
-			if state == nil || data == nil {
-				t.Fatal("state and data were not republished together")
+			defer remote.mu.Unlock()
+			for key, encoded := range original {
+				require.NotNil(t, remote.records[key])
+				require.Equal(t, encoded, remote.records[key].Value, "TTL retry must retain original ciphertext")
 			}
 		})
 	}
@@ -132,8 +93,9 @@ func TestAccountManagementRereview20261006(t *testing.T) {
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
 
-	t.Run("IndependentWalletCreationMustConverge", func(t *testing.T) {
-		first, second, _ := reviewAccountDevices(t)
+	t.Run("ConcurrentWalletCreationMerges", func(t *testing.T) {
+		first, second, remote := reviewAccountDevices(t)
+		initialCount := len(first.GetWalletCatalog())
 		firstID, _, err := first.CreateWallet("password")
 		if err != nil {
 			t.Fatal(err)
@@ -142,8 +104,6 @@ func TestAccountManagementRereview20261006(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		firstName := first.walletInfoMap[firstID].Name
-		secondName := second.walletInfoMap[secondID].Name
 		firstFingerprint := walletFingerprint(first.walletInfoMap[firstID].Wallet)
 		secondFingerprint := walletFingerprint(second.walletInfoMap[secondID].Wallet)
 		if firstFingerprint == secondFingerprint {
@@ -152,20 +112,73 @@ func TestAccountManagementRereview20261006(t *testing.T) {
 		if err := second.SyncAccountManagementState(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-		firstSync := first.SyncAccountManagementState(context.Background())
-		secondSync := first.SyncAccountManagementState(context.Background())
-		t.Logf("rereview: independent names=%q/%q first_sync=%v retry=%v pending=%d", firstName,
-			secondName, firstSync, secondSync, first.GetAccountManagementStatus().PendingChanges)
-		if firstSync != nil || secondSync != nil {
-			t.Errorf("valid independent wallet additions must converge without a permanent naming conflict")
-			return
+		require.NoError(t, first.SyncAccountManagementState(context.Background()))
+		require.NoError(t, second.SyncAccountManagementState(context.Background()))
+		for _, device := range []*Manager{first, second} {
+			require.Len(t, device.GetWalletCatalog(), initialCount+2)
+			require.NotNil(t, reviewCatalogWallet(t, device, firstFingerprint))
+			require.NotNil(t, reviewCatalogWallet(t, device, secondFingerprint))
+		}
+
+		// Read and explicitly verify the remote record through a synchronized
+		// device before a separate device enters normal account recovery.
+		store, err := first.accountDKVSStore()
+		require.NoError(t, err)
+		stateKey := accountWalletModuleKey(t, first)
+		value, err := store.GetAuthoritative(stateKey)
+		require.NoError(t, err)
+		require.NotNil(t, value)
+		require.NotNil(t, value.record)
+		require.NoError(t, dkvsindexer.VerifySignature(value.record))
+		require.Equal(t, stateKey, value.record.Key)
+		require.NotZero(t, value.record.Seq)
+		state, err := account.OpenManagedState(first.accountSecret, first.accountProfile.AccountID, value.Value)
+		require.NoError(t, err)
+		defer func() {
+			for i := range state.Wallets {
+				zeroBytes(state.Wallets[i].Secret)
+			}
+		}()
+		require.Equal(t, initialCount+2, len(state.Wallets))
+		for _, fingerprint := range []string{firstFingerprint, secondFingerprint} {
+			wallet := findManagedWallet(&state, fingerprint)
+			require.NotNil(t, wallet)
+			require.False(t, wallet.Deleted)
+		}
+		recovered, _, _, _ := newAccountGroup(t, remote)
+		require.NoError(t, restoreImportGroup(t, recovered, first))
+		require.Len(t, recovered.GetWalletCatalog(), initialCount+2)
+		require.NotNil(t, reviewCatalogWallet(t, recovered, firstFingerprint))
+		require.NotNil(t, reviewCatalogWallet(t, recovered, secondFingerprint))
+	})
+
+	t.Run("SequentialWalletCreationPublishesBoth", func(t *testing.T) {
+		first, second, _ := reviewAccountDevices(t)
+		firstID, _, err := first.CreateWallet("password")
+		if err != nil {
+			t.Fatal(err)
+		}
+		firstFingerprint := walletFingerprint(first.walletInfoMap[firstID].Wallet)
+		if err := first.SyncAccountManagementState(context.Background()); err != nil {
+			t.Fatal(err)
 		}
 		if err := second.SyncAccountManagementState(context.Background()); err != nil {
 			t.Fatal(err)
 		}
+		secondID, _, err := second.CreateWallet("password")
+		if err != nil {
+			t.Fatal(err)
+		}
+		secondFingerprint := walletFingerprint(second.walletInfoMap[secondID].Wallet)
+		if err := second.SyncAccountManagementState(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if err := first.SyncAccountManagementState(context.Background()); err != nil {
+			t.Fatal(err)
+		}
 		for _, device := range []*Manager{first, second} {
 			if reviewCatalogWallet(t, device, firstFingerprint) == nil || reviewCatalogWallet(t, device, secondFingerprint) == nil {
-				t.Error("converged catalog lost an independently created wallet")
+				t.Fatal("sequential publication lost a wallet")
 			}
 		}
 	})

@@ -1,0 +1,143 @@
+Language persistence ordering — candidate only
+Date: 2026-10-31
+Status: data-only proposal; not applied, compiled, or tested.
+
+Observed source hashes before drafting
+  main.ts                                      a697661e412bbd3db522506489f380e1b271926eadfc9398d820134c8391e604
+  components/setting/NetworkSetting.vue       294fa1c0a2f1b2f40336af9ae98a8e8620fedd8344250205f6b8667d666b7523
+  locales/en.json                              fdba9cb1b03a2080f909c2f58710fe5d8410cf877b1d78489f212119308635bd
+  locales/zh.json                              0636ac7d7be8076913bcfa4c18a7b1cbce8d5a461d85b8ec46496650eb4a5fe4
+  lib/walletStorage.ts                         ecfcd30fe5118f2de3019b14871bff1443db9b296d1871dd96848cfe332439e0
+  scripts/verify/wallet-basic-e2e.mjs          7c770e249e894a18d8eaba2e3978ca9ba7bf17ce847f158cb79dfd44e8a96aa1
+
+Call-site audit
+  `setLanguage` has one current caller: components/setting/NetworkSetting.vue.
+  The caller can serialize accepted user changes by disabling the language
+  selector synchronously while its IndexedDB write is pending. The selected
+  value remains controlled by the last committed locale. A subsequent choice
+  can start only after the preceding write has resolved, so a late older write
+  cannot overwrite a newer accepted choice. No general queue is proposed for
+  this single call site.
+
+Candidate source patch (against the working-tree contents and hashes above;
+the component/locales already contain staged changes from other work, which
+this incremental candidate preserves)
+
+diff --git a/pwa/main.ts b/pwa/main.ts
+--- a/pwa/main.ts
++++ b/pwa/main.ts
+@@ -192,7 +192,7 @@
+   }
+ }).catch(renderStartupError);
+ 
+-export const setLanguage = (locale: Language) => {
++export const setLanguage = async (locale: Language): Promise<void> => {
++  await walletStorage.setValue('language', locale)
+   i18n.global.locale.value = locale
+-  walletStorage.setValue('language', locale)
+ }
+
+diff --git a/pwa/components/setting/NetworkSetting.vue b/pwa/components/setting/NetworkSetting.vue
+--- a/pwa/components/setting/NetworkSetting.vue
++++ b/pwa/components/setting/NetworkSetting.vue
+@@ -35,7 +35,8 @@
+         <div class="text-sm text-muted-foreground mb-4">
+           {{ $t('networkSetting.languageSwitch') }}
+         </div>
+-        <Select v-model="currentLanguage" @update:model-value="(value) => changeLanguage(value as Language | null)">
++        <Select :model-value="currentLanguage" :disabled="isSavingLanguage"
++          @update:model-value="(value) => changeLanguage(value as Language | null)">
+           <SelectTrigger class="max-w-[160px] bg-gray-900/30 mb-4">
+             <SelectValue :placeholder="$t('networkSetting.selectLanguage')" />
+           </SelectTrigger>
+@@ -53,6 +54,7 @@
+ import { ref, watch } from 'vue'
+ import { useI18n } from 'vue-i18n'
+ import { setLanguage } from '@/main'
++import { useToast } from '@/components/ui/toast-new'
+ import type { Language } from '@/types'
+ import { Network } from '@/types'
+ import { Label } from '@/components/ui/label'
+@@ -83,10 +85,25 @@
+ 
+ const { locale, t } = useI18n()
+ const currentLanguage = ref(locale.value)
++const isSavingLanguage = ref(false)
++const { toast } = useToast()
+ 
+-const changeLanguage = (lang: Language | null) => {
+-  if (lang) {
+-    setLanguage(lang) // 调用 setLanguage 更新语言
+-  }
++const changeLanguage = async (lang: Language | null) => {
++  if (!lang || isSavingLanguage.value || lang === locale.value) return
++  isSavingLanguage.value = true
++  try {
++    await setLanguage(lang)
++    currentLanguage.value = lang
++  } catch (error) {
++    console.error('Language preference save failed:', error)
++    currentLanguage.value = locale.value
++    toast({
++      title: t('common.error'),
++      description: t('networkSetting.languageSaveFailed'),
++      variant: 'destructive',
++    })
++  } finally {
++    isSavingLanguage.value = false
++  }
+ }
+ </script>
+
+diff --git a/pwa/locales/en.json b/pwa/locales/en.json
+--- a/pwa/locales/en.json
++++ b/pwa/locales/en.json
+@@ -742,6 +742,7 @@
+     "testnet": "Testnet",
+     "regtest": "Regtest",
+     "languageSwitch": "Language Switch:",
+-    "selectLanguage": "Select language"
++    "selectLanguage": "Select language",
++    "languageSaveFailed": "Could not save the language preference. The previous language remains active."
+   },
+   "otherSetting": {
+
+diff --git a/pwa/locales/zh.json b/pwa/locales/zh.json
+--- a/pwa/locales/zh.json
++++ b/pwa/locales/zh.json
+@@ -743,6 +743,7 @@
+     "testnet": "Testnet",
+     "regtest": "Regtest",
+     "languageSwitch": "语言切换：",
+-    "selectLanguage": "选择语言"
++    "selectLanguage": "选择语言",
++    "languageSaveFailed": "无法保存语言设置，已保留原语言。"
+   },
+   "otherSetting": {
+
+Regression to add to the existing wallet-basic browser case
+  1. Confirm the starting stored language and visible selector are English.
+  2. In a controlled failure substep, replace only the exposed walletStorage
+     language write with a rejected promise. Select Chinese; assert that the
+     English UI and selected value remain active, the stored language is still
+     English, and the localized save-error toast is visible. Restore the real
+     method in a finally block, then reload/unlock and confirm English and the
+     same wallet identity still load from durable state.
+  3. Select Chinese through the real UI. Before reload, poll the persisted
+     walletStorage language until it is `zh` using a short bound; then reload,
+     unlock, and assert the stored/UI language is Chinese and wallet identity
+     is unchanged.
+  4. Switch back to English through the same UI and verify the stored value.
+     This also proves a later accepted choice is saved after the earlier one.
+
+Why this is narrow
+  `walletStorage.setValue` already awaits the IndexedDB transaction. The
+  candidate only makes `setLanguage` await that existing durable boundary and
+  moves the visible locale change after it. It does not change the storage
+  format, wallet identity, network, or SDK state. The setting component uses
+  the existing toast system and keeps the previous committed locale on error.
+
+Review boundary
+  This changes user-visible behavior: a language choice is not shown as
+  complete until its preference is durably saved, and a failed write produces
+  a localized error. Production code remains unchanged pending approval.

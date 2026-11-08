@@ -56,7 +56,7 @@ func assertInitialAccountManagementStatus(t *testing.T, manager *Manager, wallet
 	status := manager.GetAccountManagementStatus()
 	if !status.Active || status.RecoveryConfigured || status.StorageMode != AccountStorageTemporary ||
 		status.AccountID == "" || status.RootFingerprint == "" || status.RootWalletID != walletID ||
-		status.StateSeq != 1 || status.PendingChanges != 0 || !status.ManagedDataDirty {
+		status.StateSeq != 0 || status.PendingChanges != 0 || !status.ManagedDataDirty {
 		t.Fatalf("initial account management status=%+v", status)
 	}
 	providers := manager.accountManagedDataProviders()
@@ -135,8 +135,16 @@ func TestImportFirstMnemonicWalletDoesNotReuseAnotherMnemonicAuthorization(t *te
 	); err != nil {
 		t.Fatal(err)
 	}
-	if manager.GetAccountManagementStatus().Active || len(manager.accountSecret) != 0 {
-		t.Fatal("another mnemonic reused the root-not-found authorization")
+	status := manager.GetAccountManagementStatus()
+	if !status.Active || status.LocalOnly || status.DiscoveryStatus != "unknown" || status.RecoveryConfigured {
+		t.Fatal("another root reused a not-found observation as write authorization")
+	}
+	before := manager.GetWalletCatalog()
+	if err := manager.UpdateWalletName(manager.GetCurrentWalletId(), "must discover this root"); !errors.Is(err, ErrDKVSPathNotSynced) {
+		t.Fatal(err)
+	}
+	if manager.GetWalletCatalog()[0].Name != before[0].Name {
+		t.Fatal("unknown root edit changed catalog")
 	}
 }
 
@@ -225,6 +233,7 @@ func TestChangePasswordReencryptsWalletsAndAccountSecret(t *testing.T) {
 	if _, _, err := manager.CreateWallet("123456"); err != nil {
 		t.Fatal(err)
 	}
+	establishAccountManagedTestWriteSession(t, manager, manager.http.(*rgb11MemoryDKVSHTTP), "123456")
 	if _, _, err := manager.CreateWallet("123456"); err != nil {
 		t.Fatal(err)
 	}
@@ -280,6 +289,7 @@ func TestChangePasswordFailureKeepsOldCredentials(t *testing.T) {
 	if _, _, err := manager.CreateWallet("123456"); err != nil {
 		t.Fatal(err)
 	}
+	establishAccountManagedTestWriteSession(t, manager, manager.http.(*rgb11MemoryDKVSHTTP), "123456")
 	if _, _, err := manager.CreateWallet("123456"); err != nil {
 		t.Fatal(err)
 	}
@@ -350,6 +360,7 @@ func TestImportPrivateKeyRejectsDuplicateFingerprint(t *testing.T) {
 	if _, err := manager.ImportWalletWithPrivateKey(privateKey, "password"); err != nil {
 		t.Fatal(err)
 	}
+	prepareLocalAccountGroup(t, manager)
 	if _, err := manager.ImportWalletWithPrivateKey(privateKey, "password"); !errors.Is(err, ErrWalletAlreadyExists) {
 		t.Fatalf("duplicate private-key import error=%v", err)
 	}

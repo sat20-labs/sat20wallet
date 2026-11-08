@@ -3,6 +3,7 @@ package wallet
 import (
 	"context"
 	"errors"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -20,30 +21,39 @@ type blockedAccountConfigHTTP struct {
 	continueAfterRelease bool
 }
 
-func assertAccountNetworkReleasedScopeLocks(t *testing.T, manager *Manager) {
+func accountOperationWithin(t *testing.T, name string, operation func() error) error {
 	t.Helper()
-	if manager.channelIdentityMu.TryLock() {
-		manager.channelIdentityMu.Unlock()
-	} else {
-		t.Error("network wait holds channel identity lock")
+	done := make(chan error, 1)
+	go func() { done <- operation() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(2 * time.Second):
+		t.Fatalf("%s did not return during the held network wait", name)
+		return nil
 	}
-	if manager.rgbOperationMu.TryLock() {
-		manager.rgbOperationMu.Unlock()
-	} else {
-		t.Error("network wait holds RGB scope lock")
-	}
-	if manager.mutex.TryLock() {
-		manager.mutex.Unlock()
-	} else {
-		t.Error("network wait holds manager data lock")
+}
+
+func accountStatusWithin(t *testing.T, manager *Manager) AccountManagementStatus {
+	t.Helper()
+	done := make(chan AccountManagementStatus, 1)
+	go func() { done <- manager.GetAccountManagementStatus() }()
+	select {
+	case status := <-done:
+		return status
+	case <-time.After(2 * time.Second):
+		t.Fatal("account status read did not return during the held network wait")
+		return AccountManagementStatus{}
 	}
 }
 
 func TestAccountRemoteCommitDoesNotDependOnCurrentSelection(t *testing.T) {
+	oldChain := _chain
+	_chain = "testnet"
+	t.Cleanup(func() { _chain = oldChain })
 	for _, change := range []string{"account", "wallet"} {
 		t.Run(change, func(t *testing.T) {
-			manager, _, secret := buildRootWrapperSource(t)
-			defer zeroBytes(secret)
+			manager, _, _, _ := accountTTLNoopFixture(t)
 			rootID := manager.status.CurrentWallet
 			if err := manager.EnsureAccount(rootID, 1, "Savings", ""); err != nil {
 				t.Fatal(err)
@@ -55,140 +65,130 @@ func TestAccountRemoteCommitDoesNotDependOnCurrentSelection(t *testing.T) {
 			if err := manager.SwitchWallet(rootID, "password"); err != nil {
 				t.Fatal(err)
 			}
-			snapshot, err := manager.captureAccountManagementSyncSnapshot()
+			catalog, err := manager.accountManagedDataCatalog()
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer zeroBytes(snapshot.secret)
-			state, err := account.OpenManagedState(snapshot.secret, snapshot.profile.AccountID, snapshot.profile.StateEnvelope)
+			entry, err := accountEntry(manager.accountProfile.AccountID, "wallets", AccountManagedDataGlobalScope)
 			if err != nil {
 				t.Fatal(err)
 			}
-			target, _, err := buildAccountManagedStateTarget(state, snapshot)
+			payload, err := manager.exportAccountPayload(entry, catalog)
 			if err != nil {
 				t.Fatal(err)
 			}
-			envelope, err := account.SealManagedState(snapshot.secret, snapshot.profile.AccountID, target, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			commit, err := manager.prepareAccountManagedCommitForSync(target, snapshot, envelope, nil)
+			defer zeroBytes(payload)
+			state, err := account.DecodeManagedState(payload)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if change == "account" {
-				manager.SwitchAccount(1)
+				if err := manager.SwitchAccount(1); err != nil {
+					t.Fatal(err)
+				}
 			} else if err := manager.SwitchWallet(childID, "password"); err != nil {
 				t.Fatal(err)
 			}
 			walletID, accountIndex := manager.status.CurrentWallet, manager.status.CurrentAccount
-			err = manager.withAccountLocalState(false, func() error {
-				_, _, err := manager.applyAccountManagedCommitForSync(commit, snapshot)
-				return err
-			})
-			if err != nil {
-				t.Fatalf("selection-only change invalidated root-account commit: %v", err)
+			if err := manager.importAccountWallets(state); err != nil {
+				t.Fatalf("selection-only change invalidated root-account import: %v", err)
 			}
 			if manager.status.CurrentWallet != walletID || manager.status.CurrentAccount != accountIndex {
-				t.Fatal("root-account commit replaced current wallet/account selection")
+				t.Fatal("root-account import replaced current wallet/account selection")
 			}
 		})
 	}
 }
 
 func TestAccountRemoteCommitRejectsChangedManagedDataGeneration(t *testing.T) {
-	manager, _, secret := buildRootWrapperSource(t)
+	oldChain := _chain
+	_chain = "testnet"
+	t.Cleanup(func() { _chain = oldChain })
+	manager, _, _, _ := accountTTLNoopFixture(t)
+	manager.mutex.RLock()
+	secret := append([]byte(nil), manager.accountSecret...)
+	manager.mutex.RUnlock()
 	defer zeroBytes(secret)
-	snapshot, err := manager.captureAccountManagementSyncSnapshot()
+	accountID := manager.accountProfile.AccountID
+	entry, err := accountEntry(accountID, "wallets", AccountManagedDataGlobalScope)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer zeroBytes(snapshot.secret)
-	state, err := account.OpenManagedState(snapshot.secret, snapshot.profile.AccountID, snapshot.profile.StateEnvelope)
+	catalog, err := manager.accountManagedDataCatalog()
 	if err != nil {
 		t.Fatal(err)
 	}
-	commit, err := manager.prepareAccountManagedCommitForSync(state, snapshot, snapshot.profile.StateEnvelope, nil)
+	before, err := manager.readAccountLocal(accountID, entry.Provider, entry.Scope)
+	if err != nil || before == nil {
+		t.Fatalf("wallet module baseline: %v", err)
+	}
+	payload, err := openAccountPayload(secret, accountID, _chain, entry, before.Value)
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager.markAccountManagedDataDirtyDeferred(rgb11AccountManagedProviderID)
-	generation := manager.accountProfile.ManagedDataGeneration
-	err = manager.withAccountLocalState(false, func() error {
-		_, _, err := manager.applyAccountManagedCommitForSync(commit, snapshot)
-		return err
-	})
+	defer zeroBytes(payload)
+	if err := manager.EnsureAccount(manager.status.CurrentWallet, 1, "New local account", ""); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := manager.readAccountLocal(accountID, entry.Provider, entry.Scope)
+	if err != nil || changed == nil || changed.Generation <= before.Generation {
+		t.Fatalf("catalog edit did not stage a module generation: %v", err)
+	}
+	err = manager.importAccountValue(entry, catalog, before, nil, before.Value, payload, false)
 	if !errors.Is(err, errAccountSnapshotChanged) {
-		t.Fatalf("changed managed-data generation accepted: %v", err)
+		t.Fatalf("changed module generation accepted stale import: %v", err)
 	}
-	if manager.accountProfile.ManagedDataGeneration != generation {
-		t.Fatal("stale remote commit replaced managed-data generation")
-	}
-	if err := manager.checkAccountManagedDataImport(); err != nil {
-		t.Fatalf("stale result created import marker: %v", err)
+	after, err := manager.readAccountLocal(accountID, entry.Provider, entry.Scope)
+	if err != nil || !reflect.DeepEqual(changed, after) {
+		t.Fatalf("stale import replaced newer module state: %v", err)
 	}
 }
 
-// PWA screen locking leaves the SDK runtime running. Reopening that screen
-// must not invalidate work fetched while password authentication was pending.
 func TestAccountRemoteCommitSurvivesPWAReauthentication(t *testing.T) {
-	for _, restoreSession := range []bool{false, true} {
-		name := "running-session"
-		if restoreSession {
-			name = "cleared-session"
-		}
-		t.Run(name, func(t *testing.T) {
-			manager, _, secret := buildRootWrapperSource(t)
-			defer zeroBytes(secret)
-			snapshot, err := manager.captureAccountManagementSyncSnapshot()
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer zeroBytes(snapshot.secret)
-			state, err := account.OpenManagedState(snapshot.secret, snapshot.profile.AccountID, snapshot.profile.StateEnvelope)
-			if err != nil {
-				t.Fatal(err)
-			}
-			target, _, err := buildAccountManagedStateTarget(state, snapshot)
-			if err != nil {
-				t.Fatal(err)
-			}
-			envelope, err := account.SealManagedState(snapshot.secret, snapshot.profile.AccountID, target, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			commit, err := manager.prepareAccountManagedCommitForSync(target, snapshot, envelope, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := manager.UnlockWallet("incorrect-password"); err == nil {
-				t.Fatal("incorrect password authenticated")
-			}
-			if !manager.accountSyncSnapshotCurrentLocked(snapshot) {
-				t.Fatal("failed authentication invalidated the running session")
-			}
-			wallet := manager.wallet
-			if restoreSession {
-				manager.clearAccountManagementSession()
-			}
-			if _, err := manager.UnlockWallet("password"); err != nil {
-				t.Fatal(err)
-			}
-			if manager.wallet != wallet {
-				t.Fatal("screen reauthentication replaced the wallet runtime")
-			}
-			err = manager.withAccountLocalState(false, func() error {
-				_, _, err := manager.applyAccountManagedCommitForSync(commit, snapshot)
-				return err
-			})
-			if restoreSession {
-				if !errors.Is(err, errAccountSnapshotChanged) {
-					t.Fatalf("cleared session accepted an old remote commit: %v", err)
-				}
-			} else if err != nil {
-				t.Fatalf("PWA screen reauthentication rejected a valid remote commit: %v", err)
-			}
-		})
+	oldChain := _chain
+	_chain = "testnet"
+	t.Cleanup(func() { _chain = oldChain })
+	manager, _, _, _ := accountTTLNoopFixture(t)
+	manager.mutex.RLock()
+	secret := append([]byte(nil), manager.accountSecret...)
+	manager.mutex.RUnlock()
+	defer zeroBytes(secret)
+	catalog, err := manager.accountManagedDataCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := accountEntry(manager.accountProfile.AccountID, "wallets", AccountManagedDataGlobalScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := manager.exportAccountPayload(entry, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zeroBytes(payload)
+	state, err := account.DecodeManagedState(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wallet := manager.wallet
+	generation := manager.accountGeneration
+	if _, err := manager.UnlockWallet("incorrect-password"); err == nil {
+		t.Fatal("incorrect password authenticated")
+	}
+	if manager.accountGeneration != generation || manager.wallet != wallet {
+		t.Fatal("failed authentication invalidated the running wallet session")
+	}
+	if _, err := manager.UnlockWallet("password"); err != nil {
+		t.Fatal(err)
+	}
+	if manager.wallet != wallet || manager.accountGeneration != generation {
+		t.Fatal("screen reauthentication replaced the wallet runtime or session")
+	}
+	if err := manager.importAccountWallets(state); err != nil {
+		t.Fatalf("PWA screen reauthentication rejected a valid wallet module import: %v", err)
+	}
+	if manager.wallet != wallet {
+		t.Fatal("wallet module import replaced the running wallet runtime")
 	}
 }
 
@@ -202,27 +202,38 @@ func (h *blockedAccountConfigHTTP) DKVSClientConfig() (*dkvsindexer.ClientConfig
 }
 
 func TestAccountActiveMailboxReadRejectsChangedCatalog(t *testing.T) {
-	manager, _, secret := buildRootWrapperSource(t)
-	defer zeroBytes(secret)
-	// RGB is stable-only; use the existing active-provider stub to exercise mailbox I/O.
+	oldChain := _chain
+	_chain = "testnet"
+	defer func() { _chain = oldChain }()
+	db := &finalBoundaryReadDB{}
+	manager, _, _, _ := accountTTLNoopFixture(t, db.attach)
+	manager.accountBackgroundWG.Wait()
 	if err := manager.RegisterAccountManagedDataProvider(&accountManagedActiveDataProviderStub{
 		accountManagedDataProviderStub: accountManagedDataProviderStub{id: "latency-active"},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	remote := &blockedAccountConfigHTTP{rgb11MemoryDKVSHTTP: newRGB11MemoryDKVSHTTP(),
-		started: make(chan struct{}), release: make(chan struct{}), continueAfterRelease: true}
-	manager.http = remote
-	manager.dkvs.mu.Lock()
-	manager.dkvs.clients = make(map[string]*SatsNetDKVSClient)
-	manager.dkvs.mu.Unlock()
-	manager.accountProfile.RecoveryConfigured = true
+	started, release := make(chan struct{}), make(chan struct{})
+	var gateOnce, releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
+	// Active import reads the synchronized local mailbox cache. Gate that real
+	// read after catalog capture, rather than an unrelated config HTTP request.
+	db.arm(func([]byte) error {
+		stack := make([]byte, 16<<10)
+		if strings.Contains(string(stack[:runtime.Stack(stack, false)]), ".prepareAccountManagedActiveDataImport(") {
+			gateOnce.Do(func() { close(started); <-release })
+		}
+		return nil
+	})
 	done := make(chan error, 1)
 	go func() { done <- manager.importAccountManagedActiveDataForSync(false) }()
 	select {
-	case <-remote.started:
-	case <-time.After(2 * time.Second):
-		t.Fatal("mailbox read did not reach network")
+	case <-started:
+	case err := <-done:
+		t.Fatalf("mailbox import ended before cache gate: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("mailbox read did not reach cache")
 	}
 	editDone := make(chan error, 1)
 	go func() { editDone <- manager.EnsureAccount(manager.status.CurrentWallet, 1, "Savings", "") }()
@@ -232,109 +243,83 @@ func TestAccountActiveMailboxReadRejectsChangedCatalog(t *testing.T) {
 			t.Error(err)
 		}
 	case <-time.After(2 * time.Second):
-		t.Error("catalog edit blocked behind mailbox network read")
+		t.Error("catalog edit blocked behind mailbox cache read")
 	}
-	close(remote.release)
+	unblock()
 	select {
 	case err := <-done:
 		if !errors.Is(err, errAccountSnapshotChanged) {
 			t.Fatalf("changed mailbox catalog: %v", err)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("mailbox import did not finish")
 	}
 }
 
-func TestAccountActiveMailboxReadSurvivesPWAReauthentication(t *testing.T) {
-	manager, _, secret := buildRootWrapperSource(t)
-	defer zeroBytes(secret)
-	// RGB is stable-only; use the existing active-provider stub to exercise mailbox I/O.
-	if err := manager.RegisterAccountManagedDataProvider(&accountManagedActiveDataProviderStub{
-		accountManagedDataProviderStub: accountManagedDataProviderStub{id: "latency-active"},
+func TestAccountDiscoveryReadOnly(t *testing.T) {
+	old := _chain
+	_chain = "testnet"
+	defer func() { _chain = old }()
+	manager := newAccountManagementAutoTestManager(t)
+	base := newRGB11MemoryDKVSHTTP()
+	remote := &blockedAccountConfigHTTP{rgb11MemoryDKVSHTTP: base,
+		started: make(chan struct{}), release: make(chan struct{})}
+	configureRGB11DKVSTestManager(manager, remote)
+	if _, err := manager.ImportWallet(accountRootWrapperTestMnemonic, "password"); err != nil {
+		t.Fatal(err)
+	}
+	before := manager.GetWalletCatalog()
+	if err := manager.StartDKVSSync(); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.StopDKVSSync()
+	var once sync.Once
+	release := func() { once.Do(func() { close(remote.release) }) }
+	defer release()
+	select {
+	case <-remote.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("discovery did not reach online configuration")
+	}
+	if err := accountOperationWithin(t, "wallet reauthentication", func() error {
+		_, err := manager.UnlockWallet("password")
+		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
-	remote := &blockedAccountConfigHTTP{rgb11MemoryDKVSHTTP: newRGB11MemoryDKVSHTTP(),
-		started: make(chan struct{}), release: make(chan struct{}), continueAfterRelease: true}
-	var release sync.Once
-	defer release.Do(func() { close(remote.release) })
-	manager.http = remote
-	manager.dkvs.mu.Lock()
-	manager.dkvs.clients = make(map[string]*SatsNetDKVSClient)
-	manager.dkvs.mu.Unlock()
-	manager.accountProfile.RecoveryConfigured = true
-	done := make(chan error, 1)
-	go func() { done <- manager.importAccountManagedActiveDataForSync(false) }()
-	select {
-	case <-remote.started:
-	case <-time.After(2 * time.Second):
-		t.Fatal("mailbox read did not reach network")
-	}
-	assertAccountNetworkReleasedScopeLocks(t, manager)
-	if _, err := manager.UnlockWallet("password"); err != nil {
+	if err := accountOperationWithin(t, "RGB state read", func() error {
+		_, err := manager.GetRGB11State()
+		return err
+	}); err != nil {
 		t.Fatal(err)
 	}
-	release.Do(func() { close(remote.release) })
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("PWA screen reauthentication interrupted mailbox sync: %v", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("mailbox import did not finish")
+	if err := accountOperationWithin(t, "rejected local edit", func() error {
+		return manager.UpdateWalletName(manager.GetCurrentWalletId(), "unknown must not write")
+	}); err == nil {
+		t.Fatal("unknown discovery permitted a local edit")
+	} else if !errors.Is(err, ErrDKVSPathNotSynced) {
+		t.Fatalf("unknown discovery edit error=%v", err)
 	}
-}
-
-func TestTemporaryAccountConfigWaitDoesNotBlockLocalWalletAccess(t *testing.T) {
-	oldChain := _chain
-	_chain = "testnet"
-	defer func() { _chain = oldChain }()
-	manager, _, secret := buildRootWrapperSource(t)
-	defer zeroBytes(secret)
-	remote := &blockedAccountConfigHTTP{rgb11MemoryDKVSHTTP: newRGB11MemoryDKVSHTTP(), started: make(chan struct{}), release: make(chan struct{})}
-	manager.http = remote
-	manager.dkvs.mu.Lock()
-	manager.dkvs.clients = make(map[string]*SatsNetDKVSClient)
-	manager.dkvs.mu.Unlock()
-	manager.accountProfile.StorageMode = AccountStorageTemporary
-	manager.accountProfile.RecoveryConfigured = false
-	manager.accountProfile.ManagedDataDirty = true
-	syncDone := make(chan error, 1)
-	go func() { syncDone <- manager.SyncAccountManagementState(context.Background()) }()
-	select {
-	case <-remote.started:
-	case <-time.After(2 * time.Second):
-		t.Fatal("temporary account sync did not reach config request")
+	if !reflect.DeepEqual(before, manager.GetWalletCatalog()) {
+		t.Fatal("rejected discovery edit changed local data")
 	}
-	assertAccountNetworkReleasedScopeLocks(t, manager)
-	unlockDone, stateDone := make(chan error, 1), make(chan error, 1)
-	go func() { _, err := manager.UnlockWallet("password"); unlockDone <- err }()
-	go func() { _, err := manager.GetRGB11State(); stateDone <- err }()
-	status := manager.GetAccountManagementStatus()
-	if !status.Active || !status.ManagedDataDirty || status.RecoveryConfigured {
-		t.Error("fixture does not match temporary dirty account status")
+	if status := accountStatusWithin(t, manager); status.LocalOnly || status.DKVSWriteAllowed {
+		t.Fatalf("unknown discovery was called inactive: %+v", status)
 	}
-	for name, done := range map[string]chan error{"reauthenticate": unlockDone, "RGB state": stateDone} {
-		select {
-		case err := <-done:
-			done <- err
-		case <-time.After(5 * time.Second):
-			t.Errorf("%s blocked behind DKVS config request", name)
-		}
+	release()
+	manager.StopDKVSSync()
+	manager.SetDKVSHttpClient(base)
+	if _, err := manager.syncDKVSOnce(); err != nil {
+		t.Fatal(err)
 	}
-	close(remote.release)
-	if err := <-syncDone; !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("config request error = %v", err)
+	if !manager.GetAccountManagementStatus().LocalOnly {
+		t.Fatal("verified absence did not establish local-only mode")
 	}
-	for name, done := range map[string]chan error{"reauthenticate": unlockDone, "RGB state": stateDone} {
-		select {
-		case err := <-done:
-			if err != nil {
-				t.Errorf("%s after release: %v", name, err)
-			}
-		case <-time.After(2 * time.Second):
-			t.Errorf("%s did not resume after config request failed", name)
-		}
+	if err := manager.UpdateWalletName(manager.GetCurrentWalletId(), "verified inactive"); err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshotRGB11MemoryRecords(base)) != 0 {
+		t.Fatal("inactive account uploaded a private backup")
 	}
 }
 
@@ -358,12 +343,11 @@ func TestAccountRootWrapperRemoteWaitDoesNotBlockLocalWalletAccess(t *testing.T)
 	case <-time.After(2 * time.Second):
 		t.Fatal("background wrapper did not reach the remote wait")
 	}
-	assertAccountNetworkReleasedScopeLocks(t, manager)
 	unlockDone := make(chan error, 1)
 	stateDone := make(chan error, 1)
 	go func() { _, err := manager.UnlockWallet("password"); unlockDone <- err }()
 	go func() { _, err := manager.GetRGB11State(); stateDone <- err }()
-	status := manager.GetAccountManagementStatus()
+	status := accountStatusWithin(t, manager)
 	if !status.Active {
 		t.Error("local account status unexpectedly unavailable")
 	}

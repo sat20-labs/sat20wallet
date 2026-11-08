@@ -95,7 +95,9 @@ func (p *NetClient) SendGetRequestContext(ctx context.Context, u *URL) ([]byte, 
 	respBytes, err := io.ReadAll(httpResponse.Body)
 	httpResponse.Body.Close()
 	if err != nil {
-		return nil, fmt.Errorf("error reading json reply: %v", err)
+		// Body failures are transport failures too, including Fetch stream
+		// errors in WASM. Preserve that classification and the original cause.
+		return nil, &url.Error{Op: "read", URL: requestURL.String(), Err: err}
 	}
 	if httpResponse.StatusCode < 200 || httpResponse.StatusCode >= 300 {
 		return nil, newHTTPResponseError(httpResponse.StatusCode, respBytes)
@@ -128,7 +130,7 @@ func (p *NetClient) SendPostRequestContext(ctx context.Context, u *URL, marshall
 	respBytes, err := io.ReadAll(httpResponse.Body)
 	httpResponse.Body.Close()
 	if err != nil {
-		return nil, fmt.Errorf("error reading json reply: %v", err)
+		return nil, &url.Error{Op: "read", URL: requestURL.String(), Err: err}
 	}
 	if httpResponse.StatusCode < 200 || httpResponse.StatusCode >= 300 {
 		return nil, newHTTPResponseError(httpResponse.StatusCode, respBytes)
@@ -167,7 +169,7 @@ func (p *NetClient) SendDeleteRequestContext(ctx context.Context, u *URL, marsha
 	respBytes, err := io.ReadAll(httpResponse.Body)
 	httpResponse.Body.Close()
 	if err != nil {
-		return nil, fmt.Errorf("error reading json reply: %v", err)
+		return nil, &url.Error{Op: "read", URL: requestURL.String(), Err: err}
 	}
 	if httpResponse.StatusCode < 200 || httpResponse.StatusCode >= 300 {
 		return nil, newHTTPResponseError(httpResponse.StatusCode, respBytes)

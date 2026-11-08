@@ -14,6 +14,11 @@ import (
 // receiver removes current mailbox state without retaining deletion history.
 func TestSDKDKVSActiveMailbox(t *testing.T) {
 	f, _, _, _ := sdkDKVSReviewPaidFixture(t)
+	runSDKDKVSActiveMailbox(t, f)
+}
+
+func runSDKDKVSActiveMailbox(t *testing.T, f *templateFixture) {
+	t.Helper()
 	// P2P/DKVS readiness precedes STP startup after the indexer catches up.
 	// Wait for the real service listener before exercising mailbox RPCs.
 	require.Eventually(t, func() bool {
@@ -37,6 +42,10 @@ func TestSDKDKVSActiveMailbox(t *testing.T) {
 	before, err := client.GetRecord(key)
 	require.NoError(t, err)
 	require.NotEmpty(t, before.Value)
+	tipBefore, heightBefore, err := f.Network.Core.Client.GetBestBlock()
+	require.NoError(t, err)
+	t.Logf("dkvs-active-mailbox-state: account=%s message=%s key=%s tip=%s height=%d after_send=present:%d:%s",
+		account, message.MessageID, key, tipBefore, heightBefore, before.Seq, dkvs.RecordHash(before).String())
 
 	t.Run("DeleteAndRepeatWithoutTombstone", func(t *testing.T) {
 		require.NoError(t, manager.DeleteMailboxMessage(root, key))
@@ -46,5 +55,9 @@ func TestSDKDKVSActiveMailbox(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, dkvs.KeyStateNeverSeen, state.Status)
 		require.NoError(t, manager.DeleteMailboxMessage(root, key), "already absent is idempotent without a deleted-key floor")
+		tipAfter, heightAfter, err := f.Network.Core.Client.GetBestBlock()
+		require.NoError(t, err)
+		t.Logf("dkvs-active-mailbox-state: account=%s message=%s key=%s tip=%s height=%d after_delete=absent state=%s",
+			account, message.MessageID, key, tipAfter, heightAfter, state.Status)
 	})
 }

@@ -1,5 +1,5 @@
 <template>
-  <LayoutSecond title="Node Setting">
+  <LayoutSecond :title="t('settingsUi.nodeTitle')">
     <div class="max-w-xl mx-auto my-8">
       <Card>
         <CardHeader>
@@ -24,20 +24,20 @@
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <div v-if="minerInfoLoading" class="text-sm text-muted-foreground">{{ $t('loading', '加载中...') }}</div>
+          <div v-if="minerInfoLoading" class="text-sm text-muted-foreground">{{ $t('loading') }}</div>
           <div v-else-if="minerInfoError" class="text-sm text-destructive">{{ minerInfoError.message }}</div>
           <div v-else-if="isStaked" class="space-y-4">
-            <p class="text-sm text-muted-foreground">{{ $t('nodeSetting.alreadyStaked', '已质押节点') }}</p>
+            <p class="text-sm text-muted-foreground">{{ $t('nodeSetting.alreadyStaked') }}</p>
             <Button variant="destructive" class="w-full" @click="onUnstake"
               :disabled="isLoading || unstakeSubmitted" :loading="isLoading">
-              {{ $t('nodeSetting.unstake', '取消质押') }}
+              {{ $t('nodeSetting.unstake') }}
             </Button>
           </div>
           <div v-else class="flex flex-col gap-4">
-            <Button aria-label="become Core Node" @click="onStake(true)" :disabled="isLoading" :loading="isLoading && isCore">
+            <Button :aria-label="$t('nodeSetting.becomeCoreNode')" @click="onStake(true)" :disabled="isLoading" :loading="isLoading && isCore">
               {{ $t('nodeSetting.becomeCoreNode') }}
             </Button>
-            <Button variant="secondary" aria-label="become Miner" @click="onStake(false)"
+            <Button variant="secondary" :aria-label="$t('nodeSetting.becomeMiner')" @click="onStake(false)"
               :disabled="isLoading" :loading="isLoading && !isCore">
               {{ $t('nodeSetting.becomeMiner') }}
             </Button>
@@ -48,27 +48,27 @@
           <Alert :variant="resultSuccess ? 'default' : 'destructive'">
             <!-- <AlertTitle>{{ resultSuccess ? 'Operate Successfull' : 'Operation Fail' }}</AlertTitle> -->
             <AlertDescription>{{ resultMsg }}</AlertDescription>
-            <div v-if="resultSuccess && pendingAction !== 'unstake'" class="mt-2 text-xs text-gray-500">Node Type: <span class="text-zinc-400 ml-1">{{
-              resultCore ? 'Core Node' : 'Mining Node' }}</span></div>
-            <div v-if="txId" class="mt-2 text-xs text-gray-500">Transaction ID:<span class="text-zinc-400 ml-1">
+            <div v-if="resultSuccess && pendingAction !== 'unstake'" class="mt-2 text-xs text-gray-500">{{ t('settingsUi.nodeType') }} <span class="text-zinc-400 ml-1">{{
+              resultCore ? t('settingsUi.coreNode') : t('settingsUi.miningNode') }}</span></div>
+            <div v-if="txId" class="mt-2 text-xs text-gray-500">{{ t('settingsUi.transactionId') }}<span class="text-zinc-400 ml-1">
                 <a v-if="pendingAction !== 'unstake'" :href="generateMempoolUrl({ network: network, path: `tx/${txId}` })" target="_blank"
                   class="text-sky-500 hover:text-sky-400 underline cursor-pointer">
                   {{ hideAddress(txId) }}
                 </a>
                 <span v-else class="font-mono">{{ txId }}</span>
               </span></div>
-            <div v-if="resvId" class="mt-2 text-xs text-gray-500">Reservation ID: <span class="text-zinc-400 ml-1">{{
+            <div v-if="resvId" class="mt-2 text-xs text-gray-500">{{ t('settingsUi.reservationId') }} <span class="text-zinc-400 ml-1">{{
               hideAddress(resvId) }}</span></div>
-            <div v-if="assetName" class="mt-2 text-xs text-gray-500">Asset Name: <span class="text-zinc-400 ml-1">{{
+            <div v-if="assetName" class="mt-2 text-xs text-gray-500">{{ t('settingsUi.assetName') }} <span class="text-zinc-400 ml-1">{{
               assetName }}</span></div>
-            <div v-if="amt" class="mt-2 text-xs text-gray-500">Staked Amount: <span class="text-zinc-400 ml-1">{{ amt
+            <div v-if="amt" class="mt-2 text-xs text-gray-500">{{ t('settingsUi.stakedAmount') }} <span class="text-zinc-400 ml-1">{{ amt
             }}</span></div>
           </Alert>
           <!-- <template v-if="resultSuccess">
-            <div v-if="txId" class="mt-2 text-xs text-gray-500">交易ID：{{ hideAddress(txId) }}</div>
-            <div v-if="resvId" class="mt-2 text-xs text-gray-500">预定ID：{{ hideAddress(resvId) }}</div>
-            <div v-if="assetName" class="mt-2 text-xs text-gray-500">资产名称：{{ assetName }}</div>
-            <div v-if="amt" class="mt-2 text-xs text-gray-500">质押数量：{{ amt }}</div>
+            <div v-if="txId" class="mt-2 text-xs text-gray-500">{{ t('settingsUi.transactionId') }}{{ hideAddress(txId) }}</div>
+            <div v-if="resvId" class="mt-2 text-xs text-gray-500">{{ t('settingsUi.reservationId') }}{{ hideAddress(resvId) }}</div>
+            <div v-if="assetName" class="mt-2 text-xs text-gray-500">{{ t('settingsUi.assetName') }}{{ assetName }}</div>
+            <div v-if="amt" class="mt-2 text-xs text-gray-500">{{ t('settingsUi.stakedAmount') }}{{ amt }}</div>
           </template> -->
         </CardFooter>
       </Card>
@@ -76,13 +76,13 @@
         <DialogContent class="w-[95%]">
           <DialogHeader>
             <DialogTitle><span class="flex justify-center items-center text-zinc-300 text-lg">
-                <Icon icon="lucide:message-circle-question-mark" class="w-8 h-8 mr-1 text-green-500" /> {{ pendingAction === 'unstake' ? $t('nodeSetting.confirmUnstake', '确认取消质押') : isCore ?
+                <Icon icon="lucide:message-circle-question-mark" class="w-8 h-8 mr-1 text-green-500" /> {{ pendingAction === 'unstake' ? $t('nodeSetting.confirmUnstake') : isCore ?
                   $t('nodeSetting.confirmCoreDescription') : $t('nodeSetting.confirmMinerDescription') }}<br>
               </span></DialogTitle>
             <hr class="my-2 border-zinc-950" />
             <DialogDescription>
               <p class="text-center py-2">
-                {{ pendingAction === 'unstake' ? $t('nodeSetting.confirmUnstakeDescription', '确认解除当前节点质押？提交后请在操作日志中查看最终结果。') : $t('nodeSetting.confirmDescription') }}
+                {{ pendingAction === 'unstake' ? $t('nodeSetting.confirmUnstakeDescription') : $t('nodeSetting.confirmDescription') }}
               </p>
             </DialogDescription>
           </DialogHeader>
@@ -100,6 +100,8 @@
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
+const { t } = useI18n()
 import { ref, computed } from 'vue'
 import { useQuery } from '@tanstack/vue-query'
 import { satnetApi } from '@/apis'
@@ -189,14 +191,14 @@ async function confirmStake() {
     console.log('res', res);
 
     if (err) {
-      resultMsg.value = err.message || '操作失败'
+      resultMsg.value = err.message || t('settingsUi.operationFailed')
       resultSuccess.value = false
       txId.value = ''
       resvId.value = ''
       assetName.value = ''
       amt.value = ''
     } else {
-      resultMsg.value = '操作成功，节点质押已提交！'
+      resultMsg.value = t('settingsUi.stakeSubmitted')
       resultSuccess.value = true
       resultCore.value = submittedCore
       txId.value = res && res.txId ? res.txId : ''
@@ -221,7 +223,7 @@ async function confirmStake() {
       }
     }
   } catch (e: any) {
-    resultMsg.value = e.message || '未知错误'
+    resultMsg.value = e.message || t('settingsUi.unknownError')
     resultSuccess.value = false
     txId.value = ''
     resvId.value = ''
@@ -244,16 +246,16 @@ async function confirmUnstake() {
   try {
     const [err, res] = await walletManager.minerUnstake(btcFeeRate.value.toString())
     if (err) {
-      resultMsg.value = err.message || '取消质押提交失败'
+      resultMsg.value = err.message || t('settingsUi.unstakeFailed')
     } else {
       unstakeSubmitted.value = true
       resultSuccess.value = true
-      resultMsg.value = '取消质押已提交，请在操作日志中查看最终结果。'
+      resultMsg.value = t('settingsUi.unstakeSubmitted')
       txId.value = res?.txId || ''
       resvId.value = res?.resvId || ''
     }
   } catch (error: any) {
-    resultMsg.value = error.message || '取消质押提交失败'
+    resultMsg.value = error.message || t('settingsUi.unstakeFailed')
   } finally {
     isLoading.value = false
   }

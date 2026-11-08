@@ -18,13 +18,15 @@ import (
 // Import exactly the authenticated current public-pool source. This projection
 // is owned by the captured account, but ordinary wallet selection excludes its
 // P2WSH script; only an authorized channel-send context may consume it.
-func (p *rgb11Manager) importObservedNativePoolTransfer(ctx context.Context, source *NativeChannelSource) (*RGB11ImportResult, error) {
+func (p *rgb11Manager) importObservedNativePoolTransfer(ctx context.Context, source *NativeChannelSource,
+	reconcile bool) (*RGB11ImportResult, error) {
 	return retryNativeProjection(ctx, func() (*RGB11ImportResult, error) {
-		return p.importObservedNativePoolTransferAttempt(ctx, source)
+		return p.importObservedNativePoolTransferAttempt(ctx, source, reconcile)
 	})
 }
 
-func (p *rgb11Manager) importObservedNativePoolTransferAttempt(ctx context.Context, source *NativeChannelSource) (*RGB11ImportResult, error) {
+func (p *rgb11Manager) importObservedNativePoolTransferAttempt(ctx context.Context, source *NativeChannelSource,
+	reconcile bool) (*RGB11ImportResult, error) {
 	if p == nil || p.projectionStore == nil || p.evidence == nil || p.wallet == nil || source == nil || source.Output == nil {
 		return nil, ErrRGB11Inconsistent
 	}
@@ -76,7 +78,15 @@ func (p *rgb11Manager) importObservedNativePoolTransferAttempt(ctx context.Conte
 	if err != nil {
 		return nil, err
 	}
-	current, _, err := p.exportRGB11WalletSnapshot(walletID)
+	var current *RGB11WalletSnapshot
+	if reconcile {
+		// Complete already-persisted material is revalidated together with
+		// the recorded settlement below. A cached old-proof fault must not
+		// prevent its exact, authenticated consumer from entering the candidate.
+		current, err = p.readRGB11Local(walletID)
+	} else {
+		current, _, err = p.readRGB11StrictSnapshot(walletID, true)
+	}
 	if err != nil {
 		return nil, err
 	}

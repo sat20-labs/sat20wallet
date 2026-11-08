@@ -23,7 +23,7 @@
         </label>
         <label class="block space-y-1">
           <span class="text-xs text-zinc-400">{{ $t('rgb11Transfer.name') }}</span>
-          <Input v-model="name" maxlength="40" autocomplete="off" placeholder="Tether USD" />
+          <Input v-model="name" maxlength="40" autocomplete="off" :placeholder="$t('walletComponents.nameExample')" />
           <span class="block text-xs text-zinc-500">{{ $t('rgb11Transfer.nameHelp') }}</span>
         </label>
         <label class="block space-y-1">
@@ -74,6 +74,9 @@
           :class="warning ? 'text-amber-500' : success ? 'text-emerald-400' : 'text-red-400'">
           {{ message }}
         </p>
+        <p v-if="!issuedSummary && !rgb11WriteAllowed" class="text-xs text-amber-400" role="status">
+          {{ t('accountManagement.readiness.moduleBlocked') }}
+        </p>
         <div v-if="issuedSummary" class="space-y-2 rounded-md border border-zinc-800 bg-zinc-950 p-3">
           <div>
             <p class="text-xs text-zinc-500">{{ $t('rgb11Transfer.issuedTicker') }}</p>
@@ -104,7 +107,7 @@
             {{ $t('rgb11Transfer.copyContract') }}
           </Button>
         </div>
-        <Button class="w-full" :disabled="loading" @click="handlePrimaryAction">
+        <Button class="w-full" :disabled="loading || (!issuedSummary && !rgb11WriteAllowed)" @click="handlePrimaryAction">
           {{ loading
             ? $t('rgb11Transfer.issuing')
             : issuedSummary
@@ -122,8 +125,10 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { storeToRefs } from 'pinia'
 import { useClipboard } from '@vueuse/core'
 import walletManager from '@/utils/sat20'
+import { useAccountManagementStore } from '@/store/accountManagement'
 import { downloadRGB11ContractFile } from '@/utils/rgb11ContractFile'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -156,6 +161,13 @@ const issuedSummary = ref<{
 } | null>(null)
 const { t } = useI18n()
 const { copy } = useClipboard()
+const accountManagementState = useAccountManagementStore()
+const { rgb11WriteAllowed } = storeToRefs(accountManagementState)
+const displayOperationError = (error: any, fallbackKey: string) => {
+  const quotaKey = accountManagementState.quotaMessageKeyForCode(error?.code)
+  if (quotaKey) return [error?.message, t(quotaKey)].filter(Boolean).join(' ')
+  return error?.message || t(fallbackKey)
+}
 
 const handleOpenChange = (open: boolean) => {
   if (!open && loading.value) return
@@ -227,6 +239,12 @@ const setAdvancedAllocations = (enabled: boolean) => {
 }
 
 const runIssue = async () => {
+  if (!rgb11WriteAllowed.value) {
+    message.value = t('accountManagement.readiness.moduleBlocked')
+    success.value = false
+    warning.value = false
+    return
+  }
   const issueAmounts = parsedIssueAmounts.value
   const inflation = parsedInflationAmounts.value
   const issuePrecision = parsedPrecision.value
@@ -280,7 +298,7 @@ const runIssue = async () => {
     message.value = t('rgb11Transfer.issued')
     emit('completed')
   } catch (error: any) {
-    message.value = error?.message || t('rgb11Transfer.issueFailed')
+    message.value = displayOperationError(error, 'rgb11Transfer.issueFailed')
   } finally {
     loading.value = false
   }

@@ -4,6 +4,7 @@ import { tryit } from 'radash'
 import { walletRequestSessionGuard } from '@/lib/walletSession'
 import { beginPwaWalletOperation, finishPwaOperation } from '@/utils/pwaOperationLog'
 import { noteWasmOperation } from '@/utils/wasmRuntimeDiagnostics'
+import { wasmResponseError } from '@/utils/wasmError'
 
 export interface MnemonicValidation {
   normalized: string
@@ -14,6 +15,8 @@ export interface MnemonicValidation {
   address: string
 }
 class WalletManager {
+  private initTask?: Promise<[Error | undefined, any | undefined]>
+
   private async _handleRequest(
     methodName: string,
     ...args: any[]
@@ -35,7 +38,7 @@ class WalletManager {
         noteWasmOperation(methodName, 'returned')
         trace('returned')
         checkSession()
-        if (response && response.code !== 0) throw new Error(response.msg)
+        if (response && response.code !== 0) throw wasmResponseError(response.msg, response.error_code)
         trace('finish-log')
         await finishPwaOperation(operation, null, response?.data)
         trace('finished')
@@ -313,7 +316,15 @@ class WalletManager {
     config: any,
     logLevel: number
   ): Promise<[Error | undefined, void | undefined]> {
-    return this._handleRequest('init', config, logLevel)
+    if (!this.initTask) {
+      const task = this._handleRequest('init', config, logLevel)
+      this.initTask = task
+      void task.then(
+        ([error]) => { if (error && this.initTask === task) this.initTask = undefined },
+        () => { if (this.initTask === task) this.initTask = undefined },
+      )
+    }
+    return this.initTask
   }
 
   async start(): Promise<[Error | undefined, void | undefined]> {
@@ -321,7 +332,9 @@ class WalletManager {
   }
 
   async release(): Promise<[Error | undefined, void | undefined]> {
-    return this._handleRequest('release')
+    const result = await this._handleRequest('release')
+    if (!result[0]) this.initTask = undefined
+    return result
   }
 
   async isWalletExist(): Promise<
@@ -374,6 +387,24 @@ class WalletManager {
     return this._handleRequest('exportRGB11Contract', contractId)
   }
 
+  async exportPublicRGB11Contract(contractId: string): Promise<
+    [Error | undefined, { result: string } | undefined]
+  > {
+    return this._handleRequest('exportPublicRGB11Contract', contractId)
+  }
+
+  async verifyRGB11PublicContract(contractId: string, contentBase64: string): Promise<
+    [Error | undefined, { result: string } | undefined]
+  > {
+    return this._handleRequest('verifyRGB11PublicContract', contractId, contentBase64)
+  }
+
+  async exportRGB11SettledConsignment(transferId: string): Promise<
+    [Error | undefined, { transfer: string } | undefined]
+  > {
+    return this._handleRequest('exportRGB11SettledConsignment', transferId)
+  }
+
   async issueRGB11Asset(request: {
     schema: 'NIA' | 'IFA' | 'UDA'
     ticker?: string
@@ -398,6 +429,14 @@ class WalletManager {
     min_confirmations?: number
   }): Promise<[Error | undefined, { transfer: string } | undefined]> {
     return this._handleRequest('prepareRGB11Transfer', JSON.stringify(request))
+  }
+
+  async prepareRGB11Inflation(request: {
+    invoice: string
+    fee_rate?: number
+    min_confirmations?: number
+  }): Promise<[Error | undefined, { transfer: string } | undefined]> {
+    return this._handleRequest('prepareRGB11Inflation', JSON.stringify(request))
   }
 
   async resumeRGB11PreparedTransfer(transferId: string): Promise<

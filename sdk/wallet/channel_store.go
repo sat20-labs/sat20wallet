@@ -1,6 +1,7 @@
 package wallet
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -46,7 +47,9 @@ func LoadChannelInDB(kv db.KVDB, channelId string) (*ChannelInDB, error) {
 	key := GetChannelKey(channelId)
 	buf, err := kv.Read([]byte(key))
 	if err != nil {
-		Log.Errorf("Read %s failed. %v", key, err)
+		if !errors.Is(err, db.ErrKeyNotFound) {
+			Log.Errorf("Read %s failed. %v", key, err)
+		}
 		return nil, err
 	}
 	var channel ChannelInDB

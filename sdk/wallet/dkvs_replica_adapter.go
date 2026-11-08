@@ -28,6 +28,7 @@ const (
 	DKVSSubscriptionError         = dkvscore.DKVSSubscriptionError
 	DKVSOutboxPending             = dkvscore.DKVSOutboxPending
 	DKVSOutboxInflight            = dkvscore.DKVSOutboxInflight
+	DKVSOutboxAcknowledged        = dkvscore.DKVSOutboxAcknowledged
 	DKVSOutboxConflict            = dkvscore.DKVSOutboxConflict
 	DKVSOutboxTerminal            = dkvscore.DKVSOutboxTerminal
 )

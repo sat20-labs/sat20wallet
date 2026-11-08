@@ -66,12 +66,14 @@ func (p *Manager) PrepareSTPRGBSplicingEvidence(channel *Channel, asset *indexer
 	if asset != nil && asset.Protocol == rgb11wallet.Protocol && len(funding[rgb11wallet.Protocol]) == 0 {
 		manager, scopeErr := p.stpRGB11Scope(owner)
 		if scopeErr != nil {
+			Log.Debugf("RGB STP evidence rejected: manager=%d phase=scope", p.debugID)
 			return nil, scopeErr
 		}
 		var sources []rgb11wallet.ChannelFunding
 		for _, point := range inputs {
 			output, loadErr := manager.projectionStore.LoadOutput(point)
 			if loadErr != nil {
+				manager.traceRGB11Broadcast("stp-funding-load", "", loadErr)
 				return nil, loadErr
 			}
 			source, sourceErr := manager.stpRGB11Funding(output, asset)

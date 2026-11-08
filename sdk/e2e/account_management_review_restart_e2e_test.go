@@ -14,7 +14,7 @@ import (
 // Close and reopen the real SDK database, rather than editing runtime private
 // fields to simulate locking. No mnemonic or password is written to evidence.
 func TestSDKAccountReviewPasswordRestart(t *testing.T) {
-	network := newDKVSNoPluginTemplateFixtureWithArgs(t, map[string]int64{}, nil, nil, dkvsMinerArgs(t)).Network
+	network := newDKVSNoPluginUnfundedNetwork(t)
 	waitForDKVSPeerReady(t, network)
 	indexerFor := func(node *testHarness) *sdkcommon.Indexer {
 		raw, err := node.IndexerURL("testnet")
@@ -49,6 +49,7 @@ func TestSDKAccountReviewPasswordRestart(t *testing.T) {
 	rootID, err := manager.ImportWallet(dkvsClientMnemonic, accountReviewPassword)
 	require.NoError(t, err)
 	require.NoError(t, manager.InitializeAccountManagement(accountReviewPassword))
+	requireE2EInactive(t, manager)
 	require.NoError(t, manager.UpdateWalletName(rootID, "Persistent Root"))
 	require.NoError(t, manager.EnsureAccount(rootID, 1, "Root Savings", "did:restart:root"))
 	secondaryID, err := manager.ImportWallet(coreMnemonic, accountReviewPassword)
@@ -87,6 +88,7 @@ func TestSDKAccountReviewPasswordRestart(t *testing.T) {
 	require.Equal(t, secondaryID, selected)
 	require.Equal(t, uint32(2), manager.GetCurrentAccountId())
 	require.Equal(t, before, manager.GetWalletCatalog())
+	requireE2EInactive(t, manager)
 	require.Equal(t, rootID, manager.GetAccountManagementStatus().RootWalletID)
 	require.Equal(t, identity.AccountID, manager.GetAccountManagementStatus().AccountID)
 	_, err = manager.AccountPreflight(changedPassword, nil)

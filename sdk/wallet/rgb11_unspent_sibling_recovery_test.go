@@ -17,6 +17,10 @@ import (
 // must not invalidate the other output's original immutable consignment.
 func TestRGB11RefreshUnspentSelfSendSibling(t *testing.T) {
 	self, other, imported, evidence, rpc := newRGB11GenericSendFixture(t)
+	// This test drives each confirmation/refresh step explicitly; concurrency
+	// with the automatic reconciler is covered by the gated operation tests.
+	self.rgbManager.scopeStates.stopReconciliations()
+	other.rgbManager.scopeStates.stopReconciliations()
 	ctx := context.Background()
 	confirm := func(pending *rgb11wallet.PendingTransfer) {
 		t.Helper()

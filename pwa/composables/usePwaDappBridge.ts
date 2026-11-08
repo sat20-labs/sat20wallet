@@ -63,6 +63,10 @@ const ACTION_ALIASES: Record<string, Message.MessageAction | string> = {
   getParamForInvokeContract: Message.MessageAction.QUERY_PARAM_FOR_INVOKE_CONTRACT,
   getSupportedContracts: 'getSupportedContracts',
   getDeployedContractStatus: 'getDeployedContractStatus',
+  getTickerInfo: 'getTickerInfo',
+  listRGB11Tickers: 'listRGB11Tickers',
+  exportPublicRGB11Contract: 'exportPublicRGB11Contract',
+  verifyRGB11PublicContract: 'verifyRGB11PublicContract',
   registerAsReferrer: Message.MessageAction.REGISTER_AS_REFERRER,
   bindReferrerForServer: Message.MessageAction.BIND_REFERRER_FOR_SERVER,
   batchSendAssets_SatsNet: Message.MessageAction.BATCH_SEND_ASSETS_SATSNET,
@@ -140,6 +144,12 @@ const asParamsObject = (action: string, params: unknown): Record<string, unknown
 	  }
     case 'getDeployedContractStatus':
       return { url: params[0] }
+    case 'getTickerInfo':
+      return { assetName: params[0] }
+    case 'exportPublicRGB11Contract':
+      return { contractId: params[0] }
+    case 'verifyRGB11PublicContract':
+      return { contractId: params[0], contentBase64: params[1] }
     case 'deployContract_Remote':
       return { templateName: params[0], content: params[1], feeRate: toDecimalString(params[2], 'feeRate'), bol: params[3] }
     case 'invokeContract_SatsNet':
@@ -301,6 +311,36 @@ export function usePwaDappBridge(iframeWindow: () => Window | null, currentUrl: 
 
     if (action === 'getDeployedContractStatus') {
       return unwrapTuple(await sat20Wallet.getDeployedContractStatus(String(params.url ?? '')))
+    }
+
+    if (action === 'getTickerInfo') {
+      return unwrapTuple(await sat20Wallet.getTickerInfo(String(params.assetName ?? '')))
+    }
+
+    if (action === 'listRGB11Tickers') {
+      const result = unwrapTuple(await sat20Wallet.getRGB11State())
+      assertWalletIdentityReady(identityGeneration)
+      if (!result?.state) throw new Error('RGB11 wallet state is unavailable')
+      const { ticker_infos } = JSON.parse(result.state)
+      // Only expose fungible asset IDs and public names, including zero-balance imports.
+      return (ticker_infos ?? []).flatMap((info: { name: { Protocol: string; Type: string; Ticker: string }; displayname?: string }) => {
+        const { Protocol, Type, Ticker } = info.name
+        return Protocol === 'rgb11' && Type === 'f' && /^[0-9a-f]{64}$/.test(Ticker)
+          ? [{ ticker: Ticker, displayName: info.displayname || Ticker }] : []
+      })
+    }
+
+    if (action === 'exportPublicRGB11Contract') {
+      const result = unwrapTuple(await sat20Wallet.exportPublicRGB11Contract(String(params.contractId ?? '')))
+      if (!result?.result) throw new Error('Public RGB11 contract is unavailable')
+      return JSON.parse(result.result)
+    }
+
+    if (action === 'verifyRGB11PublicContract') {
+      const result = unwrapTuple(await sat20Wallet.verifyRGB11PublicContract(
+        String(params.contractId ?? ''), String(params.contentBase64 ?? '')))
+      if (!result?.result) throw new Error('RGB11 public contract readback is unavailable')
+      return JSON.parse(result.result)
     }
 
     return approvalHandler.handleDirectRequest(action as Message.MessageAction, params)

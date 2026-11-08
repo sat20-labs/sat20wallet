@@ -1,6 +1,7 @@
 package wallet
 
 import (
+	"bytes"
 	"context"
 	"testing"
 	"time"
@@ -12,75 +13,93 @@ import (
 )
 
 func TestAccountColdUnlockResumesPersistedMetadata(t *testing.T) {
-	oldChain := _chain
-	_chain = "testnet"
-	defer func() { _chain = oldChain }()
-	remote := newRGB11MemoryDKVSHTTP()
-	client := newRGB11MessageNodeClient(remote)
-	source := newAccountManagementAutoTestManager(t)
-	configureRGB11DKVSTestManager(source, remote)
+	source, remote, _, closeSource := newAccountGroup(t)
 	id, _, err := source.CreateWallet("password")
 	require.NoError(t, err)
+	activateSyncFixture(t, source, remote, "password")
+	syncImportGroup(t, source, nil)
 	require.NoError(t, source.UpdateAccountMetadata(id, 0, "Saved before reload", "cold.btc"))
 	require.Positive(t, source.GetAccountManagementStatus().PendingChanges)
-	// One PWA closes and reopens its persisted database. Runtime jobs and
-	// credentials are not copied, and there is no remote record to notify it.
-	cold := newAccountManagementAutoTestManager(t)
-	cold.db = source.db
-	configureRGB11DKVSTestManager(cold, remote)
-	cold.serverNode = NewNode(client, "message.test", SERVER_NODE, client.CoreNodePubKey(), client.CoreNodePubKey())
-	cold.status = loadStatusFromDB(cold.db)
-	cold.walletInfoMap, err = loadAllWalletFromDB(cold.db)
-	require.NoError(t, err)
-	require.NoError(t, cold.loadAccountManagementProfileLocked())
+	cfg := source.cfg
+	closeSource()
+	coldClient := newRGB11MessageNodeClient(remote)
+	cold, _ := openAccountGroup(t, cfg, remote, coldClient)
 	_, err = cold.UnlockWallet("password")
 	require.NoError(t, err)
 	cold.dkvs.mu.Lock()
 	_, queued := cold.dkvs.jobs[accountManagedStateJobID]
 	cold.dkvs.mu.Unlock()
 	require.True(t, queued, "cold unlock lost the persistent pending changes' sync task")
-	cold.dkvs.start()
-	defer cold.dkvs.stopAndWait()
-	require.Eventually(t, func() bool {
-		status := cold.GetAccountManagementStatus()
-		return status.PendingChanges == 0 && !status.ManagedDataDirty && status.ManagedDataRevision > 0
-	}, 5*time.Second, 20*time.Millisecond)
-	key, err := cold.accountManagedStateKey(cold.wallet)
-	require.NoError(t, err)
+	// Binding belongs to the shared Core service. A cold client reuses the
+	// existing signed mapping; it need not publish a new binding of its own.
+	require.True(t, coldClient.accountBound(cold.GetAccountManagementStatus().AccountID),
+		"cold backup must start with the root bound to its current CoreNode")
+	require.NoError(t, cold.StartDKVSSync())
+	t.Cleanup(cold.StopDKVSSync)
+	ctx, cancel := context.WithTimeout(context.Background(), accountManagedBackupQuiet+5*time.Second)
+	defer cancel()
+	require.NoError(t, cold.WaitAccountManagedDataReady(ctx))
+	status := cold.GetAccountManagementStatus()
+	require.Zero(t, status.PendingChanges)
+	require.False(t, status.ManagedDataDirty)
+	key := accountWalletModuleKey(t, cold)
 	store, err := cold.accountDKVSStore()
 	require.NoError(t, err)
 	value, err := store.GetAuthoritative(key)
 	require.NoError(t, err)
 	require.NotNil(t, value)
-	state, err := account.OpenManagedState(cold.accountSecret, cold.accountProfile.AccountID, value.Value)
+	require.NotNil(t, value.record)
+	require.NoError(t, dkvsindexer.VerifySignature(value.record))
+	require.NotZero(t, value.Seq)
+	state, err := account.OpenManagedState(cold.accountSecret, status.AccountID, value.Value)
 	require.NoError(t, err)
+	defer func() {
+		for i := range state.Wallets {
+			zeroBytes(state.Wallets[i].Secret)
+		}
+	}()
 	require.Equal(t, "Saved before reload", state.Wallets[0].SubAccounts[0].Name)
 	require.Equal(t, "cold.btc", state.Wallets[0].SubAccounts[0].DID)
-	require.True(t, client.accountBound(cold.accountProfile.AccountID), "cold backup ran before the root was bound to its CoreNode")
+	require.True(t, coldClient.accountBound(status.AccountID), "cold backup lost the root binding to its current CoreNode")
 }
 
 func TestAccountFirstWalletSchedulesInitialBackup(t *testing.T) {
-	oldChain := _chain
-	_chain = "testnet"
-	defer func() { _chain = oldChain }()
-	remote := newRGB11MemoryDKVSHTTP()
-	client := newRGB11MessageNodeClient(remote)
-	manager := newAccountManagementAutoTestManager(t)
-	configureRGB11DKVSTestManager(manager, remote)
-	manager.serverNode = NewNode(client, "message.test", SERVER_NODE, client.CoreNodePubKey(), client.CoreNodePubKey())
+	manager, remote, client, _ := newAccountGroup(t)
 	_, _, err := manager.CreateWallet("password")
 	require.NoError(t, err)
 	manager.dkvs.mu.Lock()
 	_, queued := manager.dkvs.jobs[accountManagedStateJobID]
+	if queued {
+		manager.dkvs.jobDue[accountManagedStateJobID] = time.Now().Add(-time.Millisecond)
+	}
 	manager.dkvs.mu.Unlock()
-	require.True(t, queued, "first wallet's dirty state has no initial backup task")
+	require.True(t, queued, "initial local edit did not schedule its background check")
+	_, err = manager.syncDKVSOnce()
+	require.NoError(t, err, "real online discovery precedes the inactive background check")
+	manager.dkvs.mu.Lock()
+	_, queued = manager.dkvs.jobs[accountManagedStateJobID]
+	manager.dkvs.mu.Unlock()
+	require.False(t, queued, "unactivated background check did not finish")
+	require.True(t, manager.GetAccountManagementStatus().LocalOnly)
 	require.False(t, client.accountBound(manager.accountProfile.AccountID))
-	manager.dkvs.start()
-	defer manager.dkvs.stopAndWait()
-	require.Eventually(t, func() bool {
-		status := manager.GetAccountManagementStatus()
-		return !status.ManagedDataDirty && status.ManagedDataRevision > 0
-	}, 5*time.Second, 20*time.Millisecond)
+	remote.mu.Lock()
+	remoteCount := len(remote.records)
+	remote.mu.Unlock()
+	require.Zero(t, remoteCount, "unactivated wallet uploaded account data")
+	activateSyncFixture(t, manager, remote, "password")
+	require.NoError(t, manager.StartDKVSSync())
+	t.Cleanup(manager.StopDKVSSync)
+	ctx, cancel := context.WithTimeout(context.Background(), accountManagedBackupQuiet+5*time.Second)
+	defer cancel()
+	require.NoError(t, manager.WaitAccountManagedDataReady(ctx))
+	require.False(t, manager.GetAccountManagementStatus().ManagedDataDirty)
+	value, err := manager.readAccountLocal(manager.accountProfile.AccountID, "wallets", AccountManagedDataGlobalScope)
+	require.NoError(t, err)
+	require.NotNil(t, value)
+	require.NotNil(t, value.Baseline)
+	require.NoError(t, dkvsindexer.VerifySignature(value.Baseline))
+	require.NotZero(t, value.Baseline.Seq)
+	require.Equal(t, value.Generation, value.Confirmed)
 	require.True(t, client.accountBound(manager.accountProfile.AccountID), "initial backup ran before the root was bound to its CoreNode")
 }
 
@@ -127,13 +146,13 @@ func TestAccountBackupBindingPreservesOtherCore(t *testing.T) {
 	require.Equal(t, dkvsindexer.RecordHash(other), dkvsindexer.RecordHash(unchanged))
 }
 
-func TestAccountSubaccountIndependentFieldsMerge(t *testing.T) {
+func TestAccountSubaccountConcurrentFieldsRequireReconciliation(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
 	for _, edit := range []string{"local_name", "local_did", "clear_did"} {
 		t.Run(edit, func(t *testing.T) {
-			local, other, _ := reviewAccountDevices(t)
+			local, other, remote := reviewAccountDevices(t)
 			localID, otherID := local.GetAccountManagementStatus().RootWalletID, other.GetAccountManagementStatus().RootWalletID
 			require.NoError(t, local.UpdateAccountMetadata(localID, 0, "Baseline", "base.btc"))
 			require.NoError(t, local.SyncAccountManagementState(context.Background()))
@@ -153,17 +172,23 @@ func TestAccountSubaccountIndependentFieldsMerge(t *testing.T) {
 			require.NoError(t, other.SyncAccountManagementState(context.Background()))
 			require.NoError(t, local.SyncAccountManagementState(context.Background()))
 			require.NoError(t, other.SyncAccountManagementState(context.Background()))
-			for _, manager := range []*Manager{local, other} {
-				entry := reviewCatalogWallet(t, manager, manager.GetAccountManagementStatus().RootFingerprint)
+			cold := reviewColdCopy(t, local, remote)
+			fingerprint := local.GetAccountManagementStatus().RootFingerprint
+			for _, manager := range []*Manager{local, other, cold} {
+				entry := reviewCatalogWallet(t, manager, fingerprint)
 				require.NotNil(t, entry)
+				require.Len(t, entry.Accounts, 1)
 				require.Equal(t, name, entry.Accounts[0].Name)
-				require.Equal(t, did, entry.Accounts[0].DID)
-				stored, err := loadAllWalletFromDB(manager.db)
-				require.NoError(t, err)
-				require.Len(t, stored, 1)
-				require.Equal(t, name, stored[entry.ID].AccountNames[0])
-				require.Equal(t, did, stored[entry.ID].AccountDIDs[0])
-				require.Zero(t, manager.GetAccountManagementStatus().PendingChanges)
+				require.Equal(t, did, entry.Accounts[0].DID, "an intentional clear must not restore the baseline DID")
+			}
+			if edit == "local_name" {
+				// The same field with two different edits still cannot be reconciled.
+				require.NoError(t, local.UpdateWalletName(localID, "Conflicting local name"))
+				require.NoError(t, other.UpdateWalletName(otherID, "Conflicting remote name"))
+				require.NoError(t, other.SyncAccountManagementState(context.Background()))
+				assertReviewConflict(t, local)
+				require.Equal(t, "Conflicting local name", reviewCatalogWallet(t, local, fingerprint).Name)
+				require.Equal(t, "Conflicting remote name", reviewCatalogWallet(t, other, fingerprint).Name)
 			}
 		})
 	}
@@ -174,55 +199,79 @@ func TestAccountSubaccountIndependentFieldsMerge(t *testing.T) {
 // all changes and subsequent synchronization use production SDK entry points.
 func reviewAccountDevices(t *testing.T) (*Manager, *Manager, *rgb11MemoryDKVSHTTP) {
 	t.Helper()
-	remote := newRGB11MemoryDKVSHTTP()
-	// Establish the paired CoreNode identity before either device caches HTTP
-	// configuration. Adding a message service later must not switch endpoints.
-	newRGB11MessageNodeClient(remote)
-	first := newAccountManagementAutoTestManager(t)
-	configureRGB11DKVSTestManager(first, remote)
-	if _, err := first.ImportWallet(accountRootWrapperTestMnemonic, "password"); err != nil {
-		t.Fatal(err)
-	}
-	if err := first.InitializeAccountManagement("password"); err != nil {
-		t.Fatal(err)
-	}
-	if err := first.SyncAccountManagementState(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	second := newAccountManagementAutoTestManager(t)
-	configureRGB11DKVSTestManager(second, remote)
-	if _, err := second.ImportWallet(accountRootWrapperTestMnemonic, "password"); err != nil {
-		t.Fatal(err)
-	}
-	first.mutex.RLock()
-	encoded, err := EncodeToBytes(first.accountProfile)
-	secret := append([]byte(nil), first.accountSecret...)
-	first.mutex.RUnlock()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer zeroBytes(secret)
-	var profile accountManagementProfile
-	if err := DecodeFromBytes(encoded, &profile); err != nil {
-		t.Fatal(err)
-	}
-	second.mutex.Lock()
-	second.accountProfile = &profile
-	second.accountSecret = append([]byte(nil), secret...)
-	second.accountPassword = "password"
-	second.bumpAccountGenerationLocked()
-	err = second.saveAccountManagementProfileLocked()
-	second.mutex.Unlock()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := second.refreshDKVSRegistrations(); err != nil {
-		t.Fatal(err)
-	}
-	if err := second.SyncAccountManagementState(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	first, remote, _ := newInactiveAccountGroup(t, accountRootWrapperTestMnemonic, "password")
+	pkg, auth, secret := rereviewRecoveryPackage(t, first)
+	require.NoError(t, first.ActivateAccountManagement(secret, "password", *auth,
+		pkg.Envelope.Locator, "account://"+pkg.Envelope.Locator.PackageID))
+	syncImportGroup(t, first, nil)
+	second, _, _, _ := newAccountGroup(t, remote)
+	require.NoError(t, restoreImportGroup(t, second, first))
+	syncImportGroup(t, second, nil)
 	return first, second, remote
+}
+
+func reviewColdCopy(t *testing.T, source *Manager, remote *rgb11MemoryDKVSHTTP, providers ...string) *Manager {
+	t.Helper()
+	store, err := source.accountDKVSStore()
+	require.NoError(t, err)
+	key := accountWalletModuleKey(t, source)
+	value, err := store.GetAuthoritative(key)
+	require.NoError(t, err)
+	require.NotNil(t, value)
+	require.NotNil(t, value.record)
+	require.NoError(t, dkvsindexer.VerifySignature(value.record))
+	state, err := account.OpenManagedState(source.accountSecret, source.accountProfile.AccountID, value.Value)
+	require.NoError(t, err)
+	defer func() {
+		for i := range state.Wallets {
+			zeroBytes(state.Wallets[i].Secret)
+		}
+	}()
+	catalog := source.GetWalletCatalog()
+	require.Equal(t, len(catalog), len(state.Wallets))
+	for _, item := range catalog {
+		wallet := findManagedWallet(&state, item.Fingerprint)
+		require.NotNil(t, wallet)
+		require.False(t, wallet.Deleted)
+		require.Equal(t, item.Name, wallet.Name)
+		require.Len(t, wallet.SubAccounts, len(item.Accounts))
+		for i, sub := range item.Accounts {
+			require.Equal(t, sub.Index, wallet.SubAccounts[i].Index)
+			require.Equal(t, sub.Name, wallet.SubAccounts[i].Name)
+			require.Equal(t, sub.DID, wallet.SubAccounts[i].DID)
+		}
+	}
+	recovered, _, _, close := newAccountGroup(t, remote)
+	recovered.rgbManager.evidence = source.rgbManager.evidence
+	for _, id := range providers {
+		require.NoError(t, recovered.RegisterAccountManagedDataProvider(&reviewDurableProvider{id: id, db: recovered.db}))
+	}
+	require.NoError(t, restoreImportGroup(t, recovered, source))
+	syncImportGroup(t, recovered, nil)
+	cfg := recovered.cfg
+	close()
+	cold, _ := openAccountGroup(t, cfg, remote, newRGB11MessageNodeClient(remote))
+	cold.rgbManager.evidence = source.rgbManager.evidence
+	for _, id := range providers {
+		require.NoError(t, cold.RegisterAccountManagedDataProvider(&reviewDurableProvider{id: id, db: cold.db}))
+	}
+	_, err = cold.UnlockWallet("password")
+	require.NoError(t, err)
+	syncImportGroup(t, cold, nil)
+	return cold
+}
+
+func stageReviewProvider(t *testing.T, manager *Manager, provider *reviewDurableProvider, value []byte) {
+	t.Helper()
+	batch, err := NewAtomicWriteBatch(manager.db)
+	require.NoError(t, err)
+	defer batch.Close()
+	done, err := manager.StageAccountChange(batch, provider.id, AccountManagedDataGlobalScope)
+	require.NoError(t, err)
+	defer done(false)
+	require.NoError(t, batch.Put(provider.key(), value))
+	require.NoError(t, batch.Flush())
+	done(true)
 }
 
 func reviewCatalogWallet(t *testing.T, manager *Manager, fingerprint string) *WalletCatalogEntry {
@@ -264,113 +313,129 @@ func (p *reviewDurableProvider) Import(_ AccountManagedDataCatalog, values []Acc
 	return p.db.Delete(p.key())
 }
 
-func TestReviewAccountMergeAppliesRemoteIncrement(t *testing.T) {
+func TestReviewAccountConcurrentBundlesRequireReconciliation(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
-
 	t.Run("remote_wallet_and_local_rename", func(t *testing.T) {
-		local, other, _ := reviewAccountDevices(t)
+		local, other, remote := reviewAccountDevices(t)
 		rootID := local.GetAccountManagementStatus().RootWalletID
 		childID, _, err := other.CreateWallet("password")
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		childFingerprint := walletFingerprint(other.walletInfoMap[childID].Wallet)
-		if err := other.SyncAccountManagementState(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		if err := local.UpdateWalletName(rootID, "Local root rename"); err != nil {
-			t.Fatal(err)
-		}
-		for pass := 1; pass <= 2; pass++ {
-			if err := local.SyncAccountManagementState(context.Background()); err != nil {
-				t.Fatalf("sync %d: %v", pass, err)
-			}
-			if reviewCatalogWallet(t, local, childFingerprint) == nil {
-				t.Errorf("sync %d returned success but the remote wallet is absent from the live catalog", pass)
-			}
-			if got := local.walletInfoMap[rootID].Name; got != "Local root rename" {
-				t.Errorf("sync %d overwrote the local rename: %q", pass, got)
-			}
-		}
-		stored, err := loadAllWalletFromDB(local.db)
-		if err != nil || len(stored) != 2 {
-			t.Errorf("remote wallet was not durably applied: wallets=%d err=%v", len(stored), err)
+		require.NoError(t, other.SyncAccountManagementState(context.Background()))
+		require.NoError(t, local.UpdateWalletName(rootID, "Local root rename"))
+		require.NoError(t, local.SyncAccountManagementState(context.Background()))
+		require.NoError(t, other.SyncAccountManagementState(context.Background()))
+		cold := reviewColdCopy(t, local, remote)
+		for _, manager := range []*Manager{local, other, cold} {
+			require.NotNil(t, reviewCatalogWallet(t, manager, childFingerprint), "merge lost the remotely created wallet")
+			root := reviewCatalogWallet(t, manager, local.GetAccountManagementStatus().RootFingerprint)
+			require.NotNil(t, root)
+			require.Equal(t, "Local root rename", root.Name)
 		}
 	})
-
 	t.Run("remote_subaccount_and_local_rename_same_wallet", func(t *testing.T) {
-		local, other, _ := reviewAccountDevices(t)
+		local, other, remote := reviewAccountDevices(t)
 		rootID := local.GetAccountManagementStatus().RootWalletID
-		if err := other.EnsureAccount(other.GetAccountManagementStatus().RootWalletID, 1, "Remote savings", "did:savings"); err != nil {
-			t.Fatal(err)
-		}
-		if err := other.SyncAccountManagementState(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		if err := local.UpdateWalletName(rootID, "Local renamed root"); err != nil {
-			t.Fatal(err)
-		}
-		for pass := 1; pass <= 2; pass++ {
-			if err := local.SyncAccountManagementState(context.Background()); err != nil {
-				t.Fatal(err)
-			}
-			entry := reviewCatalogWallet(t, local, local.GetAccountManagementStatus().RootFingerprint)
-			if entry == nil || len(entry.Accounts) != 2 || entry.Accounts[1].Name != "Remote savings" || entry.Accounts[1].DID != "did:savings" {
-				t.Errorf("sync %d returned success but omitted the remote subaccount: %+v", pass, entry)
-			}
-			if local.walletInfoMap[rootID].Name != "Local renamed root" {
-				t.Error("remote apply overwrote the local wallet rename")
-			}
+		require.NoError(t, other.EnsureAccount(other.GetAccountManagementStatus().RootWalletID, 1, "Remote savings", "did:savings"))
+		require.NoError(t, other.SyncAccountManagementState(context.Background()))
+		require.NoError(t, local.UpdateWalletName(rootID, "Local renamed root"))
+		require.NoError(t, local.SyncAccountManagementState(context.Background()))
+		require.NoError(t, other.SyncAccountManagementState(context.Background()))
+		cold := reviewColdCopy(t, local, remote)
+		for _, manager := range []*Manager{local, other, cold} {
+			entry := reviewCatalogWallet(t, manager, local.GetAccountManagementStatus().RootFingerprint)
+			require.NotNil(t, entry)
+			require.Equal(t, "Local renamed root", entry.Name)
+			require.Len(t, entry.Accounts, 2)
+			require.Equal(t, "Remote savings", entry.Accounts[1].Name)
+			require.Equal(t, "did:savings", entry.Accounts[1].DID)
 		}
 	})
-
 	t.Run("independent_remote_and_local_provider_edits", func(t *testing.T) {
-		local, other, _ := reviewAccountDevices(t)
+		local, other, remote := reviewAccountDevices(t)
 		providers := make(map[*Manager]map[string]*reviewDurableProvider)
 		for _, manager := range []*Manager{local, other} {
 			providers[manager] = make(map[string]*reviewDurableProvider)
 			for _, id := range []string{"review.alpha", "review.beta"} {
 				provider := &reviewDurableProvider{id: id, db: manager.db}
-				if err := provider.db.Write(provider.key(), []byte("base")); err != nil {
-					t.Fatal(err)
-				}
-				if err := manager.RegisterAccountManagedDataProvider(provider); err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, provider.db.Write(provider.key(), []byte("base")))
+				require.NoError(t, manager.RegisterAccountManagedDataProvider(provider))
 				providers[manager][id] = provider
 			}
 		}
-		for _, manager := range []*Manager{local, other} {
-			if err := manager.SyncAccountManagementState(context.Background()); err != nil {
-				t.Fatal(err)
-			}
-		}
-		alpha := providers[other]["review.alpha"]
-		if err := alpha.db.Write(alpha.key(), []byte("remote-alpha")); err != nil {
-			t.Fatal(err)
-		}
-		other.markAccountManagedDataDirtyDeferred(alpha.id)
-		if err := other.SyncAccountManagementState(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		beta := providers[local]["review.beta"]
-		if err := beta.db.Write(beta.key(), []byte("local-beta")); err != nil {
-			t.Fatal(err)
-		}
-		local.markAccountManagedDataDirtyDeferred(beta.id)
-		for pass := 1; pass <= 2; pass++ {
-			if err := local.SyncAccountManagementState(context.Background()); err != nil {
-				t.Fatalf("sync %d: %v", pass, err)
-			}
+		require.NoError(t, local.SyncAccountManagementState(context.Background()))
+		require.NoError(t, other.SyncAccountManagementState(context.Background()))
+		stageReviewProvider(t, other, providers[other]["review.alpha"], []byte("remote-alpha"))
+		require.NoError(t, other.SyncAccountManagementState(context.Background()))
+		stageReviewProvider(t, local, providers[local]["review.beta"], []byte("local-beta"))
+		require.NoError(t, local.SyncAccountManagementState(context.Background()))
+		require.NoError(t, other.SyncAccountManagementState(context.Background()))
+		cold := reviewColdCopy(t, local, remote, "review.alpha", "review.beta")
+		for _, manager := range []*Manager{local, other, cold} {
 			for id, want := range map[string]string{"review.alpha": "remote-alpha", "review.beta": "local-beta"} {
-				provider := providers[local][id]
-				got, err := provider.db.Read(provider.key())
-				if err != nil || string(got) != want {
-					t.Errorf("sync %d provider %s was not applied: got=%q want=%q err=%v", pass, id, got, want, err)
-				}
+				provider := &reviewDurableProvider{id: id, db: manager.db}
+				got, err := manager.db.Read(provider.key())
+				require.NoError(t, err)
+				require.Equal(t, want, string(got), "independent module synchronization lost durable provider data")
+				row, err := manager.readAccountLocal(manager.accountProfile.AccountID, id, AccountManagedDataGlobalScope)
+				require.NoError(t, err)
+				require.NotNil(t, row)
+				require.NotNil(t, row.Baseline)
+				require.NoError(t, dkvsindexer.VerifySignature(row.Baseline))
+				entry, err := accountEntry(row.AccountID, row.Provider, row.Scope)
+				require.NoError(t, err)
+				payload, err := openAccountPayload(manager.accountSecret, row.AccountID, manager.cfg.Chain, entry, row.Baseline.Value)
+				require.NoError(t, err)
+				require.Equal(t, want, string(payload))
+				zeroBytes(payload)
 			}
 		}
 	})
+}
+
+func assertReviewConflict(t *testing.T, manager *Manager) {
+	t.Helper()
+	catalog := manager.GetWalletCatalog()
+	persisted, err := loadAllWalletFromDB(manager.db)
+	require.NoError(t, err)
+	before := make(map[int64][]byte)
+	for id := range persisted {
+		before[id], err = manager.db.Read([]byte(getWalletDBKey(id)))
+		require.NoError(t, err)
+	}
+	store, err := manager.accountDKVSStore()
+	require.NoError(t, err)
+	stateKey := accountWalletModuleKey(t, manager)
+	indexKey, err := account.ManagedIndexKey(manager.accountProfile.AccountID)
+	require.NoError(t, err)
+	remoteBefore := make(map[string]*dkvsValue)
+	for _, key := range []string{stateKey, indexKey} {
+		remoteBefore[key], err = store.GetAuthoritative(key)
+		require.NoError(t, err)
+		require.NotNil(t, remoteBefore[key])
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		require.ErrorIs(t, manager.SyncAccountManagementState(context.Background()), dkvsindexer.ErrWriteConflict)
+		require.Equal(t, catalog, manager.GetWalletCatalog())
+		after, err := loadAllWalletFromDB(manager.db)
+		require.NoError(t, err)
+		require.Len(t, after, len(before))
+		for id, raw := range before {
+			actual, err := manager.db.Read([]byte(getWalletDBKey(id)))
+			require.NoError(t, err)
+			require.True(t, bytes.Equal(raw, actual), "unresolved conflict changed a durable wallet record")
+		}
+		for key, original := range remoteBefore {
+			actual, err := store.GetAuthoritative(key)
+			require.NoError(t, err)
+			require.NotNil(t, actual)
+			require.Equal(t, original.Hash, actual.Hash)
+			require.Equal(t, original.Seq, actual.Seq)
+			require.True(t, bytes.Equal(original.Value, actual.Value), "unresolved conflict overwrote remote data")
+		}
+		status := manager.GetAccountManagementStatus()
+		require.True(t, status.PendingChanges > 0 || status.ManagedDataDirty, "unresolved local intent must not be cleared")
+	}
 }

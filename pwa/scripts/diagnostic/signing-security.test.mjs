@@ -87,6 +87,7 @@ function psbtApproval(chain = 'btc', overrides = {}) {
     ref: (value) => ({ value }),
     computed: (fn) => ({ get value() { return fn() } }),
     watch: (_source, callback) => { load = callback },
+    useI18n: () => ({ t: (key) => key }),
     useWalletStore: () => ({ network: { value: 'testnet' } }),
     storeToRefs: (store) => store,
     useToast: () => ({ toast: (notice) => notices.push(notice) }),

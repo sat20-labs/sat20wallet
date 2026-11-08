@@ -22,3 +22,4 @@ sdk/log
 sdk/wasm/html/wasm/sat20wallet.wasm
 sdk/data
 sdk/review-evidence/
+/.cache/

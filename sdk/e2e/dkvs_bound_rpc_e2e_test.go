@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	indexercommon "github.com/sat20-labs/indexer/common"
 	indexerdb "github.com/sat20-labs/indexer/indexer/db"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet"
 	"github.com/sat20-labs/satoshinet/btcec"
@@ -199,14 +200,20 @@ type boundRPCFixture struct {
 
 func newBoundRPCFixture(t *testing.T) *boundRPCFixture {
 	t.Helper()
+	db := indexerdb.NewKVDB(t.TempDir())
+	require.NotNil(t, db)
+	t.Cleanup(func() { db.Close() })
+	return newBoundRPCFixtureDB(t, db)
+}
+
+func newBoundRPCFixtureDB(t *testing.T, db indexercommon.KVDB) *boundRPCFixture {
+	t.Helper()
 	core, err := btcec.NewPrivateKey()
 	require.NoError(t, err)
 	f := &boundRPCFixture{coreID: hex.EncodeToString(core.PubKey().SerializeCompressed())}
 	f.core.Store(true)
 	f.height.Store(100)
-	db := indexerdb.NewKVDB(t.TempDir())
 	require.NotNil(t, db)
-	t.Cleanup(func() { db.Close() })
 	f.store = dkvs.New(db, dkvs.Config{EndpointID: f.coreID, AllowFreeLocal: true,
 		FreeLocalCache: dkvs.DefaultFreeLocalCachePolicy(), CurrentHeight: f.height.Load,
 		FeeVerifier: releaseReviewFeeVerifier{JSONFeeVerifier: dkvs.JSONFeeVerifier{AllowFreeLocal: true}, height: &f.height}})

@@ -51,6 +51,9 @@ type AccountAutopayFundingStatus struct {
 	Balance                     string `json:"balance,omitempty"`
 	RequiredAmountPerBlock      string `json:"required_amount_per_block,omitempty"`
 	EffectiveAmountPerBlock     string `json:"effective_amount_per_block,omitempty"`
+	RequiredBlobKeys            uint32 `json:"required_blob_keys"`
+	BlobKeyLimit                uint32 `json:"blob_key_limit"`
+	EffectiveBlobKeyLimit       uint32 `json:"effective_blob_key_limit"`
 	RecommendedFundingAmount    string `json:"recommended_funding_amount,omitempty"`
 	RecommendedFundingBlocks    uint64 `json:"recommended_funding_blocks,omitempty"`
 	RemainingPaymentBlocks      uint64 `json:"remaining_payment_blocks,omitempty"`
@@ -59,13 +62,16 @@ type AccountAutopayFundingStatus struct {
 }
 
 func accountAutopayStateFundingStatus(state *dkvsindexer.AutopayContractState,
-	defaults dkvsindexer.NetworkDefaults, payer, requiredAmount string) AccountAutopayFundingStatus {
+	defaults dkvsindexer.NetworkDefaults, payer, requiredAmount string, requiredBlobs uint32) AccountAutopayFundingStatus {
 
 	result := AccountAutopayFundingStatus{
 		Required: true, ContractAddress: defaults.AutopayContract,
 		FeeAsset: defaults.AutopayFeeAssetName, Payer: strings.TrimSpace(payer),
 		RequiredAmountPerBlock:   requiredAmount,
 		RecommendedFundingBlocks: accountPaidDefaultFundingBlocks,
+		RequiredBlobKeys:         requiredBlobs,
+		BlobKeyLimit:             accountBlobLimit(state, payer),
+		EffectiveBlobKeyLimit:    accountBlobTarget(state, payer, requiredBlobs),
 	}
 	if state == nil {
 		result.Reason = AccountAutopayReasonInvalidState
@@ -124,6 +130,12 @@ func accountAutopayStateFundingStatus(state *dkvsindexer.AutopayContractState,
 		result.Message = "账户 AUTOPAY 每区块费率不足，请充值以恢复付费同步。"
 		return result
 	}
+	if result.BlobKeyLimit < requiredBlobs {
+		result.NeedsFunding, result.CanFund = true, true
+		result.Reason = "blob_capacity_insufficient"
+		result.Message = "AUTOPAY 模块容量不足，请确认调整容量；增加余额不会自动增加模块数量。"
+		return result
+	}
 	balance, balanceErr := decimalRat(delegate.Balance)
 	if balanceErr != nil {
 		result.Reason = AccountAutopayReasonInvalidState
@@ -171,8 +183,8 @@ func accountAutopayExpiryHeight(height int64, balance, rate *big.Rat) (int64, ui
 }
 
 func accountAutopayStateReady(state *dkvsindexer.AutopayContractState, defaults dkvsindexer.NetworkDefaults,
-	payer, requiredAmount string) bool {
-	return accountAutopayStateFundingStatus(state, defaults, payer, requiredAmount).Ready
+	payer, requiredAmount string, requiredBlobs uint32) bool {
+	return accountAutopayStateFundingStatus(state, defaults, payer, requiredAmount, requiredBlobs).Ready
 }
 
 func (p *Manager) accountAutopayState(defaults dkvsindexer.NetworkDefaults) (*dkvsindexer.AutopayContractState, error) {
@@ -199,15 +211,17 @@ func (p *Manager) accountAutopayState(defaults dkvsindexer.NetworkDefaults) (*dk
 	return state, nil
 }
 
-func (p *Manager) accountAutopayReady(defaults dkvsindexer.NetworkDefaults, payer, requiredAmount string) (bool, error) {
+func (p *Manager) accountAutopayReady(defaults dkvsindexer.NetworkDefaults, payer, requiredAmount string,
+	requiredBlobs uint32) (bool, error) {
 	state, err := p.accountAutopayState(defaults)
 	if err != nil {
 		return false, err
 	}
-	return accountAutopayStateReady(state, defaults, payer, requiredAmount), nil
+	return accountAutopayStateReady(state, defaults, payer, requiredAmount, requiredBlobs), nil
 }
 
-func (p *Manager) waitForAccountAutopayReady(defaults dkvsindexer.NetworkDefaults, requiredAmount, payer string) error {
+func (p *Manager) waitForAccountAutopayReady(defaults dkvsindexer.NetworkDefaults, requiredAmount, payer string,
+	requiredBlobs uint32) error {
 	if p == nil {
 		return fmt.Errorf("wallet is not created/unlocked")
 	}
@@ -222,7 +236,7 @@ func (p *Manager) waitForAccountAutopayReady(defaults dkvsindexer.NetworkDefault
 
 	var lastErr error
 	for {
-		ready, err := p.accountAutopayReady(defaults, payer, requiredAmount)
+		ready, err := p.accountAutopayReady(defaults, payer, requiredAmount, requiredBlobs)
 		if ready {
 			return nil
 		}

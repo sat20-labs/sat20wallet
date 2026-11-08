@@ -19,7 +19,7 @@ export const requiredPwaMintCases = [
 const poll = { timeout: 120000, intervals: [250, 500, 1000] }
 
 export async function runPwaMintCases(t, fixture) {
-  const { check, device, ready, unlock, walletCall } = t
+  const { check, device, ready, unlock, walletCall, accountCall } = t
   const actor = fixture.basicWallet
   assert.ok(actor?.mnemonic && actor.password && actor.address)
   assert.ok(['testnet', 'regtest'].includes(fixture.config.Chain))
@@ -157,6 +157,14 @@ export async function runPwaMintCases(t, fixture) {
     await expect.poll(() => page.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().address), poll).toBe(actor.address)
     // A previous RGB case may have issued assets to this existing fixture
     // identity. Reconcile its carrier locks before taking the no-spend baseline.
+    // This direct SDK refresh writes local projection state. A local-only
+    // account may write; an activated account needs its verified baseline.
+    await expect.poll(async () => {
+      const state = await accountCall(page, 'status')
+      if (!state.activation_pending &&
+        (state.local_only || (state.recovery_configured && state.dkvs_write_allowed))) return 'ready'
+      return `${state.dkvs_status || 'unknown'}:${state.last_dkvs_sync_error || 'pending'}`
+    }, { timeout: 90000 }).toBe('ready')
     await walletCall(page, 'refreshRGB11State')
     await visit(page, '/wallet/tools')
     const tab = page.getByRole('tab', { name: 'Mint', exact: true })

@@ -1,0 +1,37 @@
+--- a/pwa/scripts/verify/account-management-usage-e2e.mjs
++++ b/pwa/scripts/verify/account-management-usage-e2e.mjs
+@@ -1092,8 +1092,34 @@
+       assert.equal((await catalog(page)).find(wallet => String(wallet.id) === String(renamedID))?.name,
+         'Background backup status', 'local wallet rename did not commit')
+       console.log(JSON.stringify({ backgroundBackupGate: 'local-commit' }))
+       await expect.poll(() => blocked, { timeout: 90000 }).toBe(true)
++      const heldStatus = await accountCall(page, 'status')
++      const heldCardText = await card.textContent() || ''
++      console.log(JSON.stringify({ backgroundBackupGate: 'held-observed',
++        backup_post_blocked: blocked,
++        held_requests: heldWrites.length,
++        same_account: heldStatus.account_id === baseline.account_id,
++        sdk: {
++          pending_changes: heldStatus.pending_changes ?? null,
++          managed_data_dirty: heldStatus.managed_data_dirty ?? null,
++          pending_requests: heldStatus.dkvs_pending_requests ?? null,
++          state_seq: heldStatus.state_seq ?? null,
++          data_revision: heldStatus.managed_data_revision ?? null,
++          write_allowed: heldStatus.dkvs_write_allowed ?? null,
++          dkvs_status: heldStatus.dkvs_status ?? null,
++          error_code: heldStatus.last_dkvs_sync_error_code || '',
++        },
++        baseline: { state_seq: baseline.state_seq ?? null,
++          data_revision: baseline.managed_data_revision ?? null },
++        ui: {
++          dirty_warning: heldCardText.includes('最新必要数据尚未备份，恢复仅覆盖最后确认版本'),
++          pending_zero: heldCardText.includes('待同步变更：0'),
++          sync_error: heldCardText.includes('DKVS 同步异常'),
++          synchronized: heldCardText.includes('Synchronized'),
++          writable: heldCardText.includes('Writable'),
++        },
++        same_location: page.url() === location }))
+       await expect(card).not.toContainText('待同步变更：0')
+       releaseWrite()
+       await Promise.all(heldWrites)
+       await expect.poll(async () => Boolean((await accountCall(page, 'status')).last_dkvs_sync_error), { timeout: 90000 }).toBe(true)

@@ -440,6 +440,9 @@ func (p *Manager) StakeToBeMinner(bCoreNode bool, feeRate int64) (string, int64,
 	if err != nil {
 		return "", 0, err
 	}
+	if err := p.RejectChannelStake(channelAddr); err != nil {
+		return "", 0, err
+	}
 
 	assetAmt := indexer.GetStakeAssetAmt(p.GetSyncHeightL1())
 	var ascendingTxId string

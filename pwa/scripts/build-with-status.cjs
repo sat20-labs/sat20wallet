@@ -3,6 +3,10 @@ const path = require('node:path')
 const { spawn } = require('node:child_process')
 
 const root = path.resolve(__dirname, '..')
+const buildDir = process.env.SAT20_PWA_BUILD_DIR
+if (buildDir && !path.isAbsolute(buildDir)) {
+  throw new Error('SAT20_PWA_BUILD_DIR must be an absolute private directory')
+}
 const profile = process.argv[2] || 'production'
 if (!['production', 'root', 'skip-check', 'regtest'].includes(profile)) {
   throw new Error(`Unsupported PWA build profile: ${profile}`)
@@ -65,10 +69,31 @@ process.once('SIGTERM', () => stop('SIGTERM'))
 const main = async () => {
   writeStatus('RUNNING')
   try {
+    const typecheckArgs = ['--noEmit']
+    if (buildDir) {
+      // The release test prepares public inputs in a fresh private directory.
+      // Exclusive directory/file creation rejects reused outputs and symlinks.
+      fs.mkdirSync(path.join(buildDir, 'generated'))
+      fs.mkdirSync(path.join(buildDir, 'dist'))
+      const sourceConfig = path.join(root, 'tsconfig.json')
+      const config = JSON.parse(fs.readFileSync(sourceConfig, 'utf8'))
+      const typecheckConfig = path.join(buildDir, 'typecheck.json')
+      fs.writeFileSync(typecheckConfig, `${JSON.stringify({
+        extends: sourceConfig,
+        compilerOptions: {
+          paths: {
+            ...config.compilerOptions.paths,
+            '@/generated/wasm-integrity': [path.join(buildDir, 'generated/wasm-integrity.ts')],
+          },
+          typeRoots: [path.join(root, 'node_modules/@types'), path.join(root, 'node_modules')],
+        },
+      }, null, 2)}\n`, { flag: 'wx' })
+      typecheckArgs.push('--project', typecheckConfig)
+    }
     await run('write version metadata', [path.join(root, 'scripts', 'write-version.cjs')])
     await run('write WASM integrity metadata', [path.join(root, 'scripts', 'write-integrity-manifest.cjs')])
     if (profile !== 'skip-check') {
-      await run('typecheck', [path.join(root, 'node_modules', 'vue-tsc', 'bin', 'vue-tsc.js'), '--noEmit'])
+      await run('typecheck', [path.join(root, 'node_modules', 'vue-tsc', 'bin', 'vue-tsc.js'), ...typecheckArgs])
     }
     const buildEnv = profile === 'root'
       ? { ...process.env, VITE_PWA_BASE_PATH: '/' }

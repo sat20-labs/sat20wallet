@@ -267,37 +267,37 @@ type dkvsWriteResultData struct {
 	Data *dkvsindexer.WriteResult `json:"data,omitempty"`
 }
 
-// Passing an explicit authorization (including nil for the binding exception)
-// is a retry of a captured request. No fresh context is fetched in that case.
 func (p *SatsNetDKVSClient) putRecordBatchCASRaw(mutations []dkvsindexer.CASMutation, endpointID, requestID string,
 	authorizations ...*dkvsindexer.WalletWriteAuthorization) (*dkvsindexer.WriteResult, error) {
-	req, err := dkvscore.BuildBatchCASRequest(mutations, endpointID, requestID)
-	if err != nil {
-		return nil, err
-	}
 	if len(authorizations) > 1 {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
+	var authorization *dkvsindexer.WalletWriteAuthorization
 	if len(authorizations) == 1 {
-		req.Authorization = dkvsindexer.CloneWalletWriteAuthorization(authorizations[0])
+		authorization = dkvsindexer.CloneWalletWriteAuthorization(authorizations[0])
 	} else {
-		// Manager-attached clients resolve the pinned account-management root
-		// inside prepareWriteAuthorization; request-scoped clones may instead
-		// carry an explicit signer. The account-mapping bootstrap exception
-		// intentionally returns nil authorization.
-		req.Authorization, err = p.prepareWriteAuthorization(mutations, endpointID, requestID)
+		var err error
+		authorization, err = p.prepareWriteAuthorization(mutations, endpointID, requestID)
 		if err != nil {
 			return nil, err
 		}
 	}
-	// A raw client has neither a manager-owned root nor an explicit signer, so
-	// prepareWriteAuthorization fails before any unauthenticated business write.
+	return p.submitDKVSBatch(mutations, endpointID, requestID, authorization, nil)
+}
+
+func (p *SatsNetDKVSClient) sendDKVSBatch(mutations []dkvsindexer.CASMutation, endpointID, requestID string,
+	authorization *dkvsindexer.WalletWriteAuthorization) (*dkvsindexer.WriteResult, error) {
+	req, err := dkvscore.BuildBatchCASRequest(mutations, endpointID, requestID)
+	if err != nil {
+		return nil, err
+	}
+	req.Authorization = dkvsindexer.CloneWalletWriteAuthorization(authorization)
 	var resp dkvsWriteResultData
 	if err := p.postDKVSApplication("/v3/dkvs/records/batch-cas", req, &resp); err != nil {
 		return nil, fmt.Errorf("submit DKVS batch: %w", err)
 	}
 	if err := dkvscore.VerifyWriteResult(mutations, requestID, resp.Data); err != nil {
-		return nil, fmt.Errorf("verify DKVS batch response: %w", err)
+		return nil, &DKVSRequestPendingError{RequestID: requestID, Cause: fmt.Errorf("verify DKVS batch response: %w", err)}
 	}
 	return resp.Data, nil
 }
@@ -327,7 +327,7 @@ func (p *SatsNetDKVSClient) putRecordBatchCASWithOrigin(mutations []dkvsindexer.
 		return nil, err
 	}
 	var result *dkvsindexer.WriteResult
-	err = p.manager.runTransport(func() error {
+	err = func() error {
 		entry.Authorization, err = p.prepareWriteAuthorization(mutations, endpointID, entry.RequestID)
 		if err != nil {
 			return err
@@ -338,24 +338,46 @@ func (p *SatsNetDKVSClient) putRecordBatchCASWithOrigin(mutations []dkvsindexer.
 		if inflightErr := store.UpdateOutboxState(entry, DKVSOutboxInflight, nil); inflightErr != nil {
 			return fmt.Errorf("mark DKVS batch inflight: %w", inflightErr)
 		}
-		result, err = p.putRecordBatchCASRaw(mutations, endpointID, entry.RequestID, entry.Authorization)
+		result, err = p.submitDKVSBatch(mutations, endpointID, entry.RequestID, entry.Authorization, entry)
 		if err != nil {
 			if p.manager.owner != nil {
 				err = p.manager.owner.accountAutopaySubmissionFailure(mutations, err)
 			}
 			if errors.Is(err, ErrAccountAutopayFundingRequired) {
-				_ = store.UpdateOutboxState(entry, DKVSOutboxPending, err)
+				state := DKVSOutboxPending
+				if knownDKVSRefusal(err) {
+					state = DKVSOutboxConflict
+				}
+				_ = store.UpdateOutboxState(entry, state, err)
 				return err
 			}
-			_ = markDKVSOutboxSubmissionFailure(store, entry, err)
+			if markErr := markDKVSOutboxSubmissionFailure(store, entry, err); markErr != nil {
+				return errors.Join(err, markErr)
+			}
+			// This fresh, explicitly rejected business intent did not commit.
+			// End it so a later user action for the same key can be authorized.
+			// Replay of older pending requests and durable ACKs never comes here.
+			if origin.Domain == "" && (IsDKVSErrorCode(err, dkvsindexer.ErrorCodePermissionDenied) || isDKVSRebaseError(err)) {
+				if cleanupErr := store.DiscardOutbox(entry); cleanupErr != nil {
+					return errors.Join(err, cleanupErr)
+				}
+			}
+			if isDKVSNetworkFailure(err) {
+				// The request may have committed before the response was lost.
+				// Its signed outbox intent is durable; replay that same ID.
+				return &DKVSRequestPendingError{RequestID: entry.RequestID, Cause: err}
+			}
 			return err
 		}
 		if ackErr := store.ApplyWriteResultAndAck(entry, result); ackErr != nil {
-			_ = markDKVSOutboxSubmissionFailure(store, entry, ackErr)
-			return fmt.Errorf("complete DKVS request: %w", ackErr)
+			var persistence *dkvscore.AckPersistenceError
+			return &DKVSRequestPendingError{RequestID: entry.RequestID, Committed: errors.As(ackErr, &persistence), Cause: ackErr}
+		}
+		if err := p.manager.finishAcknowledgedWrite(p, store, entry); err != nil {
+			return &DKVSRequestPendingError{RequestID: entry.RequestID, Committed: true, Durable: true, Cause: err}
 		}
 		return nil
-	})
+	}()
 	if err != nil {
 		return nil, err
 	}
@@ -365,3 +387,68 @@ func (p *SatsNetDKVSClient) putRecordBatchCASWithOrigin(mutations []dkvsindexer.
 func IsDKVSErrorCode(err error, code dkvsindexer.ErrorCode) bool {
 	return dkvscore.IsErrorCode(err, code)
 }
+
+// Called only while the existing manager transport coordinator is owned.
+func (m *dkvsManager) finishAcknowledgedWrite(client *SatsNetDKVSClient, store *dkvsReplicaStore, entry *DKVSBatchOutboxEntry) error {
+	if entry.State != DKVSOutboxAcknowledged {
+		return dkvsindexer.ErrInvalidRecord
+	}
+	if entry.OriginDomain == accountKVOutboxDomain {
+		if err := m.owner.finishAccountKVACK(client, entry); err != nil {
+			return accountACKCleanup(entry, err)
+		}
+		if err := store.DiscardOutbox(entry); err != nil {
+			return accountACKCleanup(entry, err)
+		}
+		return nil
+	}
+	mutations, err := entry.DecodeMutations()
+	if err != nil {
+		return err
+	}
+	var prefixes []string
+	for _, mutation := range mutations {
+		prefix, _, err := dkvsManagedPathForKey(mutation.Record.Key)
+		if err != nil {
+			return err
+		}
+		prefixes = append(prefixes, prefix)
+	}
+	if len(prefixes) > 0 {
+		prefixes, err = normalizeWalletSubscriptionPrefixes(prefixes)
+		if err != nil {
+			return err
+		}
+		changed, err := m.syncManagedPrefixes(client, store, prefixes, false)
+		if err != nil {
+			return err
+		}
+		m.enqueueNotifications(changed)
+	}
+	{
+		if err := store.DiscardOutbox(entry); err != nil {
+			// The exact ACK is already durable. A one-off local deletion failure
+			// must wake bounded reconciliation even when no remote watch changes.
+			return &DKVSRequestPendingError{RequestID: entry.RequestID, Committed: true, Durable: true, Cause: err}
+		}
+	}
+	if err := m.grantReconciledWriteSession(client, store); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// DKVSRequestPendingError prevents a known remote commit being retried as a
+// fresh business write when only local installation failed.
+type DKVSRequestPendingError struct {
+	RequestID string
+	Committed bool
+	Durable   bool // Acknowledgement persisted; recovery installs without resending.
+	Cause     error
+}
+
+func (e *DKVSRequestPendingError) Error() string {
+	return fmt.Sprintf("DKVS request %s committed=%t durable=%t; local reconciliation pending: %v", e.RequestID, e.Committed, e.Durable, e.Cause)
+}
+func (e *DKVSRequestPendingError) Unwrap() error { return e.Cause }

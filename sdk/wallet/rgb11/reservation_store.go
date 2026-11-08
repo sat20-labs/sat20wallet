@@ -1,6 +1,7 @@
 package rgb11wallet
 
 import (
+	"errors"
 	indexer "github.com/sat20-labs/indexer/common"
 	corewallet "github.com/sat20-labs/rgb11/wallet"
 	"strings"
@@ -40,26 +41,55 @@ type ReservationCommitBatch interface {
 	FlushWith(ReservationCommitStage) error
 }
 
+// ReservationCommitMetadata joins the account dirty generation to the same
+// local transaction. The returned callback must release any local state gate
+// on both success and failure; it must never perform transport work.
+type ReservationCommitMetadata interface {
+	StageReservationMetadata(indexer.WriteBatch, string) (func(bool), error)
+}
+
+var ErrAtomicPersistenceUnavailable = errors.New("RGB11 database does not support atomic write transactions")
+
 type reservationBatch struct {
 	indexer.WriteBatch
 	scope       string
 	persistence ReservationPersistence
 	committed   []func()
+	changed     bool
 }
 
-func NewReservationWriteBatch(db indexer.KVDB, scope string, persistence ReservationPersistence) indexer.WriteBatch {
-	batch := db.NewWriteBatch()
-	if batch == nil || persistence == nil {
-		return batch
+func NewReservationWriteBatch(db indexer.KVDB, scope string, persistence ReservationPersistence) (indexer.WriteBatch, error) {
+	atomic, ok := db.(indexer.AtomicWriteBatchDB)
+	if !ok {
+		return nil, ErrAtomicPersistenceUnavailable
 	}
-	return &reservationBatch{WriteBatch: batch, scope: scope, persistence: persistence}
+	batch := atomic.NewAtomicWriteBatch()
+	if batch == nil {
+		return nil, ErrAtomicPersistenceUnavailable
+	}
+	if persistence == nil {
+		return batch, nil
+	}
+	return &reservationBatch{WriteBatch: batch, scope: scope, persistence: persistence}, nil
 }
 
 func (b *reservationBatch) Put(key, value []byte) error {
 	if err := b.stageReservation(key, value); err != nil {
 		return err
 	}
-	return b.WriteBatch.Put(key, value)
+	if err := b.WriteBatch.Put(key, value); err != nil {
+		return err
+	}
+	b.changed = true
+	return nil
+}
+
+func (b *reservationBatch) Delete(key []byte) error {
+	if err := b.WriteBatch.Delete(key); err != nil {
+		return err
+	}
+	b.changed = true
+	return nil
 }
 
 // Unchanged snapshot records still rebuild reservation rows and RAM callbacks
@@ -116,6 +146,18 @@ func (b *reservationBatch) FlushWith(stage ReservationCommitStage) (err error) {
 		release = locker.LockReservationCommit()
 		defer release()
 	}
+	var finishMetadata func(bool)
+	defer func() {
+		if finishMetadata != nil {
+			finishMetadata(false)
+		}
+	}()
+	if metadata, ok := b.persistence.(ReservationCommitMetadata); ok && b.changed {
+		finishMetadata, err = metadata.StageReservationMetadata(b.WriteBatch, b.scope)
+		if err != nil {
+			return err
+		}
+	}
 	var finish func(bool)
 	finishCalled := false
 	defer func() {
@@ -132,6 +174,11 @@ func (b *reservationBatch) FlushWith(stage ReservationCommitStage) (err error) {
 	if err = b.WriteBatch.Flush(); err != nil {
 		return err
 	}
+	if finishMetadata != nil {
+		complete := finishMetadata
+		finishMetadata = nil
+		complete(true)
+	}
 	if finish != nil {
 		complete := finish
 		finish = nil
@@ -147,22 +194,22 @@ func (b *reservationBatch) FlushWith(stage ReservationCommitStage) (err error) {
 
 func (s *ProjectionStore) SetReservationPersistence(p ReservationPersistence) { s.reservations = p }
 func (s *EngineStore) SetReservationPersistence(p ReservationPersistence)     { s.reservations = p }
-func (s *ProjectionStore) newWriteBatch() indexer.WriteBatch {
+func (s *ProjectionStore) newWriteBatch() (indexer.WriteBatch, error) {
 	s.mu.RLock()
 	scope := s.scope
 	s.mu.RUnlock()
 	return NewReservationWriteBatch(s.db, scope, s.reservations)
 }
-func (s *EngineStore) newWriteBatch() indexer.WriteBatch {
+func (s *EngineStore) newWriteBatch() (indexer.WriteBatch, error) {
 	s.mu.RLock()
 	scope := s.scope
 	s.mu.RUnlock()
 	return NewReservationWriteBatch(s.db, scope, s.reservations)
 }
 func (s *ProjectionStore) writeReservationRecord(key, value []byte) error {
-	batch := s.newWriteBatch()
-	if batch == nil {
-		return ErrWalletScope
+	batch, err := s.newWriteBatch()
+	if err != nil {
+		return err
 	}
 	defer batch.Close()
 	if err := batch.Put(key, value); err != nil {
@@ -172,9 +219,9 @@ func (s *ProjectionStore) writeReservationRecord(key, value []byte) error {
 }
 
 func (s *ProjectionStore) deleteReservationRecord(key []byte) error {
-	batch := s.newWriteBatch()
-	if batch == nil {
-		return ErrWalletScope
+	batch, err := s.newWriteBatch()
+	if err != nil {
+		return err
 	}
 	defer batch.Close()
 	if err := batch.Delete(key); err != nil {

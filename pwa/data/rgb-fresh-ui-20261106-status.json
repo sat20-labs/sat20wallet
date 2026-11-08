@@ -1,0 +1,89 @@
+{
+  "updated_at": "2026-11-06T03:51:48.767211+00:00",
+  "runtime_root": "/private/tmp/sat20-pwa-rgb-20261106-qdcd3whz",
+  "tools": {
+    "at": "2026-11-06T03:10:50.247449+00:00",
+    "from": "/private/tmp/sat20-real-tools-20261106",
+    "to": "/Users/yingfeng/github/.test-tools/sat20-real-tools-20261106",
+    "method": "single os.rename; no copy",
+    "sha256": {
+      "bitcoind": "01dbf0e049cbd4775a16c2cabf57a0818557f0e7cac2f0d05991cab4fe5cd05c",
+      "bitcoin-cli": "84a6bd5e49073689e5cf6068b412cd569703ea88b74e5be3b0b82ce9e2067d02",
+      "electrs": "0555ae9140cedd9a45637bf796a6f9c8ffc8eaadf3375c3385bdac7fc8d5b6d2"
+    },
+    "hashes_unchanged": true,
+    "old_path_exists": false,
+    "running_services_restarted": false
+  },
+  "l1": {
+    "state": "READY",
+    "rpc": "127.0.0.1:53168",
+    "indexer": "http://127.0.0.1:53169/btc/regtest",
+    "esplora": "http://127.0.0.1:53170"
+  },
+  "pwa": {
+    "state": "READY",
+    "pid": 19001,
+    "origin": "http://127.0.0.1:5189",
+    "mode": "regtest",
+    "l1": "127.0.0.1:53169",
+    "wasm": "unchanged public/wasm/sat20wallet.wasm",
+    "at": "2026-11-06T03:35:19.087Z"
+  },
+  "nodes": {
+    "at": "2026-11-06T03:16:42.262706Z",
+    "pid": 17849,
+    "state": "BUILT_WAITING_OLD_UI_UNLOADED"
+  },
+  "ui_cases_executed": 0,
+  "next": "User credential handoff and confirmation old 5179 page unloaded, then release existing compiled node fixture gate.",
+  "wasm_sha256": "3ee1cc45411be19f5c2746fdde0c8421c7f19661ed1189c70bb72120214279f0",
+  "scope": "New fixture uses approved current frozen working tree; no old-node deployment and no old task recovery.",
+  "ui": {
+    "browser": "hidden IAB",
+    "tab_id": "2",
+    "url": "http://127.0.0.1:5189/#/create",
+    "observed": "Create New Wallet; Password; Confirm Password; Continue",
+    "credential_entered": false,
+    "wallet_created": false,
+    "transactions_submitted": 0,
+    "physical_input_used": false
+  },
+  "startup_fix": {
+    "scope": "owned test server only",
+    "cause": "process cwd did not locate existing Tailwind configuration",
+    "action": "normal stop of own PID 17487; single relaunch with cwd pwa",
+    "source_changed": false,
+    "wasm_changed": false,
+    "result": "initial wallet page and create form rendered"
+  },
+  "wallet_public_observation": {
+    "url": "http://127.0.0.1:5189/#/wallet",
+    "wallet_label": "Wallet 1",
+    "account_index": 0,
+    "network": "regtest, shown by this isolated runtime and rBTC denomination",
+    "public_address": "masked in UI as bcrt1p*****0yjywd",
+    "total_l1_balance": "0.00000000 rBTC",
+    "readiness_banner": "The account is syncing and being verified; related new business temporarily unavailable",
+    "l2": "not verified; node fixture has not started",
+    "transactions_submitted": 0,
+    "mnemonic_or_password_read": false
+  },
+  "node_isolation_finding": {
+    "supported_port_override_parameter": "none found in this PWA readiness path",
+    "fixed_test_ports": "bootstrap 30250-30254, core 30260-30264",
+    "source_locations": [
+      "sdk/e2e/real_regtest_environment_test.go:67",
+      "sdk/e2e/real_regtest_environment_test.go:80-96",
+      "sdk/e2e/real_regtest_environment_test.go:115",
+      "sdk/e2e/real_regtest_environment_test.go:148-153",
+      "sdk/e2e/real_regtest_assets_test.go:202-225"
+    ],
+    "pwa_config_entry": [
+      "pwa/config/wasm.ts:74-86",
+      "pwa/config/index.ts:16-19"
+    ],
+    "isolated_vite_connection_override": "runtime-only /private/tmp/sat20-pwa-rgb-20261106-qdcd3whz/pwa-server.mjs:6 (L1 config only); it does not remap L2 peer/indexer ports",
+    "status": "No source changed; compiled node fixture remains waiting; safe distinct-port setup needs test fixture parameterization plus matching temporary PWA L2 endpoints."
+  }
+}

@@ -5,10 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	"reflect"
 	"testing"
+	"time"
 
+	"github.com/sat20-labs/rgb11/invoicing"
+	corewallet "github.com/sat20-labs/rgb11/wallet"
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 	"github.com/stretchr/testify/require"
 )
@@ -43,50 +45,51 @@ func TestAccountPWAColdStartupReadFailurePreservesSelection(t *testing.T) {
 	}
 }
 
-func TestAccountPWAIncompleteImportBlocksWalletUse(t *testing.T) {
+func TestPWAImportScopeIsolation(t *testing.T) {
 	old := _chain
 	_chain = "testnet"
-	defer func() { _chain = old }()
+	t.Cleanup(func() { _chain = old })
 	for _, origin := range []string{"restore", "remote-apply"} {
 		t.Run(origin, func(t *testing.T) {
 			remote := newRGB11MemoryDKVSHTTP()
-			source, sourceProvider := managedImportTestSource(t, remote)
-			target, provider := managedImportTestManager(t, remote)
+			source, sourceProvider, _ := newImportSource(t, remote)
+			target, provider, _ := newImportGroup(t, remote)
+			want := []byte("A")
 			if origin == "remote-apply" {
-				require.NoError(t, restoreManagedImportTestWallet(t, target, source))
-				sourceProvider.payloads[0].Payload = []byte("new independent-device data")
+				require.NoError(t, restoreImportGroup(t, target, source))
+				want = []byte("new independent-device data")
+				stageManagedImportTestPayload(t, source, sourceProvider, want)
 				require.NoError(t, source.SyncAccountManagementState(nil))
 			}
+			beforeRemote := snapshotRGB11MemoryRecords(remote)
 			interrupted := errors.New("PWA provider import interrupted")
 			provider.importErr = interrupted
+			imports := provider.imports
 			if origin == "restore" {
-				require.ErrorIs(t, restoreManagedImportTestWallet(t, target, source), interrupted)
+				require.NoError(t, restoreImportGroup(t, target, source), "healthy wallets survive an independent module failure")
 			} else {
-				require.ErrorIs(t, target.SyncAccountManagementState(nil), interrupted)
+				err := target.SyncAccountManagementState(nil)
+				require.ErrorIs(t, err, interrupted)
+				require.True(t, accountModuleOnly(err))
 			}
+			require.Greater(t, provider.imports, imports, "the real provider fault must be reached")
+			targetCopy := importModuleTarget(t, target, provider.id, want)
 			_, err := target.captureWalletIdentity()
-			require.ErrorIs(t, err, ErrAccountManagedDataImportIncomplete, "PSBT approval must remain closed")
-			require.True(t, target.isL1RGBInputProtected("0000000000000000000000000000000000000000000000000000000000000001:0"), "missing projection must not authorize BTC/fee selection")
-			require.ErrorIs(t, target.SwitchAccount(0), ErrAccountManagedDataImportIncomplete)
+			require.NoError(t, err, "an unrelated provider must not disable the healthy wallet")
+			require.NoError(t, target.SwitchAccount(0))
 			_, err = target.UnlockWallet("password")
-			require.ErrorIs(t, err, ErrAccountManagedDataImportIncomplete, "PWA must not open a wallet session before import completes")
+			require.NoError(t, err)
+			current := importModuleTarget(t, target, provider.id, want)
+			require.Equal(t, targetCopy.Value, current.Value)
+			require.Equal(t, beforeRemote, snapshotRGB11MemoryRecords(remote))
 			provider.importErr = nil
-			if origin == "restore" {
-				require.NoError(t, restoreManagedImportTestWallet(t, target, source))
-			} else {
-				require.NoError(t, target.SyncAccountManagementState(nil))
-			}
-			_, err = target.UnlockWallet("password")
-			require.NoError(t, err)
-			_, err = target.captureWalletIdentity()
-			require.NoError(t, err)
+			require.NoError(t, target.SyncAccountManagementState(nil))
+			assertImportComplete(t, target, provider, want)
+			require.Equal(t, beforeRemote, snapshotRGB11MemoryRecords(remote), "retry must import the target without republishing stale local data")
 		})
 	}
 }
 
-// A real PWA reload loses runtime objects, but keeps unfinished channel work.
-// Authenticating to resume remote-apply must recover that work even though the
-// UI remains locked until the provider import completes.
 func TestAccountPWAColdRemoteImportPreservesPendingChannelRuntime(t *testing.T) {
 	old := _chain
 	_chain = "testnet"
@@ -94,42 +97,57 @@ func TestAccountPWAColdRemoteImportPreservesPendingChannelRuntime(t *testing.T) 
 	for _, closing := range []bool{false, true} {
 		t.Run(fmt.Sprintf("closing=%t", closing), func(t *testing.T) {
 			remote := newRGB11MemoryDKVSHTTP()
-			source, sourceProvider := managedImportTestSource(t, remote)
-			target, provider := managedImportTestManager(t, remote)
-			require.NoError(t, restoreManagedImportTestWallet(t, target, source))
-			channelID, err := GetP2WSHaddress(target.wallet.GetPaymentPubKey().SerializeCompressed(), target.wallet.GetPaymentPubKey().SerializeCompressed())
+			source, sourceProvider, _ := newImportSource(t, remote)
+			target, provider, closeTarget := newImportGroup(t, remote)
+			require.NoError(t, restoreImportGroup(t, target, source))
+			channelID, err := target.GetChannelAddress()
 			require.NoError(t, err)
 			const reservationID int64 = 9301
-			stored := savePendingFundingFixture(t, target.db.(*memoryKVDB), target.wallet.(*InternalWallet), channelID, reservationID)
+			// Reuse the existing channel shape, then persist it through the real DB.
+			stored := savePendingFundingFixture(t, newMemoryKVDB(), target.wallet.(*InternalWallet), channelID, reservationID)
+			stored.RemoteChanCfg.PaymentKey = target.serverNode.Pubkey
+			stored.StaticMerkleRoot = stored.CalcStaticMerkleRoot()
+			stored.ChannelHash = stored.CalcHash()
+			require.NoError(t, SaveChannelInDB(target.db, stored))
+			require.NoError(t, SaveReservation(target.db, &FundingReservation{FundingDataInDB: FundingDataInDB{
+				ReservationBase: NewReservationBase(reservationID, true, ResvStatus(RS_FUNDING_BROADCASTED), target.wallet), ChannelId: channelID,
+			}}))
 			if closing {
 				require.NoError(t, DeleteReservation(target.db, RESV_TYPE_OPEN, reservationID))
 				stored.Status = CS_CLOSING_DEANCHOR_BROADCASTED
 				stored.UpdateTime = reservationID
 				stored.StaticMerkleRoot = stored.CalcStaticMerkleRoot()
+				stored.ChannelHash = stored.CalcHash()
 				require.NoError(t, SaveChannelInDB(target.db, stored))
 				require.NoError(t, SaveReservation(target.db, &ClosingReservation{ClosingDataInDB: ClosingDataInDB{
-					ReservationBase: NewReservationBase(reservationID, true, ResvStatus(CS_CLOSING_DEANCHOR_BROADCASTED), target.wallet),
-					ChannelId:       channelID,
+					ReservationBase: NewReservationBase(reservationID, true, ResvStatus(CS_CLOSING_DEANCHOR_BROADCASTED), target.wallet), ChannelId: channelID,
 				}}))
 			}
 			before, err := target.db.Read([]byte(GetChannelKey(channelID)))
 			require.NoError(t, err)
-			sourceProvider.payloads[0].Payload = []byte("independent device updated ownership")
+			want := []byte("independent device updated ownership")
+			stageManagedImportTestPayload(t, source, sourceProvider, want)
 			require.NoError(t, source.SyncAccountManagementState(nil))
+			beforeRemote := snapshotRGB11MemoryRecords(remote)
 			interrupted := errors.New("PWA remote provider persistence interrupted")
 			provider.importErr = interrupted
+			imports := provider.imports
 			require.ErrorIs(t, target.SyncAccountManagementState(nil), interrupted)
-
-			reopened, resumedProvider := managedImportTestManager(t, remote)
-			reopened.db = target.db
-			reopened.initResvMap()
-			require.NoError(t, reopened.initDB())
-			reopened.serverNode = NewNode(&channelHeartbeatTestClient{}, "test", SERVER_NODE, target.wallet.GetPaymentPubKey(), target.wallet.GetNodePubKey())
+			require.Greater(t, provider.imports, imports)
+			targetCopy := importModuleTarget(t, target, provider.id, want)
+			cfg := target.cfg
+			closeTarget()
+			reopened, resumedProvider, _ := openImportGroup(t, cfg, remote)
 			resumedProvider.importErr = interrupted
 			_, err = reopened.UnlockWallet("password")
-			require.ErrorIs(t, err, ErrAccountManagedDataImportIncomplete)
+			require.NoError(t, err, "a failed independent provider must not prevent channel rehydration")
+			current := importModuleTarget(t, reopened, resumedProvider.id, want)
+			require.Equal(t, targetCopy.Value, current.Value)
+			require.ErrorIs(t, reopened.SyncAccountManagementState(nil), interrupted)
+			require.Positive(t, resumedProvider.imports)
 			resumedProvider.importErr = nil
 			require.NoError(t, reopened.SyncAccountManagementState(nil))
+			assertImportComplete(t, reopened, resumedProvider, want)
 			_, err = reopened.UnlockWallet("password")
 			require.NoError(t, err)
 			var channel *Channel
@@ -153,6 +171,7 @@ func TestAccountPWAColdRemoteImportPreservesPendingChannelRuntime(t *testing.T) 
 			after, err := reopened.db.Read([]byte(GetChannelKey(channelID)))
 			require.NoError(t, err)
 			require.Equal(t, before, after, "runtime recovery rewrote the persisted channel")
+			require.Equal(t, beforeRemote, snapshotRGB11MemoryRecords(remote))
 		})
 	}
 }
@@ -160,67 +179,71 @@ func TestAccountPWAColdRemoteImportPreservesPendingChannelRuntime(t *testing.T) 
 func TestAccountPWARootMnemonicRetryResumesProviderImport(t *testing.T) {
 	old := _chain
 	_chain = "testnet"
-	defer func() { _chain = old }()
+	t.Cleanup(func() { _chain = old })
 	remote := newRGB11MemoryDKVSHTTP()
-	source, _ := managedImportTestSource(t, remote)
+	source, _, _ := newImportSource(t, remote)
 	require.NoError(t, source.SyncAccountRootWrapper(context.Background()))
-	target, provider := managedImportTestManager(t, remote)
-	root := source.wallet
-	wrapperKey, err := accountRootWrapperKey(root)
-	require.NoError(t, err)
-	stateKey, err := source.accountManagedStateKey(root)
-	require.NoError(t, err)
-	dataKey, err := source.accountManagedDataBlobKey(root)
-	require.NoError(t, err)
-	store, err := target.accountDKVSStore()
-	require.NoError(t, err)
-	require.NoError(t, store.Refresh(wrapperKey, stateKey, dataKey))
+	target, provider, closeTarget := newImportGroup(t, remote)
 	interrupted := errors.New("root mnemonic provider interruption")
 	provider.importErr = interrupted
-	_, err = target.RecoverAccountManagementFromRootMnemonic(context.Background(), accountRootWrapperTestMnemonic, "password")
-	require.ErrorIs(t, err, interrupted)
+	_, err := target.RecoverAccountManagementFromRootMnemonic(context.Background(), accountRootWrapperTestMnemonic, "password")
+	require.NoError(t, err, "root recovery keeps healthy wallets when a module import fails")
+	require.Positive(t, provider.imports)
+	targetCopy := importModuleTarget(t, target, provider.id, []byte("A"))
 	before := target.GetWalletCatalog()
-	// Reload the PWA: discard the runtime secret and rebuild from the same DB.
-	target.accountBackgroundWG.Wait()
-	reopened, reopenedProvider := managedImportTestManager(t, remote)
-	reopened.db = target.db
-	require.NoError(t, reopened.initDB())
-	target, provider = reopened, reopenedProvider
+	beforeRemote := snapshotRGB11MemoryRecords(remote)
+	cfg := target.cfg
+	closeTarget()
+	target, provider, _ = openImportGroup(t, cfg, remote)
 	_, err = target.RecoverAccountManagementFromRootMnemonic(context.Background(), accountRootWrapperTestMnemonic, "password")
-	require.NoError(t, err, "same PWA mnemonic import entry must resume its committed target")
+	require.NoError(t, err, "same PWA mnemonic entry must resume its committed module target")
 	require.Equal(t, before, target.GetWalletCatalog())
-	require.NoError(t, target.checkAccountManagedDataImport())
-	require.Equal(t, "A", string(provider.payloads[0].Payload))
+	require.Positive(t, provider.imports)
+	assertImportComplete(t, target, provider, []byte("A"))
+	current, err := target.readAccountLocal(target.accountProfile.AccountID, provider.id, AccountManagedDataGlobalScope)
+	require.NoError(t, err)
+	require.Equal(t, targetCopy.Value, current.Value)
+	require.Equal(t, beforeRemote, snapshotRGB11MemoryRecords(remote))
 }
 
 func TestAccountPWARecoveryPreviewUsesInterruptedTargetBeforeNewRemoteState(t *testing.T) {
 	old := _chain
 	_chain = "testnet"
-	defer func() { _chain = old }()
+	t.Cleanup(func() { _chain = old })
 	remote := newRGB11MemoryDKVSHTTP()
-	source, _ := managedImportTestSource(t, remote)
-	target, provider := managedImportTestManager(t, remote)
-	original := managedImportRecoveryValue(t, source)
-	provider.importErr = errors.New("PWA restore interruption")
-	require.Error(t, restoreManagedImportTestWallet(t, target, source))
-	target.accountBackgroundWG.Wait()
-	reopened, _ := managedImportTestManager(t, remote)
-	reopened.db = target.db
-	require.NoError(t, reopened.initDB())
-	target = reopened
+	source, _, _ := newImportSource(t, remote)
+	target, provider, closeTarget := newImportGroup(t, remote)
+	failure := errors.New("PWA restore interruption")
+	provider.importErr = failure
+	require.NoError(t, restoreImportGroup(t, target, source))
+	require.Positive(t, provider.imports)
+	original := importModuleTarget(t, target, provider.id, []byte("A"))
+	cfg := target.cfg
+	closeTarget()
+	target, provider, _ = openImportGroup(t, cfg, remote)
+	provider.importErr = failure
 	require.NoError(t, source.UpdateWalletName(source.GetCurrentWalletId(), "Other device advanced the state"))
 	require.NoError(t, source.SyncAccountManagementState(nil))
-	location, err := source.AccountIndexerLocation()
-	require.NoError(t, err)
-	locator := account.Locator{AccountID: source.accountProfile.AccountID}
+	locator, location := importGroupMaterial(t, source)
+	remoteBefore := snapshotRGB11MemoryRecords(remote)
 	preview, err := target.LoadAccountManagementStateForRecovery(location, locator, source.accountSecret, accountRootWrapperTestMnemonic)
 	require.NoError(t, err)
-	require.Equal(t, original.Hash, preview.Hash, "retry must finish the original authenticated target before adopting R+1")
-	_, err = target.RestoreAccountManagementState(*preview, source.accountSecret, "password", locator,
-		AccountManagementRestoreOptions{StorageMode: AccountStorageTemporary, RecordTTL: testRGB11FreeLocalTTL})
+	require.Equal(t, "Other device advanced the state", preview.State.Wallets[0].Name,
+		"independent wallet metadata need not freeze on a failed business module")
+	local, err := target.readAccountLocal(locator.AccountID, provider.id, AccountManagedDataGlobalScope)
 	require.NoError(t, err)
-	require.NoError(t, target.SyncAccountManagementState(nil))
+	require.True(t, local.Restoring)
+	require.Equal(t, original.Value, local.Value, "preview must not replace the interrupted module target")
+	_, err = target.RestoreAccountManagementState(*preview, source.accountSecret, "password", locator,
+		AccountManagementRestoreOptions{Location: location, StorageMode: AccountStorageTemporary, RecordTTL: testRGB11FreeLocalTTL})
+	require.NoError(t, err)
 	require.Equal(t, "Other device advanced the state", target.GetWalletCatalog()[0].Name)
+	current := importModuleTarget(t, target, provider.id, []byte("A"))
+	require.Equal(t, original.Value, current.Value)
+	provider.importErr = nil
+	require.NoError(t, target.SyncAccountManagementState(nil))
+	assertImportComplete(t, target, provider, []byte("A"))
+	require.Equal(t, remoteBefore, snapshotRGB11MemoryRecords(remote))
 }
 
 func TestAccountPWARootRestoreCommitFailureLeavesNoImportMarker(t *testing.T) {
@@ -230,7 +253,7 @@ func TestAccountPWARootRestoreCommitFailureLeavesNoImportMarker(t *testing.T) {
 	remote := newRGB11MemoryDKVSHTTP()
 	source, _ := managedImportTestSource(t, remote)
 	require.NoError(t, source.SyncAccountRootWrapper(context.Background()))
-	target, _ := managedImportTestManager(t, remote)
+	target, provider := managedImportTestManager(t, remote)
 	// PWA can have imported its root while discovery was unavailable, then
 	// restore the discovered backup when connectivity returns.
 	_, err := target.ImportWallet(accountRootWrapperTestMnemonic, "password")
@@ -241,79 +264,100 @@ func TestAccountPWARootRestoreCommitFailureLeavesNoImportMarker(t *testing.T) {
 	require.NoError(t, err)
 	stateKey, err := source.accountManagedStateKey(source.wallet)
 	require.NoError(t, err)
-	dataKey, err := source.accountManagedDataBlobKey(source.wallet)
+	dataKey, err := account.ManagedIndexKey(source.accountProfile.AccountID)
 	require.NoError(t, err)
 	require.NoError(t, store.Refresh(wrapperKey, stateKey, dataKey))
 	before := target.GetWalletCatalog()
+	beforeProfile, err := target.db.Read(accountManagementProfileKey())
+	require.NoError(t, err)
+	beforeCopies, err := target.listAccountLocal(source.accountProfile.AccountID)
+	require.NoError(t, err)
 	database := target.db
 	fault := &accountPersistenceReviewDB{KVDB: database, profileKey: accountManagementProfileKey()}
 	fault.armed.Store(true)
 	target.db = fault
 	_, err = target.RecoverAccountManagementFromRootMnemonic(context.Background(), accountRootWrapperTestMnemonic, "password")
 	require.ErrorIs(t, err, errAccountPersistenceReview)
+	require.Positive(t, fault.hits.Load(), "root recovery must reach the real profile commit fault")
 	fault.armed.Store(false)
 	target.db = database
 	require.Equal(t, before, target.GetWalletCatalog())
-	marker, err := target.readAccountManagedDataImportMarker()
+	afterProfile, err := database.Read(accountManagementProfileKey())
 	require.NoError(t, err)
-	require.Nil(t, marker, "failed local commit must not strand a previously imported root")
+	require.Equal(t, beforeProfile, afterProfile)
+	afterCopies, err := target.listAccountLocal(source.accountProfile.AccountID)
+	require.NoError(t, err)
+	require.Equal(t, beforeCopies, afterCopies, "failed core commit must not strand partial module copies")
+	require.Zero(t, provider.imports)
+	_, err = target.RecoverAccountManagementFromRootMnemonic(context.Background(), accountRootWrapperTestMnemonic, "password")
+	require.ErrorIs(t, err, ErrAccountDBStopped,
+		"restoring storage availability must not revive the failed Manager")
+	service := target.serverNode
+	target.Close()
+	target = newAccountManagementAutoTestManager(t)
+	target.db, target.serverNode = database, service
+	configureRGB11DKVSTestManager(target, remote)
+	require.NoError(t, target.initDB())
+	provider = managedImportProvider(t, target)
+	target.managedDataProviders = map[string]AccountManagedDataProvider{provider.id: provider}
+	_, err = target.UnlockWallet("password")
+	require.NoError(t, err)
+	require.Equal(t, before, target.GetWalletCatalog(), "restart must load the pre-failure wallet catalog")
 	_, err = target.RecoverAccountManagementFromRootMnemonic(context.Background(), accountRootWrapperTestMnemonic, "password")
 	require.NoError(t, err)
+	assertImportComplete(t, target, provider, []byte("A"))
 }
 
-func TestFinalReviewIncompleteRestoreRejectsCatalogMutation(t *testing.T) {
+func TestImportFailureKeepsCatalog(t *testing.T) {
 	old := _chain
 	_chain = "testnet"
-	defer func() { _chain = old }()
+	t.Cleanup(func() { _chain = old })
 	remote := newRGB11MemoryDKVSHTTP()
-	source, _ := managedImportTestSource(t, remote)
-	target, provider := managedImportTestManager(t, remote)
+	source, _, _ := newImportSource(t, remote)
+	target, provider, _ := newImportGroup(t, remote)
 	injected := errors.New("review provider interruption")
 	provider.importErr = injected
-	if err := restoreManagedImportTestWallet(t, target, source); !errors.Is(err, injected) {
-		t.Fatal(err)
-	}
+	require.NoError(t, restoreImportGroup(t, target, source))
+	require.Positive(t, provider.imports)
+	syncImportGroup(t, target, injected)
+	before := importModuleTarget(t, target, provider.id, []byte("A"))
+	require.NoError(t, target.UpdateWalletName(target.GetAccountManagementStatus().RootWalletID, "Edited while independent module restores"))
+	require.ErrorIs(t, target.SyncAccountManagementState(nil), injected)
+	after := importModuleTarget(t, target, provider.id, []byte("A"))
+	require.Equal(t, before.Value, after.Value)
+	require.Equal(t, "Edited while independent module restores", target.GetWalletCatalog()[0].Name)
 	provider.importErr = nil
-	renameErr := target.UpdateWalletName(target.GetAccountManagementStatus().RootWalletID, "Edited during incomplete restore")
-	retryErr := restoreManagedImportTestWallet(t, target, source)
-	syncErr := target.SyncAccountManagementState(nil)
-	t.Logf("rename=%v pending=%d restore_retry=%v sync_retry=%v", renameErr, target.GetAccountManagementStatus().PendingChanges, retryErr, syncErr)
-	if renameErr == nil {
-		t.Error("catalog mutation succeeded while restore is incomplete")
-	}
-	if retryErr != nil {
-		t.Errorf("same-snapshot recovery is now blocked: %v", retryErr)
-	}
+	require.NoError(t, restoreImportGroup(t, target, source))
+	assertImportComplete(t, target, provider, []byte("A"))
+	require.NoError(t, target.SyncAccountManagementState(nil))
+	require.Equal(t, "Edited while independent module restores", target.GetWalletCatalog()[0].Name)
 }
 
 func TestFinalReviewRemoteImportCanResumeAfterProviderRecovers(t *testing.T) {
 	old := _chain
 	_chain = "testnet"
-	defer func() { _chain = old }()
+	t.Cleanup(func() { _chain = old })
 	remote := newRGB11MemoryDKVSHTTP()
 	source, sourceProvider := managedImportTestSource(t, remote)
 	target, provider := managedImportTestManager(t, remote)
-	if err := restoreManagedImportTestWallet(t, target, source); err != nil {
-		t.Fatal(err)
-	}
-	sourceProvider.payloads[0].Payload = []byte("new data")
-	if err := source.SyncAccountManagementState(nil); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, restoreManagedImportTestWallet(t, target, source))
+	want := []byte("new data")
+	stageManagedImportTestPayload(t, source, sourceProvider, want)
+	require.NoError(t, source.SyncAccountManagementState(nil))
+	beforeRemote := snapshotRGB11MemoryRecords(remote)
 	injected := errors.New("review provider interruption")
 	provider.importErr = injected
-	if err := target.SyncAccountManagementState(nil); !errors.Is(err, injected) {
-		t.Fatal(err)
-	}
+	imports := provider.imports
+	err := target.SyncAccountManagementState(nil)
+	require.ErrorIs(t, err, injected)
+	require.True(t, accountModuleOnly(err))
+	require.Greater(t, provider.imports, imports)
+	importModuleTarget(t, target, provider.id, want)
+	require.Equal(t, beforeRemote, snapshotRGB11MemoryRecords(remote))
 	provider.importErr = nil
-	syncErr := target.SyncAccountManagementState(nil)
-	marker, markerErr := target.readAccountManagedDataImportMarker()
-	if markerErr != nil || marker != nil {
-		t.Errorf("retry left import marker: %v, %v", marker, markerErr)
-	}
-	if syncErr != nil {
-		t.Errorf("ordinary sync cannot resume: %v", syncErr)
-	}
+	require.NoError(t, target.SyncAccountManagementState(nil))
+	assertImportComplete(t, target, provider, want)
+	require.Equal(t, beforeRemote, snapshotRGB11MemoryRecords(remote))
 }
 
 func TestFinalReviewSwitchWalletStatusFailureIsReported(t *testing.T) {
@@ -351,11 +395,29 @@ func TestFinalReviewRGBDirtyWriteFailureReleasesManagerLock(t *testing.T) {
 	m := configuredRGB11ManagedOperationTestManager(t)
 	m.accountBackgroundWG.Wait()
 	db := m.db
-	fault := &accountPersistenceReviewDB{KVDB: db, profileKey: accountManagementProfileKey()}
+	beforeProfile, err := db.Read(accountManagementProfileKey())
+	require.NoError(t, err)
+	beforeGeneration := m.accountProfile.ManagedDataGeneration
+	scope, err := m.rgbManager.rgb11AccountManagedScopeID()
+	require.NoError(t, err)
+	moduleKey := accountLocalKey(m.accountProfile.AccountID, rgb11AccountManagedProviderID, scope)
+	beforeModule, err := db.Read(moduleKey)
+	require.NoError(t, err)
+	beforeRGBRecords := make(map[string][]byte)
+	require.NoError(t, db.BatchRead([]byte("rgb11-engine-"), false, func(key, value []byte) error {
+		beforeRGBRecords[string(key)] = bytes.Clone(value)
+		return nil
+	}))
+	fault := &accountPersistenceReviewDB{KVDB: db, profileKey: moduleKey}
 	m.db = fault
-	_, err := runRGB11ManagedOperation(m, nil, rgb11ManagedOperationNew, func(rgb *rgb11Manager) (struct{}, error) {
+	t.Cleanup(func() { fault.armed.Store(false); m.db = db })
+	_, err = runRGB11ManagedOperation(m, nil, rgb11ManagedOperationNew, func(rgb *rgb11Manager) (struct{}, error) {
 		fault.armed.Store(true)
-		return struct{}{}, rgb.autoBackupRGB11AfterMutation()
+		_, createErr := rgb.engine.CreateReceive(corewallet.ReceiveParams{
+			Network: invoicing.BitcoinTestnet4, RecipientID: "dirty-write-failure",
+			WitnessVout: 1, Expiry: time.Now().Add(time.Hour).Unix(),
+		})
+		return struct{}{}, createErr
 	})
 	acquired := m.mutex.TryLock()
 	if acquired {
@@ -363,8 +425,9 @@ func TestFinalReviewRGBDirtyWriteFailureReleasesManagerLock(t *testing.T) {
 	}
 	fault.armed.Store(false)
 	m.db = db
+	t.Logf("atomic RGB fault result=%v module_fault_hits=%d", err, fault.hits.Load())
 	if fault.hits.Load() == 0 {
-		t.Fatal("profile fault was not exercised")
+		t.Fatal("RGB module StageAccountChange fault was not exercised")
 	}
 	if !errors.Is(err, errAccountPersistenceReview) {
 		t.Errorf("persistence failure was not propagated: %v", err)
@@ -378,9 +441,20 @@ func TestFinalReviewRGBDirtyWriteFailureReleasesManagerLock(t *testing.T) {
 	if active {
 		t.Fatal("managed RGB operation remained active")
 	}
-	if !m.accountProfile.ManagedDataDirty {
-		t.Fatal("failed persistence reported account data as clean")
+	afterProfile, readErr := db.Read(accountManagementProfileKey())
+	if readErr != nil || !bytes.Equal(beforeProfile, afterProfile) ||
+		m.accountProfile.ManagedDataGeneration != beforeGeneration || m.accountProfile.ManagedDataDirty {
+		t.Fatal("failed business+dirty transaction changed the durable account profile")
 	}
+	afterModule, err := db.Read(moduleKey)
+	require.NoError(t, err)
+	require.True(t, bytes.Equal(beforeModule, afterModule), "failed business transaction advanced the RGB module generation or receipt")
+	afterRGBRecords := make(map[string][]byte)
+	require.NoError(t, db.BatchRead([]byte("rgb11-engine-"), false, func(key, value []byte) error {
+		afterRGBRecords[string(key)] = bytes.Clone(value)
+		return nil
+	}))
+	require.True(t, reflect.DeepEqual(beforeRGBRecords, afterRGBRecords), "failed business+dirty transaction changed RGB receive records")
 	if err := m.SyncAccountManagementState(nil); err != nil {
 		t.Fatalf("healthy retry: %v", err)
 	}
@@ -431,135 +505,113 @@ func TestFinalReviewProfileReadErrorDoesNotReinitializeSecret(t *testing.T) {
 	}
 }
 
-func TestFinalReviewRemoteRebaseResume(t *testing.T) {
+func TestFinalReviewCleanRemoteImportResume(t *testing.T) {
 	old := _chain
 	_chain = "testnet"
-	defer func() { _chain = old }()
+	t.Cleanup(func() { _chain = old })
 	for _, cold := range []bool{false, true} {
 		t.Run(fmt.Sprintf("cold=%t", cold), func(t *testing.T) {
 			remote := newRGB11MemoryDKVSHTTP()
-			source, sourceProvider := managedImportTestSource(t, remote)
-			target, provider := managedImportTestManager(t, remote)
-			if err := restoreManagedImportTestWallet(t, target, source); err != nil {
-				t.Fatal(err)
-			}
-			root := target.GetAccountManagementStatus().RootWalletID
-			if err := target.UpdateWalletName(root, "Local merged name"); err != nil {
-				t.Fatal(err)
-			}
-			sourceProvider.payloads[0].Payload = []byte("Remote merged data")
-			if err := source.SyncAccountManagementState(nil); err != nil {
-				t.Fatal(err)
-			}
-			failure := errors.New("interrupt rebase provider import")
+			source, sourceProvider, _ := newImportSource(t, remote)
+			target, provider, closeTarget := newImportGroup(t, remote)
+			require.NoError(t, restoreImportGroup(t, target, source))
+			require.NoError(t, source.UpdateWalletName(source.GetAccountManagementStatus().RootWalletID, "Remote updated name"))
+			want := []byte("Remote updated data")
+			stageManagedImportTestPayload(t, source, sourceProvider, want)
+			require.NoError(t, source.SyncAccountManagementState(nil))
+			beforeRemote := snapshotRGB11MemoryRecords(remote)
+			failure := errors.New("interrupt remote import provider import")
 			provider.importErr = failure
-			if err := target.SyncAccountManagementState(nil); !errors.Is(err, failure) {
-				t.Fatalf("rebase fault: %v", err)
-			}
-			marker, err := target.readAccountManagedDataImportMarker()
-			if err != nil || marker == nil || len(marker.ReplayStateEnvelope) == 0 || len(marker.ReplayDataEnvelope) == 0 {
-				t.Fatalf("merge target was not persisted: %v", err)
-			}
-			if target.GetAccountManagementStatus().PendingChanges != 1 {
-				t.Fatal("unacknowledged local edit was lost")
+			imports := provider.imports
+			require.ErrorIs(t, target.SyncAccountManagementState(nil), failure)
+			require.Greater(t, provider.imports, imports)
+			original := importModuleTarget(t, target, provider.id, want)
+			require.Zero(t, target.GetAccountManagementStatus().PendingChanges)
+			if cold {
+				cfg := target.cfg
+				closeTarget()
+				target, provider, _ = openImportGroup(t, cfg, remote)
+				provider.importErr = failure
+				_, err := target.UnlockWallet("password")
+				require.NoError(t, err, "wallet authentication is independent of the failed provider")
+				current := importModuleTarget(t, target, provider.id, want)
+				require.Equal(t, original.Value, current.Value)
 			}
 			provider.importErr = nil
-			if cold {
-				target.accountBackgroundWG.Wait()
-				restarted, restartProvider := managedImportTestManager(t, remote)
-				restarted.db = target.db
-				if err := restarted.initDB(); err != nil {
-					t.Fatal(err)
-				}
-				if _, err := restarted.UnlockWallet("password"); !errors.Is(err, ErrAccountManagedDataImportIncomplete) {
-					t.Fatalf("cold authentication must keep PWA closed until import completes: %v", err)
-				}
-				target, provider = restarted, restartProvider
-			}
-			if err := target.SyncAccountManagementState(nil); err != nil {
-				t.Fatalf("rebase resume: %v", err)
-			}
-			if len(provider.payloads) != 1 || string(provider.payloads[0].Payload) != "Remote merged data" {
-				t.Fatal("rebase resume lost remote provider data")
-			}
-			if target.GetWalletCatalog()[0].Name != "Local merged name" {
-				t.Fatal("rebase resume lost local catalog edit")
-			}
-			if target.GetAccountManagementStatus().PendingChanges != 0 {
-				t.Fatal("resumed merge was not ACKed")
-			}
-			if err := source.SyncAccountManagementState(nil); err != nil {
-				t.Fatal(err)
-			}
-			if source.GetWalletCatalog()[0].Name != "Local merged name" {
-				t.Fatal("merged catalog was not published")
-			}
+			require.NoError(t, target.SyncAccountManagementState(nil))
+			assertImportComplete(t, target, provider, want)
+			require.Equal(t, "Remote updated name", target.GetWalletCatalog()[0].Name)
+			require.Zero(t, target.GetAccountManagementStatus().PendingChanges)
+			require.Equal(t, beforeRemote, snapshotRGB11MemoryRecords(remote))
+			require.NoError(t, source.SyncAccountManagementState(nil))
+			require.Equal(t, "Remote updated name", source.GetWalletCatalog()[0].Name)
 		})
 	}
 }
 
-func TestFinalReviewRemoteResumeRejectsTamperedMarker(t *testing.T) {
+func TestReviewImportCopyIntegrity(t *testing.T) {
 	old := _chain
 	_chain = "testnet"
-	defer func() { _chain = old }()
-	for _, corrupt := range []string{"version", "state-hash", "data-reference", "catalog", "ciphertext"} {
+	t.Cleanup(func() { _chain = old })
+	for _, corrupt := range []string{"version", "account", "network", "scope", "ciphertext"} {
 		t.Run(corrupt, func(t *testing.T) {
 			remote := newRGB11MemoryDKVSHTTP()
 			source, sourceProvider := managedImportTestSource(t, remote)
 			target, provider := managedImportTestManager(t, remote)
-			if err := restoreManagedImportTestWallet(t, target, source); err != nil {
-				t.Fatal(err)
-			}
-			if err := target.UpdateWalletName(target.GetCurrentWalletId(), "merged"); err != nil {
-				t.Fatal(err)
-			}
-			sourceProvider.payloads[0].Payload = []byte("new data")
-			if err := source.SyncAccountManagementState(nil); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, restoreManagedImportTestWallet(t, target, source))
+			want := []byte("new data")
+			stageManagedImportTestPayload(t, source, sourceProvider, want)
+			require.NoError(t, source.SyncAccountManagementState(nil))
 			provider.importErr = errors.New("stop import")
-			if err := target.SyncAccountManagementState(nil); !errors.Is(err, provider.importErr) {
-				t.Fatal(err)
-			}
-			marker, err := target.readAccountManagedDataImportMarker()
-			if err != nil || marker == nil {
-				t.Fatal("missing marker")
-			}
+			imports := provider.imports
+			require.ErrorIs(t, target.SyncAccountManagementState(nil), provider.importErr)
+			require.Greater(t, provider.imports, imports)
+			local := importModuleTarget(t, target, provider.id, want)
+			key := accountLocalKey(local.AccountID, local.Provider, local.Scope)
+			original, err := target.db.Read(key)
+			require.NoError(t, err)
 			switch corrupt {
 			case "version":
-				marker.Version++
-			case "state-hash":
-				marker.TargetStateHash = "wrong"
-			case "data-reference":
-				marker.TargetDataRevision++
-			case "catalog":
-				target.walletInfoMap[target.GetCurrentWalletId()].Name = "tampered"
+				local.Version++
+			case "account":
+				local.AccountID = "another-account"
+			case "network":
+				local.Network = "mainnet"
+			case "scope":
+				local.Scope = "another-scope"
 			case "ciphertext":
-				marker.ReplayDataEnvelope[len(marker.ReplayDataEnvelope)-1] ^= 1
+				local.Value[len(local.Value)-1] ^= 1
 			}
-			if err := target.writeAccountManagedDataImportMarker(*marker); err != nil {
-				t.Fatal(err)
-			}
-			before := map[string]string{}
-			for key, record := range remote.records {
-				before[key] = dkvsindexer.RecordHash(record).String()
-			}
+			encoded, err := EncodeToBytes(local)
+			require.NoError(t, err)
+			require.NoError(t, target.db.Write(key, encoded))
+			beforeRemote := snapshotRGB11MemoryRecords(remote)
+			beforeCatalog := target.GetWalletCatalog()
 			provider.importErr = nil
-			imports := provider.imports
-			if err := target.SyncAccountManagementState(nil); !errors.Is(err, ErrAccountManagedDataImportIncomplete) {
-				t.Fatalf("corrupted target resumed: %v", err)
-			}
-			if provider.imports != imports {
-				t.Fatal("invalid target reached provider")
-			}
-			for key, hash := range before {
-				if dkvsindexer.RecordHash(remote.records[key]).String() != hash {
-					t.Fatal("invalid target overwrote server")
+			imports = provider.imports
+			err = target.SyncAccountManagementState(nil)
+			if corrupt == "ciphertext" {
+				// With no unconfirmed local edit, normal sync may repair damaged bytes
+				// from the independently authenticated remote module. It must never
+				// pass the damaged target to the provider or republish it.
+				require.NoError(t, err)
+				require.Greater(t, provider.imports, imports)
+				for _, attempt := range provider.imported[imports:] {
+					require.Len(t, attempt, 1)
+					require.Equal(t, want, attempt[0].Payload, "only authenticated replacement bytes may reach the provider")
 				}
+				assertImportComplete(t, target, provider, want)
+			} else {
+				require.Error(t, err, "invalid module identity/version must remain fail closed")
+				require.Equal(t, imports, provider.imports, "invalid local metadata reached the provider")
+				require.Error(t, target.CheckAccountRestore(provider.id, AccountManagedDataGlobalScope))
+				require.Error(t, target.CheckAccountWrite(provider.id, AccountManagedDataGlobalScope))
+				require.NoError(t, target.db.Write(key, original))
+				require.NoError(t, target.SyncAccountManagementState(nil))
+				assertImportComplete(t, target, provider, want)
 			}
-			if err := target.checkAccountManagedDataImport(); !errors.Is(err, ErrAccountManagedDataImportIncomplete) {
-				t.Fatal("invalid marker was cleared")
-			}
+			require.Equal(t, beforeCatalog, target.GetWalletCatalog())
+			require.Equal(t, beforeRemote, snapshotRGB11MemoryRecords(remote), "bad local data must never replace a verified remote value")
 		})
 	}
 }
@@ -593,7 +645,7 @@ func TestFinalReviewSwitchExistingAccountStatusFailure(t *testing.T) {
 	}
 }
 
-func TestFinalReviewRemoteImportMarkerDeleteCanRetry(t *testing.T) {
+func TestFinalReviewRemoteImportCompletionWriteCanRetry(t *testing.T) {
 	old := _chain
 	_chain = "testnet"
 	defer func() { _chain = old }()
@@ -603,33 +655,60 @@ func TestFinalReviewRemoteImportMarkerDeleteCanRetry(t *testing.T) {
 	if err := restoreManagedImportTestWallet(t, target, source); err != nil {
 		t.Fatal(err)
 	}
-	sourceProvider.payloads[0].Payload = []byte("committed data")
+	stageManagedImportTestPayload(t, source, sourceProvider, []byte("committed data"))
 	if err := source.SyncAccountManagementState(nil); err != nil {
 		t.Fatal(err)
 	}
+	beforeRemote := snapshotRGB11MemoryRecords(remote)
 	database := target.db
-	failure := errors.New("marker delete failed")
-	target.db = &managedImportFaultDB{KVDB: database, deleteErr: failure}
+	failure := errors.New("module completion write failed")
+	fault := &managedImportFaultDB{KVDB: database,
+		key: accountLocalKey(target.accountProfile.AccountID, provider.id, AccountManagedDataGlobalScope)}
+	target.db = fault
+	beforeImport := provider.beforeImport
+	provider.beforeImport = func() { beforeImport(); fault.writeErr = failure }
 	if err := target.SyncAccountManagementState(nil); !errors.Is(err, failure) {
 		t.Fatal(err)
 	}
 	target.db = database
+	if fault.hits.Load() == 0 {
+		t.Fatal("completion persistence fault was not reached")
+	}
 	if string(provider.payloads[0].Payload) != "committed data" {
 		t.Fatal("failure was not after import")
 	}
-	if err := target.checkAccountManagedDataImport(); !errors.Is(err, ErrAccountManagedDataImportIncomplete) {
-		t.Fatal("missing marker")
+	if err := target.CheckAccountRestore(provider.id, AccountManagedDataGlobalScope); !errors.Is(err, ErrAccountManagedDataImportIncomplete) {
+		t.Fatal("missing module restore marker")
 	}
+	importModuleTarget(t, target, provider.id, []byte("committed data"))
+	if !reflect.DeepEqual(beforeRemote, snapshotRGB11MemoryRecords(remote)) {
+		t.Fatal("completion failure changed remote records")
+	}
+	require.ErrorIs(t, target.SyncAccountManagementState(nil), ErrAccountDBStopped)
+	service := target.serverNode
+	target.Close()
+	target = newAccountManagementAutoTestManager(t)
+	target.db, target.serverNode = database, service
+	configureRGB11DKVSTestManager(target, remote)
+	require.NoError(t, target.initDB())
+	provider = managedImportProvider(t, target)
+	target.managedDataProviders = map[string]AccountManagedDataProvider{provider.id: provider}
+	_, err := target.UnlockWallet("password")
+	require.NoError(t, err)
 	imports := provider.imports
 	if err := target.SyncAccountManagementState(nil); err != nil {
 		t.Fatal(err)
 	}
-	if provider.imports != imports+1 || string(provider.payloads[0].Payload) != "committed data" {
+	if provider.imports <= imports {
 		t.Fatal("retry did not idempotently import exact target")
+	}
+	assertImportComplete(t, target, provider, []byte("committed data"))
+	if !reflect.DeepEqual(beforeRemote, snapshotRGB11MemoryRecords(remote)) {
+		t.Fatal("completion retry changed remote records")
 	}
 }
 
-func TestFinalReviewIncompleteRestoreFreezesCatalog(t *testing.T) {
+func TestFinalReviewIncompleteRestoreOnlyBlocksFailedModule(t *testing.T) {
 	old := _chain
 	_chain = "testnet"
 	defer func() { _chain = old }()
@@ -637,37 +716,25 @@ func TestFinalReviewIncompleteRestoreFreezesCatalog(t *testing.T) {
 	source, _ := managedImportTestSource(t, remote)
 	target, provider := managedImportTestManager(t, remote)
 	provider.importErr = errors.New("incomplete restore")
-	if err := restoreManagedImportTestWallet(t, target, source); !errors.Is(err, provider.importErr) {
-		t.Fatal(err)
+	if err := restoreManagedImportTestWallet(t, target, source); err != nil {
+		t.Fatalf("failed independent module prevented wallet restoration: %v", err)
+	}
+	if err := target.CheckAccountRestore(provider.id, AccountManagedDataGlobalScope); !errors.Is(err, ErrAccountManagedDataImportIncomplete) {
+		t.Fatalf("failed module escaped durable protection: %v", err)
+	}
+	if err := target.CheckAccountRestore("wallets", AccountManagedDataGlobalScope); err != nil {
+		t.Fatalf("independent failed module froze healthy catalog: %v", err)
 	}
 	before := target.GetWalletCatalog()
-	root := target.GetAccountManagementStatus().RootWalletID
-	for _, operation := range []struct {
-		name string
-		run  func() error
-	}{
-		{"create", func() error { _, _, err := target.CreateWallet("password"); return err }},
-		{"import", func() error {
-			_, err := target.ImportWallet("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about", "password")
-			return err
-		}},
-		{"rename", func() error { return target.UpdateWalletName(root, "changed") }},
-		{"ensure-account", func() error { return target.EnsureAccount(root, 1, "changed", "") }},
-		{"metadata", func() error { return target.UpdateAccountMetadata(root, 0, "changed", "") }},
-		{"switch-account", func() error { return target.SwitchAccount(1) }},
-	} {
-		t.Run(operation.name, func(t *testing.T) {
-			if err := operation.run(); !errors.Is(err, ErrAccountManagedDataImportIncomplete) {
-				t.Fatalf("mutation escaped protection: %v", err)
-			}
-			if !reflect.DeepEqual(before, target.GetWalletCatalog()) || target.GetAccountManagementStatus().PendingChanges != 0 {
-				t.Fatal("rejected mutation changed catalog or pending")
-			}
-		})
-	}
 	provider.importErr = nil
 	if err := restoreManagedImportTestWallet(t, target, source); err != nil {
 		t.Fatal(err)
+	}
+	if err := target.CheckAccountRestore(provider.id, AccountManagedDataGlobalScope); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, target.GetWalletCatalog()) {
+		t.Fatal("module retry replaced the healthy wallet catalog")
 	}
 }
 
@@ -701,68 +768,50 @@ func TestFinalReviewRGBOperationPanicClearsRuntimeState(t *testing.T) {
 	}
 }
 
-func TestFinalReviewRebasePartialProviderResumePreservesBothDevices(t *testing.T) {
+func TestFinalReviewCleanPartialProviderResumePreservesBothProviders(t *testing.T) {
 	old := _chain
 	_chain = "testnet"
-	defer func() { _chain = old }()
+	t.Cleanup(func() { _chain = old })
 	remote := newRGB11MemoryDKVSHTTP()
-	source, remoteProvider := managedImportTestSource(t, remote)
-	secondSource := &managedImportTestProvider{accountManagedDataProviderStub: accountManagedDataProviderStub{id: "ztest", payloads: []AccountManagedDataPayload{{Scope: AccountManagedDataGlobalScope, Payload: []byte("base")}}}}
-	if err := source.RegisterAccountManagedDataProvider(secondSource); err != nil {
-		t.Fatal(err)
-	}
-	if err := source.SyncAccountManagementState(nil); err != nil {
-		t.Fatal(err)
-	}
-	target, firstTarget := managedImportTestManager(t, remote)
-	secondTarget := &managedImportTestProvider{accountManagedDataProviderStub: accountManagedDataProviderStub{id: "ztest"}}
-	if err := target.RegisterAccountManagedDataProvider(secondTarget); err != nil {
-		t.Fatal(err)
-	}
-	if err := restoreManagedImportTestWallet(t, target, source); err != nil {
-		t.Fatal(err)
-	}
-	secondTarget.payloads[0].Payload = []byte("local change")
-	if err := target.UpdateWalletName(target.GetCurrentWalletId(), "Local name"); err != nil {
-		t.Fatal(err)
-	}
-	remoteProvider.payloads[0].Payload = []byte("remote change")
-	if err := source.SyncAccountManagementState(nil); err != nil {
-		t.Fatal(err)
-	}
+	source, remoteProvider, _ := newImportSource(t, remote)
+	secondSource := importProviderWithID(t, source, "ztest")
+	secondSource.payloads = []AccountManagedDataPayload{{Scope: AccountManagedDataGlobalScope, Payload: []byte("base")}}
+	require.NoError(t, source.RegisterAccountManagedDataProvider(secondSource))
+	require.NoError(t, source.SyncAccountManagementState(nil))
+	target, firstTarget, closeTarget := newImportGroup(t, remote)
+	secondTarget := importProviderWithID(t, target, "ztest")
+	require.NoError(t, target.RegisterAccountManagedDataProvider(secondTarget))
+	require.NoError(t, restoreImportGroup(t, target, source))
+	stageManagedImportTestPayload(t, source, secondSource, []byte("second remote change"))
+	stageManagedImportTestPayload(t, source, remoteProvider, []byte("remote change"))
+	require.NoError(t, source.SyncAccountManagementState(nil))
+	beforeRemote := snapshotRGB11MemoryRecords(remote)
 	failure := errors.New("second provider failed after first import")
 	secondTarget.importErr = failure
-	if err := target.SyncAccountManagementState(nil); !errors.Is(err, failure) {
-		t.Fatal(err)
-	}
-	if string(firstTarget.payloads[0].Payload) != "remote change" {
-		t.Fatal("test did not partially import first provider")
-	}
-	target.accountBackgroundWG.Wait()
-	restarted, firstRestart := managedImportTestManager(t, remote)
-	secondRestart := &managedImportTestProvider{accountManagedDataProviderStub: accountManagedDataProviderStub{id: "ztest"}}
-	if err := restarted.RegisterAccountManagedDataProvider(secondRestart); err != nil {
-		t.Fatal(err)
-	}
-	restarted.db = target.db
-	if err := restarted.initDB(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := restarted.UnlockWallet("password"); !errors.Is(err, ErrAccountManagedDataImportIncomplete) {
-		t.Fatalf("PWA session opened before merged provider import completed: %v", err)
-	}
-	if err := restarted.SyncAccountManagementState(nil); err != nil {
-		t.Fatal(err)
-	}
-	if string(firstRestart.payloads[0].Payload) != "remote change" || string(secondRestart.payloads[0].Payload) != "local change" {
-		t.Fatal("resume lost remote or local provider data")
-	}
-	if err := source.SyncAccountManagementState(nil); err != nil {
-		t.Fatal(err)
-	}
-	if string(secondSource.payloads[0].Payload) != "local change" || string(remoteProvider.payloads[0].Payload) != "remote change" {
-		t.Fatal("merged data did not converge")
-	}
+	imports := secondTarget.imports
+	require.ErrorIs(t, target.SyncAccountManagementState(nil), failure)
+	require.Greater(t, secondTarget.imports, imports)
+	assertImportComplete(t, target, firstTarget, []byte("remote change"))
+	original := importModuleTarget(t, target, secondTarget.id, []byte("second remote change"))
+	cfg := target.cfg
+	closeTarget()
+	restarted, firstRestart, _ := openImportGroup(t, cfg, remote)
+	secondRestart := importProviderWithID(t, restarted, "ztest")
+	secondRestart.importErr = failure
+	require.NoError(t, restarted.RegisterAccountManagedDataProvider(secondRestart))
+	_, err := restarted.UnlockWallet("password")
+	require.NoError(t, err)
+	assertImportComplete(t, restarted, firstRestart, []byte("remote change"))
+	current := importModuleTarget(t, restarted, secondRestart.id, []byte("second remote change"))
+	require.Equal(t, original.Value, current.Value)
+	secondRestart.importErr = nil
+	require.NoError(t, restarted.SyncAccountManagementState(nil))
+	assertImportComplete(t, restarted, firstRestart, []byte("remote change"))
+	assertImportComplete(t, restarted, secondRestart, []byte("second remote change"))
+	require.NoError(t, source.SyncAccountManagementState(nil))
+	require.Equal(t, []byte("second remote change"), secondSource.payloads[0].Payload)
+	require.Equal(t, []byte("remote change"), remoteProvider.payloads[0].Payload)
+	require.Equal(t, beforeRemote, snapshotRGB11MemoryRecords(remote))
 }
 
 func TestFinalReviewLockedAccountSwitchCannotCreateCatalogEntry(t *testing.T) {

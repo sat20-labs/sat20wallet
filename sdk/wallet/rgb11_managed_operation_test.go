@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
@@ -19,15 +20,32 @@ type rgb11RejectDirtyAccountCASHTTP struct {
 	transportFailure bool
 	rejectMu         sync.Mutex
 	rejected         int
+	key              string
 }
 
-func (h *rgb11RejectDirtyAccountCASHTTP) rejectIfDirty(path string) bool {
+func (h *rgb11RejectDirtyAccountCASHTTP) rejectIfDirty(path string, body []byte) bool {
 	if h == nil || path != "/v3/dkvs/records/batch-cas" || h.owner == nil {
 		return false
 	}
+	var request DKVSBatchCASRequest
+	if json.Unmarshal(body, &request) != nil {
+		return false
+	}
 	h.owner.mutex.RLock()
-	dirty := h.owner.accountProfile != nil && h.owner.accountProfile.ManagedDataDirty
+	var values []*accountLocalKV
+	if h.owner.accountProfile != nil {
+		values, _ = h.owner.listAccountLocal(h.owner.accountProfile.AccountID)
+	}
 	h.owner.mutex.RUnlock()
+	dirty := false
+	for _, mutation := range request.Mutations {
+		if mutation.Record == nil || h.key != "" && mutation.Record.Key != h.key {
+			continue
+		}
+		for _, value := range values {
+			dirty = dirty || value.Key == mutation.Record.Key && value.Generation > value.Confirmed
+		}
+	}
 	if !dirty {
 		return false
 	}
@@ -38,7 +56,7 @@ func (h *rgb11RejectDirtyAccountCASHTTP) rejectIfDirty(path string) bool {
 }
 
 func (h *rgb11RejectDirtyAccountCASHTTP) SendDKVSPost(path string, body []byte) ([]byte, error) {
-	if h.rejectIfDirty(path) {
+	if h.rejectIfDirty(path, body) {
 		if h.transportFailure {
 			return nil, errors.Join(errors.New("simulated account data CAS transport failure"), context.DeadlineExceeded)
 		}
@@ -50,7 +68,7 @@ func (h *rgb11RejectDirtyAccountCASHTTP) SendDKVSPost(path string, body []byte) 
 
 func (h *rgb11RejectDirtyAccountCASHTTP) SendDKVSPostContext(ctx context.Context,
 	path string, body []byte) ([]byte, error) {
-	if h.rejectIfDirty(path) {
+	if h.rejectIfDirty(path, body) {
 		if h.transportFailure {
 			return nil, errors.Join(errors.New("simulated account data CAS transport failure"), context.DeadlineExceeded)
 		}
@@ -62,28 +80,8 @@ func (h *rgb11RejectDirtyAccountCASHTTP) SendDKVSPostContext(ctx context.Context
 
 func configuredRGB11ManagedOperationTestManager(t *testing.T) *Manager {
 	t.Helper()
-	manager := newAccountManagementAutoTestManager(t)
-	configureRGB11DKVSTestManager(manager, newRGB11MemoryDKVSHTTP())
-	if _, err := manager.ImportWallet(rgb11ManagedOperationTestMnemonic, "password"); err != nil {
-		t.Fatal(err)
-	}
-	if err := manager.InitializeAccountManagement("password"); err != nil {
-		t.Fatal(err)
-	}
-	// ImportWallet creates the local account profile, but remote recovery is not
-	// active until the user completes account-storage activation. These tests
-	// exercise the post-activation RGB transaction boundary, so make that
-	// precondition explicit without constructing an unrelated recovery package.
-	manager.mutex.Lock()
-	manager.accountProfile.RecoveryConfigured = true
-	if err := manager.saveAccountManagementProfileLocked(); err != nil {
-		manager.mutex.Unlock()
-		t.Fatal(err)
-	}
-	manager.mutex.Unlock()
-	if err := manager.SyncAccountManagementState(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	manager, _, _, _ := accountTTLNoopFixture(t)
+	manager.accountBackgroundWG.Wait()
 	return manager
 }
 
@@ -105,14 +103,18 @@ func TestRGB11ManagedOperationAggregatesMutationMarker(t *testing.T) {
 }
 
 func TestRGB11ManagedOperationWithoutRecoveryKeepsChainLockFree(t *testing.T) {
-	owner := &Manager{}
-	manager := &rgb11Manager{
-		Manager:      owner,
-		accountOwner: owner,
-		scopeStates:  newRGB11ScopeStateRegistry(),
+	oldChain := _chain
+	_chain = "testnet"
+	t.Cleanup(func() { _chain = oldChain })
+	owner := newAccountManagementAutoTestManager(t)
+	if _, err := owner.ImportWallet(rgb11ManagedOperationTestMnemonic, "password"); err != nil {
+		t.Fatal(err)
 	}
-	owner.rgbManager = manager
-	owner.dkvs = &dkvsManager{owner: owner, jobs: make(map[string]func(*dkvsStore) error)}
+	prepareRGBEndpoint(t, owner, owner.http.(*rgb11MemoryDKVSHTTP))
+	manager := owner.rgbManager
+	if owner.accountManagedRecoveryConfigured() {
+		t.Fatal("local lock-operation group unexpectedly activated account backup")
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -160,16 +162,19 @@ func TestRGB11ManagedOperationWithoutRecoveryKeepsChainLockFree(t *testing.T) {
 	}
 }
 
-func TestRGB11ManagedOperationPublishesOneStableGeneration(t *testing.T) {
+func TestRGB11ManagedOperationCommitsOneGenerationBeforeBackup(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
 
 	manager := configuredRGB11ManagedOperationTestManager(t)
-	initialGeneration := manager.accountProfile.ManagedDataGeneration
+	initialGeneration := rgb11LocalModuleForTest(t, manager).Generation
+	manager.rgbManager.evidence = newCoreE2EChain()
 	_, err := runRGB11ManagedOperation(manager, context.Background(), rgb11ManagedOperationNew,
 		func(rgb *rgb11Manager) (struct{}, error) {
-			seedRGB11DurableAccountRecoveryState(t, rgb)
+			if _, err := rgb.CreateRGB11Invoice(RGB11InvoiceRequest{Mode: "witness", TransportMode: "out-of-band", AmountRaw: "1", Expiry: time.Now().Add(time.Hour).Unix()}); err != nil {
+				return struct{}{}, err
+			}
 			// Multiple low-level mutation notifications inside one business
 			// operation must still produce one managed generation and one final
 			// account snapshot.
@@ -180,12 +185,17 @@ func TestRGB11ManagedOperationPublishesOneStableGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manager.accountProfile.ManagedDataDirty {
-		t.Fatalf("stable ACK left account-managed data dirty (generation=%d)",
-			manager.accountProfile.ManagedDataGeneration)
+	if !rgb11LocalModulePendingForTest(t, manager) {
+		t.Fatal("local commit must remain dirty until the asynchronous backup is acknowledged")
 	}
-	if got := manager.accountProfile.ManagedDataGeneration; got != initialGeneration+1 {
+	if got := rgb11LocalModuleForTest(t, manager).Generation; got != initialGeneration+1 {
 		t.Fatalf("managed generation=%d want=%d", got, initialGeneration+1)
+	}
+	if err := manager.SyncAccountManagementState(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if rgb11LocalModulePendingForTest(t, manager) {
+		t.Fatal("successful backup did not clear its acknowledged generation")
 	}
 	payloads, err := manager.currentAccountManagedProviderPayloads(rgb11AccountManagedProviderID)
 	if err != nil {
@@ -253,7 +263,7 @@ func TestAccountManagedSyncPublishesActiveRGB11TransitionToStableClosure(t *test
 	}
 }
 
-func TestRGB11NewInvoiceIsNotReturnedUntilStableCASIsConfirmed(t *testing.T) {
+func TestRGB11NewInvoicePersistsLocallyBeforeAsynchronousBackup(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
@@ -263,7 +273,7 @@ func TestRGB11NewInvoiceIsNotReturnedUntilStableCASIsConfirmed(t *testing.T) {
 		transportFailure bool
 		wantOutbox       bool
 	}{
-		{name: "cas-conflict", wantOutbox: false},
+		{name: "cas-conflict", wantOutbox: true},
 		{name: "transport-unconfirmed", transportFailure: true, wantOutbox: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -275,14 +285,7 @@ func TestRGB11NewInvoiceIsNotReturnedUntilStableCASIsConfirmed(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			root, err := manager.accountManagementRootWallet()
-			if err != nil {
-				t.Fatal(err)
-			}
-			dataKey, err := manager.accountManagedDataBlobKey(root)
-			if err != nil {
-				t.Fatal(err)
-			}
+			dataKey := rgb11LocalModuleForTest(t, manager).Key
 			before, err := store.GetAuthoritative(dataKey)
 			if err != nil {
 				t.Fatal(err)
@@ -296,6 +299,7 @@ func TestRGB11NewInvoiceIsNotReturnedUntilStableCASIsConfirmed(t *testing.T) {
 				rgb11MemoryDKVSHTTP: remote,
 				owner:               manager,
 				transportFailure:    tc.transportFailure,
+				key:                 dataKey,
 			}
 			manager.http = fault
 			manager.dkvs.mu.Lock()
@@ -308,9 +312,17 @@ func TestRGB11NewInvoiceIsNotReturnedUntilStableCASIsConfirmed(t *testing.T) {
 				Mode: "witness", TransportMode: "out-of-band",
 				AmountRaw: "1", WitnessVout: 1, Expiry: time.Now().Add(time.Hour).Unix(),
 			})
-			if createErr == nil || receive != nil {
-				t.Fatalf("invoice escaped before its complete stable recovery CAS: returned=%t error=%v",
-					receive != nil, createErr)
+			if createErr != nil || receive == nil {
+				t.Fatalf("local invoice must not wait for its backup: returned=%t error=%v", receive != nil, createErr)
+			}
+			fault.rejectMu.Lock()
+			beforeSyncRejected := fault.rejected
+			fault.rejectMu.Unlock()
+			if beforeSyncRejected != 0 {
+				t.Fatal("local invoice synchronously attempted its backup")
+			}
+			if err := manager.SyncAccountManagementState(context.Background()); err == nil {
+				t.Fatal("explicit backup did not report the injected failure")
 			}
 			fault.rejectMu.Lock()
 			rejected := fault.rejected
@@ -321,7 +333,7 @@ func TestRGB11NewInvoiceIsNotReturnedUntilStableCASIsConfirmed(t *testing.T) {
 			if count := countRGB11Receives(t, manager.db); count != 1 {
 				t.Fatalf("failed publication discarded the local resumable receive request: count=%d", count)
 			}
-			if !manager.accountProfile.ManagedDataDirty {
+			if !rgb11LocalModulePendingForTest(t, manager) {
 				t.Fatal("failed stable publication cleared the local recovery dirty marker")
 			}
 			after, err := store.GetAuthoritative(dataKey)

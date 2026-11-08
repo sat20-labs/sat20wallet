@@ -59,6 +59,10 @@ export const DAPP_ACTION_POLICY: Readonly<Record<string, DappActionPolicy>> = {
   [Message.MessageAction.BIND_REFERRER_FOR_SERVER]: policy('identity:write', 'fail-closed'),
   getSupportedContracts: policy('contract:read', 'none'),
   getDeployedContractStatus: policy('contract:read', 'none'),
+  getTickerInfo: policy('contract:read', 'none'),
+  listRGB11Tickers: policy('balance:read', 'none'),
+  exportPublicRGB11Contract: policy('contract:read', 'none'),
+  verifyRGB11PublicContract: policy('contract:read', 'none'),
 }
 
 export const getDappActionPolicy = (action: string) => DAPP_ACTION_POLICY[action] ?? null

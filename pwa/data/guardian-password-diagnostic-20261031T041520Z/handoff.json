@@ -1,0 +1,110 @@
+{
+  "execution_owner": "Luna after parent review",
+  "working_directory": "/Users/yingfeng/github/sat20wallet/sdk",
+  "j": {
+    "go_test": "TestSDKPWARealRegtestGuardianRecoveryBrowser",
+    "usage_case": "usage: real 2of3 settings and independent Guardian pages complete setup and rehearsal",
+    "existing_entry_reused": true,
+    "command_argv": [
+      "go",
+      "test",
+      "-mod=readonly",
+      "-json",
+      "-p=1",
+      "-parallel=1",
+      "-count=1",
+      "-run",
+      "^TestSDKPWARealRegtestGuardianRecoveryBrowser$",
+      "./e2e"
+    ],
+    "diagnostics": [
+      "guardianRecoveryStage: combination + stage",
+      "guardianRecoveryFailure: combination/stage/hash route/visible h1+h2/redacted alerts/password id+type+label+visibility"
+    ],
+    "password_fill_evidence": "fill-confirm-password stage means first fill completed; restore-wallets stage means both fills completed. No value reads or outputs.",
+    "interpretation": "Original placeholders already match. No claim of root cause or pass until execution. Preview heading missing remains preview failure; no bypass or timeout extension."
+  },
+  "d": [
+    {
+      "go_test": "TestPWAAccountRemoteDelete",
+      "usage_case": "usage: remote deletion rejects offline edits and adopts the confirmed remote state",
+      "command_argv": [
+        "go",
+        "test",
+        "-mod=readonly",
+        "-json",
+        "-p=1",
+        "-parallel=1",
+        "-count=1",
+        "-run",
+        "^TestPWAAccountRemoteDelete$",
+        "./e2e"
+      ]
+    },
+    {
+      "go_test": "TestPWAPasswordTxRollback",
+      "usage_case": "usage: browser password transaction failure preserves every wallet and original password",
+      "command_argv": [
+        "go",
+        "test",
+        "-mod=readonly",
+        "-json",
+        "-p=1",
+        "-parallel=1",
+        "-count=1",
+        "-run",
+        "^TestPWAPasswordTxRollback$",
+        "./e2e"
+      ]
+    },
+    {
+      "go_test": "TestPWATabAccountSwitch",
+      "usage_case": "usage: shared IndexedDB subaccount switch discards another tab previous-identity response",
+      "command_argv": [
+        "go",
+        "test",
+        "-mod=readonly",
+        "-json",
+        "-p=1",
+        "-parallel=1",
+        "-count=1",
+        "-run",
+        "^TestPWATabAccountSwitch$",
+        "./e2e"
+      ]
+    },
+    {
+      "go_test": "TestPWATabWalletSwitch",
+      "usage_case": "usage: shared IndexedDB wallet switch survives another tab rebuilding before commit",
+      "command_argv": [
+        "go",
+        "test",
+        "-mod=readonly",
+        "-json",
+        "-p=1",
+        "-parallel=1",
+        "-count=1",
+        "-run",
+        "^TestPWATabWalletSwitch$",
+        "./e2e"
+      ]
+    },
+    {
+      "go_test": "TestPWAGuardianPaidQuote",
+      "usage_case": "usage: Guardian paid confirmation uses 100 records and root identity after a 200 record child-wallet quote",
+      "command_argv": [
+        "go",
+        "test",
+        "-mod=readonly",
+        "-json",
+        "-p=1",
+        "-parallel=1",
+        "-count=1",
+        "-run",
+        "^TestPWAGuardianPaidQuote$",
+        "./e2e"
+      ]
+    }
+  ],
+  "run_policy": "Reuse current runner/network window and existing budgets. No new allowlist/tags/fixture. Do not run full. No self-tests performed by patch author."
+}

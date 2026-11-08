@@ -1,0 +1,31 @@
+{
+  "state": "COMPLETE",
+  "execution_mode": "exec_command require_escalated",
+  "cwd": "/Users/yingfeng/github/sat20wallet/pwa",
+  "pid": 77092,
+  "started_utc": "2026-10-31T12:38:08Z",
+  "ended_utc": "2026-10-31T12:38:17Z",
+  "exit_code": 1,
+  "command": "node --test --test-name-pattern='^(Tools confirmation keeps Confirm reachable at a 375\u00d7564 viewport|setup first error survives and later resources close after a close failure|actual runner setup failure closes DApp and Vite before exiting|spawnStage cleans its stubborn (same-group|detached) descendants after (timeout|normal) without touching other processes)$' scripts/diagnostic/tools-confirm-viewport.test.mjs scripts/verify/pwa-runner-resources.test.mjs scripts/verify/workspace-e2e.test.mjs",
+  "tests": 7,
+  "pass": 6,
+  "fail": 1,
+  "skipped": 0,
+  "cancelled": 0,
+  "failure": "spawnStage cleans its stubborn same-group descendants after normal without touching other processes",
+  "failure_detail": "workspace-e2e.test.mjs:332 expected result.timedOut=false for parentExit=normal; received true",
+  "input_hashes_unchanged": true,
+  "input_hashes_before": [
+    "9256f432e94f09c9ff2d67b7f668952af6abdd55b98f9b2e3d205bd086272d52  scripts/diagnostic/tools-confirm-viewport.test.mjs",
+    "40348c4d92a70ff611126056b38a991e9d173b2ad97b30333437d84dfa376760  scripts/verify/pwa-runner-resources.test.mjs",
+    "c4f8ff6fa79acdec62ab22ee7ab7a30138fe90c60c7a28f19e51d88187147d98  scripts/verify/workspace-e2e.test.mjs"
+  ],
+  "input_hashes_after": [
+    "9256f432e94f09c9ff2d67b7f668952af6abdd55b98f9b2e3d205bd086272d52  scripts/diagnostic/tools-confirm-viewport.test.mjs",
+    "40348c4d92a70ff611126056b38a991e9d173b2ad97b30333437d84dfa376760  scripts/verify/pwa-runner-resources.test.mjs",
+    "c4f8ff6fa79acdec62ab22ee7ab7a30138fe90c60c7a28f19e51d88187147d98  scripts/verify/workspace-e2e.test.mjs"
+  ],
+  "log": "data/node-unit-env-rerun-20261031T123754Z/test.log",
+  "log_bytes": 2493,
+  "log_sha256": "3062c61d3c50d300c5ca147d232dd75ddb87236e441b15a222c7c9dbc9af51a7"
+}

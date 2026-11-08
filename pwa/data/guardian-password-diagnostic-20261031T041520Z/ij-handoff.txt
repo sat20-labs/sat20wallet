@@ -1,0 +1,6 @@
+target: /Users/yingfeng/github/sat20wallet/sdk/e2e/account_management_browser_e2e_test.go
+before SHA256: cfe39aabea2e5469dee3562a0b8b5473e1f21765cde4f50c4ef5dc7fa197872e
+after SHA256: 63e895bc67e6fe257b57a30d36bab95de22f0329e9fe86a41e2178437ce48c14
+J: TestPWAGuardianRecovery (runAccountPWABrowser; fakeL1 temporary real nodes). Supersedes the earlier real-regtest J handoff.
+I: TestPWABackupStatus (existing case unchanged).
+D five entries retained; no case, assertion, helper, tag, allowlist or environment edits. No compile or tests run.

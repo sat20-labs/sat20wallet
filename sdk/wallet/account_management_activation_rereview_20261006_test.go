@@ -16,7 +16,24 @@ func rereviewRecoveryPackage(t *testing.T, manager *Manager, passwords ...string
 	if len(passwords) > 0 {
 		password = passwords[0]
 	}
-	auth, err := manager.ConfirmAccountStorage(AccountStorageTemporary, 0)
+	if !manager.accountManagedRecoveryConfigured() {
+		if err := manager.refreshDKVSRegistrations(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := manager.syncDKVSOnce(); err != nil {
+			t.Fatal(err)
+		}
+		if !manager.GetAccountManagementStatus().LocalOnly {
+			t.Fatal("activation fixture lacks authenticated inactive discovery")
+		}
+	}
+	var auth *AccountStorageAuthorization
+	var err error
+	if manager.GetAccountManagementStatus().StorageMode == AccountStoragePaid {
+		auth, err = manager.ReusePaidAccountStorage(0)
+	} else {
+		auth, err = manager.ConfirmAccountStorage(AccountStorageTemporary, 0)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,6 +97,12 @@ func TestAccountReconfigurationPreservesNewerRemoteWallet20261006(t *testing.T) 
 	if err := first.ActivateAccountManagement(secret, "password", *auth, pkg.Envelope.Locator, "account://"+pkg.Envelope.Locator.PackageID); err != nil {
 		t.Fatal(err)
 	}
+	if err := first.SyncAccountManagementState(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// Build genuine replacement material while this device still has its
+	// verified baseline, before the other device publishes a newer revision.
+	newPackage, newAuth, newSecret := rereviewRecoveryPackage(t, first)
 	initial, err := second.LoadAccountManagementStateForRecovery(auth.Location, pkg.Envelope.Locator, secret, accountRootWrapperTestMnemonic)
 	if err != nil {
 		t.Fatal(err)
@@ -89,6 +112,7 @@ func TestAccountReconfigurationPreservesNewerRemoteWallet20261006(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	establishAccountManagedTestWriteSession(t, second, remote)
 	initialRevision := first.GetAccountManagementStatus().StateSeq
 	childID, _, err := second.CreateWallet("password")
 	if err != nil {
@@ -117,7 +141,7 @@ func TestAccountReconfigurationPreservesNewerRemoteWallet20261006(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	dataKey, err := first.accountManagedDataBlobKey(root)
+	indexKey, err := account.ManagedIndexKey(first.accountProfile.AccountID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,21 +149,44 @@ func TestAccountReconfigurationPreservesNewerRemoteWallet20261006(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Refresh(stateKey, dataKey, wrapperKey); err != nil {
+	keys := []string{stateKey, indexKey, wrapperKey}
+	if err := store.Refresh(keys...); err != nil {
+		t.Fatal(err)
+	}
+	indexValue, err := store.GetAuthoritative(indexKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := account.OpenManagedIndex(secret, first.accountProfile.AccountID, first.cfg.Chain, indexValue.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{stateKey: true, indexKey: true, wrapperKey: true}
+	for _, entry := range index.Entries {
+		if !entry.Deleted && !seen[entry.Key] {
+			keys = append(keys, entry.Key)
+			seen[entry.Key] = true
+		}
+	}
+	if err := store.Refresh(keys...); err != nil {
 		t.Fatal(err)
 	}
 
 	beforeCatalog := first.GetWalletCatalog()
+	for _, item := range beforeCatalog {
+		if item.Fingerprint == childFingerprint {
+			t.Fatal("transport-only refresh unexpectedly applied the newer wallet catalog")
+		}
+	}
 	beforeStatus := first.GetAccountManagementStatus()
 	beforeRemote := map[string]*dkvsValue{}
-	for _, key := range []string{stateKey, dataKey, wrapperKey} {
+	for _, key := range keys {
 		value, err := store.GetAuthoritative(key)
 		if err != nil {
 			t.Fatal(err)
 		}
 		beforeRemote[key] = value
 	}
-	newPackage, newAuth, newSecret := rereviewRecoveryPackage(t, first)
 	activationErr := first.ActivateAccountManagement(newSecret, "password", *newAuth,
 		newPackage.Envelope.Locator, "account://"+newPackage.Envelope.Locator.PackageID)
 	if activationErr != nil {

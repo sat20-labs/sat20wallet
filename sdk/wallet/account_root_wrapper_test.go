@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"reflect"
 	"testing"
 
 	"github.com/sat20-labs/sat20wallet/sdk/account"
@@ -94,70 +95,18 @@ func (s *memoryAccountRootWrapperStore) Update(keys []string,
 
 func buildRootWrapperSource(t *testing.T) (*Manager, *memoryAccountRootWrapperStore, []byte) {
 	t.Helper()
-	manager := newAccountManagementAutoTestManager(t)
-	if _, err := manager.ImportWallet(accountRootWrapperTestMnemonic, "password"); err != nil {
+	manager, remote, pkg, auth, secret := newLocalActivationFixture(t)
+	if err := manager.ActivateAccountManagement(secret, "password", *auth, pkg.Envelope.Locator, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.InitializeAccountManagement("password"); err != nil {
+	if err := manager.SyncAccountManagementState(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-
-	manager.mutex.Lock()
-	secret := append([]byte(nil), manager.accountSecret...)
-	profile := manager.accountProfile
-	state, err := account.OpenManagedState(secret, profile.AccountID, profile.StateEnvelope)
-	if err != nil {
-		manager.mutex.Unlock()
-		t.Fatal(err)
+	store := &memoryAccountRootWrapperStore{records: make(map[string]*dkvsValue)}
+	for key, record := range snapshotRGB11MemoryRecords(remote) {
+		store.records[key] = &dkvsValue{Key: key, Value: bytes.Clone(record.Value), Seq: record.Seq,
+			TTL: record.TTL, record: cloneDKVSRecord(record)}
 	}
-	bundle := emptyAccountManagedDataBundle(1)
-	dataHash, err := accountManagedDataContentHash(bundle.Items)
-	if err != nil {
-		manager.mutex.Unlock()
-		t.Fatal(err)
-	}
-	dataEnvelope, _, err := account.SealManagedDataBundleWithInfo(secret, profile.AccountID, bundle, nil)
-	if err != nil {
-		manager.mutex.Unlock()
-		t.Fatal(err)
-	}
-	state.DataRevision = bundle.Revision
-	state.DataHash = dataHash
-	stateEnvelope, err := account.SealManagedState(secret, profile.AccountID, state, nil)
-	if err != nil {
-		manager.mutex.Unlock()
-		t.Fatal(err)
-	}
-	profile.StateSeq = state.Revision
-	profile.StateEnvelope = stateEnvelope
-	profile.StateHash = accountStateDigest(stateEnvelope)
-	profile.ManagedDataRevision = bundle.Revision
-	profile.ManagedDataHash = dataHash
-	profile.ManagedDataEnvelope = dataEnvelope
-	profile.ManagedDataDirty = false
-	profile.RecordTTL = 144
-	manager.mutex.Unlock()
-
-	root, err := manager.accountManagementRootWallet()
-	if err != nil {
-		t.Fatal(err)
-	}
-	stateKey, err := manager.accountManagedStateKey(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	dataKey, err := manager.accountManagedDataBlobKey(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	dataValue, err := EncodeDKVSBlobValue(dataEnvelope, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	store := &memoryAccountRootWrapperStore{records: map[string]*dkvsValue{
-		stateKey: {Key: stateKey, Value: stateEnvelope, Seq: 1},
-		dataKey:  {Key: dataKey, Value: dataValue, Seq: 1},
-	}}
 	return manager, store, secret
 }
 
@@ -208,105 +157,60 @@ func TestAccountRootWrapperRoundTripTamperAndNetworkIsolation(t *testing.T) {
 	}
 }
 
-func TestAccountRootWrapperLegacyProfileMigrationPreservesSecret(t *testing.T) {
-	oldChain := _chain
-	_chain = "testnet"
-	defer func() { _chain = oldChain }()
-	manager, store, originalSecret := buildRootWrapperSource(t)
-	defer zeroBytes(originalSecret)
-	if manager.GetAccountManagementStatus().RecoveryConfigured {
-		t.Fatal("legacy fixture unexpectedly has formal recovery configured")
-	}
-	if err := manager.syncAccountRootWrapper(store); err != nil {
-		t.Fatal(err)
-	}
-	root, _ := manager.accountManagementRootWallet()
-	key, _ := accountRootWrapperKey(root)
-	value, err := store.Get(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	payload, err := openAccountRootWrapper(root, _chain,
-		manager.GetAccountManagementStatus().AccountID, value.Value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer zeroBytes(payload.Secret)
-	if !bytes.Equal(payload.Secret, originalSecret) || payload.RecoveryConfigured {
-		t.Fatal("migration changed the original account secret or recovery state")
-	}
-	if err := manager.syncAccountRootWrapper(store); err != nil || store.updates != 1 {
-		t.Fatalf("idempotent migration: updates=%d err=%v", store.updates, err)
-	}
-}
-
 func TestAccountRootWrapperUpdatesFormalRecoveryAndStorageMetadataOnce(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
-	manager, store, secret := buildRootWrapperSource(t)
+	manager, _, secret := buildRootWrapperSource(t)
 	defer zeroBytes(secret)
-	if err := manager.syncAccountRootWrapper(store); err != nil {
-		t.Fatal(err)
-	}
-
-	manager.mutex.Lock()
-	manager.accountProfile.PackageID = "formal-package"
-	manager.accountProfile.RecoveryMode = account.RecoveryMode2Of3
-	manager.accountProfile.StorageMode = AccountStoragePaid
-	manager.accountProfile.RecordTTL = 0
-	manager.accountProfile.AutopayContract = "autopay-contract"
-	manager.accountProfile.PublicLocator = "public-locator"
-	manager.accountProfile.RecoveryConfigured = true
-	manager.mutex.Unlock()
-
+	remote := manager.http.(*rgb11MemoryDKVSHTTP)
 	root, _ := manager.accountManagementRootWallet()
-	wrapperKey, _ := accountRootWrapperKey(root)
-	stateKey, _ := manager.accountManagedStateKey(root)
-	dataKey, _ := manager.accountManagedDataBlobKey(root)
-	profile := *manager.accountProfile
-	encoded, err := sealAccountRootWrapper(root, _chain, profile.AccountID, rootWrapperPayload(profile, secret), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = store.Update([]string{wrapperKey, stateKey, dataKey}, func(current map[string]*dkvsValue, _ map[string]uint64) ([]dkvsValueMutation, error) {
-		return accountActivationMutations(&profile, root, secret, wrapperKey, encoded, stateKey, profile.StateEnvelope, dataKey, profile.ManagedDataEnvelope, current)
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if err := manager.syncAccountRootWrapper(store); err != nil {
-		t.Fatal(err)
-	}
-	if store.updates != 2 {
-		t.Fatalf("metadata upgrade updates=%d, want 2", store.updates)
-	}
 	key, _ := accountRootWrapperKey(root)
-	value, err := store.Get(key)
+	before := snapshotRGB11MemoryRecords(remote)[key]
+	pkg, _, packageSecret := rereviewRecoveryPackage(t, manager)
+	defer zeroBytes(packageSecret)
+	location, err := manager.AccountIndexerLocation()
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload, err := openAccountRootWrapper(root, _chain,
-		manager.GetAccountManagementStatus().AccountID, value.Value)
+	pool := dkvsindexer.NetworkDefaultsForParams(GetChainParam_SatsNet()).AutopayContract
+	auth := AccountStorageAuthorization{Mode: AccountStoragePaid, Location: location,
+		Autopay: &DKVSAutopayOptions{AddressParams: GetChainParam_SatsNet(), PoolContract: pool}}
+	publicLocator, err := buildAccountPublicLocator(root, _chain, location, accountRootWrapperPayload{
+		PackageID: pkg.Envelope.Locator.PackageID, StorageMode: AccountStoragePaid, AutopayContract: pool,
+	}, pkg.Envelope.Locator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ActivateAccountManagement(secret, "password", auth, pkg.Envelope.Locator, publicLocator); err != nil {
+		t.Fatal(err)
+	}
+	value := snapshotRGB11MemoryRecords(remote)[key]
+	payload, err := openAccountRootWrapper(root, _chain, manager.accountProfile.AccountID, value.Value)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer zeroBytes(payload.Secret)
-	if payload.PackageID != "formal-package" || payload.RecoveryMode != account.RecoveryMode2Of3 ||
-		payload.StorageMode != AccountStoragePaid || payload.RecordTTL != 0 ||
-		payload.AutopayContract != "autopay-contract" || payload.PublicLocator != "public-locator" ||
-		!payload.RecoveryConfigured || value.Seq != 2 {
-		t.Fatalf("updated wrapper payload=%+v seq=%d", payload, value.Seq)
+	if payload.PackageID != pkg.Envelope.Locator.PackageID || payload.StorageMode != AccountStoragePaid ||
+		payload.RecordTTL != 0 || payload.AutopayContract != pool || value.Seq != before.Seq+1 ||
+		!bytes.Equal(payload.Secret, secret) {
+		t.Fatalf("activation did not publish the new wrapper policy: seq=%d", value.Seq)
 	}
-	manager.mutex.RLock()
-	profile = *manager.accountProfile
-	manager.mutex.RUnlock()
-	if !accountRecordMatchesStorage(value, &profile) {
-		t.Fatal("updated wrapper did not use the current paid storage policy")
+	status := manager.GetAccountManagementStatus()
+	if !status.RecoveryConfigured || manager.accountProfile.PublicLocator != publicLocator ||
+		manager.accountProfile.RecoveryMode != pkg.Envelope.Locator.RecoveryMode {
+		t.Fatal("public recovery configuration was lost when reducing the wrapper payload")
 	}
-	if err := manager.syncAccountRootWrapper(store); err != nil || store.updates != 2 {
-		t.Fatalf("updated wrapper was not idempotent: updates=%d err=%v", store.updates, err)
+	public, err := DecodeAccountPublicLocator(status.PublicLocator, _chain)
+	if err != nil || public.Locator != pkg.Envelope.Locator || public.StorageLocation != location ||
+		public.StorageMode != AccountStoragePaid || public.RecordTTL != 0 || public.AutopayContract != pool {
+		t.Fatal("signed public locator lost its recovery identity or paid storage policy")
+	}
+	if err := manager.SyncAccountRootWrapper(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if after := snapshotRGB11MemoryRecords(remote)[key]; !reflect.DeepEqual(value, after) {
+		t.Fatal("ordinary wrapper sync rewrote the activated configuration")
 	}
 }
 
@@ -314,70 +218,38 @@ func TestTemporaryAccountAdoptsVerifiedRemotePaidPolicy(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
-	manager, store, secret := buildRootWrapperSource(t)
+	source, _, secret := buildRootWrapperSource(t)
 	defer zeroBytes(secret)
-	if err := manager.syncAccountRootWrapper(store); err != nil {
+	remote := source.http.(*rgb11MemoryDKVSHTTP)
+	target := newAccountManagementAutoTestManager(t)
+	configureRGB11DKVSTestManager(target, remote)
+	target.serverNode = source.serverNode
+	if _, err := target.RecoverAccountManagementFromRootMnemonic(context.Background(), accountRootWrapperTestMnemonic, "password"); err != nil {
 		t.Fatal(err)
 	}
-	root, err := manager.accountManagementRootWallet()
+	pkg, _, packageSecret := rereviewRecoveryPackage(t, source)
+	defer zeroBytes(packageSecret)
+	location, err := source.AccountIndexerLocation()
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager.mutex.RLock()
-	paid := *manager.accountProfile
-	manager.mutex.RUnlock()
-	paid.PackageID = "paid-package"
-	paid.RecoveryMode = account.RecoveryMode2Of2
-	paid.StorageMode = AccountStoragePaid
-	paid.RecordTTL = 0
-	paid.AutopayContract = "paid-autopay"
-	paid.PublicLocator = "paid-locator"
-	paid.RecoveryConfigured = true
-
-	wrapperKey, _ := accountRootWrapperKey(root)
-	stateKey, _ := manager.accountManagedStateKey(root)
-	dataKey, _ := manager.accountManagedDataBlobKey(root)
-	wrapperEnvelope, err := sealAccountRootWrapper(root, _chain, paid.AccountID,
-		rootWrapperPayload(paid, secret), nil)
-	if err != nil {
+	pool := dkvsindexer.NetworkDefaultsForParams(GetChainParam_SatsNet()).AutopayContract
+	auth := AccountStorageAuthorization{Mode: AccountStoragePaid, Location: location,
+		Autopay: &DKVSAutopayOptions{AddressParams: GetChainParam_SatsNet(), PoolContract: pool}}
+	if err := source.ActivateAccountManagement(secret, "password", auth, pkg.Envelope.Locator, "paid-locator"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Update([]string{wrapperKey, stateKey, dataKey},
-		func(current map[string]*dkvsValue, _ map[string]uint64) ([]dkvsValueMutation, error) {
-			return accountActivationMutations(&paid, root, secret, wrapperKey, wrapperEnvelope,
-				stateKey, paid.StateEnvelope, dataKey, paid.ManagedDataEnvelope, current)
-		}); err != nil {
+	if err := source.SyncAccountManagementState(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-
-	snapshot, err := manager.captureAccountManagementSyncSnapshot()
-	if err != nil {
+	if err := target.SyncAccountManagementState(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer zeroBytes(snapshot.secret)
-	stateValue, err := store.Get(stateKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	dataValue, err := store.Get(dataKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	adopted, err := manager.adoptRemoteAccountConfiguration(
-		store, root, snapshot, stateValue, dataValue, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !adopted {
-		t.Fatal("verified remote paid policy was not adopted")
-	}
-	manager.mutex.RLock()
-	got := *manager.accountProfile
-	manager.mutex.RUnlock()
-	if got.StorageMode != AccountStoragePaid || got.AutopayContract != paid.AutopayContract ||
-		got.PackageID != paid.PackageID || got.PublicLocator != paid.PublicLocator ||
-		!got.RecoveryConfigured {
-		t.Fatalf("adopted profile=%+v", got)
+	got := target.GetAccountManagementStatus()
+	if got.StorageMode != AccountStoragePaid || target.accountProfile.AutopayContract != pool ||
+		target.accountProfile.PackageID != pkg.Envelope.Locator.PackageID || !got.RecoveryConfigured ||
+		!bytes.Equal(target.accountSecret, secret) {
+		t.Fatal("verified paid configuration was not adopted with the original secret")
 	}
 }
 
@@ -406,67 +278,30 @@ func TestAccountRootWrapperRefusesDifferentSecret(t *testing.T) {
 	if err := manager.syncAccountRootWrapper(store); !errors.Is(err, ErrRootAccountWrapperInvalid) {
 		t.Fatalf("different-secret wrapper error=%v", err)
 	}
-	if store.updates != 1 {
+	if store.updates != 0 {
 		t.Fatalf("different-secret wrapper was overwritten: updates=%d", store.updates)
 	}
 }
 
-func TestAccountActivationMutationsRefuseDifferentRootSecret(t *testing.T) {
+func TestAccountActivationRefusesDifferentRootSecret(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
-	manager, store, secret := buildRootWrapperSource(t)
+	manager, _, secret := buildRootWrapperSource(t)
 	defer zeroBytes(secret)
-	if err := manager.syncAccountRootWrapper(store); err != nil {
-		t.Fatal(err)
-	}
-	root, _ := manager.accountManagementRootWallet()
-	manager.mutex.RLock()
-	profile := *manager.accountProfile
-	manager.mutex.RUnlock()
-	wrapperKey, _ := accountRootWrapperKey(root)
-	stateKey, _ := manager.accountManagedStateKey(root)
-	dataKey, _ := manager.accountManagedDataBlobKey(root)
+	remote := manager.http.(*rgb11MemoryDKVSHTTP)
+	pkg, auth, packageSecret := rereviewRecoveryPackage(t, manager)
+	defer zeroBytes(packageSecret)
+	before := snapshotRGB11MemoryRecords(remote)
 	different := bytes.Repeat([]byte{0x7f}, 32)
-	conflicting, err := sealAccountRootWrapper(root, _chain, profile.AccountID,
-		rootWrapperPayload(profile, different), nil)
-	if err != nil {
-		t.Fatal(err)
+	if err := manager.ActivateAccountManagement(different, "password", *auth, pkg.Envelope.Locator, ""); !errors.Is(err, ErrAccountManagementSecretConflict) {
+		t.Fatalf("activation accepted another root secret: %v", err)
 	}
-	current := map[string]*dkvsValue{
-		wrapperKey: {Key: wrapperKey, Value: conflicting},
+	if !reflect.DeepEqual(before, snapshotRGB11MemoryRecords(remote)) || !bytes.Equal(manager.accountSecret, secret) {
+		t.Fatal("rejected activation replaced local secret or remote records")
 	}
-	mutations, err := accountActivationMutations(&profile, root, secret, wrapperKey,
-		store.records[wrapperKey].Value, stateKey, profile.StateEnvelope, dataKey,
-		profile.ManagedDataEnvelope, current)
-	if !errors.Is(err, ErrRootAccountWrapperInvalid) || len(mutations) != 0 {
-		t.Fatalf("conflicting activation mutations=%d err=%v", len(mutations), err)
-	}
-
-	current[wrapperKey] = store.records[wrapperKey]
-	mutations, err = accountActivationMutations(&profile, root, secret, wrapperKey,
-		store.records[wrapperKey].Value, stateKey, profile.StateEnvelope, dataKey,
-		profile.ManagedDataEnvelope, current)
-	if err != nil || len(mutations) != 3 {
-		t.Fatalf("matching activation mutations=%d err=%v", len(mutations), err)
-	}
-}
-
-func TestAccountRootWrapperMigrationRequiresVerifiedRemoteState(t *testing.T) {
-	oldChain := _chain
-	_chain = "testnet"
-	defer func() { _chain = oldChain }()
-	manager, store, secret := buildRootWrapperSource(t)
-	defer zeroBytes(secret)
-	root, _ := manager.accountManagementRootWallet()
-	stateKey, _ := manager.accountManagedStateKey(root)
-	store.records[stateKey].Value = []byte("different remote state")
-	if err := manager.syncAccountRootWrapper(store); err == nil {
-		t.Fatal("wrapper was published without verified remote state")
-	}
-	wrapperKey, _ := accountRootWrapperKey(root)
-	if store.records[wrapperKey] != nil || store.updates != 0 {
-		t.Fatal("failed remote verification overwrote wrapper state")
+	if err := manager.ActivateAccountManagement(secret, "password", *auth, pkg.Envelope.Locator, ""); err != nil {
+		t.Fatalf("matching account secret failed activation: %v", err)
 	}
 }
 
@@ -491,9 +326,8 @@ func TestAccountRootDiscoveryMissingStateDoesNotAuthorizeNewSecret(t *testing.T)
 	oldChain := _chain
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
-	source, store, secret := buildRootWrapperSource(t)
-	defer zeroBytes(secret)
-	if err := source.syncAccountRootWrapper(store); err != nil {
+	source, remote, pkg, auth, secret := newLocalActivationFixture(t)
+	if err := source.ActivateAccountManagement(secret, "password", *auth, pkg.Envelope.Locator, ""); err != nil {
 		t.Fatal(err)
 	}
 	root, err := source.accountManagementRootWallet()
@@ -504,19 +338,37 @@ func TestAccountRootDiscoveryMissingStateDoesNotAuthorizeNewSecret(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	delete(store.records, stateKey)
-
-	target := newAccountManagementAutoTestManager(t)
-	_, discoveryErr := target.recoverAccountManagementFromRootMnemonic(context.Background(),
-		accountRootWrapperTestMnemonic, "password", store, AccountIndexerLocation{})
-	if !errors.Is(discoveryErr, ErrRootAccountDiscoveryPending) {
-		t.Fatalf("missing-state discovery error=%v", discoveryErr)
-	}
-	if _, err := target.ImportWallet(accountRootWrapperTestMnemonic, "password"); err != nil {
+	wrapperKey, err := accountRootWrapperKey(root)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if target.GetAccountManagementStatus().Active || len(target.accountSecret) != 0 {
-		t.Fatal("incomplete remote account authorized a new account secret")
+	beforeRemote := snapshotRGB11MemoryRecords(remote)
+	if beforeRemote[wrapperKey] == nil || beforeRemote[stateKey] != nil {
+		t.Fatal("fixture must open the service before its first private backup")
+	}
+	target := newAccountManagementAutoTestManager(t)
+	configureRGB11DKVSTestManager(target, remote)
+	target.serverNode = source.serverNode
+	walletID, err := target.ImportWallet(accountRootWrapperTestMnemonic, "password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := target.syncDKVSOnce(); err != nil && !errors.Is(err, ErrRootAccountDiscoveryPending) {
+		t.Fatal(err)
+	}
+	_, discoveryErr := target.RecoverAccountManagementFromRootMnemonic(context.Background(), accountRootWrapperTestMnemonic, "password")
+	if !errors.Is(discoveryErr, ErrRootAccountDiscoveryPending) || errors.Is(discoveryErr, ErrRootAccountNotFound) {
+		t.Fatalf("existing service with missing backup must remain pending: %v", discoveryErr)
+	}
+	if target.GetAccountManagementStatus().DiscoveryStatus != "active-waiting-backup" {
+		t.Fatal("existing active service was not identified")
+	}
+	assertPendingImportReadOnly(t, target, walletID)
+	if err := target.ActivateAccountManagement(target.accountSecret, "password", *auth, pkg.Envelope.Locator, ""); !errors.Is(err, ErrRootAccountDiscoveryPending) {
+		t.Fatalf("existing service permitted reinitialization: %v", err)
+	}
+	if !reflect.DeepEqual(beforeRemote, snapshotRGB11MemoryRecords(remote)) {
+		t.Fatal("pending new device overwrote or initialized remote account data")
 	}
 }
 
@@ -555,8 +407,12 @@ func TestFreshMainnetImportContinuesAfterRootMetadataRouteNotFound(t *testing.T)
 			if err != nil || walletID == 0 {
 				t.Fatalf("ordinary import after pending discovery: wallet=%d err=%v", walletID, err)
 			}
-			if manager.GetAccountManagementStatus().Active || len(manager.accountSecret) != 0 {
-				t.Fatal("pending discovery import created an account secret")
+			if manager.GetAccountManagementStatus().DiscoveryStatus != "unknown" {
+				t.Fatal("failed network discovery was treated as confirmed inactive")
+			}
+			assertPendingImportReadOnly(t, manager, walletID)
+			if len(store.records) != 0 || store.updates != 0 {
+				t.Fatal("unknown discovery published remote account data")
 			}
 		})
 	}
@@ -581,22 +437,25 @@ func TestAccountRootDiscoveryRestoresOriginalAccount(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
-	source, store, originalSecret := buildRootWrapperSource(t)
-	defer zeroBytes(originalSecret)
-	if err := source.syncAccountRootWrapper(store); err != nil {
+	source, remote, pkg, auth, originalSecret := newLocalActivationFixture(t)
+	if err := source.ActivateAccountManagement(originalSecret, "password", *auth, pkg.Envelope.Locator, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.SyncAccountManagementState(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	target := newAccountManagementAutoTestManager(t)
+	configureRGB11DKVSTestManager(target, remote)
+	target.serverNode = source.serverNode
 	importedID, err := target.ImportWallet(accountRootWrapperTestMnemonic, "password")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target.GetAccountManagementStatus().Active || len(target.accountSecret) != 0 {
-		t.Fatal("import before root recovery created an account secret")
+	assertPendingImportReadOnly(t, target, importedID)
+	if _, err := target.syncDKVSOnce(); err != nil {
+		t.Fatal(err)
 	}
-	results, err := target.recoverAccountManagementFromRootMnemonic(context.Background(),
-		accountRootWrapperTestMnemonic, "password", store,
-		AccountIndexerLocation{Scheme: "http", Host: "dkvs.test", Proxy: "testnet"})
+	results, err := target.RecoverAccountManagementFromRootMnemonic(context.Background(), accountRootWrapperTestMnemonic, "password")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -612,7 +471,7 @@ func TestAccountRootDiscoveryRestoresOriginalAccount(t *testing.T) {
 	defer zeroBytes(restoredSecret)
 	status := target.GetAccountManagementStatus()
 	if !status.Active || status.AccountID != source.GetAccountManagementStatus().AccountID ||
-		status.RecoveryConfigured || !bytes.Equal(restoredSecret, originalSecret) {
+		!status.RecoveryConfigured || !bytes.Equal(restoredSecret, originalSecret) {
 		t.Fatalf("restored status=%+v secretMatches=%v", status,
 			bytes.Equal(restoredSecret, originalSecret))
 	}
@@ -623,11 +482,8 @@ func TestAccountRootDiscoveryMnemonicIgnoresCurrentWalletSelection(t *testing.T)
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
 
-	manager := newAccountManagementAutoTestManager(t)
-	rootID, err := manager.ImportWallet(accountRootWrapperTestMnemonic, "password")
-	if err != nil {
-		t.Fatal(err)
-	}
+	manager, _, _, _, _ := newLocalActivationFixture(t)
+	rootID := manager.GetCurrentWalletId()
 	childID, err := manager.ImportWallet(
 		"legal winner thank year wave sausage worth useful legal winner thank yellow",
 		"password",
@@ -659,11 +515,8 @@ func TestAccountGuardianIdentityIsRootBoundNotSelectionBound(t *testing.T) {
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
 
-	manager := newAccountManagementAutoTestManager(t)
-	rootID, err := manager.ImportWallet(accountRootWrapperTestMnemonic, "password")
-	if err != nil {
-		t.Fatal(err)
-	}
+	manager, _, _, _, _ := newLocalActivationFixture(t)
+	rootID := manager.GetCurrentWalletId()
 	childID, err := manager.ImportWallet(
 		"legal winner thank year wave sausage worth useful legal winner thank yellow",
 		"password",
@@ -704,57 +557,101 @@ func TestSameModeReconfigurationDoesNotRollBackRootWrapper(t *testing.T) {
 	defer func() { _chain = oldChain }()
 	for _, mode := range []string{AccountStorageTemporary, AccountStoragePaid} {
 		t.Run(mode, func(t *testing.T) {
-			manager, store, secret := buildRootWrapperSource(t)
+			manager, _, secret := buildRootWrapperSource(t)
 			defer zeroBytes(secret)
-			root, err := manager.accountManagementRootWallet()
-			if err != nil {
-				t.Fatal(err)
-			}
-			profile := *manager.accountProfile
-			profile.PackageID = "old-package"
-			profile.PublicLocator = "old-locator"
-			profile.RecoveryConfigured = true
-			profile.RecoveryMode = account.RecoveryMode2Of2
-			profile.StorageMode = mode
-			if mode == AccountStoragePaid {
-				profile.RecordTTL = 0
-				profile.AutopayContract = "autopay"
-			}
-			manager.accountProfile = &profile
-			wrapperKey, _ := accountRootWrapperKey(root)
-			stateKey, _ := manager.accountManagedStateKey(root)
-			dataKey, _ := manager.accountManagedDataBlobKey(root)
-			publish := func(value accountManagementProfile) {
-				encoded, err := sealAccountRootWrapper(root, _chain, value.AccountID, rootWrapperPayload(value, secret), nil)
-				if err != nil {
+			remote := manager.http.(*rgb11MemoryDKVSHTTP)
+			root, _ := manager.accountManagementRootWallet()
+			key, _ := accountRootWrapperKey(root)
+			var peer *Manager
+			var auth *AccountStorageAuthorization
+			for round := 0; round < 2; round++ {
+				var pkg *account.RecoveryPackage
+				if round == 0 {
+					var packageSecret []byte
+					pkg, auth, packageSecret = rereviewRecoveryPackage(t, manager)
+					zeroBytes(packageSecret)
+					if mode == AccountStoragePaid {
+						auth.Mode, auth.RecordOptions.TTL = mode, 0
+						auth.Autopay = &DKVSAutopayOptions{AddressParams: GetChainParam_SatsNet(),
+							PoolContract: dkvsindexer.NetworkDefaultsForParams(GetChainParam_SatsNet()).AutopayContract}
+					}
+				} else {
+					backup, err := manager.ExportAccountBackupForPWA("password", nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					bootstrap, err := account.RootBootstrapBackup(backup)
+					clearAccountBackup(&backup)
+					if err != nil {
+						t.Fatal(err)
+					}
+					status := manager.GetAccountManagementStatus()
+					pkg, err = manager.CreateAccountRecoveryPackage(account.CreateOptions{
+						AccountID: status.AccountID, Backup: bootstrap,
+						RecoveryMode: account.RecoveryMode(status.RecoveryMode), Questions: coreQuestions(),
+					})
+					clearAccountBackup(&bootstrap)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := manager.ActivateAccountManagement(secret, "password", *auth, pkg.Envelope.Locator, ""); err != nil {
 					t.Fatal(err)
 				}
-				_, err = store.Update([]string{wrapperKey, stateKey, dataKey}, func(current map[string]*dkvsValue, _ map[string]uint64) ([]dkvsValueMutation, error) {
-					return accountActivationMutations(&value, root, secret, wrapperKey, encoded, stateKey, value.StateEnvelope, dataKey, value.ManagedDataEnvelope, current)
-				})
-				if err != nil {
+				if err := manager.SyncAccountManagementState(context.Background()); err != nil {
 					t.Fatal(err)
 				}
+				if round == 0 {
+					peer = newAccountManagementAutoTestManager(t)
+					configureRGB11DKVSTestManager(peer, remote)
+					peer.serverNode = manager.serverNode
+					if _, err := peer.RecoverAccountManagementFromRootMnemonic(context.Background(), accountRootWrapperTestMnemonic, "password"); err != nil {
+						t.Fatal(err)
+					}
+				}
 			}
-			publish(profile)
-			current := profile
-			current.PackageID = "new-package"
-			current.PublicLocator = "new-locator"
-			current.RecoveryMode = account.RecoveryMode2Of3
-			publish(current)
-			updates := store.updates
-			seq := store.records[wrapperKey].Seq
+			current := snapshotRGB11MemoryRecords(remote)[key]
 			for round := 0; round < 3; round++ {
-				if err := manager.syncAccountRootWrapper(store); err != nil {
+				if err := peer.SyncAccountManagementState(context.Background()); err != nil {
 					t.Fatal(err)
 				}
-				if !accountRootWrapperMetadataMatchesProfile(rootWrapperPayload(current, secret), *manager.accountProfile) {
-					t.Fatal("old profile did not adopt confirmed configuration")
+				if peer.accountProfile.PackageID != manager.accountProfile.PackageID || peer.accountProfile.StorageMode != mode ||
+					!bytes.Equal(peer.accountSecret, secret) {
+					t.Fatal("stale device did not adopt the same-mode configuration and original secret")
 				}
-				if store.updates != updates || store.records[wrapperKey].Seq != seq {
+				if err := peer.SyncAccountRootWrapper(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(current, snapshotRGB11MemoryRecords(remote)[key]) {
 					t.Fatal("ordinary sync rewrote current wrapper")
 				}
 			}
 		})
+	}
+}
+
+func assertPendingImportReadOnly(t *testing.T, manager *Manager, walletID int64) {
+	t.Helper()
+	status := manager.GetAccountManagementStatus()
+	if status.LocalOnly || status.DKVSWriteAllowed || status.RecoveryConfigured || status.ActivationPending {
+		t.Fatal("unconfirmed discovery granted business or activation authority")
+	}
+	if status.DiscoveryStatus != "unknown" && status.DiscoveryStatus != "active-waiting-backup" {
+		t.Fatal("discovery lost its pending state")
+	}
+	before, err := manager.db.Read(accountManagementProfileKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeCatalog := manager.GetWalletCatalog()
+	if err := manager.UpdateWalletName(walletID, "must wait for discovery"); err == nil {
+		t.Fatal("pending discovery allowed a local edit")
+	}
+	if err := manager.SyncAccountManagementState(context.Background()); !errors.Is(err, ErrDKVSPathNotSynced) {
+		t.Fatalf("pending discovery backup error: %v", err)
+	}
+	after, err := manager.db.Read(accountManagementProfileKey())
+	if err != nil || !bytes.Equal(before, after) || !reflect.DeepEqual(beforeCatalog, manager.GetWalletCatalog()) {
+		t.Fatal("rejected pending-discovery business changed local recovery data")
 	}
 }

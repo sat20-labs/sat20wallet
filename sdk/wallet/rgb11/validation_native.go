@@ -20,16 +20,8 @@ import (
 )
 
 const (
-	NativeEngineBuildID     = "rgb11-go-0.11.1+sat20.1"
-	legacyRC11EngineBuildID = "rgb11-go-0.11.1-rc.11+sat20.1"
+	NativeEngineBuildID = "rgb11-go-0.11.1+sat20.1"
 )
-
-// CompatibleEngineBuildID permits recovery of rc.11 snapshots whose strict
-// protocol vectors match the official 0.11.1 release. New writes use the
-// stable build ID; unrelated engine builds remain incompatible.
-func CompatibleEngineBuildID(buildID string) bool {
-	return buildID == NativeEngineBuildID || buildID == legacyRC11EngineBuildID
-}
 
 // NativeConsensusValidator is the production Go validator checked against the
 // official 0.11.1 Rust vectors.

@@ -727,7 +727,36 @@ export async function runPwaPosCases(t, fixture) {
     const l1SatsBefore = await addressAmount('Bitcoin', fixture.address, '::')
     const l2Before = await readL2Amount(key)
     const feeRate = asInteger(await page.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().btcFeeRate))
+    await page.evaluate(async () => {
+      const manager = (await import('/utils/sat20.ts')).default
+      const original = manager.withdraw
+      const probe = window.__SAT20_WITHDRAW_DIAGNOSTIC__ = {
+        called: false, error: null, txid: null,
+        restore: () => { manager.withdraw = original },
+      }
+      manager.withdraw = async function(...args) {
+        probe.called = true
+        try {
+          const result = await original.apply(this, args)
+          probe.error = result?.[0]?.message ?? null
+          probe.txid = result?.[1]?.txId ?? null
+          return result
+        } catch (error) {
+          probe.error = error?.message ?? String(error)
+          throw error
+        }
+      }
+    })
     await clickAssetOperation('Withdraw', amount, token, 'SatoshiNet')
+    const call = await page.evaluate(() => {
+      const probe = window.__SAT20_WITHDRAW_DIAGNOSTIC__
+      probe.restore()
+      return { called: probe.called, error: probe.error, txid: probe.txid }
+    })
+    const afterClick = await control('snapshot')
+    console.log(JSON.stringify({ withdrawSubmission: { token, call,
+      pending: afterClick.l1.pending_txids,
+      confirmedAdded: afterClick.l1.confirmed_txids.filter(txid => !before.l1.confirmed_txids.includes(txid)) } }))
     const funding = await pendingFunding(before)
     const tx = await confirmL1Payment(funding)
     const paid = tx.outs.filter(output => output.script.toString('hex') === walletScript)

@@ -15,7 +15,7 @@ type nativeProjectionConflict struct{ error }
 func (e *nativeProjectionConflict) Unwrap() error { return e.error }
 
 func nativeProjectionPublicationError(err error) error {
-	if errors.Is(err, errAccountSnapshotChanged) || errors.Is(err, rgb11wallet.ErrLocalSnapshotChanged) {
+	if errors.Is(err, errAccountSnapshotChanged) || errors.Is(err, rgb11wallet.ErrLocalSnapshotChanged) || errors.Is(err, errRGB11StaleLocal) {
 		return &nativeProjectionConflict{err}
 	}
 	return err

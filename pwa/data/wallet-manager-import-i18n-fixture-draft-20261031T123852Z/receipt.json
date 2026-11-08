@@ -1,0 +1,47 @@
+{
+  "status": "draft only; not applied; parent review pending",
+  "created_utc": "2026-10-31T12:38:52.784516+00:00",
+  "source": "pwa/scripts/diagnostic/wallet-manager-import.test.mjs",
+  "before_sha256": "4edf1908e957f7641cfd935e17407940e4f4c1cebd0266f5f156452d3b22183e",
+  "proposed_sha256": "12f91bf3c5b4aaaff0b70ac01d3d131ca36a9f9e745a5ef136caf4a7f2a9d908",
+  "patch": "/Users/yingfeng/github/sat20wallet/pwa/data/wallet-manager-import-i18n-fixture-draft-20261031T123852Z/fixture.patch",
+  "patch_sha256": "4f281554aa692dd9b2b3884da1b04366b884ebfee303aa93d99dacfaa73d8aa6",
+  "failure_evidence": "/Users/yingfeng/github/sat20wallet/pwa/data/node-unit-full-20261031T123440Z/summary.json",
+  "log": "/Users/yingfeng/github/sat20wallet/pwa/data/node-unit-full-20261031T123440Z/test.log",
+  "failure_log_lines": [
+    1152,
+    1175,
+    1200,
+    1225
+  ],
+  "affected_cases": [
+    "manager committed import offers reload and refuses replay after readFailure",
+    "manager committed import offers reload and refuses replay after switchFailure",
+    "manager uncommitted import can be retried and cancellation does not save a wallet",
+    "manager successful import closes and permits a separate new import"
+  ],
+  "cause": "All four cases fail in the fixture require adapter at line 34 on unexpected dependency vue-i18n, before calling the actual WalletManager import business function. The current production component imports useI18n and immediately reads its t member.",
+  "change": "Add only a vue-i18n adapter returning the used Composer t interface, matching the existing password dialog fixture in wallet-lock-boundary.test.mjs. Leave the unexpected dependency assertion intact.",
+  "existing_reference": "pwa/scripts/diagnostic/wallet-lock-boundary.test.mjs:311",
+  "production_reference": [
+    "pwa/components/wallet/WalletManager.vue:316",
+    "pwa/components/wallet/WalletManager.vue:321"
+  ],
+  "package_reference": "pwa/package.json:65 already declares vue-i18n; no dependency installation/change is needed.",
+  "business_assertions_changed": false,
+  "business_steps_changed": false,
+  "production_modified": false,
+  "source_modified": false,
+  "tests_executed": false,
+  "dependencies_changed": false,
+  "post_review_validation": {
+    "cwd": "/Users/yingfeng/github/sat20wallet/pwa",
+    "command": [
+      "node",
+      "--test",
+      "scripts/diagnostic/wallet-manager-import.test.mjs"
+    ],
+    "expected_test_count": 5,
+    "note": "Four previously blocked runtime cases plus the existing passing template contract; retain all assertions. Assigned Luna executes after reviewed application."
+  }
+}

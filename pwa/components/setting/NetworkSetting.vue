@@ -35,7 +35,8 @@
         <div class="text-sm text-muted-foreground mb-4">
           {{ $t('networkSetting.languageSwitch') }}
         </div>
-        <Select v-model="currentLanguage" @update:model-value="(value) => changeLanguage(value as Language | null)">
+        <Select :model-value="currentLanguage" :disabled="isSavingLanguage"
+          @update:model-value="(value) => changeLanguage(value as Language | null)">
           <SelectTrigger class="max-w-[160px] bg-gray-900/30 mb-4">
             <SelectValue :placeholder="$t('networkSetting.selectLanguage')" />
           </SelectTrigger>
@@ -53,6 +54,7 @@
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { setLanguage } from '@/main'
+import { useToast } from '@/components/ui/toast-new'
 import type { Language } from '@/types'
 import { Network } from '@/types'
 import { Label } from '@/components/ui/label'
@@ -68,6 +70,7 @@ import { useWalletStore } from '@/store/wallet'
 import { storeToRefs } from 'pinia'
 import { restartApp } from '@/utils/app-restart'
 import { isRegtestBuild } from '@/utils/networkMode'
+import { confirmPendingBackupRisk } from '@/utils/pendingBackupRisk'
 
 const isExpanded = ref(false)
 const walletStore = useWalletStore()
@@ -75,16 +78,32 @@ const { network, isSwitchingNetwork } = storeToRefs(walletStore)
 
 const handleNetworkChange = async (value: any) => {
   if (!value || value === network.value || isSwitchingNetwork.value) return
+  if (!await confirmPendingBackupRisk(key => t(key))) return
   const changed = await walletStore.setNetwork(value as Network)
   if (changed) restartApp()
 }
 
-const { locale } = useI18n()
+const { locale, t } = useI18n()
 const currentLanguage = ref(locale.value)
+const isSavingLanguage = ref(false)
+const { toast } = useToast()
 
-const changeLanguage = (lang: Language | null) => {
-  if (lang) {
-    setLanguage(lang) // 调用 setLanguage 更新语言
+const changeLanguage = async (lang: Language | null) => {
+  if (!lang || isSavingLanguage.value || lang === locale.value) return
+  isSavingLanguage.value = true
+  try {
+    await setLanguage(lang)
+    currentLanguage.value = lang
+  } catch (error) {
+    console.error('Language preference save failed:', error)
+    currentLanguage.value = locale.value
+    toast({
+      title: t('common.error'),
+      description: t('networkSetting.languageSaveFailed'),
+      variant: 'destructive',
+    })
+  } finally {
+    isSavingLanguage.value = false
   }
 }
 </script>

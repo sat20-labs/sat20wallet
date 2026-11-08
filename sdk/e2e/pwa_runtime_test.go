@@ -18,6 +18,7 @@ import (
 // The PWA's normal integrity loader verifies these bytes; public/ is untouched.
 func buildPWAWalletRuntime(t *testing.T, ctx context.Context, sdk string, posActivation ...int32) (string, string) {
 	t.Helper()
+	defer e2ePhase(t, "wallet_wasm_build")()
 	dir := testCaseDirectory(t)
 	wasmPath := filepath.Join(dir, "wallet.wasm")
 	require.LessOrEqual(t, len(posActivation), 1)
@@ -27,7 +28,17 @@ func buildPWAWalletRuntime(t *testing.T, ctx context.Context, sdk string, posAct
 		// The node's rpctest override lives in package main, so it does not reach
 		// browser SDKs. Configure the same private-chain schedule at build time;
 		// no release source, loader, signing rule or production parameter changes.
-		source := filepath.Clean(filepath.Join(sdk, "..", "..", "satoshinet", "chaincfg", "pos.go"))
+		locate := exec.CommandContext(ctx, filepath.Join(runtime.GOROOT(), "bin", "go"),
+			"list", "-f={{.Dir}}", "github.com/sat20-labs/satoshinet/chaincfg")
+		locate.Dir = sdk
+		locate.Env = append(os.Environ(), "GOOS=js", "GOARCH=wasm")
+		packageDir, err := locate.Output()
+		require.NoError(t, err, "locate the effective SatoshiNet chaincfg package")
+		chaincfgDir := strings.TrimSpace(string(packageDir))
+		require.True(t, filepath.IsAbs(chaincfgDir), "chaincfg package directory must be absolute")
+		source := filepath.Join(chaincfgDir, "zz_sat20_e2e_pos_override.go")
+		_, err = os.Lstat(source)
+		require.True(t, os.IsNotExist(err), "POS override must be a new virtual file: %s", source)
 		replacements := make(map[string]string)
 		goFlags := strings.Fields(os.Getenv("GOFLAGS"))
 		for i := 0; i < len(goFlags); i++ {
@@ -54,14 +65,10 @@ func buildPWAWalletRuntime(t *testing.T, ctx context.Context, sdk string, posAct
 				replacements[original] = replacement
 			}
 		}
-		contentSource := source
-		if inheritedSource := replacements[source]; inheritedSource != "" {
-			contentSource = inheritedSource
-		}
-		content, err := os.ReadFile(contentSource)
-		require.NoError(t, err, "read the effective frozen SatoshiNet POS source")
-		content = append(content, []byte(fmt.Sprintf("\nfunc init() { TestNetParams.POSV2Height = %d; RegressionNetParams.POSV2Height = %d }\n", posActivation[0], posActivation[0]))...)
-		overlaySource := filepath.Join(dir, "pos.go")
+		_, exists := replacements[source]
+		require.False(t, exists, "inherited overlay already defines the POS override")
+		content := []byte(fmt.Sprintf("package chaincfg\n\nfunc init() { TestNetParams.POSV2Height = %d; RegressionNetParams.POSV2Height = %d }\n", posActivation[0], posActivation[0]))
+		overlaySource := filepath.Join(dir, "zz_sat20_e2e_pos_override.go")
 		require.NoError(t, os.WriteFile(overlaySource, content, 0600))
 		replacements[source] = overlaySource
 		mapping, err := json.Marshal(map[string]any{"Replace": replacements})

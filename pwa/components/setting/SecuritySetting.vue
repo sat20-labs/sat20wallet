@@ -130,12 +130,12 @@
         </Button>
         <Button as-child class="h-10 w-full">
           <RouterLink to="/wallet/setting/publickey" class="w-full">
-            Show Public Key
+            {{ t('settingsUi.showPublicKey') }}
           </RouterLink>
         </Button>
         <Button as-child class="h-10 w-full">
           <RouterLink to="/wallet/setting/password" class="w-full">
-            Password
+            {{ t('settingsUi.passwordTitle') }}
           </RouterLink>
         </Button>
       </div>
@@ -176,7 +176,6 @@ import { biometricCredentialManager } from '@/utils/biometricCredentials'
 
 const { t } = useI18n()
 const BIOMETRIC_UI_TIMEOUT_MS = 60000
-const BIOMETRIC_UNSUPPORTED_ORIGIN_ERROR = '当前环境不能安全启用生物识别。请使用有效 HTTPS 地址，或在 Android 调试时通过 adb reverse 使用 http://localhost:5173。'
 
 const isExpanded = ref(false)
 const globalStore = useGlobalStore()
@@ -257,11 +256,11 @@ const getLocalWebAuthnOriginError = (): string | null => {
   const isAndroid = /Android/i.test(navigator.userAgent)
 
   if (!window.isSecureContext) {
-    return '生物识别需要没有证书错误的安全 HTTPS 环境。请使用有效证书的 HTTPS 地址，或在本地测试时使用 Chrome 已信任的安全 origin。'
+    return t('settingsUi.secureBiometrics')
   }
 
   if (isAndroid && location.protocol !== 'https:') {
-    return BIOMETRIC_UNSUPPORTED_ORIGIN_ERROR
+    return t('settingsUi.unsupportedOrigin')
   }
 
   if (isLocalhost) {
@@ -269,7 +268,7 @@ const getLocalWebAuthnOriginError = (): string | null => {
   }
 
   if (isIpAddress) {
-    return BIOMETRIC_UNSUPPORTED_ORIGIN_ERROR
+    return t('settingsUi.unsupportedOrigin')
   }
 
   if (location.protocol === 'https:') {
@@ -283,7 +282,7 @@ const withBiometricTimeout = async <T,>(promise: Promise<T>): Promise<T> => {
   return Promise.race([
     promise,
     new Promise<T>((_, reject) => {
-      setTimeout(() => reject(new Error('生物识别验证超时。当前浏览器或安装环境没有返回系统验证结果，请使用密码解锁后重试。')), BIOMETRIC_UI_TIMEOUT_MS)
+      setTimeout(() => reject(new Error(t('settingsUi.biometricTimeout'))), BIOMETRIC_UI_TIMEOUT_MS)
     }),
   ])
 }
@@ -311,7 +310,7 @@ const checkBiometricSupport = async () => {
       supported: false,
       available: false,
       availability: 'inconclusive',
-      error: error instanceof Error ? error.message : '未知错误'
+      error: error instanceof Error ? error.message : t('settingsUi.unknownError')
     }
   }
 }
@@ -368,7 +367,7 @@ const handleBiometricToggle = async (newValue: boolean) => {
           biometricEnabled.value = false
           showAlert(t('securitySetting.biometricDisabled'), 'success')
         } else {
-          showAlert(t('securitySetting.clearBiometricFailed', { error: '未知错误' }), 'error')
+          showAlert(t('securitySetting.clearBiometricFailed', { error: t('settingsUi.unknownError') }), 'error')
         }
       }
     }
@@ -390,7 +389,7 @@ const createBiometricCredential = async (): Promise<boolean> => {
     const result = await withWalletPassword(password => withBiometricTimeout(
       biometricCredentialManager.createCredential(
         password,
-        'SAT20 钱包生物识别凭据'
+        t('settingsUi.credentialName')
       )
     ))
     if (result === undefined) return false
@@ -440,7 +439,7 @@ const deleteBiometricCredential = async () => {
         biometricEnabled.value = false
         showAlert(t('securitySetting.deleteCredentialSuccess'), 'success')
       } else {
-        showAlert(t('securitySetting.deleteCredentialFailed', { error: '未知错误' }), 'error')
+        showAlert(t('securitySetting.deleteCredentialFailed', { error: t('settingsUi.unknownError') }), 'error')
       }
     }
   } catch (error) {

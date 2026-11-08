@@ -21,7 +21,7 @@ import (
 // RecoveryPackageVersion identifies the complete cross-device recovery
 // closure; it is independent from the complete local snapshot used for
 // diagnostics and runtime caches.
-const RecoveryPackageVersion = uint32(2)
+const RecoveryPackageVersion = uint32(1)
 
 type RecoveryPackage struct {
 	Version           uint32
@@ -90,7 +90,7 @@ func recoveryProjectionRoots() []string {
 	return []string{
 		"proof-", "pending-", "transfer-", "prepared-receive-",
 		"receive-key-", "receive-reservation-", "local-name-",
-		"registered-name-", "contract-object-",
+		"contract-object-",
 	}
 }
 
@@ -186,15 +186,12 @@ func recoveryClosureKeys(snapshot *RGB11WalletSnapshot,
 		}
 	}
 
-	// Aliases, verified registrations, and contract imports are user-visible
+	// Local aliases and contract imports are user-visible
 	// contract intent. Keep one matching validation receipt and its consignment
 	// for every named/imported ContractID, including contracts with no balance.
 	for _, record := range snapshot.ProjectionRecords {
 		if strings.HasPrefix(record.Key, "local-name-") {
 			contractsNamed[strings.TrimPrefix(record.Key, "local-name-")] = struct{}{}
-		}
-		if strings.HasPrefix(record.Key, "registered-name-") {
-			contractsNamed[strings.TrimPrefix(record.Key, "registered-name-")] = struct{}{}
 		}
 	}
 	for _, record := range snapshot.ProjectionRecords {
@@ -283,7 +280,7 @@ func canonicalizeRecoveryProjectionRecords(records []SnapshotRecord) ([]Snapshot
 		if decode(record.Value, &receipt) != nil || receipt.validate(hash) != nil {
 			return nil, ErrValidationReceipt
 		}
-		if !CompatibleEngineBuildID(receipt.EngineBuildID) {
+		if receipt.EngineBuildID != NativeEngineBuildID {
 			return nil, ErrValidationReceipt
 		}
 		receipt.EngineBuildID = NativeEngineBuildID
@@ -302,6 +299,30 @@ func canonicalizeRecoveryProjectionRecords(records []SnapshotRecord) ([]Snapshot
 	}
 	for index := range result {
 		record := &result[index]
+		switch {
+		case strings.HasPrefix(record.Key, "pending-"):
+			var pending PendingTransfer
+			if decode(record.Value, &pending) != nil {
+				return nil, ErrValidationReceipt
+			}
+			pending = recoveryPendingMaterial(pending)
+			encoded, err := encode(&pending)
+			if err != nil {
+				return nil, err
+			}
+			record.Value = encoded
+		case strings.HasPrefix(record.Key, "transfer-"):
+			var state TransferState
+			if decode(record.Value, &state) != nil {
+				return nil, ErrValidationReceipt
+			}
+			state = recoveryTransferMaterial(state)
+			encoded, err := encode(&state)
+			if err != nil {
+				return nil, err
+			}
+			record.Value = encoded
+		}
 		if !strings.HasPrefix(record.Key, "proof-") {
 			continue
 		}
@@ -326,6 +347,50 @@ func canonicalizeRecoveryProjectionRecords(records []SnapshotRecord) ([]Snapshot
 	return result, nil
 }
 
+// A terminal journal remains a root for private history, change seals and the
+// exact witness. Its delivery/ACK bookkeeping is not recovery material. Active
+// obligations still need their signing and delivery boundary until fresh
+// evidence can prove their outcome.
+func recoveryTransferMaterial(state TransferState) TransferState {
+	if !recoveryReservationReleased(state.Status) {
+		return state
+	}
+	return recoveryTerminalTransfer(state)
+}
+
+// Project only terminal execution metadata. Status and business/signing
+// identity stay intact, including when projecting an older active comparison.
+func recoveryTerminalTransfer(state TransferState) TransferState {
+	state.AckStatus, state.RejectReason = "", ""
+	state.RelayRecordKey, state.AckRecordKey, state.RelayDurability = "", "", ""
+	state.RelayExpiry, state.NetworkBackupRef = 0, ""
+	state.ParentStateHash, state.DKVSOperationID = "", ""
+	state.AddressMessageID = ""
+	state.ReceiveCapabilityKey, state.ReceiveCapabilityHash = "", ""
+	state.DeliveryMode, state.DeliveryObjectID, state.DeliveryRecordKey, state.DeliveryRecordHash = "", "", "", ""
+	state.DeliveryTemporary, state.DeliveryIssueHeight, state.DeliveryTTL = false, 0, 0
+	state.DeliveryAcknowledged, state.DeliveryCacheCompacted = false, false
+	return state
+}
+
+func recoveryPendingMaterial(pending PendingTransfer) PendingTransfer {
+	pending.State = recoveryTransferMaterial(pending.State)
+	return recoveryPendingMetadata(pending, pending.State.Status)
+}
+
+func recoveryPendingMetadata(pending PendingTransfer, status string) PendingTransfer {
+	switch status {
+	case "settled":
+		// Confirmation loss can return a settled send to pending. Its owner
+		// identity is still needed to derive the current lock plan; retaining
+		// that identity does not restore the old temporary lock rows.
+		pending.CreatedAt = 0
+	case "rejected", "orphaned":
+		pending.ReservationID, pending.CreatedAt = "", 0
+	}
+	return pending
+}
+
 func cloneRecoveryRecords(records []SnapshotRecord) []SnapshotRecord {
 	result := make([]SnapshotRecord, len(records))
 	for index, record := range records {
@@ -340,7 +405,7 @@ func normalizeRecoveryPackage(value *RecoveryPackage) (*RecoveryPackage, error) 
 		return nil, fmt.Errorf("%w: recovery package is nil", ErrRGB11Inconsistent)
 	}
 	if value.Version != RecoveryPackageVersion || value.WalletID == "" ||
-		!CompatibleEngineBuildID(value.EngineBuildID) {
+		value.EngineBuildID != NativeEngineBuildID {
 		return nil, fmt.Errorf("%w: header version=%d wallet=%q engine=%q want_engine=%q",
 			ErrRGB11Inconsistent, value.Version, value.WalletID, value.EngineBuildID, NativeEngineBuildID)
 	}
@@ -408,6 +473,28 @@ func ValidateRecoveryPackage(value *RecoveryPackage) error {
 		}
 	}
 	for _, record := range packageValue.ProjectionRecords {
+		switch {
+		case strings.HasPrefix(record.Key, "pending-"):
+			var pending PendingTransfer
+			if decode(record.Value, &pending) != nil {
+				return ErrValidationReceipt
+			}
+			material := recoveryPendingMaterial(pending)
+			encoded, err := encode(&material)
+			if err != nil || !bytes.Equal(encoded, record.Value) {
+				return fmt.Errorf("%w: execution state in recovery pending %s", ErrRGB11Inconsistent, record.Key)
+			}
+		case strings.HasPrefix(record.Key, "transfer-"):
+			var state TransferState
+			if decode(record.Value, &state) != nil {
+				return ErrValidationReceipt
+			}
+			material := recoveryTransferMaterial(state)
+			encoded, err := encode(&material)
+			if err != nil || !bytes.Equal(encoded, record.Value) {
+				return fmt.Errorf("%w: execution state in recovery transfer %s", ErrRGB11Inconsistent, record.Key)
+			}
+		}
 		if strings.HasPrefix(record.Key, "validation-") {
 			var receipt ValidationReceipt
 			if decode(record.Value, &receipt) != nil || receipt.ValidatedAt != 1 ||
@@ -448,7 +535,7 @@ func (p *RecoveryPackage) WalletSnapshot() (*RGB11WalletSnapshot, error) {
 func MergeRecoverySnapshot(current, recovery *RGB11WalletSnapshot) (*RGB11WalletSnapshot, error) {
 	if current == nil || recovery == nil || current.WalletID != recovery.WalletID ||
 		current.AccountIndex != recovery.AccountIndex ||
-		!CompatibleEngineBuildID(current.EngineBuildID) || !CompatibleEngineBuildID(recovery.EngineBuildID) {
+		current.EngineBuildID != NativeEngineBuildID || recovery.EngineBuildID != NativeEngineBuildID {
 		return nil, ErrRGB11Inconsistent
 	}
 	if err := ValidateWalletSnapshot(current); err != nil {
@@ -543,7 +630,7 @@ func MergeRecoverySnapshot(current, recovery *RGB11WalletSnapshot) (*RGB11Wallet
 func MergeSelectedRecoverySnapshot(current, selected *RGB11WalletSnapshot) (*RGB11WalletSnapshot, error) {
 	if current == nil || selected == nil || current.WalletID != selected.WalletID ||
 		current.AccountIndex != selected.AccountIndex ||
-		!CompatibleEngineBuildID(current.EngineBuildID) || !CompatibleEngineBuildID(selected.EngineBuildID) {
+		current.EngineBuildID != NativeEngineBuildID || selected.EngineBuildID != NativeEngineBuildID {
 		return nil, ErrRGB11Inconsistent
 	}
 	if err := ValidateWalletSnapshot(current); err != nil {
@@ -771,10 +858,6 @@ func compatibleSelectedRecoveryRecord(current, selected SnapshotRecord) error {
 		// A same-contract local alias is user preference, so a clean selected
 		// account rename is authoritative for this key.
 		return nil
-	case strings.HasPrefix(current.Key, "registered-name-"):
-		// Package validation verifies the selected signed registration; the
-		// account-selected record may legitimately refresh its signature.
-		return nil
 	default:
 		if !bytes.Equal(current.Value, selected.Value) {
 			return ErrRGB11Inconsistent
@@ -784,6 +867,12 @@ func compatibleSelectedRecoveryRecord(current, selected SnapshotRecord) error {
 }
 
 func sameTransferIntent(left, right TransferState) bool {
+	// Selected callers have validated the canonical right-hand package. Its
+	// terminal metadata omissions also apply to this comparison-only copy;
+	// active selected states retain every existing identity check below.
+	if recoveryReservationReleased(right.Status) {
+		left = recoveryTerminalTransfer(left)
+	}
 	if left.TransferID != right.TransferID || left.Direction != right.Direction ||
 		!sameOptionalString(left.BatchID, right.BatchID) ||
 		!sameOptionalString(left.TransportMode, right.TransportMode) ||
@@ -828,14 +917,16 @@ func sameTransferIntent(left, right TransferState) bool {
 }
 
 func samePendingIntent(left, right PendingTransfer) bool {
+	// Only local execution metadata follows the selected terminal projection.
+	// Keep the original states and signed material for the signing checks.
+	leftMetadata := recoveryPendingMetadata(left, right.State.Status)
 	if !sameTransferIntent(left.State, right.State) ||
 		!sameOptionalString(left.RecipientObjectHash, right.RecipientObjectHash) &&
 			!(right.RecipientObjectHash == "" && right.State.Status == "rejected") ||
 		!sameOptionalString(left.LocalObjectHash, right.LocalObjectHash) &&
 			!(right.LocalObjectHash == "" && right.State.Status == "rejected") ||
-		!sameOptionalString(left.ReservationID, right.ReservationID) &&
-			!(left.ReservationID != "" && right.ReservationID == "" && recoveryReservationReleased(right.State.Status)) ||
-		!sameOptionalInt64(left.CreatedAt, right.CreatedAt) ||
+		!sameOptionalString(leftMetadata.ReservationID, right.ReservationID) ||
+		!sameOptionalInt64(leftMetadata.CreatedAt, right.CreatedAt) ||
 		!samePendingSigningIntent(left, right) ||
 		!samePendingChangeSeals(left, right) {
 		return false

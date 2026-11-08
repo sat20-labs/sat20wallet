@@ -175,7 +175,7 @@ func (p *rgb11AccountManagedDataProvider) Validate(catalog AccountManagedDataCat
 		walletID, err := manager.RGB11WalletID()
 		if err != nil || packageValue.WalletID != walletID ||
 			packageValue.AccountIndex != accountValue.AccountIndex ||
-			!rgb11wallet.CompatibleEngineBuildID(packageValue.EngineBuildID) {
+			packageValue.EngineBuildID != rgb11wallet.NativeEngineBuildID {
 			return ErrRGB11Inconsistent
 		}
 	}
@@ -254,14 +254,16 @@ func (p *rgb11AccountManagedDataProvider) Import(catalog AccountManagedDataCatal
 		steps = append(steps, rgb11AccountImportStep{
 			apply: func() error {
 				var err error
-				applied, err = mgr.importRGB11AccountRecoverySnapshotResult(after, true)
+				// This authenticated remote apply is already represented by the
+				// account profile, rather than a new local business mutation.
+				applied, err = mgr.importRGB11AccountRecoverySnapshotResultMode(after, true, false)
 				return err
 			},
 			rollback: func() error {
 				if applied == nil {
 					return nil
 				}
-				if err := mgr.restoreRGB11AccountSnapshotIfCurrent(before, applied); err != nil {
+				if err := mgr.restoreRGB11AccountSnapshotIfCurrentMode(before, applied, false); err != nil {
 					return err
 				}
 				mgr.scheduleRGB11ChainReconciliation()

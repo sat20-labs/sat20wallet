@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
@@ -16,8 +17,8 @@ import (
 
 func TestMain(m *testing.M) {
 	flag.Parse()
-	// Fixed node directories are shared by successive test processes. Serialize
-	// the whole E2E run, including builds, before touching either runtime variant.
+	// Serialize the real-node workload and inherited node processes, including
+	// builds. Each process owns a fresh runtime root under this lock.
 	if err := flag.Set("test.parallel", "1"); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -40,6 +41,12 @@ func TestMain(m *testing.M) {
 	}
 	satoshinetRuntimeLock = lock
 	rc := m.Run()
+	started := time.Now()
+	if err := cleanupE2ERuntime(); err != nil {
+		fmt.Fprintln(os.Stderr, "clean owned E2E runtime:", err)
+		rc = 1
+	}
+	fmt.Fprintf(os.Stderr, "e2e-phase: name=runtime_cleanup elapsed_seconds=%.3f\n", time.Since(started).Seconds())
 	// Nodes inherit this descriptor. Close without explicitly unlocking so an
 	// interrupted test cannot release shared directories while its nodes live.
 	_ = lock.Close()
