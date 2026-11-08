@@ -15,11 +15,6 @@ replace github.com/sat20-labs/satoshinet => ../../satoshinet
 
 replace github.com/sat20-labs/indexer => ../../indexer
 
-// Shared raw-chain framing has no third-party dependencies.
-replace github.com/sat20-labs/xaplib/chainindex => ../../xaplib/chainindex
-
-require github.com/sat20-labs/xaplib/chainindex v0.0.0 // indirect
-
 require (
 	github.com/andybalholm/brotli v1.1.0
 	github.com/btcsuite/btcd v0.24.2
@@ -37,6 +32,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	github.com/tyler-smith/go-bip39 v1.1.0
 	golang.org/x/crypto v0.44.0
+	golang.org/x/sync v0.18.0
 	golang.org/x/sys v0.41.0
 	golang.org/x/text v0.31.0
 	lukechampine.com/uint128 v1.3.0
@@ -131,7 +127,6 @@ require (
 	golang.org/x/arch v0.8.0 // indirect
 	golang.org/x/exp v0.0.0-20241217172543-b2144cdd0a67 // indirect
 	golang.org/x/net v0.47.0 // indirect
-	golang.org/x/sync v0.18.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
