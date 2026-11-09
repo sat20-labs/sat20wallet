@@ -269,7 +269,8 @@ func runCoreE2ESegment(t *testing.T, ctx context.Context, deadline time.Time,
 			[]dkvsPrevOut{gasOuts[2]}, wire.TxOut{Value: 9000, Assets: txAsset(gas, 290000)}),
 	}
 	if needsBrowser {
-		maintenanceParam, err := (&contractcommon.TemplateAutopayConfigInvokeParam{AmountPerBlock: "10"}).Encode()
+		// The paid upgrade reuses one RGB module key for each of two subaccounts.
+		maintenanceParam, err := (&contractcommon.TemplateAutopayConfigInvokeParam{AmountPerBlock: "10", BlobKeyLimit: 2}).Encode()
 		require.NoError(t, err)
 		configs = append(configs, buildDKVSKeyPathTemplateInvoke(t, maintenance, contract, 1,
 			contractcommon.TemplateInvokeAPIConfig, maintenanceParam,
@@ -292,6 +293,7 @@ func runCoreE2ESegment(t *testing.T, ctx context.Context, deadline time.Time,
 		maintenanceDelegate, ok := state.Delegates[maintenance.Address]
 		require.True(t, ok)
 		require.Equal(t, "10", maintenanceDelegate.AmountPerBlock)
+		require.EqualValues(t, 2, maintenanceDelegate.BlobKeyLimit)
 		require.GreaterOrEqual(t, maintenanceDelegate.LastPayHeight, state.CurrentBlock)
 	} else {
 		require.Len(t, state.Delegates, 2, "native Core fixture must fund only owner and receiver")

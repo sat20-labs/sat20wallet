@@ -144,7 +144,7 @@ func TestManagedDataEnvelopeRequiresCurrentBundleVersion(t *testing.T) {
 		valid   bool
 	}{
 		{name: "current", version: uint64(ManagedDataBundleVersion), valid: true},
-		{name: "obsolete-v1", version: 1},
+		{name: "invalid-v0", version: 0},
 		{name: "unknown", version: uint64(ManagedDataBundleVersion) + 1},
 		{name: "wrapped-version", version: uint64(ManagedDataBundleVersion) + 1<<32},
 	} {

@@ -165,7 +165,7 @@ func TestAccountPersistenceFailureReview20261006(t *testing.T) {
 	}
 
 	t.Run("RemoteApplyTransactionFailureCanRetry", func(t *testing.T) {
-		first, second, _ := reviewAccountDevices(t)
+		first, second, remote := reviewAccountDevices(t)
 		root := first.GetAccountManagementStatus().RootWalletID
 		if err := first.UpdateWalletName(root, "Remote Confirmed Rename"); err != nil {
 			t.Fatal(err)
@@ -178,7 +178,6 @@ func TestAccountPersistenceFailureReview20261006(t *testing.T) {
 		before := second.GetWalletCatalog()
 		fault.armed.Store(true)
 		second.db = fault
-		defer func() { second.db = original }()
 		firstErr := second.SyncAccountManagementState(context.Background())
 		fault.armed.Store(false)
 		second.db = original
@@ -190,15 +189,33 @@ func TestAccountPersistenceFailureReview20261006(t *testing.T) {
 		if marker != nil {
 			markerOrigin = marker.Origin
 		}
-		retryErr := second.SyncAccountManagementState(context.Background())
-		unchanged := reflect.DeepEqual(before, second.GetWalletCatalog())
+		if !errors.Is(second.SyncAccountManagementState(context.Background()), ErrAccountDBStopped) {
+			t.Fatal("restored storage must not revive the stopped wallet")
+		}
+		second.Close()
+		restarted := NewManager(second.cfg, original)
+		if restarted == nil {
+			t.Fatal("reopen the original account database")
+		}
+		t.Cleanup(restarted.Close)
+		restarted.SetDKVSHttpClient(remote)
+		restarted.SetServerNodeHttpClient(newRGB11MessageNodeClient(remote))
+		if _, err := restarted.UnlockWallet("password"); err != nil {
+			t.Fatal(err)
+		}
+		retryErr := restarted.SyncAccountManagementState(context.Background())
+		unchanged := reflect.DeepEqual(before, restarted.GetWalletCatalog())
 		observations = append(observations, map[string]any{"scenario": "RemoteApplyTransactionFailureCanRetry", "first_error": fmt.Sprint(firstErr), "fault_hits": fault.hits.Load(), "marker_origin": markerOrigin, "retry_error": fmt.Sprint(retryErr), "catalog_still_old": unchanged})
 		t.Logf("persistence review: first=%v hits=%d marker=%s retry=%v old_catalog=%t", firstErr, fault.hits.Load(), markerOrigin, retryErr, unchanged)
 		if !errors.Is(firstErr, errAccountPersistenceReview) || fault.hits.Load() == 0 {
 			t.Fatal("test did not reach account apply transaction failure")
 		}
 		if retryErr != nil {
-			t.Errorf("failed local apply must be retryable after persistence recovers: %v", retryErr)
+			t.Fatalf("failed local apply must be retryable after restart: %v", retryErr)
+		}
+		fingerprint := first.GetAccountManagementStatus().RootFingerprint
+		if entry := reviewCatalogWallet(t, restarted, fingerprint); entry == nil || entry.Name != "Remote Confirmed Rename" {
+			t.Error("restarted device did not apply the remote wallet rename")
 		}
 	})
 }

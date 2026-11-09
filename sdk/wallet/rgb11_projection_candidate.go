@@ -217,6 +217,30 @@ func (p *rgb11Manager) rgb11SnapshotLockPlan(current, candidate *RGB11WalletSnap
 	if err != nil {
 		return plan, err
 	}
+	frozen, err := rgb11wallet.PendingTransfersFromProjectionSnapshot(oldView.Frozen)
+	if err != nil {
+		return plan, err
+	}
+	for _, pending := range frozen {
+		if pending.State.Status != "broadcast" || pending.ReservationID == "" ||
+			pending.State.AckStatus != "accepted" || pending.State.Direction != "send" {
+			continue
+		}
+		if err := validateRGB11PendingTransaction(pending); err != nil {
+			return plan, err
+		}
+		if plan.FrozenInputs == nil {
+			plan.FrozenInputs = make(map[string]string)
+		}
+		for _, point := range pending.State.InputOutPoints {
+			if nextView.Points[point] {
+				if owner := plan.FrozenInputs[point]; owner != "" && owner != pending.ReservationID {
+					return plan, ErrUtxoReservationOwner
+				}
+				plan.FrozenInputs[point] = pending.ReservationID
+			}
+		}
+	}
 	oldWork, nextWork := *current, *candidate
 	oldWork.ProjectionRecords = oldView.Records
 	nextWork.ProjectionRecords = nextView.Records

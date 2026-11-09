@@ -27,6 +27,7 @@ export function useAssetActions() {
   const refreshL1Assets = () => {
     queryClient.invalidateQueries({ queryKey: ['summary-l1'] })
     queryClient.invalidateQueries({ queryKey: ['ns-l1'] })
+    queryClient.invalidateQueries({ queryKey: ['rgb11-state'] })
   }
 
   const refreshL2Assets = () => {
@@ -62,10 +63,16 @@ export function useAssetActions() {
       return
     }
     refreshL1Assets()
-    await channelStore.getCurrentChannel()
+    let refreshFailed = false
+    try { await channelStore.getCurrentChannel() } catch (error) {
+      if (!asset_name.startsWith('rgb11:')) throw error
+      // A successful submission must not become a retryable transaction error.
+      refreshFailed = true
+    }
     toast({
       title: t('common.success'),
-      description: t('pwaUi.assetActions.spliceIn'),
+      description: t(refreshFailed ? 'rgb11Transfer.crossLayerSubmittedRefreshFailed'
+        : asset_name.startsWith('rgb11:') ? 'rgb11Transfer.crossLayerSubmitted' : 'pwaUi.assetActions.spliceIn'),
       duration: 1500,
     })
     loading.value = false
@@ -87,10 +94,16 @@ export function useAssetActions() {
       return
     }
     refreshL1Assets()
-    await channelStore.getCurrentChannel()
+    let refreshFailed = false
+    try { await channelStore.getCurrentChannel() } catch (error) {
+      if (!asset_name.startsWith('rgb11:')) throw error
+      // A successful submission must not become a retryable transaction error.
+      refreshFailed = true
+    }
     toast({
       title: t('common.success'),
-      description: t('pwaUi.assetActions.spliceOut'),
+      description: t(refreshFailed ? 'rgb11Transfer.crossLayerSubmittedRefreshFailed'
+        : asset_name.startsWith('rgb11:') ? 'rgb11Transfer.crossLayerSubmitted' : 'pwaUi.assetActions.spliceOut'),
       duration: 1500,
     })
     loading.value = false

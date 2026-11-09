@@ -11,6 +11,8 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { tmpdir } from 'node:os'
 import { performance } from 'node:perf_hooks'
 
+export const regtestCorePubKey = '0367f26af23dc40fdad06752c38264fe621b7bbafb1d41ab436b87ded192f1336e'
+
 const CORE_P2P_PORT = 18444
 const INDEXER_CONFIG_RELATIVE_PATH = 'install/conf_regtest.yaml'
 const SDK_WALLETS_RELATIVE_PATH = 'sat20wallet/sdk/e2e/testdata/regtest/wallets.json'
@@ -285,8 +287,9 @@ function quoteYaml(value) {
   return JSON.stringify(String(value))
 }
 
-function renderIndexerConfig({ dataDir, logDir, host, rpcPort, user, password, apiPort }) {
+function renderIndexerConfig({ dataDir, logDir, host, rpcPort, user, password, apiPort, indexerPubKey }) {
   return `chain: regtest\n` +
+    (indexerPubKey ? `pubkey: ${quoteYaml(indexerPubKey)}\n` : '') +
     `db:\n  path: ${quoteYaml(join(dataDir, 'db'))}\n` +
     `  badger_block_cache_total_mb: 64\n  badger_index_cache_total_mb: 16\n` +
     `  badger_num_compactors: 2\n  badger_flatten_workers: 1\n` +
@@ -459,7 +462,7 @@ export function discardLocalRealRegtestData({ runDirectory, dataDirectories, wal
   return true
 }
 
-export async function startLocalRealRegtest({ directory, workspaceRoot, env = process.env, artifactsDirectory }) {
+export async function startLocalRealRegtest({ directory, workspaceRoot, env = process.env, artifactsDirectory, indexerPubKey }) {
   const runDir = privateTmpPath(directory, 'directory')
   prepareRunDirectory(runDir)
   const artifactsDir = privateTmpPath(artifactsDirectory ?? join(runDir, 'artifacts'), 'artifactsDirectory')
@@ -627,6 +630,7 @@ export async function startLocalRealRegtest({ directory, workspaceRoot, env = pr
       user: cookie.username,
       password: cookie.password,
       apiPort,
+      indexerPubKey,
     })
     writePrivate(indexerConfigPath, indexerConfig)
 

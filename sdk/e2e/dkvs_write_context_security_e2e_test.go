@@ -19,6 +19,7 @@ type writeContextSecurityTap struct {
 	inner             wallet.HttpClient
 	request           []byte
 	beforeWrite       func()
+	afterWrite        func([]byte, []byte, error)
 	writeContextCalls int
 }
 
@@ -36,6 +37,11 @@ func (c *writeContextSecurityTap) SendPostRequest(url *wallet.URL, body []byte) 
 			c.beforeWrite = nil
 			hook()
 		}
+		response, err := c.inner.SendPostRequest(url, body)
+		if c.afterWrite != nil {
+			c.afterWrite(body, response, err)
+		}
+		return response, err
 	}
 	return c.inner.SendPostRequest(url, body)
 }
@@ -170,25 +176,75 @@ func TestSDKDKVSWriteContextSecurity(t *testing.T) {
 		require.NotEmpty(t, request.Authorization.Context.Prefixes)
 	})
 
+	// Capture both node responses. The SDK only re-signs after an explicit
+	// height rejection, with the original intent and write context.
+	checkHeightRetry := func(t *testing.T, f *boundRPCFixture, writer *wallet.SatsNetDKVSClient,
+		tap *writeContextSecurityTap, key string, issueHeight uint64) {
+		t.Helper()
+		var requests []core.BatchCASRequest
+		tap.afterWrite = func(body, response []byte, err error) {
+			var request core.BatchCASRequest
+			require.NoError(t, json.Unmarshal(body, &request))
+			requests = append(requests, request)
+			if len(requests) == 1 {
+				if err != nil {
+					var httpErr *wallet.HTTPResponseError
+					require.ErrorAs(t, err, &httpErr)
+					response = httpErr.Body
+				}
+				require.ErrorIs(t, core.ErrorFromResponseBody(response), dkvs.ErrHeightTooLow)
+				assertAbsent(t, f, key)
+				return
+			}
+			require.NoError(t, err)
+			var reply struct {
+				Data *dkvs.WriteResult `json:"data"`
+			}
+			require.NoError(t, core.DecodeApplicationResponse(response, &reply))
+			require.NotNil(t, reply.Data)
+			require.Equal(t, 1, reply.Data.Applied)
+		}
+		_, err := writer.PutSignedRecordFreeLocal(owner.Wallet, key, []byte("bounded-height"),
+			dkvs.RecordOptions{IssueHeight: issueHeight, TTL: 100})
+		require.NoError(t, err)
+		require.Len(t, requests, 2)
+		original, retry := requests[0], requests[1]
+		require.NotEqual(t, original.RequestID, retry.RequestID)
+		require.Equal(t, original.EndpointID, retry.EndpointID)
+		require.NotNil(t, original.Authorization)
+		require.NotNil(t, retry.Authorization)
+		require.Equal(t, original.Authorization.Context, retry.Authorization.Context)
+		require.Len(t, original.Mutations, 1)
+		require.Len(t, retry.Mutations, 1)
+		old, next := original.Mutations[0], retry.Mutations[0]
+		require.Equal(t, old.ExpectAbsent, next.ExpectAbsent)
+		require.Equal(t, old.ExpectedETag, next.ExpectedETag)
+		require.Equal(t, issueHeight, old.Record.IssueHeight)
+		require.Equal(t, f.height.Load(), next.Record.IssueHeight)
+		expected := *old.Record
+		expected.IssueHeight, expected.Signature = next.Record.IssueHeight, next.Record.Signature
+		require.Equal(t, &expected, next.Record)
+		actual, err := f.client.GetRecordDirect(key)
+		require.NoError(t, err)
+		require.Equal(t, dkvs.RecordHash(next.Record), dkvs.RecordHash(actual))
+	}
+
 	for _, offset := range []uint64{0, 1, 2, 3} {
 		t.Run("IssueHeightWindow_"+string(rune('0'+offset)), func(t *testing.T) {
-			f, writer, _, key := fixture(t)
-			_, err := writer.PutSignedRecordFreeLocal(owner.Wallet, key, []byte("bounded-height"), dkvs.RecordOptions{IssueHeight: 100 - offset, TTL: 100})
-			if offset <= 2 {
-				require.NoError(t, err)
-			} else {
-				require.ErrorIs(t, err, dkvs.ErrStaleEndpoint)
-				assertAbsent(t, f, key)
+			f, writer, tap, key := fixture(t)
+			if offset > dkvs.WalletWriteHeightTolerance {
+				checkHeightRetry(t, f, writer, tap, key, 100-offset)
+				return
 			}
+			_, err := writer.PutSignedRecordFreeLocal(owner.Wallet, key, []byte("bounded-height"), dkvs.RecordOptions{IssueHeight: 100 - offset, TTL: 100})
+			require.NoError(t, err)
 		})
 	}
 
 	t.Run("HeightIsRecheckedAtActualCommit", func(t *testing.T) {
 		f, writer, tap, key := fixture(t)
 		tap.beforeWrite = func() { f.height.Store(103) }
-		_, err := writer.PutSignedRecordFreeLocal(owner.Wallet, key, []byte("late"), dkvs.RecordOptions{IssueHeight: 100, TTL: 100})
-		require.ErrorIs(t, err, dkvs.ErrStaleEndpoint)
-		assertAbsent(t, f, key)
+		checkHeightRetry(t, f, writer, tap, key, 100)
 	})
 
 	t.Run("AuthorizationDoesNotBypassStrictSequence", func(t *testing.T) {

@@ -128,7 +128,7 @@ export async function runPwaNodeCases(t, fixture) {
         assert.equal(beforeSnapshot.l1.pending_txids.length, 0, 'previous groups left unconfirmed L1 operations')
         assert.ok(BigInt(before.availableAmt) >= BigInt(fixture.stake.amount))
         await page.evaluate(() => { location.hash = '#/wallet/setting/node' })
-        await page.getByRole('button', { name: isCore ? 'become Core Node' : 'become Miner', exact: true }).click()
+        await page.getByRole('button', { name: isCore ? 'Become Core Node' : 'Become Mining Node', exact: true }).click()
         const dialog = page.getByRole('dialog')
         await expect(dialog).toContainText(isCore ? 'become a core node' : 'become a regular mining node')
         await page.evaluate(async () => {
@@ -149,8 +149,8 @@ export async function runPwaNodeCases(t, fixture) {
         try {
           await dialog.getByRole('button', { name: 'Confirm', exact: true }).click()
           await expect.poll(() => page.evaluate(() => window.stakeReceiptReady), { timeout: 60000 }).toBe(true)
-          const core = page.getByRole('button', { name: 'become Core Node', exact: true })
-          const miner = page.getByRole('button', { name: 'become Miner', exact: true })
+          const core = page.getByRole('button', { name: 'Become Core Node', exact: true })
+          const miner = page.getByRole('button', { name: 'Become Mining Node', exact: true })
           await expect(core).toBeDisabled(); await expect(miner).toBeDisabled()
           await (isCore ? miner : core).dispatchEvent('click')
           await expect(page.getByRole('dialog')).toHaveCount(0)
@@ -158,7 +158,7 @@ export async function runPwaNodeCases(t, fixture) {
           await page.evaluate(() => window.releaseStakeReceipt())
           const failure = await page.evaluate(() => window.stakeReceiptError)
           assert.equal(failure, '', 'real stake request failed after the UI busy guards were verified')
-          await expect(page.getByText('操作成功，节点质押已提交！', { exact: true })).toBeVisible({ timeout: 90000 })
+          await expect(page.getByText('Node staking submitted successfully!', { exact: true })).toBeVisible({ timeout: 90000 })
         } finally { await page.evaluate(() => window.releaseStakeReceipt?.()).catch(() => {}) }
         const readPending = () => page.evaluate(async key =>
           (await import('/lib/nodeStakeStorage.ts')).nodeStakeStorage.getNodeStakeData(key), publicKey)
@@ -221,8 +221,8 @@ export async function runPwaNodeCases(t, fixture) {
         await page.getByRole('button', { name: /^(Unstake|取消质押)$/, exact: true }).click()
         await expect.poll(() => new URL(page.url()).hash, poll).toBe('#/wallet/setting/node')
         await expect(page.getByRole('button', { name: /^(Unstake|取消质押)$/, exact: true })).toBeEnabled()
-        await expect(page.getByRole('button', { name: 'become Core Node', exact: true })).toHaveCount(0)
-        await expect(page.getByRole('button', { name: 'become Miner', exact: true })).toHaveCount(0)
+        await expect(page.getByRole('button', { name: 'Become Core Node', exact: true })).toHaveCount(0)
+        await expect(page.getByRole('button', { name: 'Become Mining Node', exact: true })).toHaveCount(0)
         await expect.poll(readPending, poll).toBeNull()
         const after = await walletCall(page, 'getAssetAmount', actor.address, fixture.stake.asset)
         assert.equal(BigInt(before.availableAmt) + BigInt(before.lockedAmt) - BigInt(after.availableAmt) - BigInt(after.lockedAmt), BigInt(fixture.stake.amount))

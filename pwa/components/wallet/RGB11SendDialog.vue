@@ -106,7 +106,7 @@
             :disabled="loading || (!pendingPrepared && !rgb11WriteAllowed) || !invoice.trim() || !traditionalAmountValid || !!transferId"
             @click="prepareTraditional"
           >
-            {{ loading ? $t('rgb11Transfer.preparing') : $t('rgb11Transfer.prepare') }}
+            {{ loading ? $t('rgb11Transfer.preparing') : $t(props.inflation ? 'walletComponents.prepareInflation' : 'rgb11Transfer.prepare') }}
           </Button>
 
           <div v-if="outOfBand && standardConsignmentBase64" class="space-y-2">

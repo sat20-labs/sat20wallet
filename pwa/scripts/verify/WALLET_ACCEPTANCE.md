@@ -133,7 +133,7 @@ npm run verify:wallet-e2e:functional
 | L1 协议部署 | ORDX/BRC20/Runes 参数检查、规范化、预览、取消 | 逐项核对额度、精度、self-mint、binding sat、网络/地址/费率，取消后无交易/预留/扣款 | `wallet-mint-e2e.mjs` |
 | L1 协议铸造 | ORDX/BRC20/Runes 不存在的 ticker 检查 | 真实 SDK 读取假 L1 的已知状态，未取得铸造资格时不能进入签署；不宣称已完成 mint | `wallet-mint-e2e.mjs` |
 | DID 铸造 | 非法名称拒绝、可用名称预览、取消、重复检查 | 使用真实 Indexer 的缺名返回契约，取消不登记 pending、不预留或花费；不宣称已完成注册 | `wallet-mint-e2e.mjs` |
-| BTC Lucky Mining | 配置、启动、实际 worker 求解、提交、停止、刷新 | 假 L1 独立重算 BTC header/hash/target 验证工作量；停止后不再请求 job | `wallet-mining-e2e.mjs` |
+| BTC Lucky Mining | 假 L1：有效 Testnet4 模板 hashing、停止、配置重载；真实 regtest：命中和独立复核 | fake 检查 ETag/304、WASM 算力与 bestShare 对应有效 target，不等待 Testnet4 命中；regtest 由 Bitcoin Core 独立复核已确认区块和 coinbase | `wallet-mining-e2e.mjs` |
 | 推荐人 | 无 owned name 的注册保护、绑定取消、未知名字拒绝 | 不广播注册，不扣 L2 资金，不产生假绑定 | `wallet-basic-e2e.mjs` |
 
 ## Regtest 配置与验收入口

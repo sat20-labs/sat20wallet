@@ -165,7 +165,7 @@ const { walletId, accountIndex, btcFeeRate } = storeToRefs(walletStore)
 
 const channelStore = useChannelStore()
 
-const { channel, plainList, sat20List, brc20List, runesList } = storeToRefs(channelStore)
+const { channel, plainList, sat20List, brc20List, runesList, rgb11List } = storeToRefs(channelStore)
 const { toast } = useToast()
 
 const loading = ref(false)
@@ -230,6 +230,8 @@ const channelAssets = computed(() => {
       return list
     case 'BRC20':
       return (brc20List.value).map(asset => ({ ...asset, type: 'BRC20' }))
+    case 'RGB11':
+      return rgb11List.value
     default:
       return []
   }

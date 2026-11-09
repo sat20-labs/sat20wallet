@@ -636,7 +636,8 @@
     "assetType": {
       "ORDX": "ORDX",
       "Runes": "Runes",
-      "BRC20": "BRC20"
+      "BRC20": "BRC20",
+      "RGB11": "RGB"
     },
     "viewTradeHistory": "交易历史",
     "viewL2History": "查看 L2 历史",
@@ -662,7 +663,8 @@
     "assetType": {
       "ORDX": "ORDX",
       "Runes": "Runes",
-      "BRC20": "BRC20"
+      "BRC20": "BRC20",
+      "RGB11": "RGB"
     },
     "viewTradeHistory": "交易历史",
     "send": "发送",
@@ -896,6 +898,11 @@
     "sendUnavailable": "RGB 状态不一致，发送已安全锁定。"
   },
   "rgb11Transfer": {
+    "crossLayerSubmittedRefreshFailed": "已提交，但通道状态刷新失败。请先刷新余额，再开始下一次操作。",
+    "crossLayerMarketRequired": "请先在聪网市场完成此 RGB 资产的注册和 Transcend 合约部署。",
+    "crossLayerContractInactive": "公共合约在本次操作所需链上尚未生效，请到聪网市场查看状态。",
+    "crossLayerFungibleOnly": "此操作仅支持使用完整合约 ID 的可分割 RGB 资产。",
+    "crossLayerSubmitted": "已提交，请等待确认后刷新来源层和目标层余额。",
     "protocolVersion": "RGB 协议",
     "sendTitle": "发送 RGB 资产",
     "availableAmount": "可用",
@@ -1704,7 +1711,8 @@
       "running": "正在参与抽奖",
       "stopped": "未运行",
       "localHashrate": "本机算力",
-      "difficulty": "当前难度",
+      "networkDifficulty": "公网参考难度",
+      "difficulty": "模板难度",
       "networkHashrate": "全网算力",
       "jobs": "工作线程",
       "rewardAddress": "奖励地址（钱包通道地址）",
@@ -1713,10 +1721,10 @@
       "indexer": "索引器数据服务节点",
       "bootstrap": "引导节点",
       "btcHeight": "BTC 区块高度",
-      "jobId": "任务 ID",
+      "templateId": "模板 ID",
       "bestShare": "最佳份额",
       "target": "目标值",
-      "lastJob": "上次任务",
+      "lastTemplate": "上次领取模板",
       "lastSubmit": "上次提交",
       "configuration": "配置",
       "auto": "自动",

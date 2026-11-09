@@ -39,11 +39,11 @@
           <span class="flex justify-center items-center w-10 h-10">{{ asset.label.charAt(0).toUpperCase() }}</span>
         </div>
 
-        <div class="flex flex-col justify-between w-full h-full ml-3">
+        <div class="flex min-w-0 flex-1 flex-col justify-between h-full ml-3">
           <!-- 第一行：资产名称和数量 -->
           <div class="flex justify-between items-center">
-            <div class="font-medium text-zinc-400">{{ asset.label.toLocaleUpperCase() }}</div>
-            <div class="text-sm font-semibold text-zinc-300">
+            <div class="min-w-0 flex-1 font-medium text-zinc-400 break-all">{{ asset.protocol === 'rgb11' ? asset.label : asset.label.toLocaleUpperCase() }}</div>
+            <div class="shrink-0 ml-2 text-sm font-semibold text-zinc-300">
               {{ formatAmount(asset) }}
             </div>
           </div>
@@ -51,12 +51,12 @@
           <div class="flex justify-end gap-2 mt-2">
             <!-- Lightning 模式按钮 -->
             <template v-if="mode === 'lightning'">
-              <Button size="sm" variant="outline" class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
+              <Button v-if="asset.protocol !== 'rgb11'" size="sm" variant="outline" class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
                 @click="$emit('send', asset)">
                 <Icon icon="lucide:send" class="w-4 h-4 mr-1" />
                 {{ $t('l2AssetsTabs.send') }}
               </Button>
-              <Button size="sm" variant="outline" class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
+              <Button v-if="asset.protocol !== 'rgb11'" size="sm" variant="outline" class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
                 @click="$emit('lock', asset)">
                 <Icon icon="lucide:lock" class="w-4 h-4 mr-1" />
                 {{ $t('l2AssetsTabs.lock') }}
@@ -65,12 +65,12 @@
 
             <!-- Poolswap 模式按钮 -->
             <template v-else>
-              <Button size="sm" variant="outline" class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
+              <Button v-if="asset.protocol !== 'rgb11'" size="sm" variant="outline" class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
                 @click="$emit('send', asset)">
                 <Icon icon="lucide:send" class="w-4 h-4 mr-1" />
                 {{ $t('l2AssetsTabs.send') }}
               </Button>
-              <Button size="sm" variant="outline" class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
+              <Button v-if="asset.protocol !== 'rgb11' || asset.type === 'f'" size="sm" variant="outline" class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
                 @click="$emit('withdraw', asset)">
                 <Icon icon="lucide:arrow-up-right" class="w-4 h-4 mr-1" />
                 {{ $t('l2AssetsTabs.withdraw') }}
@@ -103,7 +103,9 @@ interface Asset {
   id: string
   ticker: string
   label: string
-  amount: number
+  amount: number | string
+  protocol?: string
+  key?: string
   type?: string
 }
 
@@ -131,8 +133,9 @@ const mempoolUrl = computed(() => {
 
 // 资产类型
 //const assetTypes = ['BTC', 'ORDX', 'Runes', 'BRC20']
-const assetTypes = ['ORDX', 'Runes', 'BRC20']
+const assetTypes = ['ORDX', 'Runes', 'BRC20', 'RGB11']
 const selectedType = ref(props.modelValue || assetTypes[0])
+watch(() => props.modelValue, (value) => { if (value) selectedType.value = value })
 
 // 过滤资产
 const filteredAssets = computed(() => {
@@ -147,6 +150,7 @@ const filteredAssets = computed(() => {
 
 // 格式化金额显示
 const formatAmount = (asset: Asset) => {
+  if (asset.protocol === 'rgb11') return hideBalance.value ? '••••••' : String(asset.amount)
   if (hideBalance.value) {
     return '••••••'
   }

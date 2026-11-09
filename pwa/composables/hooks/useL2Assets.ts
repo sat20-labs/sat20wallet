@@ -19,7 +19,7 @@ interface AssetItem {
   label: string
   ticker: string
   utxos: string[]
-  amount: number
+  amount: number | string
 }
 
 // 定义刷新选项接口
@@ -147,6 +147,7 @@ export const useL2Assets = (options: UseAssetQueryOptions = {}) => {
     assetsStore.setRunesList(list.filter((item) => item?.protocol === 'runes'))
     assetsStore.setBrc20List(list.filter((item) => item?.protocol === 'brc20'))
     assetsStore.setOrdList(list.filter((item) => item?.protocol === 'ord'))
+    assetsStore.setRGB11List(list.filter((item) => item?.protocol === 'rgb11'))
 
     const plain = list.filter((item) => item?.protocol === '')
     assetsStore.setPlainList(plain)
@@ -159,6 +160,9 @@ export const useL2Assets = (options: UseAssetQueryOptions = {}) => {
         : []),
       ...(list.some((item) => item?.protocol === 'runes')
         ? [{ label: 'Runes', value: 'runes' }]
+        : []),
+      ...(list.some((item) => item?.protocol === 'rgb11')
+        ? [{ label: 'RGB', value: 'rgb11' }]
         : []),
     ]
     assetsStore.setUniqueAssetList(uniqueTypes)
@@ -206,6 +210,7 @@ export const useL2Assets = (options: UseAssetQueryOptions = {}) => {
       ...(snapshot.runesList || []),
       ...(snapshot.brc20List || []),
       ...(snapshot.ordList || []),
+      ...(snapshot.rgb11List || []),
     ]
   }
 

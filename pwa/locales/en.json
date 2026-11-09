@@ -636,7 +636,8 @@
     "assetType": {
       "ORDX": "ORDX",
       "Runes": "Runes",
-      "BRC20": "BRC20"
+      "BRC20": "BRC20",
+      "RGB11": "RGB"
     },
     "viewTradeHistory": "View Trade History",
     "viewL2History": "View L2 History",
@@ -662,7 +663,8 @@
     "assetType": {
       "ORDX": "ORDX",
       "Runes": "Runes",
-      "BRC20": "BRC20"
+      "BRC20": "BRC20",
+      "RGB11": "RGB"
     },
     "viewTradeHistory": "View Trade History",
     "send": "Send",
@@ -896,6 +898,11 @@
     "sendUnavailable": "RGB state is inconsistent; sending is safely locked."
   },
   "rgb11Transfer": {
+    "crossLayerSubmittedRefreshFailed": "Submitted, but the channel refresh failed. Refresh the balances before starting another operation.",
+    "crossLayerMarketRequired": "Register this RGB asset and deploy its Transcend contract in SatoshiNet Market first.",
+    "crossLayerContractInactive": "The public contract is not active on the required chain yet. Check it in SatoshiNet Market.",
+    "crossLayerFungibleOnly": "Only fungible RGB assets with a full contract ID support this operation.",
+    "crossLayerSubmitted": "Submitted. Wait for confirmation, then refresh the source and destination balances.",
     "protocolVersion": "RGB protocol",
     "sendTitle": "Send RGB Asset",
     "availableAmount": "Available",
@@ -1704,7 +1711,8 @@
       "running": "Mining",
       "stopped": "Not running",
       "localHashrate": "Device hashrate",
-      "difficulty": "Current difficulty",
+      "networkDifficulty": "Public network difficulty",
+      "difficulty": "Template difficulty",
       "networkHashrate": "Network hashrate",
       "jobs": "Jobs",
       "rewardAddress": "Reward address (wallet channel address)",
@@ -1713,10 +1721,10 @@
       "indexer": "Indexer data service node",
       "bootstrap": "Bootstrap node",
       "btcHeight": "BTC Height",
-      "jobId": "Job ID",
+      "templateId": "Template ID",
       "bestShare": "Best Share",
       "target": "Target",
-      "lastJob": "Last Job",
+      "lastTemplate": "Last template",
       "lastSubmit": "Last Submit",
       "configuration": "Configuration",
       "auto": "Auto",

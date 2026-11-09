@@ -14,8 +14,10 @@ export const requiredPwaRgbCases = [
   'RGB PWA: confirmed receive conserves RGB supply and persists the actual carrier proofs',
   'RGB PWA: cancelling an unbroadcast transfer releases its reservations and preserves carrier protection',
   'RGB PWA: issue a real IFA with separately committed inflation rights',
+  'RGB PWA: consume IFA inflation rights and confirm the added supply',
   'RGB PWA: issue a real indivisible UDA',
   'RGB PWA: transfer the unique UDA to another wallet and persist its carrier proof',
+  'RGB PWA: direct-address transfer waits for ACK and confirms conserved balances',
 ]
 
 const poll = { timeout: 180000, intervals: [250, 500, 1000, 2000] }
@@ -31,7 +33,11 @@ const sameTxIDs = (before, after) => assert.deepEqual(after.l1.broadcast_count, 
 
 export async function runPwaRgbCases(t, fixture) {
   const failures = []
-  for (const [udaOnly, names] of [[false, requiredPwaRgbCases.slice(0, 10)], [true, requiredPwaRgbCases.slice(10)]]) {
+  const udaTransferCase = 'RGB PWA: transfer the unique UDA to another wallet and persist its carrier proof'
+  assert.equal(requiredPwaRgbCases.filter(name => name === udaTransferCase).length, 1,
+    'the UDA-only group must select exactly its unique transfer case')
+  const ordinaryCases = requiredPwaRgbCases.filter(name => name !== udaTransferCase)
+  for (const [udaOnly, names] of [[false, ordinaryCases], [true, [udaTransferCase]]]) {
     if (t.selectedCases && !names.some(name => t.selectedCases.includes(name))) continue
     try { await runPwaRgbCaseGroup(t, fixture, udaOnly) } catch (error) { failures.push(error) }
   }
@@ -164,6 +170,7 @@ async function runPwaRgbCaseGroup(t, fixture, udaOnly) {
     }
     const accountIndex = Number(actor.account_index ?? 0)
     assert.ok(Number.isInteger(accountIndex) && accountIndex >= 0 && accountIndex <= 3)
+    await waitForAccountWrite(page, accountCall)
     await page.evaluate(async index => {
       const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
       await store.switchToAccount(index)
@@ -251,7 +258,7 @@ async function runPwaRgbCaseGroup(t, fixture, udaOnly) {
     const form = dialog(sender, 'Issue RGB Asset')
     await form.locator('select').selectOption(schema)
     await form.getByPlaceholder('USDT', { exact: true }).fill(ticker)
-    await form.getByPlaceholder('Tether USD', { exact: true }).fill(`PWA ${schema} acceptance`)
+    await form.getByRole('textbox', { name: /^Display name\b/ }).fill(`PWA ${schema} acceptance`)
     await form.locator('input[type="number"]').fill('0')
     if (schema !== 'UDA') await form.getByPlaceholder('1000', { exact: true }).fill(supply)
     if (schema === 'IFA') await form.getByPlaceholder('9000', { exact: true }).fill(inflation)
@@ -364,7 +371,7 @@ async function runPwaRgbCaseGroup(t, fixture, udaOnly) {
 
   try {
     if (udaOnly) {
-      await check(requiredPwaRgbCases[10], async () => {
+      await check(requiredPwaRgbCases[11], async () => {
         if (fixture.rgbReadbackWitness) {
           sender = await fresh(senderActor); receiver = await fresh(receiverActor)
           const original = (await state(sender)).transfers.find(item => item.direction === 'send' && item.witness_txid === fixture.rgbReadbackWitness)
@@ -972,9 +979,264 @@ async function runPwaRgbCaseGroup(t, fixture, udaOnly) {
       await assertControls()
     })
     await check(requiredPwaRgbCases[9], async () => {
+      if (!sender) sender = await fresh(senderActor)
+      if (!receiver) receiver = await fresh(receiverActor)
+      const issued = await issue('IFA', 'PWAIFM', '1000', '9000')
+      contractId = issued.id
+      canonicalName = issued.key
+      const controlKey = canonicalName.replace(/^rgb11:f:/, 'rgb11:control:')
+      assert.equal(sum(issued.issued.available_assets, canonicalName), 1000n)
+      assert.equal(sum(issued.issued.available_assets, controlKey), 9000n)
+
+      await receiver.getByRole('button', { name: 'Import RGB Contract', exact: true }).click()
+      const importForm = dialog(receiver, 'Import RGB Contract')
+      await importForm.locator('#rgb11-contract-file').setInputFiles({ name: issued.standard.filename,
+        mimeType: 'application/octet-stream', buffer: issued.standard.bytes })
+      await importForm.getByRole('button', { name: 'Import RGB Contract', exact: true }).click()
+      await expect(importForm.getByText('Imported; 0 wallet allocation(s) projected.', { exact: true }))
+        .toBeVisible({ timeout: 180000 })
+      await importForm.getByRole('button', { name: 'Close', exact: true }).click()
+
+      const receive = await openReceive()
+      await receive.locator('select').nth(0).selectOption('out-of-band')
+      await receive.locator('select').nth(1).selectOption('witness')
+      await receive.getByPlaceholder('Enter amount to receive', { exact: true }).fill('100')
+      await receive.getByRole('button', { name: 'Generate Invoice', exact: true }).click()
+      await expect(receive.locator('textarea[readonly]')).toBeVisible({ timeout: 180000 })
+      invoice = await receive.locator('textarea[readonly]').inputValue()
+      assert.match(invoice, /^rgb:/)
+      const reservation = (await state(receiver)).reservations.find(item => item.invoice === invoice)
+      assert.equal(reservation?.amount_raw, '100')
+      assert.equal(reservation?.transport_mode, 'out-of-band')
+
+      const beforeInflation = await control('snapshot')
+      const inflationButton = assetCard(sender, issued.id).getByRole('button', { name: 'Inflate RGB asset', exact: true })
+      await expect(inflationButton).toBeEnabled()
+      await inflationButton.click()
+      const inflation = dialog(sender, 'Inflate RGB asset')
+      await inflation.locator('textarea').first().fill(invoice)
+      await inflation.getByRole('button', { name: 'Prepare RGB inflation', exact: true }).click()
+      await expect(inflation.getByRole('button', { name: 'Download armored consignment for PWA', exact: true }))
+        .toBeVisible({ timeout: 180000 })
+      const prepared = (await state(sender)).transfers.find(item => item.direction === 'send' && item.invoice === invoice)
+      assert.ok(prepared?.transfer_id)
+      assert.equal(prepared.transport_mode, 'out-of-band')
+      assert.match(prepared.witness_txid, /^[0-9a-f]{64}$/)
+      const transferId = prepared.transfer_id
+      const witnessTxid = prepared.witness_txid
+      const downloaded = await downloadBytes(sender,
+        inflation.getByRole('button', { name: 'Download armored consignment for PWA', exact: true }))
+      const consignment = downloaded.bytes.toString('utf8')
+      assert.equal(sha256(consignment), prepared.consignment_hash)
+      await receive.locator('#rgb11-consignment-file').setInputFiles({ name: 'pwa-ifa-inflation-consignment.asc',
+        mimeType: 'text/plain', buffer: Buffer.from(consignment) })
+      await receive.getByRole('button', { name: 'Validate before broadcast', exact: true }).click()
+      await expect(receive.locator('textarea[readonly]')).toHaveCount(2, { timeout: 180000 })
+      const summary = JSON.parse(await receive.locator('textarea[readonly]').nth(1).inputValue())
+      assert.equal(summary.stage, 'validated-awaiting-broadcast')
+      assert.equal(summary.contract_id, issued.id)
+      assert.equal(summary.witness_txid, witnessTxid)
+      assert.equal(summary.amount_raw, '100')
+      assert.equal(summary.consignment_hash, sha256(consignment))
+      sameTxIDs(beforeInflation, await control('snapshot'))
+
+      await inflation.locator('#rgb-summary-0').fill(JSON.stringify(summary))
+      await inflation.getByRole('button', { name: 'Match summary fields', exact: true }).click()
+      await expect(inflation.getByText('Fields match this recipient. Confirm the external message before broadcasting.', { exact: true }))
+        .toBeVisible()
+      await inflation.locator('input[type="checkbox"]').check()
+      await inflation.getByRole('button', { name: 'Confirm receiver validation and broadcast', exact: true }).click()
+      await expect(inflation.getByText(`Transaction broadcast: ${witnessTxid}`, { exact: true }))
+        .toBeVisible({ timeout: 180000 })
+
+      const [mempoolStatus] = await evidence('/v3/bitcoin/tx/status/batch', { txids: [witnessTxid] })
+      assert.ok(mempoolStatus.in_mempool || mempoolStatus.confirmed)
+      const afterBroadcast = await control('snapshot')
+      assert.equal(afterBroadcast.l1.broadcast_count[witnessTxid], 1)
+      const newBroadcasts = Object.keys(afterBroadcast.l1.broadcast_count).filter(txid =>
+        afterBroadcast.l1.broadcast_count[txid] > (beforeInflation.l1.broadcast_count[txid] || 0))
+      assert.deepEqual(newBroadcasts, [witnessTxid], 'IFA inflation must broadcast exactly its prepared witness once')
+      const raw = Transaction.fromHex(await evidence(`/btc/rawtx/${witnessTxid}`))
+      assert.equal(raw.getId(), witnessTxid)
+      assert.ok(raw.ins.every(input => input.witness.length > 0), 'IFA inflation transaction lacks signatures')
+      const confirmed = await control('confirm-l1', { wait_anchors: false })
+      assert.ok(confirmed.l1.confirmed_txids.includes(witnessTxid))
+      const [confirmedStatus] = await evidence('/v3/bitcoin/tx/status/batch', { txids: [witnessTxid] })
+      assert.ok(confirmedStatus.confirmed && confirmedStatus.confirmations >= 1)
+
+      await receive.getByRole('button', { name: 'Complete receive after broadcast', exact: true }).click()
+      await expect(receive.locator('p.text-red-400, p.text-emerald-400')).toBeVisible({ timeout: 180000 })
+      assert.equal((await receive.locator('p.text-red-400').allTextContents()).join(' '), '',
+        `IFA inflation receive failed; witness=${witnessTxid}; transfer=${transferId}`)
+      await expect(receive.getByText('Consignment accepted. Notify the sender through the external channel so it can record the out-of-band ACK.', { exact: true }))
+        .toBeVisible({ timeout: 180000 })
+
+      await inflation.getByRole('button', { name: 'Close', exact: true }).click()
+      await expect(inflation).toBeHidden()
+      await receive.getByRole('button', { name: 'Close', exact: true }).click()
+      await expect(receive).toBeHidden()
+      await refreshRGB(sender)
+      await refreshRGB(receiver)
+      await expect.poll(async () => sum((await state(sender)).available_assets, controlKey), poll).toBe(8900n)
+      await expect.poll(async () => sum((await state(receiver)).available_assets, canonicalName), poll).toBe(100n)
+      const senderState = await state(sender)
+      const receiverState = await state(receiver)
+      assert.equal(sum(senderState.assets, canonicalName), 1000n)
+      assert.equal(sum(receiverState.assets, canonicalName), 100n)
+      assert.equal(sum(senderState.assets, canonicalName) + sum(receiverState.assets, canonicalName), 1100n,
+        'IFA inflation must increase the contract supply by the invoice amount')
+      assert.equal(sum(senderState.available_assets, controlKey), 8900n,
+        'IFA inflation must consume exactly 100 units of inflation authority')
+      const proof = receiverState.proofs.find(item => item.witness_txid === witnessTxid && assetKey(item.asset_name) === canonicalName)
+      assert.ok(proof)
+      assert.equal(proof.status, 'settled')
+      assert.ok(proof.confirmations >= 1)
+      const [output] = await evidence('/v3/bitcoin/utxos/status', { outpoints: [proof.outpoint] })
+      assert.ok(output.exists && output.unspent && output.confirmations >= 1)
+      console.log(JSON.stringify({ observation: 'PWA IFA actual inflation confirmed', contract_id: issued.id,
+        transfer_id: transferId, txid: witnessTxid, amount_raw: '100', sender_supply: '1000',
+        recipient_supply: '100', total_supply: '1100', remaining_inflation_rights: '8900' }))
+    })
+    await check(requiredPwaRgbCases[10], async () => {
       const unique = await issue('UDA', 'PWAUDA', '1')
       await expect(assetCard(sender, unique.id)).toContainText('Available: 1')
       await expect(assetCard(sender, unique.id).getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
+    })
+    await check(requiredPwaRgbCases[12], async () => {
+      sender = await fresh(fixture.basicWallet)
+      receiver = await fresh(fixture.recipient)
+      const unique = await issue('NIA', 'PWAADR', '100')
+      contractId = unique.id
+      canonicalName = unique.key
+      const senderRoot = await sender.evaluate(() => {
+        const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
+        return { accountIndex: Number(store.accountIndex), rootAccountId: store.rootAccountId, address: store.address }
+      })
+      const receiverRoot = await receiver.evaluate(() => {
+        const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
+        return { accountIndex: Number(store.accountIndex), rootAccountId: store.rootAccountId, address: store.address }
+      })
+      assert.equal(senderRoot.accountIndex, 0)
+      assert.equal(receiverRoot.accountIndex, 0)
+      assert.notEqual(senderRoot.rootAccountId, receiverRoot.rootAccountId)
+      assert.equal(senderRoot.address, fixture.basicWallet.address)
+      assert.equal(receiverRoot.address, fixture.recipient.address)
+
+      await receiver.getByRole('button', { name: 'Import RGB Contract', exact: true }).click()
+      const importForm = dialog(receiver, 'Import RGB Contract')
+      await importForm.locator('#rgb11-contract-file').setInputFiles({ name: unique.standard.filename,
+        mimeType: 'application/octet-stream', buffer: unique.standard.bytes })
+      await importForm.getByRole('button', { name: 'Import RGB Contract', exact: true }).click()
+      await expect(importForm.getByText('Imported; 0 wallet allocation(s) projected.', { exact: true }))
+        .toBeVisible({ timeout: 180000 })
+      await importForm.getByRole('button', { name: 'Close', exact: true }).click()
+
+      const enabledEndpoint = await receiver.evaluate(async () => {
+        const [error, result] = await window.__SAT20_PWA_VERIFY__.rgb11Address.enableReceive({})
+        if (error || !result?.endpoint) throw error || new Error('PWA address receive endpoint was not created')
+        return JSON.parse(result.endpoint)
+      })
+      assert.equal(enabledEndpoint.account_id, receiverRoot.rootAccountId)
+      assert.equal(enabledEndpoint.address, receiverRoot.address)
+      assert.equal(sum((await state(receiver)).available_assets, canonicalName), 0n)
+      // Keep the receiver offline until the sender has persisted and delivered
+      // the exact direct transfer, so the no-broadcast-before-ACK boundary is
+      // observable rather than racing the receiver's mailbox discovery poll.
+      await receiver.close()
+
+      const beforeAddress = await control('snapshot')
+      const sendButton = assetCard(sender, unique.id).getByRole('button', { name: 'Send', exact: true })
+      await sendButton.click()
+      const send = dialog(sender, 'Send RGB Asset')
+      const addressMode = send.getByRole('button', { name: 'Address', exact: true })
+      await expect(addressMode).toBeEnabled()
+      await addressMode.click()
+      await send.getByPlaceholder('Enter the recipient SAT20 P2TR address', { exact: true }).fill(receiverRoot.address)
+      await send.getByPlaceholder('1', { exact: true }).fill('10')
+      await send.getByRole('button', { name: 'Send to Address', exact: true }).click()
+      await expect(send.getByText('The consignment was delivered. The transaction will be broadcast only after the recipient persists and acknowledges it.', { exact: true }))
+        .toBeVisible({ timeout: 180000 })
+      await expect.poll(async () => {
+        const current = await state(sender)
+        return current.transfers.some(item => item.direction === 'send' && item.address_mode &&
+          assetKey(item.asset?.Name || {}) === canonicalName && String(item.asset?.Amount?.Value || '') === '10')
+      }, poll).toBe(true)
+      let senderState = await state(sender)
+      let direct = senderState.transfers.find(item => item.direction === 'send' && item.address_mode &&
+        assetKey(item.asset?.Name || {}) === canonicalName && String(item.asset?.Amount?.Value || '') === '10')
+      assert.ok(direct?.transfer_id)
+      assert.equal(direct.ack_status, 'awaiting-persistence')
+      const transferId = direct.transfer_id
+      const waitingForAck = await control('snapshot')
+      sameTxIDs(beforeAddress, waitingForAck)
+      assert.ok(!waitingForAck.l1.pending_txids.includes(direct.witness_txid))
+      assert.ok(!waitingForAck.l1.confirmed_txids.includes(direct.witness_txid))
+
+      receiver = await fresh(fixture.recipient)
+      const deliveryResult = await receiver.evaluate(async () => {
+        const [error, result] = await window.__SAT20_PWA_VERIFY__.rgb11Address.syncMailbox({})
+        if (error) throw error
+        return JSON.parse(result?.result || '{}')
+      })
+      await expect.poll(async () => (await state(receiver)).transfers.some(item =>
+        item.direction === 'receive' && item.transfer_id === transferId), poll).toBe(true)
+      const receivedDirect = (await state(receiver)).transfers.find(item =>
+        item.direction === 'receive' && item.transfer_id === transferId)
+      assert.equal(receivedDirect.ack_status, 'ack-sent')
+      assert.equal(receivedDirect.delivery_acknowledged, true)
+
+      let witnessTxid = direct.witness_txid
+      const ackDeadline = Date.now() + 180000
+      while (Date.now() < ackDeadline) {
+        const [mailboxError] = await sender.evaluate(async () => window.__SAT20_PWA_VERIFY__.rgb11Address.syncMailbox({}))
+        if (mailboxError) throw mailboxError
+        senderState = await state(sender)
+        direct = senderState.transfers.find(item => item.transfer_id === transferId)
+        witnessTxid = direct?.witness_txid || witnessTxid
+        const [status] = witnessTxid ? await evidence('/v3/bitcoin/tx/status/batch', { txids: [witnessTxid] }) : [null]
+        if (status && (status.in_mempool || status.confirmed)) break
+        await sender.waitForTimeout(1000)
+      }
+      assert.match(witnessTxid || '', /^[0-9a-f]{64}$/)
+      assert.ok(deliveryResult.received > 0 || deliveryResult.already_done > 0 ||
+        (receivedDirect.ack_status === 'ack-sent' && receivedDirect.delivery_acknowledged === true),
+        'receiver root must persist the direct-address consignment and ACK it')
+      const [pendingStatus] = await evidence('/v3/bitcoin/tx/status/batch', { txids: [witnessTxid] })
+      assert.ok(pendingStatus.in_mempool || pendingStatus.confirmed,
+        'the direct-address witness must be broadcast after the recipient ACK')
+      const afterAddressBroadcast = await control('snapshot')
+      assert.equal(afterAddressBroadcast.l1.broadcast_count[witnessTxid], 1)
+      const newBroadcasts = Object.keys(afterAddressBroadcast.l1.broadcast_count).filter(txid =>
+        afterAddressBroadcast.l1.broadcast_count[txid] > (beforeAddress.l1.broadcast_count[txid] || 0))
+      assert.deepEqual(newBroadcasts, [witnessTxid], 'direct-address transfer must broadcast once')
+      const confirmed = await control('confirm-l1', { wait_anchors: false })
+      assert.ok(confirmed.l1.confirmed_txids.includes(witnessTxid))
+      const [confirmedStatus] = await evidence('/v3/bitcoin/tx/status/batch', { txids: [witnessTxid] })
+      assert.ok(confirmedStatus.confirmed && confirmedStatus.confirmations >= 1)
+
+      await receiver.evaluate(async () => {
+        const [error] = await window.__SAT20_PWA_VERIFY__.rgb11Address.syncMailbox({})
+        if (error) throw error
+      })
+      await send.getByRole('button', { name: 'Close', exact: true }).click()
+      await expect(send).toBeHidden()
+      await refreshRGB(sender)
+      await refreshRGB(receiver)
+      await expect.poll(async () => sum((await state(sender)).available_assets, canonicalName), poll).toBe(90n)
+      await expect.poll(async () => sum((await state(receiver)).available_assets, canonicalName), poll).toBe(10n)
+      senderState = await state(sender)
+      const receiverState = await state(receiver)
+      assert.equal(sum(senderState.assets, canonicalName) + sum(receiverState.assets, canonicalName), 100n,
+        'direct-address transfer must conserve the issued RGB supply')
+      const receivedProof = receiverState.proofs.find(item => item.witness_txid === witnessTxid &&
+        assetKey(item.asset_name) === canonicalName)
+      assert.ok(receivedProof)
+      assert.equal(receivedProof.status, 'settled')
+      assert.ok(receivedProof.confirmations >= 1)
+      const [output] = await evidence('/v3/bitcoin/utxos/status', { outpoints: [receivedProof.outpoint] })
+      assert.ok(output.exists && output.unspent && output.confirmations >= 1)
+      console.log(JSON.stringify({ observation: 'PWA direct-address transfer confirmed', contract_id: unique.id,
+        transfer_id: transferId, txid: witnessTxid, sender_balance: '90', receiver_balance: '10', total_supply: '100' }))
     })
   } finally {
     for (const context of contexts.reverse()) await context.close().catch(() => {})

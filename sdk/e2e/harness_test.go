@@ -44,20 +44,20 @@ import (
 const (
 	harnessPortStart  uint32 = 20000
 	harnessPortEnd    uint32 = 29995 // Five-port blocks end at 29999, below Linux's default ephemeral range.
-	bootstrapMnemonic            = "acquire pet news congress unveil erode paddle crumble blue fish match eye"
-	coreMnemonic                 = "uniform bulb body vital later special era tourist build chief devote annual"
-	minerMnemonic                = "letter advice cage absurd amount doctor acoustic avoid letter advice cage above"
-	rpcReadyTimeout              = 2 * time.Minute
+	bootstrapMnemonic        = "acquire pet news congress unveil erode paddle crumble blue fish match eye"
+	coreMnemonic             = "uniform bulb body vital later special era tourist build chief devote annual"
+	minerMnemonic            = "letter advice cage absurd amount doctor acoustic avoid letter advice cage above"
+	rpcReadyTimeout          = 2 * time.Minute
 )
 
 var (
-	satoshinetBuildMu         sync.Mutex
-	satoshinetTestArtifacts   satoshinetArtifacts
-	satoshinetNodeDirsMu      sync.Mutex
-	activeSatoshiNetNodeDirs  = make(map[string]bool)
-	satoshinetRuntimeLock     *os.File
-	nextHarnessPort           uint32 = harnessPortStart - 5
-	satoshinetTestConf               = `env: test
+	satoshinetBuildMu        sync.Mutex
+	satoshinetTestArtifacts  satoshinetArtifacts
+	satoshinetNodeDirsMu     sync.Mutex
+	activeSatoshiNetNodeDirs = make(map[string]bool)
+	satoshinetRuntimeLock    *os.File
+	nextHarnessPort          uint32 = harnessPortStart - 5
+	satoshinetTestConf              = `env: test
 chain: testnet
 mode: %s
 log: info
@@ -212,35 +212,51 @@ func newFakeL1Indexer(t *testing.T, indexerPubKey string, lockedPkScript []byte,
 			return
 		}
 
-		if r.URL.Path == "/testnet/btc/lucky/job" {
-			resp := btclucky.APIResponse[*btclucky.CompactMiningJob]{Code: -1, Msg: "btc lucky template service is not enabled"}
+		if r.URL.Path == "/testnet/btc/lucky/template" {
+			if r.Method != http.MethodGet {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			resp := btclucky.APIResponse[*btclucky.BlockTemplate]{Code: -1, Msg: "btc lucky template service is not enabled"}
 			if fake.btcLucky == nil || !fake.btcLucky.IsReady() {
 				require.NoError(t, json.NewEncoder(w).Encode(resp))
 				return
 			}
-			var req btclucky.JobRequest
-			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
-			job, err := fake.btcLucky.CurrentJob(req)
+			body, etag, err := fake.btcLucky.TemplateBytes()
 			if err != nil {
 				resp.Msg = err.Error()
-			} else {
-				resp.Code = 0
-				resp.Msg = "ok"
-				resp.Data = job
+				require.NoError(t, json.NewEncoder(w).Encode(resp))
+				return
 			}
-			require.NoError(t, json.NewEncoder(w).Encode(resp))
+			w.Header().Set("ETag", etag)
+			if r.Header.Get("If-None-Match") == etag {
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, err = w.Write(body)
+			require.NoError(t, err)
 			return
 		}
 
-		if r.URL.Path == "/testnet/btc/lucky/submit" {
+		if r.URL.Path == "/testnet/v3/bitcoin/block/submit" {
 			resp := btclucky.APIResponse[*btclucky.FoundBlockRecord]{Code: -1, Msg: "btc lucky template service is not enabled"}
 			if fake.btcLucky == nil || !fake.btcLucky.IsReady() {
 				require.NoError(t, json.NewEncoder(w).Encode(resp))
 				return
 			}
-			var req btclucky.MiningSolution
-			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
-			found, err := fake.btcLucky.SubmitSolution(&req)
+			if r.Method != http.MethodPost {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			if contentType := strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]); contentType != "application/octet-stream" {
+				resp.Msg = "bitcoin block submission requires application/octet-stream"
+				require.NoError(t, json.NewEncoder(w).Encode(resp))
+				return
+			}
+			raw, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
+			require.NoError(t, err)
+			found, err := fake.btcLucky.SubmitBlock(raw)
 			if found != nil {
 				resp.Data = found
 			}
@@ -249,7 +265,6 @@ func newFakeL1Indexer(t *testing.T, indexerPubKey string, lockedPkScript []byte,
 			} else {
 				resp.Code = 0
 				resp.Msg = "ok"
-				require.NoError(t, fake.btcLucky.RefreshTemplate())
 			}
 			require.NoError(t, json.NewEncoder(w).Encode(resp))
 			return

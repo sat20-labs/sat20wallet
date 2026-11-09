@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { performance } from 'node:perf_hooks'
-import { startLocalRealRegtest, checkLocalRealDependencies } from './local-real-regtest.mjs'
+import { startLocalRealRegtest, checkLocalRealDependencies, regtestCorePubKey } from './local-real-regtest.mjs'
 
 const scriptDir = dirname(fileURLToPath(import.meta.url))
 export const pwaRoot = resolve(scriptDir, '../..')
@@ -20,6 +20,8 @@ const pwaCanonicalTests = [
   'TestSDKPWARealRegtestWalletBasicAndBiometricBrowser',
   'TestSDKPWARealRegtestAssetContextStabilityBrowser',
   'TestSDKPWARealRegtestRGBBrowser',
+  'TestSDKPWARealRegtestRGBIFAInflationBrowser',
+  'TestSDKPWARealRegtestRGBAddressTransferBrowser',
   'TestSDKPWARealRegtestBRC20ExistingTransferSendBrowser',
   'TestSDKPWARealRegtestRunesDecimalSendBrowser',
   'TestSDKPWARealRegtestRunesPremineReturnBrowser',
@@ -74,6 +76,7 @@ export const stageCatalog = [
   goStage('sdk-assets', 'sat20wallet/sdk', './e2e', ['TestSDKPWARealRegtestL1AssetPreparation'], '60m'),
   goStage('sdk-wasm-real', 'sat20wallet/sdk', './e2e', ['TestSDKPWARealRegtestSDKWASMInterfacesBrowser'], '60m'),
   goStage('pwa-canonical', 'sat20wallet/sdk', './e2e', pwaCanonicalTests, '60m'),
+  goStage('pwa-rgb-cross-layer', 'sat20wallet/sdk', './e2e', ['TestSDKPWARealRegtestRGBCrossLayerBrowser'], '60m'),
   goStage('pwa-force-close-csv', 'sat20wallet/sdk', './e2e', [forceCloseCSVCase], '60m'),
   goStage('pwa-fixed-account-usage', 'sat20wallet/sdk', './e2e', fixedAccountUsageTests, '60m'),
   goStage('pwa-guardian-2of3', 'sat20wallet/sdk', './e2e', ['TestSDKPWARealRegtestGuardianRecoveryBrowser'], '60m'),
@@ -119,7 +122,8 @@ export function buildGroups(stages) {
     if (name === readiness) prerequisites = []
     else if (name === rgbPreparation) prerequisites = [readiness]
     else if (name === assetPreparation) prerequisites = [readiness, accountPreparation]
-    if (cases.includes(activation) || cases.includes(sdkWasmCase)) {
+    if (cases.includes(activation) || cases.includes(sdkWasmCase) ||
+      cases.includes('TestSDKPWARealRegtestRGBCrossLayerBrowser')) {
       prerequisites.push('TestSDKPWARealRegtestChannelOpeningOrReadyBrowser')
     }
     if (cases.includes(forceCloseCSVCase)) {
@@ -551,7 +555,10 @@ async function main(argv) {
       save()
       let environment
       try {
+        // Ordinary Lucky miners pay a 2-of-2 with their serving core.
+        const minesBitcoin = group.selectedTests.includes('TestSDKPWARealRegtestMiningBrowser')
         environment = await startLocalRealRegtest({ directory, workspaceRoot, env,
+          indexerPubKey: minesBitcoin ? regtestCorePubKey : undefined,
           artifactsDirectory: resolve(runDir, 'artifacts') })
         result.environment = environment.manifest
         const groupEnv = { ...env, ...environment.env, SAT20_E2E_LOCAL_REAL: '1' }

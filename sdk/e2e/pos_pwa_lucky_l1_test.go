@@ -1,14 +1,18 @@
 package e2e
 
 import (
-	"encoding/binary"
+	"bytes"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
-	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	btcblockchain "github.com/btcsuite/btcd/blockchain"
+	btcbtcjson "github.com/btcsuite/btcd/btcjson"
 	btcutil "github.com/btcsuite/btcd/btcutil"
 	btcchaincfg "github.com/btcsuite/btcd/chaincfg"
 	btcchainhash "github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -17,29 +21,26 @@ import (
 	"github.com/sat20-labs/indexer/share/btclucky"
 )
 
-// The fake L1 Indexer supplies low-difficulty test jobs. The production WASM
-// miner must do the hashing and submit a genuine solution. Validate every
-// submitted header independently; no success response or wallet status is
-// injected into the browser. This does not assert Bitcoin network rewards.
-type posPWALuckyL1 struct {
-	mu       sync.Mutex
-	sequence uint64
-	jobs     map[string]*posPWALuckyJob
-	found    []btclucky.FoundBlockRecord
-}
+// The fake L1 Indexer supplies a valid Testnet4-difficulty Bitcoin template.
+// The production WASM miner must do the hashing. Validate any submitted block
+// independently; this fixture does not expect a Testnet4 block hit.
+const posPWALuckyTestnet4Bits = uint32(0x1d00ffff)
 
-type posPWALuckyJob struct {
-	job       btclucky.CompactMiningJob
-	coinbase  *btcwire.MsgTx
-	submitted bool
+type posPWALuckyL1 struct {
+	mu            sync.Mutex
+	sequence      uint64
+	template      *btclucky.BlockTemplate
+	templateBytes []byte
+	etag          string
+	found         []btclucky.FoundBlockRecord
 }
 
 func newPOSPWALuckyL1() *posPWALuckyL1 {
-	return &posPWALuckyL1{jobs: make(map[string]*posPWALuckyJob), found: []btclucky.FoundBlockRecord{}}
+	return &posPWALuckyL1{found: []btclucky.FoundBlockRecord{}}
 }
 
 func (f *posPWALuckyL1) serveHTTP(w http.ResponseWriter, r *http.Request, path string, height int64, tipHash string) bool {
-	if path != "/btc/lucky/job" && path != "/btc/lucky/submit" && path != "/btc/lucky/info" {
+	if path != "/btc/lucky/template" && path != "/v3/bitcoin/block/submit" && path != "/btc/lucky/info" {
 		return false
 	}
 	if path == "/btc/lucky/info" {
@@ -50,124 +51,138 @@ func (f *posPWALuckyL1) serveHTTP(w http.ResponseWriter, r *http.Request, path s
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		posPWAL1JSON(w, btclucky.APIResponse[map[string]any]{Code: 0, Msg: "ok", Data: map[string]any{
-			"foundBlocks": append([]btclucky.FoundBlockRecord{}, f.found...),
-			"jobCount":    f.sequence, "evidence": "independently verified proof of work on fake L1",
+			"foundBlocks":   append([]btclucky.FoundBlockRecord{}, f.found...),
+			"templateCount": f.sequence, "evidence": "independently verified proof of work on fake L1",
 		}})
+		return true
+	}
+	if path == "/btc/lucky/template" {
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return true
+		}
+		f.mu.Lock()
+		f.refreshTemplateLocked(height, tipHash)
+		body, etag := append([]byte(nil), f.templateBytes...), f.etag
+		f.mu.Unlock()
+		w.Header().Set("ETag", etag)
+		if r.Header.Get("If-None-Match") == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return true
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
 		return true
 	}
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return true
 	}
-	if path == "/btc/lucky/job" {
-		var req btclucky.JobRequest
-		if err := posPWAL1Decode(r, &req); err != nil {
-			posPWAL1Error(w, err)
-			return true
-		}
-		job, err := f.newJob(req, height, tipHash)
-		if err != nil {
-			posPWAL1Error(w, err)
-			return true
-		}
-		posPWAL1JSON(w, btclucky.APIResponse[*btclucky.CompactMiningJob]{Code: 0, Msg: "ok", Data: job})
+	if contentType := strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]); contentType != "application/octet-stream" {
+		posPWAL1Error(w, fmt.Errorf("bitcoin block submission requires application/octet-stream"))
 		return true
 	}
-	var solution btclucky.MiningSolution
-	if err := posPWAL1Decode(r, &solution); err != nil {
-		posPWAL1Error(w, err)
-		return true
-	}
-	record, err := f.submit(&solution)
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
 	if err != nil {
 		posPWAL1Error(w, err)
 		return true
 	}
-	posPWAL1JSON(w, btclucky.APIResponse[*btclucky.FoundBlockRecord]{Code: 0, Msg: "ok", Data: record})
+	record, err := f.submitBlock(raw)
+	resp := btclucky.APIResponse[*btclucky.FoundBlockRecord]{Code: -1, Msg: "block rejected"}
+	if record != nil {
+		resp.Data = record
+	}
+	if err != nil {
+		resp.Msg = err.Error()
+	} else {
+		resp.Code = 0
+		resp.Msg = "ok"
+	}
+	posPWAL1JSON(w, resp)
 	return true
 }
 
-func (f *posPWALuckyL1) newJob(req btclucky.JobRequest, height int64, tipHash string) (*btclucky.CompactMiningJob, error) {
-	if req.Network != "testnet4" || req.Jobs != 1 || len(req.MinerID) != 66 {
-		return nil, fmt.Errorf("PWA acceptance requires testnet4 and one real worker")
+func (f *posPWALuckyL1) refreshTemplateLocked(height int64, tipHash string) {
+	if f.template != nil && f.template.Height == height+1 && f.template.PreviousHash == tipHash {
+		return
 	}
-	address, err := btcutil.DecodeAddress(req.RewardAddress, &btcchaincfg.TestNet4Params)
-	if err != nil {
-		return nil, err
-	}
-	if !address.IsForNet(&btcchaincfg.TestNet4Params) {
-		return nil, fmt.Errorf("non-testnet reward address")
-	}
-	script, err := btctxscript.PayToAddrScript(address)
-	if err != nil {
-		return nil, err
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.sequence++
-	extra := make([]byte, 8)
-	binary.LittleEndian.PutUint64(extra, f.sequence)
-	coinbaseScript, err := btctxscript.NewScriptBuilder().AddInt64(height + 1).AddData([]byte("pwa-l1-test")).AddData(extra).Script()
-	if err != nil {
-		return nil, err
-	}
-	coinbase := btcwire.NewMsgTx(1)
-	coinbase.AddTxIn(btcwire.NewTxIn(&btcwire.OutPoint{Index: ^uint32(0)}, coinbaseScript, nil))
-	// Keep ordinary Bitcoin subsidy semantics even though accepted PoW is
-	// evidence only and never inserted into the fixture's spendable UTXO set.
-	subsidy := btcblockchain.CalcBlockSubsidy(int32(height+1), &btcchaincfg.TestNet4Params)
-	coinbase.AddTxOut(btcwire.NewTxOut(subsidy, script))
-	id := fmt.Sprintf("pwa-l1-%d", f.sequence)
 	now := time.Now().Unix()
-	job := btclucky.CompactMiningJob{
-		JobID: id, TemplateID: id, Network: "testnet4", Height: height + 1,
-		PreviousBlockHash: tipHash, Version: 0x20000000,
-		Bits: "207fffff", Target: fmt.Sprintf("%064x", btcblockchain.CompactToBig(0x207fffff)),
-		CurTime: now, MinTime: now, RewardAddress: req.RewardAddress, MinerID: req.MinerID,
-		WorkerRanges: []btclucky.WorkerRange{{WorkerID: 0, ExtraNonceStart: f.sequence, ExtraNonceEnd: f.sequence, MerkleRoot: coinbase.TxHash().String()}},
+	subsidy := btcblockchain.CalcBlockSubsidy(int32(height+1), &btcchaincfg.TestNet4Params)
+	template := &btclucky.BlockTemplate{
+		GetBlockTemplateResult: btcbtcjson.GetBlockTemplateResult{
+			Bits: fmt.Sprintf("%08x", posPWALuckyTestnet4Bits), CurTime: now, Height: height + 1,
+			PreviousHash: tipHash, SigOpLimit: 80000, SizeLimit: 1000000,
+			WeightLimit: 4000000, Transactions: []btcbtcjson.GetBlockTemplateResultTx{},
+			Version: 0x20000000, CoinbaseAux: &btcbtcjson.GetBlockTemplateResultAux{Flags: fmt.Sprintf("%x", []byte("pwa-l1-test"))},
+			CoinbaseValue: &subsidy, WorkID: fmt.Sprintf("pwa-l1-%d", f.sequence),
+			Target:  fmt.Sprintf("%064x", btcblockchain.CompactToBig(posPWALuckyTestnet4Bits)),
+			MaxTime: now + 2*60*60, MinTime: now, Mutable: []string{"time"},
+			NonceRange: "00000000ffffffff", Capabilities: []string{"proposal"},
+		},
+		Network: "testnet4", MerkleBranch: []string{},
 	}
-	f.jobs[id] = &posPWALuckyJob{job: job, coinbase: coinbase}
-	// One active browser worker only needs its current job; retain a bounded
-	// history to reject duplicate/unknown submissions and diagnose failures.
-	if f.sequence > 64 {
-		delete(f.jobs, fmt.Sprintf("pwa-l1-%d", f.sequence-64))
-	}
-	return &job, nil
+	body, _ := json.Marshal(btclucky.APIResponse[*btclucky.BlockTemplate]{Code: 0, Msg: "ok", Data: template})
+	hash := sha256.Sum256(body)
+	f.template = template
+	f.templateBytes = body
+	f.etag = fmt.Sprintf("\"%x\"", hash)
+	template.ID = fmt.Sprintf("%x", hash)
 }
 
-func (f *posPWALuckyL1) submit(solution *btclucky.MiningSolution) (*btclucky.FoundBlockRecord, error) {
+func (f *posPWALuckyL1) submitBlock(raw []byte) (*btclucky.FoundBlockRecord, error) {
+	var block btcwire.MsgBlock
+	reader := bytes.NewReader(raw)
+	if err := block.Deserialize(reader); err != nil {
+		return nil, err
+	}
+	if reader.Len() != 0 {
+		return nil, fmt.Errorf("submitted block has trailing bytes")
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	entry := f.jobs[solution.JobID]
-	if entry == nil || entry.submitted {
-		return nil, fmt.Errorf("unknown or already submitted mining job")
+	if f.template == nil {
+		return nil, fmt.Errorf("no Bitcoin block template was requested")
 	}
-	job := entry.job
-	worker := job.WorkerRanges[0]
-	if solution.TemplateID != job.TemplateID || solution.Network != job.Network || solution.RewardAddress != job.RewardAddress ||
-		solution.WorkerID != worker.WorkerID || solution.ExtraNonce != worker.ExtraNonceStart || solution.NTime != job.CurTime {
-		return nil, fmt.Errorf("mining solution changed its assigned job, reward, or worker")
+	template := f.template
+	if block.Header.Version != template.Version || block.Header.PrevBlock.String() != template.PreviousHash || block.Header.Bits != posPWALuckyTestnet4Bits {
+		return nil, fmt.Errorf("submitted block does not match the active Bitcoin template")
 	}
-	previous, err := btcchainhash.NewHashFromStr(job.PreviousBlockHash)
-	if err != nil {
-		return nil, err
+	if block.Header.Timestamp.Unix() < template.MinTime || block.Header.Timestamp.Unix() > template.MaxTime {
+		return nil, fmt.Errorf("submitted block time is outside the template bounds")
 	}
-	bits, err := strconv.ParseUint(job.Bits, 16, 32)
-	if err != nil {
-		return nil, err
+	if len(block.Transactions) != 1 {
+		return nil, fmt.Errorf("submitted block does not contain the template transactions")
 	}
-	header := btcwire.BlockHeader{Version: job.Version, PrevBlock: *previous, MerkleRoot: entry.coinbase.TxHash(),
-		Timestamp: time.Unix(job.CurTime, 0), Bits: uint32(bits), Nonce: solution.Nonce}
-	hash := header.BlockHash()
-	if hash.String() != solution.HeaderHash || btcblockchain.HashToBig(&hash).Cmp(btcblockchain.CompactToBig(header.Bits)) > 0 {
-		return nil, fmt.Errorf("submitted header does not prove the claimed work")
+	coinbase := block.Transactions[0]
+	if len(coinbase.TxIn) != 1 || coinbase.TxIn[0].PreviousOutPoint.Index != ^uint32(0) ||
+		coinbase.TxIn[0].PreviousOutPoint.Hash != (btcchainhash.Hash{}) || len(coinbase.TxOut) != 1 {
+		return nil, fmt.Errorf("submitted block does not contain one valid coinbase")
+	}
+	if coinbase.TxHash() != block.Header.MerkleRoot {
+		return nil, fmt.Errorf("submitted block merkle root does not match its coinbase")
+	}
+	height, err := btcblockchain.ExtractCoinbaseHeight(btcutil.NewTx(coinbase))
+	if err != nil || int64(height) != template.Height {
+		return nil, fmt.Errorf("submitted coinbase height does not match the template")
+	}
+	subsidy := btcblockchain.CalcBlockSubsidy(int32(template.Height), &btcchaincfg.TestNet4Params)
+	if coinbase.TxOut[0].Value != subsidy {
+		return nil, fmt.Errorf("submitted coinbase reward does not match the template subsidy")
+	}
+	_, addresses, _, err := btctxscript.ExtractPkScriptAddrs(coinbase.TxOut[0].PkScript, &btcchaincfg.TestNet4Params)
+	if err != nil || len(addresses) != 1 {
+		return nil, fmt.Errorf("submitted coinbase has no single testnet reward address")
+	}
+	hash := block.Header.BlockHash()
+	if btcblockchain.HashToBig(&hash).Cmp(btcblockchain.CompactToBig(block.Header.Bits)) > 0 {
+		return nil, fmt.Errorf("submitted block does not prove the claimed work")
 	}
 	record := btclucky.FoundBlockRecord{
-		BlockHash: hash.String(), BlockHeight: job.Height, CoinbaseTxID: entry.coinbase.TxHash().String(), Vout: 0,
-		Amount: entry.coinbase.TxOut[0].Value, RewardAddress: job.RewardAddress, JobID: job.JobID, TemplateID: job.TemplateID,
+		BlockHash: hash.String(), BlockHeight: template.Height, CoinbaseTxID: coinbase.TxHash().String(), Vout: 0,
+		Amount: coinbase.TxOut[0].Value, RewardAddress: addresses[0].EncodeAddress(),
 		Submitted: true, SubmitResult: "pwa-fake-l1-pow-verified", CreatedAt: time.Now(),
 	}
-	entry.submitted = true
 	f.found = append(f.found, record)
 	if len(f.found) > 32 {
 		f.found = f.found[len(f.found)-32:]

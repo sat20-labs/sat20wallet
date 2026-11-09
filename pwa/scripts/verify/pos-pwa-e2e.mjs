@@ -1,5 +1,6 @@
 import { assertSnapshotTransactionDelta } from './l1-snapshot-assertions.mjs'
 import assert from 'node:assert/strict'
+import { randomBytes } from 'node:crypto'
 import { expect } from '@playwright/test'
 import { address as bitcoinAddress, networks, Transaction, initEccLib } from 'bitcoinjs-lib'
 import * as secp256k1 from '@bitcoin-js/tiny-secp256k1-asmjs'
@@ -42,6 +43,11 @@ export const optionalPwaEscapeCases = [
   'Escape PWA: confirmed force close waits for CSV and returns exact wallet funds after reload',
 ]
 
+export const requiredPwaRgbCrossLayerCases = [
+  'RGB PWA: register and deploy the public Transcend, then deposit and withdraw the same amount',
+  'RGB PWA: splice the fungible RGB asset into and out of the READY private channel',
+]
+
 const pollOptions = { timeout: 180000, intervals: [250, 500, 1000, 2000] }
 const txidPattern = /^[0-9a-f]{64}$/
 const asInteger = value => {
@@ -64,7 +70,8 @@ const deanchorInputs = channel => Object.fromEntries(['localDeAnchorTx', 'remote
 }))
 
 export async function runPwaPosCases(t, fixture) {
-  const { check, device, ready, walletCall } = t
+  const { check, device, ready, walletCall, accountCall, questions, answers } = t
+  const rgbCrossLayer = fixture.rgbCrossLayer === true
   assert.ok(['testnet', 'regtest'].includes(fixture.config.Chain))
   const network = fixture.config.Chain
   const bitcoinNetwork = network === 'regtest' ? networks.regtest : networks.testnet
@@ -72,10 +79,17 @@ export async function runPwaPosCases(t, fixture) {
   const controller = new URL(fixture.control_url)
   assert.equal(controller.protocol, 'http:')
   assert.ok(['127.0.0.1', 'localhost'].includes(controller.hostname), 'controller must be loopback')
-  assert.equal(fixture.asset.key, `ordx:f:${fixture.asset.ticker}`)
-  assert.equal(fixture.asset.type, 'ORDX')
+  if (rgbCrossLayer) {
+    assert.equal(fixture.asset.type, 'RGB')
+    if (fixture.asset.key) assert.match(fixture.asset.key, /^rgb11:f:[0-9a-f]{64}$/)
+  } else {
+    assert.equal(fixture.asset.key, `ordx:f:${fixture.asset.ticker}`)
+    assert.equal(fixture.asset.type, 'ORDX')
+  }
   const amounts = fixture.amounts
-  for (const name of ['opening', 'splicing_btc', 'splicing_asset', 'deposit_btc', 'deposit_asset']) {
+  for (const name of rgbCrossLayer
+    ? ['splicing_asset', 'deposit_asset', 'withdraw_asset', 'splicing_out_asset']
+    : ['opening', 'splicing_btc', 'splicing_asset', 'deposit_btc', 'deposit_asset']) {
     assert.ok(asInteger(amounts[name]) > 0n, `${name} must be positive`)
   }
   const walletScript = bitcoinAddress.toOutputScript(fixture.address, bitcoinNetwork).toString('hex')
@@ -85,6 +99,7 @@ export async function runPwaPosCases(t, fixture) {
   let page = await device()
   const context = page.context()
   let channelId
+  let publicRGBContractURL
   let latestDeposit = fixture.resumeDeposit ? {
     funding: { txid: fixture.resumeDeposit.funding_txid },
     anchor: { txid: fixture.resumeDeposit.anchor_txid },
@@ -159,7 +174,9 @@ export async function runPwaPosCases(t, fixture) {
     await expect(page.getByRole('heading', { name: 'Transcending Mode', exact: true })).toBeHidden()
   }
   const assetRow = () => activePanel().locator('div.bg-muted.border')
-    .filter({ has: page.getByText(fixture.asset.ticker.toUpperCase(), { exact: true }) })
+    .filter({ has: rgbCrossLayer
+      ? page.locator(`[title=${JSON.stringify(fixture.asset.key)}]`)
+      : page.getByText(fixture.asset.ticker.toUpperCase(), { exact: true }) })
   const assertAssetVisible = async amount => {
     await activePanel().getByRole('button', { name: fixture.asset.type, exact: true }).click()
     await expect(assetRow()).toHaveCount(1)
@@ -416,7 +433,24 @@ export async function runPwaPosCases(t, fixture) {
     .filter(asset => key === '::'
       ? asset.Name.Protocol === '' && asset.Name.Type === '*' : assetKey(asset.Name) === key)
     .reduce((sum, asset) => sum + asInteger(asset.Amount), 0n)
-  const addressAmount = async (chain, address, key) => summaryAmount(await readSummary(chain, address), key)
+  const rgbState = async () => {
+    const result = await walletCall(page, 'getRGB11State')
+    assert.equal(typeof result.state, 'string')
+    return JSON.parse(result.state)
+  }
+  const rgbStateAmount = (state, key, field = 'available_assets') => (state[field] || [])
+    .filter(asset => assetKey(asset.Name) === key)
+    .reduce((sum, asset) => {
+      assert.equal(asset.Amount?.Precision, 0)
+      assert.match(String(asset.Amount?.Value), /^\d+$/)
+      return sum + BigInt(asset.Amount.Value)
+    }, 0n)
+  const addressAmount = async (chain, address, key) => {
+    if (rgbCrossLayer && chain === 'Bitcoin' && address === fixture.address && key === fixture.asset.key) {
+      return rgbStateAmount(await rgbState(), key)
+    }
+    return summaryAmount(await readSummary(chain, address), key)
+  }
   const assertWalletBalanceUI = async (chain, token = false) => {
     const summary = await readSummary(chain, fixture.address)
     const total = summaryAmount(summary, '::')
@@ -424,7 +458,14 @@ export async function runPwaPosCases(t, fixture) {
     await showTab(chain === 'Bitcoin' ? 'SatoshiNet' : 'Bitcoin')
     await showTab(chain)
     await expect(balancePanel().getByRole('heading', { level: 2 })).toHaveText(btcText(total), { timeout: 90000 })
-    if (token) await assertAssetVisible(summaryAmount(summary, fixture.asset.key))
+    if (token) {
+      if (rgbCrossLayer && chain === 'Bitcoin') {
+        await assertAssetVisible(rgbStateAmount(await rgbState(), fixture.asset.key))
+      } else if (rgbCrossLayer && chain === 'SatoshiNet') {
+        const amount = await readL2Amount(fixture.asset.key)
+        if (amount > 0n) await assertAssetVisible(amount)
+      } else await assertAssetVisible(summaryAmount(summary, fixture.asset.key))
+    }
   }
   const operationLogs = async () => {
     const response = await page.evaluate(() => window.sat20wallet_operation_log.getOperationLogs())
@@ -700,7 +741,7 @@ export async function runPwaPosCases(t, fixture) {
   const splicingOut = async token => {
     await selectMode('lightning')
     const key = token ? fixture.asset.key : '::'
-    const amount = token ? 400n : 10000n
+    const amount = token ? (rgbCrossLayer ? asInteger(amounts.splicing_out_asset) : 400n) : 10000n
     const prior = await readChannel()
     const before = await control('snapshot')
     const l1Before = await addressAmount('Bitcoin', fixture.address, key)
@@ -721,12 +762,35 @@ export async function runPwaPosCases(t, fixture) {
   const withdraw = async token => {
     await selectMode('poolswap')
     const key = token ? fixture.asset.key : '::'
-    const amount = token ? 400n : 4000n
+    const amount = token ? (rgbCrossLayer ? asInteger(amounts.withdraw_asset) : 400n) : 4000n
     const before = await control('snapshot')
     const l1Before = await addressAmount('Bitcoin', fixture.address, key)
     const l1SatsBefore = await addressAmount('Bitcoin', fixture.address, '::')
     const l2Before = await readL2Amount(key)
     const feeRate = asInteger(await page.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().btcFeeRate))
+    let rgbPlainBeforeWithdraw
+    let rgbWithdrawFee
+    if (rgbCrossLayer && token) {
+      assert.ok(publicRGBContractURL, 'RGB withdrawal quote must use the exact deployed Transcend URL')
+      const funding = fixture.rgbCrossLayerFunding
+      assert.ok(funding, 'RGB public route must have a real fee-budget fixture')
+      assert.equal(String(feeRate), funding.withdraw_fee_rate,
+        'browser fee rate must match the live SDK fee rate used to prepare the real budget')
+      const invoke = JSON.stringify({
+        action: 'withdraw',
+        param: JSON.stringify({ orderType: 7, assetName: key, amt: String(amount),
+          feeRate: Number(feeRate), destAddr: fixture.address }),
+      })
+      const quote = await walletCall(page, 'getFeeForInvokeContract', publicRGBContractURL, invoke)
+      rgbWithdrawFee = asInteger(quote.fee)
+      assert.equal(rgbWithdrawFee, asInteger(funding.withdraw_fee_quote),
+        'actual deployed-contract withdrawal quote must equal the SDK-calculated funding budget')
+      assert.equal(funding.withdraw_amount, String(amount),
+        'fee budget must use the exact confirmed RGB withdrawal amount')
+      rgbPlainBeforeWithdraw = await readL2Amount('::')
+      assert.ok(rgbPlainBeforeWithdraw >= rgbWithdrawFee + 10n,
+        'ordinary-2 must retain the complete quoted withdrawal fee plus its L2 network fee')
+    }
     await page.evaluate(async () => {
       const manager = (await import('/utils/sat20.ts')).default
       const original = manager.withdraw
@@ -767,6 +831,10 @@ export async function runPwaPosCases(t, fixture) {
     if (token) {
       await expect.poll(() => addressAmount('Bitcoin', fixture.address, key), pollOptions).toBe(l1Before + amount)
       await expect.poll(() => readL2Amount(key), pollOptions).toBe(l2Before - amount)
+      if (rgbCrossLayer) {
+        const expectedPlainAfterWithdraw = rgbPlainBeforeWithdraw - rgbWithdrawFee - 10n
+        await expect.poll(() => readL2Amount('::'), pollOptions).toBe(expectedPlainAfterWithdraw)
+      }
     } else {
       assert.equal(creditSats, amount, 'public BTC withdrawal must pay the complete requested amount; fees are charged separately')
       // The published withdrawal quote reserves a 3-input/5-output 2-of-2
@@ -831,6 +899,350 @@ export async function runPwaPosCases(t, fixture) {
   const assertL1TransactionDelta = (...args) => assertSnapshotTransactionDelta(
     args[0], args[1], args[2], args[3], args[4], fixture.realBitcoinControl === true)
 
+  const ensureRGBRecovery = async () => {
+    assert.equal(typeof accountCall, 'function', 'RGB cross-layer fixture requires the real account-management API')
+    const current = await accountCall(page, 'status')
+    if (!current.recovery_configured) {
+      await accountCall(page, 'preflight', fixture.password, [])
+      await accountCall(page, 'confirmStorage', 'temporary')
+      const material = await accountCall(page, 'createRecovery', {
+        password: fixture.password, wallets: [], recovery_mode: '2of2', questions,
+      })
+      const rehearsal = await accountCall(page, 'rehearse', material.session_id,
+        answers, material.user_share, fixture.password)
+      assert.equal(rehearsal.verified, true)
+    }
+    await expect.poll(async () => {
+      const status = await accountCall(page, 'status')
+      return status.recovery_configured && !status.pending_changes && !status.managed_data_dirty
+    }, pollOptions).toBe(true)
+  }
+
+  const crossLayerEvidence = async (path, body) => {
+    const endpoint = fixture.config.IndexerL1
+    const base = `${endpoint.Scheme}://${endpoint.Host}/${String(endpoint.Proxy || 'regtest').replace(/^\/+|\/+$/g, '')}`
+    const response = await fetch(`${base}${path}`, body === undefined ? { signal: AbortSignal.timeout(30000) } : {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body), signal: AbortSignal.timeout(30000),
+    })
+    assert.ok(response.ok, `${path}: HTTP ${response.status}`)
+    const result = await response.json()
+    assert.equal(result.code, 0, `${path}: ${result.msg}`)
+    return result.data
+  }
+
+  const assertRGBProofs = async (key, expectedAmount) => {
+    const current = await rgbState()
+    assert.equal(current.consistency_status, 'ok')
+    assert.equal(rgbStateAmount(current, key), expectedAmount)
+    const proofs = (current.proofs || []).filter(proof => assetKey(proof.asset_name) === key && proof.status === 'settled')
+    assert.ok(proofs.length, 'the returned RGB balance must have a settled carrier proof')
+    let foundCurrentCarrier = false
+    for (const proof of proofs) {
+      assert.match(proof.outpoint || '', /^[0-9a-f]{64}:\d+$/)
+      const [txid, voutText] = proof.outpoint.split(':')
+      const [status] = await crossLayerEvidence('/v3/bitcoin/utxos/status', { outpoints: [proof.outpoint] })
+      if (!status.exists || !status.unspent || status.confirmations < 1) continue
+      const rawHex = await crossLayerEvidence(`/btc/rawtx/${txid}`)
+      const raw = Transaction.fromHex(rawHex)
+      assert.equal(raw.getId(), txid)
+      assert.equal(raw.outs[Number(voutText)].script.toString('hex'), status.pk_script)
+      assert.ok(proof.confirmations >= 1, 'settled RGB carrier proof must be confirmed')
+      foundCurrentCarrier = true
+      break
+    }
+    assert.equal(foundCurrentCarrier, true, 'the wallet must retain an independently verified unspent RGB carrier proof')
+    return current
+  }
+
+  const issueCrossLayerRGB = async () => {
+    if (fixture.asset.key) return fixture.asset.key
+    await ensureRGBRecovery()
+    const before = await rgbState()
+    assert.equal(before.consistency_status, 'ok', 'RGB issue requires a consistent wallet state')
+    assert.deepEqual(before.transfers.filter(item => !['settled', 'rejected', 'failed', 'conflicted'].includes(item.status)), [],
+      'RGB issue must not overlap unresolved transfers')
+    assert.deepEqual(before.reservations.filter(item => !['settled', 'rejected', 'failed', 'conflicted', 'expired', 'cancelled'].includes(item.status)), [],
+      'RGB issue must not overlap active reservations')
+    await showTab('Bitcoin')
+    await page.getByRole('button', { name: 'RGB', exact: true }).click()
+    await expect(page.getByRole('button', { name: 'Issue RGB Asset', exact: true })).toBeVisible()
+    const ticker = `X${randomBytes(3).toString('hex').toUpperCase()}`
+    await page.getByRole('button', { name: 'Issue RGB Asset', exact: true }).click()
+    const form = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Issue RGB Asset', exact: true }) })
+    await form.locator('select').selectOption('NIA')
+    await form.getByPlaceholder('USDT', { exact: true }).fill(ticker)
+    await form.getByRole('textbox', { name: /^Display name\b/ }).fill('PWA RGB cross-layer test')
+    await form.locator('input[type="number"]').fill('0')
+    await form.getByPlaceholder('1000', { exact: true }).fill('1000')
+    await form.getByRole('button', { name: 'Issue RGB Asset', exact: true }).click()
+    await expect(form.getByText('Asset issued. The contract consignment is shown for other wallets to import.', { exact: true }))
+      .toBeVisible({ timeout: 180000 })
+    const contractId = (await form.getByText('RGB Contract ID', { exact: true }).locator('..').locator('p').last().textContent()).trim()
+    const key = (await form.getByText('Full asset name', { exact: true }).locator('..').locator('p').last().textContent()).trim()
+    assert.match(contractId, /^rgb:/)
+    assert.match(key, /^rgb11:f:[0-9a-f]{64}$/)
+    const issued = await rgbState()
+    assert.equal(issued.consistency_status, 'ok')
+    assert.equal(rgbStateAmount(issued, key), 1000n)
+    await assertRGBProofs(key, 1000n)
+    fixture.asset = { key, type: 'RGB', ticker: key.split(':').at(-1) }
+    await form.getByRole('button', { name: 'Close', exact: true }).first().click()
+    await expect(form).toBeHidden()
+    return key
+  }
+
+  const deployPublicRGBTranscend = async key => {
+    assert.ok(fixture.marketURL && fixture.marketOrigin, 'RGB public route requires the isolated real Market fixture')
+    const registrations = []
+    let marketFrame
+    const onResponse = async response => {
+      const request = response.request()
+      if (!marketFrame || request.method() !== 'POST') return
+      let requestFrame
+      try { requestFrame = request.frame() } catch { return }
+      if (requestFrame !== marketFrame) return
+      const url = new URL(response.url())
+      if (!url.pathname.endsWith('/v3/rgb11/contracts/register')) return
+      let body
+      try { body = await response.json() } catch { body = null }
+      let requestBody
+      try { requestBody = request.postDataJSON() } catch { requestBody = null }
+      registrations.push({ status: response.status(), code: body?.code, contract_id: body?.registration?.contract_id,
+        schema_id: body?.registration?.schema_id,
+        hasConsignment: typeof requestBody?.contract_consignment_base64 === 'string' &&
+          requestBody.contract_consignment_base64.length > 0 })
+    }
+    try {
+      await page.evaluate(() => { location.hash = '#/wallet/dapp' })
+      const embedded = page.frameLocator('iframe[title="SAT20 Market"]')
+      await expect(embedded.locator('body')).toBeVisible({ timeout: 90000 })
+      await expect.poll(() => page.frames().some(frame => frame.url().startsWith(fixture.marketOrigin)), pollOptions).toBe(true)
+      marketFrame = page.frames().find(frame => frame.url().startsWith(fixture.marketOrigin))
+      assert.ok(marketFrame, 'PWA must embed the configured local SatoshiNet Market')
+      page.context().on('response', onResponse)
+      await marketFrame.goto(`${fixture.marketOrigin}/transcend?network=regtest`)
+      await marketFrame.waitForLoadState('load', { timeout: 90000 })
+      await expect(marketFrame.getByRole('button', { name: /创建BTC穿越合约/ })).toBeVisible({ timeout: 90000 })
+      const createPageLoaded = marketFrame.waitForURL(url =>
+        url.origin === new URL(fixture.marketOrigin).origin && url.pathname === '/transcend/create/',
+      { waitUntil: 'load', timeout: 90000 })
+      await marketFrame.getByRole('button', { name: /创建BTC穿越合约/ }).click()
+      await createPageLoaded
+      await marketFrame.waitForLoadState('load', { timeout: 90000 })
+      const form = marketFrame.locator('form')
+      await expect(marketFrame.getByRole('heading', { name: /创建BTC穿越合约/ })).toBeVisible()
+      await expect(form).toBeVisible()
+      const connectedWallet = marketFrame.getByRole('button').filter({ hasText: fixture.address.slice(-4) })
+      await expect(connectedWallet).toHaveCount(1, { timeout: 90000 })
+      await expect(connectedWallet).toBeVisible()
+
+      const protocol = form.locator('button[data-slot="select-trigger"]').first()
+      await expect(protocol).toHaveAttribute('aria-expanded', 'false')
+      await protocol.click()
+      await expect(protocol).toHaveAttribute('aria-expanded', 'true')
+      const protocolList = marketFrame.getByRole('listbox')
+      const rgb11Protocol = protocolList.getByRole('option', { name: 'RGB11', exact: true })
+      await expect(rgb11Protocol).toBeVisible()
+      await rgb11Protocol.click()
+      await expect(protocol).toContainText('RGB11')
+      await expect(protocol).toHaveAttribute('aria-expanded', 'false')
+
+      assert.match(fixture.asset.ticker, /^[0-9a-f]{64}$/, 'RGB11 selection must use the full canonical ticker')
+      assert.equal(key, fixture.asset.key, 'Market form must select the exact issued RGB asset')
+      const tickerInfo = JSON.parse((await walletCall(page, 'getTickerInfo', key)).ticker)
+      assert.equal(tickerInfo.name.Protocol, 'rgb11')
+      assert.equal(tickerInfo.name.Type, 'f')
+      assert.equal(tickerInfo.name.Ticker, fixture.asset.ticker)
+      const tickerExt = JSON.parse(Buffer.from(tickerInfo.content, 'base64').toString('utf8'))
+      assert.equal(tickerExt.asset_name.Protocol, 'rgb11')
+      assert.equal(tickerExt.asset_name.Type, 'f')
+      assert.equal(tickerExt.asset_name.Ticker, fixture.asset.ticker)
+      const publicContract = JSON.parse((await walletCall(page, 'exportPublicRGB11Contract', tickerExt.contract_id)).result)
+      assert.match(publicContract.contract_id, /^[0-9a-f]{64}$/)
+      assert.equal(publicContract.contract_id, fixture.asset.ticker,
+        'canonical RGB11 contract identity must match the exact selected asset ticker')
+      assert.equal(publicContract.schema_id, tickerExt.schema_id,
+        'canonical RGB11 contract schema must match its ticker metadata')
+      const tickerPickers = form.locator('button[role="combobox"]:not([data-slot="select-trigger"])')
+      await expect(tickerPickers).toHaveCount(1)
+      const tickerPicker = tickerPickers.first()
+      await expect(tickerPicker).toBeVisible()
+      await tickerPicker.click()
+      const tickerSearch = marketFrame.getByPlaceholder('Search or type ticker...')
+      await expect(tickerSearch).toBeVisible()
+      await tickerSearch.fill(fixture.asset.ticker)
+      const exactTickerOption = marketFrame.locator(`[role="option"][data-value="${fixture.asset.ticker}"]`)
+      await expect(exactTickerOption).toBeVisible()
+      assert.equal(await exactTickerOption.getAttribute('data-value'), fixture.asset.ticker,
+        'ticker option identity must match the complete RGB11 asset key suffix')
+      await exactTickerOption.click()
+      await expect(form.getByRole('button').last()).toBeEnabled()
+      await form.getByRole('button').last().click()
+      await expect.poll(() => registrations.length, pollOptions).toBe(1)
+      assert.equal(registrations[0].status, 200)
+      assert.equal(registrations[0].code, 0)
+      assert.equal(registrations[0].contract_id, publicContract.contract_id,
+        'Market frame POST must register the exact selected RGB11 contract')
+      assert.equal(registrations[0].schema_id, publicContract.schema_id,
+        'Market frame POST must register the exact selected RGB11 schema')
+      assert.equal(registrations[0].hasConsignment, true,
+        'Market frame must POST the RGB11 public contract consignment')
+
+      const deployDialog = page.getByRole('dialog').filter({
+        has: page.getByRole('heading', { name: 'Deploy Contract', exact: true }),
+      })
+      await expect(deployDialog).toBeVisible({ timeout: 90000 })
+      await expect(deployDialog.getByRole('heading', { name: 'Confirm remote contract deployment', exact: true }))
+        .toBeVisible()
+      const templateRow = deployDialog.locator('div').filter({ hasText: /^Contract template：/ }).last()
+      await expect(templateRow).toContainText('transcend.tc')
+      await deployDialog.getByRole('button', { name: 'View raw contract parameters', exact: true }).click()
+      const deploymentParameters = JSON.parse(await deployDialog.getByRole('alert').innerText())
+      assert.equal(deploymentParameters.contractType, 'transcend.tc',
+        'PWA deployment approval must target the Transcend template')
+      assert.deepEqual(deploymentParameters.assetName, {
+        Protocol: 'rgb11', Type: 'f', Ticker: fixture.asset.ticker,
+      }, 'PWA deployment approval must preserve the exact complete RGB11 asset identity')
+      const deployLogsBefore = await operationLogs()
+      await deployDialog.getByRole('button', { name: 'Confirm', exact: true }).click()
+      const deployTxid = await newOperationTx('deploy_contract', deployLogsBefore)
+      await expect(deployDialog).toBeHidden({ timeout: 180000 })
+
+      const findDeployed = async () => {
+        const list = await walletCall(page, 'getDeployedContractsInServer')
+        const urls = list.contractURLs || []
+        for (const url of urls) {
+          if (!String(url).includes('transcend.tc')) continue
+          const status = await walletCall(page, 'getDeployedContractStatus', url)
+          if (typeof status.contractStatus !== 'string') continue
+          let parsed
+          try { parsed = JSON.parse(status.contractStatus) } catch { continue }
+          const contract = parsed?.Contract
+          const assetName = contract?.assetName
+          if (contract?.contractType === 'transcend.tc' &&
+            assetName?.Protocol === 'rgb11' &&
+            assetName?.Type === 'f' &&
+            assetName?.Ticker === fixture.asset.ticker) return { url, parsed }
+        }
+        return null
+      }
+      await expect.poll(async () => Boolean(await findDeployed()), pollOptions).toBe(true)
+      const deployed = await findDeployed()
+      assert.ok(deployed?.url)
+      assert.equal(deployed.parsed.Contract.contractType, 'transcend.tc',
+        'deployed contract status must identify the exact Transcend template')
+      assert.deepEqual(deployed.parsed.Contract.assetName, {
+        Protocol: 'rgb11', Type: 'f', Ticker: fixture.asset.ticker,
+      }, 'deployed Transcend status must identify the exact complete RGB11 asset')
+      await page.evaluate(() => { location.hash = '#/wallet' })
+      await selectMode('poolswap')
+      await showTab('Bitcoin')
+      await page.getByRole('button', { name: 'RGB', exact: true }).click()
+      await expect(assetRow()).toHaveCount(1)
+      await expect(assetRow().getByRole('button', { name: 'Deposit', exact: true })).toBeEnabled({ timeout: 90000 })
+      console.log(JSON.stringify({ rgbPublicTranscend: { contract_url: deployed.url, deploy_txid: deployTxid,
+        registration: registrations[0] } }))
+      return deployed.url
+    } finally {
+      page.context().off('response', onResponse)
+    }
+  }
+
+  const assertReadyChannel = async () => {
+    const channel = await readyChannelUI()
+    assert.equal(channel.channelId, fixture.privateChannelID)
+    assert.equal(channel.status, 16)
+    return channel
+  }
+
+  const privateRGBRoundTrip = async key => {
+    await selectMode('lightning')
+    const amount = asInteger(amounts.splicing_asset)
+    const initial = await assertReadyChannel()
+    const l1Before = await addressAmount('Bitcoin', fixture.address, key)
+    const channelBefore = channelAmount(initial, key)
+    const l2Before = await readL2Amount(key)
+    const before = await control('snapshot')
+    assert.deepEqual(before.l1.pending_txids, [], 'private RGB splicing requires a clean L1 mempool')
+    assert.equal(l1Before + channelBefore + l2Before, 1000n,
+      'the issued cross-layer fixture must account for its complete RGB supply before splicing')
+    deanchorInputs(initial)
+    await clickAssetOperation('Splicing in', amount, true, 'Bitcoin')
+    const funding = await pendingFunding(before)
+    const signed = deanchorInputs(await readChannel())
+    const { anchor } = await confirmFunding(funding, fixture.node_count, fixture.pos_v2_active === true)
+    const afterIn = await readyChannelUI()
+    assert.equal(channelAmount(afterIn, key), channelBefore + amount)
+    assert.equal(await addressAmount('Bitcoin', fixture.address, key), l1Before - amount)
+    assert.equal(channelAmount(afterIn, key) + await addressAmount('Bitcoin', fixture.address, key) + await readL2Amount(key), 1000n)
+    assertSignedAnchor(signed, anchor, afterIn)
+    await assertAssetVisible(channelBefore + amount)
+
+    await splicingOut(true)
+    const finalChannel = await readyChannelUI()
+    assert.equal(channelAmount(finalChannel, key), channelBefore)
+    assert.equal(await addressAmount('Bitcoin', fixture.address, key), l1Before)
+    assert.equal(await readL2Amount(key), l2Before)
+    assert.equal(channelAmount(finalChannel, key) + await addressAmount('Bitcoin', fixture.address, key) + await readL2Amount(key), 1000n)
+    await assertRGBProofs(key, l1Before)
+    await assertWalletBalanceUI('Bitcoin', true)
+    console.log(JSON.stringify({ rgbPrivateRoundTrip: { key, amount: String(amount),
+      l1_before: String(l1Before), channel_before: String(channelBefore), l2_before: String(l2Before),
+      l1_final: String(await addressAmount('Bitcoin', fixture.address, key)),
+      channel_final: String(channelAmount(finalChannel, key)), l2_final: String(await readL2Amount(key)) } }))
+  }
+
+  const publicRGBRoundTrip = async () => {
+    const key = await issueCrossLayerRGB()
+    const initial = await assertRGBProofs(key, 1000n)
+    const l1Before = rgbStateAmount(initial, key)
+    const l2Before = await readL2Amount(key)
+    const channelBefore = await channelAmount(await assertReadyChannel(), key)
+    assert.equal(l1Before + l2Before + channelBefore, 1000n,
+      'the issued cross-layer fixture must account for its complete RGB supply before public deposit')
+    publicRGBContractURL = await deployPublicRGBTranscend(key)
+    const funding = fixture.rgbCrossLayerFunding
+    assert.ok(funding, 'RGB public round-trip must start with verified real L2 fee funding')
+    assert.equal(funding.deployer_address, fixture.address)
+    assert.ok(asInteger(funding.deployer_after) >= asInteger(funding.deployer_minimum))
+    const feeRate = asInteger(await page.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().btcFeeRate))
+    assert.equal(String(feeRate), funding.withdraw_fee_rate,
+      'browser fee rate must match the rate used to prepare the real withdrawal budget')
+    const quoteInvoke = JSON.stringify({
+      action: 'withdraw',
+      param: JSON.stringify({ orderType: 7, assetName: key, amt: amounts.withdraw_asset,
+        feeRate: Number(feeRate), destAddr: fixture.address }),
+    })
+    const feeQuote = await walletCall(page, 'getFeeForInvokeContract', publicRGBContractURL, quoteInvoke)
+    assert.equal(asInteger(feeQuote.fee), asInteger(funding.withdraw_fee_quote),
+      'deployed Transcend must return the exact SDK fee quote used for prefunding')
+    assert.ok(await readL2Amount('::') >= asInteger(feeQuote.fee) + 10n,
+      'ordinary-2 must already hold the entire withdrawal budget before Deposit; do not rely on returned white sats')
+    const depositAmount = asInteger(amounts.deposit_asset)
+    const before = await control('snapshot')
+    await deposit(true)
+    assert.equal(await addressAmount('Bitcoin', fixture.address, key), l1Before - depositAmount)
+    assert.equal(await readL2Amount(key), l2Before + depositAmount)
+    assert.equal(await channelAmount(await readChannel(), key), channelBefore)
+    assert.equal(await addressAmount('Bitcoin', fixture.address, key) + await readL2Amount(key) + await channelAmount(await readChannel(), key), 1000n)
+    const afterDeposit = await control('snapshot')
+    assert.notDeepEqual(afterDeposit.l1.confirmed_txids, before.l1.confirmed_txids,
+      'public Deposit must confirm its own real Bitcoin funding transaction')
+
+    await withdraw(true)
+    assert.equal(await addressAmount('Bitcoin', fixture.address, key), l1Before)
+    assert.equal(await readL2Amount(key), l2Before)
+    assert.equal(await channelAmount(await readChannel(), key), channelBefore)
+    assert.equal(await addressAmount('Bitcoin', fixture.address, key) + await readL2Amount(key) + await channelAmount(await readChannel(), key), 1000n)
+    await assertRGBProofs(key, l1Before)
+    await assertWalletBalanceUI('Bitcoin', true)
+    console.log(JSON.stringify({ rgbPublicRoundTrip: { key, amount: String(depositAmount),
+      l1_before: String(l1Before), l2_before: String(l2Before),
+      l1_final: String(await addressAmount('Bitcoin', fixture.address, key)),
+      l2_final: String(await readL2Amount(key)) } }))
+  }
+
   try {
     // Test wallet import is fixture setup. Every movement of its funds below
     // goes through the same controls a PWA user operates.
@@ -857,6 +1269,17 @@ export async function runPwaPosCases(t, fixture) {
       }, pollOptions).toBe(16)
       channelId = restored.channelId
       await readyChannelUI()
+    }
+
+    if (rgbCrossLayer) {
+      try {
+        await check(requiredPwaRgbCrossLayerCases[0], publicRGBRoundTrip)
+        await check(requiredPwaRgbCrossLayerCases[1], async () => privateRGBRoundTrip(await issueCrossLayerRGB()))
+      } catch (error) {
+        await t.preserveBrowserFailureState?.()
+        throw error
+      }
+      return
     }
 
     await check(requiredPwaPosCases[0], async () => {

@@ -927,7 +927,20 @@ func TestAccountManagedACKFinalizesAfterRemoteAdvance(t *testing.T) {
 				require.Greater(t, remoteRecord.Seq, targetRecord.Seq)
 				require.NotEqual(t, targetRecord.Value, remoteRecord.Value)
 				database.fail.Store(0)
-				require.NoError(t, manager.dkvs.forceCurrentPrefixes(client, manager.dkvs.managedPaths()))
+				require.ErrorIs(t, manager.StartDKVSSync(), ErrAccountDBStopped)
+				service := manager.serverNode
+				manager.Close()
+				manager = coreNewE2EManagerWithDB(t, coreE2EConfig{
+					Core: AccountIndexerLocation{Scheme: "http", Host: "dkvs.test", Proxy: "testnet"},
+				}, chain, database, "", http)
+				t.Cleanup(manager.Close)
+				useRGB11TestCoreAuthority(t, manager)
+				manager.serverNode = service
+				_, err = manager.UnlockWallet("password")
+				require.NoError(t, err)
+				client, err = manager.dkvs.primaryClient()
+				require.NoError(t, err)
+				require.NoError(t, manager.dkvs.ensureCurrentSubscription(client))
 				observed, err := replica.ReadSnapshot(client.replicaNamespace, []string{targetKey})
 				require.NoError(t, err)
 				require.Equal(t, remoteRecord.Value, observed[targetKey].Value)
@@ -935,6 +948,11 @@ func TestAccountManagedACKFinalizesAfterRemoteAdvance(t *testing.T) {
 				err = manager.finishReadyAccountACKsLocked()
 				manager.mutex.Unlock()
 				require.NoError(t, err)
+				entries, err = replica.LoadOutbox(client.replicaNamespace)
+				require.NoError(t, err)
+				for _, remaining := range entries {
+					require.NotEqual(t, ack.RequestID, remaining.RequestID)
+				}
 				current := readLocal(manager)
 				require.Equal(t, localGeneration, current.Generation)
 				require.GreaterOrEqual(t, current.Confirmed, ack.OriginGeneration)

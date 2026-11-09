@@ -77,7 +77,7 @@
             <div class="space-y-2">
               <Label>{{ $t('assetOperationDialog.amount') }}</Label>
               <div class="flex items-center gap-2">
-                <Input :model-value="amount" :type="operationType === 'send' ? 'text' : 'number'" :inputmode="operationType === 'send' ? 'decimal' : undefined" :placeholder="$t('assetOperationDialog.enterAmount')"
+                <Input :model-value="amount" :type="preciseAmount ? 'text' : 'number'" :inputmode="preciseAmount ? 'decimal' : undefined" :placeholder="$t('assetOperationDialog.enterAmount')"
                   class="h-12 bg-zinc-800" @update:modelValue="handleAmountUpdate" />
                 <Button variant="outline" class="h-12 px-4 text-sm border border-zinc-600 hover:bg-zinc-700"
                   @click="setMaxAmount">
@@ -179,11 +179,11 @@
           <span class="text-zinc-300">{{ $t('walletComponents.btcFeeRate') }}</span>
           <span class="text-primary font-semibold">{{ btcFeeRate }} sats/vB</span>
         </div>
-        <!-- 显示固定手续费 -->
-        <div v-if="props.operationType === 'splicing_out'" class="flex items-center justify-between text-sm mt-2">
-          <span class="text-zinc-300">{{ $t('assetOperationDialog.fixedFee') }}:</span>
-          <span class="text-primary font-semibold">2000 sats</span>
-        </div>
+      </div>
+      <div v-if="!isResolving && props.operationType === 'splicing_out'"
+        class="flex items-center justify-between text-sm mt-2">
+        <span class="text-zinc-300">{{ $t('assetOperationDialog.fixedFee') }}:</span>
+        <span class="text-primary font-semibold">2000 sats</span>
       </div>
 
       <!-- 新增：显示提取费用提示 -->
@@ -329,7 +329,7 @@ const isBTCAsset = computed(() => {
 // 判断哪些操作需要显示 btcFeeRate
 const needsBtcFeeRate = computed(() => {
   const operationsNeedingBtcFeeRate = ['send', 'deposit', 'withdraw', 'splicing_in', 'splicing_out']
-  return (isBitcoinChain.value || props.chain === 'channel') && operationsNeedingBtcFeeRate.includes(props.operationType || '')
+  return (isBitcoinChain.value || props.chain === 'channel' || props.operationType === 'withdraw') && operationsNeedingBtcFeeRate.includes(props.operationType || '')
 })
 
 const emit = defineEmits<{
@@ -374,7 +374,8 @@ const resolveAddress = async (input: string) => {
 
 // Native amounts are always sats. Unknown token precision remains fail-closed.
 const nativeSats = computed(() => props.assetKey === '::' && props.assetType === '*')
-const sendAmountError = computed(() => props.operationType === 'send' ? validateSendAmount(props.amount, nativeSats.value ? 0 : props.amountPrecision, props.maxAmount) : null)
+const preciseAmount = computed(() => props.operationType === 'send' || props.assetKey?.startsWith('rgb11:'))
+const sendAmountError = computed(() => preciseAmount.value ? validateSendAmount(props.amount, nativeSats.value ? 0 : props.amountPrecision, props.maxAmount) : null)
 
 const confirmOperation = async () => {
   if (sendAmountError.value || isResolving.value) return
@@ -405,12 +406,13 @@ const confirmOperation = async () => {
   }
 
   if (sendAmountError.value) return
-  if (needsAddress.value) {
+  if (preciseAmount.value) {
+    if (!props.address) return
     review.value = Object.freeze({
       fingerprint: reviewFingerprint(), amount: props.amount,
       unit: nativeSats.value ? 'sats' : getAssetDisplayName(),
       address: props.address,
-      chain: isSatoshiNetSend.value ? 'SatoshiNet' : 'Bitcoin',
+      chain: getOperationHint() || (isSatoshiNetSend.value ? 'SatoshiNet' : 'Bitcoin'),
       network: String(network.value),
       feeRate: needsBtcFeeRate.value ? String(btcFeeRate.value) : null,
       networkFee: props.networkFee ?? null,
@@ -422,7 +424,7 @@ const confirmOperation = async () => {
 
 const handleConfirm = () => {
   if (submitted || dialogStage.value !== 'confirm' || sendAmountError.value) return
-  if (needsAddress.value && (!review.value || review.value.fingerprint !== reviewFingerprint())) {
+  if (preciseAmount.value && (!review.value || review.value.fingerprint !== reviewFingerprint())) {
     cancelReview()
     return
   }
@@ -476,6 +478,7 @@ const getAssetDisplayName = () => {
 
 // 获取资产类型
 const getAssetType = () => {
+  if (props.assetKey?.startsWith('rgb11:')) return 'RGB'
   if (props.assetType) {
     return props.assetType.toUpperCase()
   }
@@ -504,6 +507,8 @@ const getOperationHint = () => {
   if (props.operationType === 'withdraw') {
     return 'SatoshiNet → Bitcoin'
   }
+  if (props.operationType === 'splicing_in') return `Bitcoin → ${t('walletComponents.channel')}`
+  if (props.operationType === 'splicing_out') return `${t('walletComponents.channel')} → Bitcoin`
   return null
 }
 

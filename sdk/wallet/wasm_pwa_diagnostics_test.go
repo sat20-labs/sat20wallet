@@ -79,7 +79,8 @@ func TestAccountStorageAuthorizationIsSDKOwnedAndNonFunding(t *testing.T) {
 		t.Fatal("unfinished storage authorization must not be persisted by the PWA SDK")
 	}
 	if !strings.Contains(page, "resumePendingStorageAuthorization()") ||
-		!strings.Contains(page, "仅复用现有 AUTOPAY 授权（不充值）") {
+		!strings.Contains(page, "accountManagement.ui.reuseAutopay") ||
+		!strings.Contains(page, "accountSDK.reusePaidStorage(") {
 		t.Fatal("account setup page does not expose SDK resume/reuse behavior")
 	}
 	for _, want := range []string{

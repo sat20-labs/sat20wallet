@@ -215,8 +215,7 @@ type Manager struct {
 	statusBootstrapMu         sync.Mutex
 	statusBootstrapGeneration uint64
 
-	btcLuckyMiner        *btclucky.Miner
-	btcLuckyLastL1Height int
+	btcLuckyMiner *btclucky.Miner
 }
 
 // captureWalletIdentity freezes the currently selected signing identity.  A

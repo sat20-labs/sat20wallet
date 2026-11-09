@@ -50,7 +50,7 @@ export async function runPwaBiometricCases(t, fixture) {
   const closeAlert = async message => {
     const alert = page.getByRole('dialog').filter({ hasText: message })
     await expect(alert).toBeVisible({ timeout: 120000 })
-    await alert.getByRole('button', { name: '确定', exact: true }).click()
+    await alert.getByRole('button', { name: 'Confirm', exact: true }).click()
     await expect(alert).toBeHidden()
   }
   try {
@@ -156,13 +156,13 @@ export async function runPwaBiometricCases(t, fixture) {
         }
       })
       await page.evaluate(() => { location.hash = '#/wallet/setting/password' })
-      await page.getByLabel('旧密码', { exact: true }).fill(currentPassword)
-      await page.getByLabel('新密码', { exact: true }).fill(replacement)
-      await page.getByLabel('确认新密码', { exact: true }).fill(replacement)
-      await page.getByRole('button', { name: '确认修改', exact: true }).click()
+      await page.getByLabel('Current password', { exact: true }).fill(currentPassword)
+      await page.getByLabel('New password', { exact: true }).fill(replacement)
+      await page.getByLabel('Confirm new password', { exact: true }).fill(replacement)
+      await page.getByRole('button', { name: 'Confirm change', exact: true }).click()
       await expect.poll(() => page.evaluate(() => window.biometricPasswordChange), poll)
         .toEqual({ calls: 1, error: 'none' })
-      await expect(page.getByText('修改成功', { exact: true })).toBeVisible()
+      await expect(page.getByText('Changed successfully', { exact: true })).toBeVisible()
       await expect.poll(bindings, poll).toEqual([])
       await page.reload(); await ready(page)
       await expect(page.getByRole('button', { name: biometricButtonName })).toBeHidden()

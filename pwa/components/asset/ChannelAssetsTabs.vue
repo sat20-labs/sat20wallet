@@ -45,23 +45,23 @@
           <span class="flex justify-center items-center w-10 h-10">{{ asset.label.charAt(0).toUpperCase() }}</span>
         </div>
 
-        <div class="flex flex-col justify-between w-full h-full ml-3">
+        <div class="flex min-w-0 flex-1 flex-col justify-between h-full ml-3">
           <!-- 第一行：资产名称和数量 -->
           <div class="flex justify-between items-center">
-            <div class="font-medium text-zinc-400">{{ asset.label.toLocaleUpperCase() }}</div>
-            <div class="text-sm font-semibold text-zinc-300">
+            <div class="min-w-0 flex-1 font-medium text-zinc-400 break-all">{{ asset.protocol === 'rgb11' ? asset.label : asset.label.toLocaleUpperCase() }}</div>
+            <div class="shrink-0 ml-2 text-sm font-semibold text-zinc-300">
               {{ formatAmount(asset) }}
             </div>
           </div>
 
           <!-- 第二行：操作按钮 -->
           <div class="flex justify-end gap-2 mt-2">
-            <Button size="sm" variant="outline" class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
+            <Button v-if="asset.protocol !== 'rgb11' || asset.type === 'f'" size="sm" variant="outline" class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
               @click="$emit('splicing_out', asset)">
               <Icon icon="lets-icons:sign-out-squre" class="w-4 h-4 mr-1" />
               {{ $t('channelAssetsTabs.splicingOut') }}
             </Button>
-            <Button size="sm" variant="outline" class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
+            <Button v-if="asset.protocol !== 'rgb11'" size="sm" variant="outline" class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
               @click="$emit('unlock', asset)">
               <Icon icon="lucide:unlock" class="w-4 h-4 mr-1" />
               {{ $t('channelAssetsTabs.unlock') }}
@@ -93,7 +93,9 @@ interface Asset {
   id: string
   ticker: string
   label: string
-  amount: number
+  amount: number | string
+  protocol?: string
+  key?: string
   type?: string
 }
 // Props定义
@@ -105,7 +107,7 @@ const props = defineProps<{
 const emit = defineEmits(['update:modelValue', 'splicing_out', 'unlock'])
 
 const globalStore = useGlobalStore()
-const { env } = storeToRefs(globalStore)
+const { env, hideBalance } = storeToRefs(globalStore)
 
 const mempoolUrl = computed(() => {
 
@@ -125,8 +127,9 @@ const l1MempoolUrl = computed(() => generateMempoolUrl({
 
 // 资产类型
 //const assetTypes = ['BTC', 'ORDX', 'Runes', 'BRC20']
-const assetTypes = ['BRC20', 'ORDX', 'Runes']
+const assetTypes = ['BRC20', 'ORDX', 'Runes', 'RGB11']
 const selectedType = ref(props.modelValue || assetTypes[0])
+watch(() => props.modelValue, (value) => { if (value) selectedType.value = value })
 
 // 过滤资产
 const filteredAssets = computed(() => {
@@ -139,6 +142,7 @@ const filteredAssets = computed(() => {
 
 // 格式化金额显示
 const formatAmount = (asset: Asset) => {
+  if (asset.protocol === 'rgb11') return hideBalance.value ? '••••••' : String(asset.amount)
   if (selectedType.value === 'BTC') {
     return `${Number(asset.amount)} sats`
   }

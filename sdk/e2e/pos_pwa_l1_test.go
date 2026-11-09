@@ -101,13 +101,21 @@ func newPOSPWAL1Indexer(t *testing.T, bootstrapPub string, parentByPub map[strin
 
 func (f *posPWAL1Indexer) NodeFixture() *fakeL1Indexer { return f.nodeFixture }
 
+func setPOSPWAL1CORS(w http.ResponseWriter) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, pubkey, signature, nonce, Authorization, If-None-Match")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Expose-Headers", "ETag")
+}
+
 // Nodes validate the configured L1 server's fixed identity. The miner uses
 // its Core's identity, while all endpoints still share this one L1 ledger.
 func (f *posPWAL1Indexer) NodeFixtureForParent(t *testing.T, parentPub string) *fakeL1Indexer {
 	t.Helper()
 	require.NotEmpty(t, parentPub)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/testnet/v3/indexer/pubkey" {
+		if r.URL.Path == "/testnet/v3/indexer/pubkey" && r.Method == http.MethodGet {
+			setPOSPWAL1CORS(w)
 			posPWAL1JSON(w, indexerwire.IndexerPubKeyResp{PubKey: parentPub})
 			return
 		}
@@ -777,9 +785,7 @@ func (f *posPWAL1Indexer) confirmedNameLocked(name string) *indexerwire.Ordinals
 }
 
 func (f *posPWAL1Indexer) serveHTTP(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, pubkey, signature, nonce, Authorization")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	setPOSPWAL1CORS(w)
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -789,7 +795,7 @@ func (f *posPWAL1Indexer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := strings.TrimPrefix(r.URL.Path, "/testnet")
-	if strings.HasPrefix(path, "/btc/lucky/") {
+	if strings.HasPrefix(path, "/btc/lucky/") || path == "/v3/bitcoin/block/submit" {
 		f.mu.Lock()
 		height, tipHash := f.height, f.blockLocked(f.height).BlockHash().String()
 		f.mu.Unlock()

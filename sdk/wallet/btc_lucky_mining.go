@@ -1,7 +1,6 @@
 package wallet
 
 import (
-	"bytes"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -46,10 +45,6 @@ func (p *Manager) StartBTCLuckyMining(req BTCLuckyMiningConfig) (*btclucky.Miner
 		jobs = "1"
 	}
 
-	network := "mainnet"
-	if IsTestNet() {
-		network = "testnet4"
-	}
 	backend := btclucky.NewHTTPTemplateBackend(p.l1IndexerBaseURL(), 10*time.Second)
 	miner, err := btclucky.NewMiner(btclucky.BTCLuckyMinerConfig{
 		Enabled:          true,
@@ -59,7 +54,7 @@ func (p *Manager) StartBTCLuckyMining(req BTCLuckyMiningConfig) (*btclucky.Miner
 		Jobs:             jobs,
 		LowPriority:      req.LowPriority,
 		LowPrioritySleep: lowPrioritySleep,
-		Network:          network,
+		Network:          p.cfg.Chain,
 	}, backend)
 	if err != nil {
 		return nil, err
@@ -67,10 +62,8 @@ func (p *Manager) StartBTCLuckyMining(req BTCLuckyMiningConfig) (*btclucky.Miner
 	if err := miner.Start(); err != nil {
 		return nil, err
 	}
-	height := p.GetSyncHeightL1()
 	p.mutex.Lock()
 	p.btcLuckyMiner = miner
-	p.btcLuckyLastL1Height = height
 	p.mutex.Unlock()
 	st := miner.Status()
 	return &st, nil
@@ -120,15 +113,13 @@ func (p *Manager) btcLuckyRewardAddress(walletPubKey []byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	signer := indexerKey
-	if core {
-		if !bytes.Equal(indexerKey, walletPubKey) {
-			return "", fmt.Errorf("core BTC lucky mining requires its own indexer")
-		}
-		signer, err = hex.DecodeString(indexer.GetBootstrapPubKey())
-		if err != nil {
-			return "", err
-		}
+	bootstrap, err := hex.DecodeString(indexer.GetBootstrapPubKey())
+	if err != nil {
+		return "", err
+	}
+	signer, err := btclucky.RewardSigner(walletPubKey, indexerKey, bootstrap, core)
+	if err != nil {
+		return "", err
 	}
 	return GetP2WSHaddress(walletPubKey, signer)
 }
@@ -149,39 +140,6 @@ func (p *Manager) handleBTCLuckyMonitorTick(sendTxInL1 bool) {
 				}
 			}
 		}
-	}
-	p.mutex.Lock()
-	miner := p.btcLuckyMiner
-	lastHeight := p.btcLuckyLastL1Height
-	p.mutex.Unlock()
-	if miner == nil || !miner.IsMining() {
-		return
-	}
-	height := p.GetSyncHeightL1()
-	if height <= 0 {
-		return
-	}
-	if lastHeight == 0 {
-		p.mutex.Lock()
-		if p.btcLuckyLastL1Height == 0 {
-			p.btcLuckyLastL1Height = height
-		}
-		p.mutex.Unlock()
-		return
-	}
-	if height == lastHeight {
-		return
-	}
-	p.mutex.Lock()
-	if p.btcLuckyLastL1Height != height {
-		p.btcLuckyLastL1Height = height
-		miner = p.btcLuckyMiner
-	} else {
-		miner = nil
-	}
-	p.mutex.Unlock()
-	if miner != nil {
-		miner.NotifyBlockUpdated()
 	}
 }
 

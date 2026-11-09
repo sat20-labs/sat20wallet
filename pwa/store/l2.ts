@@ -10,6 +10,7 @@ export const useL2Store = defineStore('l2-assets', () => {
   const runesList = ref<any[]>([])
   const brc20List = ref<any[]>([])
   const ordList = ref<any[]>([])
+  const rgb11List = ref<any[]>([])
   const totalSats = ref<number>(0)
   const setAssetList = (list: any[]) => (assetList.value = list)
   const setUniqueAssetList = (list: any[]) => (uniqueAssetList.value = list)
@@ -19,6 +20,7 @@ export const useL2Store = defineStore('l2-assets', () => {
   const setRunesList = (list: any[]) => (runesList.value = list)
   const setBrc20List = (list: any[]) => (brc20List.value = list)
   const setOrdList = (list: any[]) => (ordList.value = list)
+  const setRGB11List = (list: any[]) => (rgb11List.value = list)
   const setTotalSats = (total: number) => (totalSats.value = total)
   const balance = computed(() =>
     plainList.value?.reduce((acc, item) => acc + Number(item.amount), 0)
@@ -32,6 +34,7 @@ export const useL2Store = defineStore('l2-assets', () => {
     runesList.value = []
     brc20List.value = []
     ordList.value = []
+    rgb11List.value = []
     totalSats.value = 0
   }
 
@@ -46,6 +49,7 @@ export const useL2Store = defineStore('l2-assets', () => {
     runesList,
     brc20List,
     ordList,
+    rgb11List,
     totalSats,
     setTotalSats,
     setAssetList,
@@ -56,6 +60,7 @@ export const useL2Store = defineStore('l2-assets', () => {
     setRunesList,
     setBrc20List,
     setOrdList,
+    setRGB11List,
     balance,
     reset,
   }

@@ -7,6 +7,8 @@ import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
 import { dirname, isAbsolute, join } from 'node:path'
 import { chromium, expect } from '@playwright/test'
+import { spawn } from 'node:child_process'
+import { createServer as createTcpServer } from 'node:net'
 import { Transaction } from 'bitcoinjs-lib'
 import { createServer } from 'vite'
 import {
@@ -18,12 +20,13 @@ import {
   waitForAccountWrite,
 } from './account-management-usage-e2e.mjs'
 import { requiredPwaBiometricCases, runPwaBiometricCases } from './wallet-biometric-e2e.mjs'
-import { requiredPwaPosCases, optionalPwaEscapeCases, runPwaPosCases } from './pos-pwa-e2e.mjs'
+import { requiredPwaPosCases, requiredPwaRgbCrossLayerCases, optionalPwaEscapeCases, runPwaPosCases } from './pos-pwa-e2e.mjs'
 import { requiredPwaL1ProtocolCases, runPwaL1ProtocolCases } from './wallet-l1-assets-e2e.mjs'
 import { requiredPwaWalletBasicCases, runPwaWalletBasicCases } from './wallet-basic-e2e.mjs'
 import { requiredPwaSilentPayCases, runPwaSilentPayCases } from './silentpay-e2e.mjs'
 import { createPwaIntegrationDapp, requiredPwaIntegrationCases, runPwaIntegrationCases } from './wallet-integrations-e2e.mjs'
-import { requiredPwaMiningCases, runPwaMiningCases } from './wallet-mining-e2e.mjs'
+import { regtestCorePubKey } from './local-real-regtest.mjs'
+import { requiredPwaMiningCases, requiredPwaRegtestMiningCases, runPwaMiningCases } from './wallet-mining-e2e.mjs'
 import { requiredPwaNodeCases, runPwaNodeCases } from './wallet-node-e2e.mjs'
 import { requiredPwaToolsCases, runPwaToolsCases } from './wallet-tools-e2e.mjs'
 import { requiredPwaMintCases, runPwaMintCases } from './wallet-mint-e2e.mjs'
@@ -82,7 +85,7 @@ const assertRegtestEndpointConfig = value => {
   assertLoopbackHost(value?.IndexerL2?.Host, 'L2 indexer')
   const expectedPeers = [
     'b@025fb789035bc2f0c74384503401222e53f72eefdebf0886517ff26ac7985f52ad',
-    's@0367f26af23dc40fdad06752c38264fe621b7bbafb1d41ab436b87ded192f1336e',
+    `s@${regtestCorePubKey}`,
   ].sort()
   const peers = [...(value?.Peers || [])]
   assert.equal(peers.length, expectedPeers.length)
@@ -307,6 +310,8 @@ const regtestBrowserPort = regtestMode
 const posFixture = regtestMode && (focusedWalletCases || sdkWASM)
   ? { ...regtestWalletFixture, config: regtestConfig }
   : legacyPosFixture
+const rgbCrossLayerFixture = regtestMode && focusedWalletCases?.some(name => requiredPwaRgbCrossLayerCases.includes(name))
+  ? regtestWalletFixture : null
 const rgbFixture = regtestMode && focusedRGBCases
   ? { ...(regtestFixture?.rgbFixture || {}), config: regtestConfig }
   : legacyRgbFixture
@@ -357,7 +362,7 @@ if (regtestMode && focusedWalletCases) {
   const currentlyRegtestReadyCases = new Set([...requiredPwaWalletBasicCases, ...requiredPwaBiometricCases,
     ...(regtestWalletFixture?.realBitcoinControl ? requiredPwaIntegrationCases.filter(name => name.startsWith("RGB PWA:")) : []),
     ...(regtestWalletFixture?.dappWallet ? requiredPwaIntegrationCases.filter(name => name.startsWith("DApp PWA:")) : []),
-    ...requiredPwaMiningCases,
+    ...requiredPwaRegtestMiningCases,
     ...(regtestWalletFixture?.realBitcoinControl ? requiredPwaMintCases : []),
     ...(regtestWalletFixture?.protocolWallets ? requiredPwaL1ProtocolCases : []),
     ...(regtestWalletFixture?.realBitcoinFunds ? [requiredPwaPosCases[9], requiredPwaPosCases[10], requiredPwaPosCases[11], requiredPwaPosCases[24]] : []),
@@ -369,6 +374,16 @@ if (regtestMode && focusedWalletCases) {
     ...(regtestWalletFixture?.realChannel && regtestWalletFixture?.pos_v2_active === true ? [requiredPwaPosCases[3]] : []),
     ...(regtestWalletFixture?.realChannel && regtestWalletFixture?.realBitcoinControl && regtestWalletFixture?.posProducerRotation === true
       ? requiredPwaPosCases.slice(6, 9) : [])])
+  if (regtestWalletFixture?.rgbCrossLayer === true) {
+    for (const name of requiredPwaRgbCrossLayerCases) currentlyRegtestReadyCases.add(name)
+    assert.ok(regtestWalletFixture.realBitcoinControl && regtestWalletFixture.realBitcoinFunds &&
+      regtestWalletFixture.realSatoshiNetFunds && regtestWalletFixture.realChannel &&
+      regtestWalletFixture.resumePrivateChannel,
+    'RGB cross-layer cases require the existing real Bitcoin, SatoshiNet, and READY private-channel fixture')
+    assert.ok(regtestWalletFixture.marketRoot && regtestWalletFixture.marketURL &&
+      regtestWalletFixture.marketOrigin && Number(regtestWalletFixture.marketPort) === 3006,
+    'RGB cross-layer cases require the isolated local Market fixture')
+  }
   const sdkWASMSelector = sdkWASM && focusedWalletCases.length > 0
   const sdkWASMFixtureReady = sdkWASMSelector &&
     [regtestWalletFixture?.sdkWasmOwner, regtestWalletFixture?.recipient].every(actor =>
@@ -394,8 +409,82 @@ if (regtestMode && focusedWalletCases) {
 }
 const runnerResources = createRunnerResources()
 let runnerPrimaryError
+async function startRgbCrossLayerMarket(fixture, networkConfig) {
+  assert.ok(fixture?.rgbCrossLayer === true, 'RGB Market fixture must be explicitly enabled')
+  const root = fixture.marketRoot
+  assert.ok(typeof root === 'string' && existsSync(join(root, 'package.json')),
+    'real SatoshiNet Market source checkout must exist')
+  const nextBin = join(root, 'node_modules', 'next', 'dist', 'bin', 'next')
+  assert.ok(existsSync(nextBin), 'SatoshiNet Market Next.js dependencies must already be installed')
+  const port = Number(fixture.marketPort)
+  assert.equal(port, 3006, 'use the reviewed isolated Market port')
+  const probe = createTcpServer()
+  await new Promise((resolve, reject) => {
+    probe.once('error', reject)
+    probe.listen(port, '127.0.0.1', () => probe.close(error => error ? reject(error) : resolve()))
+  }).catch(error => {
+    throw new Error(`isolated Market port ${port} is not free; leaving the existing process untouched (${error.message})`)
+  })
+  const peer = (networkConfig.Peers || []).find(value => value.startsWith('s@'))
+  assert.ok(peer, 'regtest SatoshiNet peer is required for the Market registry')
+  const l1 = endpointUrl(networkConfig.IndexerL1, '')
+  const l2 = endpointUrl(networkConfig.IndexerL2, '')
+  const stp = peer.split('@').at(-1)
+  const origin = `http://127.0.0.1:${port}`
+  const url = `${origin}/swap/`
+  const child = spawn(process.execPath, [nextBin, 'dev', '--webpack', '--hostname', '127.0.0.1', '--port', String(port)], {
+    cwd: root,
+    env: { ...process.env,
+      NEXT_PUBLIC_NETWORK: 'regtest',
+      NEXT_PUBLIC_REGTEST_L1_INDEXER_URL: l1,
+      NEXT_PUBLIC_REGTEST_L2_INDEXER_URL: l2,
+      NEXT_PUBLIC_REGTEST_STP_URL: stp,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let output = ''
+  const retainOutput = chunk => { output = `${output}${chunk}`.slice(-8000) }
+  child.stdout.on('data', retainOutput)
+  child.stderr.on('data', retainOutput)
+  let exited = false
+  let exitInfo = ''
+  child.once('exit', (code, signal) => { exited = true; exitInfo = `exit=${code} signal=${signal}` })
+  const close = async () => {
+    if (!exited) {
+      child.kill('SIGTERM')
+      await Promise.race([
+        new Promise(resolve => child.once('exit', resolve)),
+        new Promise(resolve => setTimeout(resolve, 5000)),
+      ])
+    }
+    if (!exited) {
+      child.kill('SIGKILL')
+      await new Promise(resolve => child.once('exit', resolve))
+    }
+  }
+  try {
+    const deadline = Date.now() + 180000
+    let ready = false
+    while (Date.now() < deadline) {
+      if (exited) throw new Error(`Market dev server exited before readiness (${exitInfo})\n${output}`)
+      try {
+        const response = await fetch(`${origin}/transcend?network=regtest`, { signal: AbortSignal.timeout(3000) })
+        if (response.ok) { ready = true; break }
+      } catch {}
+      await new Promise(resolve => setTimeout(resolve, 500))
+    }
+    assert.ok(ready, `isolated Market did not become ready within three minutes\n${output}`)
+    return { url, origin, close }
+  } catch (error) {
+    await close()
+    throw error
+  }
+}
 try {
-const integrationDapp = posFixture ? runnerResources.own('dapp', await createPwaIntegrationDapp(expectedNetwork)) : null
+const integrationDapp = posFixture && !rgbCrossLayerFixture
+  ? runnerResources.own('dapp', await createPwaIntegrationDapp(expectedNetwork)) : null
+const marketServer = rgbCrossLayerFixture
+  ? runnerResources.own('market', await startRgbCrossLayerMarket(rgbCrossLayerFixture, regtestConfig)) : null
 const existingPwaURL = regtestWalletFixture?.existingPwaURL
 let existingReleaseId
 if (existingPwaURL) {
@@ -421,9 +510,9 @@ const server = existingPwaURL ? {
     strictPort: regtestMode || Boolean(posFixture?.browserPort),
     open: false,
   },
-  ...(integrationDapp ? { define: {
-    'import.meta.env.VITE_SAT20_MARKET_URL': JSON.stringify(integrationDapp.url),
-    'import.meta.env.VITE_SAT20_DAPP_ALLOWED_ORIGINS': JSON.stringify(integrationDapp.origin),
+  ...(integrationDapp || marketServer ? { define: {
+    'import.meta.env.VITE_SAT20_MARKET_URL': JSON.stringify((marketServer || integrationDapp).url),
+    'import.meta.env.VITE_SAT20_DAPP_ALLOWED_ORIGINS': JSON.stringify((marketServer || integrationDapp).origin),
   } } : {}),
 }))
 // SDK browser tests use the current SDK compiled into Go's temporary directory. The
@@ -568,7 +657,9 @@ const completedCases = new Map()
 if (focusedWalletCases) {
   assert.ok(posFixture && focusedWalletCases.length, 'wallet rerun requires the existing wallet fixture and exact cases')
   const known = sdkWASM ? requiredSDKWASMCases : [...requiredPwaPosCases, ...optionalPwaEscapeCases, ...requiredPwaL1ProtocolCases, ...requiredPwaWalletBasicCases, ...requiredPwaBiometricCases, ...requiredPwaMintCases,
-    ...requiredPwaMiningCases, ...requiredPwaNodeCases, ...requiredPwaIntegrationCases, ...requiredPwaToolsCases, ...requiredPwaSilentPayCases,
+    ...requiredPwaRgbCrossLayerCases,
+    ...(regtestMode ? requiredPwaRegtestMiningCases : requiredPwaMiningCases),
+    ...requiredPwaNodeCases, ...requiredPwaIntegrationCases, ...requiredPwaToolsCases, ...requiredPwaSilentPayCases,
     ...requiredWalletRuntimeCases]
   assert.ok(focusedWalletCases.every(name => known.includes(name)), 'unknown wallet case')
   assert.equal(new Set(focusedWalletCases).size, focusedWalletCases.length)
@@ -734,7 +825,7 @@ let accountDiagnosticDevice = 0
 
 async function device(sharedContext, waitForReady = true, beforeGoto, diagnosticRole = 'unassigned') {
   const diagnosticDeviceId = ++accountDiagnosticDevice
-  const context = sharedContext ?? await browser.newContext()
+  const context = sharedContext ?? await browser.newContext({ locale: 'en-US' })
   if (!sharedContext && posFixture && process.env.SAT20_PWA_DIAGNOSTIC === '1') auditAccountCAS(context)
   context.setDefaultTimeout(30000)
   context.setDefaultNavigationTimeout(90000)
@@ -1296,11 +1387,11 @@ async function runAccountGate() {
       const { default: router } = await import('/router/index.ts')
       return router.push('/restore-account')
     })
-    await canceled.getByPlaceholder('粘贴 sat20account1:...').fill(two.locator)
-    await canceled.getByRole('button', { name: '加载加密账户备份', exact: true }).click()
-    await canceled.getByText('回答私人知识问题', { exact: true }).waitFor()
+    await canceled.getByPlaceholder('Paste sat20account1:...').fill(two.locator)
+    await canceled.getByRole('button', { name: 'Load encrypted account backup', exact: true }).click()
+    await canceled.getByText('Answer private knowledge questions', { exact: true }).waitFor()
     const id = await canceled.evaluate(() => window.canceledRecoverySession)
-    await canceled.getByRole('button', { name: '取消', exact: true }).click()
+    await canceled.getByRole('button', { name: 'Cancel', exact: true }).click()
     await canceled.waitForFunction(() => new URL(location.href).hash !== '#/restore-account')
     await assert.rejects(accountCall(canceled, 'recoverKnowledge', id, answers))
     await canceled.context().close()
@@ -1309,21 +1400,21 @@ async function runAccountGate() {
   await check('PWA recovery page completes locator knowledge share preview and password steps', async () => {
     await uiRecovery.goto(`${server.resolvedUrls.local[0]}#/restore-account`, { waitUntil: 'domcontentloaded', timeout: 90000 })
     await ready(uiRecovery)
-    await uiRecovery.getByPlaceholder('粘贴 sat20account1:...').fill(two.locator)
-    await uiRecovery.getByRole('button', { name: '加载加密账户备份', exact: true }).click()
+    await uiRecovery.getByPlaceholder('Paste sat20account1:...').fill(two.locator)
+    await uiRecovery.getByRole('button', { name: 'Load encrypted account backup', exact: true }).click()
     for (const question of questions.slice(0, 2)) {
       await uiRecovery.getByText(question.prompt, { exact: true }).locator('..').locator('input').fill(question.answer)
     }
-    await uiRecovery.getByRole('button', { name: '恢复加密分片', exact: true }).click()
-    await uiRecovery.getByPlaceholder('可选：粘贴 sat20share1:...').fill(two.user_share)
-    await uiRecovery.getByRole('button', { name: '使用用户分片', exact: true }).click()
-    await uiRecovery.getByRole('button', { name: '预览恢复内容', exact: true }).click()
+    await uiRecovery.getByRole('button', { name: 'Recover encrypted share', exact: true }).click()
+    await uiRecovery.getByPlaceholder('Optional: paste sat20share1:...').fill(two.user_share)
+    await uiRecovery.getByRole('button', { name: 'Use user share', exact: true }).click()
+    await uiRecovery.getByRole('button', { name: 'Preview recovery', exact: true }).click()
     await uiRecovery.getByText('PWA Root', { exact: true }).waitFor()
-    await uiRecovery.getByPlaceholder('设置新的本地钱包密码').fill(newPassword)
-    await uiRecovery.getByPlaceholder('再次输入密码').fill(newPassword)
+    await uiRecovery.getByPlaceholder('Set a new local wallet password').fill(newPassword)
+    await uiRecovery.getByPlaceholder('Enter password again').fill(newPassword)
     await Promise.all([
       uiRecovery.waitForEvent('domcontentloaded', { timeout: 90000 }),
-      uiRecovery.getByRole('button', { name: '恢复全部钱包', exact: true }).click(),
+      uiRecovery.getByRole('button', { name: 'Restore all wallets', exact: true }).click(),
     ])
     assert.equal(new URL(uiRecovery.url()).hash, '#/unlock')
     await ready(uiRecovery)
@@ -1384,23 +1475,23 @@ async function runAccountGate() {
     const pairDevice = await device()
     await pairDevice.goto(`${server.resolvedUrls.local[0]}#/restore-account`, { waitUntil: 'domcontentloaded' })
     await ready(pairDevice)
-    await pairDevice.getByPlaceholder('粘贴 sat20account1:...').fill(three.locator)
-    await pairDevice.getByRole('button', { name: '加载加密账户备份', exact: true }).click()
-    await pairDevice.getByRole('button', { name: '使用用户分片和 Guardian', exact: true }).click()
-    await pairDevice.getByPlaceholder('可选：粘贴 sat20share1:...').fill(three.user_share)
-    await pairDevice.getByRole('button', { name: '使用用户分片', exact: true }).click()
-    assert.equal(await pairDevice.getByRole('button', { name: '预览恢复内容', exact: true }).isDisabled(), true)
-    await pairDevice.getByRole('button', { name: '生成 Guardian 恢复请求', exact: true }).click()
+    await pairDevice.getByPlaceholder('Paste sat20account1:...').fill(three.locator)
+    await pairDevice.getByRole('button', { name: 'Load encrypted account backup', exact: true }).click()
+    await pairDevice.getByRole('button', { name: 'Use user share and Guardian', exact: true }).click()
+    await pairDevice.getByPlaceholder('Optional: paste sat20share1:...').fill(three.user_share)
+    await pairDevice.getByRole('button', { name: 'Use user share', exact: true }).click()
+    assert.equal(await pairDevice.getByRole('button', { name: 'Preview recovery', exact: true }).isDisabled(), true)
+    await pairDevice.getByRole('button', { name: 'Generate Guardian recovery request', exact: true }).click()
     const request = await pairDevice.locator('textarea[readonly]').inputValue()
     const response = await accountCall(guardian, 'createGuardianResponse', password, request)
-    await pairDevice.getByPlaceholder('粘贴 Guardian 返回的加密响应').fill(response.response)
-    await pairDevice.getByRole('button', { name: '使用 Guardian 响应', exact: true }).click()
-    await pairDevice.getByRole('button', { name: '预览恢复内容', exact: true }).click()
-    await pairDevice.getByPlaceholder('设置新的本地钱包密码').fill(newPassword)
-    await pairDevice.getByPlaceholder('再次输入密码').fill(newPassword)
+    await pairDevice.getByPlaceholder('Paste the encrypted response from your Guardian').fill(response.response)
+    await pairDevice.getByRole('button', { name: 'Use Guardian response', exact: true }).click()
+    await pairDevice.getByRole('button', { name: 'Preview recovery', exact: true }).click()
+    await pairDevice.getByPlaceholder('Set a new local wallet password').fill(newPassword)
+    await pairDevice.getByPlaceholder('Enter password again').fill(newPassword)
     await Promise.all([
       pairDevice.waitForEvent('domcontentloaded', { timeout: 90000 }),
-      pairDevice.getByRole('button', { name: '恢复全部钱包', exact: true }).click(),
+      pairDevice.getByRole('button', { name: 'Restore all wallets', exact: true }).click(),
     ])
     await ready(pairDevice)
     await unlock(pairDevice, newPassword)
@@ -1628,9 +1719,9 @@ try {
     const helpers = { check, device, ready, unlock, catalog, walletCall, accountCall, questions, answers, nodeAPIOrigins, integrationDapp, selectedCases: focusedWalletCases, preserveBrowserFailureState }
     // Independent feature groups use fresh browser stores and continue after
     // another group fails; the required-case ledger still fails the whole gate.
-    for (const [run, names] of [[runPwaSilentPayCases, requiredPwaSilentPayCases], [runPwaPosCases, [...requiredPwaPosCases, ...optionalPwaEscapeCases]], [runPwaL1ProtocolCases, requiredPwaL1ProtocolCases], [runPwaWalletBasicCases, requiredPwaWalletBasicCases],
+    for (const [run, names] of [[runPwaSilentPayCases, requiredPwaSilentPayCases], [runPwaPosCases, [...requiredPwaPosCases, ...requiredPwaRgbCrossLayerCases, ...optionalPwaEscapeCases]], [runPwaL1ProtocolCases, requiredPwaL1ProtocolCases], [runPwaWalletBasicCases, requiredPwaWalletBasicCases],
       [runPwaIntegrationCases, requiredPwaIntegrationCases], [runPwaToolsCases, requiredPwaToolsCases],
-      [runPwaMintCases, requiredPwaMintCases], [runPwaMiningCases, requiredPwaMiningCases],
+      [runPwaMintCases, requiredPwaMintCases], [runPwaMiningCases, regtestMode ? requiredPwaRegtestMiningCases : requiredPwaMiningCases],
       [runPwaNodeCases, requiredPwaNodeCases]]) {
       if (run === runPwaSilentPayCases && !posFixture.silentPay) continue
       if (focusedWalletCases && !names.some(name => focusedWalletCases.includes(name))) continue

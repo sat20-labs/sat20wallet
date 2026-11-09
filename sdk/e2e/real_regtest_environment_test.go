@@ -108,7 +108,8 @@ func prepareSDKPWARegtestNodes(t *testing.T) *realSatoshiNet {
 		// peers prevent the SDK default from contacting the public testnet.
 		require.NotContains(t, conf, "\npeers:")
 		conf += fmt.Sprintf("\npeers:\n  - %q\n", localBootstrapPeer)
-		conf += fmt.Sprintf("\npublic_rpc:\n  browser_allowed_origins: [%q]\n", sdkPWARegtestBrowserOrigin(t))
+		conf += fmt.Sprintf("\npublic_rpc:\n  browser_allowed_origins: [%q, %q]\n",
+			sdkPWARegtestBrowserOrigin(t), "http://127.0.0.1:3006")
 		require.NoError(t, os.WriteFile(filepath.Join(nodeDir, "conf.yaml"), []byte(conf), 0o600))
 		args := []string{"--regtest", "--notls", "--nodnsseed", "--txindex", "--generate", "--miningpubkey=" + pubkey,
 			"--listen=" + p2p, "--rpclisten=" + rpc, "--rpcuser=user", "--rpcpass=pass",
@@ -292,6 +293,549 @@ func registerSDKPWARegtestMiner(t *testing.T, manager *wallet.Manager, network *
 	}, rpcReadyTimeout, 300*time.Millisecond, "Core child list does not contain A1's confirmed AscendHeight")
 	require.Equal(t, minerInfo.ServerNode, network.Core.nodePubKey)
 	return minerPubkey
+}
+
+// prepareSDKPWARegtestCoreDogcoinStake establishes the real Core collateral
+// required by the public-contract route. It only uses SDK deploy, mint, and
+// StakeToBeMinner(true) paths, and it refuses partial or ambiguous prior state
+// rather than repeating a transaction.
+func prepareSDKPWARegtestCoreDogcoinStake(t *testing.T, issuer *wallet.Manager,
+	network *realSatoshiNet, mine func(string, int)) map[string]string {
+	t.Helper()
+	require.NotNil(t, issuer)
+	require.NotNil(t, network)
+	require.NotNil(t, network.Core)
+	require.NotNil(t, network.Bootstrap)
+	require.NotNil(t, mine)
+	require.NotNil(t, issuer.GetWallet())
+
+	seeds := readSDKPWARegtestMnemonics(t)
+	coreKey := keyFromMnemonic(t, seeds["core"], 0)
+	bootstrapKey := keyFromMnemonic(t, seeds["bootstrap"], 0)
+	corePub := coreKey.PubKey().SerializeCompressed()
+	bootstrapPub := bootstrapKey.PubKey().SerializeCompressed()
+	corePubHex := hex.EncodeToString(corePub)
+	require.Equal(t, network.Core.nodePubKey, corePubHex, "use the fixed built-in Core identity")
+	require.Equal(t, indexercommon.GetBootstrapPubKey(), hex.EncodeToString(bootstrapPub),
+		"use the fixed built-in Bootstrap identity")
+
+	coreWallet := wallet.NewInternalWalletWithMnemonic(seeds["core"], "", wallet.GetChainParam())
+	require.NotNil(t, coreWallet)
+	coreAddress := wallet.PublicKeyToP2TRAddress(coreKey.PubKey())
+	require.Equal(t, coreWallet.GetAddress(), coreAddress, "derive Core's fixed account-0 Bitcoin address")
+	stakeAddress, err := indexercommon.GetCoreNodeChannelAddress(corePub, wallet.GetChainParam())
+	require.NoError(t, err)
+	l2StakeAddress, err := wallet.GetP2WSHaddress(corePub, bootstrapPub)
+	require.NoError(t, err)
+	require.Equal(t, stakeAddress, l2StakeAddress,
+		"the actual Core/Bootstrap collateral and Anchor must identify the same channel address")
+
+	startL1Height := issuer.GetSyncHeightL1()
+	assetText := indexercommon.GetStakeAssetName(startL1Height)
+	assetAmount := indexercommon.GetStakeAssetAmt(startL1Height)
+	require.Equal(t, "ordx:f:dogcoin", assetText,
+		"this fixture must prepare the live regtest staking asset, not ordinary sats")
+	require.Equal(t, int64(1000), assetAmount, "this fixture must meet the live Core staking threshold")
+	asset := wallet.ParseAssetString(assetText)
+	require.NotNil(t, asset)
+
+	// Fail before issuance or staking if this is not a clean or already-complete
+	// isolated fixture. In particular, do not send a second ASCEND action when
+	// an earlier stake output, anchor, or live action reservation exists.
+	stakeOutputsBefore := issuer.GetIndexerClient().GetUtxoListWithTicker(stakeAddress, asset)
+	require.Empty(t, stakeOutputsBefore,
+		"the fixed Core/Bootstrap collateral address must be empty before the one authorized stake action")
+	require.False(t, issuer.HasStaked(corePub), "Core must not already satisfy the staking threshold")
+
+	l1CoreInfoBefore, err := issuer.GetIndexerRPCClient_SatsNet().GetCoreNodeInfo(corePub)
+	require.NoError(t, err, "read the pre-existing built-in Core registry entry")
+	require.NotNil(t, l1CoreInfoBefore)
+	isCoreBefore, err := issuer.GetIndexerRPCClient_SatsNet().IsCoreNode(corePub)
+	require.NoError(t, err)
+	require.True(t, isCoreBefore, "preserve the built-in Core registry membership")
+	coreRegistryBefore, err := json.Marshal(l1CoreInfoBefore)
+	require.NoError(t, err)
+
+	feeRate := issuer.GetFeeRate()
+	require.Positive(t, feeRate, "use the live Bitcoin fee rate for the SDK inscription quotes")
+	plain := wallet.ParseAssetString(wallet.PLAIN_ASSET.String())
+	require.NotNil(t, plain)
+	issuerAddress := issuer.GetWallet().GetAddress()
+	issuerPlainAvailable, issuerPlainLocked := issuer.GetAssetAmount(issuerAddress, plain, nil)
+	require.NotNil(t, issuerPlainAvailable)
+	require.NotNil(t, issuerPlainLocked)
+	issuerPlainUtxos := issuer.GetIndexerClient().GetUtxoListWithTicker(issuerAddress, plain)
+	issuerLocks, err := issuer.GetLockedUtxoList(issuerAddress)
+	require.NoError(t, err)
+	spendableInputCount := 0
+	var spendableInputTotal int64
+	for _, output := range issuerPlainUtxos {
+		if output == nil || issuerLocks[output.OutPoint] != nil {
+			continue
+		}
+		spendableInputCount++
+		spendableInputTotal += output.Value
+	}
+	require.Positive(t, spendableInputCount, "ordinary-2 needs real unlocked L1 fee inputs")
+	require.Equal(t, issuerPlainAvailable.Int64(), spendableInputTotal,
+		"fee preflight must use only confirmed, unlocked ordinary-2 plain-sat inputs")
+	deployQuote := wallet.EstimatedDeployFee(spendableInputCount, feeRate)
+	mintQuote := wallet.EstimatedMintFee(spendableInputCount, feeRate, assetAmount)
+	issuerFeeBudget := deployQuote + mintQuote
+	require.GreaterOrEqual(t, spendableInputTotal, issuerFeeBudget,
+		"ordinary-2's existing unlocked L1 funds must cover both DOGCOIN inscription quotes before broadcasting")
+
+	ticker := issuer.GetTickerInfoV2(assetText)
+	coreAssetBefore := issuer.GetAssetBalance(coreAddress, asset)
+	coreAssetBeforeAmt := int64(0)
+	if coreAssetBefore != nil {
+		coreAssetBeforeAmt = coreAssetBefore.Int64()
+	}
+	if ticker == nil {
+		require.Zero(t, coreAssetBeforeAmt, "no Core DOGCOIN may predate this isolated issuance")
+		deployed, deployErr := issuer.DeployTicker_ordx("dogcoin", assetAmount, assetAmount, 1, feeRate)
+		require.NoError(t, deployErr, "deploy the live Core stake asset through the real SDK")
+		require.NotNil(t, deployed)
+		require.NotNil(t, deployed.CommitTx)
+		require.NotNil(t, deployed.RevealTx)
+		deployTxIDs := []string{deployed.CommitTx.TxID(), deployed.RevealTx.TxID()}
+		confirmSDKPWARegtestL1Transactions(t, issuer, deployTxIDs, mine)
+		require.Eventually(t, func() bool {
+			ticker = issuer.GetTickerInfoV2(assetText)
+			return ticker != nil
+		}, rpcReadyTimeout, 200*time.Millisecond, "real indexer did not recognize the DOGCOIN deploy inscription")
+		t.Logf("real Core stake ticker deployed: commit=%s reveal=%s L1_height=%d fee_rate=%d deploy_quote=%d",
+			deployTxIDs[0], deployTxIDs[1], issuer.GetSyncHeightL1(), feeRate, deployQuote)
+	}
+	require.NotNil(t, ticker)
+	require.Equal(t, "ordx", ticker.Protocol)
+	require.Equal(t, "f", ticker.Type)
+	require.Equal(t, "dogcoin", ticker.Ticker)
+	require.Equal(t, int64(1), int64(ticker.N), "DOGCOIN must bind one satoshi per token")
+	require.Equal(t, strconv.FormatInt(assetAmount, 10), ticker.Limit)
+	require.Equal(t, strconv.FormatInt(assetAmount, 10), ticker.MaxSupply)
+
+	totalMinted, err := strconv.ParseInt(ticker.TotalMinted, 10, 64)
+	require.NoError(t, err, "read the exact indexed DOGCOIN supply before minting")
+	switch {
+	case totalMinted == 0 && coreAssetBeforeAmt == 0:
+		minted, mintErr := issuer.MintAsset_ordx(coreAddress, ticker, assetAmount, nil, feeRate)
+		require.NoError(t, mintErr, "mint the exact Core stake amount through the real SDK")
+		require.NotNil(t, minted)
+		require.NotNil(t, minted.CommitTx)
+		require.NotNil(t, minted.RevealTx)
+		mintTxIDs := []string{minted.CommitTx.TxID(), minted.RevealTx.TxID()}
+		confirmSDKPWARegtestL1Transactions(t, issuer, mintTxIDs, mine)
+		mintReveal := minted.RevealTx
+		mintAddressScript, scriptErr := wallet.GetPkScriptFromAddress(coreAddress)
+		require.NoError(t, scriptErr)
+		mintVout := -1
+		for index, output := range mintReveal.TxOut {
+			if !bytes.Equal(output.PkScript, mintAddressScript) {
+				continue
+			}
+			require.Equal(t, assetAmount, output.Value,
+				"the exact 1,000 DOGCOIN mint must create its bound Core carrier")
+			require.Equal(t, -1, mintVout, "mint reveal must create only one Core asset carrier")
+			mintVout = index
+		}
+		require.NotEqual(t, -1, mintVout, "mint reveal must pay the fixed Core account-0 address")
+		mintOutpoint := fmt.Sprintf("%s:%d", mintReveal.TxID(), mintVout)
+		mintOutput, outputErr := issuer.GetIndexerClient().GetTxOutput(mintOutpoint)
+		require.NoError(t, outputErr, "L1 indexer must expose the exact Core DOGCOIN carrier")
+		require.NotNil(t, mintOutput)
+		require.Equal(t, mintOutpoint, mintOutput.OutPointStr)
+		require.Equal(t, assetAmount, mintOutput.OutValue.Value)
+		require.Equal(t, mintAddressScript, mintOutput.OutValue.PkScript)
+		mintAsset, assetErr := mintOutput.Assets.Find(asset)
+		require.NoError(t, assetErr)
+		require.Equal(t, assetAmount, mintAsset.Amount.Int64())
+		require.Equal(t, uint32(1), mintAsset.BindingSat)
+		require.Eventually(t, func() bool {
+			ticker = issuer.GetTickerInfoV2(assetText)
+			return ticker != nil && ticker.TotalMinted == strconv.FormatInt(assetAmount, 10)
+		}, rpcReadyTimeout, 200*time.Millisecond, "real L1 indexer did not confirm the exact DOGCOIN supply")
+		t.Logf("real Core stake DOGCOIN minted: commit=%s reveal=%s outpoint=%s amount=%d binding_sat=1 L1_height=%d fee_rate=%d mint_quote=%d",
+			mintTxIDs[0], mintTxIDs[1], mintOutpoint, assetAmount, issuer.GetSyncHeightL1(), feeRate, mintQuote)
+	case totalMinted == assetAmount && coreAssetBeforeAmt == assetAmount:
+		t.Logf("reusing verified complete DOGCOIN issuance without a duplicate mint: amount=%d", assetAmount)
+	default:
+		require.FailNow(t, fmt.Sprintf("refusing to repeat or repair partial DOGCOIN issuance: totalMinted=%d Core=%d", totalMinted, coreAssetBeforeAmt))
+	}
+
+	ticker = issuer.GetTickerInfoV2(assetText)
+	require.NotNil(t, ticker)
+	require.Equal(t, strconv.FormatInt(assetAmount, 10), ticker.TotalMinted,
+		"the real indexed supply must exactly equal the Core staking threshold")
+	coreAvailable, coreLocked := issuer.GetAssetAmount(coreAddress, asset, nil)
+	require.NotNil(t, coreAvailable, "Core must have exactly the minted DOGCOIN available")
+	require.Equal(t, assetAmount, coreAvailable.Int64())
+	if coreLocked != nil {
+		require.Zero(t, coreLocked.Sign(), "Core's newly minted DOGCOIN must not be reserved or locked")
+	}
+	coreDogcoinOutputs := issuer.GetIndexerClient().GetUtxoListWithTicker(coreAddress, asset)
+	require.NotEmpty(t, coreDogcoinOutputs, "Core must own a real indexed DOGCOIN output before staking")
+	coreDogcoinTotal := int64(0)
+	for _, output := range coreDogcoinOutputs {
+		require.NotNil(t, output)
+		indexed, outputErr := issuer.GetIndexerClient().GetTxOutput(output.OutPoint)
+		require.NoError(t, outputErr)
+		require.NotNil(t, indexed)
+		assetInfo, findErr := indexed.Assets.Find(asset)
+		require.NoError(t, findErr)
+		require.Equal(t, uint32(1), assetInfo.BindingSat)
+		coreDogcoinTotal += assetInfo.Amount.Int64()
+	}
+	require.Equal(t, assetAmount, coreDogcoinTotal,
+		"Core's real DOGCOIN carriers must conserve the exact 1,000-unit issuance")
+
+	coreFeeAvailable, coreFeeLocked := issuer.GetAssetAmount(coreAddress, plain, nil)
+	require.NotNil(t, coreFeeAvailable)
+	if coreFeeLocked != nil {
+		require.Zero(t, coreFeeLocked.Sign(), "Core's L1 fee inputs must not be locked before the one stake action")
+	}
+ stakeFeeQuote := wallet.CalcFee_SendTx(1, 3, 1, asset, indexercommon.NewDecimal(assetAmount, 0), feeRate, false)
+	require.GreaterOrEqual(t, coreFeeAvailable.Int64(), stakeFeeQuote,
+		"the fixed Core wallet must have enough real unlocked L1 plain sats for the exact stake send quote")
+
+	// Save the built-in Core registry record on both nodes. The built-in Core
+	// must remain a Core; adding its stake must not replace its original entry.
+	indexers := make([]*wallet.IndexerClient, 0, len(network.Nodes))
+	coreRegistryJSON := make([]string, 0, len(network.Nodes))
+	for _, node := range network.Nodes {
+		client := sdkPWARegtestL2Indexer(t, node)
+		indexers = append(indexers, client)
+		isCore, checkErr := client.IsCoreNode(corePub)
+		require.NoError(t, checkErr)
+		require.True(t, isCore, "%s must preserve built-in Core registry membership", node.role)
+		info, infoErr := client.GetCoreNodeInfo(corePub)
+		require.NoError(t, infoErr)
+		require.NotNil(t, info)
+		encoded, marshalErr := json.Marshal(info)
+		require.NoError(t, marshalErr)
+		coreRegistryJSON = append(coreRegistryJSON, string(encoded))
+	}
+	require.Equal(t, coreRegistryJSON[0], coreRegistryJSON[1],
+		"both SatoshiNet nodes must begin with the same built-in Core record")
+	require.Equal(t, string(coreRegistryBefore), coreRegistryJSON[1],
+		"issuer's view must agree with both nodes' pre-stake Core membership")
+
+	// Ensure there is no active ASCEND reservation in the original Core wallet.
+	// The Core process must release its DB before this test opens that same DB.
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	err = posPWAStopNode(ctx, network.Core)
+	cancel()
+	require.NoError(t, err, "normally stop the original Core before opening its wallet DB")
+	coreStopped := true
+	coreRestored := false
+	defer func() {
+		if coreRestored || !coreStopped || network.Core.Client != nil {
+			return
+		}
+		restartCtx, restartCancel := context.WithTimeout(context.Background(), rpcReadyTimeout)
+		defer restartCancel()
+		if restartErr := posPWARestartNode(restartCtx, network.Core); restartErr != nil {
+			t.Errorf("restart original Core after stake preparation: %v", restartErr)
+		}
+	}()
+
+	portBase := sdkPWARegtestSatoshiNetPortBase(t)
+	l1URL, err := url.Parse(os.Getenv("SAT20_REAL_L1_INDEXER"))
+	require.NoError(t, err)
+	bootstrapIndexerURL, err := network.Bootstrap.IndexerURL("regtest")
+	require.NoError(t, err)
+	bootstrapIndexer, err := url.Parse(bootstrapIndexerURL)
+	require.NoError(t, err)
+	coreDBDir := filepath.Join(network.Core.nodeDir, "data", "db", "stp", "regtest")
+	info, statErr := os.Stat(coreDBDir)
+	require.NoError(t, statErr, "open only the original Core STP wallet DB")
+	require.True(t, info.IsDir())
+	database := indexerdb.NewKVDB(coreDBDir)
+	require.NotNil(t, database)
+	coreCfg := &sdkcommon.Config{Env: "dev", Chain: "regtest", Mode: "client",
+		Peers: []string{fmt.Sprintf("b@%s@http://127.0.0.1:%d/regtest", hex.EncodeToString(bootstrapPub), portBase+3)},
+		IndexerL1: &sdkcommon.Indexer{Scheme: l1URL.Scheme, Host: l1URL.Host, Proxy: "btc/regtest"},
+		// The original Core indexer is offline during this exclusive session.
+		// Read the already-verified canonical L2 state from Bootstrap instead.
+		IndexerL2: &sdkcommon.Indexer{Scheme: bootstrapIndexer.Scheme, Host: bootstrapIndexer.Host, Proxy: "regtest"}}
+	coreManager := wallet.NewManager(coreCfg, database)
+	require.NotNil(t, coreManager)
+	coreManagerClosed := false
+	defer func() {
+		if coreManagerClosed {
+			return
+		}
+		coreManager.Close()
+		if closeErr := database.Close(); closeErr != nil {
+			t.Errorf("close original Core wallet DB: %v", closeErr)
+		}
+	}()
+	require.NotEmpty(t, coreManager.GetWalletCatalog(),
+		"original Core wallet must exist; never import or replace the fixed Core identity")
+	_, err = coreManager.UnlockWallet("rpctest")
+	require.NoError(t, err, "unlock the existing Core account")
+	require.NoError(t, coreManager.SwitchAccount(0), "select the fixed Core account-0 identity")
+	require.Equal(t, uint32(0), coreManager.GetCurrentAccountId())
+	actualCorePub := coreManager.GetWallet().GetPubKey().SerializeCompressed()
+	require.Equal(t, corePub, actualCorePub, "exclusive Core Manager must use original account 0")
+	require.Equal(t, coreAddress, coreManager.GetWallet().GetAddress())
+	coreManager.Start()
+	require.Eventually(t, coreManager.IsReady, rpcReadyTimeout, 200*time.Millisecond,
+		"Core's original SDK Manager must be ready against the Bootstrap peer")
+	require.True(t, coreManager.ServerIsBootstrapNode(), "StakeToBeMinner(true) must target Bootstrap")
+	require.GreaterOrEqual(t, coreManager.GetSyncHeightL1(), issuer.GetSyncHeightL1(),
+		"exclusive Core Manager must sync the confirmed DOGCOIN issuance")
+
+	for id, reservation := range coreManager.GetRemoteActionReservations() {
+		action, ok := reservation.(*wallet.RemoteActionPerformReservation)
+		if ok && action.Action == wallet.REMOTE_ACTION_ASCEND {
+			require.FailNow(t, fmt.Sprintf("refusing to repeat active Core ASCEND reservation %d (id=%d status=%d)",
+				action.Id, id, action.GetStatus()))
+		}
+	}
+	require.False(t, coreManager.HasStaked(corePub),
+		"Core must be genuinely unstaked before the one SDK stake action")
+	coreStakeBalance, coreStakeLocked := coreManager.GetAssetAmount(coreAddress, asset, nil)
+	require.NotNil(t, coreStakeBalance)
+	require.Equal(t, assetAmount, coreStakeBalance.Int64(), "Core account 0 must spend exactly its real DOGCOIN")
+	if coreStakeLocked != nil {
+		require.Zero(t, coreStakeLocked.Sign())
+	}
+	stakeOutputsBefore = coreManager.GetIndexerClient().GetUtxoListWithTicker(stakeAddress, asset)
+	require.Empty(t, stakeOutputsBefore,
+		"no earlier Core/Bootstrap DOGCOIN stake output may be reused or double-registered")
+
+	// One invocation only. If this request has an uncertain result, fail and
+	// inspect its records; never repeat it from this fixture.
+	stakeTxID, reservationID, stakeErr := coreManager.StakeToBeMinner(true, feeRate)
+	require.NoError(t, stakeErr, "fixed Core account 0 must stake through the real SDK Bootstrap path")
+	require.Len(t, stakeTxID, 64)
+	require.Greater(t, reservationID, int64(0), "Core stake action must persist its real reservation id")
+	if active, ok := coreManager.GetRemoteActionReservation(reservationID); ok {
+		action, actionOK := active.(*wallet.RemoteActionPerformReservation)
+		require.True(t, actionOK)
+		require.Equal(t, wallet.REMOTE_ACTION_ASCEND, action.Action)
+		require.True(t, action.SendTxInL1)
+		require.True(t, action.SendToBootstrapNode)
+		require.Equal(t, stakeTxID, action.FeeTxId)
+	}
+	coreManager.Close()
+	require.NoError(t, database.Close())
+	coreManagerClosed = true
+
+	restartCtx, restartCancel := context.WithTimeout(context.Background(), rpcReadyTimeout)
+	err = posPWARestartNode(restartCtx, network.Core)
+	restartCancel()
+	require.NoError(t, err, "restart the original Core node with its original wallet DB")
+	coreRestored = true
+	waitSDKPWARegtestManagerHealth(t, network.Core)
+	require.NoError(t, connectNode(network.Core, network.Bootstrap),
+		"reconnect Core to its original Bootstrap peer")
+	require.NoError(t, joinBlocks(network.Nodes), "both nodes must rejoin the canonical SatoshiNet chain")
+	waitSDKPWARegtestIndexes(t, network)
+
+	// The SDK's returned transaction is the Core's actual L1 DOGCOIN transfer.
+	// Confirm the exact transaction before inspecting outputs; do not reissue if
+	// the result is missing from both mempool and indexer.
+	var stakeMempool []string
+	require.NoError(t, json.Unmarshal(realRegtestBitcoinCLI(t, "getrawmempool"), &stakeMempool))
+	if !containsString(stakeMempool, stakeTxID) {
+		stakeInfo, lookupErr := issuer.GetIndexerClient().GetTxInfo(stakeTxID)
+		require.NoError(t, lookupErr, "look up the one submitted Core stake transaction")
+		require.NotNil(t, stakeInfo)
+		require.Greater(t, stakeInfo.Confirmations, uint64(0),
+			"stake tx missing from mempool must already have a confirmed indexer record; never resend")
+	} else {
+		mine(issuer.GetWallet().GetAddressByIndex(1), 1)
+	}
+	require.Eventually(t, func() bool {
+		info, lookupErr := issuer.GetIndexerClient().GetTxInfo(stakeTxID)
+		return lookupErr == nil && info != nil && info.Confirmations > 0
+	}, rpcReadyTimeout, 200*time.Millisecond, "L1 indexer did not confirm the single Core stake transaction")
+	stakeInfo, err := issuer.GetIndexerClient().GetTxInfo(stakeTxID)
+	require.NoError(t, err)
+	require.NotNil(t, stakeInfo)
+	require.Greater(t, stakeInfo.BlockHeight, int64(0))
+	coreBlockHash := strings.TrimSpace(string(realRegtestBitcoinCLI(t, "getblockhash", strconv.FormatInt(stakeInfo.BlockHeight, 10))))
+	require.Len(t, coreBlockHash, 64)
+	indexedBlockHash, err := issuer.GetIndexerClient().GetBlockHash(int(stakeInfo.BlockHeight))
+	require.NoError(t, err)
+	require.Equal(t, strings.ToLower(coreBlockHash), strings.ToLower(indexedBlockHash),
+		"L1 indexer confirmation must identify the same Bitcoin Core block")
+
+	stakeRaw, err := issuer.GetIndexerClient().GetRawTx(stakeTxID)
+	require.NoError(t, err)
+	stakeTx, err := wallet.DecodeMsgTx(stakeRaw)
+	require.NoError(t, err)
+	require.Equal(t, stakeTxID, stakeTx.TxHash().String())
+	stakeScript, err := wallet.GetPkScriptFromAddress(stakeAddress)
+	require.NoError(t, err)
+	stakeVout := -1
+	for i, output := range stakeTx.TxOut {
+		if !bytes.Equal(output.PkScript, stakeScript) {
+			continue
+		}
+		require.Equal(t, assetAmount, output.Value,
+			"Core must create the exact 1,000-sat DOGCOIN collateral output")
+		require.Equal(t, -1, stakeVout, "Core stake tx must create one collateral output")
+		stakeVout = i
+	}
+	require.NotEqual(t, -1, stakeVout, "Core stake transaction must pay the fixed Core/Bootstrap P2WSH")
+	fundingOutpoint := fmt.Sprintf("%s:%d", stakeTxID, stakeVout)
+	indexedStakeOutput, err := issuer.GetIndexerClient().GetTxOutput(fundingOutpoint)
+	require.NoError(t, err, "real L1 indexer must expose the exact DOGCOIN collateral output")
+	require.NotNil(t, indexedStakeOutput)
+	require.Equal(t, fundingOutpoint, indexedStakeOutput.OutPointStr)
+	require.Equal(t, assetAmount, indexedStakeOutput.OutValue.Value)
+	require.Equal(t, stakeScript, indexedStakeOutput.OutValue.PkScript)
+	stakedAsset, err := indexedStakeOutput.Assets.Find(asset)
+	require.NoError(t, err, "Core collateral output must carry the live staking asset")
+	require.Equal(t, assetAmount, stakedAsset.Amount.Int64())
+	require.Equal(t, uint32(1), stakedAsset.BindingSat)
+	unspentValue, unspentScript, unspent := bitcoinUnspentAt(t, stakeTxID, uint32(stakeVout))
+	require.True(t, unspent, "the exact Core DOGCOIN stake output must remain unspent")
+	require.Equal(t, assetAmount, unspentValue)
+	require.Equal(t, stakeScript, unspentScript)
+	require.True(t, issuer.HasStaked(corePub), "HasStaked must pass from the actual confirmed DOGCOIN UTXO")
+
+	// Validate the actual confirmed L2 Anchor, not the REST AscendData.Assets
+	// field (which is intentionally omitted by that endpoint).
+	var bootstrapAscend, coreAscend *sindexercommon.AscendData
+	require.Eventually(t, func() bool {
+		bootstrapAscend, err = indexers[0].GetAscendData(fundingOutpoint)
+		if err != nil || bootstrapAscend == nil {
+			return false
+		}
+		coreAscend, err = indexers[1].GetAscendData(fundingOutpoint)
+		return err == nil && coreAscend != nil
+	}, rpcReadyTimeout, 250*time.Millisecond,
+		"both SatoshiNet indexers must confirm the real Core stake Anchor")
+	for _, ascend := range []*sindexercommon.AscendData{bootstrapAscend, coreAscend} {
+		require.Equal(t, fundingOutpoint, ascend.FundingUtxo)
+		require.Equal(t, stakeAddress, ascend.Address)
+		require.Greater(t, ascend.Height, 0)
+		require.NotEmpty(t, ascend.AnchorTxId)
+		require.Equal(t, assetAmount, ascend.Value)
+		pairMatches := (bytes.Equal(ascend.PubA, corePub) && bytes.Equal(ascend.PubB, bootstrapPub)) ||
+			(bytes.Equal(ascend.PubA, bootstrapPub) && bytes.Equal(ascend.PubB, corePub))
+		require.True(t, pairMatches, "Anchor must contain the fixed Core and Bootstrap participants")
+	}
+	require.Equal(t, *bootstrapAscend, *coreAscend,
+		"both nodes must agree on all stake Anchor fields")
+	anchorTxID := bootstrapAscend.AnchorTxId
+	anchorRaw, err := indexers[0].GetRawTx(anchorTxID)
+	require.NoError(t, err, "Bootstrap indexer must retain the confirmed SatoshiNet Anchor")
+	anchorTx, err := wallet.DecodeMsgTx_SatsNet(anchorRaw)
+	require.NoError(t, err)
+	require.Equal(t, anchorTxID, anchorTx.TxID())
+	anchorScript, err := wallet.GetPkScriptFromAddress_SatsNet(stakeAddress)
+	require.NoError(t, err)
+	anchorAssetTotal := int64(0)
+	anchorAssetOutputs := 0
+	for _, output := range anchorTx.TxOut {
+		if output == nil {
+			continue
+		}
+		assetInfo, findErr := output.Assets.Find(asset)
+		if findErr != nil || assetInfo == nil {
+			continue
+		}
+		anchorAssetOutputs++
+		require.Equal(t, stakeScript, output.PkScript,
+			"the actual L2 DOGCOIN Anchor must target the fixed Core/Bootstrap channel")
+		require.Equal(t, assetAmount, output.Value)
+		require.Equal(t, assetAmount, assetInfo.Amount.Int64())
+		require.Equal(t, uint32(1), assetInfo.BindingSat)
+		anchorAssetTotal += assetInfo.Amount.Int64()
+	}
+	require.Equal(t, 1, anchorAssetOutputs, "the Anchor must contain one exact DOGCOIN output")
+	require.Equal(t, assetAmount, anchorAssetTotal,
+		"the actual Anchor transaction must conserve all 1,000 DOGCOIN")
+
+	var anchorBlockHash string
+	for i, client := range indexers {
+		info, infoErr := client.GetTxInfo(anchorTxID)
+		require.NoError(t, infoErr, "%s indexer must confirm the exact Anchor tx", network.Nodes[i].role)
+		require.NotNil(t, info)
+		require.Equal(t, anchorTxID, info.TxID)
+		require.GreaterOrEqual(t, info.Confirmations, uint64(1))
+		require.Equal(t, int64(bootstrapAscend.Height), info.BlockHeight)
+		blockHash, hashErr := client.GetBlockHash(bootstrapAscend.Height)
+		require.NoError(t, hashErr)
+		if i == 0 {
+			anchorBlockHash = blockHash
+		} else {
+			require.Equal(t, anchorBlockHash, blockHash,
+				"Core and Bootstrap must confirm the Anchor in the same canonical block")
+		}
+		raw, rawErr := client.GetRawTx(anchorTxID)
+		require.NoError(t, rawErr)
+		require.Equal(t, strings.ToLower(anchorRaw), strings.ToLower(raw),
+			"both nodes must retain identical signed Anchor bytes")
+		confirmedTx, decodeErr := wallet.DecodeMsgTx_SatsNet(raw)
+		require.NoError(t, decodeErr)
+		require.Equal(t, anchorTx.TxHash(), confirmedTx.TxHash())
+	}
+	for _, client := range indexers {
+		isCore, checkErr := client.IsCoreNode(corePub)
+		require.NoError(t, checkErr)
+		require.True(t, isCore, "real stake must preserve the built-in Core registry entry")
+		info, infoErr := client.GetCoreNodeInfo(corePub)
+		require.NoError(t, infoErr)
+		require.NotNil(t, info)
+		encoded, marshalErr := json.Marshal(info)
+		require.NoError(t, marshalErr)
+		require.Equal(t, coreRegistryJSON[0], string(encoded),
+			"staking must not replace the built-in Core registry identity")
+	}
+
+	var l1Height int
+	require.NoError(t, json.Unmarshal(realRegtestBitcoinCLI(t, "getblockcount"), &l1Height))
+	currentStakeAsset := indexercommon.GetStakeAssetName(issuer.GetSyncHeightL1())
+	currentStakeAmount := indexercommon.GetStakeAssetAmt(issuer.GetSyncHeightL1())
+	require.Equal(t, assetText, currentStakeAsset, "the fixture must remain in the same live stake era")
+	require.Equal(t, assetAmount, currentStakeAmount)
+	evidence := map[string]string{
+		"asset": assetText,
+		"amount": strconv.FormatInt(assetAmount, 10),
+		"asset_n": strconv.Itoa(ticker.N),
+		"total_minted": ticker.TotalMinted,
+		"core_address": coreAddress,
+		"stake_address": stakeAddress,
+		"stake_txid": stakeTxID,
+		"stake_outpoint": fundingOutpoint,
+		"l1_height": strconv.Itoa(l1Height),
+		"l1_block_hash": strings.ToLower(coreBlockHash),
+		"anchor_txid": anchorTxID,
+		"anchor_height": strconv.Itoa(bootstrapAscend.Height),
+		"anchor_block_hash": strings.ToLower(anchorBlockHash),
+		"action_reservation_id": strconv.FormatInt(reservationID, 10),
+	}
+	t.Logf("verified real Core DOGCOIN stake: asset=%s amount=%d core=%s stake_address=%s stake_txid=%s outpoint=%s L1_height=%d L1_block=%s anchor_txid=%s L2_height=%d L2_block=%s dual_node=true",
+		assetText, assetAmount, coreAddress, stakeAddress, stakeTxID, fundingOutpoint, l1Height, coreBlockHash,
+		anchorTxID, bootstrapAscend.Height, anchorBlockHash)
+	return evidence
+}
+
+func confirmSDKPWARegtestL1Transactions(t *testing.T, manager *wallet.Manager, txids []string,
+	mine func(string, int)) {
+	t.Helper()
+	require.NotNil(t, manager)
+	require.NotEmpty(t, txids)
+	require.NotNil(t, mine)
+	var mempool []string
+	require.NoError(t, json.Unmarshal(realRegtestBitcoinCLI(t, "getrawmempool"), &mempool))
+	for _, txid := range txids {
+		require.Contains(t, mempool, txid,
+			"both SDK inscription transactions must be in the real Bitcoin Core mempool before mining")
+	}
+	mine(manager.GetWallet().GetAddressByIndex(1), 1)
+	for _, txid := range txids {
+		require.Eventually(t, func() bool {
+			info, err := manager.GetIndexerClient().GetTxInfo(txid)
+			return err == nil && info != nil && info.Confirmations > 0
+		}, rpcReadyTimeout, 200*time.Millisecond, "real L1 indexer did not confirm SDK transaction %s", txid)
+	}
 }
 
 func mineSDKPWARegtestL1(t *testing.T, manager *wallet.Manager, address string) {
@@ -990,7 +1534,6 @@ func TestSDKPWARealRegtestNodeReadiness(t *testing.T) {
 	scheduledSend, err := ordinaryA.SendAssets_SatsNet(ordinaryA.GetWallet().GetAddress(), wallet.PLAIN_ASSET.String(), "10000", nil)
 	require.NoError(t, err, "ordinary-1 SDK self-send through scheduled mining")
 	scheduledTxID := scheduledSend.TxID()
-	requireMempoolTx(t, network.Bootstrap, scheduledTxID)
 	scheduledBlockHash, scheduledHeight, submitToConfirm, blockTimestampInterval := waitForScheduledSatsNetTx(t,
 		network, scheduledTxID, submittedAt, baselineHeight, baselineHash, baselineBlock.Header.Timestamp)
 	t.Logf("scheduled mining evidence baseline_height=%d baseline_hash=%s confirmed_height=%d confirmed_hash=%s submit_to_confirm=%s block_timestamp_interval=%s",

@@ -245,7 +245,7 @@ export const useChannelStore = defineStore('channel', () => {
           ? `${protocol}:${item.Name.Type}:${item.Name.Ticker}`
           : '::'
 
-        const amt = Number(item.Amount) || 0
+        const amt = protocol === 'rgb11' ? String(item.Amount) : Number(item.Amount) || 0
         const assetItem = {
           id: key,
           key,
@@ -272,7 +272,8 @@ export const useChannelStore = defineStore('channel', () => {
           const result = JSON.parse(ticker)
           const findItem = allAssetList.value?.find((a: any) => a.key === key)
           if (findItem) {
-            findItem.label = result?.name.Ticker || findItem.label
+            findItem.label = (findItem.protocol === 'rgb11' ? result?.displayname : '') || result?.name.Ticker || findItem.label
+            findItem.precision = result?.divisibility ?? 0
             console.log('更新资产标签:', findItem)
           }
         }
@@ -309,6 +310,9 @@ export const useChannelStore = defineStore('channel', () => {
   const ordList = computed(() => {
     return allAssetList.value.filter((item) => item?.protocol === 'ord')
   })
+  const rgb11List = computed(() => {
+    return allAssetList.value.filter((item) => item?.protocol === 'rgb11')
+  })
   const uniqueAssetList = computed(() => {
     const _assetTypes = []
     if (plainList.value?.length) {
@@ -328,6 +332,9 @@ export const useChannelStore = defineStore('channel', () => {
         label: 'RUNES',
         value: 'runes',
       })
+    }
+    if (rgb11List.value?.length) {
+      _assetTypes.push({ label: 'RGB', value: 'rgb11' })
     }
     return _assetTypes
   })
@@ -364,6 +371,7 @@ export const useChannelStore = defineStore('channel', () => {
     runesList,
     brc20List,
     ordList,
+    rgb11List,
     plainList,
     plainBalance,
     channel,

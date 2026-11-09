@@ -500,6 +500,14 @@ func TestSDKPWARealRegtestL1AssetPreparation(t *testing.T) {
 // fixture. Existing RGB carriers are never selected or unlocked. Funding is an
 // already-mature L1 coinbase at ordinary-1 account 1, signed by the existing SDK.
 func prepareSDKPWARegtestRGBBrowserCoins(t *testing.T, a, b *wallet.Manager, mine func(string, int)) {
+	prepareSDKPWARegtestRGBBrowserCoinsWithTargets(t, a, b, 7, 1, mine)
+}
+
+// Cross-layer splicing and pool operations run as ordinary-2, so its existing
+// browser wallet needs the same independent fee-coin depth as ordinary-1.
+// Keep the signer and source validation anchored to ordinary-1 account 1.
+func prepareSDKPWARegtestRGBBrowserCoinsWithTargets(t *testing.T, a, b *wallet.Manager,
+	targetA, targetB int, mine func(string, int)) {
 	t.Helper()
 	free := func(manager *wallet.Manager) int {
 		count := 0
@@ -519,7 +527,7 @@ func prepareSDKPWARegtestRGBBrowserCoins(t *testing.T, a, b *wallet.Manager, min
 		}
 		return count
 	}
-	neededA, neededB := 7-free(a), 1-free(b)
+	neededA, neededB := max(targetA-free(a), 0), max(targetB-free(b), 0)
 	if neededA <= 0 && neededB <= 0 {
 		return
 	}
@@ -543,7 +551,7 @@ func prepareSDKPWARegtestRGBBrowserCoins(t *testing.T, a, b *wallet.Manager, min
 	require.NoError(t, json.Unmarshal(realRegtestBitcoinCLI(t, "scantxoutset", "start", string(descriptors)), &scan))
 	require.True(t, scan.Success)
 	var input *indexercommon.TxOutput
-	browserValue := int64(max(neededA, 0)+max(neededB, 0)) * 100000
+	browserValue := int64(neededA+neededB) * 100000
 	for _, point := range scan.Unspents {
 		if !point.Coinbase || point.Confirmations < 101 {
 			continue
@@ -596,8 +604,8 @@ func prepareSDKPWARegtestRGBBrowserCoins(t *testing.T, a, b *wallet.Manager, min
 	_, err = a.BroadcastTx(tx)
 	require.NoError(t, err, "accept the existing SDK-signed L1 preparation transaction")
 	mine(sourceAddress, 1)
-	require.GreaterOrEqual(t, free(a), 7)
-	require.GreaterOrEqual(t, free(b), 1)
+	require.GreaterOrEqual(t, free(a), targetA)
+	require.GreaterOrEqual(t, free(b), targetB)
 	t.Logf("prepared only missing RGB browser plain outputs via existing L1 account-1 funds: txid=%s A_added=%d B_added=%d fee=1000", tx.TxHash(), max(neededA, 0), max(neededB, 0))
 }
 

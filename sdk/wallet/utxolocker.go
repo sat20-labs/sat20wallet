@@ -48,6 +48,7 @@ type rgb11ReservationLockTarget struct {
 // ReplacedOwners are the only existing operation reservations that this
 // candidate may move or retire; all other lock owners remain protected.
 type rgb11LockPlan struct {
+	FrozenInputs   map[string]string
 	ReplacedOwners map[string]struct{}
 	DesiredOwners  map[string]rgb11ReservationLockTarget
 	Consumed       map[string]struct{}
@@ -513,6 +514,12 @@ func (p *UtxoLocker) stageRGB11LockPlan(batch db.WriteBatch, plan rgb11LockPlan)
 
 	for outpoint := range touched {
 		lock := cloneLockedUtxo(current[outpoint])
+		if owner := plan.FrozenInputs[outpoint]; owner != "" {
+			if lock == nil || lock.Reason != rgb11wallet.LockReasonPending || lock.ReservationID != owner {
+				return nil, fmt.Errorf("%w: frozen RGB11 input %s", ErrUtxoReservationOwner, outpoint)
+			}
+			continue
+		}
 		target, hasOwner := plan.DesiredOwners[outpoint]
 		if hasOwner {
 			if lock != nil && lock.ReservationID != "" && lock.ReservationID != target.ReservationID {

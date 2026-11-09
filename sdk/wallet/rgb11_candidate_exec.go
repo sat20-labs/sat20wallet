@@ -116,7 +116,7 @@ func (p *rgb11Manager) runRGB11Candidate(ctx context.Context,
 			}
 			return nil, err
 		}
-		if first != nil && result.candidate != nil && current.Version == result.candidate.Version &&
+		if first != nil && len(first.faults) == 0 && result.candidate != nil && current.Version == result.candidate.Version &&
 			!rgb11SnapshotChanged(current, result.candidate) {
 			// Only an identical refresh candidate can reuse this attempt's
 			// resolution. Publication still rechecks chain evidence and the

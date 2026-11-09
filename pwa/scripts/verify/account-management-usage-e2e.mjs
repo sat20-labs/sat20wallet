@@ -8,7 +8,7 @@ const accountMessages = JSON.parse(readFileSync(new URL('../../locales/en.json',
 
 function dkvsFundingButton(page, quote) {
   assert.equal(quote.can_fund, true, 'current DKVS quote cannot be funded')
-  return page.locator('[aria-label="账户备份状态"]').getByRole('button', {
+  return page.getByRole('alert', { name: accountMessages.ui.backupStatusLabel, exact: true }).getByRole('button', {
     name: quote.ready ? /^(Renew DKVS storage|续费 DKVS 存储)$/ : /^(Pay DKVS storage fees|支付 DKVS 存储费用)$/,
   })
 }
@@ -127,7 +127,7 @@ export async function waitForAccountWrite(page, accountCall) {
 }
 
 async function assertBackupPreview(page, expectedCatalog) {
-  const heading = page.getByRole('heading', { name: '确认恢复账户', exact: true })
+  const heading = page.getByRole('heading', { name: accountMessages.ui.confirmRecovery, exact: true })
   const cards = page.locator('section').filter({ has: heading }).locator(':scope > div.rounded-lg')
   let phase = 'heading'
   let walletIndex = -1
@@ -144,11 +144,11 @@ async function assertBackupPreview(page, expectedCatalog) {
       await expect(card).toHaveCount(1)
       await expect(card.getByText(wallet.name, { exact: true })).toBeVisible()
       phase = 'account-count'
-      await expect(card.getByText(`${wallet.accounts.length} 个子账户`, { exact: true })).toBeVisible()
+      await expect(card.getByText(`Subaccounts: ${wallet.accounts.length}`, { exact: true })).toBeVisible()
     }
     phase = 'password-inputs'
-    await expect(page.getByLabel('新设备解锁密码', { exact: true })).toBeVisible()
-    await expect(page.getByLabel('再次输入解锁密码', { exact: true })).toBeVisible()
+    await expect(page.getByLabel(accountMessages.ui.newDevicePassword, { exact: true })).toBeVisible()
+    await expect(page.getByLabel(accountMessages.ui.repeatUnlockPassword, { exact: true })).toBeVisible()
   } catch (error) {
     console.error(JSON.stringify({ backupPreviewFailure: { phase, wallet_index: walletIndex,
       expected_cards: expectedCatalog.length, actual_cards: await cards.count(), matching_cards: matchingCards } }))
@@ -180,6 +180,7 @@ async function sameModeReconfiguration(t, page, credential, mode, questions, mne
     assert.equal((await accountCall(peer, 'status')).package_id, before.package_id)
     phase = 'source before reconfiguration'
     await settled(page)
+    await waitForAccountWrite(page, accountCall)
     if (mode === 'paid') await accountCall(page, 'reusePaidStorage', 100)
     else await accountCall(page, 'confirmStorage', 'temporary')
     const material = await accountCall(page, 'createRecovery', { password: credential, wallets: [], recovery_mode: '2of2', questions })
@@ -413,7 +414,7 @@ export async function runPwaUsageCases(t) {
   }
   const settings = async page => {
     await page.evaluate(() => { location.hash = '#/wallet/setting/account-management' })
-    await page.getByRole('heading', { name: '账户管理与恢复', exact: true }).waitFor()
+    await page.getByRole('heading', { name: accountMessages.ui.managementTitle, exact: true }).waitFor()
   }
   const usingFixedOwner = async action => {
     assert.ok(fixedOwner, 'fixed-root cases require the fixed ordinary-1 owner fixture')
@@ -459,24 +460,25 @@ export async function runPwaUsageCases(t) {
   }
   const preflightUI = async page => {
     await settings(page)
-    await page.getByRole('button', { name: '检查账户', exact: true }).click()
+    await page.getByRole('button', { name: accountMessages.ui.checkAccount, exact: true }).click()
     const dialog = page.getByRole('dialog')
     await dialog.locator('input[type="password"]').fill('incorrect')
     await dialog.getByRole('button', { name: 'Confirm', exact: true }).click()
     await dialog.getByRole('alert').waitFor()
     await confirmPassword(page)
-    await page.getByRole('button', { name: '确认存储方式', exact: true }).waitFor()
+    await page.getByRole('button', { name: accountMessages.ui.confirmStorage, exact: true }).waitFor()
   }
   const temporaryUI = async page => {
     const options = (await accountCall(page, 'getStorageOptions')).options
-    await page.getByRole('button', { name: new RegExp(`^${options.find(option => option.id === 'temporary').title}`) }).click()
-    await page.getByRole('button', { name: '确认存储方式', exact: true }).click()
-    await page.getByRole('button', { name: '创建并保存加密账户备份', exact: true }).waitFor()
+    assert.ok(options.some(option => option.id === 'temporary' && option.available))
+    await page.getByRole('button', { name: accountMessages.ui.temporaryStorage }).click()
+    await page.getByRole('button', { name: accountMessages.ui.confirmStorage, exact: true }).click()
+    await page.getByRole('button', { name: accountMessages.ui.createBackup, exact: true }).waitFor()
   }
   const fillQuestions = async page => {
     for (let i = 0; i < 3; i++) {
-      await page.getByPlaceholder('答案', { exact: true }).nth(i).fill(questions[i].answer)
-      await page.getByPlaceholder('再次输入答案', { exact: true }).nth(i).fill(questions[i].confirmation)
+      await page.getByPlaceholder(accountMessages.ui.answer, { exact: true }).nth(i).fill(questions[i].answer)
+      await page.getByPlaceholder(accountMessages.ui.repeatAnswer, { exact: true }).nth(i).fill(questions[i].confirmation)
     }
   }
   const assertNoSecrets = async (page, secrets) => {
@@ -510,10 +512,10 @@ export async function runPwaUsageCases(t) {
     const guardian = await freshGuardian()
     try {
       await settings(guardian)
-      await guardian.getByRole('button', { name: '生成我的联系信息并发送给好友', exact: true }).click()
+      await guardian.getByRole('button', { name: accountMessages.ui.generateContact, exact: true }).click()
       await confirmPassword(guardian)
-      const guardianTools = guardian.getByRole('heading', { name: 'Guardian 工具', exact: true }).locator('xpath=..')
-      const copyContact = guardianTools.getByRole('button', { name: '复制联系信息', exact: true })
+      const guardianTools = guardian.getByRole('heading', { name: accountMessages.ui.guardianTools, exact: true }).locator('xpath=..')
+      const copyContact = guardianTools.getByRole('button', { name: accountMessages.ui.copyContact, exact: true })
       await expect(copyContact).toBeVisible()
       const contactOutput = copyContact.locator('xpath=..').locator('textarea[readonly]')
       await expect(contactOutput).toHaveCount(1)
@@ -587,13 +589,13 @@ export async function runPwaUsageCases(t) {
 
   const didSettings = async page => {
     await page.evaluate(() => { location.hash = '#/wallet/setting' })
-    await page.getByRole('button', { name: '设置地址 DID', exact: true }).click()
-    await page.getByRole('heading', { name: '设置地址 DID', exact: true }).waitFor()
+    await page.getByRole('button', { name: 'Set address DID', exact: true }).click()
+    await page.getByRole('heading', { name: 'Set address DID', exact: true }).waitFor()
   }
   const saveDID = async (page, did) => {
-    await page.getByLabel('地址 DID（可选）', { exact: true }).fill(did)
-    await page.getByRole('button', { name: '保存 DID', exact: true }).click()
-    await expect(page.getByText('DID 已保存', { exact: true })).toBeVisible()
+    await page.getByLabel('Address DID (optional)', { exact: true }).fill(did)
+    await page.getByRole('button', { name: 'Save DID', exact: true }).click()
+    await expect(page.getByText('DID saved', { exact: true })).toBeVisible()
   }
 
   await scenario('usage: independent address DID entry persists changes and clearing through recovery', () => using(async page => {
@@ -604,10 +606,10 @@ export async function runPwaUsageCases(t) {
     assert.equal(before[0].accounts[0].did, 'bob.btc')
     await page.reload(); await ready(page); await unlock(page)
     await didSettings(page)
-    await expect(page.getByLabel('地址 DID（可选）', { exact: true })).toHaveValue('bob.btc')
+    await expect(page.getByLabel('Address DID (optional)', { exact: true })).toHaveValue('bob.btc')
     await settings(page)
-    await expect(page.getByRole('textbox', { name: '子账户 0 的已保存 DID', exact: true })).toHaveValue('bob.btc')
-    assert.equal(await page.getByRole('textbox', { name: '子账户 0 的已保存 DID', exact: true }).getAttribute('readonly'), '')
+    await expect(page.getByRole('textbox', { name: 'Saved DID for subaccount 0', exact: true })).toHaveValue('bob.btc')
+    assert.equal(await page.getByRole('textbox', { name: 'Saved DID for subaccount 0', exact: true }).getAttribute('readonly'), '')
     const material = await setup(page)
     const restored = await device()
     try {
@@ -619,8 +621,8 @@ export async function runPwaUsageCases(t) {
         return status.recovery_configured && status.dkvs_write_allowed
       }, { timeout: 90000 }).toBe(true)
       await didSettings(restored)
-      await restored.getByRole('button', { name: '清空 DID', exact: true }).click()
-      await expect(restored.getByLabel('地址 DID（可选）', { exact: true })).toHaveValue('')
+      await restored.getByRole('button', { name: 'Clear DID', exact: true }).click()
+      await expect(restored.getByLabel('Address DID (optional)', { exact: true })).toHaveValue('')
       await settled(restored)
       await restored.reload(); await ready(restored); await unlock(restored)
       assert.equal((await catalog(restored))[0].accounts[0].did || '', '')
@@ -649,14 +651,14 @@ export async function runPwaUsageCases(t) {
       }
     })
     try {
-      await page.getByLabel('地址 DID（可选）', { exact: true }).fill('rejected.btc')
-      await page.getByRole('button', { name: '保存 DID', exact: true }).click()
+      await page.getByLabel('Address DID (optional)', { exact: true }).fill('rejected.btc')
+      await page.getByRole('button', { name: 'Save DID', exact: true }).click()
       await expect(page.getByRole('alert')).toContainText('DID profile persistence failure')
       assert.deepEqual(await catalog(page), before)
     } finally { await page.evaluate(() => window.__restoreDIDPut()) }
     await page.reload(); await ready(page); await unlock(page)
     await didSettings(page)
-    await expect(page.getByLabel('地址 DID（可选）', { exact: true })).toHaveValue('saved.btc')
+    await expect(page.getByLabel('Address DID (optional)', { exact: true })).toHaveValue('saved.btc')
   }))
 
   await scenario('usage: remote deletion rejects offline edits and adopts the confirmed remote state', () => using(async page => {
@@ -737,8 +739,12 @@ export async function runPwaUsageCases(t) {
         const [error] = await store.deleteWallet(childID)
         if (error) throw error
         await store.switchWallet(rootID)
-        await store.updateAccountName(0, 'Remote independent account')
       }, { childID: String(child.id), rootID: String(rootID) })
+      // Removing a wallet changes DKVS registrations. Wait for the online
+      // device's write gate before making its independent root-account edit.
+      await waitForAccountWrite(page, accountCall)
+      await page.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore()
+        .updateAccountName(0, 'Remote independent account'))
       await settled(page)
       for (const route of routes) await replica.context().unroute(route, unavailable)
       await settled(replica)
@@ -873,8 +879,8 @@ export async function runPwaUsageCases(t) {
       }
       location.hash = '#/wallet/setting/account-management'
     })
-    await page.getByRole('button', { name: '只读恢复演练', exact: true }).click()
-    await page.getByRole('button', { name: '加载加密账户备份', exact: true }).click()
+    await page.getByRole('button', { name: accountMessages.ui.rehearsalTitle, exact: true }).click()
+    await page.getByRole('button', { name: accountMessages.ui.loadBackup, exact: true }).click()
     await expect(page.locator('input[type="password"]').first()).toBeVisible()
     const session = await page.evaluate(() => window.inactivitySession)
     assert.ok(session)
@@ -885,7 +891,7 @@ export async function runPwaUsageCases(t) {
     assert.equal(await page.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().locked), true)
     await unlock(page)
     await assert.rejects(accountCall(page, 'previewRecovery', session))
-    await expect(page.getByPlaceholder('可选：粘贴 sat20share1:...')).toHaveCount(0)
+    await expect(page.getByPlaceholder(accountMessages.ui.pasteOptionalShare)).toHaveCount(0)
   }))
 
   await scenario('usage: SDK creation page delivers mnemonic without redundant PWA persistence', async () => {
@@ -1107,11 +1113,11 @@ export async function runPwaUsageCases(t) {
   await scenario('usage: account page refreshes background backup failure and success without navigation', () => using(async page => {
     await setup(page)
     await page.evaluate(() => { location.hash = '#/wallet/setting/account-management' })
-    await page.getByRole('heading', { name: '维护恢复配置', exact: true }).waitFor()
+    await page.getByRole('heading', { name: accountMessages.ui.maintainRecovery, exact: true }).waitFor()
     await page.bringToFront()
-    const card = page.getByRole('alert', { name: '账户备份状态', exact: true })
-    await expect(card).toContainText('数据存储：服务节点临时缓存')
-    await expect(card).toContainText('待同步变更：0')
+    const card = page.getByRole('alert', { name: accountMessages.ui.backupStatusLabel, exact: true })
+    await expect(card).toContainText('Data storage: Service node temporary cache')
+    await expect(card).toContainText('Pending changes: 0')
     // Pending can finish before the background worker clears an earlier CAS
     // error. Establish a healthy baseline before injecting this outage.
     await expect.poll(async () => (await accountCall(page, 'status')).last_dkvs_sync_error || '', { timeout: 90000 }).toBe('')
@@ -1187,32 +1193,32 @@ export async function runPwaUsageCases(t) {
         baseline: { state_seq: baseline.state_seq ?? null,
           data_revision: baseline.managed_data_revision ?? null },
         ui: {
-          dirty_warning: heldCardText.includes('最新必要数据尚未备份，恢复仅覆盖最后确认版本'),
-          pending_zero: heldCardText.includes('待同步变更：0'),
+          dirty_warning: heldCardText.includes(accountMessages.ui.unbackedNotice),
+          pending_zero: heldCardText.includes('Pending changes: 0'),
           sync_error: heldCardText.includes(accountMessages.readiness.error),
           synchronized: heldCardText.includes('Synchronized'),
           writable: heldCardText.includes('Writable'),
         },
         same_location: page.url() === location }))
-      await expect(card).not.toContainText('待同步变更：0')
+      await expect(card).not.toContainText('Pending changes: 0')
       releaseWrite()
       await Promise.all(heldWrites)
       await expect.poll(async () => Boolean((await accountCall(page, 'status')).last_dkvs_sync_error), { timeout: 90000 }).toBe(true)
       await expect(card).toContainText(accountMessages.readiness.error, { timeout: 45000 })
-      await expect(card).toContainText('最新必要数据尚未备份，恢复仅覆盖最后确认版本')
-      await expect(card).not.toContainText('待同步变更：0')
+      await expect(card).toContainText(accountMessages.ui.unbackedNotice)
+      await expect(card).not.toContainText('Pending changes: 0')
       const retryButton = card.getByRole('button', { name: accountMessages.readiness.retryNow, exact: true })
       await expect(retryButton).toBeVisible()
       const retriesBeforeClick = heldWrites.length
       await retryButton.click()
       await expect.poll(() => heldWrites.length, { timeout: 4000 }).toBeGreaterThan(retriesBeforeClick)
       await expect(card).toContainText(accountMessages.readiness.error)
-      await expect(card).not.toContainText('待同步变更：0')
+      await expect(card).not.toContainText('Pending changes: 0')
       failBackup = false
       for (const route of routes) await page.context().unroute(route, unavailable)
       await settled(page)
-      await expect(card).toContainText('待同步变更：0', { timeout: 45000 })
-      await expect(card).not.toContainText('最新必要数据尚未备份，恢复仅覆盖最后确认版本')
+      await expect(card).toContainText('Pending changes: 0', { timeout: 45000 })
+      await expect(card).not.toContainText(accountMessages.ui.unbackedNotice)
       await expect(card).not.toContainText(accountMessages.readiness.error)
       assert.equal((await catalog(page)).find(wallet => String(wallet.id) === String(renamedID))?.name,
         'Background backup status', 'backup recovery lost the committed wallet name')
@@ -1540,22 +1546,22 @@ export async function runPwaUsageCases(t) {
 
   const realTwoFactorSetupUI = async (page, statusReadMode = 'none') => {
     await preflightUI(page)
-    await page.getByRole('button', { name: '2/2 增强安全', exact: true }).click()
+    await page.getByRole('button', { name: accountMessages.ui.modeSecure, exact: true }).click()
     await temporaryUI(page)
     await fillQuestions(page)
-    await page.getByPlaceholder('再次输入答案', { exact: true }).first().fill('mismatched answer')
-    await page.getByRole('button', { name: '创建并保存加密账户备份', exact: true }).click()
+    await page.getByPlaceholder(accountMessages.ui.repeatAnswer, { exact: true }).first().fill('mismatched answer')
+    await page.getByRole('button', { name: accountMessages.ui.createBackup, exact: true }).click()
     await confirmPassword(page)
-    await page.getByRole('alert').filter({ hasText: '两次答案一致' }).waitFor()
+    await page.getByRole('alert').filter({ hasText: accountMessages.ui.invalidAnswers }).waitFor()
     assert.equal((await accountCall(page, 'status')).recovery_configured, false)
     await fillQuestions(page)
-    await page.getByRole('button', { name: '创建并保存加密账户备份', exact: true }).click()
+    await page.getByRole('button', { name: accountMessages.ui.createBackup, exact: true }).click()
     await confirmPassword(page)
-    await page.getByRole('button', { name: '进入恢复演练', exact: true }).waitFor({ timeout: 90000 })
+    await page.getByRole('button', { name: accountMessages.ui.startRehearsal, exact: true }).waitFor({ timeout: 90000 })
     const share = await page.locator('textarea[readonly]').nth(1).inputValue()
-    await page.getByRole('button', { name: '进入恢复演练', exact: true }).click()
-    for (let i = 0; i < 2; i++) await page.getByPlaceholder(`问题 ${i + 1} 的答案`, { exact: true }).fill(questions[i].answer)
-    await page.getByPlaceholder('重新粘贴用户分片', { exact: true }).fill(share)
+    await page.getByRole('button', { name: accountMessages.ui.startRehearsal, exact: true }).click()
+    for (let i = 0; i < 2; i++) await page.getByPlaceholder(`Answer to question ${i + 1}`, { exact: true }).fill(questions[i].answer)
+    await page.getByPlaceholder(accountMessages.ui.pasteShareAgain, { exact: true }).fill(share)
     if (statusReadMode !== 'none') await page.evaluate(mode => {
       const rehearse = window.accountE2E.rehearse.bind(window.accountE2E)
       const status = window.accountE2E.status.bind(window.accountE2E)
@@ -1577,9 +1583,11 @@ export async function runPwaUsageCases(t) {
           if (fault.mode === 'manual' && fault.manualAuthorized) {
             fault.manualAuthorized = false
             fault.manualReads++
+            // Release the injected outage as the user's real read starts. A
+            // concurrent SDK notification can now refresh normally as well.
+            fault.armed = false
             const result = await status()
             fault.manualSuccesses++
-            fault.armed = false
             return result
           }
           fault.hits++
@@ -1589,7 +1597,7 @@ export async function runPwaUsageCases(t) {
         return status()
       }
     }, statusReadMode)
-    await page.getByRole('button', { name: '执行恢复演练', exact: true }).click()
+    await page.getByRole('button', { name: accountMessages.ui.runRehearsal, exact: true }).click()
     await confirmPassword(page)
     // First publication and active-scope refresh can advance the captured
     // baseline more than once. Exercise bounded user retries of the same
@@ -1597,7 +1605,7 @@ export async function runPwaUsageCases(t) {
     for (let attempt = 0; attempt < 4; attempt++) {
       let rehearsalOutcome
       await expect.poll(async () => {
-        if (await page.getByRole('heading', { name: '账户恢复已配置', exact: true }).isVisible()) {
+        if (await page.getByRole('heading', { name: accountMessages.ui.recoveryConfigured, exact: true }).isVisible()) {
           rehearsalOutcome = 'configured'
         } else if (await page.getByRole('alert').filter({ hasText: 'publish account activation state: dkvs write conflict' }).isVisible()) {
           rehearsalOutcome = 'conflict'
@@ -1613,15 +1621,15 @@ export async function runPwaUsageCases(t) {
         return status.state_seq > 0 && status.managed_data_revision > 0 &&
           !status.managed_data_dirty && (status.pending_changes ?? 0) === 0
       }, { timeout: 90000 }).toBe(true)
-      await page.getByRole('button', { name: '执行恢复演练', exact: true }).click()
+      await page.getByRole('button', { name: accountMessages.ui.runRehearsal, exact: true }).click()
       await confirmPassword(page)
     }
-    await page.getByRole('heading', { name: '账户恢复已配置', exact: true }).waitFor()
+    await page.getByRole('heading', { name: accountMessages.ui.recoveryConfigured, exact: true }).waitFor()
     if (statusReadMode === 'automatic') {
       await expect.poll(async () => {
         const fault = await page.evaluate(() => window.setupCompletionFault)
         const errorVisible = await page.getByText(accountMessages.dkvsStatusReadFailed, { exact: true }).count()
-        const configuredVisible = await page.getByText('恢复配置：已配置', { exact: true }).count()
+        const configuredVisible = await page.getByText('Recovery configuration: Configured', { exact: true }).count()
         return fault.verified === 1 && fault.hits === 1 && !fault.armed && errorVisible === 0 && configuredVisible === 1
       }, { timeout: 30_000, intervals: [250, 500, 1000] }).toBe(true)
       assert.deepEqual(await page.evaluate(() => window.setupCompletionFault), {
@@ -1635,29 +1643,32 @@ export async function runPwaUsageCases(t) {
       await expect(statusError).toBeVisible()
       await expect(retryRead).toBeVisible()
       await expect(retryRead).toBeEnabled()
-      assert.equal(await page.getByRole('button', { name: '执行恢复演练', exact: true }).count(), 0)
-      await retryRead.evaluate(button => {
+      assert.equal(await page.getByRole('button', { name: accountMessages.ui.runRehearsal, exact: true }).count(), 0)
+      await page.evaluate(label => {
         const fault = window.setupCompletionFault
-        // This capture listener only releases the test's status-read fault on
-        // the exact real button matched by Playwright, before Vue invokes refreshAccountStatus.
-        button.addEventListener('click', () => {
+        // Background status reads can recreate the v-if button before the
+        // click. Grant the permit only for the actual trusted click on Retry.
+        const authorizeRead = event => {
+          const button = event.target.closest('button')
+          if (!event.isTrusted || button?.textContent.trim() !== label) return
+          document.removeEventListener('click', authorizeRead, true)
           fault.manualClicks++
           fault.manualAuthorized = true
-        }, { capture: true, once: true })
-        // The page's Vue click handler was registered before this bubble
-        // listener. Its synchronous status() call must consume the permit;
-        // otherwise revoke it before any later poll can run.
-        button.addEventListener('click', () => { fault.manualAuthorized = false }, { once: true })
-      })
+          // Vue must call status() during this click, before the permit expires.
+          button.addEventListener('click', () => { fault.manualAuthorized = false }, { once: true })
+        }
+        document.addEventListener('click', authorizeRead, true)
+      }, accountMessages.readiness.retryReadStatus)
       await retryRead.click()
       await expect.poll(async () => {
         const fault = await page.evaluate(() => window.setupCompletionFault)
         const errorVisible = await statusError.count()
-        const configuredVisible = await page.getByText('恢复配置：已配置', { exact: true }).count()
-        return fault.verified === 1 && fault.manualClicks === 1 && fault.manualReads === 1 &&
-          fault.manualSuccesses === 1 && !fault.manualAuthorized && !fault.armed &&
-          errorVisible === 0 && configuredVisible === 1
-      }, { timeout: 30_000, intervals: [250, 500, 1000] }).toBe(true)
+        const configuredVisible = await page.getByText('Recovery configuration: Configured', { exact: true }).count()
+        return { ...fault, errorVisible, configuredVisible }
+      }, { timeout: 30_000, intervals: [250, 500, 1000] }).toMatchObject({
+        verified: 1, manualClicks: 1, manualReads: 1, manualSuccesses: 1,
+        manualAuthorized: false, armed: false, errorVisible: 0, configuredVisible: 1,
+      })
       const fault = await page.evaluate(() => window.setupCompletionFault)
       assert.equal(fault.mode, 'manual')
       assert.ok(fault.hits >= 1, 'controlled status-read failure was never observed')
@@ -1681,14 +1692,14 @@ export async function runPwaUsageCases(t) {
     const before = await accountCall(page, 'status')
     const beforeCatalog = await catalog(page)
     await page.evaluate(() => { location.hash = '#/wallet/setting/account-management' })
-    await page.getByRole('button', { name: '重新配置恢复或升级存储', exact: true }).click()
-    await page.getByRole('button', { name: '检查账户', exact: true }).click()
+    await page.getByRole('button', { name: accountMessages.ui.reconfigure, exact: true }).click()
+    await page.getByRole('button', { name: accountMessages.ui.checkAccount, exact: true }).click()
     await confirmPassword(page)
-    await page.getByRole('button', { name: '2/2 增强安全', exact: true }).click()
+    await page.getByRole('button', { name: accountMessages.ui.modeSecure, exact: true }).click()
     await temporaryUI(page)
-    await page.getByRole('button', { name: '取消本次设置', exact: true }).click()
-    await page.getByRole('button', { name: '返回当前配置', exact: true }).click()
-    await page.getByRole('button', { name: '复制当前公开恢复码', exact: true }).waitFor()
+    await page.getByRole('button', { name: accountMessages.ui.cancelSetup, exact: true }).click()
+    await page.getByRole('button', { name: accountMessages.ui.backToConfiguration, exact: true }).click()
+    await page.getByRole('button', { name: accountMessages.ui.copyCurrentLocator, exact: true }).waitFor()
     const current = await accountCall(page, 'status')
     assert.equal(current.package_id, before.package_id)
     assert.equal(current.public_locator, material.locator)
@@ -1696,8 +1707,8 @@ export async function runPwaUsageCases(t) {
     assert.equal(await accountCall(page, 'resumePendingStorageAuthorization'), null)
     await page.reload(); await ready(page); await unlock(page)
     await page.evaluate(() => { location.hash = '#/wallet/setting/account-management' })
-    await page.getByRole('button', { name: '重新配置恢复或升级存储', exact: true }).click()
-    await page.getByRole('button', { name: '检查账户', exact: true }).waitFor()
+    await page.getByRole('button', { name: accountMessages.ui.reconfigure, exact: true }).click()
+    await page.getByRole('button', { name: accountMessages.ui.checkAccount, exact: true }).waitFor()
     assert.equal((await accountCall(page, 'status')).public_locator, material.locator)
   }))
 
@@ -1719,28 +1730,28 @@ export async function runPwaUsageCases(t) {
       }
       location.hash = '#/wallet/setting/account-management'
     })
-    await page.getByRole('button', { name: '只读恢复演练', exact: true }).click()
-    await page.getByRole('heading', { name: '只读恢复演练', exact: true }).waitFor()
-    await expect(page.getByPlaceholder('粘贴 sat20account1:...')).toHaveValue(material.locator)
-    await page.getByRole('button', { name: '加载加密账户备份', exact: true }).click()
+    await page.getByRole('button', { name: accountMessages.ui.rehearsalTitle, exact: true }).click()
+    await page.getByRole('heading', { name: accountMessages.ui.rehearsalTitle, exact: true }).waitFor()
+    await expect(page.getByPlaceholder(accountMessages.ui.pasteLocator)).toHaveValue(material.locator)
+    await page.getByRole('button', { name: accountMessages.ui.loadBackup, exact: true }).click()
     const inputs = page.locator('input[type="password"]')
     await inputs.nth(0).fill('incorrect private answer')
     await inputs.nth(1).fill('another incorrect answer')
-    await page.getByRole('button', { name: '恢复加密分片', exact: true }).click()
+    await page.getByRole('button', { name: accountMessages.ui.recoverShare, exact: true }).click()
     await expect(page.getByRole('alert')).toBeVisible()
     await inputs.nth(0).fill(questions[0].answer)
     await inputs.nth(1).fill(questions[1].answer)
-    await page.getByRole('button', { name: '恢复加密分片', exact: true }).click()
-    await page.getByPlaceholder('可选：粘贴 sat20share1:...').fill(material.user_share)
-    await page.getByRole('button', { name: '使用用户分片', exact: true }).click()
-    await expect(page.getByRole('button', { name: '预览恢复内容', exact: true })).toBeEnabled()
-    await page.getByRole('button', { name: '预览恢复内容', exact: true }).click()
-    await page.getByRole('heading', { name: '恢复材料验证通过', exact: true }).waitFor()
-    assert.equal(await page.getByRole('button', { name: '恢复全部钱包', exact: true }).count(), 0)
-    assert.equal(await page.getByPlaceholder('设置新的本地钱包密码').count(), 0)
+    await page.getByRole('button', { name: accountMessages.ui.recoverShare, exact: true }).click()
+    await page.getByPlaceholder(accountMessages.ui.pasteOptionalShare).fill(material.user_share)
+    await page.getByRole('button', { name: accountMessages.ui.useShare, exact: true }).click()
+    await expect(page.getByRole('button', { name: accountMessages.ui.previewRecovery, exact: true })).toBeEnabled()
+    await page.getByRole('button', { name: accountMessages.ui.previewRecovery, exact: true }).click()
+    await page.getByRole('heading', { name: accountMessages.ui.factorsVerified, exact: true }).waitFor()
+    assert.equal(await page.getByRole('button', { name: accountMessages.ui.restoreAll, exact: true }).count(), 0)
+    assert.equal(await page.getByPlaceholder(accountMessages.ui.setPassword).count(), 0)
     const session = await page.evaluate(() => window.maintenanceSession)
-    await page.getByRole('button', { name: '完成演练并返回', exact: true }).click()
-    await page.getByRole('button', { name: '只读恢复演练', exact: true }).waitFor()
+    await page.getByRole('button', { name: accountMessages.ui.finishRehearsal, exact: true }).click()
+    await page.getByRole('button', { name: accountMessages.ui.rehearsalTitle, exact: true }).waitFor()
     await assert.rejects(accountCall(page, 'previewRecovery', session))
     assert.equal(await page.evaluate(() => window.maintenanceCommits), 0)
     assert.deepEqual(await catalog(page), beforeCatalog)
@@ -1759,63 +1770,63 @@ export async function runPwaUsageCases(t) {
     const guardian = await freshGuardian()
     try {
       await settings(guardian)
-      await guardian.getByRole('button', { name: '生成我的联系信息并发送给好友', exact: true }).click()
+      await guardian.getByRole('button', { name: accountMessages.ui.generateContact, exact: true }).click()
       await confirmPassword(guardian)
       const contact = await guardian.locator('textarea[readonly]').first().inputValue()
       assert.ok(JSON.parse(contact).mailbox_id)
       await preflightUI(page)
       await temporaryUI(page)
       await fillQuestions(page)
-      const contactInput = page.getByPlaceholder('粘贴好友钱包生成的 Guardian contact JSON')
+      const contactInput = page.getByPlaceholder(accountMessages.ui.pasteGuardianContact)
       await contactInput.fill('{}')
-      assert.equal(await page.getByRole('button', { name: '创建并保存加密账户备份', exact: true }).isDisabled(), true)
+      assert.equal(await page.getByRole('button', { name: accountMessages.ui.createBackup, exact: true }).isDisabled(), true)
       await contactInput.fill(contact)
-      await page.getByRole('button', { name: '创建并保存加密账户备份', exact: true }).click()
+      await page.getByRole('button', { name: accountMessages.ui.createBackup, exact: true }).click()
       await confirmPassword(page)
-      await page.getByRole('button', { name: '验证 Guardian 密文已保存', exact: true }).waitFor({ timeout: 90000 })
+      await page.getByRole('button', { name: accountMessages.ui.verifyStored, exact: true }).waitFor({ timeout: 90000 })
       // Only the final, receipt-bound locator can be handed to the user.
-      await expect(page.getByRole('button', { name: '复制恢复码', exact: true })).toHaveCount(0)
+      await expect(page.getByRole('button', { name: accountMessages.ui.copyLocator, exact: true })).toHaveCount(0)
       await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: new URL(page.url()).origin })
-      await page.getByRole('button', { name: '复制用户分片', exact: true }).click()
+      await page.getByRole('button', { name: accountMessages.ui.copyShare, exact: true }).click()
       const savedShare = await page.evaluate(() => navigator.clipboard.readText())
-      assert.equal(savedShare, await page.getByRole('textbox', { name: '秘密用户分片', exact: true }).inputValue())
+      assert.equal(savedShare, await page.getByRole('textbox', { name: accountMessages.ui.secretShare, exact: true }).inputValue())
       assert.ok(savedShare.startsWith('sat20-share-v1:'))
-      const setupJSON = await page.getByRole('textbox', { name: 'Guardian setup', exact: true }).inputValue()
-      await guardian.getByPlaceholder('好友发送的 Guardian setup JSON').fill(setupJSON)
+      const setupJSON = await page.getByRole('textbox', { name: accountMessages.ui.guardianSetup, exact: true }).inputValue()
+      await guardian.getByPlaceholder(accountMessages.ui.pasteFriendSetup).fill(setupJSON)
       await guardian.locator('select').selectOption('temporary')
-      await guardian.getByRole('button', { name: '接受并保存好友分片', exact: true }).click()
+      await guardian.getByRole('button', { name: accountMessages.ui.acceptShare, exact: true }).click()
       await confirmPassword(guardian)
       await expect.poll(async () => guardian.locator('textarea[readonly]').count(), { timeout: 90000 }).toBe(2)
       const receipt = await guardian.locator('textarea[readonly]').last().inputValue()
-      await page.getByPlaceholder('粘贴 Guardian 返回的 receipt').fill(receipt)
-      await page.getByRole('button', { name: '验证 Guardian 密文已保存', exact: true }).click()
-      await expect(page.getByRole('heading', { name: '4. 保存恢复材料', exact: true })).toBeVisible()
-      await page.getByRole('button', { name: '复制恢复码', exact: true }).click()
+      await page.getByPlaceholder(accountMessages.ui.pasteReceipt).fill(receipt)
+      await page.getByRole('button', { name: accountMessages.ui.verifyStored, exact: true }).click()
+      await expect(page.getByRole('heading', { name: accountMessages.ui.stepSave, exact: true })).toBeVisible()
+      await page.getByRole('button', { name: accountMessages.ui.copyLocator, exact: true }).click()
       const savedLocator = await page.evaluate(() => navigator.clipboard.readText())
       assert.ok(savedLocator.startsWith('sat20account1:'))
-      await page.getByRole('button', { name: '我已保存最终恢复码，进入演练', exact: true }).click()
-      await page.getByPlaceholder('重新粘贴已保存的最终恢复码').fill('incorrect saved locator')
-      await page.getByRole('button', { name: '生成 Guardian 演练请求', exact: true }).click()
-      await page.getByRole('alert').filter({ hasText: '请粘贴本次保存的最终恢复码' }).waitFor()
+      await page.getByRole('button', { name: accountMessages.ui.savedStartRehearsal, exact: true }).click()
+      await page.getByPlaceholder(accountMessages.ui.pasteFinalLocatorAgain).fill('incorrect saved locator')
+      await page.getByRole('button', { name: accountMessages.ui.createRehearsalRequest, exact: true }).click()
+      await page.getByRole('alert').filter({ hasText: accountMessages.ui.finalLocatorRequired }).waitFor()
       assert.equal((await accountCall(page, 'status')).recovery_configured, false)
-      await page.getByPlaceholder('重新粘贴已保存的最终恢复码').fill(savedLocator)
-      await page.getByRole('button', { name: '生成 Guardian 演练请求', exact: true }).click()
+      await page.getByPlaceholder(accountMessages.ui.pasteFinalLocatorAgain).fill(savedLocator)
+      await page.getByRole('button', { name: accountMessages.ui.createRehearsalRequest, exact: true }).click()
       const request = await page.locator('textarea[readonly]').first().inputValue()
-      await guardian.getByPlaceholder('好友发送的 Guardian 恢复请求 JSON').fill(request)
-      await guardian.getByRole('button', { name: '生成加密恢复响应', exact: true }).click()
+      await guardian.getByPlaceholder(accountMessages.ui.pasteFriendRequest).fill(request)
+      await guardian.getByRole('button', { name: accountMessages.ui.createResponse, exact: true }).click()
       await confirmPassword(guardian)
       await expect.poll(async () => guardian.locator('textarea[readonly]').count(), { timeout: 90000 }).toBe(3)
       const response = await guardian.locator('textarea[readonly]').last().inputValue()
-      await page.getByPlaceholder('粘贴 Guardian 返回的加密响应').fill(response)
-      await page.getByRole('button', { name: '验证 Guardian 响应', exact: true }).click()
-      for (let i = 0; i < 2; i++) await page.getByPlaceholder(`问题 ${i + 1} 的答案`, { exact: true }).fill(questions[i].answer)
-      await page.getByRole('button', { name: '执行恢复演练', exact: true }).click()
+      await page.getByPlaceholder(accountMessages.ui.pasteGuardianResponse).fill(response)
+      await page.getByRole('button', { name: accountMessages.ui.verifyGuardianResponse, exact: true }).click()
+      for (let i = 0; i < 2; i++) await page.getByPlaceholder(`Answer to question ${i + 1}`, { exact: true }).fill(questions[i].answer)
+      await page.getByRole('button', { name: accountMessages.ui.runRehearsal, exact: true }).click()
       await confirmPassword(page)
-      await page.getByRole('heading', { name: '账户恢复已配置', exact: true }).waitFor({ timeout: 90000 })
+      await page.getByRole('heading', { name: accountMessages.ui.recoveryConfigured, exact: true }).waitFor({ timeout: 90000 })
       const status = await accountCall(page, 'status')
       assert.equal(status.recovery_configured, true)
       assert.equal(status.recovery_mode, '2of3')
-      await page.getByRole('button', { name: '复制当前公开恢复码', exact: true }).click()
+      await page.getByRole('button', { name: accountMessages.ui.copyCurrentLocator, exact: true }).click()
       assert.equal(await page.evaluate(() => navigator.clipboard.readText()), savedLocator)
       const expectedCatalog = await catalog(page)
       const normalize = wallets => wallets.map(({ fingerprint, name, accounts }) => ({ fingerprint, name, accounts }))
@@ -1834,31 +1845,31 @@ export async function runPwaUsageCases(t) {
         try {
           stageAt('load-backup')
           await recovery.evaluate(() => { location.hash = '#/restore-account' })
-          await recovery.getByPlaceholder('粘贴 sat20account1:...').fill(savedLocator)
-          await recovery.getByRole('button', { name: '加载加密账户备份', exact: true }).click()
+          await recovery.getByPlaceholder(accountMessages.ui.pasteLocator).fill(savedLocator)
+          await recovery.getByRole('button', { name: accountMessages.ui.loadBackup, exact: true }).click()
           if (combination === 'knowledge+guardian') {
             stageAt('recover-knowledge')
             for (let i = 0; i < 2; i++) await recovery.locator('section input[type="password"]').nth(i).fill(questions[i].answer)
-            await recovery.getByRole('button', { name: '恢复加密分片', exact: true }).click()
+            await recovery.getByRole('button', { name: accountMessages.ui.recoverShare, exact: true }).click()
           } else {
             stageAt('set-user-share')
-            await recovery.getByRole('button', { name: '使用用户分片和 Guardian', exact: true }).click()
-            await recovery.getByPlaceholder('可选：粘贴 sat20share1:...').fill(savedShare)
-            await recovery.getByRole('button', { name: '使用用户分片', exact: true }).click()
+            await recovery.getByRole('button', { name: accountMessages.ui.shareAndGuardian, exact: true }).click()
+            await recovery.getByPlaceholder(accountMessages.ui.pasteOptionalShare).fill(savedShare)
+            await recovery.getByRole('button', { name: accountMessages.ui.useShare, exact: true }).click()
           }
           stageAt('guardian-request')
-          await recovery.getByRole('button', { name: '生成 Guardian 恢复请求', exact: true }).click()
+          await recovery.getByRole('button', { name: accountMessages.ui.createGuardianRequest, exact: true }).click()
           const recoveryRequest = await recovery.locator('textarea[readonly]').first().inputValue()
           const previousResponse = await guardian.locator('textarea[readonly]').last().inputValue()
-          await guardian.getByPlaceholder('好友发送的 Guardian 恢复请求 JSON').fill(recoveryRequest)
-          await guardian.getByRole('button', { name: '生成加密恢复响应', exact: true }).click()
+          await guardian.getByPlaceholder(accountMessages.ui.pasteFriendRequest).fill(recoveryRequest)
+          await guardian.getByRole('button', { name: accountMessages.ui.createResponse, exact: true }).click()
           await confirmPassword(guardian)
           await expect.poll(() => guardian.locator('textarea[readonly]').last().inputValue(), { timeout: 90000 }).not.toBe(previousResponse)
           stageAt('guardian-response')
-          await recovery.getByPlaceholder('粘贴 Guardian 返回的加密响应').fill(await guardian.locator('textarea[readonly]').last().inputValue())
-          await recovery.getByRole('button', { name: '使用 Guardian 响应', exact: true }).click()
+          await recovery.getByPlaceholder(accountMessages.ui.pasteGuardianResponse).fill(await guardian.locator('textarea[readonly]').last().inputValue())
+          await recovery.getByRole('button', { name: accountMessages.ui.useGuardianResponse, exact: true }).click()
           stageAt('preview')
-          await recovery.getByRole('button', { name: '预览恢复内容', exact: true }).click()
+          await recovery.getByRole('button', { name: accountMessages.ui.previewRecovery, exact: true }).click()
           stageAt('preview-content')
           await assertBackupPreview(recovery, expectedCatalog)
           if (!firstBackupRecoverable) {
@@ -1891,8 +1902,8 @@ export async function runPwaUsageCases(t) {
             firstBackupRecoverable = true
             await page.context().close()
           }
-          const localPassword = recovery.getByLabel('新设备解锁密码', { exact: true })
-          const confirmPasswordBox = recovery.getByLabel('再次输入解锁密码', { exact: true })
+          const localPassword = recovery.getByLabel(accountMessages.ui.newDevicePassword, { exact: true })
+          const confirmPasswordBox = recovery.getByLabel(accountMessages.ui.repeatUnlockPassword, { exact: true })
           stageAt('password-inputs-visible')
           await localPassword.waitFor()
           await confirmPasswordBox.waitFor()
@@ -1901,7 +1912,7 @@ export async function runPwaUsageCases(t) {
           stageAt('fill-confirm-password')
           await confirmPasswordBox.fill(newPassword)
           stageAt('restore-wallets')
-          await Promise.all([recovery.waitForEvent('domcontentloaded', { timeout: 90000 }), recovery.getByRole('button', { name: '恢复全部钱包', exact: true }).click()])
+          await Promise.all([recovery.waitForEvent('domcontentloaded', { timeout: 90000 }), recovery.getByRole('button', { name: accountMessages.ui.restoreAll, exact: true }).click()])
           await ready(recovery); await unlock(recovery, newPassword)
           stageAt('catalog-and-secret-checks')
           const restoredStatus = await accountCall(recovery, 'status')
@@ -1998,15 +2009,15 @@ export async function runPwaUsageCases(t) {
     })
     try {
       await page.evaluate(() => { location.hash = '#/restore-account' })
-      await page.getByPlaceholder('粘贴 sat20account1:...').fill(t.material.locator)
-      await page.getByRole('button', { name: '加载加密账户备份', exact: true }).click()
+      await page.getByPlaceholder(accountMessages.ui.pasteLocator).fill(t.material.locator)
+      await page.getByRole('button', { name: accountMessages.ui.loadBackup, exact: true }).click()
       for (let i = 0; i < 2; i++) await page.locator('section input[type="password"]').nth(i).fill(questions[i].answer)
-      await page.getByRole('button', { name: '恢复加密分片', exact: true }).click()
-      await page.getByPlaceholder('可选：粘贴 sat20share1:...').fill(t.material.user_share)
-      await page.getByRole('button', { name: '使用用户分片', exact: true }).click()
-      await page.getByRole('button', { name: '预览恢复内容', exact: true }).click()
-      await page.getByPlaceholder('设置新的本地钱包密码').fill(newPassword)
-      await page.getByPlaceholder('再次输入密码').fill(newPassword)
+      await page.getByRole('button', { name: accountMessages.ui.recoverShare, exact: true }).click()
+      await page.getByPlaceholder(accountMessages.ui.pasteOptionalShare).fill(t.material.user_share)
+      await page.getByRole('button', { name: accountMessages.ui.useShare, exact: true }).click()
+      await page.getByRole('button', { name: accountMessages.ui.previewRecovery, exact: true }).click()
+      await page.getByPlaceholder(accountMessages.ui.setPassword).fill(newPassword)
+      await page.getByPlaceholder(accountMessages.ui.repeatPassword).fill(newPassword)
       await page.evaluate(() => {
         const commit = window.accountE2E.commitRecovery.bind(window.accountE2E)
         window.accountE2E.commitRecovery = async (...args) => {
@@ -2023,9 +2034,9 @@ export async function runPwaUsageCases(t) {
           return put.call(this, value, key)
         }
       })
-      await page.getByRole('button', { name: '恢复全部钱包', exact: true }).click()
+      await page.getByRole('button', { name: accountMessages.ui.restoreAll, exact: true }).click()
       await expect.poll(() => new URL(page.url()).hash, { timeout: 90000 }).toBe('#/unlock')
-      await expect(page.getByRole('button', { name: '恢复全部钱包', exact: true })).toHaveCount(0)
+      await expect(page.getByRole('button', { name: accountMessages.ui.restoreAll, exact: true })).toHaveCount(0)
       await ready(page); await unlock(page, newPassword)
       const committed = await catalog(page)
       assert.ok(committed.length > 0)
@@ -2043,9 +2054,9 @@ export async function runPwaUsageCases(t) {
     await page.evaluate(() => { location.hash = '#/wallet/setting' })
     await preflightUI(page); await temporaryUI(page)
     await fillQuestions(page)
-    await page.getByPlaceholder('粘贴好友钱包生成的 Guardian contact JSON').fill(JSON.stringify(own))
-    await expect(page.getByText('不能使用自己的 Guardian 联系信息', { exact: true })).toBeVisible()
-    await expect(page.getByRole('button', { name: '创建并保存加密账户备份', exact: true })).toBeDisabled()
+    await page.getByPlaceholder(accountMessages.ui.pasteGuardianContact).fill(JSON.stringify(own))
+    await expect(page.getByText(accountMessages.ui.selfGuardian, { exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: accountMessages.ui.createBackup, exact: true })).toBeDisabled()
     await assert.rejects(accountCall(page, 'createRecovery', { password, wallets: [], recovery_mode: '2of3', questions, guardian: own }), /independent account/)
     await assert.rejects(accountCall(page, 'createRecovery', { password, wallets: [], recovery_mode: '2of3', questions,
       guardian: { ...own, network: 'mainnet' } }), /network does not match/)
@@ -2066,16 +2077,16 @@ export async function runPwaUsageCases(t) {
     const status = await accountCall(page, 'status')
     await preflightUI(page)
     const paid = (await accountCall(page, 'getStorageOptions')).options.find(option => option.id === 'paid')
-    await page.getByRole('button', { name: paid.title, exact: false }).click()
+    await page.getByRole('button', { name: accountMessages.ui.paidStorage, exact: false }).click()
     await page.locator('#autopay-record-count').fill('200')
-    await page.getByRole('button', { name: '确认存储方式', exact: true }).click()
+    await page.getByRole('button', { name: accountMessages.ui.confirmStorage, exact: true }).click()
     const dialog = page.getByRole('dialog')
     await expect(dialog.getByText('200', { exact: true })).toBeVisible()
     await expect(dialog).toContainText(status.account_id)
     await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
-    await page.getByPlaceholder('好友发送的 Guardian setup JSON').fill(t.material.guardian_setup)
+    await page.getByPlaceholder(accountMessages.ui.pasteFriendSetup).fill(t.material.guardian_setup)
     await page.locator('select').selectOption('paid')
-    await page.getByRole('button', { name: '接受并保存好友分片', exact: true }).click()
+    await page.getByRole('button', { name: accountMessages.ui.acceptShare, exact: true }).click()
     await dialog.locator('input[type="password"]').fill(password)
     await dialog.getByRole('button', { name: 'Confirm', exact: true }).click()
     await expect(dialog.getByText('100', { exact: true })).toBeVisible()
@@ -2094,7 +2105,7 @@ export async function runPwaUsageCases(t) {
     const options = (await accountCall(page, 'getStorageOptions')).options
     const paid = options.find(option => option.id === 'paid')
     assert.ok(paid?.available, 'real fixture must expose the paid option')
-    await page.getByRole('button', { name: paid.title, exact: false }).click()
+    await page.getByRole('button', { name: accountMessages.ui.paidStorage, exact: false }).click()
     await page.evaluate(() => {
       const confirm = window.accountE2E.confirmStorage.bind(window.accountE2E)
       window.recordCountPaidRequests = 0
@@ -2102,12 +2113,12 @@ export async function runPwaUsageCases(t) {
     })
     for (const value of ['99', '100.5', '9007199254740992']) {
       await page.locator('#autopay-record-count').fill(value)
-      await expect(page.getByRole('button', { name: '确认存储方式', exact: true })).toBeDisabled()
+      await expect(page.getByRole('button', { name: accountMessages.ui.confirmStorage, exact: true })).toBeDisabled()
       await expect(page.getByRole('dialog')).toHaveCount(0)
       assert.equal(await page.evaluate(() => window.recordCountPaidRequests), 0, 'invalid count dispatched paid storage')
     }
     await page.locator('#autopay-record-count').fill('100')
-    await page.getByRole('button', { name: '确认存储方式', exact: true }).click()
+    await page.getByRole('button', { name: accountMessages.ui.confirmStorage, exact: true }).click()
     const dialog = page.getByRole('dialog')
     await expect(dialog).toContainText(paid.contract_address)
     await expect(dialog).toContainText(paid.fee_asset)
@@ -2122,7 +2133,7 @@ export async function runPwaUsageCases(t) {
     const page = await device()
     try {
       await page.evaluate(() => { location.hash = '#/restore-account' })
-      await page.getByPlaceholder('粘贴 sat20account1:...').fill(t.material.locator)
+      await page.getByPlaceholder(accountMessages.ui.pasteLocator).fill(t.material.locator)
       await page.evaluate(() => {
         const original = window.accountE2E.loadRecovery.bind(window.accountE2E)
         window.accountE2E.loadRecovery = async locator => {
@@ -2131,15 +2142,15 @@ export async function runPwaUsageCases(t) {
           return result
         }
       })
-      await page.getByRole('button', { name: '加载加密账户备份', exact: true }).click()
+      await page.getByRole('button', { name: accountMessages.ui.loadBackup, exact: true }).click()
       for (let i = 0; i < 2; i++) await page.locator('section input[type="password"]').nth(i).fill(questions[i].answer)
-      await page.getByRole('button', { name: '恢复加密分片', exact: true }).click()
-      await page.getByPlaceholder('可选：粘贴 sat20share1:...').fill(t.material.user_share)
-      await page.getByRole('button', { name: '使用用户分片', exact: true }).click()
-      await page.getByRole('button', { name: '预览恢复内容', exact: true }).click()
+      await page.getByRole('button', { name: accountMessages.ui.recoverShare, exact: true }).click()
+      await page.getByPlaceholder(accountMessages.ui.pasteOptionalShare).fill(t.material.user_share)
+      await page.getByRole('button', { name: accountMessages.ui.useShare, exact: true }).click()
+      await page.getByRole('button', { name: accountMessages.ui.previewRecovery, exact: true }).click()
       const session = await page.evaluate(() => window.usageLoadedSession)
       await page.evaluate(() => { location.hash = '#/' })
-      await page.getByRole('heading', { name: '确认恢复账户', exact: true }).waitFor({ state: 'hidden' })
+      await page.getByRole('heading', { name: accountMessages.ui.confirmRecovery, exact: true }).waitFor({ state: 'hidden' })
       await assert.rejects(accountCall(page, 'commitRecovery', session, password))
       assert.deepEqual(await catalog(page), [])
       await assertNoSecrets(page, [...questions.map(q => q.answer), t.material.user_share, password])
@@ -2366,17 +2377,25 @@ export async function runPwaUsageCases(t) {
 export async function runRgbPwaCases(t, fixture) {
   const { check, device, ready, unlock, catalog, walletCall, accountCall } = t
   const failures = []
+  const waitForPeerCatalog = async peer => {
+    await waitForAccountWrite(peer, accountCall)
+    await expect.poll(async () => {
+      const status = await accountCall(peer, 'status')
+      return accountReadiness(status).writeQualified && status.modules?.some(module =>
+        module.provider === 'wallets' && module.scope === 'global' && module.write_allowed)
+    }, { timeout: 90000, message: 'restored peer wallet catalog must be writable' }).toBe(true)
+  }
   const navigateRecovery = async page => {
     await page.evaluate(() => { location.hash = '#/restore-account' })
-    await page.getByPlaceholder('粘贴 sat20account1:...').fill(fixture.locator)
-    await page.getByRole('button', { name: '加载加密账户备份', exact: true }).click()
+    await page.getByPlaceholder(accountMessages.ui.pasteLocator).fill(fixture.locator)
+    await page.getByRole('button', { name: accountMessages.ui.loadBackup, exact: true }).click()
     for (let i = 0; i < fixture.answers.length; i++) await page.locator('section input[type="password"]').nth(i).fill(fixture.answers[i].answer)
-    await page.getByRole('button', { name: '恢复加密分片', exact: true }).click()
-    await page.getByPlaceholder('可选：粘贴 sat20share1:...').fill(fixture.user_share)
-    await page.getByRole('button', { name: '使用用户分片', exact: true }).click()
-    await page.getByRole('button', { name: '预览恢复内容', exact: true }).click()
-    await page.getByPlaceholder('设置新的本地钱包密码').fill(fixture.password)
-    await page.getByPlaceholder('再次输入密码').fill(fixture.password)
+    await page.getByRole('button', { name: accountMessages.ui.recoverShare, exact: true }).click()
+    await page.getByPlaceholder(accountMessages.ui.pasteOptionalShare).fill(fixture.user_share)
+    await page.getByRole('button', { name: accountMessages.ui.useShare, exact: true }).click()
+    await page.getByRole('button', { name: accountMessages.ui.previewRecovery, exact: true }).click()
+    await page.getByPlaceholder(accountMessages.ui.setPassword).fill(fixture.password)
+    await page.getByPlaceholder(accountMessages.ui.repeatPassword).fill(fixture.password)
   }
   const unlockRecovered = async (page, phase = 'recovery unlock') => {
     // A healthy R+1 remote apply can overlap the fresh page's first unlock.
@@ -2425,7 +2444,7 @@ export async function runRgbPwaCases(t, fixture) {
   const commit = async page => {
     await Promise.all([
       page.waitForEvent('domcontentloaded', { timeout: 90000 }),
-      page.getByRole('button', { name: '恢复全部钱包', exact: true }).click(),
+      page.getByRole('button', { name: accountMessages.ui.restoreAll, exact: true }).click(),
     ])
     await ready(page); await unlockRecovered(page)
   }
@@ -2509,52 +2528,41 @@ export async function runRgbPwaCases(t, fixture) {
         if (mnemonic) await fillMnemonic()
         else await navigateRecovery(page)
         if (fault) {
-          await page.evaluate(mnemonic => {
+          // Fail only the first affected RGB scope, including after a page reload.
+          // Other wallets and the SDK account catalog must remain usable.
+          const installFault = () => {
             const put = IDBObjectStore.prototype.put
-            window.usageRgbFailure = false
-            window.usageRgbCommitOutcome = null
-            const owner = mnemonic ? window.__SAT20_PWA_VERIFY__.useWalletStore() : window.accountE2E
-            const method = mnemonic ? 'importWallet' : 'commitRecovery'
-            const commitRecovery = owner[method].bind(owner)
-            owner[method] = async (...args) => {
-              try {
-                const result = await commitRecovery(...args)
-                window.usageRgbCommitOutcome = mnemonic && result[0]
-                  ? { failed: true, message: result[0].message } : { failed: false }
-                return result
-              } catch (error) {
-                window.usageRgbCommitOutcome = { failed: true, message: error.message }
-                throw error
-              }
-            }
             IDBObjectStore.prototype.put = function(value, key) {
-              if (!window.usageRgbFailure && this.name === 'kv' && String(key).startsWith('rgb11-') && String(key).includes('-proof-')) {
-                window.usageRgbFailure = true
-                throw new DOMException('usage injected real RGB proof persistence failure', 'QuotaExceededError')
+              const row = String(key)
+              if (sessionStorage.getItem('rgbProofFault') && this.name === 'kv' &&
+                  row.startsWith('rgb11-') && row.includes('-proof-')) {
+                const scope = row.slice(0, row.indexOf('-proof-'))
+                const target = sessionStorage.getItem('rgbProofScope') ?? scope
+                if (scope === target) {
+                  sessionStorage.setItem('rgbProofScope', scope)
+                  throw new DOMException('usage injected real RGB proof persistence failure', 'QuotaExceededError')
+                }
               }
               return put.call(this, value, key)
             }
-            window.restoreUsageRgbFault = () => { IDBObjectStore.prototype.put = put }
-          }, mnemonic)
-          if (mnemonic) await page.locator('form button[type="submit"]').click()
-          else await page.getByRole('button', { name: '恢复全部钱包', exact: true }).click()
-          await expect.poll(() => page.evaluate(() => Boolean(window.usageRgbCommitOutcome)), { timeout: 90000 }).toBe(true)
-          const faultResult = await page.evaluate(() => ({ injected: window.usageRgbFailure, result: window.usageRgbCommitOutcome }))
-          assert.equal(faultResult.injected, true, 'real recovered ownership proof write was not faulted')
-          assert.equal(faultResult.result.failed, true, 'RGB provider storage failure was swallowed')
-          assert.match(faultResult.result.message, /usage injected real RGB proof persistence failure/)
-          if (!mnemonic) await page.getByRole('alert').filter({ hasText: 'usage injected real RGB proof persistence failure' }).waitFor()
-          await page.evaluate(() => window.restoreUsageRgbFault())
-          const wallets = await catalog(page)
-          assert.equal(wallets.length, fixture.wallet_count, 'must exercise failure after the account transaction')
-          // Public facade remains locked during recovery; the trusted host SDK
-          // boundary must independently reject destructive catalog changes.
-          const rejected = await page.evaluate(async id => {
-            const response = await window.sat20wallet_wasm.updateWalletName(id, 'Forbidden incomplete RGB import')
-            return { code: response.code, message: response.msg }
-          }, String(wallets[0].id))
-          assert.notEqual(rejected.code, 0)
-          assert.match(rejected.message, /account-managed data import is incomplete/)
+          }
+          await page.evaluate(() => sessionStorage.setItem('rgbProofFault', '1'))
+          await page.addInitScript(installFault)
+          await page.evaluate(installFault)
+        }
+        if (mnemonic) {
+          await page.locator('form button[type="submit"]').click()
+          await expect.poll(() => page.evaluate(() => location.hash), { timeout: 90000 }).toBe('#/wallet')
+          await unlockRecovered(page)
+        } else await commit(page)
+        if (fault) {
+          assert.ok(await page.evaluate(() => sessionStorage.getItem('rgbProofScope')), 'real proof write must fail')
+          const failedScope = async () => (await accountCall(page, 'status')).modules?.find(module =>
+            module.provider === 'rgb11' && !module.write_allowed &&
+            /usage injected real RGB proof persistence failure/.test(module.last_error ?? ''))
+          await expect.poll(async () => Boolean(await failedScope()), { timeout: 90000 }).toBe(true)
+          const target = (await failedScope()).scope
+          assert.equal((await catalog(page)).length, fixture.wallet_count)
           // Independent device A advances the real remote state while B is
           // interrupted at the original committed proof import target.
           if (!mnemonic) {
@@ -2565,6 +2573,7 @@ export async function runRgbPwaCases(t, fixture) {
                 ? route.abort('blockedbyclient') : route.fallback())
               await navigateRecovery(peer); await commit(peer)
               const root = (await catalog(peer))[0]
+              await waitForPeerCatalog(peer)
               await peer.evaluate(async id => {
                 await window.__SAT20_PWA_VERIFY__.useWalletStore().updateWalletName(id, 'Independent device newer state')
               }, String(root.id))
@@ -2572,24 +2581,17 @@ export async function runRgbPwaCases(t, fixture) {
                 { timeout: 90000 }).toBe(0)
             } finally { await peer.context().close() }
           }
-          await page.reload(); await ready(page)
-          await page.evaluate(() => { location.hash = '#/unlock' })
-          const unlockFailure = await page.evaluate(async credential => {
-            const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
-            const [error] = await store.unlockWallet(credential)
-            return { message: error?.message, locked: store.locked }
-          }, fixture.password)
-          assert.match(unlockFailure.message, /account-managed data import is incomplete/)
-          assert.equal(unlockFailure.locked, true, 'incomplete ownership must not open PWA session')
-          await page.getByRole('button', { name: mnemonic ? '继续助记词恢复' : '继续账户恢复', exact: true }).click()
-          if (mnemonic) await fillMnemonic()
-          else await navigateRecovery(page)
+          await page.reload(); await ready(page); await unlockRecovered(page)
+          await expect.poll(async () => (await failedScope())?.scope, { timeout: 90000 }).toBe(target)
+          await page.evaluate(() => sessionStorage.removeItem('rgbProofFault'))
+          const retry = await accountCall(page, 'retryDKVSSync')
+          assert.equal(retry.queued, true, 'DKVS retry must report that the recovery work was queued')
+          await expect.poll(async () => {
+            const module = (await accountCall(page, 'status')).modules?.find(item =>
+              item.provider === 'rgb11' && item.scope === target)
+            return Boolean(module?.write_allowed && !module.last_error && module.backup_state === 'backed_up')
+          }, { timeout: 90000 }).toBe(true)
         }
-        if (mnemonic) {
-          await page.locator('form button[type="submit"]').click()
-          await expect.poll(() => page.evaluate(() => location.hash), { timeout: 90000 }).toBe('#/wallet')
-          await unlockRecovered(page)
-        } else await commit(page)
         if (mode === 'recovery-retry') {
           await expect.poll(async () => {
             await page.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().syncWalletCatalog())
@@ -2644,34 +2646,40 @@ export async function runRgbPwaCases(t, fixture) {
   })
   try {
     await check('RGB PWA: cold remote import retry keeps unfinished local channel visible', async () => {
-      const readLocal = async key => {
+      const checkLocalRows = async ({ keys, remember = false, expected }) => {
         const db = await new Promise((resolve, reject) => {
           const request = indexedDB.open('sat20-wallet-sdk', 1)
           request.onsuccess = () => resolve(request.result)
           request.onerror = () => reject(request.error)
         })
         try {
-          return await new Promise((resolve, reject) => {
+          const rows = await new Promise((resolve, reject) => {
             const tx = db.transaction('kv', 'readonly')
-            const request = tx.objectStore('kv').get(key)
-            tx.oncomplete = () => resolve(request.result ?? null)
+            const store = tx.objectStore('kv')
+            const requests = keys.map(key => store.get(key))
+            tx.oncomplete = () => resolve(requests.map(request => request.result))
             tx.onabort = () => reject(tx.error)
           })
+          if (remember) window.__usageCatalogRows = rows
+          const reference = expected ?? window.__usageCatalogRows
+          return rows.length > 0 && rows.every((row, i) => typeof row === 'string' && row === reference[i])
         } finally { db.close() }
       }
       const peer = await device()
       let peerRoot
+      let peerRenamed = false
       const caseFailures = []
       try {
-        // Establish an explicit healthy remote generation first. Applying it
-        // canonicalizes receipts even on this same device, independently of
-        // which earlier browser cases ran. Compare full recovery receipts.
+        // Establish a known catalog generation. A wallet rename updates the
+        // wallets module and leaves this device's RGB proof receipts intact.
         await peer.context().route('**/v3/bitcoin/**', bitcoinRoute)
         await navigateRecovery(peer); await commit(peer)
         peerRoot = (await catalog(peer))[0]
+        await waitForPeerCatalog(peer)
         await peer.evaluate(async id => {
           await window.__SAT20_PWA_VERIFY__.useWalletStore().updateWalletName(id, 'Pending channel healthy baseline')
         }, String(peerRoot.id))
+        peerRenamed = true
         await expect.poll(async () => (await accountCall(peer, 'status')).pending_changes ?? 0,
           { timeout: 90000 }).toBe(0)
         // This is one device's complete encoded DB, including its local wallet
@@ -2711,7 +2719,7 @@ export async function runRgbPwaCases(t, fixture) {
         await expect.poll(async () => (await catalog(channelPage)).some(wallet => wallet.name === 'Pending channel healthy baseline'),
           { timeout: 90000 }).toBe(true)
         let localRGBBeforeFault
-        try { localRGBBeforeFault = await verify(channelPage, fixture.scopes) }
+        try { localRGBBeforeFault = await verify(channelPage, fixture.local_scopes) }
         catch (error) {
           // Preserve the original strict assertion even if diagnostics cannot be saved.
           await captureRGB(channelPage, 'verify-fail').catch(() => {})
@@ -2722,48 +2730,53 @@ export async function runRgbPwaCases(t, fixture) {
           await store.switchWallet(id)
           await store.switchToAccount(0)
         }, String(fixture.pending_channel.wallet_id))
-        await channelPage.evaluate(() => sessionStorage.setItem('usage-channel-import-fault', 'armed'))
-        const installFault = markerKey => {
+        const localCatalog = await catalog(channelPage)
+        const renamedWallet = localCatalog.find(wallet => wallet.fingerprint === peerRoot.fingerprint)
+        assert.equal(renamedWallet?.name, 'Pending channel healthy baseline')
+        const catalogKeys = localCatalog.map(wallet => `wallet-id-${wallet.id}`)
+        assert.ok(await channelPage.evaluate(checkLocalRows, { keys: catalogKeys, remember: true }),
+          'local catalog rows are missing before the interrupted import')
+        await channelPage.evaluate(walletKey => {
           const put = IDBObjectStore.prototype.put
+          const withStatus = new WeakSet()
           IDBObjectStore.prototype.put = function(value, key) {
-            // Do not assume a catalog-only update rewrites an ownership proof
-            // or imports a provider when a newer local data generation exists.
-            // Fault the first actual post-commit import stage write; the atomic
-            // local-commit marker must still succeed.
-            if (sessionStorage.getItem('usage-channel-import-fault') === 'armed' &&
-                this.name === 'kv' && String(key) === markerKey &&
-                JSON.parse(atob(value)).stage !== 'local-commit') {
-              sessionStorage.setItem('usage-channel-import-fault-hit', 'yes')
-              throw new DOMException('usage pending channel post-commit import stage write failure', 'QuotaExceededError')
-            }
-            return put.call(this, value, key)
+            const request = put.call(this, value, key)
+            const tx = this.transaction
+            if (tx.db.name !== 'sat20-wallet-sdk' || this.name !== 'kv') return request
+            if (key === 'wallet-status') withStatus.add(tx)
+            if (key === walletKey) request.addEventListener('success', () => {
+              // Remote catalog import queues the wallet rows and status together.
+              if (!withStatus.has(tx)) return
+              tx.addEventListener('abort', () => { window.__usageCatalogAborted = true }, { once: true })
+              tx.abort()
+            }, { once: true })
+            return request
           }
-        }
-        await channelPage.evaluate(installFault, fixture.pending_channel.import_marker_key)
-        await channelPage.context().addInitScript(installFault, fixture.pending_channel.import_marker_key)
+        }, `wallet-id-${renamedWallet.id}`)
+        await waitForPeerCatalog(peer)
         await peer.evaluate(async id => {
           await window.__SAT20_PWA_VERIFY__.useWalletStore().updateWalletName(id, 'Pending channel recovery state')
         }, String(peerRoot.id))
         await expect.poll(async () => (await accountCall(peer, 'status')).pending_changes ?? 0,
           { timeout: 90000 }).toBe(0)
-        await expect.poll(async () => {
-          const value = await channelPage.evaluate(readLocal, fixture.pending_channel.import_marker_key)
-          return value ? JSON.parse(Buffer.from(value, 'base64').toString()).origin : null
-        }, { timeout: 90000 }).toBe('remote-apply')
-        await expect.poll(() => channelPage.evaluate(() => sessionStorage.getItem('usage-channel-import-fault-hit')),
-          { timeout: 90000 }).toBe('yes')
+        await expect.poll(() => channelPage.evaluate(() => window.__usageCatalogAborted === true),
+          { timeout: 90000 }).toBe(true)
+        await expect.poll(async () => (await accountCall(channelPage, 'status')).last_dkvs_sync_error_code,
+          { timeout: 90000 }).toBe('ACCOUNT_DB_WRITE_FAILED')
+        assert.ok(await channelPage.evaluate(checkLocalRows, { keys: catalogKeys }),
+          'aborted remote catalog transaction changed durable wallet rows')
+        // Reload drops the page-local fault and starts a fresh Manager. It must
+        // finish the interrupted wallets/global import from its durable copy.
         await channelPage.reload(); await ready(channelPage)
-        const rejected = await channelPage.evaluate(async password => {
-          const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
-          const [error] = await store.unlockWallet(password)
-          return { error: error?.message, locked: store.locked }
-        }, fixture.password)
-        assert.match(rejected.error, /account-managed data import is incomplete/)
-        assert.equal(rejected.locked, true)
-        await channelPage.evaluate(() => sessionStorage.removeItem('usage-channel-import-fault'))
         await unlockRecovered(channelPage, 'same-device cold retry after removing injected fault')
-        await expect.poll(() => channelPage.evaluate(readLocal, fixture.pending_channel.import_marker_key),
-          { timeout: 90000 }).toBe(null)
+        await expect.poll(async () => {
+          const wallets = await catalog(channelPage)
+          const module = (await accountCall(channelPage, 'status')).modules?.find(item =>
+            item.provider === 'wallets' && item.scope === 'global')
+          return wallets.some(wallet => String(wallet.id) === String(renamedWallet.id) &&
+            wallet.name === 'Pending channel recovery state') &&
+            module?.write_allowed && module.backup_state === 'backed_up' && !module.last_error
+        }, { timeout: 90000 }).toBe(true)
         const channel = await channelPage.evaluate(async () => {
           const { default: stp } = await import('/utils/stp.ts')
           const [error, result] = await stp.getCurrentChannel()
@@ -2785,17 +2798,14 @@ export async function runRgbPwaCases(t, fixture) {
           return JSON.parse(result.channels)
         })
         assert.ok(channels.some(item => item.ChannelId === fixture.pending_channel.id || item.channelId === fixture.pending_channel.id))
-        for (const [key, value] of Object.entries(fixture.pending_channel.records)) {
-          assert.equal(await channelPage.evaluate(readLocal, key), value, 'authentication rewrote unfinished channel work')
-        }
+        const records = fixture.pending_channel.records
+        assert.ok(await channelPage.evaluate(checkLocalRows, {
+          keys: Object.keys(records), expected: Object.values(records),
+        }), 'authentication rewrote unfinished channel work')
         await captureRGB(channelPage, 'post-retry')
-        // Remote import restores canonical recovery receipts. Compare every
-        // asset/proof field, including its hash, with that recovery baseline;
-        // the device's complete spending-lock set must still remain unchanged.
-        const localRGBAfterRetry = await verify(channelPage, fixture.scopes)
-        const localLocks = scopes => scopes.map(({ fingerprint, index, locks }) => ({ fingerprint, index, locks }))
-        assert.deepEqual(localLocks(localRGBAfterRetry), localLocks(localRGBBeforeFault),
-          'remote import retry changed same-device RGB spending locks')
+        const localRGBAfterRetry = await verify(channelPage, fixture.local_scopes)
+        assert.deepEqual(localRGBAfterRetry, localRGBBeforeFault,
+          'catalog import retry changed same-device RGB proofs or spending locks')
         assert.equal(channelBroadcasts, 0, 'channel recovery attempted a new transaction broadcast')
       } catch (error) {
         caseFailures.push(error)
@@ -2803,7 +2813,8 @@ export async function runRgbPwaCases(t, fixture) {
         try {
           // Restore only this peer's metadata change, including when the cold
           // retry stays red. Keep later independent recovery cases synchronized.
-          if (peerRoot) {
+          if (peerRenamed) {
+            await waitForPeerCatalog(peer)
             await peer.evaluate(async ({ id, name }) => {
               await window.__SAT20_PWA_VERIFY__.useWalletStore().updateWalletName(id, name)
             }, { id: String(peerRoot.id), name: peerRoot.name })
@@ -2831,8 +2842,8 @@ export async function runRgbPwaCases(t, fixture) {
     await check('RGB PWA: single SDK recovery preserves ownership proofs and locks without redundant UI persistence', async () => {
       await navigateRecovery(snapshotPage)
       const replacementPassword = fixture.password + '-ui-snapshot'
-      await snapshotPage.getByPlaceholder('设置新的本地钱包密码').fill(replacementPassword)
-      await snapshotPage.getByPlaceholder('再次输入密码').fill(replacementPassword)
+      await snapshotPage.getByPlaceholder(accountMessages.ui.setPassword).fill(replacementPassword)
+      await snapshotPage.getByPlaceholder(accountMessages.ui.repeatPassword).fill(replacementPassword)
       await snapshotPage.evaluate(() => {
         const put = IDBObjectStore.prototype.put
         const commit = window.accountE2E.commitRecovery.bind(window.accountE2E)
@@ -2849,9 +2860,9 @@ export async function runRgbPwaCases(t, fixture) {
           return put.call(this, value, key)
         }
       })
-      await snapshotPage.getByRole('button', { name: '恢复全部钱包', exact: true }).click()
+      await snapshotPage.getByRole('button', { name: accountMessages.ui.restoreAll, exact: true }).click()
       await expect.poll(() => new URL(snapshotPage.url()).hash, { timeout: 90000 }).toBe('#/unlock')
-      await expect(snapshotPage.getByRole('button', { name: '恢复全部钱包', exact: true })).toHaveCount(0)
+      await expect(snapshotPage.getByRole('button', { name: accountMessages.ui.restoreAll, exact: true })).toHaveCount(0)
       // The SDK owns the restored catalog and public identity.
       await ready(snapshotPage)
       await expect.poll(() => new URL(snapshotPage.url()).hash).toBe('#/unlock')
@@ -2907,12 +2918,16 @@ export async function runRgbPaidCases(t, fixture) {
       const questions = ids.map((id, index) => ({ id, prompt: `Private upgrade question ${index + 1}`,
         answer: fixture.answers[index % fixture.answers.length].answer,
         confirmation: fixture.answers[index % fixture.answers.length].answer }))
-      // Begin with an actually configured temporary account, rather than
-      // setting a Vue step or manufacturing a configured status response.
-      await expect.poll(async () => {
-        const status = await accountCall(paidPage, 'status')
-        return !status.pending_changes && !status.managed_data_dirty
-      }, { timeout: 90000 }).toBe(true)
+      // Before activation, the new subaccount is durable locally and still
+      // pending its first remote backup.
+      await waitForAccountWrite(paidPage, accountCall)
+      const local = await accountCall(paidPage, 'status')
+      assert.equal(local.local_only, true)
+      assert.equal(local.recovery_configured, false)
+      const edited = (await catalog(paidPage)).find(wallet => wallet.fingerprint === root.fingerprint)
+      const savings = edited?.accounts.find(account => account.index === 1)
+      assert.equal(savings?.name, 'Upgrade savings')
+      assert.equal(savings.did, 'did:upgrade:1')
       await accountCall(paidPage, 'confirmStorage', 'temporary')
       const temporary = await accountCall(paidPage, 'createRecovery', { password: fixture.password,
         wallets: [], recovery_mode: '2of2', questions })
@@ -2928,12 +2943,13 @@ export async function runRgbPaidCases(t, fixture) {
           if (!/publish account activation state: dkvs write conflict/.test(error.message) || attempt === 3) throw error
           assert.equal((await accountCall(paidPage, 'status')).recovery_configured, false, 'CAS refusal falsely configured recovery')
           console.log(JSON.stringify({ activationUserRetry: attempt + 1, outcome: 'conflict', entry: 'RGB paid setup' }))
-          await expect.poll(async () => {
-            const status = await accountCall(paidPage, 'status')
-            return !status.pending_changes && !status.managed_data_dirty
-          }, { timeout: 90000 }).toBe(true)
+          await waitForAccountWrite(paidPage, accountCall)
         }
       }
+      await expect.poll(async () => {
+        const status = await accountCall(paidPage, 'status')
+        return accountReadiness(status).writeQualified && !status.pending_changes && !status.managed_data_dirty
+      }, { timeout: 90000, message: 'temporary recovery must back up the edited catalog before the paid upgrade' }).toBe(true)
       const configured = await accountCall(paidPage, 'status')
       assert.equal(configured.active, true)
       assert.equal(configured.recovery_configured, true)
@@ -2941,54 +2957,57 @@ export async function runRgbPaidCases(t, fixture) {
       const beforeCatalog = await catalog(paidPage)
       await paidPage.reload(); await ready(paidPage); await unlock(paidPage, fixture.password)
       await paidPage.evaluate(() => { location.hash = '#/wallet/setting/account-management' })
-      await paidPage.getByRole('heading', { name: '维护恢复配置', exact: true }).waitFor()
-      await expect(paidPage.getByRole('textbox', { name: '当前公开恢复码', exact: true })).toHaveValue(temporary.locator)
-      await paidPage.getByRole('button', { name: '重新配置恢复或升级存储', exact: true }).click()
-      await paidPage.getByRole('button', { name: '检查账户', exact: true }).click()
+      await paidPage.getByRole('heading', { name: accountMessages.ui.maintainRecovery, exact: true }).waitFor()
+      await expect(paidPage.getByRole('textbox', { name: accountMessages.ui.currentLocator, exact: true })).toHaveValue(temporary.locator)
+      await paidPage.getByRole('button', { name: accountMessages.ui.reconfigure, exact: true }).click()
+      await paidPage.getByRole('button', { name: accountMessages.ui.checkAccount, exact: true }).click()
       const dialog = paidPage.getByRole('dialog')
       await dialog.locator('input[type="password"]').fill(fixture.password)
       await dialog.getByRole('button', { name: 'Confirm', exact: true }).click()
       await dialog.waitFor({ state: 'hidden' })
-      await paidPage.getByRole('button', { name: '2/2 增强安全', exact: true }).click()
+      await paidPage.getByRole('button', { name: accountMessages.ui.modeSecure, exact: true }).click()
       const paid = (await accountCall(paidPage, 'getStorageOptions')).options.find(option => option.id === 'paid')
-      await paidPage.getByRole('button', { name: paid.title, exact: false }).click()
-      await paidPage.getByRole('button', { name: '仅复用现有 AUTOPAY 授权（不充值）', exact: true }).click()
-      await paidPage.getByRole('button', { name: '创建并保存加密账户备份', exact: true }).waitFor()
+      assert.ok(paid?.available, 'the funded fixture must expose paid storage')
+      await paidPage.getByRole('button', { name: accountMessages.ui.paidStorage, exact: false }).click()
+      // The cold unlock starts a new DKVS session for this active account.
+      await waitForAccountWrite(paidPage, accountCall)
+      await paidPage.getByRole('button', { name: accountMessages.ui.reuseAutopay, exact: true }).click()
+      await paidPage.getByRole('button', { name: accountMessages.ui.createBackup, exact: true }).waitFor()
       const authorization = await accountCall(paidPage, 'resumePendingStorageAuthorization')
       assert.equal(authorization.mode, 'paid')
       assert.equal(Boolean(authorization.transaction_id), false)
-      await paidPage.getByRole('button', { name: '取消本次设置', exact: true }).click()
+      await paidPage.getByRole('button', { name: accountMessages.ui.cancelSetup, exact: true }).click()
       assert.equal(await accountCall(paidPage, 'resumePendingStorageAuthorization'), null)
       assert.equal((await accountCall(paidPage, 'status')).public_locator, temporary.locator)
-      await paidPage.getByRole('button', { name: '仅复用现有 AUTOPAY 授权（不充值）', exact: true }).click()
+      await paidPage.getByRole('button', { name: accountMessages.ui.reuseAutopay, exact: true }).click()
       for (let i = 0; i < 3; i++) {
-        await paidPage.getByPlaceholder('答案', { exact: true }).nth(i).fill(questions[i].answer)
-        await paidPage.getByPlaceholder('再次输入答案', { exact: true }).nth(i).fill(questions[i].confirmation)
+        await paidPage.getByPlaceholder(accountMessages.ui.answer, { exact: true }).nth(i).fill(questions[i].answer)
+        await paidPage.getByPlaceholder(accountMessages.ui.repeatAnswer, { exact: true }).nth(i).fill(questions[i].confirmation)
       }
       await expect.poll(async () => {
         const status = await accountCall(paidPage, 'status')
         return !status.pending_changes && !status.managed_data_dirty
       }, { timeout: 90000 }).toBe(true)
-      await paidPage.getByRole('button', { name: '创建并保存加密账户备份', exact: true }).click()
+      await paidPage.getByRole('button', { name: accountMessages.ui.createBackup, exact: true }).click()
       await dialog.locator('input[type="password"]').fill(fixture.password)
       await dialog.getByRole('button', { name: 'Confirm', exact: true }).click()
       await dialog.waitFor({ state: 'hidden' })
-      const finalLocator = await paidPage.getByRole('textbox', { name: '最终公开恢复码', exact: true }).inputValue()
-      const userShare = await paidPage.getByRole('textbox', { name: '秘密用户分片', exact: true }).inputValue()
-      await paidPage.getByRole('button', { name: '进入恢复演练', exact: true }).click()
-      for (let i = 0; i < 2; i++) await paidPage.getByPlaceholder(`问题 ${i + 1} 的答案`, { exact: true }).fill(questions[i].answer)
-      await paidPage.getByPlaceholder('重新粘贴用户分片', { exact: true }).fill(userShare)
-      await paidPage.getByRole('button', { name: '执行恢复演练', exact: true }).click()
+      const finalLocator = await paidPage.getByRole('textbox', { name: accountMessages.ui.finalLocator, exact: true }).inputValue()
+      const userShare = await paidPage.getByRole('textbox', { name: accountMessages.ui.secretShare, exact: true }).inputValue()
+      await paidPage.getByRole('button', { name: accountMessages.ui.startRehearsal, exact: true }).click()
+      for (let i = 0; i < 2; i++) await paidPage.getByPlaceholder(`Answer to question ${i + 1}`, { exact: true }).fill(questions[i].answer)
+      await paidPage.getByPlaceholder(accountMessages.ui.pasteShareAgain, { exact: true }).fill(userShare)
+      await paidPage.getByRole('button', { name: accountMessages.ui.runRehearsal, exact: true }).click()
       await dialog.locator('input[type="password"]').fill(fixture.password)
       await dialog.getByRole('button', { name: 'Confirm', exact: true }).click()
       await dialog.waitFor({ state: 'hidden' })
-      await paidPage.getByRole('heading', { name: '账户恢复已配置', exact: true }).waitFor()
+      await paidPage.getByRole('heading', { name: accountMessages.ui.recoveryConfigured, exact: true }).waitFor()
       assert.equal((await accountCall(paidPage, 'status')).storage_mode, 'paid')
       await paidPage.reload(); await ready(paidPage); await unlock(paidPage, fixture.password)
       await paidPage.evaluate(() => { location.hash = '#/wallet/setting/account-management' })
-      await expect(paidPage.getByRole('textbox', { name: '当前公开恢复码', exact: true })).toHaveValue(finalLocator)
-      await expect(paidPage.getByRole('alert', { name: '账户备份状态', exact: true }))
-        .toContainText('数据存储：AUTOPAY 持久存储')
+      await expect(paidPage.getByRole('textbox', { name: accountMessages.ui.currentLocator, exact: true })).toHaveValue(finalLocator)
+      await expect(paidPage.getByRole('alert', { name: accountMessages.ui.backupStatusLabel, exact: true }))
+        .toContainText('Data storage: AUTOPAY persistent storage')
       assert.equal((await accountCall(paidPage, 'status')).storage_mode, 'paid')
       assert.deepEqual(await catalog(paidPage), beforeCatalog, 'paid upgrade changed wallet or DID metadata')
       assert.equal(paidBroadcasts, 0, 'AUTOPAY reuse attempted another funding transaction')
@@ -3008,12 +3027,13 @@ export async function runRgbPaidCases(t, fixture) {
       // router on /unlock. Re-enter the visible management page before using
       // its controls; SDK readiness alone does not establish a UI route.
       await paidPage.evaluate(() => { location.hash = '#/wallet/setting/account-management' })
-      await paidPage.getByRole('heading', { name: '维护恢复配置', exact: true }).waitFor()
+      await paidPage.getByRole('heading', { name: accountMessages.ui.maintainRecovery, exact: true }).waitFor()
       const initial = await accountCall(paidPage, 'autopayStatus')
       const publicDiagnostic = data => appendFileSync(
         join(tmpdir(), `sat20wallet-pwa-e2e-funding-diagnostics-${process.pid}.jsonl`),
         JSON.stringify({ at: new Date().toISOString(), ...data }) + '\n', { mode: 0o600 })
       assert.ok(initial.required && initial.ready)
+      assert.ok(Number.isSafeInteger(initial.blob_key_limit) && initial.blob_key_limit > 0)
       const required = Number(initial.required_amount_per_block)
       assert.ok(Number.isFinite(required) && required > 0)
       const evidence = []
@@ -3037,7 +3057,7 @@ export async function runRgbPaidCases(t, fixture) {
       const configure = async (action, rate) => {
         const result = await walletCall(paidPage, 'invokeUnifiedContract', {
           ContractType: 'template', SubType: 'autopay.tc', ContractAddress: initial.contract_address,
-          Action: action, Param: JSON.stringify(action === 'config' ? { amountPerBlock: String(rate), blobKeyLimit: 1 } : {}),
+          Action: action, Param: JSON.stringify(action === 'config' ? { amountPerBlock: String(rate), blobKeyLimit: initial.blob_key_limit } : {}),
           ParamEncoding: 'json', Assets: [],
         })
         assert.ok(result.txid)
@@ -3107,7 +3127,7 @@ export async function runRgbPaidCases(t, fixture) {
           captureFunding = true
           await dialog.getByRole('button', { name: 'Confirm', exact: true }).click()
           await expect.poll(() => evidence.length, { timeout: 90000 }).toBe(index + 1)
-          await expect(paidPage.getByRole('button', { name: '查询充值状态', exact: true })).toBeEnabled({ timeout: 160000 })
+          await expect(paidPage.getByRole('button', { name: accountMessages.ui.checkFunding, exact: true })).toBeEnabled({ timeout: 160000 })
           captureFunding = false
           assert.equal(broadcasts, beforeFunding + 1, 'confirmation did not submit exactly one payment')
           Object.assign(evidence[index], { rate: quote.effective_amount_per_block,
@@ -3164,20 +3184,21 @@ export async function runRgbPaidCases(t, fixture) {
       }
       await paidPage.context().route('**/*', fundingRoute)
       const confirmPaid = async () => {
-        await paidPage.getByRole('button', { name: '确认存储方式', exact: true }).click()
+        await paidPage.getByRole('button', { name: accountMessages.ui.confirmStorage, exact: true }).click()
         await paidPage.getByRole('dialog').getByRole('button', { name: 'Confirm', exact: true }).click()
         await paidPage.getByRole('dialog').waitFor({ state: 'hidden' })
       }
       const select200 = async () => {
-        await paidPage.getByRole('button', { name: '重新配置恢复或升级存储', exact: true }).click()
-        await paidPage.getByRole('button', { name: '检查账户', exact: true }).click()
+        await paidPage.getByRole('button', { name: accountMessages.ui.reconfigure, exact: true }).click()
+        await paidPage.getByRole('button', { name: accountMessages.ui.checkAccount, exact: true }).click()
         const dialog = paidPage.getByRole('dialog')
         await dialog.locator('input[type="password"]').fill(fixture.password)
         await dialog.getByRole('button', { name: 'Confirm', exact: true }).click()
         await dialog.waitFor({ state: 'hidden' })
         const paid = (await accountCall(paidPage, 'getStorageOptions')).options.find(option => option.id === 'paid')
-        await paidPage.getByRole('button', { name: paid.title, exact: false }).click()
-        await paidPage.getByLabel('持久记录条数', { exact: true }).fill('200')
+        assert.ok(paid?.available, 'the funded fixture must expose paid storage')
+        await paidPage.getByRole('button', { name: accountMessages.ui.paidStorage, exact: false }).click()
+        await paidPage.getByLabel(accountMessages.ui.recordCount, { exact: true }).fill('200')
       }
       try {
         await select200()
@@ -3200,9 +3221,9 @@ export async function runRgbPaidCases(t, fixture) {
         await expect.poll(() => submissions, { timeout: 90000 }).toBe(1)
         // Delay contract state and execution-history queries after a real submission to
         // exercise the unresolved-receipt path. No SDK clock override.
-        const tracker = paidPage.getByRole('region', { name: 'DKVS 付费交易追踪' })
-        await expect(tracker).toContainText('原充值交易等待提交或合约确认', { timeout: 160000 })
-        await expect(paidPage.getByRole('button', { name: '确认存储方式', exact: true })).toBeEnabled({ timeout: 160000 })
+        const tracker = paidPage.getByRole('region', { name: accountMessages.ui.fundingTracking })
+        await expect(tracker).toContainText(accountMessages.ui.fundingPending, { timeout: 160000 })
+        await expect(paidPage.getByRole('button', { name: accountMessages.ui.confirmStorage, exact: true })).toBeEnabled({ timeout: 160000 })
         const trackingText = await tracker.innerText()
         const txid = trackingText.match(/[0-9a-f]{64}/)?.[0]
         assert.ok(txid, 'the rendered receipt must retain the actual signed transaction ID')
@@ -3211,8 +3232,8 @@ export async function runRgbPaidCases(t, fixture) {
           'pending payment cannot authorize paid recovery storage')
         await paidPage.reload(); await ready(paidPage); await unlock(paidPage, fixture.password)
         await paidPage.evaluate(() => { location.hash = '#/wallet/setting/account-management' })
-        await expect(paidPage.getByRole('region', { name: 'DKVS 付费交易追踪' })).toContainText(txid)
-        await paidPage.getByRole('button', { name: '继续提交原交易', exact: true }).click()
+        await expect(paidPage.getByRole('region', { name: accountMessages.ui.fundingTracking })).toContainText(txid)
+        await paidPage.getByRole('button', { name: accountMessages.ui.resumeFunding, exact: true }).click()
         await expect.poll(() => submissions, { timeout: 90000 }).toBe(2)
         assert.equal(submittedBodies[1], submittedBodies[0], 'continuation created a different signed transaction')
         const logs = await paidPage.evaluate(async () => {
@@ -3268,13 +3289,13 @@ export async function runRgbPaidCases(t, fixture) {
         assert.equal(historical.funding_transaction_id, txid)
         assert.equal(submissions, 2, 'status and history queries broadcast another transaction')
         delayState = false
-        await paidPage.getByRole('button', { name: '查询充值状态', exact: true }).click()
+        await paidPage.getByRole('button', { name: accountMessages.ui.checkFunding, exact: true }).click()
         await expect.poll(async () => {
-          await paidPage.getByRole('button', { name: '查询充值状态', exact: true }).click()
+          await paidPage.getByRole('button', { name: accountMessages.ui.checkFunding, exact: true }).click()
           return (await accountCall(paidPage, 'autopayStatus')).ready
         }, { timeout: 90000 }).toBe(true)
-        await expect(paidPage.getByRole('region', { name: 'DKVS 付费交易追踪' })).toContainText('合约查询确认 AUTOPAY 支付已就绪')
-        await expect(paidPage.getByRole('region', { name: 'DKVS 付费交易追踪' })).toContainText(txid)
+        await expect(paidPage.getByRole('region', { name: accountMessages.ui.fundingTracking })).toContainText(accountMessages.ui.fundingReady)
+        await expect(paidPage.getByRole('region', { name: accountMessages.ui.fundingTracking })).toContainText(txid)
         const completed = await paidPage.evaluate(async receiptTxID => {
           const response = await window.sat20wallet_operation_log.getOperationLogs()
           if (response.code !== 0) throw new Error(response.msg)
@@ -3286,10 +3307,11 @@ export async function runRgbPaidCases(t, fixture) {
         // Reload returned to the maintenance entry. Use its visible controls
         // again before confirming the 200-record authorization.
         await select200()
+        await waitForAccountWrite(paidPage, accountCall)
         await confirmPaid()
-        await paidPage.getByRole('button', { name: '创建并保存加密账户备份', exact: true }).waitFor()
+        await paidPage.getByRole('button', { name: accountMessages.ui.createBackup, exact: true }).waitFor()
         assert.equal(submissions, 2, 'ready contract must reuse the original funding')
-        await paidPage.getByRole('button', { name: '取消本次设置', exact: true }).click()
+        await paidPage.getByRole('button', { name: accountMessages.ui.cancelSetup, exact: true }).click()
       } finally { await paidPage.context().unroute('**/*', fundingRoute) }
     })
   } finally { await paidPage.context().close() }
@@ -3319,7 +3341,7 @@ export async function runAutopayPwaReviewCases(t, fixture) {
   }
   const management = async () => {
     await g.evaluate(() => { location.hash = '#/wallet/setting/account-management' })
-    await g.getByRole('heading', { name: '维护恢复配置', exact: true }).waitFor()
+    await g.getByRole('heading', { name: accountMessages.ui.maintainRecovery, exact: true }).waitFor()
   }
   const cold = async () => {
     await g.reload(); await ready(g)
@@ -3369,17 +3391,17 @@ export async function runAutopayPwaReviewCases(t, fixture) {
       await waitBackup(g)
       const before = await accountCall(g, 'status'); assert.equal(before.storage_mode, 'temporary')
       await management()
-      await g.getByRole('button', { name: '生成我的联系信息并发送给好友', exact: true }).click(); await passwordDialog()
+      await g.getByRole('button', { name: accountMessages.ui.generateContact, exact: true }).click(); await passwordDialog()
       await expect.poll(() => g.locator('textarea[readonly]').count(), poll).toBe(2)
       const contact = JSON.parse(await g.locator('textarea[readonly]').nth(1).inputValue())
       await accountCall(owner, 'confirmStorage', 'temporary')
       const material = await accountCall(owner, 'createRecovery', { password, wallets: [], recovery_mode: '2of3', questions, guardian: contact })
-      await g.getByPlaceholder('好友发送的 Guardian setup JSON').fill(material.guardian_setup)
+      await g.getByPlaceholder(accountMessages.ui.pasteFriendSetup).fill(material.guardian_setup)
       await g.locator('select').selectOption('paid')
-      await g.getByRole('button', { name: '接受并保存好友分片', exact: true }).click(); await passwordDialog()
+      await g.getByRole('button', { name: accountMessages.ui.acceptShare, exact: true }).click(); await passwordDialog()
       await expect(g.getByRole('dialog')).toContainText('100')
       await g.getByRole('dialog').getByRole('button', { name: 'Confirm', exact: true }).click()
-      await expect.poll(() => g.getByRole('button', { name: '接受并保存好友分片', exact: true }).isEnabled(), poll).toBe(true)
+      await expect.poll(() => g.getByRole('button', { name: accountMessages.ui.acceptShare, exact: true }).isEnabled(), poll).toBe(true)
       await expect.poll(() => g.locator('textarea[readonly]').count(), poll).toBe(3)
       const receipt = await g.locator('textarea[readonly]').last().inputValue()
       await accountCall(owner, 'checkGuardianSetup', material.session_id, receipt)
@@ -3389,8 +3411,8 @@ export async function runAutopayPwaReviewCases(t, fixture) {
       await cold()
       const after = await accountCall(g, 'status')
       for (const field of ['storage_mode', 'package_id', 'public_locator']) assert.equal(after[field], before[field])
-      await g.getByPlaceholder('好友发送的 Guardian 恢复请求 JSON').fill(request)
-      await g.getByRole('button', { name: '生成加密恢复响应', exact: true }).click(); await passwordDialog()
+      await g.getByPlaceholder(accountMessages.ui.pasteFriendRequest).fill(request)
+      await g.getByRole('button', { name: accountMessages.ui.createResponse, exact: true }).click(); await passwordDialog()
       await expect.poll(() => g.locator('textarea[readonly]').count(), poll).toBe(2)
       const response = await g.locator('textarea[readonly]').last().inputValue()
       await accountCall(owner, 'consumeGuardianResponse', material.session_id, response)
@@ -3417,11 +3439,11 @@ export async function runAutopayPwaReviewCases(t, fixture) {
           assert.match(pending.funding_transaction_id, /^[0-9a-f]{64}$/)
           assert.equal(attempts.length, 1); assert.equal(delivered, mode === 'before-broadcast' ? 0 : 1)
           await cold()
-          await expect(g.getByText(`交易号：${pending.funding_transaction_id}`, { exact: true })).toBeVisible()
-          await g.getByRole('button', { name: '查询充值状态', exact: true }).click()
-          await expect(g.getByRole('button', { name: '继续提交原交易', exact: true })).toBeEnabled()
+          await expect(g.getByText(accountMessages.ui.transactionId.replace('{value}', pending.funding_transaction_id), { exact: true })).toBeVisible()
+          await g.getByRole('button', { name: accountMessages.ui.checkFunding, exact: true }).click()
+          await expect(g.getByRole('button', { name: accountMessages.ui.resumeFunding, exact: true })).toBeEnabled()
           assert.equal(attempts.length, 1)
-          await g.getByRole('button', { name: '继续提交原交易', exact: true }).click()
+          await g.getByRole('button', { name: accountMessages.ui.resumeFunding, exact: true }).click()
           await expect.poll(() => attempts.length, poll).toBe(2)
           assert.equal(attempts[1], attempts[0], 'cold continuation changed original signed bytes')
           await expect.poll(async () => !(await accountCall(g, 'autopayStatus')).funding_pending, poll).toBe(true)

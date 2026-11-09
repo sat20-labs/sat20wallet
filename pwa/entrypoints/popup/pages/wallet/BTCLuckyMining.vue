@@ -8,7 +8,7 @@
           <Icon icon="lucide:arrow-left" class="h-4 w-4" />
         </Button>
         <div class="text-base font-medium">{{ $t('pwaUi.mining.title') }}</div>
-        <Button variant="ghost" size="icon" :disabled="loading" @click="refreshStatus">
+        <Button variant="ghost" size="icon" :disabled="loading" @click="refreshPage">
           <Icon icon="lucide:refresh-cw" class="h-4 w-4" :class="{ 'animate-spin': loading }" />
         </Button>
       </div>
@@ -27,6 +27,9 @@
             <div class="rounded-sm border border-border p-3">
               <div class="text-xs text-muted-foreground">{{ $t('pwaUi.mining.difficulty') }}</div>
               <div class="mt-1 font-medium">{{ formatDifficulty(currentDifficulty) }}</div>
+              <div v-if="networkStats.currentDifficulty > 0" class="mt-1 text-[11px] text-muted-foreground">
+                {{ $t('pwaUi.mining.networkDifficulty') }} {{ formatDifficulty(networkStats.currentDifficulty) }}
+              </div>
             </div>
             <div class="rounded-sm border border-border p-3">
               <div class="text-xs text-muted-foreground">{{ $t('pwaUi.mining.networkHashrate') }}</div>
@@ -70,8 +73,8 @@
               <div class="mt-1">{{ status.btcHeight || '-' }}</div>
             </div>
             <div>
-              <div class="text-muted-foreground">{{ $t('pwaUi.mining.jobId') }}</div>
-              <div class="mt-1 truncate" :title="status.jobId">{{ status.jobId || '-' }}</div>
+              <div class="text-muted-foreground">{{ $t('pwaUi.mining.templateId') }}</div>
+              <div class="mt-1 truncate" :title="status.templateId">{{ status.templateId || '-' }}</div>
             </div>
             <div>
               <div class="text-muted-foreground">{{ $t('pwaUi.mining.bestShare') }}</div>
@@ -82,8 +85,8 @@
               <div class="mt-1 truncate" :title="status.currentTarget">{{ shortHash(status.currentTarget) }}</div>
             </div>
             <div>
-              <div class="text-muted-foreground">{{ $t('pwaUi.mining.lastJob') }}</div>
-              <div class="mt-1">{{ formatTime(status.lastJobTime) }}</div>
+              <div class="text-muted-foreground">{{ $t('pwaUi.mining.lastTemplate') }}</div>
+              <div class="mt-1">{{ formatTime(status.lastTemplateTime) }}</div>
             </div>
             <div>
               <div class="text-muted-foreground">{{ $t('pwaUi.mining.lastSubmit') }}</div>
@@ -144,7 +147,7 @@
           <div v-if="!status.foundBlocks?.length" class="text-sm text-muted-foreground">{{ $t('pwaUi.mining.noRecords') }}</div>
           <div
             v-for="block in status.foundBlocks"
-            :key="`${block.jobId}-${block.blockHash}`"
+            :key="block.blockHash"
             class="space-y-1 rounded-sm border border-border p-3 text-xs"
           >
             <div class="flex items-center justify-between gap-2">
@@ -193,7 +196,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { useWalletStore } from '@/store'
+import { useGlobalStore, useWalletStore } from '@/store'
 import { Network } from '@/types'
 import { getConfig } from '@/config/wasm'
 import walletManager from '@/utils/sat20'
@@ -202,6 +205,7 @@ const { t } = useI18n()
 
 const router = useRouter()
 const walletStore = useWalletStore()
+const globalStore = useGlobalStore()
 const { network } = storeToRefs(walletStore)
 const storageKey = 'btcLuckyMiningConfig'
 const loading = ref(false)
@@ -249,19 +253,65 @@ if (saved) {
 
 const applyStatus = (next: any) => {
   Object.assign(status, next || { enabled: false, running: false, foundBlocks: [] })
-  if (!Array.isArray(status.foundBlocks)) status.foundBlocks = []
+  status.foundBlocks = Array.isArray(next?.foundBlocks) ? next.foundBlocks : []
 }
 
+let readingStatus = false
+let readingRewards = false
+let forceRewards = false
+let rewardHeights = ''
+let rewardTimer: number | undefined
+
 const refreshStatus = async () => {
-  loading.value = true
-  const [err, data] = await walletManager.getBTCLuckyMiningStatus()
-  loading.value = false
-  if (!err) applyStatus(data)
-  if (!status.rewardAddress) refreshRewardAddress()
-  refreshNetworkStats()
-  const [rewardsErr, nextRewards] = await walletManager.getBTCLuckyRewards()
-  rewardError.value = rewardsErr?.message || ''
-  if (!rewardsErr) rewards.value = Array.isArray(nextRewards) ? nextRewards : []
+  if (readingStatus) return
+  readingStatus = true
+  try {
+    const [err, data] = await walletManager.getBTCLuckyMiningStatus()
+    if (err) status.lastError = err.message
+    else applyStatus(data)
+  } finally {
+    readingStatus = false
+  }
+}
+
+const refreshRewards = async (force = false) => {
+  if (readingRewards) {
+    forceRewards ||= force
+    return
+  }
+  readingRewards = true
+  try {
+    if (!force) {
+      const cfg = getConfig(globalStore.env, network.value)
+      const heights = await Promise.all([cfg.IndexerL1, cfg.IndexerL2].map(async endpoint => {
+        const proxy = endpoint.Proxy.replace(/^\/|\/$/g, '')
+        const url = `${endpoint.Scheme}://${endpoint.Host}/${proxy}/bestheight`
+        const tip = await fetchJSON(url)
+        if (tip.code !== 0 || !Number.isInteger(tip.data?.height)) throw new Error(tip.msg || 'Invalid indexer height')
+        return tip.data.height
+      }))
+      const key = [status.rewardAddress, ...heights].join('/')
+      if (key === rewardHeights && !rewardError.value) return
+      rewardHeights = key
+    }
+    const [err, data] = await walletManager.getBTCLuckyRewards()
+    rewardError.value = err?.message || ''
+    if (!err) rewards.value = Array.isArray(data) ? data : []
+  } catch (error: any) {
+    rewardError.value = error?.message || String(error)
+  } finally {
+    readingRewards = false
+    if (forceRewards) {
+      forceRewards = false
+      void refreshRewards(true)
+    }
+  }
+}
+
+const refreshPage = () => {
+  void refreshStatus()
+  void refreshRewards(true)
+  void refreshNetworkStats()
 }
 
 const rewardState = (state: string) => ({
@@ -277,7 +327,7 @@ const claimReward = async (utxo: string) => {
   if (err) rewardError.value = err.message
   else {
     claimResult.value = typeof txid === 'string' ? txid : String(txid?.txid || txid)
-    await refreshStatus()
+    await refreshRewards(true)
   }
 }
 
@@ -290,15 +340,16 @@ const startMining = async () => {
     lowPrioritySleep: `${normalizedSleepMs.value}ms`,
   })
   loading.value = false
-  if (!err) applyStatus(data)
+  if (err) status.lastError = err.message
+  else applyStatus(data)
 }
 
 const stopMining = async () => {
   loading.value = true
   const [err, data] = await walletManager.stopBTCLuckyMining()
   loading.value = false
-  if (!err) applyStatus(data)
-  if (!status.rewardAddress) refreshRewardAddress()
+  if (err) status.lastError = err.message
+  else applyStatus(data)
 }
 
 const formatHashrate = (value?: number) => {
@@ -327,13 +378,10 @@ const normalizedSleepMs = computed(() => {
 const networkHashrateText = computed(() => {
   const value = Number(networkStats.currentHashrate || status.networkHashesPerSecond || status.networkHashrate || 0)
   if (value > 0) return formatHashrateWithExponent(value)
-  return currentDifficulty.value > 0 ? formatHashrateWithExponent((currentDifficulty.value * 4_294_967_296) / 600) : '-'
+  return networkStats.currentDifficulty > 0 ? formatHashrateWithExponent((networkStats.currentDifficulty * 4_294_967_296) / 600) : '-'
 })
 
-const currentDifficulty = computed(() => {
-  const publicDifficulty = Number(networkStats.currentDifficulty || 0)
-  return publicDifficulty > 0 ? publicDifficulty : difficultyFromTarget(status.currentTarget)
-})
+const currentDifficulty = computed(() => difficultyFromTarget(status.currentTarget))
 
 async function refreshNetworkStats(force = false) {
   const now = Date.now()
@@ -401,7 +449,7 @@ async function fetchNetworkStats() {
 }
 
 async function fetchJSON(url: string) {
-  const resp = await fetch(url, { cache: 'no-store' })
+  const resp = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(10_000) })
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
   return resp.json()
 }
@@ -422,38 +470,13 @@ function latestDifficulty(items: any[] = []) {
   return 0
 }
 
-async function refreshRewardAddress() {
-  if (status.rewardAddress) return
-  try {
-    const env = localStorage.getItem('env') || 'test'
-    const cfg = getConfig(env, network.value || Network.TESTNET)
-    const pubkey = serviceNodePubkey(cfg.Peers)
-    if (!pubkey) throw new Error(t('pwaUi.mining.indexerPubkeyEmpty'))
-    const [err, result] = await walletManager.getChannelAddrByPeerPubkey(pubkey)
-    if (err) throw err
-    if (result?.channelAddr) {
-      status.rewardAddress = result.channelAddr
-      if (!status.lastError) status.lastError = ''
-    }
-  } catch (error: any) {
-    if (!status.lastError) status.lastError = error?.message || String(error)
-  }
-}
-
-function serviceNodePubkey(peers: string[] = []) {
-  const servicePeer = peers.find((peer) => peer.startsWith('s@')) || peers[0] || ''
-  const parts = servicePeer.split('@')
-  return String(parts[1] || '').trim()
-}
-
 function difficultyFromTarget(targetHex?: string) {
   const hex = String(targetHex || '').replace(/^0x/i, '').trim()
   if (!hex) return 0
   try {
     const target = BigInt(`0x${hex}`)
     if (target <= 0n) return 0
-    const scaled = (difficultyOneTarget * 10000n) / target
-    return Number(scaled) / 10000
+    return Number(difficultyOneTarget) / Number(target)
   } catch {
     return 0
   }
@@ -465,6 +488,7 @@ function formatDifficulty(value: number) {
   if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)} B`
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)} M`
   if (value >= 1_000) return `${(value / 1_000).toFixed(2)} K`
+  if (value < 0.0001) return value.toExponential(2)
   return value.toFixed(value >= 10 ? 2 : 4)
 }
 
@@ -494,13 +518,16 @@ function durationToMs(value: string) {
 }
 
 onMounted(() => {
-  refreshStatus()
-  refreshRewardAddress()
-  refreshNetworkStats(true)
-  timer = window.setInterval(refreshStatus, 2000)
+  refreshPage()
+  timer = window.setInterval(() => {
+    if (status.running) void refreshStatus()
+    void refreshNetworkStats()
+  }, 2000)
+  rewardTimer = window.setInterval(() => void refreshRewards(), 15000)
 })
 
 onUnmounted(() => {
-  if (timer) window.clearInterval(timer)
+  window.clearInterval(timer)
+  window.clearInterval(rewardTimer)
 })
 </script>

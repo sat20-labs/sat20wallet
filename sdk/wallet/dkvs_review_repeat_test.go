@@ -46,7 +46,7 @@ func TestDKVSReviewExpiredOutboxStillReceives(t *testing.T) {
 		ttl       uint64
 		rejection error
 	}{
-		{name: "signing-height", ttl: 100, rejection: dkvs.ErrStaleEndpoint},
+		{name: "signing-height", ttl: 100, rejection: dkvs.ErrHeightTooLow},
 		{name: "record-ttl", ttl: 3, rejection: dkvs.ErrExpiredRecord},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -69,13 +69,16 @@ func TestDKVSReviewExpiredOutboxStillReceives(t *testing.T) {
 			require.NoError(t, err)
 			admission := &dkvs.WalletRPCAdmission{Indexer: node, IsCoreNode: func() bool { return true },
 				CurrentBinding: func(string) (*wire.DKVSRecord, error) { return node.Get(bindingKey) }}
-			// Reuse the existing endpoint transport; only write admission goes through
-			// the real node boundary to prove this is a height rejection, not a CAS race.
-			http := &reviewAcceptanceHTTP{rgb11MemoryDKVSHTTP: remote}
-			var rejected error
+			// A successful re-sign is acknowledged and read back from the same
+			// node. Its active snapshot must include the accepted generation.
+			reads := &satoshinetDKVSTestTransport{indexer: node}
+			http := &reviewAcceptanceHTTP{rgb11MemoryDKVSHTTP: remote, get: reads.SendDKVSGetContext}
+			var requests []DKVSBatchCASRequest
+			var outcomes []error
+			applied := 0
 			http.post = func(ctx context.Context, path string, body []byte) ([]byte, error) {
 				if path != "/v3/dkvs/records/batch-cas" {
-					return remote.SendDKVSPostContext(ctx, path, body)
+					return reads.SendDKVSPostContext(ctx, path, body)
 				}
 				var request DKVSBatchCASRequest
 				if err := json.Unmarshal(body, &request); err != nil {
@@ -87,7 +90,11 @@ func TestDKVSReviewExpiredOutboxStillReceives(t *testing.T) {
 				result, err := admission.PutRecords([]dkvs.CASMutation{{Record: request.Mutations[0].Record,
 					Precondition: dkvs.WritePrecondition{ExpectAbsent: true}}},
 					dkvs.BatchCASOptions{EndpointID: request.EndpointID, RequestID: request.RequestID}, request.Authorization)
-				rejected = err
+				requests = append(requests, request)
+				outcomes = append(outcomes, err)
+				if result != nil {
+					applied += result.Applied
+				}
 				return satoshinetTestResponse(result, err)
 			}
 			configureRGB11DKVSTestManager(manager, http)
@@ -96,8 +103,7 @@ func TestDKVSReviewExpiredOutboxStillReceives(t *testing.T) {
 			key := accountTestKey(t, manager, "repeat-receive/value")
 			prefix, err := dkvs.CollectionPathForKey(key)
 			require.NoError(t, err)
-			seed := finalDKVSSeedClient(manager, remote)
-			_, err = seed.PutRecord(freeLocalRecord(t, manager, key, 1, "confirmed-v1"))
+			_, err = node.PutLocal(freeLocalRecord(t, manager, key, 1, "confirmed-v1"))
 			require.NoError(t, err)
 			require.NoError(t, manager.SubscribeDKVSPrefix(prefix))
 			require.NoError(t, manager.dkvs.forceCurrentPrefixes(client, []string{prefix}))
@@ -118,15 +124,39 @@ func TestDKVSReviewExpiredOutboxStillReceives(t *testing.T) {
 			updated, err := newDKVSAccountSignedRecordWithFreeLocal(manager.wallet, key, []byte("remote-v2"),
 				dkvs.RecordOptions{Seq: 2, IssueHeight: height, TTL: 100})
 			require.NoError(t, err)
-			_, err = seed.PutRecord(updated)
+			_, err = node.PutLocal(updated)
 			require.NoError(t, err)
 			var syncErr error
 			panicked := captureDKVSOutboxPanic(func() { _, syncErr = manager.syncDKVSOnce() })
-			require.ErrorIs(t, rejected, test.rejection, "real wallet admission must reject the original expired request")
 			require.Nil(t, panicked, "ordinary offline expiry must not crash the synchronization worker")
-			require.True(t, IsDKVSErrorCode(syncErr, dkvs.ErrorCodeOf(test.rejection)))
-			_, err = node.Get(pendingKey)
-			require.ErrorIs(t, err, dkvs.ErrRecordNotFound, "the old intent must not be reauthorized")
+			require.NotEmpty(t, outcomes)
+			require.ErrorIs(t, outcomes[0], test.rejection)
+			if test.rejection == dkvs.ErrHeightTooLow {
+				require.Len(t, outcomes, 2)
+				require.NoError(t, outcomes[1])
+				require.NoError(t, syncErr)
+				require.Equal(t, 1, applied)
+				first, retry := requests[0], requests[1]
+				require.NotEqual(t, first.RequestID, retry.RequestID)
+				require.Equal(t, first.EndpointID, retry.EndpointID)
+				require.NotNil(t, first.Authorization)
+				require.NotNil(t, retry.Authorization)
+				require.Equal(t, first.Authorization.Context, retry.Authorization.Context)
+				require.Equal(t, first.Mutations[0].ExpectedETag, retry.Mutations[0].ExpectedETag)
+				require.Equal(t, uint64(1), first.Mutations[0].Record.IssueHeight)
+				current, err := node.Get(pendingKey)
+				require.NoError(t, err)
+				require.Equal(t, height, current.IssueHeight)
+				expected := *pending
+				expected.IssueHeight, expected.Signature = height, current.Signature
+				require.Equal(t, dkvs.RecordHash(&expected), dkvs.RecordHash(current))
+			} else {
+				require.Len(t, outcomes, 1)
+				require.Zero(t, applied)
+				require.True(t, IsDKVSErrorCode(syncErr, dkvs.ErrorCodeOf(test.rejection)))
+				_, err = node.Get(pendingKey)
+				require.ErrorIs(t, err, dkvs.ErrRecordNotFound, "expired data must not be renewed")
+			}
 			local, err := replica.LoadSubscriptionRecord(client.replicaNamespace, key)
 			require.NoError(t, err)
 			require.Equal(t, dkvs.RecordHash(updated), dkvs.RecordHash(local), "a rejected write must not prevent receiving current subscribed state")

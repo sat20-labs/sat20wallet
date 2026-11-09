@@ -199,7 +199,8 @@
                 <Icon icon="lucide:qr-code" class="w-4 h-4 mr-1" />
                 {{ $t('l1AssetsTabs.receive') }}
               </Button>
-              <Button v-if="asset.protocol !== 'rgb11'" size="sm" variant="outline" @click="handleSplicingIn(asset)"
+              <Button v-if="asset.protocol !== 'rgb11' || isFungibleRGB11(asset)" size="sm" variant="outline"
+                :disabled="asset.protocol === 'rgb11' && !canMoveRGB11(asset)" @click="handleSplicingIn(asset)"
                 class="text-zinc-400 border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]">
                 <Icon icon="lets-icons:sign-in-squre" class="w-4 h-4 mr-1" />
                 {{ $t('l1AssetsTabs.splicingIn') }}
@@ -224,7 +225,8 @@
                 <Icon icon="lucide:qr-code" class="w-4 h-4 mr-1" />
                 {{ $t('l1AssetsTabs.receive') }}
               </Button>
-              <Button v-if="asset.protocol !== 'rgb11'" size="sm" variant="outline" @click="handleDeposit(asset)"
+              <Button v-if="asset.protocol !== 'rgb11' || isFungibleRGB11(asset)" size="sm" variant="outline"
+                :disabled="asset.protocol === 'rgb11' && !canMoveRGB11(asset)" @click="handleDeposit(asset)"
                 class="text-zinc-400 border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]">
                 <Icon icon="lucide:arrow-down-right" class="w-4 h-4 mr-1" />
                 {{ $t('l1AssetsTabs.deposit') }}
@@ -359,6 +361,7 @@ const mempoolUrl = computed(() => {
 //const assetTypes = ['BTC', 'ORDX', 'Runes', 'BRC20']
 const assetTypes = ['ORDX', 'Runes', 'BRC20', 'RGB11']
 const selectedType = ref(props.modelValue || assetTypes[0])
+watch(() => props.modelValue, (value) => { if (value) selectedType.value = value })
 
 // 过滤资产
 const filteredAssets = computed(() => {
@@ -866,6 +869,9 @@ const isPositiveAmount = (amount: number | string | undefined) => {
 }
 
 const hasAvailableRGB11 = (asset: Asset) => isPositiveAmount(asset.available_amount)
+const isFungibleRGB11 = (asset: Asset) => asset.type === 'f' && /^[0-9a-f]{64}$/.test(asset.ticker)
+const canMoveRGB11 = (asset: Asset) => isFungibleRGB11(asset) &&
+  rgb11State.value.consistency_status === 'ok' && !rgb11Error.value && hasAvailableRGB11(asset)
 
 const rgb11ProofLockReason = (proof: any) => (
   proof?.status === 'settled' && Number(proof?.confirmations || 0) > 0 ? 'rgb' : 'pending-rgb'

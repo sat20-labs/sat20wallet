@@ -26,7 +26,7 @@ func TestRGB11RegistryKeyAndValueBoundaries(t *testing.T) {
 	// The old 33-byte value and armored/transfer transports are never accepted.
 	_, err := rgb11wallet.DecodeRGB11RegistryValue(append([]byte{'f'}, make([]byte, 32)...))
 	require.Error(t, err)
-	for _, malformed := range [][]byte{append(append([]byte(nil), record.Value...), 0), append([]byte{1}, record.Value[1:]...), append([]byte{2, 0xfd, 5, 0}, record.Value[2:]...)} {
+	for _, malformed := range [][]byte{append(append([]byte(nil), record.Value...), 0), append([]byte{0}, record.Value[1:]...), append([]byte{rgb11wallet.RGB11ContractValueVersion, 0xfd, 5, 0}, record.Value[2:]...)} {
 		_, err := rgb11wallet.DecodeRGB11RegistryValue(malformed)
 		require.Error(t, err)
 	}

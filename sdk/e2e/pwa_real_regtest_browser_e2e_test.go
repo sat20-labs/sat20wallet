@@ -90,6 +90,220 @@ func prepareSDKPWARegtestL2PlainFunding(t *testing.T, sender, receiver *wallet.M
 		"B0 indexed balance must include the confirmed SDK transfer")
 }
 
+func sdkPWARegtestL2Indexer(t *testing.T, node *testHarness) *wallet.IndexerClient {
+	t.Helper()
+	endpoint, err := node.IndexerURL("regtest")
+	require.NoError(t, err)
+	parsed, err := url.Parse(endpoint)
+	require.NoError(t, err)
+	return wallet.NewIndexerClient(parsed.Scheme, parsed.Host, "regtest", wallet.NewHTTPClient())
+}
+
+func sdkPWARegtestL2PlainBalance(t *testing.T, client *wallet.IndexerClient, address string) int64 {
+	t.Helper()
+	summary := client.GetAssetSummaryWithAddress(address)
+	if summary == nil {
+		return 0
+	}
+	for _, asset := range summary.Data {
+		if asset != nil && asset.Name == indexercommon.ASSET_PLAIN_SAT {
+			return asset.Amount.Int64()
+		}
+	}
+	return 0
+}
+
+// Prepare only the real L2 plain-sat fees needed by the RGB public route.
+// Both transfers use the ordinary SDK send path and are confirmed/indexed by
+// both test nodes before the browser starts.
+func prepareSDKPWARegtestRGBCrossLayerPlainFunding(t *testing.T, source *wallet.Manager,
+	deployerAddress string, network *realSatoshiNet) map[string]string {
+	t.Helper()
+	require.NotNil(t, source)
+	require.NotNil(t, network)
+	require.NotEmpty(t, deployerAddress)
+	coreKey := keyFromMnemonic(t, coreMnemonic, 0)
+	coreAddress := wallet.PublicKeyToP2TRAddress(coreKey.PubKey())
+	corePubkey := hex.EncodeToString(coreKey.PubKey().SerializeCompressed())
+	require.Equal(t, network.Core.nodePubKey, corePubkey,
+		"fund the actual Core code-node address used by DeployContract")
+	require.NotEqual(t, source.GetWallet().GetAddress(), coreAddress)
+	require.NotEqual(t, source.GetWallet().GetAddress(), deployerAddress)
+	require.NotEqual(t, coreAddress, deployerAddress)
+
+	feeRate := source.GetFeeRate()
+	require.Positive(t, feeRate, "use the live Bitcoin fee rate for the RGB withdrawal quote")
+	feeAsset := wallet.ParseAssetString("rgb11:f:" + strings.Repeat("0", 64))
+	require.NotNil(t, feeAsset)
+	feeAssetName := &wallet.AssetName{AssetName: *feeAsset, N: 1}
+	withdrawAssetAmount := indexercommon.NewDecimal(100, 0)
+	withdrawQuote := wallet.WITHDRAW_INVOKE_FEE + wallet.CalcFee_SendTx(
+		2, 3, 1, feeAssetName, withdrawAssetAmount, feeRate, true)
+	deployQuote := wallet.DEFAULT_SERVICE_FEE_DEPLOY_CONTRACT + wallet.DEFAULT_FEE_SATSNET +
+		wallet.INVOKE_FEE + wallet.DEFAULT_FEE_SATSNET
+	// Reserve both full public operations: deployment and RGB withdrawal each
+	// submit an L2 transaction with the SDK's 10-sat network fee.
+	minimumDeployerBalance := deployQuote + wallet.DEFAULT_FEE_SATSNET +
+		withdrawQuote + wallet.DEFAULT_FEE_SATSNET
+	minimumCoreBalance := int64(30) // Core's AllowDeploy reserve, separate from the deployer's fee.
+
+	nodes := make(map[*testHarness]*wallet.IndexerClient, len(network.Nodes))
+	for _, node := range network.Nodes {
+		nodes[node] = sdkPWARegtestL2Indexer(t, node)
+	}
+	coreBefore := sdkPWARegtestL2PlainBalance(t, nodes[network.Core], coreAddress)
+	deployerBefore := sdkPWARegtestL2PlainBalance(t, nodes[network.Core], deployerAddress)
+	for _, node := range network.Nodes {
+		require.Equal(t, coreBefore, sdkPWARegtestL2PlainBalance(t, nodes[node], coreAddress),
+			"all live node indexes must agree on Core's starting plain balance")
+		require.Equal(t, deployerBefore, sdkPWARegtestL2PlainBalance(t, nodes[node], deployerAddress),
+			"all live node indexes must agree on ordinary-2's starting plain balance")
+	}
+	coreGap := max(minimumCoreBalance-coreBefore, int64(0))
+	deployerGap := max(minimumDeployerBalance-deployerBefore, int64(0))
+	topupCount := 0
+	if coreGap > 0 {
+		topupCount++
+	}
+	if deployerGap > 0 {
+		topupCount++
+	}
+	plainAsset := wallet.ParseAssetString(wallet.PLAIN_ASSET.String())
+	require.NotNil(t, plainAsset)
+	sourceAddress := source.GetWallet().GetAddress()
+	sourceBefore := source.GetAssetBalance_SatsNet(sourceAddress, plainAsset)
+	require.NotNil(t, sourceBefore, "ordinary-1 must read its existing live L2 plain balance")
+	spendable := int64(0)
+	for _, output := range source.GetIndexerRPCClient_SatsNet().GetUtxoListWithTicker(sourceAddress, plainAsset) {
+		if output == nil || source.IsLocked_SatsNet(sourceAddress, output.OutPoint) {
+			continue
+		}
+		spendable += output.Value
+	}
+	totalFunding := coreGap + deployerGap
+	fees := int64(topupCount) * wallet.DEFAULT_FEE_SATSNET
+	require.GreaterOrEqual(t, spendable, totalFunding+fees,
+		"ordinary-1's confirmed, unlocked L2 plain outputs must cover both exact gaps and SDK network fees")
+
+	fund := func(label, address string, amount, startingBalance int64) {
+		if amount == 0 {
+			return
+		}
+		senderBefore := sdkPWARegtestL2PlainBalance(t, nodes[network.Core], sourceAddress)
+		receiverBefore := sdkPWARegtestL2PlainBalance(t, nodes[network.Core], address)
+		require.Equal(t, startingBalance, receiverBefore)
+		tx, err := source.SendAssets_SatsNet(address, wallet.PLAIN_ASSET.String(), strconv.FormatInt(amount, 10), nil)
+		require.NoError(t, err, "ordinary-1 must fund %s through the real SDK L2 transfer path", label)
+		require.NotNil(t, tx)
+		txid := tx.TxID()
+		waitRGB11RegtestL2Transaction(t, source, network, txid)
+		receiverScript, err := wallet.GetPkScriptFromAddress_SatsNet(address)
+		require.NoError(t, err)
+		outputIndex := -1
+		var outputTotal int64
+		for i, output := range tx.TxOut {
+			outputTotal += output.Value
+			require.Empty(t, output.Assets, "%s funding must transfer plain sats only", label)
+			if !bytes.Equal(output.PkScript, receiverScript) {
+				continue
+			}
+			require.Equal(t, amount, output.Value, "%s funding output must be exact", label)
+			require.Equal(t, -1, outputIndex, "%s transfer must have one exact recipient output", label)
+			outputIndex = i
+		}
+		require.NotEqual(t, -1, outputIndex, "%s transfer must pay its exact recipient", label)
+		inputTotal := int64(0)
+		for _, input := range tx.TxIn {
+			parentID := input.PreviousOutPoint.Hash.String()
+			parentRaw, err := nodes[network.Core].GetRawTx(parentID)
+			require.NoError(t, err, "Core indexer must retain the L2 funding parent %s", parentID)
+			parent, err := wallet.DecodeMsgTx_SatsNet(parentRaw)
+			require.NoError(t, err)
+			require.Less(t, int(input.PreviousOutPoint.Index), len(parent.TxOut))
+			inputTotal += parent.TxOut[input.PreviousOutPoint.Index].Value
+		}
+		actualFee := inputTotal - outputTotal
+		require.Equal(t, wallet.DEFAULT_FEE_SATSNET, actualFee,
+			"the SDK L2 transfer must pay only its configured network fee")
+
+		outpoint := fmt.Sprintf("%s:%d", txid, outputIndex)
+		var confirmedHeight int64
+		var confirmedBlock string
+		for _, node := range network.Nodes {
+			client := nodes[node]
+			info, err := client.GetTxInfo(txid)
+			require.NoError(t, err, "%s indexer must confirm the exact L2 funding transaction", node.role)
+			require.NotNil(t, info)
+			require.Equal(t, txid, info.TxID)
+			require.GreaterOrEqual(t, info.Confirmations, uint64(1))
+			if confirmedHeight == 0 {
+				confirmedHeight = info.BlockHeight
+			} else {
+				require.Equal(t, confirmedHeight, info.BlockHeight,
+					"Core and Bootstrap must index the funding tx at the same confirmed height")
+			}
+			blockHash, err := client.GetBlockHash(int(info.BlockHeight))
+			require.NoError(t, err)
+			if confirmedBlock == "" {
+				confirmedBlock = blockHash
+			} else {
+				require.Equal(t, confirmedBlock, blockHash,
+					"Core and Bootstrap must confirm the funding tx in the same block")
+			}
+			indexed, err := client.GetTxOutput(outpoint)
+			require.NoError(t, err, "%s indexer must expose the exact confirmed recipient output", node.role)
+			require.NotNil(t, indexed)
+			require.Equal(t, outpoint, indexed.OutPointStr)
+			require.Equal(t, amount, indexed.OutValue.Value)
+			require.Equal(t, receiverScript, indexed.OutValue.PkScript)
+			require.Empty(t, indexed.Assets)
+			require.Equal(t, amount, sdkPWARegtestL2PlainBalance(t, client, address)-receiverBefore,
+				"%s balance delta must match its exact confirmed transfer", label)
+			raw, err := client.GetRawTx(txid)
+			require.NoError(t, err)
+			confirmedRaw, err := wallet.DecodeMsgTx_SatsNet(raw)
+			require.NoError(t, err)
+			require.Equal(t, tx.TxID(), confirmedRaw.TxID(),
+				"each node's indexer must return the same signed transaction")
+		}
+		require.Equal(t, senderBefore-amount-actualFee,
+			sdkPWARegtestL2PlainBalance(t, nodes[network.Core], sourceAddress),
+			"ordinary-1 balance decrease must equal the exact payment plus actual fee")
+		t.Logf("RGB cross-layer L2 funding %s: txid=%s height=%d block=%s recipient=%s amount=%d fee=%d",
+			label, txid, confirmedHeight, confirmedBlock, address, amount, actualFee)
+	}
+	fund("Core deployment reserve", coreAddress, coreGap, coreBefore)
+	fund("ordinary-2 public route budget", deployerAddress, deployerGap, deployerBefore)
+	coreAfter := sdkPWARegtestL2PlainBalance(t, nodes[network.Core], coreAddress)
+	deployerAfter := sdkPWARegtestL2PlainBalance(t, nodes[network.Core], deployerAddress)
+	require.GreaterOrEqual(t, coreAfter, minimumCoreBalance)
+	require.GreaterOrEqual(t, deployerAfter, minimumDeployerBalance)
+	for _, node := range network.Nodes {
+		require.Equal(t, coreAfter, sdkPWARegtestL2PlainBalance(t, nodes[node], coreAddress))
+		require.Equal(t, deployerAfter, sdkPWARegtestL2PlainBalance(t, nodes[node], deployerAddress))
+	}
+	require.Equal(t, sourceBefore.Int64()-totalFunding-fees,
+		sdkPWARegtestL2PlainBalance(t, nodes[network.Core], sourceAddress),
+		"ordinary-1 must pay exactly the Core and ordinary-2 gaps plus both L2 fees")
+	t.Logf("RGB cross-layer L2 fee budget: fee_rate=%d deploy_quote=%d withdraw_quote=%d core=%d/%d ordinary2=%d/%d sender=%d->%d",
+		feeRate, deployQuote, withdrawQuote, coreAfter, minimumCoreBalance,
+		deployerAfter, minimumDeployerBalance, sourceBefore.Int64(),
+		sdkPWARegtestL2PlainBalance(t, nodes[network.Core], sourceAddress))
+	return map[string]string{
+		"core_address": coreAddress, "core_before": strconv.FormatInt(coreBefore, 10),
+		"core_after": strconv.FormatInt(coreAfter, 10), "core_minimum": strconv.FormatInt(minimumCoreBalance, 10),
+		"deployer_address": deployerAddress, "deployer_before": strconv.FormatInt(deployerBefore, 10),
+		"deployer_after":     strconv.FormatInt(deployerAfter, 10),
+		"deployer_minimum":   strconv.FormatInt(minimumDeployerBalance, 10),
+		"withdraw_fee_rate":  strconv.FormatInt(feeRate, 10),
+		"withdraw_fee_quote": strconv.FormatInt(withdrawQuote, 10),
+		"withdraw_amount":    withdrawAssetAmount.String(),
+		"ordinary1_before":   strconv.FormatInt(sourceBefore.Int64(), 10),
+		"ordinary1_after":    strconv.FormatInt(sdkPWARegtestL2PlainBalance(t, nodes[network.Core], sourceAddress), 10),
+		"funding_fee_each":   strconv.FormatInt(wallet.DEFAULT_FEE_SATSNET, 10),
+	}
+}
+
 func prepareSDKPWARegtestBRC20BalanceAsset(t *testing.T, manager *wallet.Manager, mine func(string, int)) {
 	t.Helper()
 	asset := indexercommon.NewAssetNameFromString("brc20:f:pwbx")
@@ -170,6 +384,18 @@ func TestSDKPWARealRegtestGuardianRecoveryBrowser(t *testing.T) {
 
 func TestSDKPWARealRegtestRGBBrowser(t *testing.T) {
 	runSDKPWARealRegtestBrowser(t, "rgb")
+}
+
+func TestSDKPWARealRegtestRGBIFAInflationBrowser(t *testing.T) {
+	runSDKPWARealRegtestBrowser(t, "rgb-ifa-inflation")
+}
+
+func TestSDKPWARealRegtestRGBAddressTransferBrowser(t *testing.T) {
+	runSDKPWARealRegtestBrowser(t, "rgb-address")
+}
+
+func TestSDKPWARealRegtestRGBCrossLayerBrowser(t *testing.T) {
+	runSDKPWARealRegtestBrowser(t, "rgb-cross-layer")
 }
 
 func TestSDKPWARealRegtestRGBContinuationBrowser(t *testing.T) {
@@ -349,7 +575,10 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 	var channelPreparation sdkPWARegtestChannelPrepState
 	posResume := feature == "pos-resume"
 	sdkWASM := feature == "sdk-wasm"
+	rgbCrossLayer := feature == "rgb-cross-layer"
 	v2AssetSplice := feature == "l2-channel-v2-asset-splice" || feature == "l2-channel-v2-asset-splice-diagnostic"
+	var rgbCrossLayerFunding map[string]string
+	var rgbCoreStakeEvidence map[string]string
 
 	network := prepareSDKPWARegtestNodes(t)
 	_, currentHeight, err := network.Bootstrap.Client.GetBestBlock()
@@ -740,7 +969,7 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 	brc20Sender, brc20Recipient := actorA, actorB
 	var runeAsset string
 	var runeBalances [2]string
-	if feature == "l1-brc-transfer" || strings.HasPrefix(feature, "l1-runes") || feature == "l1-funds" || feature == "l1-funds-resume" || feature == "asset-context" || strings.HasPrefix(feature, "l2-channel-") {
+	if feature == "l1-brc-transfer" || strings.HasPrefix(feature, "l1-runes") || feature == "l1-funds" || feature == "l1-funds-resume" || feature == "asset-context" || strings.HasPrefix(feature, "l2-channel-") || rgbCrossLayer {
 		_, err := ordinary1.RecoverAccountManagementFromRootMnemonic(ctx, seeds["ordinary-1"], "regtest-acceptance-only")
 		require.NoError(t, err, "synchronize RGB carrier ownership before SDK inscription coin selection")
 		_, err = ordinary1.RefreshRGB11State(ctx)
@@ -774,7 +1003,7 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 				total = total.AddAlignPrecision(balance)
 			}
 			require.Equal(t, "100", total.String(), "both fixed wallets must conserve the actual Rune supply")
-		} else if strings.HasPrefix(feature, "l2-channel-") {
+		} else if strings.HasPrefix(feature, "l2-channel-") || rgbCrossLayer {
 			active, err := ordinary1.AnchorOutputsActive()
 			require.NoError(t, err)
 			if feature == "l2-channel-activation" {
@@ -790,6 +1019,14 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 				require.Equal(t, sdkPWARegtestPOSV2ActivationHeight, wallet.GetChainParam_SatsNet().POSV2Height,
 					"native SDK invoice selection must use the activated POS v2 height")
 				require.True(t, active, "the existing chain must already be past POS v2 activation")
+			} else if rgbCrossLayer {
+				activationHeight := wallet.GetChainParam_SatsNet().POSV2Height
+				if activationHeight <= 0 {
+					require.False(t, active, "unscheduled cross-layer fixture must use the legacy Anchor format")
+				} else {
+					require.Equal(t, currentHeight >= activationHeight, active,
+						"cross-layer Anchor format must match the actual node tip")
+				}
 			} else if os.Getenv("SAT20_REAL_SATOSHINET_ATTACH") != "" {
 				require.Equal(t, sdkPWARegtestPOSV2ActivationHeight, wallet.GetChainParam_SatsNet().POSV2Height)
 				require.Equal(t, currentHeight >= sdkPWARegtestPOSV2ActivationHeight, active,
@@ -804,7 +1041,24 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 			require.NoError(t, err)
 			_, err = ordinary2.RefreshRGB11State(ctx)
 			require.NoError(t, err)
-			_, channelPreparation = prepareSDKPWARegtestChannelPrerequisites(t, feature, ordinary1, ordinary2, mine)
+			channelFeature := feature
+			if rgbCrossLayer {
+				channelFeature = "l2-channel-splice"
+				prepareSDKPWARegtestRGBBrowserCoinsWithTargets(t, ordinary1, ordinary2, 1, 7, mine)
+			}
+			_, channelPreparation = prepareSDKPWARegtestChannelPrerequisites(t, channelFeature, ordinary1, ordinary2, mine)
+			if rgbCrossLayer {
+				rgbCrossLayerFunding = prepareSDKPWARegtestRGBCrossLayerPlainFunding(t, ordinary1,
+					ordinary2.GetWallet().GetAddress(), network)
+				rgbCoreStakeEvidence = prepareSDKPWARegtestCoreDogcoinStake(t, ordinary2, network, mine)
+				_, currentHeight, err = network.Bootstrap.Client.GetBestBlock()
+				require.NoError(t, err, "read the synchronized L2 height after the real Core stake anchor")
+				for _, node := range network.Nodes {
+					_, nodeHeight, heightErr := node.Client.GetBestBlock()
+					require.NoError(t, heightErr)
+					require.Equal(t, currentHeight, nodeHeight, "both nodes must share the confirmed Core stake anchor height")
+				}
+			}
 			if v2AssetSplice {
 				assetBalance := ordinary2.GetAssetBalance("", wallet.ParseAssetString("ordx:f:pwapos"))
 				require.NotNil(t, assetBalance, "B0 must read its existing real PWAPOS balance from Bitcoin")
@@ -860,7 +1114,7 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 		}
 	}
 	var privateChannelID string
-	if strings.HasPrefix(feature, "l2-channel-") || posResume {
+	if strings.HasPrefix(feature, "l2-channel-") || posResume || rgbCrossLayer {
 		privateChannelID, err = ordinary2.GetChannelAddress()
 		require.NoError(t, err)
 		require.NotEmpty(t, privateChannelID)
@@ -986,7 +1240,12 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 		prepared["control_url"] = startSDKPWARegtestPOSController(t, confirmationAddress, mine, posController, network)
 	}
 	if strings.HasPrefix(feature, "rgb") {
-		controller := startSDKPWARegtestBitcoinController(t, confirmationAddress, mine)
+		var controller string
+		if rgbCrossLayer {
+			controller = startSDKPWARegtestBitcoinController(t, confirmationAddress, mine, network)
+		} else {
+			controller = startSDKPWARegtestBitcoinController(t, confirmationAddress, mine)
+		}
 		fixture["walletFixture"].(map[string]any)["recipient"] = actorB
 		fixture["walletFixture"].(map[string]any)["udaWallets"] = map[string]any{"sender": actorA, "recipient": actorB}
 		if feature == "rgb" {
@@ -995,6 +1254,31 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 		}
 		fixture["walletFixture"].(map[string]any)["control_url"] = controller
 		fixture["walletFixture"].(map[string]any)["realBitcoinControl"] = true
+		if rgbCrossLayer {
+			prepared := fixture["walletFixture"].(map[string]any)
+			marketRoot := filepath.Join(filepath.Dir(filepath.Dir(pwa)), "market_satsnet")
+			info, statErr := os.Stat(filepath.Join(marketRoot, "package.json"))
+			require.NoError(t, statErr, "the sibling Market checkout is required for the real RGB Transcend registration and deployment UI")
+			require.False(t, info.IsDir())
+			activationHeight := wallet.GetChainParam_SatsNet().POSV2Height
+			prepared["mnemonic"], prepared["password"], prepared["address"], prepared["pk_script"] =
+				actorB["mnemonic"], actorB["password"], actorB["address"], actorB["pk_script"]
+			prepared["recipient"] = actorA
+			prepared["rgbCrossLayer"], prepared["marketRoot"], prepared["marketURL"], prepared["marketOrigin"], prepared["marketPort"] =
+				true, marketRoot, "http://127.0.0.1:3006/swap/", "http://127.0.0.1:3006", 3006
+			prepared["realChannel"], prepared["realSatoshiNetFunds"], prepared["resumePrivateChannel"] = true, true, true
+			prepared["privateChannelID"], prepared["node_count"] = privateChannelID, len(network.Nodes)
+			prepared["rgbCrossLayerFunding"] = rgbCrossLayerFunding
+			prepared["rgbCoreStake"] = rgbCoreStakeEvidence
+			prepared["realBitcoinFunds"] = true
+			prepared["pos_v2_active"] = currentHeight >= activationHeight && activationHeight > 0
+			prepared["activation_height"], prepared["pos_activation_scheduled"] = activationHeight, activationHeight > 0
+			prepared["asset"] = map[string]string{"key": "", "type": "RGB", "ticker": ""}
+			prepared["amounts"] = map[string]string{
+				"opening": "1000000", "splicing_btc": "100000", "splicing_asset": "100",
+				"deposit_btc": "10000", "deposit_asset": "100", "withdraw_asset": "100", "splicing_out_asset": "100",
+			}
+		}
 		if feature == "rgb-readback" {
 			fixture["walletFixture"].(map[string]any)["rgbReadbackWitness"] = "8fa96dbe7cb39373f99c19dfe00326cbb04b7997a02d731adc5c94989d9ea14f"
 		}
@@ -1239,6 +1523,18 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 		}
 		if feature == "rgb-cancel-diagnostic" {
 			cases = cases[7:8]
+		}
+		if feature == "rgb-ifa-inflation" {
+			cases = []string{"RGB PWA: consume IFA inflation rights and confirm the added supply"}
+		}
+		if feature == "rgb-cross-layer" {
+			cases = []string{
+				"RGB PWA: register and deploy the public Transcend, then deposit and withdraw the same amount",
+				"RGB PWA: splice the fungible RGB asset into and out of the READY private channel",
+			}
+		}
+		if feature == "rgb-address" {
+			cases = []string{"RGB PWA: direct-address transfer waits for ACK and confirms conserved balances"}
 		}
 		runSDKPWARegtestBrowserGroup(t, pwa, configPath, fixturePath, evidenceDir, "wallet-rgb", cases)
 		return

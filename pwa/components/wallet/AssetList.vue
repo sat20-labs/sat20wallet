@@ -45,7 +45,7 @@
     <!-- Asset Operation Dialog -->
     <AssetOperationDialog v-model:open="showDialog" :title="translatedOperationTitle"
       :description="operationDescription" :amount="operationAmount" :chain="selectedChain" :address="operationAddress"
-      :operation-type="operationType" :max-amount="operationType === 'send' ? currentSendAsset?.amount : selectedAsset?.amount" :amount-precision="sendPrecision" :asset-type="selectedAsset?.type"
+      :operation-type="operationType" :max-amount="operationMaxAmount" :amount-precision="sendPrecision" :asset-type="selectedAsset?.type"
       :asset-ticker="selectedAsset?.label" :asset-key="selectedAsset?.key" @update:amount="operationAmount = $event"
       @update:address="operationAddress = $event" @confirm="handleOperationConfirm" />
     <LockWithExpandConfirmDialog v-if="pendingLockExpand" v-model:open="showLockExpandDialog"
@@ -83,6 +83,7 @@ import { useI18n } from 'vue-i18n'
 import { validateSendDispatch } from '@/utils/sendAmount'
 import { useAssetActions } from '@/composables/useAssetActions'
 import { useQueryClient } from '@tanstack/vue-query'
+import { walletRequestSessionGuard } from '@/lib/walletSession'
 
 const queryClient = useQueryClient()
 const walletStore = useWalletStore()
@@ -121,6 +122,7 @@ const { address, btcFeeRate } = storeToRefs(walletStore)
 const refreshL1Assets = () => {
   queryClient.invalidateQueries({ queryKey: ['summary-l1'] })
   queryClient.invalidateQueries({ queryKey: ['ns-l1'] })
+  queryClient.invalidateQueries({ queryKey: ['rgb11-state'] })
 }
 
 const refreshRGB11Assets = async () => {
@@ -196,10 +198,7 @@ const filteredAssets = computed(() => {
           type: 'BRC20',
         }))
       case 'RGB11':
-        return (l1Store.rgb11List || []).map((asset) => ({
-          ...asset,
-          type: 'RGB11',
-        }))
+        return store.rgb11List || []
       default:
         return []
     }
@@ -223,8 +222,14 @@ const operationType = ref<OperationType | undefined>()
 const selectedAsset = ref<any>(null)
 const sendPrecision = ref<number | undefined>()
 const openedSendScope = ref('')
-const sendScope = () => [globalStore.env, walletStore.rootAccountId, walletStore.walletId, walletStore.accountIndex, walletStore.network, selectedChain.value].join('|')
+const sendScope = () => [globalStore.env, walletStore.rootAccountId, walletStore.walletId, walletStore.accountIndex, walletStore.network, walletStore.address, selectedChain.value, transcendingModeStore.selectedTranscendingMode, channel.value?.channelId].join('|')
 const currentSendAsset = computed(() => filteredAssets.value.find((item: any) => item.key === selectedAsset.value?.key))
+const currentOperationAsset = computed(() => selectedChain.value === 'channel'
+  ? channelStore.rgb11List.find((item: any) => item.key === selectedAsset.value?.key)
+  : currentSendAsset.value)
+const operationMaxAmount = computed(() => selectedAsset.value?.protocol === 'rgb11'
+  ? (selectedChain.value === 'l1' ? currentOperationAsset.value?.available_amount : currentOperationAsset.value?.amount)
+  : operationType.value === 'send' ? currentSendAsset.value?.amount : selectedAsset.value?.amount)
 
 const showLockExpandDialog = ref(false)
 const pendingLockExpand = ref<null | {
@@ -267,9 +272,9 @@ const translatedOperationTitle = computed(() => {
 const operationDescription = computed(() => {
   if (!selectedAsset.value) return ''
   const asset = selectedAsset.value
-  const type = asset.type || 'BTC'
+  const type = asset.protocol === 'rgb11' ? 'RGB' : asset.type || 'BTC'
   const amount = asset.amount || 0
-  return `${type}: ${Number(amount).toLocaleString()} ${asset.label || 'sats'}`
+  return `${type}: ${asset.protocol === 'rgb11' ? String(amount) : Number(amount).toLocaleString()} ${asset.label || 'sats'}`
 })
 
 // 事件处理
@@ -297,7 +302,8 @@ watch(selectedChain, () => {
 })
 
 const handleSend = async (asset: any) => {
-  if (asset?.protocol === 'rgb11') {
+  if (loading.value || assetActionLoading.value) return
+  if (asset?.protocol === 'rgb11' && selectedChain.value === 'l1') {
     rgb11SendAsset.value = asset
     showRGB11Send.value = true
     return
@@ -327,30 +333,109 @@ const handleRGB11Receive = (asset: any) => {
   showRGB11Invoice.value = true
 }
 
-const handleSplicingIn = (asset: any) => {
-  operationType.value = 'splicing_in'
-  selectedAsset.value = asset
-  operationAmount.value = ''
-  showDialog.value = true
+// The market owns RGB registration and deployment. These read-only checks
+// reuse its existing wallet APIs; no registration or deployment is started here.
+const requireRGB11PublicContract = async (asset: any, operation: OperationType, check: () => void) => {
+  const [listError, deployed] = await walletManager.getDeployedContractsInServer()
+  check()
+  if (listError) throw listError
+  const urls = deployed?.contractURLs || []
+  // Match the full canonical asset key and retain the SDK's AMM-first selection.
+  const url = urls.find((value: unknown) => typeof value === 'string' && value.endsWith(`_${asset.key}_amm.tc`)) ||
+    urls.find((value: unknown) => typeof value === 'string' && value.endsWith(`_${asset.key}_transcend.tc`))
+  if (!url) throw new Error(t('rgb11Transfer.crossLayerMarketRequired'))
+  const [statusError, result] = await walletManager.getDeployedContractStatus(url)
+  check()
+  if (statusError) throw statusError
+  const status = JSON.parse(result?.contractStatus || '{}')
+  const [contractChannel, contractAsset, contractType] = url.split('_')
+  const name = status.Contract?.assetName
+  const current = operation === 'deposit' ? status.currentBlockL1 : status.currentBlock
+  const enabled = operation === 'deposit' ? status.enableBlockL1 : status.enableBlock
+  if (contractAsset !== asset.key || status.channelAddr !== contractChannel || status.Contract?.contractType !== contractType ||
+      name?.Protocol !== 'rgb11' || name.Type !== 'f' || name.Ticker !== asset.ticker ||
+      !(status.status >= 100 && status.status < 200) ||
+      !Number.isSafeInteger(current) || !Number.isSafeInteger(enabled) || current < enabled) {
+    throw new Error(t('rgb11Transfer.crossLayerContractInactive'))
+  }
+  if (operation === 'deposit') {
+    const [exportError, exported] = await walletManager.exportPublicRGB11Contract(asset.ticker)
+    check()
+    if (exportError) throw exportError
+    const publicContract = JSON.parse(exported?.result || '{}')
+    if (publicContract.contract_id !== asset.ticker || !publicContract.contract_consignment_base64) {
+      throw new Error(t('rgb11Transfer.crossLayerMarketRequired'))
+    }
+    const [verifyError] = await walletManager.verifyRGB11PublicContract(asset.ticker, publicContract.contract_consignment_base64)
+    check()
+    if (verifyError) throw verifyError
+  }
+  // Withdraw intentionally does not export a local L1 contract: an L2-only
+  // holder uses the registered L2 ticker and the SDK's final transaction checks.
+  return status.divisibility
 }
 
-const handleDeposit = (asset: any) => {
-  // console.log('TranscendingMode - Deposit:', asset)
-  operationType.value = 'deposit'
+const openAssetOperation = async (type: OperationType, asset: any) => {
+  if (loading.value || assetActionLoading.value) return
+  operationType.value = type
   selectedAsset.value = asset
   operationAmount.value = ''
-  showDialog.value = true
+  operationAddress.value = ''
+  sendPrecision.value = undefined
+  openedSendScope.value = sendScope()
+  if (asset.protocol !== 'rgb11') { showDialog.value = true; return }
+  const scope = openedSendScope.value
+  loading.value = true
+  try {
+    const checkSession = walletRequestSessionGuard('getTickerInfo')
+    const check = () => {
+      checkSession()
+      if (sendScope() !== scope || selectedAsset.value?.key !== asset.key || operationType.value !== type) {
+        throw new Error(t('rgb11Transfer.scopeChanged'))
+      }
+    }
+    if (asset.type !== 'f' || !/^rgb11:f:[0-9a-f]{64}$/.test(asset.key)) {
+      throw new Error(t('rgb11Transfer.crossLayerFungibleOnly'))
+    }
+    const destination = type === 'splicing_in' ? channel.value?.address : address.value
+    if (!destination) throw new Error(t('approvalUi.addressEmpty'))
+    if (type === 'deposit' || type === 'withdraw') {
+      const runtimePrecision = await requireRGB11PublicContract(asset, type, check)
+      // Before its first deposit, a Transcend runtime may still have provisional
+      // precision. Deposit must use the validated local genesis ticker instead.
+      sendPrecision.value = type === 'withdraw' ? runtimePrecision : undefined
+    } else {
+      if (!channel.value || channel.value.status !== 16 || channel.value.pendingSplicing) {
+        throw new Error(t('pwaUi.assetActions.channelUnconfirmed'))
+      }
+      sendPrecision.value = asset.precision
+    }
+    if (type !== 'withdraw' && sendPrecision.value === undefined) {
+      const [error, result] = await walletManager.getTickerInfo(asset.key)
+      check()
+      if (error) throw error
+      const ticker = JSON.parse(result?.ticker || '{}')
+      if (ticker.name?.Protocol !== 'rgb11' || ticker.name.Type !== 'f' || ticker.name.Ticker !== asset.ticker) {
+        throw new Error(t('assetOperationDialog.amountErrors.unavailable'))
+      }
+      sendPrecision.value = ticker.divisibility ?? 0
+    }
+    check()
+    operationAddress.value = destination
+    showDialog.value = true
+  } catch (error) {
+    if (sendScope() === scope) handleError(error instanceof Error ? error.message : String(error))
+  } finally {
+    loading.value = false
+  }
 }
 
-const handleWithdraw = (asset: any) => {
-  // console.log('TranscendingMode - Withdraw:', asset)
-  operationType.value = 'withdraw'
-  selectedAsset.value = asset
-  operationAmount.value = ''
-  showDialog.value = true
-}
+const handleSplicingIn = (asset: any) => openAssetOperation('splicing_in', asset)
+const handleDeposit = (asset: any) => openAssetOperation('deposit', asset)
+const handleWithdraw = (asset: any) => openAssetOperation('withdraw', asset)
 
 const handleLock = (asset: any) => {
+  if (loading.value || assetActionLoading.value) return
   operationType.value = 'lock'
   selectedAsset.value = asset
   operationAmount.value = ''
@@ -358,18 +443,14 @@ const handleLock = (asset: any) => {
 }
 
 const handleUnlock = (asset: any) => {
+  if (loading.value || assetActionLoading.value) return
   operationType.value = 'unlock'
   selectedAsset.value = asset
   operationAmount.value = ''
   showDialog.value = true
 }
 
-const handleSplicingOut = (asset: any) => {
-  operationType.value = 'splicing_out'
-  selectedAsset.value = asset
-  operationAmount.value = ''
-  showDialog.value = true
-}
+const handleSplicingOut = (asset: any) => openAssetOperation('splicing_out', asset)
 
 
 // 错误处理函数
@@ -476,9 +557,10 @@ const deposit = async ({
   }
   loading.value = false
   refreshL1Assets()
+  refreshL2Assets()
   toast({
     title: t('walletComponents.success'),
-    description: t('walletComponents.depositSuccess'),
+    description: t(asset_name.startsWith('rgb11:') ? 'rgb11Transfer.crossLayerSubmitted' : 'walletComponents.depositSuccess'),
     variant: 'success',
     duration: 1500,
   })
@@ -514,9 +596,10 @@ const withdraw = async ({
 
   loading.value = false
   refreshL2Assets()
+  refreshL1Assets()
   toast({
     title: t('walletComponents.success'),
-    description: t('walletComponents.withdrawSuccess'),
+    description: t(asset_name.startsWith('rgb11:') ? 'rgb11Transfer.crossLayerSubmitted' : 'walletComponents.withdrawSuccess'),
     variant: 'success',
     duration: 1500,
   })
@@ -524,8 +607,10 @@ const withdraw = async ({
 
 // 更新 handleOperationConfirm 函数
 const handleOperationConfirm = async () => {
-  if (!selectedAsset.value || !operationAmount.value) return
-  if (operationType.value === 'send' && !operationAddress.value) {
+  if (!selectedAsset.value || !operationAmount.value || loading.value || assetActionLoading.value) return
+  const type = operationType.value
+  const scope = openedSendScope.value
+  if (type === 'send' && !operationAddress.value) {
     toast({
       title: t('walletComponents.error'),
       description: t('walletComponents.enterAddress'),
@@ -534,20 +619,30 @@ const handleOperationConfirm = async () => {
     return
   }
 
-  if (operationType.value === 'send') {
-    const error = validateSendDispatch(operationAmount.value, sendPrecision.value, currentSendAsset.value?.amount, openedSendScope.value, sendScope())
+  if (type === 'send' || selectedAsset.value.protocol === 'rgb11') {
+    const error = validateSendDispatch(operationAmount.value, sendPrecision.value, operationMaxAmount.value, openedSendScope.value, sendScope())
     if (error) { handleError(t(`assetOperationDialog.amountErrors.${error}`)); return }
   }
   const asset = selectedAsset.value
   const amount = operationAmount.value
   const chanid = channel.value?.channelId
   const toAddress =
-    operationType.value === 'send' ? operationAddress.value : address.value
+    type === 'send' ? operationAddress.value : address.value
 
   try {
-    switch (operationType.value) {
+    if (asset.protocol === 'rgb11' && (type === 'deposit' || type === 'withdraw')) {
+      loading.value = true
+      try {
+        const checkSession = walletRequestSessionGuard('getDeployedContractStatus')
+        await requireRGB11PublicContract(asset, type, () => {
+          checkSession()
+          if (scope !== sendScope() || operationType.value !== type || selectedAsset.value?.key !== asset.key) throw new Error(t('rgb11Transfer.scopeChanged'))
+        })
+      } finally { loading.value = false }
+    }
+    switch (type) {
       case 'send':
-        if (asset?.protocol === 'rgb11') {
+        if (asset?.protocol === 'rgb11' && selectedChain.value === 'l1') {
           throw new Error(t('rgb11Invoice.sendUnavailable'))
         }
         if (selectedChain.value === 'l1') {
@@ -635,7 +730,7 @@ const handleOperationConfirm = async () => {
     showDialog.value = false
   } catch (error) {
     console.error('Operation error:', error)
-    handleError(t('walletComponents.operationFailed'))
+    handleError(error instanceof Error ? error.message : t('walletComponents.operationFailed'))
   }
 }
 
@@ -660,6 +755,17 @@ const confirmLockWithExpand = async () => {
 watch(showLockExpandDialog, (open) => {
   if (!open && !assetActionLoading.value) pendingLockExpand.value = null
 })
+
+watch(sendScope, () => {
+  if (selectedAsset.value?.protocol === 'rgb11') {
+    showDialog.value = false
+    selectedAsset.value = null
+    operationType.value = undefined
+    operationAmount.value = ''
+  }
+  showRGB11Send.value = false
+  showRGB11Invoice.value = false
+}, { flush: 'sync' })
 
 watch(selectedChain, async () => {
   selectedAssetType.value = 'ORDX'

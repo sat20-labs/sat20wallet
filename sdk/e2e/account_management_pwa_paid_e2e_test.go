@@ -153,12 +153,16 @@ func TestSDKAccountPWAPaidFundingWithChildSelected(t *testing.T) {
 			fundingLogs++
 			require.Equal(t, originalID, record.TxID)
 			require.Equal(t, wallet.OperationLogSucceeded, record.Status)
+			require.Equal(t, fmt.Sprint(dkvs.DefaultBlobMaxFreeLocalKeysPerSigner), record.Parameters["blob_key_limit"])
 		}
 	}
 	require.Equal(t, 1, fundingLogs)
 	require.Equal(t, childID, f.manager.GetCurrentWalletId(), "funding must preserve the PWA selection")
 	state := fetchTemplateAutopayView(t, network.Core, address.MustEncode())
 	require.Equal(t, "10", state.Delegates[owner.Address].AmountPerBlock)
+	require.EqualValues(t, dkvs.DefaultBlobMaxFreeLocalKeysPerSigner, state.Delegates[owner.Address].BlobKeyLimit,
+		"paid storage must start with the same blob capacity as free storage")
+	require.Equal(t, state.Delegates[owner.Address].BlobKeyLimit, authorization.Summary.BlobKeyLimit)
 	childAddress := wallet.PublicKeyToP2TRAddress_SatsNet(f.manager.GetWallet().GetPubKey())
 	_, childPaid := state.Delegates[childAddress]
 	require.False(t, childPaid, "the root account pays even when another wallet is selected")

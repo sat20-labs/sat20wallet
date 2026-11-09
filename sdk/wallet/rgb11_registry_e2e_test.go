@@ -207,7 +207,7 @@ func rgb11RegistryHTTPValidationE2E(t *testing.T) {
 					record.Value = record.Value[:12]
 					require.NoError(t, SignDKVSRecord(core, record))
 				case "old_codec":
-					record.Value[0] = 1
+					record.Value[0] = 0
 					require.NoError(t, SignDKVSRecord(core, record))
 				case "wrong_contract_key":
 					record.Key = rgb11wallet.RGB11RegistryPath + "/" + strings.Repeat("f", 64)

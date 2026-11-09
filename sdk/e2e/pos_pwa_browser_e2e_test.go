@@ -473,7 +473,8 @@ func runSDKWalletBrowserMode(t *testing.T, sdkWASM bool, cases ...string) {
 	server := httptest.NewServer(http.HandlerFunc(control.serveHTTP))
 	t.Cleanup(server.Close)
 	config, _ := accountReviewConfig(t, network)
-	config.IndexerL1 = &sdkcommon.Indexer{Scheme: "http", Host: l1.NodeFixture().host(), Proxy: "testnet"}
+	pwaL1 := l1.NodeFixtureForParent(t, pub(coreKey))
+	config.IndexerL1 = &sdkcommon.Indexer{Scheme: "http", Host: pwaL1.host(), Proxy: "testnet"}
 	evmArtifact, err := LoadSolidityArtifact(filepath.Join(sdk, "e2e", "testdata", "contracts", "SDKReviewProbe.sol"), "SDKReviewProbe")
 	require.NoError(t, err)
 	evmInitCode := appendSolidityConstructorArgs(evmArtifact.Bytecode, evmABIString(gas), evmABIString(asset))

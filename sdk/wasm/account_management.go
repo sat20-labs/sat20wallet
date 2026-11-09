@@ -1146,7 +1146,7 @@ func accountRetryDKVSSync(this js.Value, args []js.Value) any {
 		if err := _mgr.RetryDKVSSync(); err != nil {
 			return accountAsyncError(nil, err)
 		}
-		return map[string]bool{"queued": true}, 0, "ok"
+		return map[string]any{"queued": true}, 0, "ok"
 	}))
 }
 

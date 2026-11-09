@@ -21,7 +21,7 @@ interface Asset {
   id: string
   ticker: string
   label: string
-  amount: number
+  amount: number | string
   type?: string
 }
 
