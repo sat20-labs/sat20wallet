@@ -196,9 +196,10 @@ func (p *Manager) Stop() {
 		p.dkvs.stopAndWait()
 	}
 	p.clearAccountManagementSession()
-	if p.btcLuckyMiner != nil {
-		p.btcLuckyMiner.Stop()
-	}
+	p.channelIdentityMu.Lock()
+	p.clearLuckyMiner()
+	p.luckyScanOwner, p.luckyScanHash = "", ""
+	p.channelIdentityMu.Unlock()
 	if p.l1IndexerClient != nil {
 		p.l1IndexerClient.Stop()
 	}

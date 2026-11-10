@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -33,10 +32,11 @@ type posPWALuckyL1 struct {
 	templateBytes []byte
 	etag          string
 	found         []btclucky.FoundBlockRecord
+	submitted     map[string]struct{}
 }
 
 func newPOSPWALuckyL1() *posPWALuckyL1 {
-	return &posPWALuckyL1{found: []btclucky.FoundBlockRecord{}}
+	return &posPWALuckyL1{found: []btclucky.FoundBlockRecord{}, submitted: make(map[string]struct{})}
 }
 
 func (f *posPWALuckyL1) serveHTTP(w http.ResponseWriter, r *http.Request, path string, height int64, tipHash string) bool {
@@ -78,27 +78,25 @@ func (f *posPWALuckyL1) serveHTTP(w http.ResponseWriter, r *http.Request, path s
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return true
 	}
-	if contentType := strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]); contentType != "application/octet-stream" {
-		posPWAL1Error(w, fmt.Errorf("bitcoin block submission requires application/octet-stream"))
+	id, raw, rpcErr := decodeTestSubmitBlock(r)
+	if rpcErr != nil {
+		writeTestJSONRPC(w, id, nil, rpcErr)
 		return true
 	}
-	raw, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
-	if err != nil {
-		posPWAL1Error(w, err)
+	if contentType := strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]); contentType != "application/json" {
+		writeTestJSONRPC(w, id, nil, &testJSONRPCError{Code: -32600, Message: "submitblock requires application/json"})
 		return true
 	}
-	record, err := f.submitBlock(raw)
-	resp := btclucky.APIResponse[*btclucky.FoundBlockRecord]{Code: -1, Msg: "block rejected"}
-	if record != nil {
-		resp.Data = record
+	result, rpcErr := f.submitBlock(raw)
+	if rpcErr != nil {
+		writeTestJSONRPC(w, id, nil, rpcErr)
+		return true
 	}
-	if err != nil {
-		resp.Msg = err.Error()
-	} else {
-		resp.Code = 0
-		resp.Msg = "ok"
+	var value any
+	if result != "" {
+		value = result
 	}
-	posPWAL1JSON(w, resp)
+	writeTestJSONRPC(w, id, value, nil)
 	return true
 }
 
@@ -130,53 +128,56 @@ func (f *posPWALuckyL1) refreshTemplateLocked(height int64, tipHash string) {
 	template.ID = fmt.Sprintf("%x", hash)
 }
 
-func (f *posPWALuckyL1) submitBlock(raw []byte) (*btclucky.FoundBlockRecord, error) {
+func (f *posPWALuckyL1) submitBlock(raw []byte) (string, *testJSONRPCError) {
 	var block btcwire.MsgBlock
 	reader := bytes.NewReader(raw)
 	if err := block.Deserialize(reader); err != nil {
-		return nil, err
+		return "", &testJSONRPCError{Code: -22, Message: err.Error()}
 	}
 	if reader.Len() != 0 {
-		return nil, fmt.Errorf("submitted block has trailing bytes")
+		return "", &testJSONRPCError{Code: -22, Message: "submitted block has trailing bytes"}
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.template == nil {
-		return nil, fmt.Errorf("no Bitcoin block template was requested")
+		return "no Bitcoin block template was requested", nil
 	}
 	template := f.template
 	if block.Header.Version != template.Version || block.Header.PrevBlock.String() != template.PreviousHash || block.Header.Bits != posPWALuckyTestnet4Bits {
-		return nil, fmt.Errorf("submitted block does not match the active Bitcoin template")
+		return "submitted block does not match the active Bitcoin template", nil
 	}
 	if block.Header.Timestamp.Unix() < template.MinTime || block.Header.Timestamp.Unix() > template.MaxTime {
-		return nil, fmt.Errorf("submitted block time is outside the template bounds")
+		return "submitted block time is outside the template bounds", nil
 	}
 	if len(block.Transactions) != 1 {
-		return nil, fmt.Errorf("submitted block does not contain the template transactions")
+		return "submitted block does not contain the template transactions", nil
 	}
 	coinbase := block.Transactions[0]
 	if len(coinbase.TxIn) != 1 || coinbase.TxIn[0].PreviousOutPoint.Index != ^uint32(0) ||
 		coinbase.TxIn[0].PreviousOutPoint.Hash != (btcchainhash.Hash{}) || len(coinbase.TxOut) != 1 {
-		return nil, fmt.Errorf("submitted block does not contain one valid coinbase")
+		return "submitted block does not contain one valid coinbase", nil
 	}
 	if coinbase.TxHash() != block.Header.MerkleRoot {
-		return nil, fmt.Errorf("submitted block merkle root does not match its coinbase")
+		return "submitted block merkle root does not match its coinbase", nil
 	}
 	height, err := btcblockchain.ExtractCoinbaseHeight(btcutil.NewTx(coinbase))
 	if err != nil || int64(height) != template.Height {
-		return nil, fmt.Errorf("submitted coinbase height does not match the template")
+		return "submitted coinbase height does not match the template", nil
 	}
 	subsidy := btcblockchain.CalcBlockSubsidy(int32(template.Height), &btcchaincfg.TestNet4Params)
 	if coinbase.TxOut[0].Value != subsidy {
-		return nil, fmt.Errorf("submitted coinbase reward does not match the template subsidy")
+		return "submitted coinbase reward does not match the template subsidy", nil
 	}
 	_, addresses, _, err := btctxscript.ExtractPkScriptAddrs(coinbase.TxOut[0].PkScript, &btcchaincfg.TestNet4Params)
 	if err != nil || len(addresses) != 1 {
-		return nil, fmt.Errorf("submitted coinbase has no single testnet reward address")
+		return "submitted coinbase has no single testnet reward address", nil
 	}
 	hash := block.Header.BlockHash()
 	if btcblockchain.HashToBig(&hash).Cmp(btcblockchain.CompactToBig(block.Header.Bits)) > 0 {
-		return nil, fmt.Errorf("submitted block does not prove the claimed work")
+		return "submitted block does not prove the claimed work", nil
+	}
+	if _, duplicate := f.submitted[hash.String()]; duplicate {
+		return "duplicate", nil
 	}
 	record := btclucky.FoundBlockRecord{
 		BlockHash: hash.String(), BlockHeight: template.Height, CoinbaseTxID: coinbase.TxHash().String(), Vout: 0,
@@ -184,8 +185,9 @@ func (f *posPWALuckyL1) submitBlock(raw []byte) (*btclucky.FoundBlockRecord, err
 		Submitted: true, SubmitResult: "pwa-fake-l1-pow-verified", CreatedAt: time.Now(),
 	}
 	f.found = append(f.found, record)
+	f.submitted[hash.String()] = struct{}{}
 	if len(f.found) > 32 {
 		f.found = f.found[len(f.found)-32:]
 	}
-	return &record, nil
+	return "", nil
 }

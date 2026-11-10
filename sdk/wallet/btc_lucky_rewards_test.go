@@ -74,8 +74,12 @@ func (r *luckyRewardRPC) GetTxOutput(point string) (*TxOutput, error) {
 	}
 	return r.output, nil
 }
-func (r *luckyRewardRPC) GetTxInfo(string) (*indexerwire.TxSimpleInfo, error) {
-	return &indexerwire.TxSimpleInfo{Confirmations: r.confirmations, BlockHeight: 1}, nil
+func (r *luckyRewardRPC) GetTxInfo(txid string) (*indexerwire.TxSimpleInfo, error) {
+	hash, err := r.GetBlockHash(1)
+	if err != nil {
+		return nil, err
+	}
+	return &indexerwire.TxSimpleInfo{TxID: txid, BlockHash: hash, Confirmations: r.confirmations, BlockHeight: 1}, nil
 }
 func (r *luckyRewardRPC) GetAscendData(point string) (*sindexer.AscendData, error) {
 	if err := r.ascendErrs[point]; err != nil {

@@ -1300,6 +1300,7 @@ func (p *Manager) persistPreparedAccountRestoreLocked(prepared *preparedAccountR
 	} else {
 		applyStatusSnapshot(p.status, prepared.status)
 	}
+	p.clearLuckyMiner()
 	p.wallet = prepared.wallets[p.status.CurrentWallet].Wallet
 	p.wallet.SetSubAccount(0)
 	p.accountProfile = profile

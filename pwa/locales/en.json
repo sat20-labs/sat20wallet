@@ -900,6 +900,7 @@
   "rgb11Transfer": {
     "crossLayerSubmittedRefreshFailed": "Submitted, but the channel refresh failed. Refresh the balances before starting another operation.",
     "crossLayerMarketRequired": "Register this RGB asset and deploy its Transcend contract in SatoshiNet Market first.",
+    "crossLayerContractIdMissing": "This asset is missing its RGB contract ID. Refresh the wallet state before depositing.",
     "crossLayerContractInactive": "The public contract is not active on the required chain yet. Check it in SatoshiNet Market.",
     "crossLayerFungibleOnly": "Only fungible RGB assets with a full contract ID support this operation.",
     "crossLayerSubmitted": "Submitted. Wait for confirmation, then refresh the source and destination balances.",
@@ -1715,7 +1716,7 @@
       "difficulty": "Template difficulty",
       "networkHashrate": "Network hashrate",
       "jobs": "Jobs",
-      "rewardAddress": "Reward address (wallet channel address)",
+      "rewardAddress": "Mining reward address (first account of the main wallet)",
       "revenueSplit": "Mining reward split",
       "user": "User",
       "indexer": "Indexer data service node",

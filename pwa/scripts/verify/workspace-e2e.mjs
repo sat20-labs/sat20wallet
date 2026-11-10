@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { chmodSync, closeSync, existsSync, mkdtempSync, openSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { createServer, isIP } from 'node:net'
 import { tmpdir } from 'node:os'
-import { dirname, resolve } from 'node:path'
+import { dirname, isAbsolute, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { performance } from 'node:perf_hooks'
 import { startLocalRealRegtest, checkLocalRealDependencies, regtestCorePubKey } from './local-real-regtest.mjs'
@@ -83,10 +83,12 @@ export const stageCatalog = [
 ]
 
 const readiness = stageCatalog[0].tests[0]
+const artifactFingerprintGuard = 'TestSDKPWARealRegtestArtifactFingerprintGuard'
 const rgbPreparation = stageCatalog[1].tests[0]
 const assetPreparation = stageCatalog[2].tests[0]
 const activation = 'TestSDKPWARealRegtestChannelActivationBrowser'
 const accountPreparation = 'TestSDKPWARealRegtestFreshAccountPreparation'
+const rgbCrossLayer = 'TestSDKPWARealRegtestRGBCrossLayerBrowser'
 
 export function shouldStopBatchAfterGroup(result) {
   if (result?.error || result?.cleanupError) return true
@@ -133,8 +135,16 @@ export function buildGroups(stages) {
     const tests = [...new Set([...prerequisites, ...cases])]
     groups.push({ id: name.replace(/^TestSDKPWARealRegtest/, ''),
       selectedTests: cases.filter(test => selected.includes(test)),
-      steps: tests.map(test => ({ ...goStage(test, 'sat20wallet/sdk', './e2e', [test], '60m'),
-        purpose: cases.includes(test) && selected.includes(test) ? 'case' : 'prerequisite' })),
+      steps: tests.map(test => {
+        // Each step is a separate Go process and may rebuild Core/stpd.so.
+        // Verify the actual pair immediately before every cross-layer step,
+        // then reuse that validated pair within the same process.
+        const testNames = cases.includes(rgbCrossLayer)
+          ? [artifactFingerprintGuard, test]
+          : [test]
+        return { ...goStage(test, 'sat20wallet/sdk', './e2e', testNames, '60m'),
+          purpose: cases.includes(test) && selected.includes(test) ? 'case' : 'prerequisite' }
+      }),
       isolation: 'fresh local Bitcoin Core, L1 indexer, Electrs, SatoshiNet/STP, wallets and browser storage',
     })
   }
@@ -255,6 +265,30 @@ function readEnvFile(path) {
     values[key] = value
   }
   return values
+}
+
+// Freeze the private overlay for the whole RGB group, including the later
+// WASM build after the Core/plugin guard has finished.
+export function captureGoOverlayInputs(env) {
+  const flags = (env.GOFLAGS || '').trim().split(/\s+/).map(flag => flag.replace(/^["']|["']$/g, ''))
+  let overlay
+  for (let i = 0; i < flags.length; i++) {
+    if (flags[i].startsWith('-overlay=')) overlay = flags[i].slice('-overlay='.length)
+    else if (flags[i] === '-overlay') overlay = flags[++i]
+  }
+  assert.ok(overlay && isAbsolute(overlay), 'RGB cross-layer requires an absolute GOFLAGS overlay path')
+  const data = readFileSync(overlay)
+  const replacements = JSON.parse(data).Replace
+  assert.ok(replacements && Object.keys(replacements).length, 'RGB overlay must contain source replacements')
+  const hash = bytes => createHash('sha256').update(bytes).digest('hex')
+  const inputs = { [`overlay:${overlay}`]: hash(data) }
+  for (const [original, replacement] of Object.entries(replacements)) {
+    assert.ok(isAbsolute(original), 'overlay source path must be absolute')
+    if (replacement === '') continue
+    assert.ok(isAbsolute(replacement), 'overlay replacement path must be absolute')
+    inputs[`overlay:${original}->${replacement}`] = hash(readFileSync(replacement))
+  }
+  return inputs
 }
 
 function effectiveEnv(envFile) {
@@ -553,7 +587,7 @@ async function main(argv) {
         directory, status: 'running', executed: [], notRun: [] }
       report.groups.push(result)
       save()
-      let environment
+      let environment, groupEnv
       try {
         // Ordinary Lucky miners pay a 2-of-2 with their serving core.
         const minesBitcoin = group.selectedTests.includes('TestSDKPWARealRegtestMiningBrowser')
@@ -561,7 +595,13 @@ async function main(argv) {
           indexerPubKey: minesBitcoin ? regtestCorePubKey : undefined,
           artifactsDirectory: resolve(runDir, 'artifacts') })
         result.environment = environment.manifest
-        const groupEnv = { ...env, ...environment.env, SAT20_E2E_LOCAL_REAL: '1' }
+        groupEnv = { ...env, ...environment.env, SAT20_E2E_LOCAL_REAL: '1' }
+        delete groupEnv.SAT20_REAL_RGB_CROSS_LAYER
+        if (group.selectedTests.includes(rgbCrossLayer)) {
+          groupEnv.SAT20_REAL_RGB_CROSS_LAYER = '1'
+          result.overlayInputs = { before: captureGoOverlayInputs(groupEnv) }
+          save()
+        }
         result.prerequisites = await checkSDKEnvironment(groupEnv, port)
         for (const [index, step] of group.steps.entries()) {
           if (interrupted) {
@@ -589,6 +629,13 @@ async function main(argv) {
         result.error = error.message
         result.notRun = group.steps.filter(s => !result.executed.some(e => e.test === s.id)).map(s => s.id)
       } finally {
+        if (result.overlayInputs) {
+          try {
+            result.overlayInputs.after = captureGoOverlayInputs(groupEnv)
+            assert.deepEqual(result.overlayInputs.after, result.overlayInputs.before,
+              'RGB overlay inputs changed during the Go steps, including WASM compilation')
+          } catch (error) { result.status = 'fail'; result.error ??= error.message }
+        }
         try { await environment?.close() }
         catch (error) { result.status = 'fail'; result.cleanupError = error.message }
         if (result.status === 'pass') {

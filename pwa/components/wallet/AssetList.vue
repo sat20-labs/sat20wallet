@@ -359,14 +359,16 @@ const requireRGB11PublicContract = async (asset: any, operation: OperationType, 
     throw new Error(t('rgb11Transfer.crossLayerContractInactive'))
   }
   if (operation === 'deposit') {
-    const [exportError, exported] = await walletManager.exportPublicRGB11Contract(asset.ticker)
+    const contractId = typeof asset.contract_id === 'string' ? asset.contract_id.trim() : ''
+    if (!contractId) throw new Error(t('rgb11Transfer.crossLayerContractIdMissing'))
+    const [exportError, exported] = await walletManager.exportPublicRGB11Contract(contractId)
     check()
     if (exportError) throw exportError
     const publicContract = JSON.parse(exported?.result || '{}')
     if (publicContract.contract_id !== asset.ticker || !publicContract.contract_consignment_base64) {
       throw new Error(t('rgb11Transfer.crossLayerMarketRequired'))
     }
-    const [verifyError] = await walletManager.verifyRGB11PublicContract(asset.ticker, publicContract.contract_consignment_base64)
+    const [verifyError] = await walletManager.verifyRGB11PublicContract(contractId, publicContract.contract_consignment_base64)
     check()
     if (verifyError) throw verifyError
   }

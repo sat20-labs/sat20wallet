@@ -550,6 +550,9 @@ func (p *Manager) DeleteWallet(id int64) error {
 	if err := batch.Flush(); err != nil {
 		return err
 	}
+	if p.btcLuckyMiner != nil && p.accountProfile == nil && p.firstWalletLocked() == info {
+		p.clearLuckyMiner()
+	}
 	delete(p.walletInfoMap, id)
 	p.accountProfile = profile
 	applyStatusSnapshot(p.status, status)

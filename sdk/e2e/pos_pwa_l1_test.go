@@ -979,7 +979,7 @@ func (f *posPWAL1Indexer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		status := f.txStatusLocked(id)
-		posPWAL1JSON(w, indexerwire.TxSimpleInfoResp{BaseResp: ok, Data: &indexerwire.TxSimpleInfo{TxID: id, Version: uint32(tx.tx.Version), Confirmations: uint64(status.Confirmations), BlockHeight: tx.height, BlockTime: status.BlockTime}})
+		posPWAL1JSON(w, indexerwire.TxSimpleInfoResp{BaseResp: ok, Data: &indexerwire.TxSimpleInfo{TxID: id, BlockHash: status.BlockHash, Version: uint32(tx.tx.Version), Confirmations: uint64(status.Confirmations), BlockHeight: tx.height, BlockTime: status.BlockTime}})
 	case strings.HasPrefix(path, "/v3/utxo/info/"):
 		point := strings.TrimPrefix(path, "/v3/utxo/info/")
 		output := f.outputs[point]

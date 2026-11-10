@@ -72,9 +72,11 @@ func TestBTCLuckyAscendRechecksBeforeSigningAndBroadcast(t *testing.T) {
 			var err error
 			p.wallet, _, err = NewInternalWalletWithPrivKey(bytes.Repeat([]byte{41}, 32), GetChainParam())
 			require.NoError(t, err)
+			p.walletInfoMap = map[int64]*WalletInfo{p.wallet.GetId(): {Wallet: p.wallet}}
 			peerKey, _ := btcec.PrivKeyFromBytes(bytes.Repeat([]byte{42}, 32))
 			client1 := &luckyAscendRPC{luckyRewardRPC: l1, peer: peerKey.PubKey().SerializeCompressed()}
 			client2 := &luckyAscendRPC{luckyRewardRPC: l2}
+			p.l1IndexerClient.SetMaster(client1)
 			p.l1IndexerClient.active, p.l2IndexerClient.active = client1, client2
 			database := dbcodec.NewKVDB(t.TempDir())
 			t.Cleanup(func() { require.NoError(t, database.Close()) })
@@ -181,10 +183,12 @@ func TestBTCLuckyClaimRechecksAfterCosigning(t *testing.T) {
 			var err error
 			p.wallet, _, err = NewInternalWalletWithPrivKey(bytes.Repeat([]byte{41}, 32), GetChainParam())
 			require.NoError(t, err)
+			p.walletInfoMap = map[int64]*WalletInfo{p.wallet.GetId(): {Wallet: p.wallet}}
 			peerWallet, _, err := NewInternalWalletWithPrivKey(bytes.Repeat([]byte{42}, 32), GetChainParam())
 			require.NoError(t, err)
 			client1 := &luckyAscendRPC{luckyRewardRPC: l1, peer: peerWallet.GetPubKey().SerializeCompressed()}
 			client2 := &luckyAscendRPC{luckyRewardRPC: l2}
+			p.l1IndexerClient.SetMaster(client1)
 			p.l1IndexerClient.active, p.l2IndexerClient.active = client1, client2
 			if mode == "L1 source spent before signing" {
 				l1.spent = true

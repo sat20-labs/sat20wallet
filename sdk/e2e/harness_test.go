@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -23,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	btcbtcjson "github.com/btcsuite/btcd/btcjson"
 	indexercommon "github.com/sat20-labs/indexer/common"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 	"github.com/sat20-labs/indexer/share/btclucky"
@@ -109,6 +111,78 @@ type fakeL1Indexer struct {
 	btcHeight func() int64
 	namesMu   sync.RWMutex
 	names     map[string]string
+}
+
+type testJSONRPCRequest struct {
+	JSONRPC string            `json:"jsonrpc"`
+	ID      json.RawMessage   `json:"id"`
+	Method  string            `json:"method"`
+	Params  []json.RawMessage `json:"params"`
+}
+
+type testJSONRPCError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+func decodeTestSubmitBlock(r *http.Request) (json.RawMessage, []byte, *testJSONRPCError) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 9<<20))
+	if err != nil {
+		return nil, nil, &testJSONRPCError{Code: -32600, Message: err.Error()}
+	}
+	var request testJSONRPCRequest
+	if err := json.Unmarshal(body, &request); err != nil {
+		return nil, nil, &testJSONRPCError{Code: -32700, Message: err.Error()}
+	}
+	id := request.ID
+	if len(id) == 0 {
+		id = json.RawMessage("null")
+	}
+	if request.JSONRPC != "2.0" {
+		return id, nil, &testJSONRPCError{Code: -32600, Message: "invalid JSON-RPC 2.0 request"}
+	}
+	if request.Method != "submitblock" {
+		return id, nil, &testJSONRPCError{Code: -32601, Message: "method not found"}
+	}
+	if len(request.Params) != 1 {
+		return id, nil, &testJSONRPCError{Code: -32602, Message: "submitblock requires block hex"}
+	}
+	var blockHex string
+	if err := json.Unmarshal(request.Params[0], &blockHex); err != nil || blockHex == "" {
+		return id, nil, &testJSONRPCError{Code: -32602, Message: "block data must be a hex string"}
+	}
+	raw, err := hex.DecodeString(blockHex)
+	if err != nil {
+		return id, nil, &testJSONRPCError{Code: -22, Message: err.Error()}
+	}
+	return id, raw, nil
+}
+
+func writeTestJSONRPC(w http.ResponseWriter, id json.RawMessage, result any, rpcErr *testJSONRPCError) {
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(testJSONRPCBody(id, result, rpcErr))
+}
+
+func testJSONRPCBody(id json.RawMessage, result any, rpcErr *testJSONRPCError) []byte {
+	if len(id) == 0 {
+		id = json.RawMessage("null")
+	}
+	response := map[string]any{"jsonrpc": "2.0", "id": id}
+	if rpcErr != nil {
+		response["error"] = rpcErr
+	} else {
+		response["result"] = result
+	}
+	body, _ := json.Marshal(response)
+	return append(body, '\n')
+}
+
+func jsonRPCError(err error) *testJSONRPCError {
+	var rpcErr *btcbtcjson.RPCError
+	if errors.As(err, &rpcErr) {
+		return &testJSONRPCError{Code: int(rpcErr.Code), Message: rpcErr.Message}
+	}
+	return nil
 }
 
 func newFakeL1Indexer(t *testing.T, indexerPubKey string, lockedPkScript []byte, assets []fakeL1Asset) *fakeL1Indexer {
@@ -240,33 +314,45 @@ func newFakeL1Indexer(t *testing.T, indexerPubKey string, lockedPkScript []byte,
 		}
 
 		if r.URL.Path == "/testnet/v3/bitcoin/block/submit" {
-			resp := btclucky.APIResponse[*btclucky.FoundBlockRecord]{Code: -1, Msg: "btc lucky template service is not enabled"}
-			if fake.btcLucky == nil || !fake.btcLucky.IsReady() {
-				require.NoError(t, json.NewEncoder(w).Encode(resp))
-				return
-			}
 			if r.Method != http.MethodPost {
 				w.WriteHeader(http.StatusMethodNotAllowed)
 				return
 			}
-			if contentType := strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]); contentType != "application/octet-stream" {
-				resp.Msg = "bitcoin block submission requires application/octet-stream"
-				require.NoError(t, json.NewEncoder(w).Encode(resp))
+			id, raw, rpcErr := decodeTestSubmitBlock(r)
+			if rpcErr != nil {
+				writeTestJSONRPC(w, id, nil, rpcErr)
 				return
 			}
-			raw, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
-			require.NoError(t, err)
+			if contentType := strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]); contentType != "application/json" {
+				writeTestJSONRPC(w, id, nil, &testJSONRPCError{Code: -32600, Message: "submitblock requires application/json"})
+				return
+			}
+			if fake.btcLucky == nil || !fake.btcLucky.IsReady() {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				writeTestJSONRPC(w, id, nil, &testJSONRPCError{Code: -28, Message: "block submission temporarily unavailable"})
+				return
+			}
 			found, err := fake.btcLucky.SubmitBlock(raw)
-			if found != nil {
-				resp.Data = found
-			}
 			if err != nil {
-				resp.Msg = err.Error()
-			} else {
-				resp.Code = 0
-				resp.Msg = "ok"
+				if errors.Is(err, btclucky.ErrCoreUnavailable) {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					writeTestJSONRPC(w, id, nil, &testJSONRPCError{Code: -28, Message: err.Error()})
+					return
+				}
+				if rpcErr := jsonRPCError(err); rpcErr != nil {
+					writeTestJSONRPC(w, id, nil, rpcErr)
+					return
+				}
+				if found == nil {
+					writeTestJSONRPC(w, id, nil, &testJSONRPCError{Code: -22, Message: err.Error()})
+					return
+				}
 			}
-			require.NoError(t, json.NewEncoder(w).Encode(resp))
+			var result any
+			if found != nil && found.SubmitResult != "accepted" {
+				result = found.SubmitResult
+			}
+			writeTestJSONRPC(w, id, result, nil)
 			return
 		}
 

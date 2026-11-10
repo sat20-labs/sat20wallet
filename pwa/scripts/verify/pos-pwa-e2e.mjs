@@ -173,16 +173,54 @@ export async function runPwaPosCases(t, fixture) {
     await page.getByRole('button', { name: mode === 'lightning' ? 'Lightning' : 'Poolswap', exact: true }).click()
     await expect(page.getByRole('heading', { name: 'Transcending Mode', exact: true })).toBeHidden()
   }
-  const assetRow = () => activePanel().locator('div.bg-muted.border')
-    .filter({ has: rgbCrossLayer
-      ? page.locator(`[title=${JSON.stringify(fixture.asset.key)}]`)
-      : page.getByText(fixture.asset.ticker.toUpperCase(), { exact: true }) })
+  const assetRow = async () => {
+    const rows = activePanel().locator('div.bg-muted.border')
+    if (!rgbCrossLayer) return {
+      row: rows.filter({ has: page.getByText(fixture.asset.ticker.toUpperCase(), { exact: true }) }),
+      label: fixture.asset.ticker,
+    }
+    const tab = (await page.getByRole('tab', { selected: true }).innerText()).trim()
+    assert.ok(['Bitcoin', 'SatoshiNet', 'Channel'].includes(tab), 'RGB asset selection requires a known source layer')
+    let channelLabel
+    if (tab === 'Channel') {
+      // Channel rows start with the canonical ticker, then metadata updates
+      // their label. Wait for that known final label before fixing a locator.
+      const ticker = JSON.parse((await walletCall(page, 'getTickerInfo', fixture.asset.key)).ticker)
+      assert.deepEqual(ticker.name, { Protocol: 'rgb11', Type: 'f', Ticker: fixture.asset.ticker })
+      channelLabel = ticker.displayname || ticker.name.Ticker
+      assert.ok(typeof channelLabel === 'string' && channelLabel.trim())
+      await expect.poll(() => page.evaluate(async key => {
+        const store = (await import('/store/channel.ts')).useChannelStore()
+        return store.rgb11List.filter(asset => asset.key === key).map(asset => asset.label)
+      }, fixture.asset.key), pollOptions).toEqual([channelLabel])
+    }
+    const matches = await page.evaluate(async ({ key, tab }) => {
+      const store = tab === 'Bitcoin' ? (await import('/store/l1.ts')).useL1Store()
+        : tab === 'SatoshiNet' ? (await import('/store/l2.ts')).useL2Store()
+          : (await import('/store/channel.ts')).useChannelStore()
+      return store.rgb11List.filter(asset => asset.key === key)
+        .map(({ key, ticker, label }) => ({ key, ticker, label }))
+    }, { key: fixture.asset.key, tab })
+    assert.equal(matches.length, 1, 'the source layer must contain exactly the issued RGB asset key')
+    const asset = matches[0]
+    assert.equal(asset.key, fixture.asset.key)
+    assert.equal(asset.ticker, fixture.asset.ticker, 'display labels must not replace the canonical RGB ticker')
+    const label = tab === 'Channel' ? channelLabel : asset.label
+    assert.ok(typeof label === 'string' && label.trim(), 'the selected RGB asset must have a display label')
+    const row = rows.filter({ has: tab === 'Bitcoin'
+      ? page.locator(`[title=${JSON.stringify(asset.key)}]`)
+      : page.getByText(label, { exact: true }) })
+    await expect(row).toHaveCount(1)
+    await expect(row.locator('div.font-medium.text-zinc-400').first()).toHaveText(label)
+    return { row, label }
+  }
   const assertAssetVisible = async amount => {
     await activePanel().getByRole('button', { name: fixture.asset.type, exact: true }).click()
-    await expect(assetRow()).toHaveCount(1)
+    const { row } = await assetRow()
+    await expect(row).toHaveCount(1)
     // Fixture quantities stay below 1000 so this is an exact visible amount,
     // rather than only a rounded K/M suffix. SDK and chain amounts are exact.
-    if (amount < 1000n) await expect(assetRow().locator('div.text-sm.font-semibold').first()).toHaveText(String(amount))
+    if (amount < 1000n) await expect(row.locator('div.text-sm.font-semibold').first()).toHaveText(String(amount))
   }
   const assertNodes = (snapshot, expected = fixture.node_count ?? 3) => {
     assert.match(snapshot.hash, txidPattern)
@@ -193,6 +231,47 @@ export async function runPwaPosCases(t, fixture) {
       assert.equal(node.hash, snapshot.hash, `${node.role} canonical hash differs`)
       assert.equal(node.api_height, snapshot.height, `${node.role} index API has not caught up`)
     }
+  }
+  const readPublicRGBTranscendStatus = async url => {
+    const response = await walletCall(page, 'getDeployedContractStatus', url)
+    assert.equal(typeof response.contractStatus, 'string', 'deployed Transcend status must be JSON')
+    const runtime = JSON.parse(response.contractStatus)
+    assert.equal(runtime?.Contract?.contractType, 'transcend.tc',
+      'status must identify the exact Transcend contract template')
+    assert.deepEqual(runtime?.Contract?.assetName, {
+      Protocol: 'rgb11', Type: 'f', Ticker: fixture.asset.ticker,
+    }, 'status must identify the exact complete RGB11 asset')
+    assert.equal(url, `${runtime.channelAddr}_${fixture.asset.key}_transcend.tc`,
+      'status URL must identify the exact channel, RGB11 asset, and contract template')
+    assert.ok(Number.isSafeInteger(runtime.status), 'contract status must be an integer')
+    assert.ok(Number.isSafeInteger(runtime.deployTime) && runtime.deployTime > 0,
+      'deployed contract must report its real deployment time')
+    return runtime
+  }
+  const waitForPublicRGBTranscendActivation = async (url, requireL2) => {
+    let runtime
+    await expect.poll(async () => {
+      runtime = await readPublicRGBTranscendStatus(url)
+      const hasEnableHeights = Number.isSafeInteger(runtime.enableBlockL1) && runtime.enableBlockL1 > 0 &&
+        Number.isSafeInteger(runtime.currentBlockL1) && runtime.currentBlockL1 >= 0 &&
+        Number.isSafeInteger(runtime.enableBlock) && runtime.enableBlock > 0 &&
+        Number.isSafeInteger(runtime.currentBlock) && runtime.currentBlock >= 0
+      if (!hasEnableHeights || !txidPattern.test(runtime.enableTxId || '')) return false
+      const l1Active = runtime.currentBlockL1 >= runtime.enableBlockL1
+      const ready = runtime.status >= 100 && runtime.status < 200
+      const l2Active = !requireL2 || runtime.currentBlock >= runtime.enableBlock
+      return ready && l1Active && l2Active
+    }, pollOptions).toBe(true)
+    runtime = await readPublicRGBTranscendStatus(url)
+    assert.ok(runtime.status >= 100 && runtime.status < 200,
+      'Transcend must be READY before the next public-pool operation')
+    assert.ok(runtime.currentBlockL1 >= runtime.enableBlockL1,
+      'Transcend must reach its exact L1 enable height before Deposit')
+    if (requireL2) assert.ok(runtime.currentBlock >= runtime.enableBlock,
+      'Transcend must reach its exact SatoshiNet enable height before Withdraw')
+    assert.match(runtime.enableTxId, txidPattern,
+      'enabled Transcend must expose its real enable transaction ID')
+    return runtime
   }
   const assertIdentity = async () => {
     const identity = await page.evaluate(() => {
@@ -245,9 +324,11 @@ export async function runPwaPosCases(t, fixture) {
     await expect(balancePanel().getByRole('heading', { level: 2 })).toHaveText(btcText(channelAmount(channel, '::')))
     return channel
   }
-  const pendingFunding = async before => {
+  const pendingFunding = async (before, depositError) => {
     let snapshot
     await expect.poll(async () => {
+      const rejectedDeposit = await depositError?.()
+      if (rejectedDeposit) throw new Error(`PWA deposit rejected before pending funding: ${rejectedDeposit}`)
       const failure = await page.evaluate(() => window.__SAT20_SPLICE_DIAGNOSTIC__?.error)
       if (failure) throw new Error(`PWA splicing-in rejected before pending funding: ${failure}`)
       snapshot = await control('snapshot')
@@ -306,10 +387,13 @@ export async function runPwaPosCases(t, fixture) {
         return native?.protocol === '' && native.id === '::' && native.key === '::' && native.type === '*'
       }), pollOptions).toBe(true)
     }
+    let displayLabel
     if (token) {
       await activePanel().getByRole('button', { name: fixture.asset.type, exact: true }).click()
-      await expect(assetRow()).toHaveCount(1)
-      await assetRow().getByRole('button', { name: operation, exact: true }).click()
+      const { row, label } = await assetRow()
+      await expect(row).toHaveCount(1)
+      displayLabel = label.toUpperCase()
+      await row.getByRole('button', { name: operation, exact: true }).click()
     } else await balancePanel().getByRole('button', { name: operation, exact: true }).click()
     const dialog = page.getByRole('dialog')
     const titles = {
@@ -317,7 +401,7 @@ export async function runPwaPosCases(t, fixture) {
       Lock: 'Lock Asset', Unlock: 'Unlock Asset', 'Splicing in': 'Splicing In', 'Splicing out': 'Splicing Out',
     }
     await expect(dialog.getByRole('heading', { name: titles[operation], exact: true })).toBeVisible()
-    return dialog
+    return { dialog, displayLabel }
   }
   const observeSplicingIn = async () => {
     await page.evaluate(async () => {
@@ -358,17 +442,17 @@ export async function runPwaPosCases(t, fixture) {
     })
   }
   const clickAssetOperation = async (operation, amount, token, tab = 'Bitcoin') => {
-    const dialog = await openAssetOperation(operation, token, tab)
+    const { dialog, displayLabel } = await openAssetOperation(operation, token, tab)
     if (operation === 'Send') await dialog.getByRole('button', { name: 'Normal', exact: true }).click()
     await dialog.getByPlaceholder('Enter amount', { exact: true }).fill(String(amount))
     await expect(dialog.getByPlaceholder('Enter amount', { exact: true })).toHaveValue(String(amount))
-    if (token) await expect(dialog).toContainText(fixture.asset.ticker.toUpperCase())
+    if (token) await expect(dialog.getByText(displayLabel, { exact: true })).toBeVisible()
     if (operation === 'Send') await dialog.getByPlaceholder('Enter address', { exact: true }).fill(fixture.recipient.address)
     await dialog.getByRole('button', { name: 'Confirm', exact: true }).click()
     await expect(dialog.getByRole('heading', { name: 'Please Confirm', exact: true })).toBeVisible()
     if (operation === 'Send') {
       const review = dialog.locator('dl')
-      await expect(review.getByText(String(amount) + ' ' + (token ? fixture.asset.ticker.toUpperCase() : 'sats'), { exact: true })).toBeVisible()
+      await expect(review.getByText(String(amount) + ' ' + (token ? displayLabel : 'sats'), { exact: true })).toBeVisible()
       await expect(review.getByText(fixture.recipient.address, { exact: true })).toBeVisible()
       await expect(review.getByText(tab, { exact: true })).toBeVisible()
       await expect(review.getByText(network, { exact: true })).toBeVisible()
@@ -383,9 +467,43 @@ export async function runPwaPosCases(t, fixture) {
     const beforeTotal = await readL2Total()
     const before = await control('snapshot')
     assert.deepEqual(before.l1.pending_txids, [])
-    await clickAssetOperation('Deposit', token ? amounts.deposit_asset : amounts.deposit_btc, token)
-    const funding = await pendingFunding(before)
-    const confirmed = await confirmFunding(funding, expectedNodes, true)
+    // Observe the real call without changing its arguments, result, or errors.
+    // A rejected deposit must fail immediately instead of waiting for funding
+    // that was correctly never broadcast after a failed durable ACK.
+    const observation = await page.evaluateHandle(async () => {
+      const manager = (await import('/utils/sat20.ts')).default
+      const original = manager.deposit
+      const state = { error: '', restore: () => { manager.deposit = original } }
+      const record = error => {
+        state.error = String(error?.message ?? error)
+          .replace(/\b(?:[a-z]{2,}\s+){11,23}[a-z]{2,}\b/gi, '[redacted mnemonic]')
+          .replace(/\b(mnemonic|seed|password|passphrase|private\s*key|raw\s*tx|signed\s*tx)\b\s*[:=]\s*[^,;\n]+/gi, '$1=[redacted]')
+          .replace(/\b(?:0x)?[0-9a-f]{128,}\b/gi, '[redacted hex]')
+          .slice(0, 1200)
+      }
+      manager.deposit = async function (...args) {
+        try {
+          const result = await original.apply(this, args)
+          if (result?.[0]) record(result[0])
+          return result
+        } catch (error) {
+          record(error)
+          throw error
+        }
+      }
+      return state
+    })
+    let funding
+    try {
+      await clickAssetOperation('Deposit', token ? amounts.deposit_asset : amounts.deposit_btc, token)
+      funding = await pendingFunding(before, () => observation.evaluate(state => state.error))
+    } finally {
+      await observation.evaluate(state => state.restore())
+      await observation.dispose()
+    }
+    const confirmed = await confirmFunding(funding,
+      rgbCrossLayer ? fixture.node_count : expectedNodes,
+      rgbCrossLayer ? fixture.pos_v2_active === true : true)
     const outputs = confirmed.anchor.outputs.filter(output => output.pk_script.toLowerCase() === walletScript)
     assert.ok(outputs.length, 'public-channel Anchor has no output to the PWA wallet')
     const credited = token
@@ -408,11 +526,12 @@ export async function runPwaPosCases(t, fixture) {
     }), pollOptions).toBe(String(beforeTotal + creditedSats))
     await expect(balancePanel().getByRole('heading', { level: 2 })).toHaveText(btcText(beforeTotal + creditedSats))
     if (token) {
-      await expect.poll(() => page.evaluate(async key => {
+      await expect.poll(() => page.evaluate(async ({ key, rgb }) => {
         const store = (await import('/store/l2.ts')).useL2Store()
-        return store.sat20List.filter(asset => asset.key === key)
+        const assets = rgb ? store.rgb11List : store.sat20List
+        return assets.filter(asset => asset.key === key)
           .reduce((sum, asset) => sum + BigInt(String(asset.amount)), 0n).toString()
-      }, key), pollOptions).toBe(String(beforeAmount + credited))
+      }, { key, rgb: rgbCrossLayer }), pollOptions).toBe(String(beforeAmount + credited))
       await assertAssetVisible(beforeAmount + credited)
     }
     latestDeposit = { funding, anchor: confirmed.anchor, key, amount: beforeAmount + credited }
@@ -529,7 +648,7 @@ export async function runPwaPosCases(t, fixture) {
     return { value: asInteger(sats), script: output.scriptPubKey.hex, assets: output.Assets || [] }
   })
   const splitThroughUI = async (token, amount) => {
-    const dialog = await openAssetOperation('Send', token)
+    const { dialog } = await openAssetOperation('Send', token)
     const advanced = dialog.getByRole('button', { name: 'Advanced', exact: true })
     // This is a normal availability requirement, including ORDX. A disabled
     // control is a failure; the test never enables it or bypasses the UI.
@@ -748,14 +867,40 @@ export async function runPwaPosCases(t, fixture) {
     await clickAssetOperation('Splicing out', amount, token, 'Channel')
     const funding = await pendingFunding(before)
     const tx = await confirmL1Payment(funding)
-    assert.ok(tx.outs.some(output => output.script.toString('hex') === walletScript && asInteger(output.value) === amount),
-      'splicing-out has no exact requested output to the wallet')
+    if (!(token && rgbCrossLayer)) {
+      assert.ok(tx.outs.some(output => output.script.toString('hex') === walletScript && asInteger(output.value) === amount),
+        'splicing-out has no exact requested output to the wallet')
+    }
     const current = await readyChannelUI()
     assert.equal(channelAmount(current, key), channelAmount(prior, key) - amount)
     if (token) await expect.poll(() => addressAmount('Bitcoin', fixture.address, key), pollOptions).toBe(l1Before + amount)
     else {
       const received = (await addressAmount('Bitcoin', fixture.address, key)) - l1Before
       assert.ok(received > 0n && received < amount, 'splicing-out net credit must account for the separate L1 fee')
+    }
+    if (token && rgbCrossLayer) {
+      const state = await rgbState()
+      assert.equal(state.consistency_status, 'ok')
+      const carriers = (state.outputs || []).filter(output => output.OutPointStr.startsWith(`${funding.txid}:`) &&
+        output.Assets.some(asset => assetKey(asset.Name) === key))
+      assert.equal(carriers.length, 1, 'RGB splicing-out must credit one carrier from this exact transaction')
+      const carrier = carriers[0]
+      const asset = carrier.Assets.filter(asset => assetKey(asset.Name) === key)
+      assert.equal(asset.length, 1)
+      assert.equal(asset[0].Amount.Precision, 0)
+      assert.equal(asInteger(asset[0].Amount.Value), amount, 'RGB carrier must hold the exact requested asset quantity')
+      assert.equal(asset[0].BindingSat, 0, 'RGB quantity is not bound to the carrier satoshi value')
+      const vout = Number(carrier.OutPointStr.split(':')[1])
+      assert.ok(Number.isSafeInteger(vout) && vout >= 0 && vout < tx.outs.length)
+      assert.equal(tx.outs[vout].script.toString('hex'), walletScript)
+      assert.equal(asInteger(tx.outs[vout].value), 330n, 'RGB splicing-out uses a 330-satoshi carrier')
+      assert.ok((state.proofs || []).some(proof => proof.outpoint === carrier.OutPointStr &&
+        assetKey(proof.asset_name) === key && proof.status === 'settled' && proof.confirmations >= 1),
+      'the exact RGB carrier must have a confirmed settled proof')
+      const [status] = await crossLayerEvidence('/v3/bitcoin/utxos/status', { outpoints: [carrier.OutPointStr] })
+      assert.ok(status.exists && status.unspent && status.confirmations >= 1,
+        'the returned RGB carrier must be independently confirmed and unspent')
+      assert.equal(status.pk_script, walletScript)
     }
     await assertWalletBalanceUI('Bitcoin', token)
   }
@@ -1106,7 +1251,7 @@ export async function runPwaPosCases(t, fixture) {
       }, 'PWA deployment approval must preserve the exact complete RGB11 asset identity')
       const deployLogsBefore = await operationLogs()
       await deployDialog.getByRole('button', { name: 'Confirm', exact: true }).click()
-      const deployTxid = await newOperationTx('deploy_contract', deployLogsBefore)
+      const serviceFeeTxid = await newOperationTx('deploy_contract', deployLogsBefore)
       await expect(deployDialog).toBeHidden({ timeout: 180000 })
 
       const findDeployed = async () => {
@@ -1135,14 +1280,49 @@ export async function runPwaPosCases(t, fixture) {
       assert.deepEqual(deployed.parsed.Contract.assetName, {
         Protocol: 'rgb11', Type: 'f', Ticker: fixture.asset.ticker,
       }, 'deployed Transcend status must identify the exact complete RGB11 asset')
+      const deployedRuntime = await readPublicRGBTranscendStatus(deployed.url)
+      assert.match(serviceFeeTxid, txidPattern)
       await page.evaluate(() => { location.hash = '#/wallet' })
       await selectMode('poolswap')
       await showTab('Bitcoin')
       await page.getByRole('button', { name: 'RGB', exact: true }).click()
-      await expect(assetRow()).toHaveCount(1)
-      await expect(assetRow().getByRole('button', { name: 'Deposit', exact: true })).toBeEnabled({ timeout: 90000 })
-      console.log(JSON.stringify({ rgbPublicTranscend: { contract_url: deployed.url, deploy_txid: deployTxid,
-        registration: registrations[0] } }))
+      await expect((await assetRow()).row).toHaveCount(1)
+      const beforeActivationBlock = await control('snapshot')
+      assert.deepEqual(beforeActivationBlock.l1.pending_txids, [],
+        'L1 activation block must not confirm unrelated or pending transactions')
+      assert.ok(Number.isSafeInteger(beforeActivationBlock.l1.height))
+      assert.match(beforeActivationBlock.l1.hash, txidPattern)
+      const confirmedBeforeActivationBlock = [...beforeActivationBlock.l1.confirmed_txids].sort()
+      const activationBlock = await control('confirm-l1', { wait_anchors: false, empty_blocks: 1 })
+      assert.equal(activationBlock.l1.height, beforeActivationBlock.l1.height + 1,
+        'activation must advance Bitcoin by exactly one real block')
+      assert.notEqual(activationBlock.l1.hash, beforeActivationBlock.l1.hash)
+      assert.deepEqual(activationBlock.l1.pending_txids, [],
+        'activation block must leave the L1 mempool empty')
+      assert.deepEqual([...activationBlock.l1.confirmed_txids].sort(), confirmedBeforeActivationBlock,
+        'activation block must not confirm a transaction')
+      const activatedRuntime = await waitForPublicRGBTranscendActivation(deployed.url, false)
+      await expect((await assetRow()).row.getByRole('button', { name: 'Deposit', exact: true })).toBeEnabled({ timeout: 90000 })
+      console.log(JSON.stringify({ rgbPublicTranscend: {
+        contract_url: deployed.url,
+        service_fee_txid: serviceFeeTxid,
+        deployment_evidence: {
+          contract_type: activatedRuntime.Contract.contractType,
+          asset_name: activatedRuntime.Contract.assetName,
+          deploy_time: activatedRuntime.deployTime,
+          status: activatedRuntime.status,
+        },
+        enable_evidence: {
+          txid: activatedRuntime.enableTxId,
+          enable_block_l1: activatedRuntime.enableBlockL1,
+          current_block_l1: activatedRuntime.currentBlockL1,
+          enable_block_l2: activatedRuntime.enableBlock,
+          current_block_l2: activatedRuntime.currentBlock,
+        },
+        pre_block_runtime_status: deployedRuntime.status,
+        activation_block: { height: activationBlock.l1.height, hash: activationBlock.l1.hash },
+        registration: registrations[0],
+      } }))
       return deployed.url
     } finally {
       page.context().off('response', onResponse)
@@ -1221,7 +1401,7 @@ export async function runPwaPosCases(t, fixture) {
       'ordinary-2 must already hold the entire withdrawal budget before Deposit; do not rely on returned white sats')
     const depositAmount = asInteger(amounts.deposit_asset)
     const before = await control('snapshot')
-    await deposit(true)
+    const deposited = await deposit(true)
     assert.equal(await addressAmount('Bitcoin', fixture.address, key), l1Before - depositAmount)
     assert.equal(await readL2Amount(key), l2Before + depositAmount)
     assert.equal(await channelAmount(await readChannel(), key), channelBefore)
@@ -1229,6 +1409,18 @@ export async function runPwaPosCases(t, fixture) {
     const afterDeposit = await control('snapshot')
     assert.notDeepEqual(afterDeposit.l1.confirmed_txids, before.l1.confirmed_txids,
       'public Deposit must confirm its own real Bitcoin funding transaction')
+    const activatedAfterDeposit = await waitForPublicRGBTranscendActivation(publicRGBContractURL, true)
+    assert.ok(deposited.anchor.height >= activatedAfterDeposit.enableBlock,
+      'the confirmed public Deposit Anchor must advance SatoshiNet through the Transcend enable height')
+    console.log(JSON.stringify({ rgbPublicActivation: {
+      contract_url: publicRGBContractURL,
+      enable_txid: activatedAfterDeposit.enableTxId,
+      enable_block_l1: activatedAfterDeposit.enableBlockL1,
+      current_block_l1: activatedAfterDeposit.currentBlockL1,
+      enable_block_l2: activatedAfterDeposit.enableBlock,
+      current_block_l2: activatedAfterDeposit.currentBlock,
+      deposit_anchor: { txid: deposited.anchor.txid, height: deposited.anchor.height },
+    } }))
 
     await withdraw(true)
     assert.equal(await addressAmount('Bitcoin', fixture.address, key), l1Before)

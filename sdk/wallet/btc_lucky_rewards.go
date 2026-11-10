@@ -15,6 +15,7 @@ import (
 	btcwire "github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/indexer/share/btclucky"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
@@ -203,7 +204,7 @@ func (p *Manager) inspectBTCLuckyReward(utxo string, witness []byte, requireUnsp
 	if err != nil {
 		return nil, err
 	}
-	if info == nil || info.Confirmations == 0 || info.BlockHeight < 1 {
+	if info == nil || info.TxID != tx.TxID() || info.Confirmations == 0 || info.BlockHeight < 1 {
 		return nil, fmt.Errorf("BTC lucky reward is not confirmed on L1")
 	}
 	if uint64(info.BlockHeight) > math.MaxUint32 {
@@ -214,7 +215,7 @@ func (p *Manager) inspectBTCLuckyReward(utxo string, witness []byte, requireUnsp
 		return nil, err
 	}
 	hash, err := chainhash.NewHashFromStr(blockHash)
-	if err != nil || *hash == (chainhash.Hash{}) {
+	if err != nil || *hash == (chainhash.Hash{}) || hash.String() != info.BlockHash {
 		return nil, fmt.Errorf("invalid BTC lucky source block hash")
 	}
 	return &BTCLuckyReward{FundingUtxo: utxo, Amount: output.Value, Confirmations: info.Confirmations, Status: "unascended", BTCHeight: uint32(info.BlockHeight), BTCBlockHash: hash.String()}, nil
@@ -271,20 +272,21 @@ func (p *Manager) validateBTCLuckyAnchor(tx *swire.MsgTx, witness []byte, requir
 	return reward, nil
 }
 
-func (p *Manager) btcLuckyWitness() ([]byte, []byte, string, error) {
-	address, err := p.btcLuckyRewardAddress(nil)
+func (p *Manager) btcLuckyWitness(owner common.Wallet) ([]byte, []byte, string, error) {
+	address, err := p.btcLuckyRewardAddress(owner.GetPubKey().SerializeCompressed())
 	if err != nil {
 		return nil, nil, "", err
 	}
-	witness, peer, err := p.channelWitness(p.wallet, address)
+	witness, peer, err := p.channelWitness(owner, address)
 	return witness, peer, address, err
 }
 
 func (p *Manager) GetBTCLuckyRewards() ([]*BTCLuckyReward, error) {
-	if p == nil || p.wallet == nil {
-		return nil, fmt.Errorf("wallet is not initialized")
+	owner, err := p.luckyWallet()
+	if err != nil {
+		return nil, err
 	}
-	witness, _, address, err := p.btcLuckyWitness()
+	witness, _, address, err := p.btcLuckyWitness(owner)
 	if err != nil {
 		return nil, err
 	}
@@ -378,7 +380,15 @@ func (p *Manager) setBTCLuckyRewardStatus(reward *BTCLuckyReward, maturity uint6
 }
 
 func (p *Manager) AscendBTCLuckyReward(utxo string) (string, error) {
-	witness, peerKey, address, err := p.btcLuckyWitness()
+	owner, err := p.luckyWallet()
+	if err != nil {
+		return "", err
+	}
+	return p.ascendLuckyReward(owner, utxo)
+}
+
+func (p *Manager) ascendLuckyReward(owner common.Wallet, utxo string) (string, error) {
+	witness, peerKey, address, err := p.btcLuckyWitness(owner)
 	if err != nil {
 		return "", err
 	}
@@ -417,10 +427,10 @@ func (p *Manager) AscendBTCLuckyReward(utxo string) (string, error) {
 	if _, err := p.ValidateBTCLuckyAnchor(tx, witness); err != nil {
 		return "", err
 	}
-	if _, err := p.SignAnchorTx(tx, p.wallet.SignMessage); err != nil {
+	if _, err := p.SignAnchorTx(tx, owner.SignMessage); err != nil {
 		return "", err
 	}
-	sigs, err := p.requestBTCLuckySignature(BTCLuckyAscendReason, address, peerKey, witness, tx, nil)
+	sigs, err := p.requestBTCLuckySignature(owner, BTCLuckyAscendReason, address, peerKey, witness, tx, nil)
 	if err != nil {
 		return "", err
 	}
@@ -549,7 +559,11 @@ func (p *Manager) ValidateBTCLuckyClaim(tx *swire.MsgTx, witness, user, service 
 }
 
 func (p *Manager) ClaimBTCLuckyReward(utxo string) (string, error) {
-	witness, peerKey, address, err := p.btcLuckyWitness()
+	owner, err := p.luckyWallet()
+	if err != nil {
+		return "", err
+	}
+	witness, peerKey, address, err := p.btcLuckyWitness(owner)
 	if err != nil {
 		return "", err
 	}
@@ -566,7 +580,7 @@ func (p *Manager) ClaimBTCLuckyReward(utxo string) (string, error) {
 	}
 	tx := swire.NewMsgTx(swire.TxVersion)
 	tx.AddTxIn(swire.NewTxIn(hash, nil, nil))
-	scripts, err := btcLuckyRecipientScripts(p.wallet.GetPubKey().SerializeCompressed(), peerKey)
+	scripts, err := btcLuckyRecipientScripts(owner.GetPubKey().SerializeCompressed(), peerKey)
 	if err != nil {
 		return "", err
 	}
@@ -574,15 +588,15 @@ func (p *Manager) ClaimBTCLuckyReward(utxo string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	prev, err := p.ValidateBTCLuckyClaim(tx, witness, p.wallet.GetPubKey().SerializeCompressed(), peerKey)
+	prev, err := p.ValidateBTCLuckyClaim(tx, witness, owner.GetPubKey().SerializeCompressed(), peerKey)
 	if err != nil {
 		return "", err
 	}
-	sigs, err := PartialSignTxWithWallet_SatsNet(p.wallet, tx, prev, witness, peerKey)
+	sigs, err := PartialSignTxWithWallet_SatsNet(owner, tx, prev, witness, peerKey)
 	if err != nil {
 		return "", err
 	}
-	remote, err := p.requestBTCLuckySignature(BTCLuckyClaimReason, address, peerKey, witness, tx, sigs)
+	remote, err := p.requestBTCLuckySignature(owner, BTCLuckyClaimReason, address, peerKey, witness, tx, sigs)
 	if err != nil {
 		return "", err
 	}
@@ -591,11 +605,11 @@ func (p *Manager) ClaimBTCLuckyReward(utxo string) (string, error) {
 	}
 	// The peer round trip can span a reorg or a change of channel backing.
 	// Refresh both policy checks and prevouts before completing and broadcasting.
-	prev, err = p.ValidateBTCLuckyClaim(tx, witness, p.wallet.GetPubKey().SerializeCompressed(), peerKey)
+	prev, err = p.ValidateBTCLuckyClaim(tx, witness, owner.GetPubKey().SerializeCompressed(), peerKey)
 	if err != nil {
 		return "", err
 	}
-	if _, err = FinalSignTxWithWallet_SatsNet(p.wallet, tx, prev, witness, peerKey, remote[0]); err != nil {
+	if _, err = FinalSignTxWithWallet_SatsNet(owner, tx, prev, witness, peerKey, remote[0]); err != nil {
 		return "", err
 	}
 	if err = VerifySignedTx_SatsNet(tx, prev); err != nil {
@@ -604,7 +618,7 @@ func (p *Manager) ClaimBTCLuckyReward(utxo string) (string, error) {
 	return p.BroadcastTx_SatsNet(tx)
 }
 
-func (p *Manager) requestBTCLuckySignature(reason, address string, peerKey, witness []byte, tx *swire.MsgTx, localSigs [][]byte) ([][][]byte, error) {
+func (p *Manager) requestBTCLuckySignature(owner common.Wallet, reason, address string, peerKey, witness []byte, tx *swire.MsgTx, localSigs [][]byte) ([][][]byte, error) {
 	peer, err := p.configuredSigningPeer(peerKey)
 	if err != nil {
 		return nil, err
@@ -617,12 +631,12 @@ func (p *Manager) requestBTCLuckySignature(reason, address string, peerKey, witn
 	if err != nil {
 		return nil, err
 	}
-	req := wwire.SignRequest{MsgHeader: wwire.NewMsgHeader(), ChannelId: address, CommitHeight: -1, Reason: reason, MoreData: more, PubKey: p.wallet.GetPubKey().SerializeCompressed(), NodeId: p.wallet.GetNodePubKey().SerializeCompressed()}
+	req := wwire.SignRequest{MsgHeader: wwire.NewMsgHeader(), ChannelId: address, CommitHeight: -1, Reason: reason, MoreData: more, PubKey: owner.GetPubKey().SerializeCompressed(), NodeId: owner.GetNodePubKey().SerializeCompressed()}
 	encoded, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
-	sig, err := p.wallet.SignMessageWithIndex(encoded, 0)
+	sig, err := owner.SignMessageWithIndex(encoded, 0)
 	if err != nil {
 		return nil, err
 	}

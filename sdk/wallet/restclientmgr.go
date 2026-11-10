@@ -152,6 +152,13 @@ func (p *IndexerRPCClientMgr) pingThread() {
 	Log.Infof("pingThread exit.")
 }
 
+// The template provider owns the coinbase service identity even during failover.
+func (p *IndexerRPCClientMgr) primaryIndexer() IndexerRPCClient {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	return p.indexers[0]
+}
+
 func (p *IndexerRPCClientMgr) getActiveIndexer() IndexerRPCClient {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()

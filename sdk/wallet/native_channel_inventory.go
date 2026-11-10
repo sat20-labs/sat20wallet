@@ -11,8 +11,11 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/rgb11/consignment"
+	"github.com/sat20-labs/rgb11/schemas"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
@@ -81,10 +84,21 @@ func (p *Manager) validateNativeChannelSource(ctx context.Context, local common.
 	// exact consumed ancestors or terminal carriers is known to contain another
 	// native asset. Checking just the final output loses this information after
 	// a transfer consumes a mixed carrier.
+	consumers := make(map[schemas.InputRef]string)
+	for _, consumer := range result.History.ValidatedConsumers {
+		if consumer.WitnessState == consignment.WitnessMined {
+			txid := chainhash.Hash(consumer.WitnessTxID)
+			consumers[consumer.Input] = txid.String()
+		}
+	}
 	points := make(map[string]bool)
+	historicalSpenders := make(map[string]string)
 	for _, state := range result.History.HistoricalStates {
 		point := wire.OutPoint{Hash: state.Outpoint.TxID, Index: state.Outpoint.Vout}
 		points[point.String()] = true
+		if txid := consumers[state.Reference]; txid != "" {
+			historicalSpenders[point.String()] = txid
+		}
 	}
 	proofs, err := rgb.projectionStore.ListProofs()
 	if err != nil {
@@ -119,6 +133,14 @@ func (p *Manager) validateNativeChannelSource(ctx context.Context, local common.
 			if evidenceErr == nil && spent != nil && spent.Spent &&
 				rgb11KnownObservedChannelSpend(rgb.evidence, point, spent.SpendingTx) {
 				continue
+			}
+			// Core's outspend RPC only names mempool spenders. Once mined,
+			// use the exact consumer from the validated RGB history, then
+			// independently recheck its confirmed transaction and input.
+			if evidenceErr == nil && spent != nil && spent.Spent && spent.SpendingTx == "" {
+				if _, observed := verifyRGB11ExpectedSpend(rgb.evidence, point, historicalSpenders[point]); observed {
+					continue
+				}
 			}
 			return nil, fmt.Errorf("native history co-asset evidence unavailable: %w", err)
 		}
