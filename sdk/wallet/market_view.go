@@ -119,6 +119,14 @@ func (p *SwapContractRuntime) MarketView(detail bool) map[string]any {
 		row["maxSupply"] = ti.MaxSupply
 	}
 	if detail {
+		ticker := make(map[string]any)
+		if ti != nil {
+			ticker["displayname"] = ti.DisplayName
+			ticker["maxSupply"] = ti.MaxSupply
+			ticker["totalMinted"] = ti.TotalMinted
+			ticker["divisibility"] = ti.Divisibility
+		}
+		row["tickerInfo"] = ticker
 		row["Contract"] = p.Contract
 		row["deployer"] = p.Deployer
 		row["24hour"] = map[string]int64{"volume": d.volume}
