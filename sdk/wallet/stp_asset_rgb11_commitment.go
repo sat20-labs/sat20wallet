@@ -356,7 +356,16 @@ func (protocol rgb11STPProtocol) VerifyChannelProof(p *Manager, channel *Channel
 		knownSources[source.OutPoint] = source.AssetName
 	}
 	if err := verifySTPRGB11KnownCoassets(p, knownSources); err != nil {
-		return nil, err
+		if err != ErrRGB11AssetPreservation || protocol.prepared == nil {
+			return nil, err
+		}
+		observed, err := protocol.confirmedFundingInputs(p, evidence, tx, raw, pkg)
+		if err != nil {
+			return nil, err
+		}
+		if err := checkRGB11Coassets(p, knownSources, observed); err != nil {
+			return nil, err
+		}
 	}
 	report, err := rgb11wallet.ValidateChannelPackage(context.Background(), pkg, tx, evidence)
 	if err != nil {

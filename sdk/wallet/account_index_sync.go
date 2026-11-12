@@ -1,6 +1,7 @@
 package wallet
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -368,5 +369,26 @@ func (p *Manager) publishAccountIndex(store *dkvsStore, snapshot *accountManagem
 	if err != nil {
 		return err
 	}
-	return p.publishAccountValue(store, value, snapshot.root, snapshot.profile)
+	err = p.publishAccountValue(store, value, snapshot.root, snapshot.profile)
+	if !errors.Is(err, dkvsindexer.ErrWriteConflict) {
+		return err
+	}
+	// Another device may have published exactly this directory while its
+	// modules were syncing. Confirm the signed result without another write.
+	latest, readErr := store.GetAuthoritative(key)
+	if readErr != nil {
+		return errors.Join(err, readErr)
+	}
+	current, readErr := account.OpenManagedIndex(snapshot.secret, snapshot.profile.AccountID, snapshot.network, latest.Value)
+	if readErr != nil {
+		return errors.Join(err, readErr)
+	}
+	if !reflect.DeepEqual(current, index) {
+		return err
+	}
+	captured, readErr := p.captureAccountValue(value.AccountID, value.Provider, value.Scope, value.Key, value.Codec, latest.Value, value.Generation)
+	if readErr != nil {
+		return readErr
+	}
+	return p.recordAccountEffect(captured, latest)
 }

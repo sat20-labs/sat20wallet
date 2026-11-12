@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -31,6 +32,8 @@ type rgb11ResolvedRecoveryProjection struct {
 	faults        []rgb11wallet.ProofFault
 	ready         map[string]bool
 }
+
+var errRGB11SpenderUnknown = errors.New("unidentified spender")
 
 // Only errors tied to a decoded, key-bound proof may be localized.
 type rgb11CarrierFault struct{ fault rgb11wallet.ProofFault }
@@ -1166,7 +1169,7 @@ func (p *rgb11Manager) resolveRGB11RecoveryProjection(ctx context.Context,
 						candidateWitness, candidateOperation = row.WitnessTxID, row.ConsumerOperationID
 					}
 					if candidateWitness == "" {
-						return nil, fmt.Errorf("RGB11 allocation %s has an unidentified spender", proof.OutPoint)
+						return nil, fmt.Errorf("RGB11 allocation %s has an %w", proof.OutPoint, errRGB11SpenderUnknown)
 					}
 					if _, verified := verifyRGB11ExpectedSpend(evidence, proof.OutPoint, candidateWitness); !verified {
 						return nil, fmt.Errorf("RGB11 allocation %s has no confirmed raw consumer for its exact Opout", proof.OutPoint)

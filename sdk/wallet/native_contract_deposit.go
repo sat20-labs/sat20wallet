@@ -22,8 +22,8 @@ import (
 	"github.com/sat20-labs/satoshinet/anchortx/nativeproof"
 )
 
-const NativeContractDepositAction = "native-contract-deposit"
-const NativeContractDepositPeerAction = "native-contract-deposit-peer"
+const RGB11DepositPrepareAction = "native-contract-deposit"
+const RGB11DepositPeerPrepareAction = "native-contract-deposit-peer"
 const NativeContractDepositVersion = 1
 
 var ErrNativeContractInputNotFound = errors.New("native contract input not found")
@@ -119,8 +119,8 @@ func (p *Manager) PrepareNativeContractDeposit(ctx context.Context, contractURL,
 
 func (p *Manager) prepareNativeContractDeposit(ctx context.Context, contract ContractRuntime, recipient,
 	assetName, amount string, feeRate int64, owner common.Wallet, directPeer bool) (*NativeContractDeposit, error) {
-	if p.l2IndexerClient == nil || !GetChainParam_SatsNet().NativeAssetsActive(int32(p.l2IndexerClient.GetBestHeight()+1)) {
-		return nil, fmt.Errorf("native asset mappings are not active")
+	if p.l2IndexerClient == nil {
+		return nil, fmt.Errorf("native deposit requires a SatsNet indexer")
 	}
 	batch, err := NewAtomicWriteBatch(p.GetDB())
 	if err != nil {
@@ -265,9 +265,9 @@ func (p *Manager) ResumeNativeContractDeposit(ctx context.Context, transferID st
 		if err != nil {
 			return "", err
 		}
-		action := NativeContractDepositAction
+		action := RGB11DepositPrepareAction
 		if journal.DirectPeer {
-			action = NativeContractDepositPeerAction
+			action = RGB11DepositPeerPrepareAction
 		}
 		if err := peer.client.SendActionResultNfty(owner, 0, action, 0, string(raw)); err != nil {
 			return "", err
@@ -496,7 +496,17 @@ func validateObservedNativeContractDeposit(evidence rgb11wallet.BitcoinEvidenceP
 	return nil
 }
 
-func (p *Manager) MaterializeNativeContractInput(ctx context.Context, contract ContractRuntime, outpoint string) (*NativeContractInput, error) {
+// HasNativeContractDepositMaterial identifies a replay candidate only. The
+// matching durable receive record never substitutes for full materialization.
+func (p *Manager) HasNativeContractDepositMaterial(contractURL, outpoint string) (bool, error) {
+	_, err := p.loadNativeContractDeposit(contractURL, outpoint)
+	if errors.Is(err, ErrNativeContractInputNotFound) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func (p *Manager) loadNativeContractDeposit(contractURL, outpoint string) (*NativeContractDeposit, error) {
 	raw, err := p.GetDB().Read(nativeDepositKey("receive", outpoint))
 	if errors.Is(err, indexer.ErrKeyNotFound) {
 		return nil, ErrNativeContractInputNotFound
@@ -505,32 +515,50 @@ func (p *Manager) MaterializeNativeContractInput(ctx context.Context, contract C
 		return nil, err
 	}
 	var deposit NativeContractDeposit
-	if json.Unmarshal(raw, &deposit) != nil || deposit.Source == nil || deposit.Source.Output == nil {
+	if json.Unmarshal(raw, &deposit) != nil || deposit.Version != NativeContractDepositVersion ||
+		deposit.Intent.Version != NativeContractDepositVersion || deposit.Source == nil || deposit.Source.Output == nil ||
+		deposit.Source.Output.OutPointStr != outpoint {
 		return nil, fmt.Errorf("invalid native deposit record")
 	}
-	if deposit.Intent.ContractURL != contract.URL() {
+	if deposit.Intent.ContractURL != contractURL {
 		return nil, ErrNativeContractInputNotFound
+	}
+	return &deposit, nil
+}
+
+func (p *Manager) MaterializeNativeContractInput(ctx context.Context, contract ContractRuntime, outpoint string) (*NativeContractInput, error) {
+	deposit, err := p.loadNativeContractDeposit(contract.URL(), outpoint)
+	if err != nil {
+		return nil, err
 	}
 	scope, err := p.stpRGB11Scope(contract.GetRuntimeBase().GetLocalWallet())
 	if err != nil {
 		return nil, err
 	}
-	if err := validateObservedNativeContractDeposit(scope.evidence, &deposit, true); err != nil {
+	if err := validateObservedNativeContractDeposit(scope.evidence, deposit, true); err != nil {
 		return nil, err
 	}
-	spent, err := scope.evidence.GetOutspend(outpoint)
-	if err != nil || spent == nil {
-		return nil, fmt.Errorf("native deposit current carrier status unavailable: %w", err)
+	if p.l2IndexerClient == nil {
+		return nil, fmt.Errorf("native deposit mapping lookup unavailable")
 	}
-	if spent.Spent {
-		if !rgb11KnownObservedChannelSpend(scope.evidence, outpoint, spent.SpendingTx) {
-			return nil, fmt.Errorf("native deposit has no exact observed spender")
-		}
-		if err := p.validateHistoricalNativeContractDeposit(ctx, contract, deposit.Source); err != nil {
+	locator, err := p.l2IndexerClient.GetAscendData(outpoint)
+	switch {
+	case errors.Is(err, indexer.ErrKeyNotFound):
+		// Only an explicitly absent mapping permits new admission. Current
+		// source, ownership and co-asset checks remain mandatory here.
+		if err := p.RegisterNativeChannelSettlementSource(ctx, contract.GetRuntimeBase().GetLocalWallet(), contract.Address(), deposit.Source); err != nil {
 			return nil, err
 		}
-	} else if err := p.RegisterNativeChannelSettlementSource(ctx, contract.GetRuntimeBase().GetLocalWallet(), contract.Address(), deposit.Source); err != nil {
-		return nil, err
+	case err != nil:
+		return nil, fmt.Errorf("native deposit mapping lookup failed: %w", err)
+	case locator == nil || locator.AnchorTxId == "":
+		return nil, fmt.Errorf("native deposit mapping has no anchor")
+	default:
+		// Replay proves the existing canonical mapping. Later spending does
+		// not change that fact and must not recreate spendable inventory.
+		if err := p.validateHistoricalNativeContractDeposit(ctx, contract, deposit.Source, locator.AnchorTxId); err != nil {
+			return nil, err
+		}
 	}
 	if err := contract.GetRuntimeBase().initializeNativePublicMetadata(deposit.Source.Output); err != nil {
 		return nil, err
@@ -538,6 +566,61 @@ func (p *Manager) MaterializeNativeContractInput(ctx context.Context, contract C
 	h := sha256.Sum256(deposit.Source.PublicProof)
 	return &NativeContractInput{Output: deposit.Source.Output.Clone(), Recipient: deposit.Intent.Recipient,
 		ProofDigest: h[:], NativeProof: append([]byte(nil), deposit.Source.PublicProof...)}, nil
+}
+
+// A UTXO-only indexer cannot name a confirmed consumer. Recover its identity
+// only from this contract's existing fixed signed withdrawals, then verify it
+// against Bitcoin. This read never creates inventory or rewrites a proof.
+func (p *Manager) confirmedPoolSpender(evidence rgb11wallet.BitcoinEvidenceProvider,
+	contractURL, outpoint, observedSpender string) (string, error) {
+	var candidate string
+	var signed []byte
+	err := p.GetDB().BatchRead(nativeContractWithdrawKey("signed", ""), false, func(key, raw []byte) error {
+		var pair nativeContractBroadcastPair
+		if json.Unmarshal(raw, &pair) != nil || pair.Version != 1 {
+			return fmt.Errorf("invalid durable native withdrawal pair")
+		}
+		if pair.ContractURL != contractURL {
+			return nil
+		}
+		tx := new(wire.MsgTx)
+		reader := bytes.NewReader(pair.Bitcoin)
+		if tx.Deserialize(reader) != nil || reader.Len() != 0 || pair.Proof == nil || len(pair.Proof.Consignment) == 0 || len(pair.Descend) == 0 ||
+			!bytes.Equal(key, nativeContractWithdrawKey("signed", tx.TxID())) {
+			return fmt.Errorf("invalid durable native withdrawal pair")
+		}
+		matches := 0
+		for _, input := range tx.TxIn {
+			if input.PreviousOutPoint.String() == outpoint {
+				matches++
+			}
+		}
+		if matches == 0 {
+			return nil
+		}
+		if matches != 1 || (candidate != "" && candidate != tx.TxID()) {
+			return fmt.Errorf("historical native pool source has ambiguous recorded consumers")
+		}
+		candidate, signed = tx.TxID(), append([]byte(nil), pair.Bitcoin...)
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	if candidate == "" {
+		return "", fmt.Errorf("historical native pool source has no recorded consumer")
+	}
+	if observedSpender != "" && observedSpender != candidate {
+		return "", fmt.Errorf("historical native pool source spender conflicts with its recorded consumer")
+	}
+	if _, confirmed := verifyRGB11ExpectedSpend(evidence, outpoint, candidate); !confirmed {
+		return "", fmt.Errorf("historical native pool source consumer is not independently confirmed")
+	}
+	raw, err := evidence.GetRawTx(candidate)
+	if err != nil || !bytes.Equal(raw, signed) {
+		return "", fmt.Errorf("historical native pool source consumer differs from its signed withdrawal")
+	}
+	return candidate, nil
 }
 
 // NativeContractInputProtected guards generic Bitcoin fee selection even

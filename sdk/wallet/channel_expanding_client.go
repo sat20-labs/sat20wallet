@@ -18,11 +18,7 @@ import (
 )
 
 func isIndexerNotFoundErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "not found") || strings.Contains(msg, "can't find") || strings.Contains(msg, "cannot find")
+	return errors.Is(err, indexer.ErrKeyNotFound)
 }
 
 func (p *Manager) markRecoverAscended(resv *SplicingReservation, ascendData *sindexer.AscendData, utxo string) error {

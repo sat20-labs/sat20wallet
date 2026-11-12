@@ -48,6 +48,10 @@ export const requiredPwaRgbCrossLayerCases = [
   'RGB PWA: splice the fungible RGB asset into and out of the READY private channel',
 ]
 
+export const optionalPwaRgbContinuationCases = [
+  'RGB PWA: continue the confirmed deposit Anchor and withdraw without another deposit',
+]
+
 const pollOptions = { timeout: 180000, intervals: [250, 500, 1000, 2000] }
 const txidPattern = /^[0-9a-f]{64}$/
 const asInteger = value => {
@@ -72,6 +76,15 @@ const deanchorInputs = channel => Object.fromEntries(['localDeAnchorTx', 'remote
 export async function runPwaPosCases(t, fixture) {
   const { check, device, ready, walletCall, accountCall, questions, answers } = t
   const rgbCrossLayer = fixture.rgbCrossLayer === true
+  const continuation = fixture.resumeConfirmedRGBDeposit
+  if (continuation) {
+    assert.equal(rgbCrossLayer, true)
+    assert.deepEqual(t.selectedCases, optionalPwaRgbContinuationCases, 'restored state must never enter issue/deploy/deposit cases')
+    assert.equal(continuation.asset_key, fixture.asset.key)
+    assert.equal(continuation.amount, '100')
+    assert.equal(continuation.carrier_value, 330)
+    assert.equal(continuation.funding_height, 1139)
+  }
   assert.ok(['testnet', 'regtest'].includes(fixture.config.Chain))
   const network = fixture.config.Chain
   const bitcoinNetwork = network === 'regtest' ? networks.regtest : networks.testnet
@@ -96,7 +109,7 @@ export async function runPwaPosCases(t, fixture) {
   assert.notEqual(fixture.recipient.address, fixture.address, 'transfers require an independent recipient')
   const recipientScript = bitcoinAddress.toOutputScript(fixture.recipient.address, bitcoinNetwork).toString('hex')
   assert.equal(recipientScript, fixture.recipient.pk_script)
-  let page = await device()
+  let page = await device(undefined, true, undefined, 'rgb-continuation', continuation?.storage_state)
   const context = page.context()
   let channelId
   let publicRGBContractURL
@@ -990,6 +1003,7 @@ export async function runPwaPosCases(t, fixture) {
     }
     await assertWalletBalanceUI('Bitcoin', token)
     await assertWalletBalanceUI('SatoshiNet', token)
+    return { txid: funding.txid, tx }
   }
   const openEscape = async () => {
     await page.evaluate(() => { location.hash = '#/wallet' })
@@ -1435,10 +1449,48 @@ export async function runPwaPosCases(t, fixture) {
       l2_final: String(await readL2Amount(key)) } }))
   }
 
+  const continueConfirmedRGBDeposit = async () => {
+    const key = fixture.asset.key
+    assert.equal(amounts.deposit_asset, continuation.amount)
+    assert.equal(amounts.withdraw_asset, continuation.amount)
+    publicRGBContractURL = continuation.contract_url
+    assert.equal(publicRGBContractURL, `${continuation.pool_address}_${key}_transcend.tc`)
+    const anchor = continuation.anchor
+    assert.equal(anchor.funding_outpoint, `${continuation.funding_txid}:1`)
+    const confirmed = await confirmedL2Transaction(anchor.txid)
+    assert.ok(confirmed.confirmations >= 1)
+    const original = await readL1Transaction(continuation.funding_txid)
+    assert.equal(asInteger(original.outs[1].value), 330n)
+    assert.equal(original.outs[1].script.toString('hex'),
+      bitcoinAddress.toOutputScript(continuation.pool_address, bitcoinNetwork).toString('hex'))
+    const snapshot = await control('snapshot')
+    assert.deepEqual(snapshot.l1.pending_txids, [])
+    await expect.poll(() => readL2Amount(key), pollOptions).toBe(100n)
+    await expect.poll(() => addressAmount('Bitcoin', fixture.address, key), pollOptions).toBe(900n)
+    await assertRGBProofs(key, 900n)
+    assert.equal(channelAmount(await readChannel(), key), 0n)
+    await waitForPublicRGBTranscendActivation(publicRGBContractURL, true)
+    const withdrawn = await withdraw(true)
+    assert.equal(await addressAmount('Bitcoin', fixture.address, key), 1000n)
+    assert.equal(await readL2Amount(key), 0n)
+    assert.equal(channelAmount(await readChannel(), key), 0n)
+    await assertRGBProofs(key, 1000n)
+    const consumed = withdrawn.tx.ins.map(input => `${Buffer.from(input.hash).reverse().toString('hex')}:${input.index}`)
+    assert.ok(consumed.includes(`${continuation.funding_txid}:1`), 'withdrawal must consume the original pool carrier')
+    const poolScript = original.outs[1].script.toString('hex')
+    assert.equal(withdrawn.tx.outs.filter(output => output.script.toString('hex') === poolScript)
+      .reduce((sum, output) => sum + asInteger(output.value), 0n), 330n, 'return the full pool carrier')
+    console.log(JSON.stringify({ rgbConfirmedContinuation: { asset: key, original_funding: continuation.funding_txid,
+      anchor: anchor.txid, withdrawal: withdrawn.txid, amount: '100', returned_pool_carrier: 330 } }))
+  }
+
   try {
     // Test wallet import is fixture setup. Every movement of its funds below
     // goes through the same controls a PWA user operates.
-    await page.evaluate(async ({ mnemonic, password }) => {
+    if (continuation) {
+      await t.unlock(page, fixture.password)
+      await page.evaluate(() => { location.hash = '#/wallet' })
+    } else await page.evaluate(async ({ mnemonic, password }) => {
       const [error] = await window.__SAT20_PWA_VERIFY__.useWalletStore().importWallet(mnemonic, password)
       if (error) throw error
       location.hash = '#/wallet'
@@ -1465,6 +1517,10 @@ export async function runPwaPosCases(t, fixture) {
 
     if (rgbCrossLayer) {
       try {
+        if (continuation) {
+          await check(optionalPwaRgbContinuationCases[0], continueConfirmedRGBDeposit)
+          return
+        }
         await check(requiredPwaRgbCrossLayerCases[0], publicRGBRoundTrip)
         await check(requiredPwaRgbCrossLayerCases[1], async () => privateRGBRoundTrip(await issueCrossLayerRGB()))
       } catch (error) {

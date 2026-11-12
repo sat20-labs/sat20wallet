@@ -89,6 +89,11 @@ func (p *Manager) publishAccountValue(store *dkvsStore, value *accountLocalKV,
 			if value.Provider == "wallets" && value.Scope == AccountManagedDataGlobalScope && !value.Deleted {
 				return nil, errWalletBaselineChanged
 			}
+			// Two devices can discover the same new RGB scope before either
+			// publishes it. Re-read and compare their verified module payloads.
+			if value.Provider == rgb11AccountManagedProviderID && !value.Deleted && value.Baseline == nil && actual != nil {
+				return nil, errWalletBaselineChanged
+			}
 			return nil, dkvsindexer.ErrWriteConflict
 		}
 		content := value.Value

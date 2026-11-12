@@ -35,10 +35,8 @@ type pwaBuildInputSnapshot struct {
 func TestSDKPWARealRegtestArtifactFingerprintGuard(t *testing.T) {
 	if os.Getenv("SAT20_REAL_RGB_CROSS_LAYER") == "1" {
 		require.Empty(t, os.Getenv(prebuiltE2EEnv), "RGB cross-layer guard must build every artifact with this run's GOFLAGS overlay")
-		require.Equal(t, int32(1), chaincfg.RegressionNetParams.NativeAssetHeight, "RGB cross-layer regtest native assets must be active from height 1")
 		require.Equal(t, int32(32), chaincfg.RegressionNetParams.POSV2Height, "RGB cross-layer regtest must retain the POS v2 schedule")
-		t.Logf("private regtest activation: NativeAssetHeight=%d POSV2Height=%d",
-			chaincfg.RegressionNetParams.NativeAssetHeight, chaincfg.RegressionNetParams.POSV2Height)
+		t.Logf("private regtest activation: POSV2Height=%d", chaincfg.RegressionNetParams.POSV2Height)
 	}
 
 	before, err := capturePWABuildInputs()

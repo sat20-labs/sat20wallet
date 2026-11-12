@@ -91,7 +91,14 @@ func (c *coreE2EChain) GetTxStatus(id string) (*rgb11wallet.BitcoinTxStatus, err
 func (c *coreE2EChain) GetOutspend(point string) (*rgb11wallet.BitcoinOutspend, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return &rgb11wallet.BitcoinOutspend{Spent: c.spent[point] != "", SpendingTx: c.spent[point]}, nil
+	spender := c.spent[point]
+	outspend := &rgb11wallet.BitcoinOutspend{Spent: spender != ""}
+	// The real indexer exposes spender identity only while it is in mempool.
+	// Keep the complete spent ledger internally for double-spend validation.
+	if status := c.status[spender]; status.InMempool && !status.Confirmed {
+		outspend.SpendingTx = spender
+	}
+	return outspend, nil
 }
 func (*coreE2EChain) GetTip() (*rgb11wallet.BitcoinTip, error) {
 	return &rgb11wallet.BitcoinTip{Height: 100, BlockHash: strings.Repeat("1", 64)}, nil

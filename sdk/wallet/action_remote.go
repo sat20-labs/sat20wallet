@@ -450,9 +450,11 @@ func (p *Manager) StakeToBeMinner(bCoreNode bool, feeRate int64) (string, int64,
 	utxo, err := p.getStakeUtxo(channelAddr, dAmt, asset)
 	if err == nil {
 		_, err = p.l2IndexerClient.GetAscendData(utxo)
-		if err != nil {
+		if errors.Is(err, indexer.ErrKeyNotFound) {
 			parts := strings.Split(utxo, ":")
 			ascendingTxId = parts[0]
+		} else if err != nil {
+			return "", 0, err
 		}
 	}
 

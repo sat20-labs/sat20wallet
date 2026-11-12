@@ -221,6 +221,10 @@ func (p *Manager) importSTPNativePreparedFunding(channel *Channel) error {
 		if len(channel.AssetFunding[protocol.Protocol()]) == 0 {
 			continue
 		}
+		if rgb, ok := protocol.(rgb11STPProtocol); ok {
+			rgb.prepared = record.Candidate
+			protocol = rgb
+		}
 		if settlement, ok := protocol.(STPAssetPreparedFundingSettlement); ok {
 			if err := settlement.ImportPreparedChannelFunding(p, channel, channel.NativeParents); err != nil {
 				return err

@@ -93,9 +93,9 @@ func (p *Manager) checkBTCLuckyRewardMaturity(reward *BTCLuckyReward) error {
 
 func (p *Manager) btcLuckyAscendData(utxo string) (*sindexer.AscendData, error) {
 	data, err := p.GetIndexerClient_SatsNet().GetAscendData(utxo)
-	// The existing endpoint distinguishes absence in its explicit error message.
-	// Transport errors must not be interpreted as permission to create a new anchor.
-	if err != nil && err.Error() == "GetAscendData "+utxo+" not found" {
+	// Only explicit absence permits creating a new anchor.
+	// Transport and storage failures remain errors.
+	if errors.Is(err, indexer.ErrKeyNotFound) {
 		return nil, nil
 	}
 	return data, err

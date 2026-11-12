@@ -156,6 +156,9 @@ const productionCspPlugin = (env: Record<string, string>, releaseId: string) => 
     'https://api.iconify.design',
     'https://api.simplesvg.com',
     'https://api.unisvg.com',
+    'https://mempool.space',
+    'https://api.blockchair.com',
+    'https://api.blockchain.info',
     env.VITE_SAT20_VERSION_URL,
     env.VITE_CSP_CONNECT_SRC,
   ], 'connect-src')

@@ -9,6 +9,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
@@ -264,7 +265,6 @@ func TestRGB11TransferOutboxMetadataScopeAndConcurrentDelete(t *testing.T) {
 		change func(*Manager)
 	}{
 		{"lock", func(m *Manager) { m.clearAccountManagementSession() }},
-		{"release", func(m *Manager) { m.Close() }},
 		{"generation", func(m *Manager) { m.mutex.Lock(); m.bumpAccountGenerationLocked(); m.mutex.Unlock() }},
 		{"account", func(m *Manager) { m.mutex.Lock(); m.status.CurrentAccount = 1; m.mutex.Unlock() }},
 		{"wallet", func(m *Manager) { m.mutex.Lock(); m.status.CurrentWallet = 20; m.mutex.Unlock() }},
@@ -282,6 +282,29 @@ func TestRGB11TransferOutboxMetadataScopeAndConcurrentDelete(t *testing.T) {
 			require.Nil(t, got)
 		})
 	}
+	t.Run("release", func(t *testing.T) {
+		f := newMetadataFixture(t)
+		closeDone := make(chan struct{})
+		f.db.afterRead = func(key string) {
+			if key != f.outboxKey {
+				return
+			}
+			go func() {
+				defer close(closeDone)
+				f.m.Close()
+			}()
+			require.Eventually(t, func() bool {
+				f.m.mutex.RLock()
+				defer f.m.mutex.RUnlock()
+				return len(f.m.accountSecret) == 0
+			}, 2*time.Second, 10*time.Millisecond)
+		}
+		got, err := f.m.GetRGB11TransferOutboxMetadata(f.transferID)
+		require.ErrorIs(t, err, ErrRGB11OutboxScopeChanged)
+		require.Nil(t, got)
+		<-closeDone
+		require.False(t, f.m.bInited)
+	})
 	t.Run("delete-after-atomic-read", func(t *testing.T) {
 		f := newMetadataFixture(t)
 		f.db.afterRead = func(key string) {

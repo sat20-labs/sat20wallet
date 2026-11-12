@@ -484,6 +484,7 @@ type SwapContractRuntime struct {
 	isSending          bool
 
 	// rpc 缓存
+	marketDay         marketDay
 	responseCache     []*responseItem_swap
 	responseStatus    *responseStatus_swap
 	responseAnalytics *AnalytcisData
@@ -903,6 +904,26 @@ func (p *SwapContractRuntime) calcDepthV2(pool []*SwapHistoryItem, buy bool) []*
 	return result
 }
 
+func (p *SwapContractRuntime) marketDepth() (*Decimal, []*DepthInfo, []*DepthInfo) {
+	var sellDepth, buyDepth []*DepthInfo
+
+	minSellPrice, _, sellSpan, sellCount := getPriceSpan(p.sellPool, false)
+	if sellCount > 0 && sellCount <= DEPTH_SLOT {
+		sellDepth = p.calcDepthV2(p.sellPool, false)
+	} else {
+		sellDepth = p.calcDepth(p.sellPool, minSellPrice.Clone(), false, sellSpan)
+	}
+
+	_, maxBuyPrice, buySpan, buyCount := getPriceSpan(p.buyPool, true)
+	if buyCount > 0 && buyCount <= DEPTH_SLOT {
+		buyDepth = p.calcDepthV2(p.buyPool, true)
+	} else {
+		buyDepth = p.calcDepth(p.buyPool, maxBuyPrice.Clone(), true, buySpan)
+	}
+
+	return minSellPrice, buyDepth, sellDepth
+}
+
 func (p *SwapContractRuntime) updateResponseData() {
 	if p.refreshTime == 0 {
 
@@ -918,21 +939,7 @@ func (p *SwapContractRuntime) updateResponseData() {
 		// 默认十档，超出部分不显示
 		// 默认1聪为一个档位，从成交价上下统计
 		// 如果挂单太少，直接按挂单显示
-		var sellDepth, buyDepth []*DepthInfo
-
-		minSellPrice, _, sellSpan, sellCount := getPriceSpan(p.sellPool, false)
-		if sellCount > 0 && sellCount <= DEPTH_SLOT {
-			sellDepth = p.calcDepthV2(p.sellPool, false)
-		} else {
-			sellDepth = p.calcDepth(p.sellPool, minSellPrice.Clone(), false, sellSpan)
-		}
-
-		_, maxBuyPrice, buySpan, buyCount := getPriceSpan(p.buyPool, true)
-		if buyCount > 0 && buyCount <= DEPTH_SLOT {
-			buyDepth = p.calcDepthV2(p.buyPool, true)
-		} else {
-			buyDepth = p.calcDepth(p.buyPool, maxBuyPrice.Clone(), true, buySpan)
-		}
+		minSellPrice, buyDepth, sellDepth := p.marketDepth()
 
 		tickerInfo := p.contractAssetTicker()
 		displayName := p.GetAssetName().Ticker

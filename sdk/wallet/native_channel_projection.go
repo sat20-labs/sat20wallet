@@ -280,7 +280,12 @@ func (p *rgb11Manager) importObservedNativePoolTransferAttempt(ctx context.Conte
 			continue
 		}
 		outspend, err := p.evidence.GetOutspend(proof.OutPoint)
-		if err != nil || outspend == nil || !outspend.Spent || !rgb11KnownObservedChannelSpend(p.evidence, proof.OutPoint, outspend.SpendingTx) {
+		if err != nil || outspend == nil || !outspend.Spent || (outspend.SpendingTx != "" && outspend.SpendingTx != tx.TxID()) {
+			return nil, fmt.Errorf("native consumed source is not independently observed")
+		}
+		// The validated settlement already identifies this exact consumer.
+		// Core cannot look up a confirmed spender by its previous outpoint.
+		if _, observed := verifyRGB11ExpectedSpend(p.evidence, proof.OutPoint, tx.TxID()); !observed {
 			return nil, fmt.Errorf("native consumed source is not independently observed")
 		}
 		updates = append(updates, rgb11wallet.SnapshotProofUpdate{OutPoint: proof.OutPoint, AssetName: proof.AssetName,

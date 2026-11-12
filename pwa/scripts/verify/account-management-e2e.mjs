@@ -20,7 +20,7 @@ import {
   waitForAccountWrite,
 } from './account-management-usage-e2e.mjs'
 import { requiredPwaBiometricCases, runPwaBiometricCases } from './wallet-biometric-e2e.mjs'
-import { requiredPwaPosCases, requiredPwaRgbCrossLayerCases, optionalPwaEscapeCases, runPwaPosCases } from './pos-pwa-e2e.mjs'
+import { requiredPwaPosCases, requiredPwaRgbCrossLayerCases, optionalPwaRgbContinuationCases, optionalPwaEscapeCases, runPwaPosCases } from './pos-pwa-e2e.mjs'
 import { requiredPwaL1ProtocolCases, runPwaL1ProtocolCases } from './wallet-l1-assets-e2e.mjs'
 import { requiredPwaWalletBasicCases, runPwaWalletBasicCases } from './wallet-basic-e2e.mjs'
 import { requiredPwaSilentPayCases, runPwaSilentPayCases } from './silentpay-e2e.mjs'
@@ -376,6 +376,10 @@ if (regtestMode && focusedWalletCases) {
       ? requiredPwaPosCases.slice(6, 9) : [])])
   if (regtestWalletFixture?.rgbCrossLayer === true) {
     for (const name of requiredPwaRgbCrossLayerCases) currentlyRegtestReadyCases.add(name)
+    if (regtestWalletFixture.resumeConfirmedRGBDeposit) {
+      assert.deepEqual(focusedWalletCases, optionalPwaRgbContinuationCases)
+      for (const name of optionalPwaRgbContinuationCases) currentlyRegtestReadyCases.add(name)
+    }
     assert.ok(regtestWalletFixture.realBitcoinControl && regtestWalletFixture.realBitcoinFunds &&
       regtestWalletFixture.realSatoshiNetFunds && regtestWalletFixture.realChannel &&
       regtestWalletFixture.resumePrivateChannel,
@@ -481,7 +485,7 @@ async function startRgbCrossLayerMarket(fixture, networkConfig) {
   }
 }
 try {
-const integrationDapp = posFixture && !rgbCrossLayerFixture
+const integrationDapp = posFixture && !rgbCrossLayerFixture && !posFixture.resumeConfirmedRGBDeposit
   ? runnerResources.own('dapp', await createPwaIntegrationDapp(expectedNetwork)) : null
 const marketServer = rgbCrossLayerFixture
   ? runnerResources.own('market', await startRgbCrossLayerMarket(rgbCrossLayerFixture, regtestConfig)) : null
@@ -658,6 +662,7 @@ if (focusedWalletCases) {
   assert.ok(posFixture && focusedWalletCases.length, 'wallet rerun requires the existing wallet fixture and exact cases')
   const known = sdkWASM ? requiredSDKWASMCases : [...requiredPwaPosCases, ...optionalPwaEscapeCases, ...requiredPwaL1ProtocolCases, ...requiredPwaWalletBasicCases, ...requiredPwaBiometricCases, ...requiredPwaMintCases,
     ...requiredPwaRgbCrossLayerCases,
+    ...optionalPwaRgbContinuationCases,
     ...(regtestMode ? requiredPwaRegtestMiningCases : requiredPwaMiningCases),
     ...requiredPwaNodeCases, ...requiredPwaIntegrationCases, ...requiredPwaToolsCases, ...requiredPwaSilentPayCases,
     ...requiredWalletRuntimeCases]
@@ -851,9 +856,14 @@ const safePageErrorStack = stack => String(stack ?? '').split('\n').slice(0, 32)
 
 let accountDiagnosticDevice = 0
 
-async function device(sharedContext, waitForReady = true, beforeGoto, diagnosticRole = 'unassigned') {
+async function device(sharedContext, waitForReady = true, beforeGoto, diagnosticRole = 'unassigned', storageState) {
+  if (storageState) {
+    assert.equal(storageState, regtestWalletFixture?.resumeConfirmedRGBDeposit?.storage_state)
+    assert.equal(statSync(storageState).mode & 0o077, 0, 'restored browser state must remain private')
+    assert.deepEqual(focusedWalletCases, optionalPwaRgbContinuationCases)
+  }
   const diagnosticDeviceId = ++accountDiagnosticDevice
-  const context = sharedContext ?? await browser.newContext({ locale: 'en-US' })
+  const context = sharedContext ?? await browser.newContext({ locale: 'en-US', ...(storageState ? { storageState } : {}) })
   if (!sharedContext && posFixture && process.env.SAT20_PWA_DIAGNOSTIC === '1') auditAccountCAS(context)
   context.setDefaultTimeout(30000)
   context.setDefaultNavigationTimeout(90000)
@@ -1796,7 +1806,7 @@ try {
     const helpers = { check, device, ready, unlock, catalog, walletCall, accountCall, questions, answers, nodeAPIOrigins, integrationDapp, selectedCases: focusedWalletCases, preserveBrowserFailureState }
     // Independent feature groups use fresh browser stores and continue after
     // another group fails; the required-case ledger still fails the whole gate.
-    for (const [run, names] of [[runPwaSilentPayCases, requiredPwaSilentPayCases], [runPwaPosCases, [...requiredPwaPosCases, ...requiredPwaRgbCrossLayerCases, ...optionalPwaEscapeCases]], [runPwaL1ProtocolCases, requiredPwaL1ProtocolCases], [runPwaWalletBasicCases, requiredPwaWalletBasicCases],
+    for (const [run, names] of [[runPwaSilentPayCases, requiredPwaSilentPayCases], [runPwaPosCases, [...requiredPwaPosCases, ...requiredPwaRgbCrossLayerCases, ...optionalPwaRgbContinuationCases, ...optionalPwaEscapeCases]], [runPwaL1ProtocolCases, requiredPwaL1ProtocolCases], [runPwaWalletBasicCases, requiredPwaWalletBasicCases],
       [runPwaIntegrationCases, requiredPwaIntegrationCases], [runPwaToolsCases, requiredPwaToolsCases],
       [runPwaMintCases, requiredPwaMintCases], [runPwaMiningCases, regtestMode ? requiredPwaRegtestMiningCases : requiredPwaMiningCases],
       [runPwaNodeCases, requiredPwaNodeCases]]) {

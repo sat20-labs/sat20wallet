@@ -50,6 +50,113 @@ func nativeChannelInventoryKey(channel, outpoint string) []byte {
 
 func (p *Manager) validateNativeChannelSource(ctx context.Context, local common.Wallet,
 	channelID string, source *NativeChannelSource, mode nativeproof.Mode) (*nativeproof.Result, error) {
+	return p.validateNativeSourceSpend(ctx, local, channelID, source, mode, "")
+}
+
+// confirmedSpender is supplied only after the caller validates the confirmed
+// withdrawal and its exact RGB consumption of this immutable historical source.
+func (p *Manager) validateNativeSourceSpend(ctx context.Context, local common.Wallet,
+	channelID string, source *NativeChannelSource, mode nativeproof.Mode, confirmedSpender string) (*nativeproof.Result, error) {
+	if confirmedSpender != "" && mode != nativeproof.Historical {
+		return nil, fmt.Errorf("confirmed native source spend requires historical validation")
+	}
+	result, err := p.validateNativeSourceProof(ctx, local, channelID, source, mode)
+	if err != nil {
+		return nil, err
+	}
+	rgb, err := p.stpRGB11Scope(local)
+	if err != nil {
+		return nil, err
+	}
+	// A source can only be treated as a single-asset carrier when none of its
+	// exact consumed ancestors or terminal carriers is known to contain another
+	// native asset. Checking just the final output loses this information after
+	// a transfer consumes a mixed carrier.
+	consumers := make(map[schemas.InputRef]string)
+	for _, consumer := range result.History.ValidatedConsumers {
+		if consumer.WitnessState == consignment.WitnessMined {
+			txid := chainhash.Hash(consumer.WitnessTxID)
+			consumers[consumer.Input] = txid.String()
+		}
+	}
+	terminalPoint, err := wire.NewOutPointFromString(source.Output.OutPointStr)
+	if err != nil {
+		return nil, err
+	}
+	lineage := nativeSourceLineage(&result.History, *terminalPoint)
+	points := make(map[string]bool)
+	historicalSpenders := make(map[string]string)
+	for _, state := range result.History.HistoricalStates {
+		if !lineage[state.Reference] {
+			continue
+		}
+		point := wire.OutPoint{Hash: state.Outpoint.TxID, Index: state.Outpoint.Vout}
+		points[point.String()] = true
+		if txid := consumers[state.Reference]; txid != "" {
+			historicalSpenders[point.String()] = txid
+		}
+	}
+	proofs, err := rgb.projectionStore.ListProofs()
+	if err != nil {
+		return nil, err
+	}
+	for _, proof := range proofs {
+		if proof != nil && points[proof.OutPoint] && proof.AssetName != result.Asset.Name {
+			return nil, fmt.Errorf("native channel history contains a known co-asset")
+		}
+	}
+	for point := range points {
+		historicalPoint, err := wire.NewOutPointFromString(point)
+		if err != nil {
+			return nil, err
+		}
+		if mode == nativeproof.Prepared && historicalPoint.Hash == terminalPoint.Hash {
+			// The signed candidate has not been broadcast. Indexed co-assets
+			// can only exist on its consumed ancestors; those are checked.
+			continue
+		}
+		output, err := p.l1IndexerClient.GetTxOutput(point)
+		if err != nil {
+			// Historical RGB validation proves the exact consuming witness.
+			// A UTXO-only indexer may report a spent output using its own error
+			// vocabulary. Accept absence only after independently observing that
+			// exact Bitcoin spend, never on a missing row or RPC failure alone.
+			spent, evidenceErr := rgb.evidence.GetOutspend(point)
+			if confirmedSpender != "" && point == source.Output.OutPointStr {
+				if evidenceErr == nil && spent != nil && spent.Spent &&
+					(spent.SpendingTx == "" || spent.SpendingTx == confirmedSpender) {
+					if _, observed := verifyRGB11ExpectedSpend(rgb.evidence, point, confirmedSpender); observed {
+						continue
+					}
+				}
+				return nil, fmt.Errorf("native historical source is not spent by its confirmed consumer")
+			}
+			if evidenceErr == nil && spent != nil && spent.Spent &&
+				rgb11KnownObservedChannelSpend(rgb.evidence, point, spent.SpendingTx) {
+				continue
+			}
+			// Core's outspend RPC only names mempool spenders. Once mined,
+			// use the exact consumer from the validated RGB history, then
+			// independently recheck its confirmed transaction and input.
+			if evidenceErr == nil && spent != nil && spent.Spent && spent.SpendingTx == "" {
+				if _, observed := verifyRGB11ExpectedSpend(rgb.evidence, point, historicalSpenders[point]); observed {
+					continue
+				}
+			}
+			return nil, fmt.Errorf("native history co-asset evidence unavailable: %w", err)
+		}
+		if output != nil && len(output.Assets) != 0 {
+			return nil, fmt.Errorf("native channel history contains indexed co-assets")
+		}
+	}
+	return result, nil
+}
+
+// validateNativeSourceProof verifies immutable source facts, without granting
+// current spendability. Historical anchor replay uses only these facts; other
+// callers retain the inventory and co-asset checks in validateNativeSourceSpend.
+func (p *Manager) validateNativeSourceProof(ctx context.Context, local common.Wallet,
+	channelID string, source *NativeChannelSource, mode nativeproof.Mode) (*nativeproof.Result, error) {
 	if source == nil || source.Version != 1 || source.ChannelID != channelID || source.Output == nil ||
 		len(source.Output.Assets) != 1 || source.Output.Assets[0].Name.Protocol != rgb11wallet.Protocol ||
 		source.Output.Assets[0].BindingSat != 0 || len(source.PublicProof) == 0 || local == nil {
@@ -80,75 +187,36 @@ func (p *Manager) validateNativeChannelSource(ctx context.Context, local common.
 	if result.Value != source.Output.Value() {
 		return nil, fmt.Errorf("native source must preserve its complete Bitcoin carrier")
 	}
-	// A source can only be treated as a single-asset carrier when none of its
-	// exact consumed ancestors or terminal carriers is known to contain another
-	// native asset. Checking just the final output loses this information after
-	// a transfer consumes a mixed carrier.
-	consumers := make(map[schemas.InputRef]string)
-	for _, consumer := range result.History.ValidatedConsumers {
-		if consumer.WitnessState == consignment.WitnessMined {
-			txid := chainhash.Hash(consumer.WitnessTxID)
-			consumers[consumer.Input] = txid.String()
-		}
-	}
-	points := make(map[string]bool)
-	historicalSpenders := make(map[string]string)
-	for _, state := range result.History.HistoricalStates {
-		point := wire.OutPoint{Hash: state.Outpoint.TxID, Index: state.Outpoint.Vout}
-		points[point.String()] = true
-		if txid := consumers[state.Reference]; txid != "" {
-			historicalSpenders[point.String()] = txid
-		}
-	}
-	proofs, err := rgb.projectionStore.ListProofs()
-	if err != nil {
-		return nil, err
-	}
-	for _, proof := range proofs {
-		if proof != nil && points[proof.OutPoint] && proof.AssetName != result.Asset.Name {
-			return nil, fmt.Errorf("native channel history contains a known co-asset")
-		}
-	}
-	terminalPoint, err := wire.NewOutPointFromString(source.Output.OutPointStr)
-	if err != nil {
-		return nil, err
-	}
-	for point := range points {
-		historicalPoint, err := wire.NewOutPointFromString(point)
-		if err != nil {
-			return nil, err
-		}
-		if mode == nativeproof.Prepared && historicalPoint.Hash == terminalPoint.Hash {
-			// The signed candidate has not been broadcast. Indexed co-assets
-			// can only exist on its consumed ancestors; those are checked.
-			continue
-		}
-		output, err := p.l1IndexerClient.GetTxOutput(point)
-		if err != nil {
-			// Historical RGB validation proves the exact consuming witness.
-			// A UTXO-only indexer may report a spent output using its own error
-			// vocabulary. Accept absence only after independently observing that
-			// exact Bitcoin spend, never on a missing row or RPC failure alone.
-			spent, evidenceErr := rgb.evidence.GetOutspend(point)
-			if evidenceErr == nil && spent != nil && spent.Spent &&
-				rgb11KnownObservedChannelSpend(rgb.evidence, point, spent.SpendingTx) {
-				continue
-			}
-			// Core's outspend RPC only names mempool spenders. Once mined,
-			// use the exact consumer from the validated RGB history, then
-			// independently recheck its confirmed transaction and input.
-			if evidenceErr == nil && spent != nil && spent.Spent && spent.SpendingTx == "" {
-				if _, observed := verifyRGB11ExpectedSpend(rgb.evidence, point, historicalSpenders[point]); observed {
-					continue
-				}
-			}
-			return nil, fmt.Errorf("native history co-asset evidence unavailable: %w", err)
-		}
-		if output != nil && len(output.Assets) != 0 {
-			return nil, fmt.Errorf("native channel history contains indexed co-assets")
-		}
-	}
 	return result, nil
+}
+
+// A selected RGB operation can also produce allocations for other owners.
+// Follow validated input edges backwards from every allocation at this Bitcoin
+// output so only the terminal and its consumed ancestors supply carrier facts.
+func nativeSourceLineage(history *consignment.HistoryReport, point wire.OutPoint) map[schemas.InputRef]bool {
+	inputs := make(map[[32]byte][]schemas.InputRef)
+	for _, edge := range history.ValidatedConsumers {
+		inputs[edge.ConsumerOperationID] = append(inputs[edge.ConsumerOperationID], edge.Input)
+	}
+	var pending []schemas.InputRef
+	for _, state := range history.HistoricalStates {
+		if state.Outpoint.TxID == point.Hash && state.Outpoint.Vout == point.Index {
+			pending = append(pending, state.Reference)
+		}
+	}
+	lineage := make(map[schemas.InputRef]bool)
+	visited := make(map[[32]byte]bool)
+	for len(pending) != 0 {
+		last := len(pending) - 1
+		ref := pending[last]
+		pending = pending[:last]
+		lineage[ref] = true
+		if !visited[ref.OperationID] {
+			visited[ref.OperationID] = true
+			pending = append(pending, inputs[ref.OperationID]...)
+		}
+	}
+	return lineage
 }
 
 // RegisterNativeChannelSettlementSource records material only after full

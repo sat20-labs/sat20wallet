@@ -388,6 +388,20 @@ func newFakeL1Indexer(t *testing.T, indexerPubKey string, lockedPkScript []byte,
 			return
 		}
 
+		const allUtxosAddressPrefix = "/testnet/allutxos/address/"
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, allUtxosAddressPrefix) {
+			address := strings.TrimPrefix(r.URL.Path, allUtxosAddressPrefix)
+			if address != "" && !strings.Contains(address, "/") {
+				// The fake L1 owns no plain UTXOs, so background address scans are empty.
+				require.NoError(t, json.NewEncoder(w).Encode(indexerwire.AllUtxosResp{
+					BaseResp:   indexerwire.BaseResp{Code: 0, Msg: "ok"},
+					PlainUtxos: []*indexerwire.PlainUtxo{},
+					OtherUtxos: []*indexerwire.PlainUtxo{},
+				}))
+				return
+			}
+		}
+
 		const addressAssetPrefix = "/testnet/v3/address/asset/"
 		if strings.HasPrefix(r.URL.Path, addressAssetPrefix) {
 			// The fake L1 only owns the explicitly configured locked UTXOs.

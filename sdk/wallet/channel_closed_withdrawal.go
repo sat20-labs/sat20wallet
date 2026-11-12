@@ -516,7 +516,9 @@ func (p *Manager) prepareClosedWithdrawal(channel *Channel, parent *wire.MsgTx, 
 		return nil, fmt.Errorf("missing closed withdrawal context")
 	}
 	if closedWithdrawalHasRGB(&channel.ChannelInDB) {
-		txs, deanchor, _, err := p.prepareRGBClosedWithdrawal(channel, parent)
+		pending := context.Choice == "withdraw" && context.Step == "withdraw_pending" &&
+			context.ChannelID == channel.ChannelId && context.OldParentID == parent.TxID()
+		txs, deanchor, _, err := p.prepareRGBClosedWithdrawal(channel, parent, pending)
 		if err != nil {
 			return nil, err
 		}

@@ -40,14 +40,13 @@ func coreConfirmedHistoricalOutput(t *testing.T, manager *Manager, point string)
 	t.Helper()
 	chain, ok := manager.rgbManager.evidence.(*coreE2EChain)
 	coreAssert(t, ok, "semantic checker lost its controlled Bitcoin evidence")
-	spend, err := chain.GetOutspend(point)
-	coreRequire(t, "check allocation spending evidence", err)
-	if !spend.Spent || spend.SpendingTx == "" {
-		return false
-	}
-	status, err := chain.GetTxStatus(spend.SpendingTx)
-	coreRequire(t, "check confirmed spending transaction", err)
-	return status.Confirmed && status.Confirmations >= 6
+	// This is the test oracle, not SDK evidence: confirmed spender identity is
+	// deliberately unavailable from GetOutspend, but remains in our ledger.
+	chain.mu.Lock()
+	defer chain.mu.Unlock()
+	spender := chain.spent[point]
+	status := chain.status[spender]
+	return spender != "" && status.Confirmed && status.Confirmations >= 6
 }
 
 func coreRGBSemantic(t *testing.T, manager *Manager) coreRGBView {

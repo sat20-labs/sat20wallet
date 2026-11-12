@@ -129,7 +129,7 @@ func rgbClosedWithdrawalPackage(channel *Channel, parent *wire.MsgTx) (*rgb11wal
 // and its paired burn; the separate outspend checks below establish current
 // ownership or consumption by this exact already authorized child. In
 // particular, a confirmed retry never requires the spent parent to be unspent.
-func (p *Manager) prepareRGBClosedWithdrawal(channel *Channel, parent *wire.MsgTx) ([]*wire.MsgTx, *swire.MsgTx, int64, error) {
+func (p *Manager) prepareRGBClosedWithdrawal(channel *Channel, parent *wire.MsgTx, pending bool) ([]*wire.MsgTx, *swire.MsgTx, int64, error) {
 	pkg, recovery, err := rgbClosedWithdrawalPackage(channel, parent)
 	if err != nil {
 		return nil, nil, 0, err
@@ -228,6 +228,18 @@ func (p *Manager) prepareRGBClosedWithdrawal(channel *Channel, parent *wire.MsgT
 			return nil, nil, 0, fmt.Errorf("RGB withdrawal does not pay the current client wallet")
 		}
 	}
+	childID := recovery.CommitTx.TxID()
+	confirmedChild := ""
+	if pending && p.GetIndexerRPCClient().IsTxConfirmed(childID) {
+		observed, err := chains.bitcoinTx(childID, true)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		if !equalSTPBitcoinTx(observed, recovery.CommitTx) {
+			return nil, nil, 0, fmt.Errorf("RGB withdrawal confirmed child differs from its durable signed bytes")
+		}
+		confirmedChild = childID
+	}
 	selected := 0
 	for _, assignment := range pkg.Steps[len(pkg.Steps)-1].Assignments {
 		source, err := rgb11wallet.ChannelFundingFromStep(pkg.Steps[len(pkg.Steps)-1], assignment.OutputIndex, assignment.Amount)
@@ -248,8 +260,8 @@ func (p *Manager) prepareRGBClosedWithdrawal(channel *Channel, parent *wire.MsgT
 		output := indexer.NewTxOutput(source.Value)
 		output.OutPointStr, output.OutValue.PkScript = source.OutPoint, append([]byte(nil), source.PkScript...)
 		output.Assets = indexer.TxAssets{{Name: source.AssetName, Amount: *source.Amount.Clone(), BindingSat: 0}}
-		validated, err := p.validateNativeChannelSource(ctx, w, channel.ChannelId,
-			&NativeChannelSource{Version: 1, ChannelID: channel.ChannelId, Output: output, PublicProof: proof}, nativeproof.Historical)
+		validated, err := p.validateNativeSourceSpend(ctx, w, channel.ChannelId,
+			&NativeChannelSource{Version: 1, ChannelID: channel.ChannelId, Output: output, PublicProof: proof}, nativeproof.Historical, confirmedChild)
 		if err != nil {
 			return nil, nil, 0, err
 		}
@@ -272,7 +284,7 @@ func (p *Manager) prepareRGBClosedWithdrawal(channel *Channel, parent *wire.MsgT
 		if err != nil || spent == nil {
 			return nil, nil, 0, fmt.Errorf("RGB withdrawal current spend evidence is unavailable: %w", err)
 		}
-		if !spent.Spent && spent.SpendingTx != "" {
+		if !spent.Spent && (spent.SpendingTx != "" || confirmedChild != "") {
 			return nil, nil, 0, fmt.Errorf("RGB withdrawal has contradictory current spend evidence")
 		}
 		indexed, indexErr := p.l1IndexerClient.GetTxOutput(point)
@@ -280,12 +292,12 @@ func (p *Manager) prepareRGBClosedWithdrawal(channel *Channel, parent *wire.MsgT
 			return nil, nil, 0, fmt.Errorf("RGB withdrawal input contains an indexed co-asset")
 		}
 		if spent.Spent {
-			if spent.SpendingTx != recovery.CommitTx.TxID() {
+			if spent.SpendingTx != childID && (spent.SpendingTx != "" || confirmedChild == "") {
 				return nil, nil, 0, fmt.Errorf("RGB withdrawal parent was spent by another transaction")
 			}
 			// The authoritative input list comes from exact canonical bytes,
 			// not optional/indexer-specific Vin metadata on an outspend row.
-			observed, err := chains.bitcoinTx(spent.SpendingTx, false)
+			observed, err := chains.bitcoinTx(childID, false)
 			if err != nil || !equalSTPBitcoinTx(observed, recovery.CommitTx) {
 				return nil, nil, 0, fmt.Errorf("RGB withdrawal observed child differs from its durable signed bytes: %w", err)
 			}

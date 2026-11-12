@@ -213,7 +213,19 @@ func coreInvoiceTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain
 		chain.broadcastCount() == before+1, "proxy ACK did not authorize exactly the original transaction")
 	sender = corePendingCheckpoint(t, "06_broadcast_sender", sender, cfg, chain, senderMaterial)
 
+	coreAssert(t, len(prepared.State.InputOutPoints) > 0, "Standard transfer must consume actual Bitcoin inputs")
+	for _, point := range prepared.State.InputOutPoints {
+		spend, err := chain.GetOutspend(point)
+		coreRequire(t, "read mempool outspend", err)
+		coreAssert(t, spend.Spent && spend.SpendingTx == txid, "mempool outspend lost the actual spender")
+	}
 	chain.confirm(txid)
+	for _, point := range prepared.State.InputOutPoints {
+		spend, err := chain.GetOutspend(point)
+		coreRequire(t, "read confirmed outspend", err)
+		coreAssert(t, spend.Spent && spend.SpendingTx == "", "confirmed outspend must hide identity without becoming unspent")
+		coreAssert(t, coreConfirmedHistoricalOutput(t, sender, point), "internal confirmed-spend oracle lost historical evidence")
+	}
 	_, err = sender.RefreshRGB11State(context.Background())
 	coreRequire(t, "settle invoice sender", err)
 	proxyReceived, err = receiver.ReceiveRGB11ProxyConsignment(context.Background(), invoice.RequestID)

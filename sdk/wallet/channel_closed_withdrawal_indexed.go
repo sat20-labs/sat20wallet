@@ -333,7 +333,7 @@ func (p *Manager) prepareIndexedClosedWithdrawal(channel *Channel, parent *wire.
 			return nil, fmt.Errorf("indexed withdrawal input spend is unknown or contradictory: %v", err)
 		}
 		if spent.Spent {
-			if first || consumers[point] == "" || spent.SpendingTx != consumers[point] {
+			if first || consumers[point] == "" || spent.SpendingTx != "" && spent.SpendingTx != consumers[point] {
 				return nil, fmt.Errorf("indexed withdrawal frontier was spent without this verified package")
 			}
 		} else if err := view.Manager.validateIndexedWithdrawalCurrent(chains, output); err != nil {
@@ -354,6 +354,7 @@ func (p *Manager) prepareIndexedClosedWithdrawal(channel *Channel, parent *wire.
 	}
 	allConfirmed := true
 	observed := make(map[string]bool)
+	confirmed := make(map[string]bool)
 	for _, tx := range txs[1:] {
 		height := int(chains.tip.Height) + 1
 		if !first {
@@ -367,6 +368,7 @@ func (p *Manager) prepareIndexedClosedWithdrawal(channel *Channel, parent *wire.
 					return nil, fmt.Errorf("indexed recovery child differs from its authorized signed bytes: %v", err)
 				}
 				observed[tx.TxID()] = true
+				confirmed[tx.TxID()] = status.Confirmed
 			}
 			if status.Confirmed {
 				if status.BlockHeight <= 0 || status.BlockHeight > math.MaxInt32 {
@@ -433,12 +435,19 @@ func (p *Manager) prepareIndexedClosedWithdrawal(channel *Channel, parent *wire.
 		}
 		if spent.Spent {
 			if complete && allConfirmed && consumers[point] == "" && bytes.Equal(output.OutValue.PkScript, walletScript) {
-				if err := verifyIndexedTerminalSpend(chains, point, spent.SpendingTx); err != nil {
+				spender := spent.SpendingTx
+				if spender == "" {
+					spender, err = view.Manager.indexedSelfSpend(chains, captured.GetAddress(), output)
+					if err != nil {
+						return nil, err
+					}
+				}
+				if err := verifyIndexedTerminalSpend(chains, point, spender, spent.SpendingTx == ""); err != nil {
 					return nil, err
 				}
 				continue
 			}
-			if consumers[point] == "" || spent.SpendingTx != consumers[point] {
+			if consumers[point] == "" || spent.SpendingTx != "" && spent.SpendingTx != consumers[point] {
 				return nil, fmt.Errorf("indexed recovery output was consumed outside its authorized package")
 			}
 		} else if len(output.Assets) != 0 {
@@ -463,7 +472,10 @@ func (p *Manager) prepareIndexedClosedWithdrawal(channel *Channel, parent *wire.
 			if err != nil || spent == nil || !spent.Spent && spent.SpendingTx != "" {
 				return nil, fmt.Errorf("indexed withdrawal consumer evidence is unavailable or contradictory: %v", err)
 			}
-			if spent.Spent && (spent.SpendingTx != consumer || !observed[consumer]) || !spent.Spent && observed[consumer] {
+			// Core may omit the spender after confirmation. The signed package
+			// binds this input to the exact child checked against the active chain.
+			matched := spent.SpendingTx == consumer || spent.SpendingTx == "" && confirmed[consumer]
+			if spent.Spent && (!matched || !observed[consumer]) || !spent.Spent && observed[consumer] {
 				return nil, fmt.Errorf("indexed withdrawal has no exact observed authorized consumer")
 			}
 		}
@@ -477,11 +489,47 @@ func (p *Manager) prepareIndexedClosedWithdrawal(channel *Channel, parent *wire.
 	return &ClosingDataInDB{CloseTx: parent.Copy(), PreTxs: cloneSTPBitcoinChain(txs), DeAnchorTx: deanchor.Copy()}, nil
 }
 
+// Core has no locator for a confirmed spend. A current same-asset output
+// at the captured address can identify a direct wallet self-spend.
+func (p *Manager) indexedSelfSpend(chains *nativeSettlementChains, address string, terminal *TxOutput) (string, error) {
+	if len(terminal.Assets) != 1 || terminal.Assets[0].Name.Protocol != indexer.PROTOCOL_NAME_ATOM {
+		return "", fmt.Errorf("indexed terminal has no known spender")
+	}
+	for _, coin := range p.l1IndexerClient.GetUtxoListWithTicker(address, &terminal.Assets[0].Name) {
+		if coin == nil {
+			continue
+		}
+		op, err := wire.NewOutPointFromString(coin.OutPoint)
+		if err != nil || op.String() != coin.OutPoint {
+			return "", fmt.Errorf("invalid indexed wallet outpoint")
+		}
+		tx, err := chains.bitcoinTx(op.Hash.String(), false)
+		if err != nil {
+			return "", err
+		}
+		if uint64(op.Index) >= uint64(len(tx.TxOut)) || !bytes.Equal(tx.TxOut[op.Index].PkScript, terminal.OutValue.PkScript) {
+			continue
+		}
+		for _, input := range tx.TxIn {
+			if input.PreviousOutPoint.String() != terminal.OutPointStr {
+				continue
+			}
+			current, err := chains.bitcoin.GetUTXO(coin.OutPoint)
+			if err != nil || current == nil || current.OutPoint != coin.OutPoint || current.Value != tx.TxOut[op.Index].Value ||
+				!bytes.Equal(current.PkScript, terminal.OutValue.PkScript) {
+				return "", fmt.Errorf("indexed self-spend successor is not current at the client wallet: %v", err)
+			}
+			return tx.TxID(), nil
+		}
+	}
+	return "", fmt.Errorf("indexed terminal has no direct observed wallet self-spend")
+}
+
 // This is historical receipt validation, never permission for another spend.
 // A locator alone cannot turn an externally consumed terminal into completion.
-func verifyIndexedTerminalSpend(chains *nativeSettlementChains, point, txID string) error {
+func verifyIndexedTerminalSpend(chains *nativeSettlementChains, point, txID string, requireConfirmed bool) error {
 	status, err := chains.bitcoin.GetTxStatus(txID)
-	if err != nil || status == nil || status.TxID != txID || status.Confirmed && status.InMempool || !status.Confirmed && !status.InMempool {
+	if err != nil || status == nil || status.TxID != txID || status.Confirmed && status.InMempool || !status.Confirmed && (!status.InMempool || requireConfirmed) {
 		return fmt.Errorf("indexed terminal spender is not observed with an exact transaction identity: %v", err)
 	}
 	// The receipt is the already-confirmed original package. A later valid

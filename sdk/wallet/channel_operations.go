@@ -1169,7 +1169,7 @@ func (p *Manager) prepareClosedReopenFunding(w common.Wallet, address string, st
 			return true
 		}
 		_, err = p.l2IndexerClient.GetAscendData(outpoint)
-		if policy == closedReopenExistingFundingOnly && err != nil && !closedReopenAscendMissing(outpoint, err) {
+		if err != nil && !errors.Is(err, indexer.ErrKeyNotFound) {
 			readErr = err
 			return true
 		}

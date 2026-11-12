@@ -2498,7 +2498,13 @@ export async function runRgbPwaCases(t, fixture) {
     let data
     if (path.endsWith('/tip')) data = facts.tip
     else if (path.endsWith('/utxos/status')) data = body.outpoints.map(point => facts.utxos[point] ?? { outpoint: point, exists: false, unspent: false })
-    else if (path.endsWith('/outspends/batch')) data = body.outpoints.map(point => facts.outspends[point] ?? { outpoint: point, exists: false, spent: false })
+    else if (path.endsWith('/outspends/batch')) data = body.outpoints.map(point => {
+      const outspend = facts.outspends[point] ?? { outpoint: point, exists: false, spent: false }
+      const spender = facts.status[outspend.spending_tx]
+      assert.ok(!outspend.spending_tx || (spender?.in_mempool && !spender.confirmed),
+        `controlled Bitcoin outspend leaked non-mempool spender identity: ${point}`)
+      return outspend
+    })
     else if (path.endsWith('/rawtx/batch')) data = body.txids.map(id => facts.raw[id] ?? { txid: id, error: 'controlled transaction not found' })
     else if (path.endsWith('/tx/status/batch')) data = body.txids.map(id => facts.status[id] ?? { txid: id, exists: false, in_mempool: false, confirmed: false })
     else return route.fallback()

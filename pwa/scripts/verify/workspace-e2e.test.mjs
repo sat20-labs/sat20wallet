@@ -26,7 +26,7 @@ test('stage commands contain one Go test verb before their flags and package', (
 })
 
 test('default catalog contains only real local-chain entry points', () => {
-  assert.equal(stageCatalog.length, 8)
+  assert.equal(stageCatalog.length, 9)
   assert.ok(stageCatalog.every(stage => stage.tests.every(name => name.startsWith('TestSDKPWARealRegtest'))))
   assert.ok(selectStages(['pwa-canonical'])[0].tests.includes('TestSDKPWARealRegtestAssetContextStabilityBrowser'))
   assert.throws(() => selectStages(['indexer-silentpay']), /unknown stage/)

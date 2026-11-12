@@ -34,7 +34,7 @@ type closedAssetPipelineIndexer struct {
 func (c *closedAssetPipelineIndexer) GetSyncHeight() int { return 1 }
 func (c *closedAssetPipelineIndexer) GetFeeRate() int64  { return 1 }
 func (c *closedAssetPipelineIndexer) GetAscendData(string) (*sindexer.AscendData, error) {
-	return nil, errors.New("not found")
+	return nil, indexer.ErrKeyNotFound
 }
 func (c *closedAssetPipelineIndexer) GetExistingUtxos(points []string) ([]string, error) {
 	return append([]string(nil), points...), nil

@@ -1135,7 +1135,13 @@ func (f *posPWAL1Indexer) bitcoinEvidenceLocked(w http.ResponseWriter, r *http.R
 		utxos := make([]*indexerwire.BitcoinUTXOStatus, 0, len(req.Outpoints))
 		for _, point := range req.Outpoints {
 			output, spend := f.outputs[point], f.spent[point]
-			outspends = append(outspends, &indexerwire.BitcoinOutspend{Outpoint: point, Exists: output != nil, Spent: spend.txid != "", SpendingTx: spend.txid, Vin: spend.vin})
+			outspend := &indexerwire.BitcoinOutspend{Outpoint: point, Exists: output != nil, Spent: spend.txid != ""}
+			// Only the mempool has a spender lookup; confirmed history remains
+			// in the internal ledger without leaking txid/vin through this API.
+			if tx := f.transactions[spend.txid]; tx != nil && tx.height < 0 {
+				outspend.SpendingTx, outspend.Vin = spend.txid, spend.vin
+			}
+			outspends = append(outspends, outspend)
 			item := &indexerwire.BitcoinUTXOStatus{Outpoint: point, Exists: output != nil, Unspent: output != nil && spend.txid == ""}
 			if output != nil {
 				item.Value, item.PkScript = output.Value(), hex.EncodeToString(output.OutValue.PkScript)
@@ -1233,6 +1239,19 @@ func TestPOSPWAL1IndexerPreservesRealSignedTransactionAndAssetFlow(t *testing.T)
 		require.NoError(t, json.NewDecoder(resp.Body).Decode(response))
 	}
 
+	var outspends indexerwire.BitcoinOutspendsResp
+	post("/v3/bitcoin/outspends/batch", indexerwire.BitcoinOutpointsReq{Outpoints: []string{point}}, &outspends)
+	require.Zero(t, outspends.Code)
+	require.Len(t, outspends.Data, 1)
+	require.True(t, outspends.Data[0].Exists)
+	require.False(t, outspends.Data[0].Spent)
+	require.Empty(t, outspends.Data[0].SpendingTx)
+	spender, err := f.assets.GetUtxoSpentTx(point)
+	require.NoError(t, err)
+	require.Empty(t, spender)
+	_, err = f.assets.GetUtxoSpentTx(tx.TxID() + ":0")
+	require.ErrorContains(t, err, "does not exist", "the signed transaction has not been broadcast yet")
+
 	// A rejected signature must not consume funding or manufacture a balance.
 	invalid := tx.Copy()
 	invalid.TxIn[0].Witness[0][10] ^= 1
@@ -1259,6 +1278,15 @@ func TestPOSPWAL1IndexerPreservesRealSignedTransactionAndAssetFlow(t *testing.T)
 	require.True(t, exists)
 	require.Equal(t, encode(tx), encode(stored))
 
+	post("/v3/bitcoin/outspends/batch", indexerwire.BitcoinOutpointsReq{Outpoints: []string{point}}, &outspends)
+	require.Zero(t, outspends.Code)
+	require.Len(t, outspends.Data, 1)
+	require.True(t, outspends.Data[0].Exists && outspends.Data[0].Spent)
+	require.Equal(t, tx.TxID(), outspends.Data[0].SpendingTx, "mempool spender must remain available")
+	spender, err = f.assets.GetUtxoSpentTx(point)
+	require.NoError(t, err)
+	require.Equal(t, tx.TxID(), spender)
+
 	first, exists := f.Output(tx.TxID() + ":0")
 	require.True(t, exists)
 	require.Equal(t, uint64(indexercommon.INVALID_ID), first.UtxoId)
@@ -1273,6 +1301,24 @@ func TestPOSPWAL1IndexerPreservesRealSignedTransactionAndAssetFlow(t *testing.T)
 	get("/btc/block/bestblockhash", &previous)
 	require.Zero(t, previous.Code)
 	require.Equal(t, []string{tx.TxID()}, f.ConfirmPending())
+	outspends = indexerwire.BitcoinOutspendsResp{}
+	post("/v3/bitcoin/outspends/batch", indexerwire.BitcoinOutpointsReq{Outpoints: []string{point}}, &outspends)
+	require.Zero(t, outspends.Code)
+	require.Len(t, outspends.Data, 1)
+	require.True(t, outspends.Data[0].Exists && outspends.Data[0].Spent)
+	require.Empty(t, outspends.Data[0].SpendingTx, "confirmed spender identity must not leak through the indexer")
+	require.Zero(t, outspends.Data[0].Vin)
+	spender, err = f.assets.GetUtxoSpentTx(point)
+	require.NoError(t, err)
+	require.Equal(t, "unknown", spender, "confirmed spend must not become unspent")
+	require.Equal(t, tx.TxID(), f.spent[point].txid, "internal Bitcoin spent ledger must survive confirmation")
+	require.Equal(t, tx.TxID(), f.assets.Network.UtxoUsed[point], "internal asset spent ledger must survive confirmation")
+	var spentStatus indexerwire.BitcoinUTXOStatusResp
+	post("/v3/bitcoin/utxos/status", indexerwire.BitcoinOutpointsReq{Outpoints: []string{point}}, &spentStatus)
+	require.Zero(t, spentStatus.Code)
+	require.Len(t, spentStatus.Data, 1)
+	require.True(t, spentStatus.Data[0].Exists)
+	require.False(t, spentStatus.Data[0].Unspent)
 	first, exists = f.Output(tx.TxID() + ":0")
 	require.True(t, exists)
 	require.NotEqual(t, uint64(indexercommon.INVALID_ID), first.UtxoId)

@@ -22,7 +22,8 @@ import (
 // RGB entry is not a proof that the carrier has no RGB state.
 type rgb11STPProtocol struct {
 	stpUTXORecovery
-	view *stpRGBEvidenceView
+	view     *stpRGBEvidenceView
+	prepared *ChannelInDB
 }
 
 // Bind only a value copy for this reservation. Registered protocols and the
@@ -441,6 +442,10 @@ func (protocol rgb11STPProtocol) ValidateChannelFunding(p *Manager, channel *Cha
 // contract carried by the same Bitcoin output. Check every local account;
 // peers' public indexers cannot establish the absence of native allocations.
 func verifySTPRGB11KnownCoassets(p *Manager, sources map[string]indexer.AssetName) error {
+	return checkRGB11Coassets(p, sources, nil)
+}
+
+func checkRGB11Coassets(p *Manager, sources, observed map[string]indexer.AssetName) error {
 	accounts := p.localRGB11Accounts()
 	managers := make([]*rgb11Manager, 0, len(accounts))
 	for _, account := range accounts {
@@ -460,7 +465,7 @@ func verifySTPRGB11KnownCoassets(p *Manager, sources map[string]indexer.AssetNam
 		owner.rgbReservationMu.RLock()
 		defer owner.rgbReservationMu.RUnlock()
 		for _, manager := range managers {
-			proofs, blocked, err := manager.localRGB11ProofView()
+			proofs, blocked, err := manager.fundingRGB11ProofView(observed)
 			if err != nil {
 				return err
 			}

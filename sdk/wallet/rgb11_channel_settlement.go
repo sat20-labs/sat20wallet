@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"slices"
 
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
@@ -42,6 +43,49 @@ func (protocol rgb11STPProtocol) ImportPreparedChannelFunding(p *Manager, channe
 	// Expansion may refer to a previously imported funding output without a
 	// newly published funding transaction or new ordinary-wallet change.
 	return nil
+}
+
+// The prepared record may precede the peer's signatures. Bind its exact
+// unsigned body and package to the fully signed bytes observed on the active chain.
+func (protocol rgb11STPProtocol) confirmedFundingInputs(p *Manager, evidence rgb11wallet.BitcoinEvidenceProvider,
+	tx *wire.MsgTx, raw []byte, pkg *rgb11wallet.ChannelPackage) (map[string]indexer.AssetName, error) {
+	stored := &Channel{ChannelInDB: *protocol.prepared}
+	inventory, err := stpRGB11Inventory(stored)
+	if err != nil {
+		return nil, err
+	}
+	last := pkg.Steps[len(pkg.Steps)-1]
+	if stored.ChannelId != last.Context.ChannelID || !bytes.Equal(inventory.LastPackage, raw) ||
+		!slices.ContainsFunc(stored.NativeParents, func(parent *wire.MsgTx) bool { return sameRGB11UnsignedTx(parent, tx) }) {
+		return nil, ErrRGB11AssetPreservation
+	}
+	chains, err := p.newNativeSettlementChainsWithEvidence(context.Background(), evidence)
+	if err != nil {
+		return nil, err
+	}
+	actual, err := chains.bitcoinTx(tx.TxID(), true)
+	if err != nil {
+		return nil, err
+	}
+	if !equalSTPBitcoinTx(actual, tx) {
+		return nil, ErrRGB11AssetPreservation
+	}
+	if err := chains.verifyBitcoinSpend(actual); err != nil {
+		return nil, err
+	}
+	observed := make(map[string]indexer.AssetName, len(last.Sources))
+	for _, source := range last.Sources {
+		spend, err := evidence.GetOutspend(source.OutPoint)
+		if err != nil {
+			return nil, err
+		}
+		if spend == nil || !spend.Spent || (spend.SpendingTx != "" && spend.SpendingTx != actual.TxID()) ||
+			!slices.ContainsFunc(actual.TxIn, func(in *wire.TxIn) bool { return in.PreviousOutPoint.String() == source.OutPoint }) {
+			return nil, ErrRGB11AssetPreservation
+		}
+		observed[source.OutPoint] = source.AssetName
+	}
+	return observed, chains.stable()
 }
 
 func (protocol rgb11STPProtocol) ImportChannelSettlement(p *Manager, tx *wire.MsgTx, raw []byte) (err error) {
@@ -102,12 +146,9 @@ func (p *Manager) stpRGB11SettlementOwner(channelID string) (*Channel, common.Wa
 	if channel != nil && channel.LocalWallet() != nil {
 		return channel, channel.LocalWallet(), nil
 	}
-	stored, err := p.LoadChannelInDB(channelID)
+	stored, err := p.loadRGB11SettlementChannel(channelID)
 	if err != nil {
-		stored, err = LoadBackupChannelInDB(p.db, channelID)
-		if err != nil {
-			return nil, nil, err
-		}
+		return nil, nil, err
 	}
 	if stored == nil || stored.ChannelId != channelID || stored.LocalChanCfg.PaymentKey == nil {
 		return nil, nil, ErrRGB11Inconsistent
@@ -120,6 +161,33 @@ func (p *Manager) stpRGB11SettlementOwner(channelID string) (*Channel, common.Wa
 		}
 	}
 	return nil, nil, fmt.Errorf("native settlement has no matching local wallet")
+}
+
+func (p *Manager) loadRGB11SettlementChannel(channelID string) (*ChannelInDB, error) {
+	stored, err := p.LoadChannelInDB(channelID)
+	if err != nil {
+		return LoadBackupChannelInDB(p.db, channelID)
+	}
+	return stored, nil
+}
+
+func (p *Manager) confirmedRGB11ParentSpend(evidence rgb11wallet.BitcoinEvidenceProvider,
+	channelID string, point wire.OutPoint) (bool, error) {
+	stored, err := p.loadRGB11SettlementChannel(channelID)
+	if err != nil {
+		return false, err
+	}
+	for _, parent := range stored.NativeParents {
+		if parent == nil || !slices.ContainsFunc(parent.TxIn, func(input *wire.TxIn) bool {
+			return input != nil && input.PreviousOutPoint == point
+		}) {
+			continue
+		}
+		if _, verified := verifyRGB11ExpectedSpend(evidence, point.String(), parent.TxID()); verified {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // Historical validation supplies exact graph facts. Current ownership is
@@ -227,7 +295,16 @@ func (p *rgb11Manager) importObservedRGB11ChannelTransferAttempt(ctx context.Con
 			return nil, fmt.Errorf("native settlement outspend unavailable: %w", errRGB11ProjectionEvidence(err))
 		}
 		if spend.Spent {
-			if !rgb11KnownObservedChannelSpend(p.evidence, allocation.OutPoint, spend.SpendingTx) {
+			observed := rgb11KnownObservedChannelSpend(p.evidence, allocation.OutPoint, spend.SpendingTx)
+			if spend.SpendingTx == "" {
+				// A later splice may consume this old wallet change. Use only this
+				// channel's retained transaction as a candidate for a confirmed spend.
+				observed, err = p.confirmedRGB11ParentSpend(p.evidence, last.Context.ChannelID, *point)
+				if err != nil {
+					return nil, err
+				}
+			}
+			if !observed {
 				return nil, fmt.Errorf("native settlement has no exact observed spender")
 			}
 			continue
@@ -331,19 +408,35 @@ func (p *rgb11Manager) importObservedRGB11ChannelTransferAttempt(ctx context.Con
 	if err != nil {
 		return nil, err
 	}
-	spent := make(map[string]bool)
+	consumers := make(map[string]string)
 	for _, step := range pkg.Steps {
+		witness, err := decodeRGB11BroadcastTx(step.Tx)
+		if err != nil {
+			return nil, err
+		}
+		witnessID := witness.TxID()
 		for _, source := range step.Sources {
-			spent[source.OutPoint] = true
+			consumers[source.OutPoint] = witnessID
 		}
 	}
 	var updates []rgb11wallet.SnapshotProofUpdate
 	for _, proof := range proofs {
-		if !spent[proof.OutPoint] {
+		expected := consumers[proof.OutPoint]
+		if expected == "" {
 			continue
 		}
 		outspend, err := p.evidence.GetOutspend(proof.OutPoint)
-		if err != nil || outspend == nil || !outspend.Spent || !rgb11KnownObservedChannelSpend(p.evidence, proof.OutPoint, outspend.SpendingTx) {
+		if err != nil || outspend == nil || !outspend.Spent || outspend.SpendingTx != "" && outspend.SpendingTx != expected {
+			return nil, fmt.Errorf("native consumed source is not independently observed")
+		}
+		var observed bool
+		if outspend.SpendingTx == "" {
+			// Core omits confirmed spender IDs. Verify the package's exact consumer.
+			_, observed = verifyRGB11ExpectedSpend(p.evidence, proof.OutPoint, expected)
+		} else {
+			observed = rgb11KnownObservedChannelSpend(p.evidence, proof.OutPoint, expected)
+		}
+		if !observed {
 			return nil, fmt.Errorf("native consumed source is not independently observed")
 		}
 		updates = append(updates, rgb11wallet.SnapshotProofUpdate{OutPoint: proof.OutPoint, AssetName: proof.AssetName,

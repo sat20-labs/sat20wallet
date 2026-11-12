@@ -852,7 +852,7 @@ func (p *TestIndexerClient) GetAscendData(utxo string) (*sindexer.AscendData, er
 			AnchorTxId: txId,
 		}, nil
 	}
-	return nil, fmt.Errorf("not found")
+	return nil, indexer.ErrKeyNotFound
 }
 
 func (p *TestIndexerClient) GetChannelLedger(channel string) ([]*sindexer.ChannelLedgerEntry, error) {
@@ -2474,8 +2474,20 @@ func (p *TestIndexerClient) AllowDeployTick(assetName *swire.AssetName) error {
 }
 
 func (p *TestIndexerClient) GetUtxoSpentTx(utxo string) (string, error) {
+	p.network.mutex.RLock()
+	defer p.network.mutex.RUnlock()
+	if p.network.name == "bitcoin" {
+		if _, exists := p.network.utxoIndex[utxo]; !exists {
+			return "", fmt.Errorf("Bitcoin outpoint %s does not exist", utxo)
+		}
+	}
 	txId := p.network.utxoUsed[utxo]
 	if txId != "" {
+		if p.network.name == "bitcoin" {
+			if height, err := p.getTxHeight(txId); err != nil || height >= 0 {
+				return "unknown", nil
+			}
+		}
 		return txId, nil
 	}
 	return "", nil

@@ -178,6 +178,8 @@ func (p *IndexerClient) GetTxOutput(utxo string) (*TxOutput, error) {
 	return result.Data.ToTxOutput(), nil
 }
 
+// GetAscendData identifies an explicitly absent mapping with ErrKeyNotFound.
+// Transport, decoding and server-side lookup failures remain distinct errors.
 func (p *IndexerClient) GetAscendData(utxo string) (*sindexer.AscendData, error) {
 	url := p.GetUrl("/v3/ascend/" + utxo)
 	rsp, err := p.Http.SendGetRequest(url)
@@ -193,11 +195,17 @@ func (p *IndexerClient) GetAscendData(utxo string) (*sindexer.AscendData, error)
 		return nil, err
 	}
 
+	if result.Code == sindexerwire.AscendNotFoundCode {
+		return nil, fmt.Errorf("ascend mapping %s: %w", utxo, indexer.ErrKeyNotFound)
+	}
 	if result.Code != 0 {
 		Log.Errorf("%v response message %s", url, result.Msg)
 		return nil, fmt.Errorf("%s", result.Msg)
 	}
 
+	if result.Data == nil {
+		return nil, fmt.Errorf("invalid ascend response for %s: missing data", utxo)
+	}
 	return result.Data, nil
 }
 

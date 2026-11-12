@@ -2562,6 +2562,10 @@ func (p *rgb11Manager) readRGB11Local(walletID string) (*RGB11WalletSnapshot, er
 }
 
 func (p *rgb11Manager) localRGB11ProofView() ([]*rgb11wallet.AllocationProof, map[string]bool, error) {
+	return p.fundingRGB11ProofView(nil)
+}
+
+func (p *rgb11Manager) fundingRGB11ProofView(observed map[string]indexer.AssetName) ([]*rgb11wallet.AllocationProof, map[string]bool, error) {
 	walletID, err := p.RGB11WalletID()
 	if err != nil {
 		return nil, nil, err
@@ -2571,12 +2575,21 @@ func (p *rgb11Manager) localRGB11ProofView() ([]*rgb11wallet.AllocationProof, ma
 		p.markRGB11ProjectionUnavailable()
 		return nil, nil, err
 	}
-	view, err := rgb11wallet.SplitLocalProjection(full.ProjectionRecords, p.rgb11ScopeState().ProofFaults...)
+	faults := p.rgb11ScopeState().ProofFaults
+	if len(observed) != 0 {
+		faults = slices.DeleteFunc(slices.Clone(faults), func(f rgb11wallet.ProofFault) bool {
+			name, ok := observed[f.OutPoint]
+			return ok && name == f.AssetName && errors.Is(f.Cause, errRGB11SpenderUnknown)
+		})
+	}
+	view, err := rgb11wallet.SplitLocalProjection(full.ProjectionRecords, faults...)
 	if err != nil {
 		p.markRGB11ProjectionUnavailable()
 		return nil, nil, err
 	}
-	p.noteRGB11ProofFaults(view)
+	if len(observed) == 0 {
+		p.noteRGB11ProofFaults(view)
+	}
 	proofs, err := rgb11wallet.ProofsFromProjectionSnapshot(view.Records)
 	return proofs, view.Points, err
 }

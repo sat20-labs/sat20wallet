@@ -205,7 +205,7 @@ func (p *Manager) LoadConfirmedNativeContractWithdrawal(ctx context.Context, own
 		if e != nil {
 			return nil, e
 		}
-		validated, e := p.validateNativeChannelSource(ctx, owner, channel, source, nativeproof.Historical)
+		validated, e := p.validateNativeSourceSpend(ctx, owner, channel, source, nativeproof.Historical, txid)
 		if e != nil {
 			return nil, e
 		}
@@ -213,8 +213,13 @@ func (p *Manager) LoadConfirmedNativeContractWithdrawal(ctx context.Context, own
 			return nil, fmt.Errorf("native withdrawal does not consume the full authenticated source")
 		}
 		spent, e := scope.evidence.GetOutspend(point)
-		if e != nil || spent == nil || !spent.Spent || spent.SpendingTx != txid {
+		if e != nil || spent == nil || !spent.Spent || (spent.SpendingTx != "" && spent.SpendingTx != txid) {
 			return nil, fmt.Errorf("native withdrawal source is not spent by the confirmed transaction")
+		}
+		if spent.SpendingTx == "" {
+			if _, observed := verifyRGB11ExpectedSpend(scope.evidence, point, txid); !observed {
+				return nil, fmt.Errorf("native withdrawal source has no confirmed spending evidence")
+			}
 		}
 		totalIn = totalIn.Add(amount)
 		delete(inputAmounts, point)
@@ -272,12 +277,17 @@ func (p *Manager) LoadConfirmedNativeContractWithdrawal(ctx context.Context, own
 	}
 	_ = witness // channelWitness authenticated the captured owner above.
 	for _, source := range result.PoolSources {
-		spent, err := scope.evidence.GetOutspend(source.Output.OutPointStr)
+		point := source.Output.OutPointStr
+		spent, err := scope.evidence.GetOutspend(point)
 		if err != nil || spent == nil {
 			return nil, fmt.Errorf("native pool change evidence unavailable: %w", err)
 		}
 		if spent.Spent {
-			if !rgb11KnownObservedChannelSpend(scope.evidence, source.Output.OutPointStr, spent.SpendingTx) {
+			if spent.SpendingTx == "" {
+				if _, err := p.confirmedPoolSpender(scope.evidence, pair.ContractURL, point, ""); err != nil {
+					return nil, fmt.Errorf("native pool change has an unknown successor: %w", err)
+				}
+			} else if !rgb11KnownObservedChannelSpend(scope.evidence, point, spent.SpendingTx) {
 				return nil, fmt.Errorf("native pool change has an unknown successor")
 			}
 			continue

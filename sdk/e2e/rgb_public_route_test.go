@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -32,15 +31,16 @@ func TestRGBPublicRouteE2E(t *testing.T) {
 
 func runRGBPublicRouteE2E(t *testing.T, network *realSatoshiNet) {
 	t.Helper()
-	// Peer/indexer readiness precedes the asynchronous STP public RPC start.
-	// Reuse the bounded listener check from TestSDKDKVSActiveMailbox.
+	// The public listener starts before the Core accepts protocol requests.
+	healthClient := &http.Client{Timeout: time.Second}
 	require.Eventually(t, func() bool {
-		connection, err := net.DialTimeout("tcp", network.Core.stpAddr, time.Second)
+		response, err := healthClient.Get("http://" + network.Core.stpAddr + "/health")
 		if err != nil {
 			return false
 		}
-		return connection.Close() == nil
-	}, 15*time.Second, 100*time.Millisecond, "CoreNode STP public listener was not ready at %s; node log=%s", network.Core.stpAddr, network.Core.LogFile())
+		defer response.Body.Close()
+		return response.StatusCode == http.StatusOK
+	}, 15*time.Second, 100*time.Millisecond, "CoreNode STP public service was not ready at %s; node log=%s", network.Core.stpAddr, network.Core.LogFile())
 	endpoint := "http://" + network.Core.stpAddr + "/testnet/v3/rgb11/contracts/register"
 	t.Run("invalid_contract", func(t *testing.T) {
 		body, err := json.Marshal(map[string]string{"contract_consignment_base64": base64.StdEncoding.EncodeToString([]byte("not a contract"))})

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/big"
 	"sort"
@@ -13,6 +14,7 @@ import (
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
+	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/rgb11/schemas"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
@@ -277,9 +279,9 @@ func (g *nativeReceiptGraph) loadDescend(id string) error {
 }
 
 func nativeAscendMissing(point string, err error) bool {
-	// Preserve the existing endpoint's exact not-found responses. Transport,
-	// decoding, timeout and arbitrary server failures cannot erase a mapping.
-	return err != nil && (err.Error() == "not found" || err.Error() == "GetAscendData "+point+" not found")
+	// Only explicit absence permits inheriting the existing parent mapping.
+	// Transport, decoding and server failures cannot erase a mapping.
+	return errors.Is(err, indexer.ErrKeyNotFound)
 }
 
 func (g *nativeReceiptGraph) applyAnchor(point string) error {

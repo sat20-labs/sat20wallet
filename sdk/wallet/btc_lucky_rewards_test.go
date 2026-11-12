@@ -86,7 +86,13 @@ func (r *luckyRewardRPC) GetAscendData(point string) (*sindexer.AscendData, erro
 		return nil, err
 	}
 	if r.ascends != nil {
-		return r.ascends[point], nil
+		if ascend := r.ascends[point]; ascend != nil {
+			return ascend, nil
+		}
+		return nil, indexer.ErrKeyNotFound
+	}
+	if r.ascend == nil {
+		return nil, indexer.ErrKeyNotFound
 	}
 	return r.ascend, nil
 }

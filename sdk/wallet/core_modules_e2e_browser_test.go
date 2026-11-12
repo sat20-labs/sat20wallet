@@ -92,7 +92,12 @@ func coreRGBBrowserE2E(t *testing.T, source *Manager, cfg coreE2EConfig, chain *
 		status := chain.status[strings.Split(point, ":")[0]]
 		utxos[point] = indexerwire.BitcoinUTXOStatus{Outpoint: point, Exists: true, Unspent: chain.spent[point] == "",
 			Value: output.OutValue.Value, PkScript: hex.EncodeToString(output.OutValue.PkScript), Confirmations: status.Confirmations, BlockHash: status.BlockHash}
-		outspends[point] = indexerwire.BitcoinOutspend{Outpoint: point, Exists: true, Spent: chain.spent[point] != "", SpendingTx: chain.spent[point]}
+		spender := chain.spent[point]
+		outspend := indexerwire.BitcoinOutspend{Outpoint: point, Exists: true, Spent: spender != ""}
+		if spendingStatus := chain.status[spender]; spendingStatus.InMempool && !spendingStatus.Confirmed {
+			outspend.SpendingTx = spender
+		}
+		outspends[point] = outspend
 	}
 	for id, bytes := range chain.raw {
 		raw[id] = indexerwire.BitcoinRawTx{TxID: id, RawTx: hex.EncodeToString(bytes)}

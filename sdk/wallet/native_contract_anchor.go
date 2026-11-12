@@ -24,16 +24,18 @@ func (p *Manager) ValidateNativeContractDepositAnchor(ctx context.Context, contr
 	return p.validateNativeContractDepositAnchor(ctx, contract, tx, nativeproof.Current)
 }
 
-func (p *Manager) validateNativeContractDepositAnchor(ctx context.Context, contract ContractRuntime, tx *swire.MsgTx, mode nativeproof.Mode) error {
+func (p *Manager) validateNativeContractDepositAnchor(ctx context.Context, contract ContractRuntime, tx *swire.MsgTx,
+	mode nativeproof.Mode) error {
 	if contract == nil || tx == nil || len(tx.TxIn) != 1 || len(tx.TxOut) == 0 {
 		return fmt.Errorf("invalid native contract deposit anchor")
 	}
-	bind, err := p.AnchorOutputsActive()
-	if err != nil {
-		return err
-	}
-	if mode == nativeproof.Historical {
-		bind = true
+	bind := true
+	if mode != nativeproof.Historical {
+		var err error
+		bind, err = p.AnchorOutputsActive()
+		if err != nil {
+			return err
+		}
 	}
 	data, _, err := CheckAnchorPkScript(tx.TxIn[0].SignatureScript, tx.TxOut, bind)
 	if err != nil {
@@ -53,7 +55,14 @@ func (p *Manager) validateNativeContractDepositAnchor(ctx context.Context, contr
 	if !bytes.Equal(source.PublicProof, material) {
 		return fmt.Errorf("native anchor changed the authenticated source proof")
 	}
-	result, err := p.validateNativeChannelSource(ctx, contract.GetRuntimeBase().GetLocalWallet(), contract.Address(), source, mode)
+	var result *nativeproof.Result
+	if mode == nativeproof.Historical {
+		// Only the canonical-anchor replay below uses this path. It verifies
+		// an existing mapping, not today's eligibility for a new mapping.
+		result, err = p.validateNativeSourceProof(ctx, contract.GetRuntimeBase().GetLocalWallet(), contract.Address(), source, mode)
+	} else {
+		result, err = p.validateNativeChannelSource(ctx, contract.GetRuntimeBase().GetLocalWallet(), contract.Address(), source, mode)
+	}
 	if err != nil {
 		return err
 	}
@@ -99,23 +108,24 @@ func (p *Manager) validateNativeContractDepositAnchor(ctx context.Context, contr
 // A block replay may encounter a deposit whose RGB carrier has already been
 // spent by a later withdrawal. Recover the earlier mapping only from its
 // actual canonical anchor, including its signed outputs and native proof.
-func (p *Manager) validateHistoricalNativeContractDeposit(ctx context.Context, contract ContractRuntime, source *NativeChannelSource) error {
+func (p *Manager) validateHistoricalNativeContractDeposit(ctx context.Context, contract ContractRuntime, source *NativeChannelSource,
+	anchorTxID string) error {
 	stored, err := p.loadNativeChannelSource(contract.Address(), source.Output.OutPointStr)
 	if err != nil {
 		return err
 	}
-	if !bytes.Equal(stored.PublicProof, source.PublicProof) {
+	before, after := *stored, *source
+	before.DescendTxIDs, after.DescendTxIDs = nil, nil
+	storedRaw, storedErr := json.Marshal(before)
+	sourceRaw, sourceErr := json.Marshal(after)
+	if storedErr != nil || sourceErr != nil || !bytes.Equal(storedRaw, sourceRaw) {
 		return fmt.Errorf("historical native deposit source changed")
-	}
-	locator, err := p.l2IndexerClient.GetAscendData(source.Output.OutPointStr)
-	if err != nil || locator == nil || locator.AnchorTxId == "" {
-		return fmt.Errorf("historical native deposit has no mapped anchor: %w", err)
 	}
 	chains, err := p.newNativeSettlementChains(ctx, contract.GetRuntimeBase().GetLocalWallet())
 	if err != nil {
 		return err
 	}
-	anchor, err := chains.satoshiTx(locator.AnchorTxId)
+	anchor, err := chains.satoshiTx(anchorTxID)
 	if err != nil {
 		return err
 	}

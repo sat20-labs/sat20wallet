@@ -8,10 +8,50 @@
           <Icon icon="lucide:arrow-left" class="h-4 w-4" />
         </Button>
         <div class="text-base font-medium">{{ $t('pwaUi.mining.title') }}</div>
-        <Button variant="ghost" size="icon" :disabled="loading" @click="refreshPage">
+        <Button variant="ghost" size="icon" :disabled="loading" :aria-label="$t('pwaUi.mining.refresh')" data-testid="mining-refresh" @click="refreshPage">
           <Icon icon="lucide:refresh-cw" class="h-4 w-4" :class="{ 'animate-spin': loading }" />
         </Button>
       </div>
+
+      <MiningDashboard
+        :status="status"
+        :sample-at="sampleAt"
+        :network-stats="networkStats"
+        :network-key="network"
+        :template-difficulty="currentDifficulty"
+      >
+        <template #controls>
+          <div class="rounded-xl border border-border bg-card p-4">
+            <div class="grid grid-cols-3 gap-2" :aria-label="$t('pwaUi.mining.presets')">
+              <button
+                v-for="preset in presets"
+                :key="preset.key"
+                type="button"
+                class="rounded-lg border p-3 text-left text-xs transition-colors"
+                :class="selectedPreset === preset.key ? 'border-emerald-500/60 bg-emerald-500/10' : 'border-border hover:bg-muted'"
+                :aria-pressed="selectedPreset === preset.key"
+                :data-testid="'mining-preset-' + preset.key"
+                @click="choosePreset(preset)"
+              >
+                <Icon :icon="preset.icon" class="mb-2 h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                <div class="font-medium">{{ $t('pwaUi.mining.' + preset.key) }}</div>
+                <div class="mt-1 text-[10px] text-muted-foreground">{{ $t('pwaUi.mining.' + preset.key + 'Hint') }}</div>
+              </button>
+            </div>
+            <p class="mb-3 mt-2 text-[11px] text-muted-foreground">{{ $t('pwaUi.mining.nextStartOnly') }}</p>
+            <div class="grid grid-cols-2 gap-3">
+              <Button :disabled="status.running || loading" @click="startMining">
+                <Icon icon="lucide:play" class="h-4 w-4" />
+                {{ $t('pwaUi.mining.start') }}
+              </Button>
+              <Button variant="secondary" :disabled="!status.running || loading" @click="stopMining">
+                <Icon icon="lucide:square" class="h-4 w-4" />
+                {{ $t('pwaUi.mining.stop') }}
+              </Button>
+            </div>
+          </div>
+        </template>
+      </MiningDashboard>
 
       <Card>
         <CardHeader class="space-y-1">
@@ -21,10 +61,6 @@
         <CardContent class="space-y-3 text-sm">
           <div class="grid grid-cols-2 gap-3">
             <div class="rounded-sm border border-border p-3">
-              <div class="text-xs text-muted-foreground">{{ $t('pwaUi.mining.localHashrate') }}</div>
-              <div class="mt-1 font-medium">{{ formatHashrate(status.hashesPerSecond) }}</div>
-            </div>
-            <div class="rounded-sm border border-border p-3">
               <div class="text-xs text-muted-foreground">{{ $t('pwaUi.mining.difficulty') }}</div>
               <div class="mt-1 font-medium">{{ formatDifficulty(currentDifficulty) }}</div>
               <div v-if="networkStats.currentDifficulty > 0" class="mt-1 text-[11px] text-muted-foreground">
@@ -32,20 +68,11 @@
               </div>
             </div>
             <div class="rounded-sm border border-border p-3">
-              <div class="text-xs text-muted-foreground">{{ $t('pwaUi.mining.networkHashrate') }}</div>
-              <div class="mt-1 font-medium">{{ networkHashrateText }}</div>
-              <div v-if="networkStats.source" class="mt-1 text-[11px] text-muted-foreground">
-                {{ networkStats.source }}
-              </div>
-              <div v-if="networkStats.lastError" class="mt-1 truncate text-[11px] text-muted-foreground" :title="networkStats.lastError">
-                {{ networkStats.lastError }}
-              </div>
-            </div>
-            <div class="rounded-sm border border-border p-3">
               <div class="text-xs text-muted-foreground">{{ $t('pwaUi.mining.jobs') }}</div>
               <div class="mt-1 font-medium">{{ status.jobs || form.jobs }}</div>
             </div>
           </div>
+          <div v-if="networkStats.lastError" class="break-all text-xs text-muted-foreground">{{ networkStats.lastError }}</div>
           <div class="space-y-1">
             <div class="text-xs text-muted-foreground">{{ $t('pwaUi.mining.rewardAddress') }}</div>
             <div class="break-all rounded-sm bg-muted/70 p-2 text-xs">{{ status.rewardAddress || '-' }}</div>
@@ -102,12 +129,13 @@
       <Card>
         <CardHeader>
           <CardTitle class="text-base">{{ $t('pwaUi.mining.configuration') }}</CardTitle>
+          <CardDescription>{{ $t('pwaUi.mining.nextStartOnly') }}</CardDescription>
         </CardHeader>
         <CardContent class="space-y-3">
           <div class="grid grid-cols-2 gap-3">
             <div class="space-y-1">
               <Label>{{ $t('pwaUi.mining.jobs') }}</Label>
-              <Select v-model="form.jobs" :disabled="status.running">
+              <Select v-model="form.jobs">
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
@@ -119,23 +147,14 @@
             </div>
             <div class="space-y-1">
               <Label>{{ $t('pwaUi.mining.sleep') }}</Label>
-              <Input v-model="form.lowPrioritySleepMs" type="number" min="0" step="1" inputmode="numeric" :disabled="status.running" />
+              <Input v-model="form.lowPrioritySleepMs" type="number" min="0" step="1" inputmode="numeric" />
             </div>
           </div>
           <label class="flex items-center gap-3 rounded-sm border border-border p-3 text-sm">
-            <input v-model="form.lowPriority" type="checkbox" class="h-4 w-4" :disabled="status.running" />
+            <input v-model="form.lowPriority" type="checkbox" class="h-4 w-4" />
             <span>{{ $t('pwaUi.mining.lowPriority') }}</span>
           </label>
-          <div class="grid grid-cols-2 gap-3">
-            <Button :disabled="status.running || loading" @click="startMining">
-              <Icon icon="lucide:play" class="h-4 w-4" />
-              {{ $t('pwaUi.mining.start') }}
-            </Button>
-            <Button variant="secondary" :disabled="!status.running || loading" @click="stopMining">
-              <Icon icon="lucide:square" class="h-4 w-4" />
-              {{ $t('pwaUi.mining.stop') }}
-            </Button>
-          </div>
+          <p class="text-[11px] text-muted-foreground">{{ $t('pwaUi.mining.autoJobsHint') }}</p>
         </CardContent>
       </Card>
 
@@ -185,12 +204,13 @@
 
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { Icon } from '@iconify/vue'
 import LayoutHome from '@/components/layout/LayoutHome.vue'
 import WalletHeader from '@/components/wallet/HomeHeader.vue'
+import MiningDashboard from '@/components/wallet/MiningDashboard.vue'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -209,6 +229,7 @@ const globalStore = useGlobalStore()
 const { network } = storeToRefs(walletStore)
 const storageKey = 'btcLuckyMiningConfig'
 const loading = ref(false)
+const sampleAt = ref(0)
 const networkStatsLoading = ref(false)
 const networkStatsFetchedAt = ref(0)
 const rewards = ref<any[]>([])
@@ -227,11 +248,23 @@ const form = reactive({
   lowPriority: true,
   lowPrioritySleepMs: '100',
 })
+const presets = [
+  { key: 'light', icon: 'lucide:leaf', lowPriority: true, sleep: '100' },
+  { key: 'balanced', icon: 'lucide:gauge', lowPriority: true, sleep: '20' },
+  { key: 'performance', icon: 'lucide:zap', lowPriority: false, sleep: '0' },
+]
+const selectedPreset = computed(() => presets.find(p => form.jobs === '1' && form.lowPriority === p.lowPriority && Number(form.lowPrioritySleepMs) === Number(p.sleep))?.key)
+const choosePreset = (preset: typeof presets[number]) => {
+  form.jobs = '1'
+  form.lowPriority = preset.lowPriority
+  form.lowPrioritySleepMs = preset.sleep
+}
 const networkStats = reactive({
   currentHashrate: 0,
   currentDifficulty: 0,
   source: '',
   lastError: '',
+  updatedAt: 0,
 })
 let timer: number | undefined
 
@@ -254,6 +287,7 @@ if (saved) {
 const applyStatus = (next: any) => {
   Object.assign(status, next || { enabled: false, running: false, foundBlocks: [] })
   status.foundBlocks = Array.isArray(next?.foundBlocks) ? next.foundBlocks : []
+  sampleAt.value = Date.now()
 }
 
 let readingStatus = false
@@ -311,7 +345,7 @@ const refreshRewards = async (force = false) => {
 const refreshPage = () => {
   void refreshStatus()
   void refreshRewards(true)
-  void refreshNetworkStats()
+  void refreshNetworkStats(true)
 }
 
 const rewardState = (state: string) => ({
@@ -352,33 +386,9 @@ const stopMining = async () => {
   else applyStatus(data)
 }
 
-const formatHashrate = (value?: number) => {
-  const n = Number(value || 0)
-  if (n >= 1_000_000_000_000_000_000_000) return `${(n / 1_000_000_000_000_000_000_000).toFixed(2)} ZH/s`
-  if (n >= 1_000_000_000_000_000_000) return `${(n / 1_000_000_000_000_000_000).toFixed(2)} EH/s`
-  if (n >= 1_000_000_000_000_000) return `${(n / 1_000_000_000_000_000).toFixed(2)} PH/s`
-  if (n >= 1_000_000_000_000) return `${(n / 1_000_000_000_000).toFixed(2)} TH/s`
-  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(2)} GH/s`
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)} MH/s`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(2)} KH/s`
-  return `${n.toFixed(0)} H/s`
-}
-
-const formatHashrateWithExponent = (value?: number) => {
-  const n = Number(value || 0)
-  if (!Number.isFinite(n) || n <= 0) return '-'
-  return `${formatHashrate(n)} (${n.toExponential(2)} H/s)`
-}
-
 const normalizedSleepMs = computed(() => {
   const n = Number(form.lowPrioritySleepMs)
   return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 100
-})
-
-const networkHashrateText = computed(() => {
-  const value = Number(networkStats.currentHashrate || status.networkHashesPerSecond || status.networkHashrate || 0)
-  if (value > 0) return formatHashrateWithExponent(value)
-  return networkStats.currentDifficulty > 0 ? formatHashrateWithExponent((networkStats.currentDifficulty * 4_294_967_296) / 600) : '-'
 })
 
 const currentDifficulty = computed(() => difficultyFromTarget(status.currentTarget))
@@ -388,14 +398,18 @@ async function refreshNetworkStats(force = false) {
   if (!force && now - networkStatsFetchedAt.value < 120_000) return
   if (networkStatsLoading.value) return
   networkStatsLoading.value = true
+  const requestedNetwork = network.value
   try {
     const data = await fetchNetworkStats()
+    if (requestedNetwork !== network.value) return
     networkStats.currentHashrate = data.hashrate
     networkStats.currentDifficulty = data.difficulty
     networkStats.source = data.source
     networkStats.lastError = ''
+    networkStats.updatedAt = Date.now()
     networkStatsFetchedAt.value = now
   } catch (error: any) {
+    if (requestedNetwork !== network.value) return
     networkStats.lastError = error?.message || String(error)
     networkStatsFetchedAt.value = now
   } finally {
@@ -516,6 +530,12 @@ function durationToMs(value: string) {
   if (unit === 's') return String(Math.round(amount * 1_000))
   return String(Math.round(amount))
 }
+
+watch(network, () => {
+  Object.assign(networkStats, { currentHashrate: 0, currentDifficulty: 0, source: '', lastError: '', updatedAt: 0 })
+  networkStatsFetchedAt.value = 0
+  void refreshNetworkStats(true)
+})
 
 onMounted(() => {
   refreshPage()
