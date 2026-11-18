@@ -8,7 +8,7 @@
 - 账户 PWA fake-L1 浏览器 v3 exit 1：66 必跑、54 pass、12 fail、0 not-run。11 项在受管写资格未建立前尝试后续写，另 1 项是后台备份完成后 UI 脏提示未及时消失；先前的“11 fail + 1 running”是 Go 输出拆行造成的解析错误。原始归类和证据见 `sdk/docs/pwa-write-readiness-review-20261030.md`；其中统一等待在线写资格的生产建议已撤回，SDK/PWA 生产逻辑在本轮保持原状。
 - 用户随后明确未激活且无备份的新账户可直接做本地业务；先前“一律等 DKVS 在线资格”的 UI 方案已撤回。源码分界、被误挡的本地写和仍需严格在线的已激活/远端写见 `sdk/docs/account-preactivation-local-write-review-20261030.md`。前述 wallet-basic/mint 两处测试等待仅属历史定向通过，不能当作正确的新账户验收。
 - transcend `TestAll` exit 1：wallet 组质押后首开通道触发 `channel history exists without local recovery material`，后续 channel/contract 组未运行；日志与输入在 transcend `data/sdk-acceptance-20261030/`，见 `docs/testall-first-open-stake-20261030.md`。通道恢复/选币只读取证审批受阻，且质押资金规则待用户决定；本线程不重查受阻路径、不修改生产 guard。
-- 历史升级：SDK `legacy_pre_native` 四个 Gob fixture 的生成提交可读取且 7 个源码哈希匹配；transcend 的 0.1.4 前迁移提交 `9c86df0c` 可读取，旧完成合约确实保存在 reservation 中。但当前测试用新编码器模拟旧布局，旧依赖 replace 未固定到当时版本，无真实旧合约字节样本。发布矩阵与缺口见 `sdk/docs/release-upgrade-gate-20261030.md`。
+- 历史升级：SDK `legacy_channel` 四个 Gob fixture 的生成提交可读取且 7 个源码哈希匹配；transcend 的 0.1.4 前迁移提交 `9c86df0c` 可读取，旧完成合约确实保存在 reservation 中。但当前测试用新编码器模拟旧布局，旧依赖 replace 未固定到当时版本，无真实旧合约字节样本。发布矩阵与缺口见 `sdk/docs/release-upgrade-gate-20261030.md`。
 
 ## 钱包 PWA 浏览器命令已结束
 

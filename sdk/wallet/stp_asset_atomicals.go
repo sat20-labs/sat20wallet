@@ -44,7 +44,7 @@ func (protocol atomicalsSTPProtocol) NormalizeContract(name *indexer.AssetName) 
 }
 
 func (atomicalsSTPProtocol) Policy(*AssetName) STPAssetPolicy {
-	return STPAssetPolicy{StubCount: 2, StubValue: 330, PartialTransfer: true, NoOrdinalInputStub: true, ExchangeRecoveryPackages: true}
+	return STPAssetPolicy{StubCount: 2, StubValue: 330, PartialTransfer: true, NoOrdinalInputStub: true}
 }
 
 func (atomicalsSTPProtocol) EstimateSplicePayload(*AssetName, int) ([]byte, error) { return nil, nil }
@@ -81,7 +81,7 @@ func (protocol atomicalsSTPProtocol) VerifyInput(name *AssetName, input *TxOutpu
 	asset := input.Assets[0]
 	amount, err := atomicalsAmount(&asset.Amount)
 	if err != nil || amount <= 0 || amount > input.Value() || asset.BindingSat != 1 || len(input.Offsets) != 0 {
-		return fmt.Errorf("invalid native ARC20 allocation in %s", input.OutPointStr)
+		return fmt.Errorf("invalid ARC20 allocation in %s", input.OutPointStr)
 	}
 	return nil
 }
@@ -102,12 +102,12 @@ func (p *Manager) atomicalsIdentity(name *AssetName) (string, error) {
 		return "", fmt.Errorf("missing or inconsistent ARC20 ticker metadata")
 	}
 	if _, err := coloring.AtomicalIDKey(ticker.InscriptionId); err != nil {
-		return "", fmt.Errorf("ARC20 ticker has no canonical native identity: %w", err)
+		return "", fmt.Errorf("ARC20 ticker has no canonical ARC20 identity: %w", err)
 	}
 	return ticker.InscriptionId, nil
 }
 
-// Only native asset facts are carried here. Remaining inputs must be supplied
+// Only ARC20 asset facts are carried here. Remaining inputs must be supplied
 // by STP's authenticated prevout fetcher after the other adapters have checked
 // their own protocol state. A prevout fetcher cannot introduce ARC20 balances.
 type atomicalsPlanEvidence struct {
@@ -134,7 +134,7 @@ func (p *Manager) newAtomicalsEvidence() (*atomicalsPlanEvidence, error) {
 	}, nil
 }
 
-func (e *atomicalsPlanEvidence) addInput(input *TxOutput, nativeID string, amount int64) error {
+func (e *atomicalsPlanEvidence) addInput(input *TxOutput, atomicalID string, amount int64) error {
 	if input == nil || input.TxIn() == nil {
 		return fmt.Errorf("invalid ARC20 previous output")
 	}
@@ -143,8 +143,8 @@ func (e *atomicalsPlanEvidence) addInput(input *TxOutput, nativeID string, amoun
 		return fmt.Errorf("duplicate ARC20 input %s", outpoint)
 	}
 	fact := coloring.Input{Value: input.Value()}
-	if nativeID != "" {
-		fact.Assets = []coloring.Asset{{AtomicalID: nativeID, Amount: amount}}
+	if atomicalID != "" {
+		fact.Assets = []coloring.Asset{{AtomicalID: atomicalID, Amount: amount}}
 	}
 	e.inputs[outpoint] = fact
 	e.scripts[outpoint] = append([]byte(nil), input.OutValue.PkScript...)
@@ -157,9 +157,9 @@ type atomicalsPayment struct {
 	value  int64
 }
 
-// Regular coloring permits a single partial final output per native asset.
+// Regular coloring permits a single partial final output per ARC20 asset.
 // Other recipients must carry exactly their token quantity in satoshis. A
-// request with two sub-dust recipients needs a different native operation and
+// request with two sub-dust recipients needs a different ARC20 operation and
 // cannot be represented by adding ordinary Bitcoin stub inputs.
 func atomicalsPaymentOutputs(payments []atomicalsPayment) ([]atomicalsPayment, error) {
 	result := make([]atomicalsPayment, 0, len(payments))

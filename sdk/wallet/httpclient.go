@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"runtime"
 )
 
 type Userinfo struct {
@@ -49,6 +50,7 @@ type contextHTTPDeleteClient interface {
 type HTTPResponseError struct {
 	StatusCode int
 	Body       []byte
+	directPost bool
 }
 
 func (e *HTTPResponseError) Error() string {
@@ -61,7 +63,7 @@ func (e *HTTPResponseError) Error() string {
 	return fmt.Sprintf("%d %s", e.StatusCode, http.StatusText(e.StatusCode))
 }
 
-func newHTTPResponseError(status int, body []byte) error {
+func newHTTPResponseError(status int, body []byte) *HTTPResponseError {
 	return &HTTPResponseError{StatusCode: status, Body: append([]byte(nil), body...)}
 }
 
@@ -133,7 +135,12 @@ func (p *NetClient) SendPostRequestContext(ctx context.Context, u *URL, marshall
 		return nil, &url.Error{Op: "read", URL: requestURL.String(), Err: err}
 	}
 	if httpResponse.StatusCode < 200 || httpResponse.StatusCode >= 300 {
-		return nil, newHTTPResponseError(httpResponse.StatusCode, respBytes)
+		response := newHTTPResponseError(httpResponse.StatusCode, respBytes)
+		last := httpResponse.Request
+		// Browser fetch can follow redirects without exposing the final request to Go.
+		response.directPost = runtime.GOOS != "js" && ctx.Err() == nil && last != nil &&
+			last.Method == http.MethodPost && last.Response == nil && last.URL != nil && last.URL.String() == requestURL.String()
+		return nil, response
 	}
 	if len(respBytes) == 0 {
 		return nil, fmt.Errorf("server panic: %s", requestURL.String())

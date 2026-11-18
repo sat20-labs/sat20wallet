@@ -110,7 +110,7 @@ func TestRGB11RegistrarPublicContractHasNoGenesisDisclosures(t *testing.T) {
 // A contract envelope may carry transfer history. Even valid history is not
 // appropriate for the shared genesis catalog and must remain private.
 func TestRGB11PublicContractDropsTransferHistory(t *testing.T) {
-	raw, err := os.ReadFile("../../../rgb11/testvectors/rc11/nia-transfer.rgba")
+	raw, err := os.ReadFile("../../../rgb11/testvectors/rc1/nia-transfer.rgba")
 	require.NoError(t, err)
 	transfer, err := consignment.Decode(raw)
 	require.NoError(t, err)
@@ -124,8 +124,8 @@ func TestRGB11PublicContractDropsTransferHistory(t *testing.T) {
 	require.True(t, binaryTransfer.GenesisValid)
 	_, err = rgb11wallet.PublicRGB11Contract(transferFile)
 	require.ErrorIs(t, err, dkvsindexer.ErrInvalidRecord, "a valid transfer is rejected by the contract type check")
-	// The official history has no terminals. Add one with a real bundle ID
-	// and a strictly encoded test seal commitment to exercise its removal.
+	// Keep the V1 history and its canonical terminal seals while relabeling
+	// only the envelope, so public normalization must remove both.
 	history, ok := transfer.Value.Field("bundles")
 	require.True(t, ok)
 	require.NotEmpty(t, history.Unwrap().Items)
@@ -133,19 +133,14 @@ func TestRGB11PublicContractDropsTransferHistory(t *testing.T) {
 	require.True(t, ok)
 	bundle, err := operations.CommitBundle(bundleValue)
 	require.NoError(t, err)
-	registry, err := strict_types.RC11Registry()
-	require.NoError(t, err)
-	bundleID, err := registry.Decode("RGBCommit", "BundleId", bundle.BundleID[:])
-	require.NoError(t, err)
-	secret, err := seals.NewWitnessBlindSeal(1, 454545).Conceal()
-	require.NoError(t, err)
-	secretSet, err := registry.Decode("RGBStd", "SecretSeals", append([]byte{1, 0}, secret[:]...))
-	require.NoError(t, err)
+	terminals, ok := transfer.Value.Field("terminals")
+	require.True(t, ok)
+	require.Len(t, terminals.Unwrap().Entries, 1)
+	terminalID, ok := terminals.Unwrap().Entries[0].Key.Bytes()
+	require.True(t, ok)
+	require.Equal(t, bundle.BundleID[:], terminalID)
 	value := transfer.Value.Clone()
 	for i := range value.Fields {
-		if value.Fields[i].Name == "terminals" {
-			value.Fields[i].Value = strict_types.Value{Kind: strict_types.ValueMap, Entries: []strict_types.Entry{{Key: bundleID, Value: secretSet}}}
-		}
 		if value.Fields[i].Name == "transfer" {
 			value.Fields[i].Value = strict_types.Value{Kind: strict_types.ValueEnum, Name: "false", Tag: 0}
 		}
@@ -172,7 +167,7 @@ func TestRGB11PublicContractDropsTransferHistory(t *testing.T) {
 	publicBundles, ok := public.Value.Field("bundles")
 	require.True(t, ok)
 	require.Empty(t, publicBundles.Unwrap().Items)
-	terminals, ok := public.Value.Field("terminals")
+	terminals, ok = public.Value.Field("terminals")
 	require.True(t, ok)
 	require.Empty(t, terminals.Unwrap().Entries)
 	genesis, ok := public.Value.Field("genesis")

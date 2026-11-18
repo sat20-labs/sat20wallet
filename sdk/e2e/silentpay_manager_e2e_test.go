@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -47,6 +45,7 @@ type spManagerRegtest struct {
 	cfg         *sdkcommon.Config
 	mu          sync.Mutex
 	broadcasts  atomic.Int64
+	failSP      atomic.Bool
 }
 
 func newSPManagerRegtest(t *testing.T) *spManagerRegtest {
@@ -113,6 +112,10 @@ func newSPManagerRegtest(t *testing.T) *spManagerRegtest {
 			_ = json.NewEncoder(w).Encode(map[string]any{"broadcasts": f.broadcasts.Load()})
 			return
 		}
+		if f.failSP.Load() && strings.HasPrefix(r.URL.Path, "/test/v1/sp/") {
+			http.Error(w, "injected interrupted SP refresh", http.StatusServiceUnavailable)
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/test/v1/sp/") || strings.HasPrefix(r.URL.Path, "/test/btc/") || strings.HasPrefix(r.URL.Path, "/test/v3/bitcoin/") {
 			if r.Method == http.MethodPost && (r.URL.Path == "/test/btc/tx" || r.URL.Path == "/test/btc/txs" || r.URL.Path == "/test/v3/bitcoin/tx/broadcast") {
 				f.broadcasts.Add(1)
@@ -125,9 +128,10 @@ func newSPManagerRegtest(t *testing.T) *spManagerRegtest {
 		f.ordinaryRead(w, r)
 	}))
 	t.Cleanup(f.server.Close)
-	// Even an unactivated wallet must discover authenticated account absence
-	// before changing its catalog. Supply the real isolated DKVS service rather
-	// than making this L1 fixture fabricate absence or bypass the write gate.
+	// Keep background account discovery on the fixture's real isolated Core.
+	// Never attach to or reuse the persistent PWA acceptance node ports.
+	t.Setenv("SAT20_REAL_SATOSHINET_ATTACH", "")
+	t.Setenv("SAT20_REAL_SATOSHINET_PORT_BASE", strconv.Itoa(luckyNodePortBase(t)))
 	t.Setenv("SAT20_REAL_L1_INDEXER", f.server.URL+"/btc/regtest")
 	t.Setenv("SAT20_REAL_REGTEST_RUNTIME", testCaseDirectory(t))
 	prebuiltBundle, bundleErr := readE2EArtifactBundle()
@@ -311,65 +315,70 @@ func TestSPManagerBitcoinCoreSendReceiveE2E(t *testing.T) {
 		require.True(t, bytes.Contains(encoded, []byte(txid)), "receipt must identify the actual confirmed transaction")
 	}
 	require.Equal(t, int64(1), f.broadcasts.Load())
-}
 
-func TestSPSilentPayBrowserE2E(t *testing.T) {
-	f := newSPManagerRegtest(t)
-	sender, receiver := f.manager(t, minerMnemonic), f.manager(t, coreMnemonic)
-	address, err := receiver.EnableSilentPay(receiver.GetWallet().GetId(), 0)
-	require.NoError(t, err)
-	f.fund(t, sender.GetWallet().GetAddress(), 1000000)
-	_, err = sender.SendSilentPayment(address, 5000, 2)
-	require.NoError(t, err, "real SP payment is a prerequisite for failure/preservation cases")
-	var mining string
-	require.NoError(t, f.miner.call("getnewaddress", nil, &mining))
-	require.NoError(t, f.core.call("generatetoaddress", []any{1, mining}, nil))
-	require.NoError(t, f.sync())
-	actor := func(m *wallet.Manager, mnemonic string) map[string]string {
-		return map[string]string{"mnemonic": mnemonic, "password": "sp-browser-test-only", "address": m.GetWallet().GetAddress()}
-	}
-	sp := map[string]any{"sender": actor(sender, minerMnemonic), "receiver": actor(receiver, coreMnemonic), "address": address, "amount": 2000}
-	sender.Close()
-	receiver.Close()
-	_, source, _, ok := runtime.Caller(0)
-	require.True(t, ok)
-	sdk := filepath.Dir(filepath.Dir(source))
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
-	defer cancel()
-	wasm, runtimeJS := buildPWAWalletRuntime(t, ctx, sdk)
-	fixture := map[string]any{"config": f.cfg, "silentPay": sp, "wasmPath": wasm, "wasmRuntimePath": runtimeJS,
-		"browserPort": sdkPWARegtestBrowserPort(t)}
-	raw, err := json.Marshal(fixture)
-	require.NoError(t, err)
-	dir := testCaseDirectory(t)
-	fixturePath := filepath.Join(dir, "sp-fixture.json")
-	require.NoError(t, os.WriteFile(fixturePath, raw, 0600))
-	node, err := exec.LookPath("node")
-	require.NoError(t, err)
-	cases := []string{
-		"SP PWA: home receive exposes the private receiving method",
-		"SP PWA: enable QR clipboard and reload preserve the same subaccount",
-		"SP PWA: reviewed BTC send confirms once and receiver refresh discovers exact funds",
-		"SP PWA: late scan cannot overwrite another selected subaccount",
-		"SP PWA: network boundary rejects a public switch during a delayed scan",
-		"SP PWA: locking during a delayed scan hides private receive data",
-		"SP PWA: interrupted refresh preserves verified funds and retries successfully",
-		"SP PWA: invalid SP checksum is rejected without broadcasting",
-		"SP PWA: cancelling SP confirmation never broadcasts",
-	}
-	args := append([]string{"scripts/verify/account-management-e2e.mjs", "--pos-fixture", fixturePath, "--wallet-cases"}, cases...)
-	logDir := os.Getenv("SAT20_SP_EVIDENCE_DIR")
-	if logDir == "" {
-		logDir = testCaseDirectory(t)
-	}
-	require.NoError(t, os.MkdirAll(logDir, 0700))
-	log, err := os.OpenFile(filepath.Join(logDir, "sp-pwa.jsonl"), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
-	require.NoError(t, err)
-	command := exec.CommandContext(ctx, node, args...)
-	command.Dir = filepath.Join(sdk, "..", "pwa")
-	command.Stdout, command.Stderr = log, log
-	err = command.Run()
-	require.NoError(t, log.Close())
-	t.Logf("SP browser evidence: %s", log.Name())
-	require.NoError(t, err, "SP browser production failures are retained in %s", log.Name())
+	t.Run("invalid_checksum_never_broadcasts", func(t *testing.T) {
+		last := "q"
+		if strings.HasSuffix(address, last) {
+			last = "p"
+		}
+		_, err := sender.SendSilentPayment(address[:len(address)-1]+last, 2000, 2)
+		require.Error(t, err)
+		require.Equal(t, int64(1), f.broadcasts.Load())
+	})
+	t.Run("interrupted_refresh_preserves_real_receipt", func(t *testing.T) {
+		id := receiver.GetWallet().GetId()
+		before, err := receiver.LastSyncedSilentPay(id, 1)
+		require.NoError(t, err)
+		f.failSP.Store(true)
+		defer f.failSP.Store(false)
+		_, err = receiver.SyncSilentPayLive(context.Background())
+		require.Error(t, err)
+		after, err := receiver.LastSyncedSilentPay(id, 1)
+		require.NoError(t, err)
+		require.Equal(t, before, after)
+		f.failSP.Store(false)
+		retried, err := receiver.SyncSilentPayLive(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, []wallet.SPAccountBalance{before}, retried)
+	})
+	t.Run("cancelled_refresh_preserves_real_receipt", func(t *testing.T) {
+		id := receiver.GetWallet().GetId()
+		before, err := receiver.LastSyncedSilentPay(id, 1)
+		require.NoError(t, err)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, err = receiver.SyncSilentPayLive(ctx)
+		require.ErrorIs(t, err, context.Canceled)
+		after, err := receiver.LastSyncedSilentPay(id, 1)
+		require.NoError(t, err)
+		require.Equal(t, before, after)
+		require.Equal(t, int64(1), f.broadcasts.Load())
+	})
+	t.Run("subaccount_selection_does_not_move_funds", func(t *testing.T) {
+		id := receiver.GetWallet().GetId()
+		other, err := receiver.EnableSilentPay(id, 0)
+		require.NoError(t, err)
+		require.NotEqual(t, address, other)
+		require.NoError(t, receiver.SwitchAccount(0))
+		balances, err := receiver.SyncSilentPayLive(context.Background())
+		require.NoError(t, err)
+		require.Len(t, balances, 2)
+		for _, balance := range balances {
+			require.Equal(t, id, balance.WalletID)
+			require.True(t, balance.Complete)
+			if balance.AccountIndex == 0 {
+				require.Zero(t, balance.Balance)
+				require.Empty(t, balance.Outputs)
+			} else {
+				require.Equal(t, uint32(1), balance.AccountIndex)
+				require.Equal(t, int64(100000), balance.Balance)
+				require.Len(t, balance.Outputs, 1)
+				require.Equal(t, txid, balance.Outputs[0].TxID)
+			}
+		}
+		require.NoError(t, receiver.SwitchAccount(1))
+		_, same, err := receiver.SilentPayAccount(id, 1)
+		require.NoError(t, err)
+		require.Equal(t, address, same)
+	})
 }

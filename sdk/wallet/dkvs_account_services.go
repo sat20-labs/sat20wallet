@@ -46,7 +46,7 @@ func (p *Manager) scheduleRootAccountDKVSServices(accountID string) {
 			ctx = p.dkvs.requestContext()
 		}
 		_, err := p.syncRootRGB11AddressMailbox(ctx,
-			dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+			dkvsindexer.RecordVerificationOptions{})
 		if err == nil {
 			p.dkvs.markMailboxPolled(accountID)
 		}
@@ -91,7 +91,7 @@ func (p *Manager) pollRootAccountMailboxIfDue(client *SatsNetDKVSClient) (bool, 
 	}
 	ctx := p.dkvs.requestContext()
 	_, err = p.syncRootRGB11AddressMailbox(ctx,
-		dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+		dkvsindexer.RecordVerificationOptions{})
 	if err != nil {
 		return false, err
 	}

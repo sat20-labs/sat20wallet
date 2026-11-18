@@ -18,13 +18,18 @@ import (
 )
 
 // These are Bitcoin observations, not a replacement for RGB validation. Every
-// RGB proof below is issued, constructed and validated by the native code.
+// RGB proof below is issued, constructed and validated by the RGB11 code.
 type rgb11RecoverySelectionFacts struct {
+	genesisHash  string
 	transactions map[string]*wire.MsgTx
 	spent        map[string]string
 }
 
 var _ rgb11wallet.BitcoinEvidenceProvider = (*rgb11RecoverySelectionFacts)(nil)
+
+func (f *rgb11RecoverySelectionFacts) GetGenesisHash() (string, error) {
+	return f.genesisHash, nil
+}
 
 func (f *rgb11RecoverySelectionFacts) GetRawTx(id string) ([]byte, error) {
 	tx := f.transactions[id]
@@ -74,6 +79,7 @@ func (*rgb11RecoverySelectionFacts) Broadcast([]byte) (string, error) {
 // two carriers become one real commitment allocation plus a plain fee reserve.
 func newRGB11RecoverySelectionFixture(t *testing.T) (*Manager, STPAssetRecoveryRequest, *rgb11RecoverySelectionFacts) {
 	t.Helper()
+	chainParams := GetChainParam()
 	script := append([]byte{0, 32}, bytes.Repeat([]byte{2}, 32)...)
 	fundingTx := wire.NewMsgTx(2)
 	fundingTx.AddTxIn(wire.NewTxIn(&wire.OutPoint{Index: 42}, nil, nil))
@@ -87,7 +93,7 @@ func newRGB11RecoverySelectionFixture(t *testing.T) (*Manager, STPAssetRecoveryR
 		allocations = append(allocations, issuance.Allocation{Seal: seal, Amount: amount})
 	}
 	issued, err := issuance.Issue(issuance.Spec{Kind: schemas.NIA,
-		Network: rgb11IssuanceNetwork(GetChainParam()), Ticker: "STP", Name: "Recovery selection",
+		Network: rgb11IssuanceNetwork(chainParams), Ticker: "STP", Name: "Recovery selection",
 		Precision: 2, Allocations: allocations, Timestamp: 1_700_000_001})
 	require.NoError(t, err)
 	proof, err := nativeproof.BuildRGB11([]byte(issued.Armor), nil)
@@ -104,7 +110,7 @@ func newRGB11RecoverySelectionFixture(t *testing.T) (*Manager, STPAssetRecoveryR
 			Consignment: decoded.Consignment,
 		})
 	}
-	facts := &rgb11RecoverySelectionFacts{transactions: map[string]*wire.MsgTx{
+	facts := &rgb11RecoverySelectionFacts{genesisHash: chainParams.GenesisHash.String(), transactions: map[string]*wire.MsgTx{
 		fundingTx.TxID(): fundingTx,
 	}, spent: make(map[string]string)}
 	commitTx := wire.NewMsgTx(2)
@@ -120,7 +126,7 @@ func newRGB11RecoverySelectionFixture(t *testing.T) (*Manager, STPAssetRecoveryR
 	amount := indexer.NewDecimalWithScale(7000, 2)
 	channelContext := rgb11wallet.ChannelContext{ChannelID: "rgb11-recovery-selection",
 		Operation: string(STPOpCommit), Branch: "local", Height: 1,
-		Entropy: [32]byte{6, 21}, BitcoinNetwork: GetChainParam().Name}
+		Entropy: [32]byte{6, 21}, BitcoinNetwork: chainParams.Name}
 	step, err := rgb11wallet.BuildChannelStep(context.Background(), sources, commitTx, 0,
 		[]rgb11wallet.ChannelAssignment{{OutputIndex: 1, Amount: *amount.Clone()}}, channelContext, facts)
 	require.NoError(t, err)
@@ -141,7 +147,7 @@ func newRGB11RecoverySelectionFixture(t *testing.T) (*Manager, STPAssetRecoveryR
 		AssetEntropy: channelContext.Entropy, CommitHeight: 1,
 		AssetFunding: map[string][]byte{rgb11wallet.Protocol: inventory}}}
 	// The commitment is independently observed before recovery. Its roots are
-	// spent, while its native output and designated plain fee output are not.
+	// spent, while its RGB11 output and designated plain fee output are not.
 	facts.transactions[commitTx.TxID()] = commitTx
 	for _, source := range sources {
 		facts.spent[source.OutPoint] = commitTx.TxID()
@@ -158,7 +164,7 @@ func TestSTPRGB11RecoveryDistinguishesNilAndEmptyInputs(t *testing.T) {
 	manager, request, facts := newRGB11RecoverySelectionFixture(t)
 	protocol := rgb11STPProtocol{}
 
-	t.Run("explicit_empty_without_indexes_has_no_native_assets", func(t *testing.T) {
+	t.Run("explicit_empty_without_indexes_has_no_rgb11_assets", func(t *testing.T) {
 		req := request
 		req.Inputs = make([]*TxOutput, 0)
 		require.NotNil(t, req.Inputs)
@@ -167,26 +173,26 @@ func TestSTPRGB11RecoveryDistinguishesNilAndEmptyInputs(t *testing.T) {
 		plan, err := protocol.BuildChannelRecovery(manager, req)
 		require.NoError(t, err)
 		require.NotNil(t, plan)
-		require.True(t, plan.NoNativeAssets)
+		require.True(t, plan.NoRGB11Assets)
 		require.Nil(t, plan.Tx)
-		require.Empty(t, plan.NativeProofs)
+		require.Empty(t, plan.AssetProofs)
 	})
 
-	t.Run("nil_with_indexes_recovers_native_allocation", func(t *testing.T) {
+	t.Run("nil_with_indexes_recovers_rgb11_allocation", func(t *testing.T) {
 		req := request
 		require.Nil(t, req.Inputs)
 		req.OutputIndexes = []int{1, 2}
 		plan, err := protocol.BuildChannelRecovery(manager, req)
 		require.NoError(t, err)
 		require.NotNil(t, plan)
-		require.False(t, plan.NoNativeAssets)
+		require.False(t, plan.NoRGB11Assets)
 		require.NotNil(t, plan.Tx)
 		require.Len(t, plan.Tx.TxIn, 2)
 		require.Equal(t, fmt.Sprintf("%s:1", req.Commitment.CommitTx.TxID()), plan.Tx.TxIn[0].PreviousOutPoint.String())
 		require.Equal(t, fmt.Sprintf("%s:2", req.Commitment.CommitTx.TxID()), plan.Tx.TxIn[1].PreviousOutPoint.String())
-		require.Equal(t, int64(1500), plan.Tx.TxOut[1].Value, "native carrier must not pay recovery fees")
+		require.Equal(t, int64(1500), plan.Tx.TxOut[1].Value, "RGB11 carrier must not pay recovery fees")
 		require.Positive(t, plan.Fee)
-		recoveryPackage, err := rgb11wallet.DecodeChannelPackage(plan.NativeProofs[rgb11wallet.Protocol])
+		recoveryPackage, err := rgb11wallet.DecodeChannelPackage(plan.AssetProofs[rgb11wallet.Protocol])
 		require.NoError(t, err)
 		require.Len(t, recoveryPackage.Steps, 2)
 		validated, err := rgb11wallet.ValidateChannelPackage(context.Background(), recoveryPackage, plan.Tx, facts)
@@ -203,7 +209,7 @@ func TestSTPRGB11RecoveryDistinguishesNilAndEmptyInputs(t *testing.T) {
 		require.Nil(t, req.Inputs)
 		require.Empty(t, req.OutputIndexes)
 		plan, err := protocol.BuildChannelRecovery(manager, req)
-		require.ErrorContains(t, err, "invalid native recovery selection")
+		require.ErrorContains(t, err, "invalid RGB11 recovery selection")
 		require.Nil(t, plan)
 	})
 }

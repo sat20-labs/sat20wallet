@@ -173,7 +173,6 @@ func (p *Manager) flushDKVSBatchOutbox(client *SatsNetDKVSClient, store *dkvsRep
 			panic(permanentDKVSOutboxError(entry, err))
 		}
 		if entry.LastError != "" || entry.LastErrorCode != "" {
-			p.revokeAccountOutboxWrite(entry)
 		}
 		if entry.State == DKVSOutboxAcknowledged {
 			if err := p.dkvs.finishAcknowledgedWrite(client, store, entry); err != nil {
@@ -249,7 +248,6 @@ func (p *Manager) flushDKVSBatchOutbox(client *SatsNetDKVSClient, store *dkvsRep
 			}
 		}
 		if err := store.ApplyWriteResultAndAck(entry, result); err != nil {
-			p.revokeAccountOutboxWrite(entry)
 			var persistence *dkvscore.AckPersistenceError
 			if errors.As(err, &persistence) {
 				return submitted, &DKVSRequestPendingError{RequestID: entry.RequestID, Committed: true, Cause: err}

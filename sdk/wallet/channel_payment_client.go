@@ -303,12 +303,6 @@ func (p *Manager) InitLockProcess(resv *PaymentReservation, utxos, fees []string
 			break
 		}
 
-		resv.LocalRev, err = p.RevokeCurrentCommitment(&resv.RevocationInfo)
-		if err != nil {
-			Log.Errorf("RevokeCurrentCommitment %s failed. %v", channelId, err)
-			break
-		}
-
 		err = p.SignNextCommitment(&resv.RevocationInfo)
 		if err != nil {
 			Log.Errorf("SignNextCommitment %s failed. %v", channelId, err)

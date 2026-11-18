@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	indexer "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
@@ -161,49 +162,31 @@ func (p *Manager) CheckAccountWrite(provider, scope string) error {
 	}
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
-	if err := p.checkAccountRestore(provider, scope); err != nil {
-		return err
-	}
-	if p.accountProfile != nil {
-		value, err := p.readAccountLocal(p.accountProfile.AccountID, provider, scope)
-		if err != nil {
-			return err
-		}
-		if err := p.accountModuleWriteError(value); err != nil {
-			return err
-		}
-	}
-	return p.requireAccountManagedWriteLocked()
+	return p.checkAccountWriteLocked(provider, scope)
 }
 
-// Caller owns the Manager read/write gate. Preserve a definite request refusal
-// instead of interpreting every stopped outbox entry as a content conflict.
-func (p *Manager) accountModuleWriteError(value *accountLocalKV) error {
-	if value == nil {
+func (p *Manager) checkAccountWriteLocked(provider, scope string) error {
+	if err := p.requireAccountManagedWriteLocked(); err != nil {
+		return err
+	}
+	if p.accountProfile == nil || !p.accountProfile.RecoveryConfigured {
 		return nil
 	}
-	if value.Conflict {
+	value, err := p.readAccountLocal(p.accountProfile.AccountID, provider, scope)
+	if err != nil {
+		return err
+	}
+	if value != nil && value.Restoring {
+		return ErrAccountManagedDataImportIncomplete
+	}
+	return p.accountModuleWriteError(value)
+}
+
+// A real merge conflict blocks this module. Upload failures are backup status;
+// they do not invalidate committed local data.
+func (p *Manager) accountModuleWriteError(value *accountLocalKV) error {
+	if value != nil && value.Conflict {
 		return dkvsindexer.ErrWriteConflict
-	}
-	if value.Key != "" {
-		entries, err := newDKVSReplicaStore(p.db).LoadOutbox(p.dkvsReplicaNamespace())
-		if err != nil {
-			return err
-		}
-		for _, entry := range entries {
-			if entry.OriginDomain != accountKVOutboxDomain || entry.OriginKey != value.Key || entry.State == DKVSOutboxAcknowledged {
-				continue
-			}
-			if entry.State == DKVSOutboxConflict || entry.State == DKVSOutboxTerminal {
-				return dkvsOutboxEntryError(entry)
-			}
-			if entry.LastError != "" || entry.LastErrorCode != "" {
-				return ErrDKVSPathNotSynced
-			}
-		}
-	}
-	if value.LastError != "" {
-		return fmt.Errorf("account module is unavailable: %s", value.LastError)
 	}
 	return nil
 }
@@ -220,9 +203,6 @@ func (p *Manager) CheckAccountRestore(provider, scope string) error {
 }
 
 func (p *Manager) checkAccountRestore(provider, scope string) error {
-	if err := p.checkAccountManagedDataImport(); err != nil {
-		return err
-	}
 	if p.accountProfile == nil {
 		return nil
 	}
@@ -280,4 +260,35 @@ func (s *dkvsStore) saveAccountKV(accountID, key string, encoded []byte) error {
 		return ErrDKVSPathNotSynced
 	}
 	return s.manager.owner.saveAccountKV(accountID, key, encoded)
+}
+
+// beginAccountWrite reuses the account import exclusion for a business action.
+// The provider selects its existing managed row; this never starts synchronization.
+// Call once at the execution boundary, before taking module or wallet locks.
+func (p *Manager) beginAccountWrite(provider string, wallet common.Wallet) (func(), error) {
+	if p == nil {
+		return nil, fmt.Errorf("wallet manager is unavailable")
+	}
+	if !p.rgbManagedExecutionMu.TryRLock() {
+		return nil, ErrAccountManagedDataImportIncomplete
+	}
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	scopeID := AccountManagedDataGlobalScope
+	if provider == rgb11AccountManagedProviderID {
+		if wallet == nil {
+			wallet = p.wallet
+		}
+		if wallet == nil {
+			p.rgbManagedExecutionMu.RUnlock()
+			return nil, fmt.Errorf("wallet is not created/unlocked")
+		}
+		scopeID = (AccountManagedDataScope{Network: p.cfg.Chain,
+			WalletFingerprint: walletFingerprint(wallet), AccountIndex: wallet.GetSubAccount()}).ID()
+	}
+	if err := p.checkAccountWriteLocked(provider, scopeID); err != nil {
+		p.rgbManagedExecutionMu.RUnlock()
+		return nil, err
+	}
+	return p.rgbManagedExecutionMu.RUnlock, nil
 }

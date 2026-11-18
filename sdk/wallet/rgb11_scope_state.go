@@ -9,8 +9,6 @@ import (
 
 type rgb11ScopeBackupState struct {
 	ReconciliationState string
-	ProjectionVerified  bool
-	ReadyCarriers       map[string]bool
 	ProofFaults         []rgb11wallet.ProofFault
 }
 

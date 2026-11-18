@@ -141,7 +141,7 @@ func (p *Manager) EnableSilentPay(walletID int64, index uint32) (string, error) 
 	defer p.channelIdentityMu.Unlock()
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
-	if err := p.checkAccountManagedDataImport(); err != nil {
+	if err := p.checkAccountRestore("wallets", AccountManagedDataGlobalScope); err != nil {
 		return "", err
 	}
 	info := p.walletInfoMap[walletID]

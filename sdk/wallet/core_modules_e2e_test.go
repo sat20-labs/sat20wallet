@@ -2,7 +2,6 @@ package wallet
 
 import (
 	"context"
-	"os"
 	"testing"
 
 	"github.com/sat20-labs/sat20wallet/sdk/account"
@@ -50,7 +49,7 @@ func TestSDKCoreModulesConnectedE2E(t *testing.T) {
 	coreRequire(t, "select sender root", sender.SwitchWallet(rootID, coreE2EPassword))
 	sender.SwitchAccount(0)
 
-	// Establish ordinary backup, issuance and browser recovery first.
+	// Establish ordinary backup and issuance first.
 	// Mixed fault/retry and concurrency flows remain explicit later groups.
 	t.Run("RGB11_self_send_cold_restore_and_respend", func(t *testing.T) {
 		coreRGB11SelfSendColdRestoreE2E(
@@ -70,7 +69,7 @@ func TestSDKCoreModulesConnectedE2E(t *testing.T) {
 		uda, err := sender.IssueRGB11Asset(context.Background(), RGB11IssueRequest{
 			Schema: "UDA", Ticker: "E2EU", Name: "E2E unique asset",
 		})
-		coreRequire(t, "issue native UDA in child account 1", err)
+		coreRequire(t, "issue RGB11 UDA in child account 1", err)
 		coreAssert(t, uda.Projected == 1, "UDA must project one actual allocation")
 		coreCheckpoint(t, "UDA_child_account_DKVS_recovery", sender, cfg, chain, senderMaterial)
 		sender.SwitchAccount(2)
@@ -79,20 +78,12 @@ func TestSDKCoreModulesConnectedE2E(t *testing.T) {
 			Schema: "IFA", Ticker: "E2EI", Name: "E2E inflatable asset",
 			Amounts: []uint64{1000}, InflationAmounts: []uint64{9000},
 		})
-		coreRequire(t, "issue native IFA in child account 2", err)
+		coreRequire(t, "issue RGB11 IFA in child account 2", err)
 		coreAssert(t, ifa.Projected == 2, "IFA ownership and inflation rights must both be projected")
 		coreCheckpoint(t, "IFA_multiwallet_DKVS_recovery", sender, cfg, chain, senderMaterial)
 	})
 
-	t.Run("PWA_RGB11_nonempty_recovery_and_failure_retry", func(t *testing.T) {
-		coreRGBBrowserE2E(t, sender, cfg, chain, senderMaterial)
-		// The browser peer legitimately published R+1. Adopt it through the
-		// normal SDK path before the next case reconfigures the backup.
-		coreRequire(t, "sync independent browser update before reconfiguration", sender.SyncAccountManagementState(context.Background()))
-		if os.Getenv("SAT20_PWA_RGB_CASE") == "" {
-			coreAssert(t, sender.GetWalletCatalog()[0].Name == "Independent device newer state", "native sender did not adopt browser peer update")
-		}
-	})
+	coreBrowserCases(t, cfg, chain, sender, receiver, senderMaterial)
 
 	if !t.Run("invoice_transfer_every_paid_recovery_boundary", func(t *testing.T) {
 		coreInvoiceTransferE2E(t, cfg, chain, sender, receiver, senderMaterial, receiverMaterial)
@@ -123,10 +114,6 @@ func TestSDKCoreModulesConnectedE2E(t *testing.T) {
 			t, cfg, chain, sender, receiver, senderMaterial, receiverMaterial)
 	})
 
-	t.Run("RGB11_R11_stable_only_cold_restore_ignores_valid_and_corrupt_legacy_cache", func(t *testing.T) {
-		coreRGB11StableOnlyColdRestoreE2E(t, cfg, chain, sender, receiver, senderMaterial, receiverMaterial)
-	})
-
 	t.Run("RGB11_R23_temporary_TTL_expiry_cold_restore_and_respend", func(t *testing.T) {
 		coreRGB11TemporaryTTLExpiryColdRestoreE2E(
 			t, cfg, chain, sender, receiver, receiverMaterial)
@@ -145,17 +132,5 @@ func TestSDKCoreModulesConnectedE2E(t *testing.T) {
 		coreRGBRecoveryFailuresE2E(t, sender, cfg, chain, senderMaterial)
 	})
 
-	t.Run("guardian_two_of_three_and_wrong_knowledge", func(t *testing.T) {
-		// The browser may have advanced the shared account even if its gate failed.
-		coreRequire(t, "sync current account before guardian reconfiguration", sender.SyncAccountManagementState(context.Background()))
-		corePrepRGBFailureScopes(t, sender, cfg, chain)
-		material := coreActivateE2E(t, sender, account.RecoveryMode2Of3, receiver)
-		coreCheckpoint(t, "guardian_and_knowledge_restore_catalog_and_RGB", sender, cfg, chain, material)
-		blank := coreNewE2EManager(t, cfg, chain, "")
-		pkg, err := blank.LoadAccountRecoveryPackage(material.auth.Location, material.locator)
-		coreRequire(t, "load package for negative test", err)
-		_, err = account.RecoverDKVSShare(pkg.DKVSShareCapsule, pkg.KnowledgeBundle,
-			[]account.AnswerAttempt{{QuestionID: "one", Answer: "incorrect"}, {QuestionID: "two", Answer: "incorrect"}})
-		coreAssert(t, err != nil && len(blank.GetWalletCatalog()) == 0, "wrong knowledge changed empty wallet state")
-	})
+	coreGuardianCases(t, cfg, chain, sender, receiver, senderMaterial)
 }

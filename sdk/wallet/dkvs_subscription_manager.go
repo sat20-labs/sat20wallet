@@ -141,6 +141,10 @@ func (m *dkvsManager) endpointVerificationHeight() (uint64, bool) {
 	return m.verifyHeight, m.verifyHeightKnown && m.verifyHeightFromEndpoint
 }
 func (m *dkvsManager) refreshVerificationBestHeight(client *SatsNetDKVSClient) (uint64, error) {
+	return m.readEndpointHeight(client, "")
+}
+
+func (m *dkvsManager) readEndpointHeight(client *SatsNetDKVSClient, expected string) (uint64, error) {
 	if m == nil || client == nil {
 		return 0, ErrDKVSPathNotSynced
 	}
@@ -150,6 +154,9 @@ func (m *dkvsManager) refreshVerificationBestHeight(client *SatsNetDKVSClient) (
 	}
 	if err := m.validateVerificationEndpoint(client, config.EndpointID); err != nil {
 		return 0, err
+	}
+	if expected != "" && expected != config.EndpointID {
+		return 0, dkvsindexer.ErrEndpointMismatch
 	}
 	height, err := client.GetBestHeight()
 	if err != nil {
@@ -689,28 +696,29 @@ func (s *dkvsStore) Config() (*AccountFreeLocalPolicy, error) {
 	return s.client.GetConfig()
 }
 func (s *dkvsStore) ConfigWithVerificationHeight() (*AccountFreeLocalPolicy, uint64, bool, error) {
-	policy, err := s.Config()
+	if s == nil || s.client == nil {
+		return nil, 0, false, ErrDKVSPathNotSynced
+	}
+	config, err := s.storageConfig(s.client.requestContext(), s.client)
 	if err != nil {
 		return nil, 0, false, err
 	}
+	policy := AccountFreeLocalPolicy(config.FreeLocal)
 	if s.manager == nil {
-		return policy, 0, false, nil
+		return &policy, 0, false, nil
 	}
 	// Config has already identified the policy's source. Check it before a
 	// transient refresh failure can fall back to the replica's trusted height.
-	s.client.endpointMu.RLock()
-	endpointID := s.client.endpointID
-	s.client.endpointMu.RUnlock()
-	if err := s.manager.validateVerificationEndpoint(s.client, endpointID); err != nil {
+	if err := s.manager.validateVerificationEndpoint(s.client, config.EndpointID); err != nil {
 		return nil, 0, false, err
 	}
-	if height, err := s.manager.refreshVerificationBestHeight(s.client); err == nil {
-		return policy, height, true, nil
+	if height, err := s.manager.readEndpointHeight(s.client, config.EndpointID); err == nil {
+		return &policy, height, true, nil
 	} else if errors.Is(err, dkvsindexer.ErrEndpointMismatch) {
 		return nil, 0, false, err
 	}
 	height, known := s.manager.verificationHeight()
-	return policy, height, known, nil
+	return &policy, height, known, nil
 }
 func (s *dkvsStore) ConfigureFreeLocalRetention(options *dkvsindexer.RecordOptions) (*AccountFreeLocalPolicy, error) {
 	policy, err := s.Config()
@@ -1082,6 +1090,42 @@ func (m *dkvsManager) updateValues(client *SatsNetDKVSClient, keys []string, bui
 	}
 	return m.updateValuesWithOrigin(client, keys, builder, dkvsOutboxOrigin{Key: keys[0]}, false)
 }
+
+type accountCASGrant struct {
+	scope, root    string
+	worker         chan struct{}
+	account, write *byte
+}
+
+func (m *dkvsManager) accountCASGrant(client *SatsNetDKVSClient) accountCASGrant {
+	p := m.owner
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	if p.dkvs != m || p.accountProfile == nil || !p.accountProfile.RecoveryConfigured ||
+		len(p.accountSecret) != 32 || p.accountPassword == "" || client.replicaNamespace == "" {
+		return accountCASGrant{}
+	}
+	primary, err := m.primaryClient()
+	if err != nil || primary != client {
+		return accountCASGrant{}
+	}
+	client.endpointMu.RLock()
+	known := client.endpointID != ""
+	client.endpointMu.RUnlock()
+	if !known {
+		return accountCASGrant{}
+	}
+	scope := m.sessionKey(client, "write")
+	accountScope := m.sessionKey(client, "account-write:"+p.accountProfile.AccountID)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.stopping {
+		return accountCASGrant{}
+	}
+	return accountCASGrant{scope: scope, root: p.accountProfile.RootFingerprint, worker: m.done,
+		account: m.ready[accountScope], write: m.ready[scope]}
+}
+
 func (m *dkvsManager) updateValuesWithOrigin(client *SatsNetDKVSClient, keys []string, builder dkvsUpdateBuilder, origin dkvsOutboxOrigin, authoritativeFirst bool) ([]*dkvsValue, error) {
 	if m == nil || client == nil || len(keys) == 0 || builder == nil {
 		return nil, ErrDKVSPathNotSynced
@@ -1095,14 +1139,30 @@ func (m *dkvsManager) updateValuesWithOrigin(client *SatsNetDKVSClient, keys []s
 		}
 	}
 	var result []*dkvsValue
+	var pendingReply *DKVSRequestPendingError
 	err := m.runTransport(func() error {
 		if err := m.requireWritePaths(client, keys); err != nil {
 			return err
 		}
+		var grant accountCASGrant
+		if origin.Domain == accountKVOutboxDomain {
+			grant = m.accountCASGrant(client)
+		}
 		var err error
 		result, err = m.updateValuesCoordinated(client, keys, builder, origin)
+		if pending, ok := err.(*DKVSRequestPendingError); ok && !pending.Committed && !pending.Durable &&
+			pending.RequestID != "" && grant.write != nil && grant.account != nil {
+			if _, direct := pending.Cause.(*freeCASUnavailable); direct && m.accountCASGrant(client) == grant {
+				// A single pending POST leaves the verified session available for unrelated edits.
+				pendingReply = pending
+				return nil
+			}
+		}
 		return err
 	})
+	if pendingReply != nil {
+		return nil, pendingReply
+	}
 	return result, err
 }
 func (m *dkvsManager) updateValuesCoordinated(client *SatsNetDKVSClient, keys []string, builder dkvsUpdateBuilder, origin dkvsOutboxOrigin) ([]*dkvsValue, error) {
@@ -1715,22 +1775,71 @@ func (m *dkvsManager) runPendingJobs(store *dkvsStore) error {
 	}
 	return jobErr
 }
-func (m *dkvsManager) start() {
+func (m *dkvsManager) start() bool {
+	return m.startWorker(false)
+}
+
+func (m *dkvsManager) startWorker(discover bool) bool {
 	if m == nil {
-		return
+		return false
 	}
 	m.mu.Lock()
 	if m.stop != nil {
 		m.mu.Unlock()
-		return
+		return false
 	}
 	stop, done, wake := make(chan struct{}), make(chan struct{}), make(chan struct{}, 1)
-	requestCtx, cancelRequests := context.WithCancel(context.Background())
+	var requestCtx context.Context
+	var cancelRequests context.CancelFunc
+	if discover {
+		requestCtx, cancelRequests = context.WithTimeout(context.Background(), accountManagedDataReadyTimeout)
+	} else {
+		requestCtx, cancelRequests = context.WithCancel(context.Background())
+	}
 	m.ready = make(map[string]*byte)
 	m.stop, m.done, m.wake, m.requestCtx, m.cancelRequests, m.stopping = stop, done, wake, requestCtx, cancelRequests, false
 	m.mu.Unlock()
-	go m.run(stop, done, wake)
+	if discover {
+		go m.runDiscovery(stop, done, wake)
+	} else {
+		go m.run(stop, done, wake)
+	}
+	return true
 }
+
+// A cold entry performs exactly one discovery/resumption, without ordinary
+// outbox work, unrelated jobs, long-polling or automatic discovery retries.
+func (m *dkvsManager) runDiscovery(stop, done, wake chan struct{}) {
+	err := m.owner.refreshAccountService(true)
+	m.setLastSyncError(err)
+	m.notifyStatusCallback()
+	// Pair the activation check with completion: an activation racing this
+	// boundary either continues this owned lifetime or starts after its release.
+	m.owner.mutex.RLock()
+	m.mu.Lock()
+	configured := m.owner.accountProfile != nil && m.owner.accountProfile.RecoveryConfigured
+	if m.cancelRequests != nil {
+		m.cancelRequests()
+	}
+	if configured && !m.stopping && m.done == done && m.owner.accountDBFailure() == nil {
+		// The finite discovery deadline must not expire the activated worker.
+		m.requestCtx, m.cancelRequests = context.WithCancel(context.Background())
+		m.mu.Unlock()
+		m.owner.mutex.RUnlock()
+		m.owner.requestAccountSync()
+		m.run(stop, done, wake)
+		return
+	}
+	if m.done == done && !m.stopping {
+		m.stop, m.done, m.wake, m.requestCtx, m.cancelRequests, m.stopping = nil, nil, nil, nil, nil, false
+		// The Manager remains usable after discovery. Its per-key mutex
+		// identities must survive concurrent explicit activation/recovery.
+	}
+	close(done)
+	m.mu.Unlock()
+	m.owner.mutex.RUnlock()
+}
+
 func (m *dkvsManager) stopAndWait() {
 	if m == nil {
 		return
@@ -1738,6 +1847,7 @@ func (m *dkvsManager) stopAndWait() {
 	m.mu.Lock()
 	stop, done, cancelRequests := m.stop, m.done, m.cancelRequests
 	if stop == nil {
+		releaseDKVSManagerRuntime(m)
 		m.mu.Unlock()
 		return
 	}
@@ -1753,9 +1863,9 @@ func (m *dkvsManager) stopAndWait() {
 	m.mu.Lock()
 	if m.done == done {
 		m.stop, m.done, m.wake, m.requestCtx, m.cancelRequests, m.stopping = nil, nil, nil, nil, nil, false
+		releaseDKVSManagerRuntime(m)
 	}
 	m.mu.Unlock()
-	releaseDKVSManagerRuntime(m)
 }
 func (m *dkvsManager) wakeSync() {
 	if m == nil {

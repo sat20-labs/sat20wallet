@@ -13,9 +13,7 @@ import (
 )
 
 const (
-	Protocol          = "rgb11"
-	LockReasonRGB     = "rgb"
-	LockReasonPending = "pending-rgb"
+	Protocol = "rgb11"
 )
 
 var (

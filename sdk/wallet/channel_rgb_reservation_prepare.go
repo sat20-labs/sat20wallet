@@ -316,6 +316,12 @@ func (p *Manager) querySTPRGBEvidence(f *STPRGBReservationEvidence, inventories,
 	if err != nil {
 		return err
 	}
+	evidence = rgb11wallet.ScopedBitcoinEvidence(evidence)
+	genesisHash, err := evidence.GetGenesisHash()
+	if err != nil {
+		return err
+	}
+	f.genesisHash = genesisHash
 	txids, points := make(map[string]bool), make(map[string]bool)
 	type material struct {
 		raw     []byte
@@ -369,7 +375,7 @@ func (p *Manager) querySTPRGBEvidence(f *STPRGBReservationEvidence, inventories,
 			}
 			reveals = append(reveals, seal)
 		}
-		validator := rgb11wallet.NewNativeConsensusValidatorWithReveals(reveals...)
+		validator := rgb11wallet.NewRGB11ValidatorWithReveals(reveals...)
 		report, err := validator.ValidatePreparedHistoryConsignmentReport(context.Background(), m.raw, evidence)
 		if err != nil {
 			return err
@@ -438,7 +444,7 @@ func (p *Manager) querySTPRGBEvidence(f *STPRGBReservationEvidence, inventories,
 			}
 			reveals = append(reveals, seal)
 		}
-		validator := rgb11wallet.NewNativeConsensusValidatorWithReveals(reveals...)
+		validator := rgb11wallet.NewRGB11ValidatorWithReveals(reveals...)
 		if _, err := validator.ValidatePreparedHistoryConsignmentReport(context.Background(), m.raw, view); err != nil {
 			return err
 		}

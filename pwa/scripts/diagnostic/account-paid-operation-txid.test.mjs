@@ -4,7 +4,7 @@ import test from 'node:test'
 import { runInNewContext } from 'node:vm'
 import { transformSync } from 'esbuild'
 
-test('paid account confirmation logs the SDK transaction_id without recovery material', async () => {
+test('retained PWA service log adapter records the SDK transaction_id without recovery material', async () => {
   const source = readFileSync(new URL('../../utils/pwaOperationLog.ts', import.meta.url), 'utf8')
   const { code } = transformSync(source, { loader: 'ts', format: 'cjs', target: 'es2022' })
   const updates = []
@@ -12,11 +12,8 @@ test('paid account confirmation logs the SDK transaction_id without recovery mat
   runInNewContext(code, {
     module,
     exports: module.exports,
-    require: (name) => {
-      if (name === '@/utils/operationLog') return { beginOperationLog: async () => [null, 'op-1'], updateOperationLog: async (...args) => updates.push(args) }
-      if (name === '@/lib/walletStorage') return { walletStorage: { getValue: () => 'testnet' } }
-      throw new Error(`Unexpected import: ${name}`)
-    },
+    sat20wallet_operation_log: { updateOperationLog: async (id, input) => { updates.push([id, JSON.parse(input)]); return {code: 0} } },
+    require: (name) => { throw new Error(`Unexpected import: ${name}`) },
     console: { warn: () => {} },
   })
 

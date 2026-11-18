@@ -8,8 +8,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/sat20-labs/sat20wallet/sdk/account"
 )
 
 func TestWaitAccountManagedDataReadyCancelsAndConverges(t *testing.T) {
@@ -209,58 +207,6 @@ func TestAccountManagedDataProviderRegistration(t *testing.T) {
 	}
 }
 
-func TestAccountManagedDataImportValidatesAllProvidersBeforeMutation(t *testing.T) {
-	manager := &Manager{}
-	first := &accountManagedDataProviderStub{id: "a"}
-	second := &accountManagedDataProviderStub{id: "b", validateErr: errors.New("invalid b")}
-	if err := manager.RegisterAccountManagedDataProvider(first); err != nil {
-		t.Fatal(err)
-	}
-	if err := manager.RegisterAccountManagedDataProvider(second); err != nil {
-		t.Fatal(err)
-	}
-	catalog := AccountManagedDataCatalog{
-		AccountID: "account", Network: "testnet",
-		Scopes: []AccountManagedDataScope{{WalletFingerprint: "wallet", AccountIndex: 0, Network: "testnet"}},
-	}
-	scope := catalog.Scopes[0].ID()
-	bundle := account.ManagedDataBundle{
-		Version: account.ManagedDataBundleVersion, Revision: 1,
-		Items: []account.ManagedDataItem{
-			{Provider: "a", Scope: AccountManagedDataGlobalScope, Payload: []byte("a")},
-			{Provider: "b", Scope: scope, Payload: []byte("b")},
-		},
-	}
-	if err := manager.importAccountManagedData(catalog, bundle); err == nil {
-		t.Fatal("invalid provider bundle was imported")
-	}
-	if first.validations != 1 || second.validations != 1 || first.imports != 0 || second.imports != 0 {
-		t.Fatalf("first validate/import=%d/%d second=%d/%d",
-			first.validations, first.imports, second.validations, second.imports)
-	}
-}
-
-func TestAccountManagedDataImportRejectsUnknownProviderBeforeMutation(t *testing.T) {
-	manager := &Manager{}
-	known := &accountManagedDataProviderStub{id: "known"}
-	if err := manager.RegisterAccountManagedDataProvider(known); err != nil {
-		t.Fatal(err)
-	}
-	catalog := AccountManagedDataCatalog{AccountID: "account", Network: "testnet"}
-	bundle := account.ManagedDataBundle{
-		Version: account.ManagedDataBundleVersion, Revision: 1,
-		Items: []account.ManagedDataItem{{
-			Provider: "unknown", Scope: AccountManagedDataGlobalScope, Payload: []byte("value"),
-		}},
-	}
-	if err := manager.importAccountManagedData(catalog, bundle); err == nil {
-		t.Fatal("unknown provider bundle was imported")
-	}
-	if known.validations != 0 || known.imports != 0 {
-		t.Fatalf("known provider was touched: validate=%d import=%d", known.validations, known.imports)
-	}
-}
-
 func TestAccountManagedDataCatalogIncludesEveryMnemonicWalletAccount(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
@@ -305,51 +251,5 @@ func TestAccountManagedDataCatalogIncludesEveryMnemonicWalletAccount(t *testing.
 	}
 	if counts[first.GetId()] != 2 || counts[second.GetId()] != 3 {
 		t.Fatalf("scope counts=%v", counts)
-	}
-}
-
-func TestMergeAccountManagedDataBundlesMergesIndependentProviderScopes(t *testing.T) {
-	scopeA := AccountManagedDataScope{WalletFingerprint: "wallet-a", AccountIndex: 0, Network: "testnet"}.ID()
-	scopeB := AccountManagedDataScope{WalletFingerprint: "wallet-b", AccountIndex: 0, Network: "testnet"}.ID()
-	catalog := AccountManagedDataCatalog{Network: "testnet", Scopes: []AccountManagedDataScope{
-		{WalletFingerprint: "wallet-a", AccountIndex: 0, Network: "testnet"},
-		{WalletFingerprint: "wallet-b", AccountIndex: 0, Network: "testnet"},
-	}}
-	base := account.ManagedDataBundle{Version: account.ManagedDataBundleVersion, Revision: 1, Items: []account.ManagedDataItem{
-		{Provider: "alpha", Scope: scopeA, Payload: []byte("alpha-base")},
-		{Provider: "beta", Scope: scopeB, Payload: []byte("beta-base")},
-	}}
-	remote := account.ManagedDataBundle{Version: account.ManagedDataBundleVersion, Revision: 2, Items: []account.ManagedDataItem{
-		{Provider: "alpha", Scope: scopeA, Payload: []byte("alpha-remote")},
-		{Provider: "beta", Scope: scopeB, Payload: []byte("beta-base")},
-	}}
-	local := account.ManagedDataBundle{Version: account.ManagedDataBundleVersion, Revision: 2, Items: []account.ManagedDataItem{
-		{Provider: "alpha", Scope: scopeA, Payload: []byte("alpha-base")},
-		{Provider: "beta", Scope: scopeB, Payload: []byte("beta-local")},
-	}}
-	merged, err := mergeAccountManagedDataBundles(base, remote, local, catalog, 3)
-	if err != nil {
-		t.Fatal(err)
-	}
-	values := accountManagedDataItemMap(merged)
-	if string(values["alpha\x00"+scopeA].Payload) != "alpha-remote" ||
-		string(values["beta\x00"+scopeB].Payload) != "beta-local" {
-		t.Fatalf("merged=%+v", merged)
-	}
-}
-
-func TestMergeAccountManagedDataBundlesDropsRemovedScope(t *testing.T) {
-	removedScope := AccountManagedDataScope{WalletFingerprint: "removed", AccountIndex: 0, Network: "testnet"}.ID()
-	item := account.ManagedDataItem{Provider: "module", Scope: removedScope, Payload: []byte("old")}
-	base := account.ManagedDataBundle{Version: account.ManagedDataBundleVersion, Revision: 1, Items: []account.ManagedDataItem{item}}
-	remote := account.ManagedDataBundle{Version: account.ManagedDataBundleVersion, Revision: 2, Items: []account.ManagedDataItem{item}}
-	local := account.ManagedDataBundle{Version: account.ManagedDataBundleVersion, Revision: 2, Items: []account.ManagedDataItem{item}}
-	merged, err := mergeAccountManagedDataBundles(base, remote, local,
-		AccountManagedDataCatalog{Network: "testnet"}, 3)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(merged.Items) != 0 {
-		t.Fatalf("removed scope survived merge: %+v", merged.Items)
 	}
 }

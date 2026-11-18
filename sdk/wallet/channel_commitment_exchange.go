@@ -44,7 +44,7 @@ func (p *Manager) SignNextCommitment(info *RevocationInfo) error {
 		if err := p.verifySTPChannelProofsWithRGBView(channel, commitTx, channel.RemoteCommitment.AssetProofs, STPOpCommit, view); err != nil {
 			return err
 		}
-		if err := p.verifySTPNativeJournalContextWithRGBView(channel, channel.RemoteCommitment, view); err != nil {
+		if err := p.verifyJournalContextWithView(channel, channel.RemoteCommitment, view); err != nil {
 			return err
 		}
 	}
@@ -119,7 +119,7 @@ func (p *Manager) SignNextCommitment(info *RevocationInfo) error {
 	if err := p.verifySTPChannelProofsWithRGBView(channel, commitTx, channel.RemoteCommitment.AssetProofs, STPOpCommit, view); err != nil {
 		return err
 	}
-	return p.persistSTPNativeCommitmentWithRGBView(channel, channel.RemoteCommitment, "remote", view)
+	return p.persistCommitmentWithView(channel, channel.RemoteCommitment, "remote", view)
 }
 
 func (p *Manager) ReceiveNewCommitment(info *RevocationInfo, commitSig *wwire.CommitSigInfo, prevSignedTx []*wire.MsgTx) error {
@@ -132,7 +132,7 @@ func (p *Manager) receiveNewCommitmentForWallet(info *RevocationInfo, commitSig 
 		return err
 	}
 	channel := info.Channel
-	if err := acceptSTPSignedNativeParents(channel, prevSignedTx); err != nil {
+	if err := acceptSTPSignedParents(channel, prevSignedTx); err != nil {
 		return err
 	}
 	localWallet := captured
@@ -172,13 +172,13 @@ func (p *Manager) receiveNewCommitmentForWallet(info *RevocationInfo, commitSig 
 		return err
 	}
 	if !equalSTPAssetProofs(channel.LocalCommitment.AssetProofs, commitSig.CommitAssetProofs) {
-		return fmt.Errorf("commitment native proof differs from the independently built transaction")
+		return fmt.Errorf("commitment channel proof differs from the independently built transaction")
 	}
 	if err := p.verifySTPChannelProofsWithRGBView(channel, commitTx, channel.LocalCommitment.AssetProofs, STPOpCommit, view); err != nil {
 		return err
 	}
 	if view != nil {
-		if err := p.verifySTPNativeJournalContextWithRGBView(channel, channel.LocalCommitment, view); err != nil {
+		if err := p.verifyJournalContextWithView(channel, channel.LocalCommitment, view); err != nil {
 			return err
 		}
 	}
@@ -244,7 +244,7 @@ func (p *Manager) receiveNewCommitmentForWallet(info *RevocationInfo, commitSig 
 	info.LocalCommitInfo.CommitSigInfo = *commitSig
 	info.Channel.LocalCommitment.DeAnchorSig = commitSig.CommitDeAnchorSig
 	info.Channel.LocalCommitment.DeAnchorTx = deAnchorTx
-	return p.persistSTPNativeCommitmentWithRGBView(channel, channel.LocalCommitment, "local", view)
+	return p.persistCommitmentWithView(channel, channel.LocalCommitment, "local", view)
 }
 
 func (p *Manager) RevokeCurrentCommitment(info *RevocationInfo) (*wwire.RevokeAndAck, error) {
@@ -257,7 +257,7 @@ func (p *Manager) revokeCurrentCommitmentForWallet(info *RevocationInfo, capture
 		return nil, err
 	}
 	channel := info.Channel
-	otherTxs, err := encodeSTPNativeOtherTransactions(channel)
+	otherTxs, err := encodeSTPOtherTransactions(channel)
 	if err != nil {
 		return nil, err
 	}
@@ -268,10 +268,8 @@ func (p *Manager) revokeCurrentCommitmentForWallet(info *RevocationInfo, capture
 	if err := completeSTPRGBView(view); err != nil {
 		return nil, err
 	}
-	if needsSTPNativeCommitmentJournal(channel, channel.LocalCommitment) {
-		if err := p.markSTPNativeRevocationReady(channel); err != nil {
-			return nil, err
-		}
+	if err := p.markSTPRevocationReady(channel); err != nil {
+		return nil, err
 	}
 	localWallet := captured
 	if localWallet == nil {
@@ -286,7 +284,7 @@ func (p *Manager) revokeCurrentCommitmentForWallet(info *RevocationInfo, capture
 
 	// 只有在对端的新 commitment 已经验证通过后，才释放当前 commitment secret。
 	// 这个 secret 会让对端具备惩罚本方旧 commitment tx 的能力。
-	revocationMsg := &wwire.RevokeAndAck{NativeOtherTxs: otherTxs, RGBRecoveryTxs: rgbTxs}
+	revocationMsg := &wwire.RevokeAndAck{OtherTxs: otherTxs, RGBRecoveryTxs: rgbTxs}
 	commitSecret := localWallet.GetCommitSecret(info.Channel.PeerNodeId, uint32(channel.CommitHeight))
 	if commitSecret == nil {
 		return nil, fmt.Errorf("GetRevocationSecret failed")
@@ -378,7 +376,7 @@ func (p *Manager) ReceiveRevocation(info *RevocationInfo, revMsg *wwire.RevokeAn
 			return err
 		}
 	}
-	if err := p.acceptSTPRecoveryTransactionsWithJournalAndRGBView(info.Channel, revMsg.NativeOtherTxs, revMsg.RGBRecoveryTxs, nil, view); err != nil {
+	if err := p.acceptSTPRecoveryTransactionsWithJournalAndRGBView(info.Channel, revMsg.OtherTxs, revMsg.RGBRecoveryTxs, nil, view); err != nil {
 		return err
 	}
 

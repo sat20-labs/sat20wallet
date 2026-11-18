@@ -1,4 +1,4 @@
-import { ref, computed } from 'vue'
+import { ref, computed, watch, onScopeDispose, type Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useWalletStore } from '@/store/wallet'
 import { useGlobalStore } from '@/store/global'
@@ -8,13 +8,15 @@ import ordxApi from '@/apis/ordx'
 import { useToast } from '@/components/ui/toast-new'
 import { LockedUtxoInfo, FailedUtxoInfo, LockedUtxosApiResponse, LockedUtxoApiResponse } from '@/types'
 
-export function useUtxoManager() {
+export type UtxoTab = 'btc' | 'satsnet' | 'ordinals' | 'rgb'
+
+export function useUtxoManager(tab: Ref<UtxoTab>) {
   const { t } = useI18n()
   const walletStore = useWalletStore()
   const globalStore = useGlobalStore()
   const { toast } = useToast()
 
-  const { address, network } = walletStore
+  const { address, network } = storeToRefs(walletStore)
   const { env } = storeToRefs(globalStore)
 
   // State
@@ -26,70 +28,74 @@ export function useUtxoManager() {
   const selectedOrdinals = ref<string[]>([])
 
   // Computed
-  const addressStr = computed(() => address || '')
+  const addressStr = computed(() => address.value || '')
+  const loadError = ref('')
+  const lockNetwork = ref('')
+  const identityKey = computed(() => JSON.stringify([
+    walletStore.rootAccountId, walletStore.walletId, walletStore.accountIndex,
+    network.value, walletStore.wallet?.fingerprint, walletStore.locked,
+    walletStore.isSwitchingWallet, walletStore.isSwitchingAccount, walletStore.isSwitchingNetwork,
+  ]))
+  let generation = 0
 
   // Methods
-  const fetchLockedUtxos = async (tab: 'btc' | 'satsnet' | 'ordinals') => {
-    loading.value = true
-    let res
-
-    if (tab === 'ordinals') {
-      // Fetch locked ordinals UTXOs from API
-      try {
-        const apiResponse = await ordxApi.getLockedUtxos({
-          address: addressStr.value,
-          network
-        }) as LockedUtxosApiResponse
-
-        lockedUtxos.value = (apiResponse?.data || []).map((utxo: LockedUtxoApiResponse) => {
-          const [txid, vout] = utxo.Outpoint.split(':')
-          const assetInfo = utxo.Assets?.[0]
-          const reason = assetInfo
-            ? `${assetInfo.Name.Protocol}:${assetInfo.Name.Type}:${assetInfo.Name.Ticker || ''}`
-            : t('settingsUi.unknownAsset')
-
-          return {
-            utxo: utxo.Outpoint,
-            txid,
-            vout,
-            reason,
-            lockedTime: undefined // API doesn't provide locked time
-          }
-        })
-      } catch (error) {
-        console.error('Failed to fetch locked ordinals UTXOs:', error)
-        lockedUtxos.value = []
-      }
-    } else {
-      // Fetch from local storage (BTC/SatoshiNet)
-      if (tab === 'btc') {
-        [, res] = await walletManager.getAllLockedUtxo(addressStr.value)
-      } else {
-        [, res] = await walletManager.getAllLockedUtxo_SatsNet(addressStr.value)
-      }
-      lockedUtxos.value = Object.entries(res || {}).map(([utxo, infoStr]) => {
-        let info
-        try {
-          info = JSON.parse(infoStr as string)
-        } catch (e) {
-          info = {}
-        }
-        return {
-          utxo,
-          txid: utxo.split(':')[0],
-          vout: utxo.split(':')[1],
-          ...info
-        }
-      })
-    }
-
-    // Clear selected ordinals when switching tabs
-    if (tab !== 'ordinals') {
-      selectedOrdinals.value = []
-    }
-
+  const fetchLockedUtxos = async (requested: UtxoTab) => {
+    if (requested !== tab.value) return
+    const request = ++generation
+    const identity = identityKey.value
+    const current = () => request === generation && identity === identityKey.value && requested === tab.value
+    lockedUtxos.value = []
+    selectedOrdinals.value = []
+    loadError.value = ''
+    lockNetwork.value = network.value
     loading.value = false
+    if (walletStore.locked || walletStore.isSwitchingWallet || walletStore.isSwitchingAccount || walletStore.isSwitchingNetwork) return
+    loading.value = true
+    try {
+      let rows: LockedUtxoInfo[]
+      if (requested === 'ordinals') {
+        const response = await ordxApi.getLockedUtxos({ address: addressStr.value, network: network.value }) as LockedUtxosApiResponse
+        rows = (response?.data || []).map((utxo: LockedUtxoApiResponse) => {
+          const [txid, vout] = utxo.Outpoint.split(':')
+          const asset = utxo.Assets?.[0]
+          return { utxo: utxo.Outpoint, txid, vout, reason: asset
+            ? `${asset.Name.Protocol}:${asset.Name.Type}:${asset.Name.Ticker || ''}`
+            : t('settingsUi.unknownAsset') }
+        })
+      } else if (requested === 'rgb') {
+        const [error, view] = await walletManager.getRGB11View()
+        if (error) throw error
+        if (!view || !Array.isArray(view.locks) || !view.lock_scope) throw new Error(t('utxoManager.updateRuntime'))
+        rows = view.locks.map(lock => ({
+          utxo: lock.outpoint, txid: lock.outpoint.split(':')[0], vout: lock.outpoint.split(':')[1],
+          category: 'rgb', chain: lock.chain, scope: lock.scope, reason: lock.reason,
+          lockedTime: lock.locked_time, value: lock.value, assets: lock.assets, transferIDs: lock.transfer_ids,
+        }))
+        if (current()) lockNetwork.value = view.lock_scope.network
+      } else {
+        const [error, result] = requested === 'btc'
+          ? await walletManager.getAllLockedUtxo(addressStr.value)
+          : await walletManager.getAllLockedUtxo_SatsNet(addressStr.value)
+        if (error) throw error
+        if (!result) throw new Error(t('utxoManager.loadFailed'))
+        rows = Object.entries(result).map(([outpoint, raw]) => {
+          const info = JSON.parse(raw as string)
+          // Never expose an unclassified protection lock as an Unlock row.
+          // The current SDK supplies this field independently of RGB queries.
+          if (!['manual', 'rgb', 'other'].includes(info?.category)) throw new Error(t('utxoManager.updateRuntime'))
+          return { ...info, utxo: outpoint, txid: outpoint.split(':')[0], vout: outpoint.split(':')[1] }
+        }).filter(row => row.category !== 'rgb')
+      }
+      if (current()) lockedUtxos.value = rows
+    } catch (error) {
+      if (current()) loadError.value = error instanceof Error ? error.message : t('utxoManager.loadFailed')
+    } finally {
+      if (current()) loading.value = false
+    }
   }
+
+  watch([tab, identityKey], () => { void fetchLockedUtxos(tab.value) }, { immediate: true, flush: 'sync' })
+  onScopeDispose(() => { generation++ })
 
   const lockUtxo = async (utxoInput: string, tab: 'btc' | 'satsnet') => {
     if (!utxoInput) {
@@ -117,6 +123,7 @@ export function useUtxoManager() {
   }
 
   const unlockUtxo = async (idx: number, utxo: LockedUtxoInfo, tab: 'btc' | 'satsnet') => {
+    if (utxo.category === 'rgb') return
     unlockingIdx.value = idx
     let err
 
@@ -185,7 +192,7 @@ export function useUtxoManager() {
         utxos: selectedOrdinals.value,
         pubKey: pubKeyRes.pubKey, // Use hex string directly
         sig: sigRes.signature, // Use hex string directly
-        network
+        network: network.value
       })
 
       if (response.failedUtxos && response.failedUtxos.length > 0) {
@@ -224,6 +231,8 @@ export function useUtxoManager() {
   return {
     // State
     lockedUtxos,
+    loadError,
+    lockNetwork,
     loading,
     lockLoading,
     unlockingIdx,

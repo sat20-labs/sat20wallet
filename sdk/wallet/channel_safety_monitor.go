@@ -20,7 +20,7 @@ func (p *Manager) HandleChannelSafetyStatus() {
 		if channel == nil {
 			continue
 		}
-		if handled, err := p.RetryNativePreparedRecovery(channel); handled {
+		if handled, err := p.RetryPreparedRecovery(channel); handled {
 			if err != nil {
 				Log.Errorf("channel %s prepared recovery failed: %v", channel.ChannelId, err)
 			}
@@ -31,7 +31,7 @@ func (p *Manager) HandleChannelSafetyStatus() {
 			channel.Mutex.RUnlock()
 			continue
 		}
-		if channel.Status == CS_READY || channel.Status == CS_NATIVE_RECOVERY {
+		if channel.Status == CS_READY || channel.Status == CS_COMMIT_RECOVERY {
 			if channel.ChanPoint != nil && channel.ChanPoint.OutPointStr != "" {
 				funding[channel.ChanPoint.OutPointStr] = channel
 			}
@@ -182,18 +182,18 @@ func (p *Manager) HandleUnexpectedChannelClose(channel *Channel, txid string, sp
 }
 
 func (p *Manager) finalizePeerForceClose(channel *Channel, generation channelSafetyGeneration, txid string) error {
-	if nativeForceClose(&ClosingReservation{Channel: channel}) {
-		// The latest peer commitment is valid, but the native receipt must be
+	if usesRecoveryClose(&ClosingReservation{Channel: channel}) {
+		// The latest peer commitment is valid, but the channel receipt must be
 		// imported from the actual confirmed witness before terminal cleanup.
 		// Keep a durable monitor task even if the second chain/indexer lags.
 		for _, pending := range p.GetClosingReservations() {
-			if pending != nil && pending.ChannelId == channel.ChannelId && nativeForceClose(pending) {
-				_, err := p.RetryNativeForceClose(pending)
+			if pending != nil && pending.ChannelId == channel.ChannelId && usesRecoveryClose(pending) {
+				_, err := p.RetryForceClose(pending)
 				return err
 			}
 		}
 		if p.GetIndexerRPCClient() == nil || !p.GetIndexerRPCClient().IsTxConfirmed(txid) {
-			return fmt.Errorf("peer native force-close is awaiting confirmation")
+			return fmt.Errorf("peer channel force-close is awaiting confirmation")
 		}
 		raw, err := p.GetIndexerRPCClient().GetRawTx(txid)
 		if err != nil {
@@ -201,12 +201,12 @@ func (p *Manager) finalizePeerForceClose(channel *Channel, generation channelSaf
 		}
 		actual, err := DecodeMsgTx(raw)
 		if err != nil || actual.TxID() != txid {
-			return fmt.Errorf("peer native force-close canonical transaction is unavailable")
+			return fmt.Errorf("peer channel force-close canonical transaction is unavailable")
 		}
 		channel.Mutex.Lock()
 		if p.GetChannel(channel.ChannelId) != channel || !channelSafetyTransitionMatches(channel, generation) {
 			channel.Mutex.Unlock()
-			return fmt.Errorf("channel changed during peer native force-close")
+			return fmt.Errorf("channel changed during peer channel force-close")
 		}
 		packageTxs := []*wire.MsgTx{actual}
 		packageTxs = append(packageTxs, channel.RemoteCommitment.NextTxs...)
@@ -235,12 +235,12 @@ func (p *Manager) finalizePeerForceClose(channel *Channel, generation channelSaf
 			AssetProofs: cloneSTPAssetProofs(channel.RemoteCommitment.AssetProofs),
 			DeAnchorTx:  channel.RemoteCommitment.DeAnchorTx,
 		}, Channel: channel}
-		err = p.persistNativeForceCloseLocked(resv, resv.ClosingDataInDB, CS_CLOSE_FORCELY_SWEEP_BROADCASTED)
+		err = p.persistForceCloseLocked(resv, resv.ClosingDataInDB, CS_CLOSE_FORCELY_SWEEP_BROADCASTED)
 		channel.Mutex.Unlock()
 		if err != nil {
 			return err
 		}
-		_, err = p.RetryNativeForceClose(resv)
+		_, err = p.RetryForceClose(resv)
 		return err
 	}
 	if err := p.persistTerminalTransition(channel, generation, CS_CLOSED_FORCELY); err != nil {
@@ -305,7 +305,7 @@ func (p *Manager) completePunishBroadcastState(channelID, commitTxID string) err
 	if tower == nil {
 		return fmt.Errorf("watchtower is not initialized")
 	}
-	if err := tower.importNativePunishment(channelID, commitTxID); err != nil {
+	if err := tower.importRGB11Punishment(channelID, commitTxID); err != nil {
 		return err
 	}
 	channel := p.FindChannel(channelID)

@@ -8,19 +8,13 @@ import (
 	indexercommon "github.com/sat20-labs/indexer/common"
 	indexerdb "github.com/sat20-labs/indexer/indexer/db"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	"io"
-	"net/http"
-	"net/http/httptest"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/sat20-labs/sat20wallet/sdk/account"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
@@ -62,9 +56,37 @@ func TestSDKAccountPWAPaidFundingWithChildSelected(t *testing.T) {
 		param, []dkvsPrevOut{gasOuts[1]}, wire.TxOut{Value: 9000, Assets: txAsset(gas, 290000)})
 	network.sendManyAndMine(t, []*wire.MsgTx{reserve}, 0)
 	f := prepareAccountReviewWithMnemonic(t, network, dkvsClientMnemonic, true)
+	// Install the fault boundary before either activation. Replacing the DKVS
+	// client after funding would invalidate its synchronized session/authorization.
+	hold := newAccountStateHold(false)
+	defer hold.unblock()
+	backupHTTP := &accountBackupHTTP{inner: wallet.NewHTTPClient(), holds: []*accountStateHold{hold}}
+	f.manager.StopDKVSSync()
+	f.manager.SetDKVSHttpClient(backupHTTP)
+	requireE2EInactive(t, f.manager, accountReviewPassword)
 	childID, _, err := f.manager.CreateWallet(accountReviewPassword)
 	require.NoError(t, err)
 	require.Equal(t, childID, f.manager.GetCurrentWalletId())
+	// Upgrade an already backed-up temporary account, not an inactive setup.
+	f.activate(t)
+	accountID := f.manager.GetAccountManagementStatus().AccountID
+	index, indexRecord := readAccountE2EIndex(t, network.Core, f.secret, accountID)
+	client := dkvsClientForNode(t, network.Core)
+	originals := map[string]*wire.DKVSRecord{indexRecord.Key: indexRecord}
+	for _, entry := range index.Entries {
+		if entry.Deleted {
+			continue
+		}
+		record, readErr := client.GetRecordDirect(entry.Key)
+		require.NoError(t, readErr)
+		originals[entry.Key] = record
+	}
+	for key, record := range originals {
+		proof, proofErr := dkvs.ParseFeeProof(record.FeeProof)
+		require.NoError(t, proofErr)
+		require.Equal(t, dkvs.FeeModeFreeLocal, proof.Mode, key)
+		require.NotZero(t, record.TTL, key)
+	}
 	_, location := accountReviewConfig(t, network)
 	transport := &accountPreparedAckTransport{inner: wallet.NewHTTPClient()}
 	// Reproduce an old index projection using this run's real Result: chain
@@ -166,7 +188,65 @@ func TestSDKAccountPWAPaidFundingWithChildSelected(t *testing.T) {
 	childAddress := wallet.PublicKeyToP2TRAddress_SatsNet(f.manager.GetWallet().GetPubKey())
 	_, childPaid := state.Delegates[childAddress]
 	require.False(t, childPaid, "the root account pays even when another wallet is selected")
-	f.activate(t)
+	// PWA reconfiguration creates a new package, without changing business data.
+	backup, err := f.manager.ExportAccountBackupForPWA(accountReviewPassword, nil)
+	require.NoError(t, err)
+	f.pkg, err = f.manager.CreateAccountRecoveryPackage(account.CreateOptions{
+		AccountID: accountID, Backup: backup, RecoveryMode: account.RecoveryMode2Of2,
+		Questions: e2eKnowledgeQuestions(),
+	})
+	require.NoError(t, err)
+	backupHTTP.armed.Store(true)
+	// Split the existing activate helper before its completion wait so a held
+	// real CAS can prove that old temporary receipts do not complete the upgrade.
+	err = f.manager.UseAccountStorageAuthorization(wallet.AccountStoragePurposeRecovery,
+		func(auth *wallet.AccountStorageAuthorization) error {
+			repository, err := f.manager.NewAccountRepositoryForStorage(*auth)
+			if err != nil {
+				return err
+			}
+			if err := account.NewManager(repository).Publish(context.Background(), *f.pkg); err != nil {
+				return err
+			}
+			return f.manager.ActivateAccountManagement(f.secret, accountReviewPassword, *auth,
+				f.pkg.Envelope.Locator, "account://"+f.pkg.Envelope.Locator.PackageID)
+		})
+	require.NoError(t, err)
+	select {
+	case <-hold.entered:
+	case <-time.After(5 * time.Second):
+		t.Log("no wallet-catalog migration CAS observed within five seconds")
+	}
+	view := f.manager.GetAccountManagementStatus()
+	assert.Equal(t, wallet.AccountStoragePaid, view.StorageMode)
+	assert.NotEqual(t, "backed_up", view.BackupState, "old FREE_LOCAL receipts cannot complete paid backup")
+	assert.True(t, view.ManagedDataDirty, "held migration must remain pending")
+	waitCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	waitErr := f.manager.WaitAccountBackup(waitCtx, "", "")
+	cancel()
+	assert.ErrorIs(t, waitErr, context.DeadlineExceeded, "backup wait must include storage migration")
+	hold.unblock()
+	require.NoError(t, f.manager.SyncAccountManagementState(context.Background()))
+	requireE2EFirstBackup(t, f.manager)
+	for key, before := range originals {
+		after, readErr := client.GetRecordDirect(key)
+		require.NoError(t, readErr)
+		proof, proofErr := dkvs.ParseFeeProof(after.FeeProof)
+		require.NoError(t, proofErr)
+		assert.Equal(t, dkvs.FeeModeAutopay, proof.Mode, key)
+		assert.Zero(t, after.TTL, key)
+		assert.Equal(t, authorization.Autopay.PoolContract, proof.PoolContract, key)
+		assert.Equal(t, before.Value, after.Value, "migration must preserve ciphertext: %s", key)
+		assert.Greater(t, after.Seq, before.Seq, key)
+		require.NoError(t, dkvs.VerifySignature(after))
+		originals[key] = after
+	}
+	require.NoError(t, f.manager.SyncAccountManagementState(context.Background()))
+	for key, before := range originals {
+		after, readErr := client.GetRecordDirect(key)
+		require.NoError(t, readErr)
+		assert.Equal(t, dkvs.RecordHash(before), dkvs.RecordHash(after), "idle sync must not republish: %s", key)
+	}
 	status, err := f.manager.GetAccountAutopayFundingStatus()
 	require.NoError(t, err)
 	require.True(t, status.Required)
@@ -338,19 +418,10 @@ func (h *accountPreparedAckTransport) SendPostRequest(u *wallet.URL, body []byte
 }
 
 func TestSDKAccountAutopayPreparedTransactionColdRetry(t *testing.T) {
-	runAccountAutopayPreparedTransactionReview(t, false)
+	runAccountAutopayPreparedTransactionReview(t)
 }
 
-func TestSDKAccountGuardianPaidPWABatchReview(t *testing.T) {
-	runAccountAutopayPreparedTransactionReview(t, true)
-}
-
-func TestPWAAccountGuardianRenewal(t *testing.T) {
-	runAccountAutopayPreparedTransactionReview(t, true,
-		"usage: temporary Guardian renews paid hosting without changing its own recovery")
-}
-
-func runAccountAutopayPreparedTransactionReview(t *testing.T, browser bool, cases ...string) {
+func runAccountAutopayPreparedTransactionReview(t *testing.T) {
 	defaults := dkvs.NetworkDefaultsForParams(&chaincfg.TestNetParams)
 	fixture := newDKVSNoPluginTemplateFixtureWithArgs(t,
 		map[string]int64{defaults.AutopayFeeAssetName: 50000}, nil, nil, dkvsMinerArgs(t))
@@ -392,7 +463,7 @@ func runAccountAutopayPreparedTransactionReview(t *testing.T, browser bool, case
 	_, err = manager.ImportWallet(dkvsClientMnemonic, accountReviewPassword)
 	require.NoError(t, err)
 	require.NoError(t, manager.InitializeAccountManagement(accountReviewPassword))
-	requireE2EInactive(t, manager)
+	requireE2EInactive(t, manager, accountReviewPassword)
 	require.NoError(t, manager.BindAccountToCurrentCoreNode())
 	t.Run("PreparationWriteFailure", func(t *testing.T) {
 		transport := &accountPreparedAckTransport{inner: wallet.NewHTTPClient()}
@@ -455,7 +526,7 @@ func runAccountAutopayPreparedTransactionReview(t *testing.T, browser bool, case
 			// Unlock restores encrypted local data, not an online discovery grant.
 			// Establish actual absence without changing the prepared payment;
 			// the existing body-count assertion also covers this phase.
-			requireE2EInactive(t, manager)
+			requireE2EInactive(t, manager, accountReviewPassword)
 			status, err := manager.GetAccountAutopayFundingStatus()
 			require.NoError(t, err)
 			require.True(t, status.FundingCanResume)
@@ -502,7 +573,18 @@ func runAccountAutopayPreparedTransactionReview(t *testing.T, browser bool, case
 			require.Equal(t, wallet.OperationLogSucceeded, completed.Status)
 			finalLogs, err := manager.GetOperationLogs()
 			require.NoError(t, err)
-			require.Len(t, finalLogs, len(logs), "continuation created another operation")
+			fundingIDs := func(records []*wallet.OperationLogRecord) []string {
+				var ids []string
+				for _, record := range records {
+					if record.Action == "account_autopay_fund" {
+						ids = append(ids, record.ID)
+					}
+				}
+				return ids
+			}
+			// Cold unlock now owns its SDK log. Payment continuation must still
+			// reuse exactly the existing funding operations and signed bytes.
+			require.ElementsMatch(t, fundingIDs(logs), fundingIDs(finalLogs), "continuation created another payment")
 			// Paying for hosting does not itself activate private recovery backup.
 			// The completed payment/receipt remains valid in this local-only state.
 			backupStatus := manager.GetAccountManagementStatus()
@@ -510,50 +592,5 @@ func runAccountAutopayPreparedTransactionReview(t *testing.T, browser bool, case
 			require.False(t, backupStatus.ActivationPending)
 			require.True(t, backupStatus.LocalOnly)
 		})
-	}
-	if browser {
-		manager.Close()
-		var mineMu sync.Mutex
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPost || r.URL.Path != "/mine" {
-				http.NotFound(w, r)
-				return
-			}
-			mineMu.Lock()
-			defer mineMu.Unlock()
-			heartbeat := buildDKVSKeyPathAssetTransfer(t, heartbeatOwner, gasOuts[2], gas, 280000,
-				gasOuts[2].Output.Value-1000, heartbeatOwner)
-			network.sendManyAndMine(t, []*wire.MsgTx{heartbeat}, 0)
-			gasOuts[2] = dkvsPrevOut{Point: wire.OutPoint{Hash: heartbeat.TxHash(), Index: 0}, Output: cloneDKVSTxOut(heartbeat.TxOut[0])}
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"mined":true}`))
-		}))
-		defer server.Close()
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-		defer cancel()
-		_, file, _, ok := runtime.Caller(0)
-		require.True(t, ok)
-		sdk := filepath.Dir(filepath.Dir(file))
-		wasmPath, runtimePath := buildPWAWalletRuntime(t, ctx, sdk)
-		configJSON, err := json.Marshal(config)
-		require.NoError(t, err)
-		fixtureJSON, err := json.Marshal(map[string]string{"mnemonic": dkvsClientMnemonic,
-			"password": accountReviewPassword, "contract": address.MustEncode(), "control_url": server.URL})
-		require.NoError(t, err)
-		if len(cases) == 0 {
-			cases = []string{
-				"usage: temporary Guardian renews paid hosting without changing its own recovery",
-				"usage: original AUTOPAY resumes after prebroadcast exit and lost acknowledgement",
-			}
-		}
-		args := append([]string{"scripts/verify/account-management-e2e.mjs", "--usage-cases"}, cases...)
-		command := exec.CommandContext(ctx, "node", args...)
-		command.Dir = filepath.Join(sdk, "..", "pwa")
-		command.Env = append(os.Environ(), "SAT20_ACCOUNT_E2E_CONFIG="+string(configJSON),
-			"SAT20_PWA_AUTOPAY_REVIEW="+string(fixtureJSON), "SAT20_PWA_E2E_WASM="+wasmPath, "SAT20_PWA_E2E_WASM_RUNTIME="+runtimePath)
-		var output bytes.Buffer
-		command.Stdout = io.MultiWriter(&output, os.Stdout)
-		command.Stderr = command.Stdout
-		require.NoError(t, command.Run(), "paid Guardian/continuation browser review: %s", output.String())
 	}
 }

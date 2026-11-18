@@ -23,7 +23,7 @@ func TestClosedWithdrawalSharedPreparationPreservesOrdinaryBytes(t *testing.T) {
 	}
 	if !equalSTPBitcoinChain(material.PreTxs, expected) || !equalSTPBitcoinTx(material.CloseTx, channel.RemoteCommitment.CommitTx) ||
 		len(material.AssetProofs) != 0 || material.DeAnchorTx != nil || material.Id != 0 {
-		t.Fatal("shared preparation changed ordinary signed bytes or added native/lifecycle material")
+		t.Fatal("shared preparation changed ordinary signed bytes or added channel/lifecycle material")
 	}
 	after, err := manager.db.Read([]byte(GetChannelKey(channel.ChannelId)))
 	if err != nil || !bytes.Equal(before, after) || client.broadcasts != 0 ||
@@ -52,18 +52,18 @@ func TestClosedWithdrawalSharedCompletionPreservesOrdinaryOwnership(t *testing.T
 	}
 }
 
-func TestClosedWithdrawalSharedHooksKeepUnsupportedNativeGuard(t *testing.T) {
+func TestUnsupportedWithdrawal(t *testing.T) {
 	manager, channel, _, client := closedWithdrawalBoundsFixture(t, false)
-	channel.AssetFunding = map[string][]byte{"unknown-native": {1}}
+	channel.AssetFunding = map[string][]byte{"unknown-channel": {1}}
 	if _, err := manager.prepareClosedWithdrawal(channel, channel.RemoteCommitment.CommitTx); err == nil {
-		t.Fatal("shared preparation silently removed the native validation guard")
+		t.Fatal("shared preparation silently removed the channel validation guard")
 	}
 	channel.AssetFunding = nil
-	resv := &ClosingReservation{Channel: channel, ClosingDataInDB: ClosingDataInDB{AssetProofs: map[string][]byte{"unknown-native": {1}}}}
+	resv := &ClosingReservation{Channel: channel, ClosingDataInDB: ClosingDataInDB{AssetProofs: map[string][]byte{"unknown-channel": {1}}}}
 	if err := manager.completeClosedWithdrawal(resv); err == nil {
-		t.Fatal("unknown durable native material completed through the ordinary no-op")
+		t.Fatal("unknown durable channel material completed through the ordinary no-op")
 	}
 	if client.broadcasts != 0 || len(manager.GetClosingReservations()) != 0 || len(manager.GetLocalActionReservations()) != 0 {
-		t.Fatal("rejected native material changed lifecycle state or broadcast")
+		t.Fatal("rejected channel material changed lifecycle state or broadcast")
 	}
 }

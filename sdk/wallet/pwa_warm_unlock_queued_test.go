@@ -21,14 +21,14 @@ func TestPWAWarmUnlockAndIdentitySwitchDuringRGBNetworkWait(t *testing.T) {
 	release := func() { once.Do(func() { close(remote.release) }) }
 	defer release()
 	manager.http = remote
-	client, err := manager.GetDKVSClient()
+	client, err := manager.accountDKVSClient()
 	if err != nil {
 		t.Fatal(err)
 	}
 	client.Http = remote
 	rgbDone := make(chan error, 1)
 	go func() {
-		_, err := manager.syncRootRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+		_, err := manager.syncRootRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{})
 		rgbDone <- err
 	}()
 	select {

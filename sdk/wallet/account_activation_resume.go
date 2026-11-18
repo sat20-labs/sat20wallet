@@ -70,7 +70,7 @@ func (p *Manager) activationIdentityLocked(target *accountActivationIntent,
 	if err != nil || walletFingerprint(root.Wallet) != target.RootFingerprint {
 		return ErrAccountManagementWalletUnavailable
 	}
-	return p.checkAccountManagedDataImport()
+	return p.checkAccountRestore("wallets", AccountManagedDataGlobalScope)
 }
 
 func (p *Manager) prepareAccountActivation(secret []byte, password string,
@@ -85,7 +85,7 @@ func (p *Manager) prepareAccountActivation(secret []byte, password string,
 		p.mutex.RUnlock()
 		return ErrAccountManagementSecretConflict
 	}
-	if err := p.checkAccountManagedDataImport(); err != nil {
+	if err := p.checkAccountRestore("wallets", AccountManagedDataGlobalScope); err != nil {
 		p.mutex.RUnlock()
 		return err
 	}
@@ -202,7 +202,7 @@ func (p *Manager) prepareAccountActivation(secret []byte, password string,
 			return errAccountSnapshotChanged
 		}
 		// Recheck in the local publication gate before persisting a new intent.
-		if err := p.checkAccountManagedDataImport(); err != nil {
+		if err := p.checkAccountRestore("wallets", AccountManagedDataGlobalScope); err != nil {
 			return err
 		}
 		staged := *live
@@ -366,11 +366,6 @@ func (p *Manager) resumePendingActivation(secret []byte, password string) (bool,
 		}
 		updated.Activation = nil
 		updated.LastRehearsalAt = time.Now().UnixMilli()
-		updated.ManagedDataGeneration++
-		if updated.ManagedDataGeneration == 0 {
-			return fmt.Errorf("account generation overflow")
-		}
-		updated.ManagedDataDirty = true
 		encoded, err := EncodeToBytes(&updated)
 		if err != nil {
 			return err
@@ -383,6 +378,7 @@ func (p *Manager) resumePendingActivation(secret []byte, password string) (bool,
 		return nil
 	})
 	if err == nil {
+		defer p.startAccountRuntime(false)
 		baseline, baselineErr := p.prepareAccountBaseline(context.Background())
 		if baselineErr != nil {
 			return true, baselineErr

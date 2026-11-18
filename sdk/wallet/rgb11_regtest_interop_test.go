@@ -72,6 +72,14 @@ func newRegtestEsplora(base string) *regtestEsplora {
 	}
 }
 
+func (e *regtestEsplora) GetGenesisHash() (string, error) {
+	var hash string
+	if err := e.request(http.MethodGet, "/block-height/0", "", &hash); err != nil {
+		return "", err
+	}
+	return hash, nil
+}
+
 func (e *regtestEsplora) request(method, path, body string, target any) error {
 	req, err := http.NewRequest(method, e.base+path, strings.NewReader(body))
 	if err != nil {

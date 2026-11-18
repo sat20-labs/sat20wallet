@@ -1,0 +1,575 @@
+package wallet
+
+import (
+	"errors"
+	"fmt"
+	"strconv"
+
+	"github.com/btcsuite/btcd/wire"
+	indexer "github.com/sat20-labs/indexer/common"
+)
+
+func needsWithdrawalFacts(channel *Channel) bool {
+	if channel == nil {
+		return false
+	}
+	return needsProofJournal(channel, channel.LocalCommitment) || needsProofJournal(channel, channel.RemoteCommitment) || closedWithdrawalUsesInputFacts(&channel.ChannelInDB)
+}
+
+func indexedChannel(channel *Channel) bool {
+	if channel == nil {
+		return false
+	}
+	for a, outputs := range channel.FundingUtxos {
+		if len(outputs) == 0 {
+			continue
+		}
+		switch a.Protocol {
+		case indexer.PROTOCOL_NAME_ORDX, indexer.PROTOCOL_NAME_RUNES, indexer.PROTOCOL_NAME_BRC20, indexer.PROTOCOL_NAME_ATOM:
+			return true
+		}
+	}
+	return false
+}
+
+func usesRecoveryClose(resv *ClosingReservation) bool {
+	if resv == nil || resv.Channel == nil {
+		return false
+	}
+	if len(resv.AssetProofs) != 0 || len(resv.Channel.AssetFunding) != 0 {
+		return true
+	}
+	if indexedChannel(resv.Channel) || needsRecoveryExchange(resv.Channel, resv.Channel.RemoteCommitment) || needsRecoveryExchange(resv.Channel, resv.Channel.LocalCommitment) {
+		return true
+	}
+	return resv.Channel.LocalCommitment != nil && len(resv.Channel.LocalCommitment.AssetProofs) != 0 ||
+		resv.Channel.RemoteCommitment != nil && len(resv.Channel.RemoteCommitment.AssetProofs) != 0
+}
+
+// persistForceCloseLocked freezes the signed Bitcoin package, proof and
+// monitor state in one transaction. The caller holds the channel mutex. channel
+// reservations use PreTxs for the complete ordered package (including CloseTx),
+// because a commitment can also have signed BRC20 successors. Replaying only a
+// transaction ID or rebuilding at a later height would lose that exact package.
+func (p *Manager) persistForceCloseLocked(resv *ClosingReservation, next ClosingDataInDB, status ChannelStatus) error {
+	if p == nil || p.db == nil || resv == nil || resv.Channel == nil || next.CloseTx == nil ||
+		next.Id == 0 || next.Id != resv.Id || next.ChannelId != resv.Channel.ChannelId {
+		return fmt.Errorf("invalid channel force-close persistence context")
+	}
+	if status != CS_CLOSED_FORCELY && (status < CS_CLOSE_FORCELY_BROADCASTED || status > CS_CLOSE_FORCELY_SWEEP_CONFIRMED) {
+		return fmt.Errorf("invalid channel force-close phase %d", status)
+	}
+	if resv.Channel.Status >= CS_CLOSE_FORCELY_BROADCASTED && resv.Channel.Status <= CS_CLOSE_FORCELY_SWEEP_CONFIRMED &&
+		resv.Channel.UpdateTime != resv.Id {
+		return fmt.Errorf("stale channel force-close reservation")
+	}
+	next.CloseTx = next.CloseTx.Copy()
+	next.PreTxs = cloneSTPBitcoinChain(next.PreTxs)
+	next.AssetProofs = cloneSTPAssetProofs(next.AssetProofs)
+	if next.DeAnchorTx != nil {
+		next.DeAnchorTx = next.DeAnchorTx.Copy()
+	}
+	if len(next.PreTxs) == 0 {
+		next.PreTxs = []*wire.MsgTx{next.CloseTx.Copy()}
+	}
+	if _, err := forceClosePackage(&next); err != nil {
+		return err
+	}
+	next.Status = ResvStatus(status)
+	if status == CS_CLOSED_FORCELY {
+		next.Status = RS_CLOSED
+	}
+	key := []byte(GetResvKey(RESV_TYPE_CLOSE, next.Id))
+	if raw, err := p.db.Read(key); err == nil {
+		var previous ClosingDataInDB
+		if err := DecodeFromBytes(raw, &previous); err != nil {
+			return err
+		}
+		if previous.ChannelId != next.ChannelId || previous.Id != next.Id {
+			return fmt.Errorf("channel force-close reservation identity changed")
+		}
+		if previous.Status == next.Status && (!equalSTPBitcoinChain(previous.PreTxs, next.PreTxs) ||
+			!equalSTPBitcoinChain([]*wire.MsgTx{previous.CloseTx}, []*wire.MsgTx{next.CloseTx}) ||
+			!equalSTPAssetProofs(previous.AssetProofs, next.AssetProofs)) {
+			return fmt.Errorf("channel force-close signed package is immutable")
+		}
+	} else if !errors.Is(err, indexer.ErrKeyNotFound) {
+		return err
+	}
+	raw, err := EncodeToBytes(&resv.Channel.ChannelInDB)
+	if err != nil {
+		return err
+	}
+	var candidate ChannelInDB
+	if err := DecodeFromBytes(raw, &candidate); err != nil {
+		return err
+	}
+	candidate.Status, candidate.UpdateTime = status, next.Id
+	candidate.ClosingTx = next.CloseTx.Copy()
+	if err := candidate.PrepareForSave(); err != nil {
+		return err
+	}
+	channelRaw, err := EncodeToBytes(&candidate)
+	if err != nil {
+		return err
+	}
+	reservationRaw, err := EncodeToBytes(&next)
+	if err != nil {
+		return err
+	}
+	batch, err := NewAtomicWriteBatch(p.db)
+	if err != nil {
+		return err
+	}
+	defer batch.Close()
+	if err := batch.Put([]byte(GetChannelKey(candidate.ChannelId)), channelRaw); err != nil {
+		return err
+	}
+	if err := batch.Put(key, reservationRaw); err != nil {
+		return err
+	}
+	if status == CS_CLOSED_FORCELY {
+		preparedKey := stpPreparedRecoveryKey(resv.Channel)
+		if _, err := p.db.Read(preparedKey); err == nil {
+			if err := batch.Delete(preparedKey); err != nil {
+				return err
+			}
+		} else if !errors.Is(err, indexer.ErrKeyNotFound) {
+			return err
+		}
+	}
+	if err := batch.Flush(); err != nil {
+		return err
+	}
+	// In-memory state is published only after both durable values committed.
+	resv.Channel.ChannelInDB = candidate
+	resv.Channel.ResvId = next.Id
+	if status == CS_CLOSED_FORCELY {
+		resv.Channel.ResvId = 0
+	}
+	resv.ClosingDataInDB = next
+	p.AddResv(resv)
+	p.DisableChannel(resv.Channel)
+	p.backupChannel(resv.Channel)
+	return nil
+}
+
+func forceClosePackage(record *ClosingDataInDB) ([]*wire.MsgTx, error) {
+	if record == nil || record.CloseTx == nil {
+		return nil, fmt.Errorf("channel force-close transaction is missing")
+	}
+	seen := make(map[string]*wire.MsgTx)
+	var result []*wire.MsgTx
+	for _, tx := range append(append([]*wire.MsgTx{}, record.PreTxs...), record.CloseTx) {
+		if tx == nil {
+			return nil, fmt.Errorf("nil channel force-close package transaction")
+		}
+		if previous := seen[tx.TxID()]; previous != nil {
+			if !equalSTPBitcoinChain([]*wire.MsgTx{previous}, []*wire.MsgTx{tx}) {
+				return nil, fmt.Errorf("conflicting channel force-close transaction witness")
+			}
+			continue
+		}
+		seen[tx.TxID()] = tx
+		result = append(result, tx)
+	}
+	return result, nil
+}
+
+func (p *Manager) broadcastForceCloseLocked(resv *ClosingReservation) error {
+	var deanchorErr error
+	if resv.IsInitiator && resv.DeAnchorTx != nil {
+		if p.GetIndexerRPCClient_SatsNet() == nil {
+			deanchorErr = fmt.Errorf("channel force-close SatoshiNet client is unavailable")
+		} else if !p.GetIndexerRPCClient_SatsNet().IsTxConfirmed(resv.DeAnchorTx.TxID()) {
+			_, deanchorErr = p.BroadcastTx_SatsNet(resv.DeAnchorTx)
+		}
+	}
+	txs, err := forceClosePackage(&resv.ClosingDataInDB)
+	if err != nil {
+		return errors.Join(deanchorErr, err)
+	}
+	_, err = p.broadcastPunishPackage(txs, "channel force close recovery")
+	return errors.Join(deanchorErr, err)
+}
+
+func (p *Manager) startForceCloseLocked(resv *ClosingReservation) error {
+	if err := p.persistForceCloseLocked(resv, resv.ClosingDataInDB, CS_CLOSE_FORCELY_BROADCASTED); err != nil {
+		return err
+	}
+	return p.broadcastForceCloseLocked(resv)
+}
+
+func (p *Manager) confirmedCloseTx(resv *ClosingReservation) (*wire.MsgTx, error) {
+	if p.GetIndexerRPCClient() == nil || resv.CloseTx == nil || !p.GetIndexerRPCClient().IsTxConfirmed(resv.CloseTx.TxID()) {
+		return nil, fmt.Errorf("channel force-close transaction is awaiting confirmation")
+	}
+	raw, err := p.GetIndexerRPCClient().GetRawTx(resv.CloseTx.TxID())
+	if err != nil {
+		return nil, err
+	}
+	tx, err := DecodeMsgTx(raw)
+	if err != nil || tx.TxID() != resv.CloseTx.TxID() {
+		return nil, fmt.Errorf("channel force-close canonical transaction is unavailable")
+	}
+	return tx, nil
+}
+
+func (p *Manager) forceCloseConfirmedLocked(resv *ClosingReservation) error {
+	tx, err := p.confirmedCloseTx(resv)
+	if err != nil {
+		return err
+	}
+	if err := p.ImportSTPChannelSettlement(tx, resv.AssetProofs); err != nil {
+		return err
+	}
+	height, err := p.GetIndexerRPCClient().GetTxHeight(tx.TxID())
+	if err != nil || height <= 0 {
+		return fmt.Errorf("channel force-close confirmation height is unavailable: %w", err)
+	}
+	next := resv.ClosingDataInDB
+	next.CloseHeight = height
+	if err := p.persistForceCloseLocked(resv, next, CS_CLOSE_FORCELY_CONFIRMED); err != nil {
+		return err
+	}
+	p.SendMessageToUpper(MSG_CHANNEL_FORCELY_CLOSED, tx.TxID())
+	p.updateOperationLogByReservationBestEffort(RESV_TYPE_CLOSE, resv.Id, OperationLogUpdate{
+		Status: OperationLogRunning, Message: "Commitment confirmed; waiting for CSV delay before sweep",
+		Details: map[string]string{"commit_txid": tx.TxID(), "close_height": strconv.Itoa(height), "csv_delay": strconv.Itoa(int(resv.Channel.CsvDelay))},
+	})
+	return nil
+}
+
+func (p *Manager) forceCloseCompletedLocked(resv *ClosingReservation) error {
+	if err := p.importSTPPreparedFunding(resv.Channel); err != nil {
+		return err
+	}
+	tx, err := p.confirmedCloseTx(resv)
+	if err != nil {
+		return err
+	}
+	if !resv.IsInitiator {
+		if err := p.importPeerForceCloseLocked(resv, tx); err != nil {
+			return err
+		}
+	}
+	if err := p.ImportSTPChannelSettlement(tx, resv.AssetProofs); err != nil {
+		return err
+	}
+	if err := p.persistForceCloseLocked(resv, resv.ClosingDataInDB, CS_CLOSED_FORCELY); err != nil {
+		return err
+	}
+	p.SendMessageToUpper(MSG_CHANNEL_SWEPT, tx.TxID())
+	p.updateOperationLogByReservationBestEffort(RESV_TYPE_CLOSE, resv.Id, OperationLogUpdate{
+		Status: OperationLogSucceeded, Message: "Force close completed; funds are spendable", TxID: tx.TxID(),
+		Result: map[string]string{"channel_id": resv.ChannelId, "txid": tx.TxID()},
+	})
+	p.DelResvWithId(resv.Id)
+	if tower := p.GetWatchTower(); tower != nil {
+		return tower.CleanAllCommitTx(resv.ChannelId)
+	}
+	return nil
+}
+
+// The peer's stored deanchor can contain only our signature. Recover the
+// canonical signed transaction before exporting its locator to the public
+// pool. Never broadcast that partial transaction or treat mempool presence as
+// proof that the mapped supply was actually burnt.
+func (p *Manager) importPeerForceCloseLocked(resv *ClosingReservation, actual *wire.MsgTx) error {
+	if err := p.importPeerCloseMainLocked(resv, actual); err != nil {
+		return err
+	}
+	remote := resv.Channel.RemoteCommitment
+	// Server commitments can return client assets through a distinct signed
+	// other-sweep. Its actual confirmed witness and proof are a separate receipt;
+	// importing the commitment alone must not complete the client's recovery.
+	for _, other := range remote.Others {
+		if other == nil || other.CommitTx == nil || len(other.AssetProofs) == 0 {
+			continue
+		}
+		if !p.GetIndexerRPCClient().IsTxConfirmed(other.CommitTx.TxID()) {
+			return fmt.Errorf("peer channel other-sweep is awaiting confirmation")
+		}
+		raw, err := p.GetIndexerRPCClient().GetRawTx(other.CommitTx.TxID())
+		if err != nil {
+			return err
+		}
+		confirmed, err := DecodeMsgTx(raw)
+		if err != nil || confirmed.TxID() != other.CommitTx.TxID() {
+			return fmt.Errorf("peer channel other-sweep canonical transaction is unavailable")
+		}
+		if err := p.ImportSTPChannelSettlement(confirmed, other.AssetProofs); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Importing the current peer main and its paired burn is distinct from
+// completing a client-selected withdrawal of the separate Other receipts.
+func (p *Manager) importPeerCloseMainLocked(resv *ClosingReservation, actual *wire.MsgTx) error {
+	remote := resv.Channel.RemoteCommitment
+	if remote == nil || remote.CommitTx == nil || remote.CommitTx.TxID() != actual.TxID() {
+		return fmt.Errorf("peer channel force-close commitment changed")
+	}
+	if remote.DeAnchorTx != nil {
+		rpc := p.GetIndexerRPCClient_SatsNet()
+		if rpc == nil || !rpc.IsTxConfirmed(remote.DeAnchorTx.TxID()) {
+			return fmt.Errorf("peer channel force-close descending transaction is awaiting confirmation")
+		}
+		raw, err := rpc.GetRawTx(remote.DeAnchorTx.TxID())
+		if err != nil {
+			return err
+		}
+		confirmed, err := DecodeMsgTx_SatsNet(raw)
+		if err != nil || confirmed.TxID() != remote.DeAnchorTx.TxID() {
+			return fmt.Errorf("peer channel force-close descending transaction is unavailable")
+		}
+		next := resv.ClosingDataInDB
+		next.DeAnchorTx = confirmed
+		if err := p.persistForceCloseLocked(resv, next, resv.Channel.Status); err != nil {
+			return err
+		}
+	}
+	return p.ImportSTPChannelSettlement(actual, remote.AssetProofs)
+}
+
+// Old observations may already contain Others, including an earlier broadcast
+// with an unknown outcome. Keep that durable record unchanged, but never grant
+// it withdrawal authority merely because its phase says SWEEP_BROADCASTED.
+func peerObservationPackageLocked(resv *ClosingReservation) ([]*wire.MsgTx, bool, error) {
+	channel, w := resv.Channel, resv.LocalWallet()
+	remote := channel.RemoteCommitment
+	if resv.Id == 0 || resv.ChannelId != channel.ChannelId || channel.UpdateTime != resv.Id ||
+		w == nil || resv.WalletId != w.GetWalletId() || channel.LocalWalletId != w.GetId() ||
+		channel.LocalChanCfg.WalletId != w.GetSubAccount() || channel.LocalChanCfg.PaymentKey == nil ||
+		w.GetPaymentPubKey() == nil || !channel.LocalChanCfg.PaymentKey.IsEqual(w.GetPaymentPubKey()) ||
+		remote == nil || remote.CommitTx == nil || resv.CloseTx == nil ||
+		remote.CommitTx.TxID() != resv.CloseTx.TxID() || !equalSTPAssetProofs(resv.AssetProofs, remote.AssetProofs) {
+		return nil, false, fmt.Errorf("peer channel observation changed channel, account or current server parent")
+	}
+	frozen, err := forceClosePackage(&resv.ClosingDataInDB)
+	if err != nil {
+		return nil, false, err
+	}
+	main := resv.ClosingDataInDB
+	main.PreTxs = append([]*wire.MsgTx{resv.CloseTx}, remote.NextTxs...)
+	txs, err := forceClosePackage(&main)
+	if err != nil {
+		return nil, false, err
+	}
+	if equalSTPBitcoinChain(frozen, txs) {
+		return txs, false, nil
+	}
+	legacy := main
+	legacy.PreTxs = appendCommitmentOtherTxs(append([]*wire.MsgTx(nil), txs...), remote)
+	old, err := forceClosePackage(&legacy)
+	if err != nil || !equalSTPBitcoinChain(frozen, old) {
+		return nil, false, fmt.Errorf("peer channel observation has an unknown durable package")
+	}
+	return txs, true, nil
+}
+
+func (p *Manager) retryPeerObservationLocked(resv *ClosingReservation) error {
+	txs, legacyWithdrawal, err := peerObservationPackageLocked(resv)
+	if err != nil {
+		return err
+	}
+	actual, err := p.confirmedCloseTx(resv)
+	if err != nil {
+		return err // Do not publish any successor before this exact parent confirms.
+	}
+	if !equalSTPBitcoinChain([]*wire.MsgTx{actual}, []*wire.MsgTx{resv.CloseTx}) {
+		return fmt.Errorf("peer channel observation canonical server witness changed")
+	}
+	fetcher := resv.Channel.GetCommitmentPrefetchor()
+	AddTxOutputsToPrevFetcher(fetcher, actual)
+	for _, tx := range txs[1:] {
+		if err := VerifySignedTx(tx, fetcher); err != nil {
+			return fmt.Errorf("peer channel protocol successor is not fully signed: %w", err)
+		}
+		AddTxOutputsToPrevFetcher(fetcher, tx)
+	}
+	if _, err := p.broadcastPunishPackage(txs, "peer channel protocol successors"); err != nil {
+		return err
+	}
+	confirmed := txs
+	if legacyWithdrawal {
+		// Never infer that an old child did not execute from a missing lookup.
+		// Until every original dependency is confirmed, retaining this pending
+		// phase also keeps the existing C1 closed-channel gate from rebuilding.
+		confirmed, err = forceClosePackage(&resv.ClosingDataInDB)
+		if err != nil {
+			return err
+		}
+	}
+	for _, tx := range confirmed {
+		if !p.GetIndexerRPCClient().IsTxConfirmed(tx.TxID()) {
+			if legacyWithdrawal {
+				// A different spender is a conflict, not permission to rebuild or
+				// publish the old recovery again. An unavailable query stays pending.
+				for _, input := range tx.TxIn {
+					if input == nil {
+						return fmt.Errorf("previous peer client recovery has a nil input")
+					}
+					spender, lookupErr := p.GetIndexerRPCClient().GetUtxoSpentTx(input.PreviousOutPoint.String())
+					if lookupErr != nil {
+						return fmt.Errorf("previous peer client recovery outcome is unresolved: %w", lookupErr)
+					}
+					if spender != "" && spender != tx.TxID() {
+						return fmt.Errorf("previous peer client recovery conflicts with spender %s", spender)
+					}
+				}
+				if raw, lookupErr := p.GetIndexerRPCClient().GetRawTx(tx.TxID()); lookupErr == nil {
+					canonical, decodeErr := DecodeMsgTx(raw)
+					if decodeErr != nil || !equalSTPBitcoinChain([]*wire.MsgTx{canonical}, []*wire.MsgTx{tx}) {
+						return fmt.Errorf("previous peer client recovery canonical witness changed")
+					}
+					return fmt.Errorf("previous peer client recovery is visible but awaiting confirmation and receipt validation")
+				}
+			}
+			return fmt.Errorf("peer channel observation dependency is unresolved; original package retained")
+		}
+		raw, err := p.GetIndexerRPCClient().GetRawTx(tx.TxID())
+		if err != nil {
+			return err
+		}
+		canonical, err := DecodeMsgTx(raw)
+		if err != nil || !equalSTPBitcoinChain([]*wire.MsgTx{canonical}, []*wire.MsgTx{tx}) {
+			return fmt.Errorf("peer channel observation canonical dependency changed")
+		}
+	}
+	if err := p.importSTPPreparedFunding(resv.Channel); err != nil {
+		return err
+	}
+	if legacyWithdrawal {
+		err = p.importPeerForceCloseLocked(resv, actual)
+	} else {
+		err = p.importPeerCloseMainLocked(resv, actual)
+	}
+	if err != nil {
+		return err
+	}
+	if err := p.persistForceCloseLocked(resv, resv.ClosingDataInDB, CS_CLOSED_FORCELY); err != nil {
+		return err
+	}
+	p.SendMessageToUpper(MSG_CHANNEL_FORCELY_CLOSED, actual.TxID())
+	message := "Peer force-close observed; no client withdrawal was requested"
+	if legacyWithdrawal {
+		message = "Peer force-close and previously published recovery confirmed; no new withdrawal was broadcast"
+	}
+	p.updateOperationLogByReservationBestEffort(RESV_TYPE_CLOSE, resv.Id, OperationLogUpdate{
+		Status: OperationLogSucceeded, Message: message, TxID: actual.TxID(),
+		Result: map[string]string{"channel_id": resv.ChannelId, "txid": actual.TxID()},
+	})
+	p.DelResvWithId(resv.Id)
+	if tower := p.GetWatchTower(); tower != nil {
+		return tower.CleanAllCommitTx(resv.ChannelId)
+	}
+	return nil
+}
+
+// RetryForceClose resumes only the exact durable package. It never
+// recreates a broadcast sweep with a new locktime. Server CSV signing remains
+// with the server/bootstrap signer; its completed package must then be handed
+// to HandleForceCloseSweep before the first broadcast.
+func (p *Manager) RetryForceClose(resv *ClosingReservation) (bool, error) {
+	// This entrypoint is also called directly by peer-close observation. Route
+	// the explicit owner before taking locks, just as the ordinary monitor does.
+	if handled, err := p.retryClosedWithdrawalChild(resv); handled {
+		return true, err
+	}
+	if !usesRecoveryClose(resv) {
+		return false, nil
+	}
+	resv.Lock()
+	defer resv.Unlock()
+	resv.Channel.Mutex.Lock()
+	defer resv.Channel.Mutex.Unlock()
+	if !resv.IsInitiator && resv.Channel.IsInitiator &&
+		resv.Channel.Status >= CS_CLOSE_FORCELY_BROADCASTED && resv.Channel.Status <= CS_CLOSE_FORCELY_SWEEP_CONFIRMED {
+		return true, p.retryPeerObservationLocked(resv)
+	}
+	switch resv.Channel.Status {
+	case CS_CLOSE_FORCELY_BROADCASTED:
+		err := p.broadcastForceCloseLocked(resv)
+		if p.GetIndexerRPCClient() != nil && p.GetIndexerRPCClient().IsTxConfirmed(resv.CloseTx.TxID()) {
+			return true, p.forceCloseConfirmedLocked(resv)
+		}
+		return true, err
+	case CS_CLOSE_FORCELY_CONFIRMED:
+		if !resv.Channel.IsInitiator {
+			return false, nil
+		}
+		if p.GetIndexerRPCClient() == nil {
+			return true, fmt.Errorf("channel force-close Bitcoin client is unavailable")
+		}
+		height := p.GetIndexerRPCClient().GetSyncHeight()
+		if height-resv.CloseHeight <= int(resv.Channel.CsvDelay) {
+			return true, nil
+		}
+		pkg, err := p.BuildSignedSweepTxForClient(resv.Channel, height, resv.FeeRate)
+		if err != nil {
+			return true, err
+		}
+		return true, p.handleForceCloseSweepLocked(resv, pkg)
+	case CS_CLOSE_FORCELY_SWEEP_BROADCASTED, CS_CLOSE_FORCELY_SWEEP_CONFIRMED:
+		err := p.broadcastForceCloseLocked(resv)
+		if p.GetIndexerRPCClient() != nil && p.GetIndexerRPCClient().IsTxConfirmed(resv.CloseTx.TxID()) {
+			return true, p.forceCloseCompletedLocked(resv)
+		}
+		return true, err
+	case CS_CLOSED_FORCELY:
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
+// HandleForceCloseSweep commits a client or co-signed server recovery
+// package before broadcasting. A true handled result excludes the legacy path,
+// including when persistence, confirmation or channel receipt import fails.
+func (p *Manager) HandleForceCloseSweep(resv *ClosingReservation, pkg *SignedSweepTxPackage) (bool, error) {
+	if !usesRecoveryClose(resv) {
+		return false, nil
+	}
+	resv.Lock()
+	defer resv.Unlock()
+	resv.Channel.Mutex.Lock()
+	defer resv.Channel.Mutex.Unlock()
+	return true, p.handleForceCloseSweepLocked(resv, pkg)
+}
+
+func (p *Manager) handleForceCloseSweepLocked(resv *ClosingReservation, pkg *SignedSweepTxPackage) error {
+	if pkg == nil || pkg.SweepTx == nil {
+		if resv.Channel.Status != CS_CLOSE_FORCELY_CONFIRMED {
+			return fmt.Errorf("channel force-close has no confirmed sweep source")
+		}
+		return p.forceCloseCompletedLocked(resv)
+	}
+	if resv.Channel.Status != CS_CLOSE_FORCELY_CONFIRMED && resv.Channel.Status != CS_CLOSE_FORCELY_SWEEP_BROADCASTED {
+		return fmt.Errorf("channel force-close is not ready for a sweep")
+	}
+	if !pkg.Signed || !pkg.Verified || !pkg.Broadcastable || pkg.PrevFetcher == nil {
+		return fmt.Errorf("channel force-close sweep is not fully signed and verified")
+	}
+	if err := VerifySignedTx(pkg.SweepTx, pkg.PrevFetcher); err != nil {
+		return err
+	}
+	for name, raw := range pkg.AssetProofs {
+		protocol, ok := stpAssetProtocols.byName[name].(STPAssetChannelProtocol)
+		if !ok || len(raw) == 0 {
+			return fmt.Errorf("unknown channel force-close recovery proof %s", name)
+		}
+		if _, err := protocol.VerifyChannelProof(p, nil, pkg.SweepTx, raw, STPOpForceClose); err != nil {
+			return err
+		}
+	}
+	next := resv.ClosingDataInDB
+	next.CloseTx, next.PreTxs = pkg.SweepTx, pkg.Txs
+	next.AssetProofs = pkg.AssetProofs
+	if err := p.persistForceCloseLocked(resv, next, CS_CLOSE_FORCELY_SWEEP_BROADCASTED); err != nil {
+		return err
+	}
+	return p.broadcastForceCloseLocked(resv)
+}

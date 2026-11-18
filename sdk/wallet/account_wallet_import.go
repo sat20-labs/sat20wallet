@@ -3,8 +3,20 @@ package wallet
 import (
 	"fmt"
 
+	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 )
+
+// Only failed database writes stop account sync. Removal also reads records.
+type accountRemovalBatch struct{ indexer.WriteBatch }
+
+func (b accountRemovalBatch) Put(key, value []byte) error {
+	return accountDBWriteError(b.WriteBatch.Put(key, value))
+}
+
+func (b accountRemovalBatch) Delete(key []byte) error {
+	return accountDBWriteError(b.WriteBatch.Delete(key))
+}
 
 // Prepare wallet keys and serialization outside the short publication gate.
 // A module-local restoring marker, written by the caller first, owns resumption.
@@ -21,7 +33,7 @@ func (p *Manager) importAccountWallets(state account.ManagedState) error {
 	}
 	p.mutex.RUnlock()
 	puts := make(map[int64][]byte)
-	var deletes []int64
+	var deletes []*WalletInfo
 	for _, remote := range state.Wallets {
 		info := walletInfoByFingerprintInMap(wallets, remote.Fingerprint)
 		if remote.Deleted {
@@ -30,7 +42,7 @@ func (p *Manager) importAccountWallets(state account.ManagedState) error {
 					return fmt.Errorf("the account root cannot be deleted")
 				}
 				delete(wallets, info.Id)
-				deletes = append(deletes, info.Id)
+				deletes = append(deletes, info)
 			}
 			continue
 		}
@@ -57,6 +69,8 @@ func (p *Manager) importAccountWallets(state account.ManagedState) error {
 		puts[info.Id] = encoded
 	}
 	err := p.withAccountLocalState(false, func() error {
+		p.rgbReservationMu.Lock()
+		defer p.rgbReservationMu.Unlock()
 		p.mutex.Lock()
 		defer p.mutex.Unlock()
 		if p.accountGeneration != generation || p.accountProfile == nil ||
@@ -93,16 +107,33 @@ func (p *Manager) importAccountWallets(state account.ManagedState) error {
 				return accountDBWriteError(err)
 			}
 		}
-		for _, id := range deletes {
-			if err := batch.Delete([]byte(getWalletDBKey(id))); err != nil {
+		for _, info := range deletes {
+			if err := p.stageAccountWalletDelete(batch, walletFingerprint(info.Wallet)); err != nil {
+				return err
+			}
+			if err := batch.Delete([]byte(getWalletDBKey(info.Id))); err != nil {
 				return accountDBWriteError(err)
 			}
 		}
 		if err := batch.Put([]byte(DB_KEY_STATUS), encodedStatus); err != nil {
 			return accountDBWriteError(err)
 		}
+		finish, err := p.stageWalletRemoval(accountRemovalBatch{batch}, deletes)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if finish != nil {
+				finish(false)
+			}
+		}()
 		if err := batch.Flush(); err != nil {
 			return accountDBWriteError(err)
+		}
+		finish(true)
+		finish = nil
+		if status.CurrentWallet != p.status.CurrentWallet || status.CurrentAccount != p.status.CurrentAccount {
+			p.clearRGBDirectPreviews()
 		}
 		p.walletInfoMap = wallets
 		applyStatusSnapshot(p.status, status)

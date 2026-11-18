@@ -27,7 +27,7 @@ func TestLegacyGobRGBRecoveryFieldMustRemainNil(t *testing.T) {
 				if err := legacyFixtureRGBRecoveryIsolation(&channel); err == nil {
 					t.Fatal("old-asset isolation silently ignored a nonnil RGB-only field")
 				}
-				if !legacyFixtureNativeField("ChannelCommitmentV1", "RGBClientRecovery") {
+				if !legacyFixtureRGB11Field("ChannelCommitmentV1", "RGBClientRecovery") {
 					t.Fatal("additive RGB field was not explicitly registered in the semantic schema boundary")
 				}
 			})

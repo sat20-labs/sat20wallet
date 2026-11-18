@@ -11,6 +11,7 @@ import (
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
+	"github.com/sat20-labs/rgb11/operations"
 	"github.com/sat20-labs/rgb11/strict_types"
 )
 
@@ -58,12 +59,8 @@ func GenesisNamingOutpoints(genesis strict_types.Value) ([]wire.OutPoint, error)
 			return nil, ErrNamingOriginUnavailable
 		}
 		for _, item := range items.Items {
-			item = item.Unwrap()
-			if item.Kind != strict_types.ValueUnion || item.Name != "revealed" || item.Inner == nil {
-				return nil, ErrNamingOriginUnavailable
-			}
-			seal, ok := item.Inner.Unwrap().Field("seal")
-			if !ok {
+			kind, seal, _, err := operations.AssignmentParts(item)
+			if err != nil || kind != "revealed" {
 				return nil, ErrNamingOriginUnavailable
 			}
 			seal = seal.Unwrap()

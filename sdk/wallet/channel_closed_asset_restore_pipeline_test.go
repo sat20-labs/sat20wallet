@@ -267,7 +267,16 @@ func (w *closedAssetSecretProbe) GetCommitSecret([]byte, uint32) *secp256k1.Priv
 }
 
 func TestClosedAssetRestoreOrdinaryCommitmentSecretUsesCapturedAccount(t *testing.T) {
-	manager, channel, _, _ := closedAssetRestoreFixture(t)
+	manager, old, peer, _, _ := newClosedFundingReturnFixture(t)
+	var funding *FundingReservation
+	peer.created = func(f *FundingReservation, _ int) error { funding = f; return closedFundingReturnSigned(peer, f) }
+	if err := callClosedFundingReturn(manager, old); err != nil {
+		t.Fatal(err)
+	}
+	if funding == nil {
+		t.Fatal("opening did not return a signed channel")
+	}
+	channel := funding.Channel
 	api, ok := any(manager).(closedAssetSecretBoundary)
 	if !ok {
 		t.Fatal("missing private captured-wallet commitment/secret boundary")
@@ -278,7 +287,18 @@ func TestClosedAssetRestoreOrdinaryCommitmentSecretUsesCapturedAccount(t *testin
 	if err := api.receiveNewCommitmentForWallet(&RevocationInfo{Channel: channel}, &wwire.CommitSigInfo{}, nil, probe); err == nil || probe.reads != 1 {
 		t.Fatalf("ordinary commitment secret not captured: reads=%d err=%v", probe.reads, err)
 	}
-	rev, err := api.revokeCurrentCommitmentForWallet(&RevocationInfo{Channel: channel}, captured)
+	info := &RevocationInfo{Channel: channel, FeeRate: funding.Req.FeeRate}
+	if rev, err := api.revokeCurrentCommitmentForWallet(info, captured); err == nil || rev != nil {
+		t.Fatal("released a secret before the next local commitment was verified and stored")
+	}
+	if err := signTestCommitAt(peer, funding, uint32(channel.CommitHeight+1)); err != nil {
+		t.Fatal(err)
+	}
+	sigs := &wwire.CommitSigInfo{CommitSig: funding.FundingSigned.CommitSig, CommitDeAnchorSig: funding.FundingSigned.DeAnchorSig}
+	if err := api.receiveNewCommitmentForWallet(info, sigs, nil, captured); err != nil {
+		t.Fatal(err)
+	}
+	rev, err := api.revokeCurrentCommitmentForWallet(info, captured)
 	want := captured.GetCommitSecret(channel.PeerNodeId, uint32(channel.CommitHeight))
 	if err != nil || rev == nil || !bytes.Equal(rev.Revocation[:], want.Serialize()) {
 		t.Fatalf("ordinary revocation secret not captured: %v", err)

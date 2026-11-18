@@ -1507,7 +1507,7 @@ func sendRGB11RegtestDirectReturn(t *testing.T, sender, receiver *wallet.Manager
 	consignmentHash := prepared.State.ConsignmentHash
 
 	delivery, err := sender.DeliverAndBroadcastConfiguredRGB11AddressTransfer(
-		prepared.State.TransferID, wallet.RGB11AddressDeliveryOptions{})
+		prepared.State.TransferID)
 	require.NoError(t, err)
 	if delivery.Broadcast {
 		require.Equal(t, prepared.TxID, delivery.TxID,
@@ -1520,7 +1520,7 @@ func sendRGB11RegtestDirectReturn(t *testing.T, sender, receiver *wallet.Manager
 
 	require.Eventually(t, func() bool {
 		_, receiveSyncErr := receiver.SyncConfiguredRGB11AddressMailbox(context.Background(),
-			dkvsindexer.RecordVerificationOptions{}, wallet.RGB11AddressDeliveryOptions{})
+			dkvsindexer.RecordVerificationOptions{})
 		if receiveSyncErr != nil {
 			return false
 		}
@@ -1532,7 +1532,7 @@ func sendRGB11RegtestDirectReturn(t *testing.T, sender, receiver *wallet.Manager
 			return false
 		}
 		_, sendSyncErr := sender.SyncConfiguredRGB11AddressMailbox(context.Background(),
-			dkvsindexer.RecordVerificationOptions{}, wallet.RGB11AddressDeliveryOptions{})
+			dkvsindexer.RecordVerificationOptions{})
 		if sendSyncErr != nil {
 			return false
 		}
@@ -2050,7 +2050,7 @@ func rgb11RegtestCanonicalRecoveryPackage(t *testing.T, manager *wallet.Manager)
 	require.NoError(t, err)
 	snapshot := &rgb11wallet.RGB11WalletSnapshot{
 		Version: rgb11wallet.WalletSnapshotVersion, WalletID: walletID,
-		AccountIndex: accountIndex, EngineBuildID: rgb11wallet.NativeEngineBuildID,
+		AccountIndex: accountIndex, EngineBuildID: rgb11wallet.RGB11EngineBuildID,
 		ProjectionRecords: projectionRecords, EngineRecords: engineRecords,
 	}
 	require.NoError(t, rgb11wallet.ValidateWalletSnapshot(snapshot))

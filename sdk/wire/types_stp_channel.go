@@ -187,7 +187,7 @@ type CommitSigInfo struct {
 	// releasing signatures for the parent commitment or its funding ancestors.
 	RecoveryOnly         bool              `json:"recoveryOnly,omitempty"`
 	RecoveryCommitTxID   string            `json:"recoveryCommitTxId,omitempty"`
-	NativeOtherTxs       [][]string        `json:"nativeOtherTxs,omitempty"`
+	OtherTxs       [][]string        `json:"otherTxs,omitempty"`
 	CommitAssetProofs    map[string][]byte `json:"commitAssetProofs,omitempty"`
 	CommitSig            [][]byte          `json:"commitSig"`
 	CommitDeAnchorSig    [][]byte          `json:"commitDeAnchorSig"`
@@ -225,7 +225,7 @@ type LockCommitSigAndRevokeResp struct { // RevokeAndAck
 	BaseResp
 	RecoveryOnly       bool          `json:"recoveryOnly,omitempty"`
 	RecoveryCommitTxID string        `json:"recoveryCommitTxId,omitempty"`
-	NativeOtherTxs     [][]string    `json:"nativeOtherTxs,omitempty"`
+	OtherTxs     [][]string    `json:"otherTxs,omitempty"`
 	RGBRecoveryTxs     []string      `json:"rgbRecoveryTxs,omitempty"`
 	Id                 int64         `json:"id"`
 	Rev                *RevokeAndAck `json:"rev"`
@@ -278,7 +278,7 @@ type RevokeAndAck struct {
 	NextRevKey []byte   `json:"nextRevKey"` // the next commitment point for the next commitment tx
 	// Fully signed recovery packages for the sender's new commitment. Each
 	// group is ordered as previous transactions, the sweep, then successors.
-	NativeOtherTxs [][]string `json:"nativeOtherTxs,omitempty"`
+	OtherTxs [][]string `json:"otherTxs,omitempty"`
 	RGBRecoveryTxs []string   `json:"rgbRecoveryTxs,omitempty"`
 }
 

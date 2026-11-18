@@ -1,9 +1,9 @@
 package wallet
 
-// GetDKVSClient returns the configured endpoint client coordinated by this
+// accountDKVSClient returns the endpoint client privately coordinated by this
 // Manager. Explicit subscriptions are served from the confirmed local replica;
 // writes use the same durable client outbox as account-management domains.
-func (p *Manager) GetDKVSClient() (*SatsNetDKVSClient, error) {
+func (p *Manager) accountDKVSClient() (*SatsNetDKVSClient, error) {
 	if p == nil || p.db == nil {
 		return nil, ErrDKVSPathNotSynced
 	}
@@ -16,11 +16,80 @@ func (p *Manager) StartDKVSSync() error {
 	if err := p.accountDBFailure(); err != nil {
 		return err
 	}
-	if _, err := p.GetDKVSClient(); err != nil {
+	if !p.accountRecoveryConfigured() {
+		return ErrDKVSPathNotSynced
+	}
+	if _, err := p.accountDKVSClient(); err != nil {
 		return err
 	}
-	p.ensureDKVSManager().start()
+	if p.ensureDKVSManager().start() {
+		// A new worker needs its account baseline even when remote data is unchanged.
+		p.requestAccountSync()
+	}
 	return nil
+}
+
+func (p *Manager) accountRecoveryConfigured() bool {
+	if p == nil {
+		return false
+	}
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	return p.accountProfile != nil && p.accountProfile.RecoveryConfigured
+}
+
+// Discovery is an explicit entry/retry operation, not an inactive account's
+// ordinary backup worker. It shares the existing cancellable DKVS lifetime.
+func (p *Manager) startAccountDiscovery() error {
+	if err := p.accountDBFailure(); err != nil {
+		return err
+	}
+	if p == nil {
+		return ErrDKVSPathNotSynced
+	}
+	p.mutex.RLock()
+	unlocked := p.wallet != nil && p.accountProfile != nil &&
+		len(p.accountSecret) == 32 && p.accountPassword != ""
+	p.mutex.RUnlock()
+	if !unlocked {
+		return ErrDKVSPathNotSynced
+	}
+	if _, err := p.accountDKVSClient(); err != nil {
+		return err
+	}
+	p.ensureDKVSManager().startWorker(true)
+	return nil
+}
+
+// Native callers still own StartDKVSSync explicitly. A started wallet runtime
+// resumes its account service only at startup, cold unlock or activation.
+func (p *Manager) startAccountRuntime(discover bool) {
+	if p == nil {
+		return
+	}
+	p.actionMonitorLock.Lock()
+	defer p.actionMonitorLock.Unlock()
+	// Only local initialization follows. Serialize this start with runtime
+	// shutdown so an activation completion cannot restart a closed wallet.
+	if !p.actionMonitorRunning {
+		return
+	}
+	p.mutex.RLock()
+	unlocked := p.wallet != nil && p.accountProfile != nil &&
+		len(p.accountSecret) == 32 && p.accountPassword != ""
+	p.mutex.RUnlock()
+	if !unlocked {
+		return
+	}
+	if p.accountRecoveryConfigured() {
+		if err := p.StartDKVSSync(); err != nil {
+			Log.Warningf("start activated account synchronization failed: %v", err)
+		}
+	} else if discover {
+		if err := p.startAccountDiscovery(); err != nil {
+			Log.Warningf("start account entry discovery failed: %v", err)
+		}
+	}
 }
 
 // RetryDKVSSync wakes the existing worker for an immediate synchronization attempt.

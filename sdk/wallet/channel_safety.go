@@ -128,7 +128,10 @@ func (p *Manager) PunishStatus(channelId string) ([]*PunishTxInfo, error) {
 	return filtered, nil
 }
 
-func (p *Manager) BuildPunishTx(channelId, commitTxId string) (*PunishTxInfo, error) {
+func (p *Manager) BuildPunishTx(channelId, commitTxId string) (opValue0 *PunishTxInfo, opErr error) {
+	opLogID := p.beginWalletLog("safety", "build_punishment", "Build punishment transaction", map[string]string{"channel_id": channelId, "commit_txid": commitTxId})
+	defer func() { p.finishWalletLog(opLogID, opErr, nil) }()
+
 	if channelId == "" || commitTxId == "" {
 		return nil, fmt.Errorf("channel id and commit txid are required")
 	}
@@ -158,7 +161,10 @@ func (p *Manager) BuildPunishTx(channelId, commitTxId string) (*PunishTxInfo, er
 
 // TestBroadcastPunishTx exposes a testnet-only drill. Runtime protection never
 // depends on this method; the SDK monitor calls HandleUnexpectedChannelClose.
-func (p *Manager) TestBroadcastPunishTx(channelId, commitTxId string) (*PunishBroadcastResult, error) {
+func (p *Manager) TestBroadcastPunishTx(channelId, commitTxId string) (opValue0 *PunishBroadcastResult, opErr error) {
+	opLogID := p.beginWalletLog("safety", "broadcast_punishment", "Broadcast punishment transaction", map[string]string{"channel_id": channelId, "commit_txid": commitTxId})
+	defer func() { p.finishWalletLog(opLogID, opErr, opValue0) }()
+
 	if !IsTestNet() {
 		return nil, fmt.Errorf("punish drill is only available on testnet")
 	}
@@ -247,7 +253,10 @@ func (p *Manager) SafetySnapshot(channelId string) (*SafetySnapshot, error) {
 	}, nil
 }
 
-func (p *Manager) CommitmentExport(channelId string) (*CommitmentExport, error) {
+func (p *Manager) CommitmentExport(channelId string) (opValue0 *CommitmentExport, opErr error) {
+	opLogID := p.beginWalletLog("safety", "export_commitment", "Export channel commitment", map[string]string{"channel_id": channelId})
+	defer func() { p.finishWalletLog(opLogID, opErr, nil) }()
+
 	channel := p.FindChannel(channelId)
 	if channel == nil {
 		return nil, fmt.Errorf("channel %s not found", channelId)
@@ -380,7 +389,14 @@ func (p *Manager) ForceClosePlan(channelId string) (*ForceClosePlan, error) {
 	return plan, nil
 }
 
-func (p *Manager) BuildSweepTx(channelId string, height int) (*SweepBuildResult, error) {
+func (p *Manager) BuildSweepTx(channelId string, height int) (opValue0 *SweepBuildResult, opErr error) {
+	if gateErr := p.CheckAccountWrite("wallets", AccountManagedDataGlobalScope); gateErr != nil {
+		return nil, gateErr
+	}
+
+	opLogID := p.beginWalletLog("safety", "build_channel_sweep", "Build channel sweep", map[string]string{"channel_id": channelId})
+	defer func() { p.finishWalletLog(opLogID, opErr, opValue0) }()
+
 	channel := p.FindChannel(channelId)
 	if channel == nil {
 		return nil, fmt.Errorf("channel %s not found", channelId)

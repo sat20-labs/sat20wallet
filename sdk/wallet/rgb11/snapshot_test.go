@@ -199,7 +199,7 @@ func TestRebindValidatedConsignmentReceiptSnapshot(t *testing.T) {
 		StateClass: "fungible", SealDisclosure: []byte{4, 5, 6},
 	}
 	existing := &ValidationReceipt{
-		Version: 1, EngineBuildID: "test-engine", ConsignmentHash: hex.EncodeToString(rawHash[:]),
+		Version: 1, EngineBuildID: RGB11EngineBuildID, ConsignmentHash: hex.EncodeToString(rawHash[:]),
 		ContractID: assetName.Ticker, SchemaID: "test-schema", StateHash: [32]byte{1},
 		ValidatedAt: 100, Status: "valid", Allocations: []ValidatedAllocation{allocationA},
 	}
@@ -226,7 +226,6 @@ func TestRebindValidatedConsignmentReceiptSnapshot(t *testing.T) {
 	}
 
 	fresh := *existing
-	fresh.EngineBuildID = "test-engine-revalidated"
 	fresh.StateHash = [32]byte{2}
 	fresh.ValidatedAt++
 	fresh.Allocations = []ValidatedAllocation{allocationA, allocationB}
@@ -306,7 +305,7 @@ func TestProjectionSnapshotRoundTripsEveryPortableRecordType(t *testing.T) {
 	raw := []byte("validated snapshot consignment")
 	digest := sha256.Sum256(raw)
 	receipt, err := source.ValidateAndStoreConsignment(context.Background(), testValidator{receipt: &ValidationReceipt{
-		Version: 1, EngineBuildID: "snapshot-test", ConsignmentHash: hex.EncodeToString(digest[:]),
+		Version: 1, EngineBuildID: RGB11EngineBuildID, ConsignmentHash: hex.EncodeToString(digest[:]),
 		ContractID: "rgb:Ar4ouaLv-b7f7Dc_-z5EMvtu-FA5KNh1-nlae~jk-8xMBo7E",
 		SchemaID:   "schema", StateHash: [32]byte{1}, Status: "valid",
 		Allocations: []ValidatedAllocation{{

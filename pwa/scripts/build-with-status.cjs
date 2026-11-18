@@ -43,9 +43,9 @@ const writeChunk = (stream, chunk) => {
   fs.writeSync(logFd, chunk)
 }
 
-const run = (label, argv, env = process.env) => new Promise((resolve, reject) => {
+const run = (label, argv, env = process.env, executable = process.execPath) => new Promise((resolve, reject) => {
   writeChunk(process.stdout, Buffer.from(`\n[${new Date().toISOString()}] ${label}\n`))
-  activeChild = spawn(process.execPath, argv, { cwd: root, env, stdio: ['inherit', 'pipe', 'pipe'] })
+  activeChild = spawn(executable, argv, { cwd: root, env, stdio: ['inherit', 'pipe', 'pipe'] })
   activeChild.stdout.on('data', (chunk) => writeChunk(process.stdout, chunk))
   activeChild.stderr.on('data', (chunk) => writeChunk(process.stderr, chunk))
   activeChild.once('error', reject)
@@ -90,6 +90,8 @@ const main = async () => {
       }, null, 2)}\n`, { flag: 'wx' })
       typecheckArgs.push('--project', typecheckConfig)
     }
+    await run('build wallet WASM', ['-C', path.resolve(root, '../sdk/wasm'), 'wallet-wasm'],
+      { ...process.env, WASM_DIR: path.join(buildDir || root, 'public', 'wasm') }, 'make')
     await run('write version metadata', [path.join(root, 'scripts', 'write-version.cjs')])
     await run('write WASM integrity metadata', [path.join(root, 'scripts', 'write-integrity-manifest.cjs')])
     if (profile !== 'skip-check') {

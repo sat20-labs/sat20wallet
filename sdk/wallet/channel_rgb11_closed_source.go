@@ -88,7 +88,7 @@ func (p *Manager) prepareSTPRGBClosedChannelSource(f *STPRGBReservationEvidence,
 		remote.CommitTx == nil || stored.ClosingTx == nil || remote.CommitTx.TxID() != stored.ClosingTx.TxID() {
 		return nil, fmt.Errorf("RGB closed source backup has a foreign account, generation, or commitment")
 	}
-	witness, _, err := p.nativeChannelWitness(owner, f.channelID)
+	witness, _, err := p.channelOwnerWitness(owner, f.channelID)
 	if err != nil || !bytes.Equal(witness, stored.RedeemScript) {
 		return nil, fmt.Errorf("RGB closed source changed its fixed private owner pair")
 	}
@@ -122,7 +122,7 @@ func (p *Manager) prepareSTPRGBClosedChannelSource(f *STPRGBReservationEvidence,
 		return nil, nil
 	}
 	ctx := context.Background()
-	chains, err := p.newNativeSettlementChains(ctx, owner)
+	chains, err := p.newSettlementChains(ctx, owner)
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +135,7 @@ func (p *Manager) prepareSTPRGBClosedChannelSource(f *STPRGBReservationEvidence,
 	if _, err := (rgb11STPProtocol{}).VerifyChannelProof(p, old, actual, remote.AssetProofs[rgb11wallet.Protocol], STPOpForceClose); err != nil {
 		return nil, err
 	}
-	proof, err := selected.NativeProof()
+	proof, err := selected.RGB11Proof()
 	if err != nil {
 		return nil, err
 	}
@@ -145,8 +145,8 @@ func (p *Manager) prepareSTPRGBClosedChannelSource(f *STPRGBReservationEvidence,
 	// This ephemeral source is not registered in the public-pool store. Its
 	// current proof also checks the complete carrier and known historical
 	// co-assets against independent Bitcoin/indexer facts.
-	validated, err := p.validateNativeChannelSource(ctx, owner, f.channelID,
-		&NativeChannelSource{Version: 1, ChannelID: f.channelID, Output: output, PublicProof: proof}, nativeproof.Current)
+	validated, err := p.validateRGB11ChannelSource(ctx, owner, f.channelID,
+		&RGB11ChannelSource{Version: 1, ChannelID: f.channelID, Output: output, PublicProof: proof}, nativeproof.Current)
 	if err != nil {
 		return nil, err
 	}
@@ -176,20 +176,20 @@ func (p *Manager) prepareSTPRGBClosedChannelSource(f *STPRGBReservationEvidence,
 // a later force-close drain can use v2 FORCE_CLOSE. The exact stored forced
 // server-main identity, not that operation label alone, authorizes this path.
 // This separate predicate never relaxes public receipts.
-func (p *Manager) validateSTPRGBClosedPrivateTerminal(chains *nativeSettlementChains, validated *nativeproof.Result,
+func (p *Manager) validateSTPRGBClosedPrivateTerminal(chains *settlementChains, validated *nativeproof.Result,
 	point string, script []byte, producer string, descends []string) error {
 	bootstrap := p.GetBootstrapNodePaymentPubKey()
 	if bootstrap == nil || validated == nil || chains == nil {
 		return fmt.Errorf("RGB closed source has no independent settlement context")
 	}
 	if validated.Mode != nativeproof.Current || validated.Outpoint != point || !bytes.Equal(validated.PkScript, script) ||
-		!canonicalNativeTxID(producer) || len(script) == 0 {
+		!canonicalSettlementTxID(producer) || len(script) == 0 {
 		return fmt.Errorf("RGB closed source is not its exact current private carrier")
 	}
-	graph := &nativeReceiptGraph{manager: p, chains: chains, asset: validated.Asset,
-		bootstrap: bootstrap.SerializeCompressed(), states: make(map[schemas.InputRef]*nativeReceiptAllocation),
-		steps: make(map[string]*nativeReceiptStep), points: make(map[string][]*nativeReceiptAllocation),
-		anchorChecked: make(map[string]bool), descends: make(map[string]*nativeReceiptDescend),
+	graph := &rgb11ReceiptGraph{manager: p, chains: chains, asset: validated.Asset,
+		bootstrap: bootstrap.SerializeCompressed(), states: make(map[schemas.InputRef]*rgb11ReceiptAllocation),
+		steps: make(map[string]*rgb11ReceiptStep), points: make(map[string][]*rgb11ReceiptAllocation),
+		anchorChecked: make(map[string]bool), descends: make(map[string]*rgb11ReceiptDescend),
 		usedDescends: make(map[string]bool), delayedPools: make(map[string]bool), requiredPrivate: string(script),
 		closedPrivateProducer: producer}
 	if err := graph.walkValidatedHistory(validated, descends); err != nil {
@@ -203,7 +203,7 @@ func (p *Manager) validateSTPRGBClosedPrivateTerminal(chains *nativeSettlementCh
 
 // A graph-local predicate only: successful private source verification never
 // exposes this graph or an unclaimed sibling as a receipt or current inventory.
-func (graph *nativeReceiptGraph) validateClosedPrivateTerminal(point string, script []byte, producer string) error {
+func (graph *rgb11ReceiptGraph) validateClosedPrivateTerminal(point string, script []byte, producer string) error {
 	step := graph.steps[producer]
 	if step == nil || len(step.inputs) == 0 || !step.complete {
 		return fmt.Errorf("RGB closed source has no complete force-close consumer")
@@ -218,7 +218,7 @@ func (graph *nativeReceiptGraph) validateClosedPrivateTerminal(point string, scr
 			if output.mapping != nil {
 				return fmt.Errorf("RGB closed source client allocation was not released or was remapped")
 			}
-		} else if !sameNativeReceiptMapping(output.mapping, step.inputs[0].mapping) {
+		} else if !sameRGB11ReceiptMapping(output.mapping, step.inputs[0].mapping) {
 			return fmt.Errorf("RGB closed source changed an unclaimed sibling's mapping")
 		}
 	}

@@ -1,0 +1,448 @@
+package wallet
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"sort"
+	"sync"
+
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/wire"
+	indexer "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/rgb11/consignment"
+	"github.com/sat20-labs/rgb11/schemas"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
+	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
+	"github.com/sat20-labs/satoshinet/anchortx/nativeproof"
+	swire "github.com/sat20-labs/satoshinet/wire"
+)
+
+// RGB11ChannelSource is an authenticated, local recovery record. It is never
+// a Bitcoin-indexer balance: every use revalidates the complete RGB11 history
+// and the actual Bitcoin carrier against current chain evidence.
+type RGB11ChannelSource struct {
+	Version        uint32    `json:"version"`
+	ChannelID      string    `json:"channel_id"`
+	Output         *TxOutput `json:"output"`
+	PublicProof    []byte    `json:"public_proof"`
+	DescendTxIDs   []string  `json:"descend_txids,omitempty"`
+	PrivateWitness []byte    `json:"private_witness,omitempty"`
+}
+
+// Serializes immutable-source/monotonic-receipt checks with their local writes.
+// No network work is performed while this mutex is held.
+var rgb11ChannelInventoryMu sync.Mutex
+
+func rgb11ChannelInventoryPrefix(channel string) []byte {
+	h := sha256.Sum256([]byte(channel))
+	return []byte(GetDBKeyPrefix() + "rgb11-channel-source/" + _chain + "/" + hex.EncodeToString(h[:]) + "/")
+}
+
+func rgb11ChannelInventoryKey(channel, outpoint string) []byte {
+	return append(rgb11ChannelInventoryPrefix(channel), []byte(outpoint)...)
+}
+
+func (p *Manager) validateRGB11ChannelSource(ctx context.Context, local common.Wallet,
+	channelID string, source *RGB11ChannelSource, mode nativeproof.Mode) (*nativeproof.Result, error) {
+	return p.validateRGB11SourceSpend(ctx, local, channelID, source, mode, "")
+}
+
+// confirmedSpender is supplied only after the caller validates the confirmed
+// withdrawal and its exact RGB consumption of this immutable historical source.
+func (p *Manager) validateRGB11SourceSpend(ctx context.Context, local common.Wallet,
+	channelID string, source *RGB11ChannelSource, mode nativeproof.Mode, confirmedSpender string) (*nativeproof.Result, error) {
+	if confirmedSpender != "" && mode != nativeproof.Historical {
+		return nil, fmt.Errorf("confirmed RGB11 source spend requires historical validation")
+	}
+	result, err := p.validateRGB11SourceProof(ctx, local, channelID, source, mode)
+	if err != nil {
+		return nil, err
+	}
+	rgb, err := p.stpRGB11Scope(local)
+	if err != nil {
+		return nil, err
+	}
+	// A source can only be treated as a single-asset carrier when none of its
+	// exact consumed ancestors or terminal carriers is known to contain another
+	// RGB11 asset. Checking just the final output loses this information after
+	// a transfer consumes a mixed carrier.
+	consumers := make(map[schemas.InputRef]string)
+	for _, consumer := range result.History.ValidatedConsumers {
+		if consumer.WitnessState == consignment.WitnessMined {
+			txid := chainhash.Hash(consumer.WitnessTxID)
+			consumers[consumer.Input] = txid.String()
+		}
+	}
+	terminalPoint, err := wire.NewOutPointFromString(source.Output.OutPointStr)
+	if err != nil {
+		return nil, err
+	}
+	lineage := rgb11SourceLineage(&result.History, *terminalPoint)
+	points := make(map[string]bool)
+	historicalSpenders := make(map[string]string)
+	for _, state := range result.History.HistoricalStates {
+		if !lineage[state.Reference] {
+			continue
+		}
+		point := wire.OutPoint{Hash: state.Outpoint.TxID, Index: state.Outpoint.Vout}
+		points[point.String()] = true
+		if txid := consumers[state.Reference]; txid != "" {
+			historicalSpenders[point.String()] = txid
+		}
+	}
+	proofs, err := rgb.projectionStore.ListProofs()
+	if err != nil {
+		return nil, err
+	}
+	for _, proof := range proofs {
+		if proof != nil && points[proof.OutPoint] && proof.AssetName != result.Asset.Name {
+			return nil, fmt.Errorf("RGB11 channel history contains a known co-asset")
+		}
+	}
+	for point := range points {
+		historicalPoint, err := wire.NewOutPointFromString(point)
+		if err != nil {
+			return nil, err
+		}
+		if mode == nativeproof.Prepared && historicalPoint.Hash == terminalPoint.Hash {
+			// The signed candidate has not been broadcast. Indexed co-assets
+			// can only exist on its consumed ancestors; those are checked.
+			continue
+		}
+		output, err := p.l1IndexerClient.GetTxOutput(point)
+		if err != nil {
+			// Historical RGB validation proves the exact consuming witness.
+			// A UTXO-only indexer may report a spent output using its own error
+			// vocabulary. Accept absence only after independently observing that
+			// exact Bitcoin spend, never on a missing row or RPC failure alone.
+			spent, evidenceErr := rgb.evidence.GetOutspend(point)
+			if confirmedSpender != "" && point == source.Output.OutPointStr {
+				if evidenceErr == nil && spent != nil && spent.Spent &&
+					(spent.SpendingTx == "" || spent.SpendingTx == confirmedSpender) {
+					if _, observed := verifyRGB11ExpectedSpend(rgb.evidence, point, confirmedSpender); observed {
+						continue
+					}
+				}
+				return nil, fmt.Errorf("RGB11 historical source is not spent by its confirmed consumer")
+			}
+			if evidenceErr == nil && spent != nil && spent.Spent &&
+				rgb11KnownObservedChannelSpend(rgb.evidence, point, spent.SpendingTx) {
+				continue
+			}
+			// Core's outspend RPC only names mempool spenders. Once mined,
+			// use the exact consumer from the validated RGB history, then
+			// independently recheck its confirmed transaction and input.
+			if evidenceErr == nil && spent != nil && spent.Spent && spent.SpendingTx == "" {
+				if _, observed := verifyRGB11ExpectedSpend(rgb.evidence, point, historicalSpenders[point]); observed {
+					continue
+				}
+			}
+			return nil, fmt.Errorf("RGB11 history co-asset evidence unavailable: %w", err)
+		}
+		if output != nil && len(output.Assets) != 0 {
+			return nil, fmt.Errorf("RGB11 channel history contains indexed co-assets")
+		}
+	}
+	return result, nil
+}
+
+// validateRGB11SourceProof verifies immutable source facts, without granting
+// current spendability. Historical anchor replay uses only these facts; other
+// callers retain the inventory and co-asset checks in validateRGB11SourceSpend.
+func (p *Manager) validateRGB11SourceProof(ctx context.Context, local common.Wallet,
+	channelID string, source *RGB11ChannelSource, mode nativeproof.Mode) (*nativeproof.Result, error) {
+	if source == nil || source.Version != 1 || source.ChannelID != channelID || source.Output == nil ||
+		len(source.Output.Assets) != 1 || source.Output.Assets[0].Name.Protocol != rgb11wallet.Protocol ||
+		source.Output.Assets[0].BindingSat != 0 || len(source.PublicProof) == 0 || local == nil {
+		return nil, fmt.Errorf("invalid RGB11 channel source")
+	}
+	witness, _, err := p.channelOwnerWitness(local, channelID)
+	if err != nil {
+		return nil, err
+	}
+	script, err := utils.WitnessScriptHash(witness)
+	if err != nil {
+		return nil, err
+	}
+	if !bytes.Equal(script, source.Output.OutValue.PkScript) {
+		return nil, fmt.Errorf("RGB11 source does not belong to fixed channel owner")
+	}
+	rgb, err := p.stpRGB11Scope(local)
+	if err != nil {
+		return nil, err
+	}
+	result, err := nativeproof.Validate(source.PublicProof, nativeproof.Source{
+		Outpoint: source.Output.OutPointStr, Value: source.Output.Value(),
+		PkScript: script, Assets: source.Output.Assets, BitcoinNetwork: GetChainParam().Name,
+	}, rgb11wallet.RGB11BitcoinResolver(ctx, rgb.evidence), mode)
+	if err != nil {
+		return nil, err
+	}
+	if result.Value != source.Output.Value() {
+		return nil, fmt.Errorf("RGB11 source must preserve its complete Bitcoin carrier")
+	}
+	return result, nil
+}
+
+// A selected RGB operation can also produce allocations for other owners.
+// Follow validated input edges backwards from every allocation at this Bitcoin
+// output so only the terminal and its consumed ancestors supply carrier facts.
+func rgb11SourceLineage(history *consignment.HistoryReport, point wire.OutPoint) map[schemas.InputRef]bool {
+	inputs := make(map[[32]byte][]schemas.InputRef)
+	for _, edge := range history.ValidatedConsumers {
+		inputs[edge.ConsumerOperationID] = append(inputs[edge.ConsumerOperationID], edge.Input)
+	}
+	var pending []schemas.InputRef
+	for _, state := range history.HistoricalStates {
+		if state.Outpoint.TxID == point.Hash && state.Outpoint.Vout == point.Index {
+			pending = append(pending, state.Reference)
+		}
+	}
+	lineage := make(map[schemas.InputRef]bool)
+	visited := make(map[[32]byte]bool)
+	for len(pending) != 0 {
+		last := len(pending) - 1
+		ref := pending[last]
+		pending = pending[:last]
+		lineage[ref] = true
+		if !visited[ref.OperationID] {
+			visited[ref.OperationID] = true
+			pending = append(pending, inputs[ref.OperationID]...)
+		}
+	}
+	return lineage
+}
+
+// RegisterRGB11SettlementSource records material only after full
+// current-chain validation. A source's proof and carrier cannot be replaced;
+// settlement receipts may only be appended, retaining their exact prefix.
+func (p *Manager) RegisterRGB11SettlementSource(ctx context.Context, local common.Wallet,
+	channelID string, source *RGB11ChannelSource) error {
+	return p.registerRGB11SettlementSource(ctx, local, channelID, source, false)
+}
+
+// observed is used only by the SDK's independently verified mined channel
+// settlement path. Publicly presented new sources retain normal write checks.
+func (p *Manager) registerRGB11SettlementSource(ctx context.Context, local common.Wallet,
+	channelID string, source *RGB11ChannelSource, observed bool) error {
+	if _, err := p.validateRGB11ChannelSource(ctx, local, channelID, source, nativeproof.Current); err != nil {
+		return err
+	}
+	if len(source.PrivateWitness) != 0 || len(source.DescendTxIDs) != 0 {
+		if err := p.ValidateRGB11ChannelReceipt(ctx, local, channelID, source); err != nil {
+			return err
+		}
+	}
+	scope, err := p.stpRGB11Scope(local)
+	if err != nil {
+		return err
+	}
+	reconcile, err := p.rgb11SourceRecorded(scope, channelID, source)
+	if err != nil {
+		return err
+	}
+	reconcile = reconcile || observed
+	mode := rgb11ManagedOperationContinue
+	if reconcile {
+		mode = rgb11ManagedOperationReconcile
+	}
+	_, err = runRGB11ManagedOperationWithManager(p, ctx, mode,
+		func() (*rgb11Manager, error) { return scope, nil },
+		func(scope *rgb11Manager) (*RGB11ImportResult, error) {
+			// Qualify before the first write: a new registration must not
+			// authorize its own retry merely by saving an inventory row.
+			if err := p.saveRGB11ChannelSource(source); err != nil {
+				return nil, err
+			}
+			stored, err := p.loadRGB11ChannelSource(channelID, source.Output.OutPointStr)
+			if err != nil {
+				return nil, err
+			}
+			return scope.importObservedRGB11PoolTransfer(ctx, stored, reconcile)
+		})
+	return err
+}
+
+// Only prior local material can select the reconciliation path. A newly
+// presented proof, even if valid, still needs the normal business permission.
+func (p *Manager) rgb11SourceRecorded(scope *rgb11Manager, channelID string,
+	source *RGB11ChannelSource) (bool, error) {
+	stored, err := p.loadRGB11ChannelSource(channelID, source.Output.OutPointStr)
+	if err == nil {
+		before, after := *stored, *source
+		before.DescendTxIDs, after.DescendTxIDs = nil, nil
+		a, aErr := json.Marshal(before)
+		b, bErr := json.Marshal(after)
+		if aErr != nil || bErr != nil || !bytes.Equal(a, b) {
+			return false, fmt.Errorf("RGB11 channel source is immutable")
+		}
+		// Monotonic receipt validation is repeated by saveRGB11ChannelSource.
+		return true, nil
+	}
+	if !errors.Is(err, indexer.ErrKeyNotFound) {
+		return false, err
+	}
+	point, err := wire.NewOutPointFromString(source.Output.OutPointStr)
+	if err != nil {
+		return false, err
+	}
+	raw, err := p.GetDB().Read(rgb11ContractWithdrawKey("signed", point.Hash.String()))
+	if errors.Is(err, indexer.ErrKeyNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var pair rgb11ContractBroadcastPair
+	if json.Unmarshal(raw, &pair) != nil || pair.Version != 1 || pair.Proof == nil {
+		return false, fmt.Errorf("invalid durable RGB11 withdrawal pair")
+	}
+	channel, asset, _, err := ParseContractURL(pair.ContractURL)
+	if err != nil || channel != channelID || asset != source.Output.Assets[0].Name.String() || len(source.PrivateWitness) != 0 {
+		return false, fmt.Errorf("RGB11 source differs from its recorded withdrawal")
+	}
+	proof, err := nativeproof.BuildRGB11(pair.Proof.Consignment, pair.Proof.ChangeSeals)
+	if err != nil || !bytes.Equal(proof, source.PublicProof) {
+		return false, fmt.Errorf("RGB11 source proof differs from its recorded withdrawal")
+	}
+	descend := new(swire.MsgTx)
+	reader := bytes.NewReader(pair.Descend)
+	if descend.Deserialize(reader) != nil || reader.Len() != 0 || len(source.DescendTxIDs) == 0 ||
+		source.DescendTxIDs[len(source.DescendTxIDs)-1] != descend.TxID() {
+		return false, fmt.Errorf("RGB11 source lacks its recorded descend receipt")
+	}
+	status, err := scope.evidence.GetTxStatus(point.Hash.String())
+	if err != nil {
+		return false, err
+	}
+	if !validRGB11ObservedTxStatus(status, point.Hash.String()) || (!status.Confirmed && !status.InMempool) {
+		return false, fmt.Errorf("recorded RGB11 withdrawal is not observed")
+	}
+	observed, err := scope.evidence.GetRawTx(point.Hash.String())
+	if err != nil {
+		return false, err
+	}
+	if !bytes.Equal(observed, pair.Bitcoin) {
+		return false, fmt.Errorf("observed RGB11 withdrawal differs from recorded signed bytes")
+	}
+	if p.l2IndexerClient == nil {
+		return false, fmt.Errorf("recorded RGB11 descend evidence unavailable")
+	}
+	encoded, err := p.l2IndexerClient.GetRawTx(descend.TxID())
+	if err != nil {
+		return false, err
+	}
+	observedDescend, err := hex.DecodeString(encoded)
+	if err != nil || !bytes.Equal(observedDescend, pair.Descend) {
+		return false, fmt.Errorf("observed RGB11 descend differs from recorded signed bytes")
+	}
+	return true, nil
+}
+
+func (p *Manager) saveRGB11ChannelSource(source *RGB11ChannelSource) error {
+	if p == nil || p.GetDB() == nil {
+		return fmt.Errorf("RGB11 channel inventory database unavailable")
+	}
+	seen := make(map[string]bool)
+	for _, id := range source.DescendTxIDs {
+		decoded, err := hex.DecodeString(id)
+		if err != nil || len(decoded) != 32 || hex.EncodeToString(decoded) != id || seen[id] {
+			return fmt.Errorf("invalid or duplicate RGB11 settlement receipt")
+		}
+		seen[id] = true
+	}
+	rgb11ChannelInventoryMu.Lock()
+	defer rgb11ChannelInventoryMu.Unlock()
+	key := rgb11ChannelInventoryKey(source.ChannelID, source.Output.OutPointStr)
+	raw, err := p.GetDB().Read(key)
+	if err == nil {
+		var existing RGB11ChannelSource
+		if json.Unmarshal(raw, &existing) != nil || existing.Output == nil {
+			return fmt.Errorf("invalid persisted RGB11 channel source")
+		}
+		oldSource, newSource := existing, *source
+		oldSource.DescendTxIDs, newSource.DescendTxIDs = nil, nil
+		oldRaw, _ := json.Marshal(oldSource)
+		newRaw, _ := json.Marshal(newSource)
+		if !bytes.Equal(oldRaw, newRaw) || len(source.DescendTxIDs) < len(existing.DescendTxIDs) {
+			return fmt.Errorf("RGB11 channel source is immutable")
+		}
+		for i, id := range existing.DescendTxIDs {
+			if source.DescendTxIDs[i] != id {
+				return fmt.Errorf("RGB11 settlement receipts must retain their exact prefix")
+			}
+		}
+	} else if !errors.Is(err, indexer.ErrKeyNotFound) {
+		return err
+	}
+	raw, err = json.Marshal(source)
+	if err != nil {
+		return err
+	}
+	return p.GetDB().Write(key, raw)
+}
+
+func (p *Manager) loadRGB11ChannelSource(channelID, outpoint string) (*RGB11ChannelSource, error) {
+	raw, err := p.GetDB().Read(rgb11ChannelInventoryKey(channelID, outpoint))
+	if err != nil {
+		return nil, err
+	}
+	var source RGB11ChannelSource
+	if err := json.Unmarshal(raw, &source); err != nil || source.Version != 1 ||
+		source.ChannelID != channelID || source.Output == nil || source.Output.OutPointStr != outpoint {
+		return nil, fmt.Errorf("invalid persisted RGB11 channel source")
+	}
+	return &source, nil
+}
+
+func (p *Manager) ListRGB11ChannelSources(ctx context.Context, local common.Wallet,
+	channelID string, asset *indexer.AssetName) ([]*TxOutput, error) {
+	if asset == nil || asset.Protocol != rgb11wallet.Protocol || local == nil {
+		return nil, fmt.Errorf("invalid RGB11 channel inventory query")
+	}
+	var records []*RGB11ChannelSource
+	err := p.GetDB().BatchRead(rgb11ChannelInventoryPrefix(channelID), false, func(_, raw []byte) error {
+		var record RGB11ChannelSource
+		if err := json.Unmarshal(raw, &record); err != nil || record.Output == nil || len(record.Output.Assets) != 1 {
+			return fmt.Errorf("invalid RGB11 channel inventory record")
+		}
+		if record.Output.Assets[0].Name == *asset {
+			records = append(records, &record)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	rgb, err := p.stpRGB11Scope(local)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*TxOutput, 0, len(records))
+	for _, record := range records {
+		spent, err := rgb.evidence.GetOutspend(record.Output.OutPointStr)
+		if err != nil || spent == nil {
+			return nil, fmt.Errorf("RGB11 carrier status unavailable: %w", err)
+		}
+		if spent.Spent {
+			continue
+		}
+		if _, err := p.validateRGB11ChannelSource(ctx, local, channelID, record, nativeproof.Current); err != nil {
+			return nil, err
+		}
+		if len(record.PrivateWitness) != 0 || len(record.DescendTxIDs) != 0 {
+			if err := p.ValidateRGB11ChannelReceipt(ctx, local, channelID, record); err != nil {
+				return nil, err
+			}
+		}
+		result = append(result, record.Output.Clone())
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].OutPointStr < result[j].OutPointStr })
+	return result, nil
+}

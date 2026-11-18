@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	"testing"
 	"time"
 
@@ -86,7 +87,7 @@ func TestRGB11ReceivedFullSend(t *testing.T) {
 				t.Fatal("receive-only projection is not spendable")
 			}
 			source := received.Proofs[0].OutPoint
-			if lock := receiver.utxoLockerL1.GetLockedUtxoList()[source]; lock == nil || lock.Reason != rgb11wallet.LockReasonRGB || lock.ReservationID != "" {
+			if lock := receiver.utxoLockerL1.GetLockedUtxoList()[source]; lock == nil || lock.Reason != sdkcommon.UtxoLockRGB || lock.ReservationID != "" {
 				t.Fatal("receive-only carrier must retain its ownerless RGB lock")
 			}
 			// Indexer provides a plain fee UTXO controlled by this receiver.
@@ -105,7 +106,7 @@ func TestRGB11ReceivedFullSend(t *testing.T) {
 			evidence.mu.Unlock()
 			var sent *RGB11PreparedTransfer
 			if direct {
-				endpoint, err := donor.EnableConfiguredRGB11AddressReceive(RGB11ReceiveCapabilityOptions{RecordOptions: dkvsindexer.RecordOptions{TTL: testRGB11FreeLocalTTL}})
+				endpoint, err := donor.EnableConfiguredRGB11AddressReceive(RGB11ReceiveCapabilityOptions{})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -138,18 +139,18 @@ func TestRGB11ReceivedFullSend(t *testing.T) {
 			if _, err := receiver.rgbManager.RefreshRGB11State(ctx); err != nil {
 				t.Fatal(err)
 			}
-			if lock := receiver.utxoLockerL1.GetLockedUtxoList()[source]; lock == nil || lock.ReservationID != sendPending.ReservationID || lock.Reason != rgb11wallet.LockReasonPending {
+			if lock := receiver.utxoLockerL1.GetLockedUtxoList()[source]; lock == nil || lock.ReservationID != sendPending.ReservationID || lock.Reason != sdkcommon.UtxoLockRGBPending {
 				t.Fatal("receive refresh changed active send ownership")
 			}
 			if direct {
-				if _, err := receiver.rgbManager.deliverRGB11AddressTransferStore(mustRGB11ConfiguredStore(t, receiver), sent.State.TransferID, RGB11AddressDeliveryOptions{}); err != nil {
+				if _, err := receiver.rgbManager.deliverRGBAddress(sent.State.TransferID); err != nil {
 					t.Fatal(err)
 				}
-				result, err := donor.SyncConfiguredRGB11AddressMailbox(ctx, dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+				result, err := donor.SyncConfiguredRGB11AddressMailbox(ctx, dkvsindexer.RecordVerificationOptions{})
 				if err != nil || result.Invalid != 0 || result.Received != 1 {
 					t.Fatalf("direct receive=%+v err=%v", result, err)
 				}
-				if _, err := receiver.SyncConfiguredRGB11AddressMailbox(ctx, dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{}); err != nil {
+				if _, err := receiver.SyncConfiguredRGB11AddressMailbox(ctx, dkvsindexer.RecordVerificationOptions{}); err != nil {
 					t.Fatal(err)
 				}
 				if _, err := receiver.BroadcastRGB11AddressTransfer(sent.State.TransferID); err != nil {

@@ -58,7 +58,13 @@ func (p *Manager) startActionMonitor() {
 	p.actionMonitorCancel = cancel
 	p.actionMonitorRunning = true
 
-	p.actionMonitorWG.Add(2)
+	p.actionMonitorWG.Add(3)
+	go func() {
+		defer p.actionMonitorWG.Done()
+		if err := p.refreshNodeConfig(ctx); err != nil && ctx.Err() == nil {
+			Log.Warningf("refresh DKVS node configuration at startup: %v", err)
+		}
+	}()
 	go p.actionMonitorThread(ctx, stop, true)
 	go p.actionMonitorThread(ctx, stop, false)
 }

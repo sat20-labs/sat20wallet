@@ -29,7 +29,7 @@ func TestAccountColdSyncGrantsWrite(t *testing.T) {
 	cold, _ := openAccountGroup(t, cfg, remote, service)
 	_, err = cold.UnlockWallet("password")
 	require.NoError(t, err)
-	client, err := cold.GetDKVSClient()
+	client, err := cold.accountDKVSClient()
 	require.NoError(t, err)
 	client.endpointMu.RLock()
 	unknown := client.endpointID == ""
@@ -46,7 +46,7 @@ func TestAccountColdSyncGrantsWrite(t *testing.T) {
 	require.True(t, after.DKVSWriteAllowed, "successful first cold sync did not publish write qualification")
 	require.True(t, after.AccountID == before.AccountID, "cold sync changed account identity")
 	require.True(t, after.RootFingerprint == before.RootFingerprint, "cold sync changed the root identity")
-	require.True(t, after.ManagedDataRevision == before.ManagedDataRevision, "clean cold sync republished account data")
+	require.True(t, after.StateSeq == before.StateSeq, "clean cold sync republished account data")
 	require.False(t, after.ManagedDataDirty)
 	require.Zero(t, after.PendingChanges)
 	entries, err := newDKVSReplicaStore(cold.db).LoadOutbox(client.replicaNamespace)

@@ -12,6 +12,23 @@ import (
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
+// A verified root wrapper already establishes the account. If its linked
+// package is missing, recovery must wait; the root itself is not absent.
+func readRootLinkedPackage(store *dkvsStore, key string) (*dkvsValue, error) {
+	var value *dkvsValue
+	err := store.WaitReady(key)
+	if err == nil {
+		err = store.SyncCurrent(key)
+	}
+	if err == nil {
+		value, err = store.Get(key)
+	}
+	if errors.Is(err, ErrDKVSRecordNotFound) || (err == nil && value == nil) {
+		return nil, ErrRootAccountDiscoveryPending
+	}
+	return value, err
+}
+
 func (p *Manager) loadAccountCopies(store *dkvsStore, root common.Wallet,
 	locator account.Locator, secret []byte) (*RecoveredAccountManagementState, error) {
 	accountID, err := dkvsAccountID(root)
@@ -59,15 +76,9 @@ func (p *Manager) loadAccountCopies(store *dkvsStore, root common.Wallet,
 	if err != nil {
 		return nil, err
 	}
-	if err := store.WaitReady(packageKey); err != nil {
+	pkgValue, err := readRootLinkedPackage(store, packageKey)
+	if err != nil {
 		return nil, err
-	}
-	if err := store.SyncCurrent(packageKey); err != nil {
-		return nil, err
-	}
-	pkgValue, err := store.Get(packageKey)
-	if err != nil || pkgValue == nil {
-		return nil, ErrDKVSRecordNotFound
 	}
 	pkg, err := account.DecodeRecoveryPackageStorage(pkgValue.Value)
 	if err != nil || pkg.Envelope.Locator != locator {
@@ -318,7 +329,7 @@ func (p *Manager) restoreAccountCopies(value RecoveredAccountManagementState, se
 		AccountID: locator.AccountID, PackageID: locator.PackageID, RecoveryMode: locator.RecoveryMode,
 		StorageMode: config.StorageMode, Location: options.Location, RecordTTL: config.RecordTTL, AutopayContract: config.AutopayContract,
 		PublicLocator: publicLocator, SecretCipher: secretCipher, SecretSalt: secretSalt, DeviceID: device,
-		StateSeq: value.Seq, StateHash: value.Hash, StateEnvelope: bytes.Clone(value.Envelope), RecoveryConfigured: true, ManagedEntered: true}
+		RecoveryConfigured: true, ManagedEntered: true}
 	for _, copy := range value.Copies {
 		local := &accountLocalKV{Version: 1, AccountID: locator.AccountID, Network: p.cfg.Chain, Provider: copy.Entry.Provider,
 			Scope: copy.Entry.Scope, Key: copy.Entry.Key, Codec: copy.Entry.Codec, Value: bytes.Clone(copy.Value),

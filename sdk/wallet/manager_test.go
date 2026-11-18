@@ -399,6 +399,7 @@ func newManagerTestWallet(t *testing.T, mnemonic string) *Manager {
 	manager := newAccountManagementAutoTestManager(t)
 	_, err := manager.ImportWallet(mnemonic, "123456")
 	require.NoError(t, err)
+	discoverInactiveAccount(t, manager)
 	return manager
 }
 

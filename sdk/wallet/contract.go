@@ -1073,8 +1073,8 @@ type ContractRuntimeBase struct {
 	refreshTime     int64
 	responseHistory map[int][]*InvokeItem // 按照100个为一桶，根据区块顺序记录，跟 history 保持一致
 
-	dealDivisibility          int // 有些小数点太长，最后结算时没必要那么长，保留一部分即可
-	nativeMetadataInitialized bool
+	dealDivisibility         int // 有些小数点太长，最后结算时没必要那么长，保留一部分即可
+	rgb11MetadataInitialized bool
 
 	mutex sync.RWMutex
 }
@@ -1188,9 +1188,9 @@ func (p *ContractRuntimeBase) InitFromContent(content []byte, stp ContractManage
 	if tickInfo != nil {
 		p.Divisibility = tickInfo.Divisibility
 		p.N = tickInfo.N
-		if p.nativePublicContract() {
+		if p.rgb11PublicContract() {
 			p.N = 0
-			p.nativeMetadataInitialized = true
+			p.rgb11MetadataInitialized = true
 		}
 	} else {
 		tc := p.runtime.GetTemplateName()
@@ -1211,7 +1211,7 @@ func (p *ContractRuntimeBase) InitFromContent(content []byte, stp ContractManage
 		p.dealDivisibility = p.Divisibility
 	}
 
-	if err := p.restoreNativePublicMetadata(); err != nil {
+	if err := p.restoreRGB11PublicMetadata(); err != nil {
 		return err
 	}
 	p.StaticMerkleRoot = p.runtime.CalcStaticMerkleRoot()
@@ -2139,10 +2139,10 @@ func (p *ContractRuntimeBase) CheckInvokeTx_SatsNet(invokeTx *InvokeTx_SatsNet) 
 }
 
 func (p *ContractRuntimeBase) CheckInvokeTx(invokeTx *InvokeTx) error {
-	if invokeTx.nativeContractInput != nil {
-		if !p.nativePublicContract() || invokeTx.nativeContractInput.Output == nil ||
-			invokeTx.nativeContractInput.Recipient != invokeTx.Invoker {
-			return fmt.Errorf("native contract receipt does not match the invoke")
+	if invokeTx.rgb11ContractInput != nil {
+		if !p.rgb11PublicContract() || invokeTx.rgb11ContractInput.Output == nil ||
+			invokeTx.rgb11ContractInput.Recipient != invokeTx.Invoker {
+			return fmt.Errorf("RGB11 contract receipt does not match the invoke")
 		}
 		return nil
 	}
@@ -2264,8 +2264,8 @@ func (p *ContractRuntimeBase) PreprocessInvokeData(data *InvokeDataInBlock) erro
 }
 
 func (p *ContractRuntimeBase) InvokeWithBlock(data *InvokeDataInBlock) error {
-	p.reconcileNativeContractBlock()
-	if err := p.materializeNativeContractInvokes(data); err != nil {
+	p.reconcileRGB11ContractBlock()
+	if err := p.materializeRGB11ContractInvokes(data); err != nil {
 		return err
 	}
 	p.mutex.Lock()
@@ -2304,9 +2304,9 @@ func (p *ContractRuntimeBase) InvokeWithBlock(data *InvokeDataInBlock) error {
 				p.resyncBlock(from, data.Height-1)
 				Log.Infof("%s has resync L1 from %d to %d", p.URL(), from, data.Height-1)
 				p.mutex.Lock()
-				if p.nativePublicContract() && p.CurrBlockL1+1 != data.Height {
+				if p.rgb11PublicContract() && p.CurrBlockL1+1 != data.Height {
 					p.mutex.Unlock()
-					return fmt.Errorf("%w: preceding deposit blocks have not completed", ErrNativeContractRetry)
+					return fmt.Errorf("%w: preceding deposit blocks have not completed", ErrRGB11ContractRetry)
 				}
 			}
 		}
@@ -2375,7 +2375,7 @@ func (p *ContractRuntimeBase) PreprocessInvokeData_SatsNet(data *InvokeDataInBlo
 
 // 外面不能加锁
 func (p *ContractRuntimeBase) InvokeWithBlock_SatsNet(data *InvokeDataInBlock_SatsNet) error {
-	p.reconcileNativeContractBlock()
+	p.reconcileRGB11ContractBlock()
 
 	//
 	p.mutex.Lock()
@@ -3177,7 +3177,7 @@ func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
 		}
 	} else {
 		if stubNum != 0 {
-			p.stp.GetWalletMgr().utxoLockerL1.LockUtxo(stubs[0], "stub for "+reason)
+			p.stp.GetWalletMgr().utxoLockerL1.LockUtxo(stubs[0], common.UtxoLockStubPrefix+reason)
 			// 这里只有一个交易
 			if len(sendInfoVectWithStub) > 1 {
 				return "", 0, stubFee, fmt.Errorf("only one output in stub is supported")
@@ -3220,7 +3220,7 @@ func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
 		}
 	}
 
-	if !(p.nativePublicContract() && reason == INVOKE_RESULT_WITHDRAW) {
+	if !(p.rgb11PublicContract() && reason == INVOKE_RESULT_WITHDRAW) {
 		saveContractInvokeResult(p.stp.GetDB(), url, txId, reason)
 	}
 	return txId, fee, stubFee, nil
@@ -3451,8 +3451,8 @@ func (p *ContractRuntimeBase) GetInvokeOutput(item *SwapHistoryItem) *indexer.Tx
 		output.UtxoId = item.UtxoId
 		return output
 	}
-	if p.nativePublicContract() {
-		source, err := p.stp.GetWalletMgr().loadNativeChannelSource(p.ChannelAddr, item.InUtxo)
+	if p.rgb11PublicContract() {
+		source, err := p.stp.GetWalletMgr().loadRGB11ChannelSource(p.ChannelAddr, item.InUtxo)
 		if err != nil || source.Output == nil {
 			return nil
 		}
@@ -3974,15 +3974,15 @@ type InvokeDataInBlock_SatsNet struct {
 }
 
 type InvokeTx struct {
-	Tx                  *wire.MsgTx
-	TxIndex             int
-	InvokeVout          int
-	TxOutput            *TxOutput
-	Address             string
-	InvokeParam         *sindexer.ContractInvokeData
-	Invoker             string
-	Handled             bool
-	nativeContractInput *NativeContractInput
+	Tx                 *wire.MsgTx
+	TxIndex            int
+	InvokeVout         int
+	TxOutput           *TxOutput
+	Address            string
+	InvokeParam        *sindexer.ContractInvokeData
+	Invoker            string
+	Handled            bool
+	rgb11ContractInput *RGB11ContractInput
 }
 
 type InvokeDataInBlock struct {

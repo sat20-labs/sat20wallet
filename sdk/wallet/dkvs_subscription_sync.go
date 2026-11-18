@@ -19,6 +19,8 @@ const (
 
 var ErrDKVSPathNotSynced = errors.New("DKVS managed path is not synchronized")
 
+var errDKVSActivePageChanged = errors.New("DKVS active prefix changed during page collection")
+
 func (p *Manager) dkvsReplicaNamespace() string {
 	if p == nil || p.cfg == nil {
 		return ""
@@ -212,6 +214,11 @@ func (m *dkvsManager) syncPrefixSet(client *SatsNetDKVSClient, store *dkvsReplic
 			}
 			meta, records, e := client.collectActivePages(m.requestContext(), request, initial)
 			if e != nil {
+				// Only a stale continuation is a transient receive race. A source
+				// rollback on the first page has no verified meta and stays rejected.
+				if errors.Is(e, dkvsindexer.ErrStaleGeneration) && meta.EndpointID != "" {
+					e = errors.Join(e, errDKVSActivePageChanged)
+				}
 				if complete && isDKVSNetworkFailure(e) {
 					e = errors.Join(e, store.MarkOfflineReady(client.replicaNamespace))
 				}
@@ -796,7 +803,7 @@ func (m *dkvsManager) run(stop <-chan struct{}, done chan<- struct{}, wake <-cha
 		if m.setLastSyncError(err) {
 			m.notifyStatusCallback()
 		}
-		if isDKVSNonRetryableSyncError(err) {
+		if isDKVSNonRetryableSyncError(err) && !errors.Is(err, errDKVSActivePageChanged) {
 			if !m.waitForWake(stop, wake) {
 				return
 			}

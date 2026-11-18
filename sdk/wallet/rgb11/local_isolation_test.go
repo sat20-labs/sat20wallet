@@ -51,7 +51,7 @@ func TestLocalBoundUsesActualCodec(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot := &RGB11WalletSnapshot{Version: WalletSnapshotVersion, WalletID: "bound-wallet", EngineBuildID: NativeEngineBuildID}
+	snapshot := &RGB11WalletSnapshot{Version: WalletSnapshotVersion, WalletID: "bound-wallet", EngineBuildID: RGB11EngineBuildID}
 	for i, n := range []int{1, 16384, 65535} {
 		invoice := make([]byte, n)
 		if _, err := rand.New(rand.NewSource(int64(i + 31))).Read(invoice); err != nil {
@@ -92,7 +92,7 @@ func TestLocalBoundUsesActualCodec(t *testing.T) {
 }
 
 func TestLocalBoundRejectsCodecLimits(t *testing.T) {
-	base := RGB11WalletSnapshot{Version: WalletSnapshotVersion, WalletID: "bound", EngineBuildID: NativeEngineBuildID}
+	base := RGB11WalletSnapshot{Version: WalletSnapshotVersion, WalletID: "bound", EngineBuildID: RGB11EngineBuildID}
 	for _, kind := range []string{"field", "key", "count", "raw"} {
 		t.Run(kind, func(t *testing.T) {
 			full := base
@@ -117,13 +117,13 @@ func TestLocalBoundRejectsCodecLimits(t *testing.T) {
 	}
 }
 
-// Reuse native issued/validated material; these assertions concern local
+// Reuse material issued and validated by RGB11; these assertions concern local
 // storage bytes and never authorize a spend from the fixture sidecars.
-func nativeLocalRows(t *testing.T) ([]SnapshotRecord, string, indexer.AssetName) {
+func rgb11LocalRows(t *testing.T) ([]SnapshotRecord, string, indexer.AssetName) {
 	t.Helper()
 	sources, facts := issuedChannelFunding(t)
-	source := sources[1] // this carrier has exactly one native Opout
-	receipt, err := ValidateWith(context.Background(), NewNativeConsensusValidator(), source.Consignment, facts)
+	source := sources[1] // this carrier has exactly one RGB11 Opout
+	receipt, err := ValidateWith(context.Background(), NewRGB11ConsensusValidator(), source.Consignment, facts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func nativeLocalRows(t *testing.T) ([]SnapshotRecord, string, indexer.AssetName)
 		}
 	}
 	if allocation == nil {
-		t.Fatal("native allocation missing")
+		t.Fatal("RGB11 allocation missing")
 	}
 	hash, err := receipt.Hash()
 	if err != nil {
@@ -158,7 +158,7 @@ func nativeLocalRows(t *testing.T) ([]SnapshotRecord, string, indexer.AssetName)
 }
 
 func TestLocalHealthyHistory(t *testing.T) {
-	rows, _, _ := nativeLocalRows(t)
+	rows, _, _ := rgb11LocalRows(t)
 	for _, status := range []string{"valid", "settled", "spending", "orphaned"} {
 		t.Run(status, func(t *testing.T) {
 			changed := cloneRecoveryRecords(rows)
@@ -166,7 +166,7 @@ func TestLocalHealthyHistory(t *testing.T) {
 				if strings.HasPrefix(r.Key, "proof-") {
 					var proof AllocationProof
 					if decode(r.Value, &proof) != nil {
-						t.Fatal("decode native sidecar")
+						t.Fatal("decode RGB11 sidecar")
 					}
 					proof.Status = status
 					changed[i].Value = mustEncodeRecoveryTest(t, &proof)
@@ -221,7 +221,7 @@ func TestLocalFrozenRowsAfterHydrate(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			rows, point, name := nativeLocalRows(t)
+			rows, point, name := rgb11LocalRows(t)
 			var object []byte
 			for _, r := range rows {
 				if strings.HasPrefix(r.Key, "object-") {

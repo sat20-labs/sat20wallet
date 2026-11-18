@@ -15,11 +15,11 @@ import (
 // confirmation, reopen, and expansion remain covered by the unchanged 0758 and
 // 0332 lifecycle tests. No network or alternate recovery flow is introduced.
 type rgbClosedPrivateBurnFixture struct {
-	graph    *nativeReceiptGraph
-	mapping  *nativeReceiptMapping
-	receipt  *nativeReceiptDescend
+	graph    *rgb11ReceiptGraph
+	mapping  *rgb11ReceiptMapping
+	receipt  *rgb11ReceiptDescend
 	previous *swire.MsgTx
-	rpc      *nativeRecoveryRPC
+	rpc      *recoveryRPC
 }
 
 func newRGBClosedPrivateBurnFixture(t *testing.T) *rgbClosedPrivateBurnFixture {
@@ -56,11 +56,11 @@ func newRGBClosedPrivateBurnFixture(t *testing.T) *rgbClosedPrivateBurnFixture {
 	}
 	tx.AddTxOut(swire.NewTxOut(0, nil, marker))
 	raw := rgbClosedPrivatePreviousRaw(t, previous)
-	rpc := &nativeRecoveryRPC{raw: map[string]string{previous.TxID(): raw}}
+	rpc := &recoveryRPC{raw: map[string]string{previous.TxID(): raw}}
 	manager := &Manager{l2IndexerClient: &IndexerRPCClientMgr{active: rpc}}
-	graph := &nativeReceiptGraph{asset: asset, chains: &nativeSettlementChains{manager: manager, ctx: context.Background()}}
-	return &rgbClosedPrivateBurnFixture{graph: graph, mapping: &nativeReceiptMapping{script: script},
-		receipt: &nativeReceiptDescend{id: tx.TxID(), tx: tx, output: burn, payload: &sindexer.DescendPayload{Version: 2, Operation: sindexer.DESCEND_OP_CLOSE, L1TxId: mainID}}, previous: previous, rpc: rpc}
+	graph := &rgb11ReceiptGraph{asset: asset, chains: &settlementChains{manager: manager, ctx: context.Background()}}
+	return &rgbClosedPrivateBurnFixture{graph: graph, mapping: &rgb11ReceiptMapping{script: script},
+		receipt: &rgb11ReceiptDescend{id: tx.TxID(), tx: tx, output: burn, payload: &sindexer.DescendPayload{Version: 2, Operation: sindexer.DESCEND_OP_CLOSE, L1TxId: mainID}}, previous: previous, rpc: rpc}
 }
 
 func rgbClosedPrivatePreviousRaw(t *testing.T, previous *swire.MsgTx) string {

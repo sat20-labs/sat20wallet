@@ -1,177 +1,36 @@
 //go:build js && wasm
-// +build js,wasm
 
 package main
 
 import (
-	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"strings"
-	"sync"
 	"syscall/js"
 
-	"github.com/sat20-labs/sat20wallet/sdk/account"
-	walletsdk "github.com/sat20-labs/sat20wallet/sdk/wallet"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet"
 )
-
-type accountLocatorPayload = walletsdk.AccountPublicLocator
 
 type accountErrorData struct {
 	data any
 	code string
 }
 
-// Keep the existing async result tuple and pending-operation data. Only a
-// structured node refusal adds its existing machine-readable code.
+// Keep the existing async result tuple and pending-operation data. Preserve the error code for callers that can act on it.
 func accountAsyncError(data any, err error) (interface{}, int, string) {
-	var refusal *walletsdk.DKVSError
+	if errors.Is(err, wallet.ErrStorageTTLChanged) {
+		return accountErrorData{data: data, code: "STORAGE_TTL_CHANGED"}, -1, err.Error()
+	}
+	var refusal *wallet.DKVSError
 	if errors.As(err, &refusal) && refusal != nil && refusal.Code != "" {
 		data = accountErrorData{data: data, code: string(refusal.Code)}
 	}
 	return data, -1, err.Error()
 }
 
-type accountActivationSession struct {
-	Package          *account.RecoveryPackage
-	Summary          account.RecoverySummary
-	Authorization    walletsdk.AccountStorageAuthorization
-	Locator          accountLocatorPayload
-	GuardianVerified bool
-	GuardianShare    *account.RecoveryShare
-	RequestPrivate   []byte
-}
-
-type accountRecoverySession struct {
-	Package        *account.RecoveryPackage
-	Locator        accountLocatorPayload
-	DKVSShare      *account.RecoveryShare
-	UserShare      *account.RecoveryShare
-	GuardianShare  *account.RecoveryShare
-	RequestPrivate []byte
-	Backup         *account.Backup
-	Secret         []byte
-	ManagedState   *walletsdk.RecoveredAccountManagementState
-}
-
-var accountSessions = struct {
-	sync.Mutex
-	activation map[string]*accountActivationSession
-	recovery   map[string]*accountRecoverySession
-}{
-	activation: make(map[string]*accountActivationSession),
-	recovery:   make(map[string]*accountRecoverySession),
-}
-
-type accountQuestionInput struct {
-	ID                string `json:"id"`
-	Prompt            string `json:"prompt"`
-	Answer            string `json:"answer"`
-	Confirmation      string `json:"confirmation"`
-	CaseSensitive     bool   `json:"case_sensitive"`
-	IgnorePunctuation bool   `json:"ignore_punctuation"`
-}
-
-type accountGuardianContact struct {
-	Version   uint32 `json:"version"`
-	Network   string `json:"network"`
-	MailboxID string `json:"mailbox_id"`
-	PublicKey string `json:"recovery_public_key"`
-	Name      string `json:"display_name,omitempty"`
-}
-
-type accountGuardianSetupPayload struct {
-	Version   uint32                       `json:"version"`
-	Locator   accountLocatorPayload        `json:"locator"`
-	MailboxID string                       `json:"mailbox_id"`
-	Capsule   account.GuardianShareCapsule `json:"capsule"`
-}
-
-type accountGuardianReceipt struct {
-	Version   uint32                           `json:"version"`
-	Location  walletsdk.AccountIndexerLocation `json:"location"`
-	MailboxID string                           `json:"mailbox_id"`
-	PackageID string                           `json:"package_id"`
-	ShareID   string                           `json:"share_id"`
-	Storage   walletsdk.AccountStorageOption   `json:"storage"`
-}
-
-type accountGuardianRecoveryRequest struct {
-	Version           uint32                           `json:"version"`
-	Locator           accountLocatorPayload            `json:"locator"`
-	GuardianLocation  walletsdk.AccountIndexerLocation `json:"guardian_location"`
-	MailboxID         string                           `json:"mailbox_id"`
-	PackageID         string                           `json:"package_id"`
-	ShareID           string                           `json:"share_id"`
-	RecoveryPublicKey string                           `json:"recovery_public_key"`
-}
-
-type accountPreflightRequest struct {
-	Password string                                 `json:"password"`
-	Wallets  []walletsdk.AccountWalletMetadataInput `json:"wallets"`
-}
-
-type accountCreateRequest struct {
-	Password     string                                 `json:"password"`
-	Wallets      []walletsdk.AccountWalletMetadataInput `json:"wallets"`
-	RecoveryMode account.RecoveryMode                   `json:"recovery_mode"`
-	Questions    []accountQuestionInput                 `json:"questions"`
-	Guardian     *accountGuardianContact                `json:"guardian,omitempty"`
-}
-
-type accountAnswersRequest struct {
-	SessionID string                  `json:"session_id"`
-	Answers   []account.AnswerAttempt `json:"answers"`
-	UserShare string                  `json:"user_share,omitempty"`
-	Password  string                  `json:"password,omitempty"`
-}
-
-func zeroAccountBytes(value []byte) {
-	for index := range value {
-		value[index] = 0
-	}
-}
-
-func clearWASMBackup(value *account.Backup) {
-	if value == nil {
-		return
-	}
-	for index := range value.Wallets {
-		zeroAccountBytes(value.Wallets[index].Secret)
-		value.Wallets[index].Secret = nil
-	}
-}
-
-func accountRandomID(random io.Reader) (string, error) {
-	if random == nil {
-		random = rand.Reader
-	}
-	value := make([]byte, 16)
-	if _, err := io.ReadFull(random, value); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(value), nil
-}
-
-func accountStructData(value any) (map[string]any, error) {
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return nil, err
-	}
-	var result map[string]any
-	if err := json.Unmarshal(encoded, &result); err != nil {
-		return nil, err
-	}
-	return result, nil
-}
-
 func accountParseJSON(args []js.Value, target any) error {
-	if len(args) < 1 || args[0].Type() != js.TypeString {
+	if len(args) != 1 || args[0].Type() != js.TypeString {
 		return fmt.Errorf("request must be a JSON string")
 	}
 	if err := json.Unmarshal([]byte(args[0].String()), target); err != nil {
@@ -179,258 +38,105 @@ func accountParseJSON(args []js.Value, target any) error {
 	}
 	return nil
 }
-
-func clearAccountActivationSession(session *accountActivationSession) {
-	if session == nil {
-		return
+func accountViewResult(value any, err error) (interface{}, int, string) {
+	if err != nil {
+		return accountAsyncError(nil, err)
 	}
-	if session.Package != nil {
-		session.Package.UserShare = account.RecoveryShare{}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return accountAsyncError(nil, err)
 	}
-	zeroAccountBytes(session.RequestPrivate)
-	if session.GuardianShare != nil {
-		*session.GuardianShare = account.RecoveryShare{}
-	}
-	session.RequestPrivate, session.GuardianShare = nil, nil
+	return js.Global().Get("JSON").Call("parse", string(encoded)), 0, "ok"
 }
 
-func clearAccountRecoverySession(session *accountRecoverySession) {
-	if session == nil {
-		return
-	}
-	zeroAccountBytes(session.RequestPrivate)
-	zeroAccountBytes(session.Secret)
-	clearWASMBackup(session.Backup)
-	for _, share := range []*account.RecoveryShare{session.DKVSShare, session.UserShare, session.GuardianShare} {
-		if share != nil {
-			*share = account.RecoveryShare{}
-		}
-	}
-	if session.ManagedState != nil {
-		for index := range session.ManagedState.State.Wallets {
-			zeroAccountBytes(session.ManagedState.State.Wallets[index].Secret)
-			session.ManagedState.State.Wallets[index].Secret = nil
-		}
-		for index := range session.ManagedState.Copies {
-			item := &session.ManagedState.Copies[index]
-			zeroAccountBytes(item.Value)
-			item.Value = nil
-			if item.Record != nil {
-				zeroAccountBytes(item.Record.Value)
-				item.Record = nil
-			}
-		}
-		zeroAccountBytes(session.ManagedState.Envelope)
-		session.ManagedState.Envelope = nil
-	}
-	session.Secret, session.RequestPrivate, session.Backup, session.ManagedState = nil, nil, nil, nil
-	session.DKVSShare, session.UserShare, session.GuardianShare = nil, nil, nil
-}
-
-func snapshotAccountRecoveryForCommit(session *accountRecoverySession) *accountRecoverySession {
-	managed := *session.ManagedState
-	managed.State.Wallets = append([]account.ManagedWallet(nil), managed.State.Wallets...)
-	for index := range managed.State.Wallets {
-		managed.State.Wallets[index].SubAccounts = append([]account.SubAccount(nil), managed.State.Wallets[index].SubAccounts...)
-		managed.State.Wallets[index].Secret = bytes.Clone(managed.State.Wallets[index].Secret)
-	}
-	managed.Index.Entries = append([]account.ManagedEntry(nil), managed.Index.Entries...)
-	managed.Envelope = bytes.Clone(managed.Envelope)
-	managed.Copies = append([]walletsdk.AccountKVCopy(nil), managed.Copies...)
-	for index := range managed.Copies {
-		item := &managed.Copies[index]
-		item.Value = bytes.Clone(item.Value)
-		if item.Record != nil {
-			record := *item.Record
-			record.Value = bytes.Clone(record.Value)
-			record.PubKey = bytes.Clone(record.PubKey)
-			record.Signature = bytes.Clone(record.Signature)
-			record.FeeProof = bytes.Clone(record.FeeProof)
-			item.Record = &record
-		}
-	}
-	return &accountRecoverySession{Locator: session.Locator,
-		Secret: bytes.Clone(session.Secret), ManagedState: &managed}
-}
-
-func clearAccountSessions() {
-	accountSessions.Lock()
-	defer accountSessions.Unlock()
-	for id, session := range accountSessions.activation {
-		clearAccountActivationSession(session)
-		delete(accountSessions.activation, id)
-	}
-	for id, session := range accountSessions.recovery {
-		clearAccountRecoverySession(session)
-		delete(accountSessions.recovery, id)
-	}
-}
-
-func accountExpectedNetwork() string {
-	return _mgr.GetChain()
-}
-
-func encodeAccountLocator(value accountLocatorPayload) (string, error) {
-	return walletsdk.EncodeAccountPublicLocator(value, accountExpectedNetwork())
-}
-
-func decodeAccountLocator(value string) (accountLocatorPayload, error) {
-	return walletsdk.DecodeAccountPublicLocator(value, accountExpectedNetwork())
-}
-
-func accountPreflight(this js.Value, args []js.Value) any {
-	var request accountPreflightRequest
-	if err := accountParseJSON(args, &request); err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
-		if _mgr == nil {
-			return nil, -1, "Manager not initialized"
-		}
-		result, err := _mgr.AccountPreflight(request.Password, request.Wallets)
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		data, err := accountStructData(result)
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		return data, 0, "ok"
-	}))
-}
-
-func accountGetStorageOptions(this js.Value, args []js.Value) any {
-	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
-		if _mgr == nil {
-			return nil, -1, "Manager not initialized"
-		}
-		options, err := _mgr.GetAccountStorageOptions()
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		data, err := accountStructData(map[string]any{"options": options})
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		return data, 0, "ok"
-	}))
-}
-
-func accountAutopayStatus(this js.Value, args []js.Value) any {
-	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
-		if _mgr == nil {
-			return nil, -1, "Manager not initialized"
-		}
-		status, err := _mgr.GetAccountAutopayFundingStatus()
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		data, err := accountStructData(status)
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		return data, 0, "ok"
-	}))
-}
-
-func accountFundAutopay(this js.Value, args []js.Value) any {
-	var confirmed walletsdk.AccountAutopayFundingStatus
-	if err := accountParseJSON(args, &confirmed); err != nil {
-		return js.Global().Get("Promise").Call("resolve", createJsRet(nil, -1, err.Error()))
-	}
-	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
-		if _mgr == nil {
-			return nil, -1, "Manager not initialized"
-		}
-		result, err := _mgr.FundAccountAutopay(confirmed)
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		data, err := accountStructData(result)
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		return data, 0, "ok"
-	}))
-}
-
-func accountConfirmStorage(this js.Value, args []js.Value) any {
-	var request struct {
-		OptionID    string `json:"option_id"`
-		RecordCount uint64 `json:"record_count,omitempty"`
-	}
-	if err := accountParseJSON(args, &request); err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
-		if _mgr == nil {
-			return nil, -1, "Manager not initialized"
-		}
-		authorization, err := _mgr.ConfirmAccountStorage(request.OptionID, request.RecordCount)
-		if err != nil {
-			var pending *walletsdk.AccountAutopayPendingError
-			if errors.As(err, &pending) {
-				return accountAsyncError(map[string]any{"transaction_id": pending.TransactionID, "pending": true}, err)
-			}
-			return accountAsyncError(nil, err)
-		}
-		data, err := accountStructData(authorization)
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		return data, 0, "ok"
-	}))
-}
-
-func accountResumeStorageAuthorization(this js.Value, args []js.Value) any {
-	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
-		if _mgr == nil {
-			return nil, -1, "Manager not initialized"
-		}
-		authorization, err := _mgr.PendingAccountStorageAuthorization()
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		data, err := accountStructData(authorization)
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		return data, 0, "ok"
-	}))
-}
-
-func accountCancelStorageAuthorization(this js.Value, args []js.Value) any {
+func accountGetAccountView(_ js.Value, args []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
-	_mgr.CancelPendingAccountStorageAuthorization()
-	return createJsRet(map[string]any{"cancelled": true}, 0, "ok")
+	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
+		return accountViewResult(_mgr.GetAccountView(context.Background()))
+	}))
 }
 
-func accountReusePaidStorage(this js.Value, args []js.Value) any {
+func accountRefreshAccount(_ js.Value, args []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
+		return accountViewResult(_mgr.RefreshAccount(context.Background()))
+	}))
+}
+
+func accountPreflightRecovery(_ js.Value, args []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
 	var request struct {
-		RecordCount uint64 `json:"record_count,omitempty"`
+		Password  string  `json:"password"`
+		WalletIDs []int64 `json:"wallet_ids"`
 	}
 	if err := accountParseJSON(args, &request); err != nil {
 		return createJsRet(nil, -1, err.Error())
 	}
 	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
-		if _mgr == nil {
-			return nil, -1, "Manager not initialized"
-		}
-		authorization, err := _mgr.ReusePaidAccountStorage(request.RecordCount)
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		data, err := accountStructData(authorization)
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		return data, 0, "ok"
+		return accountViewResult(_mgr.PreflightRecovery(request.Password, request.WalletIDs))
 	}))
 }
 
-func accountGuardianIdentity(this js.Value, args []js.Value) any {
+func accountGetStorageOptions(_ js.Value, args []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	var request struct {
+		RecordCount uint64 `json:"record_count"`
+	}
+	if err := accountParseJSON(args, &request); err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
+		return accountViewResult(_mgr.GetStorageOptions(context.Background(), request.RecordCount))
+	}))
+}
+
+func accountConfirmStorage(_ js.Value, args []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	var request wallet.StorageOption
+	if err := accountParseJSON(args, &request); err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
+		return accountViewResult(_mgr.ConfirmStorage(context.Background(), request))
+	}))
+}
+
+func accountCancelStorageSetup(_ js.Value, args []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
+		return accountViewResult(nil, _mgr.CancelStorageSetup())
+	}))
+}
+
+func accountFundAutopay(_ js.Value, args []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	var request wallet.PaymentQuote
+	if err := accountParseJSON(args, &request); err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
+		return accountViewResult(_mgr.FundAutopay(context.Background(), request))
+	}))
+}
+
+func accountGetGuardianContact(_ js.Value, args []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
 	var request struct {
 		Password string `json:"password"`
 	}
@@ -438,194 +144,43 @@ func accountGuardianIdentity(this js.Value, args []js.Value) any {
 		return createJsRet(nil, -1, err.Error())
 	}
 	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
-		if _mgr == nil {
-			return nil, -1, "Manager not initialized"
-		}
-		identity, err := _mgr.GetOrCreateAccountGuardianIdentity(request.Password)
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		data, err := accountStructData(identity)
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		encoded, _ := json.Marshal(identity)
-		data["contact"] = string(encoded)
-		return data, 0, "ok"
+		return accountViewResult(_mgr.GetGuardianContact(request.Password))
 	}))
 }
 
-func accountCreateRecovery(this js.Value, args []js.Value) any {
-	var request accountCreateRequest
+func accountCreateRecovery(_ js.Value, args []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	var request wallet.RecoverySetup
 	if err := accountParseJSON(args, &request); err != nil {
 		return createJsRet(nil, -1, err.Error())
 	}
 	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
-		manager := _mgr
-		if manager == nil {
-			return nil, -1, "Manager not initialized"
-		}
-		var data map[string]any
-		var sessionID string
-		var session *accountActivationSession
-		err := manager.UseAccountStorageAuthorization(walletsdk.AccountStoragePurposeRecovery,
-			func(storage *walletsdk.AccountStorageAuthorization) error {
-				backup, err := manager.ExportAccountBackupForPWA(request.Password, request.Wallets)
-				if err != nil {
-					return err
-				}
-				defer clearWASMBackup(&backup)
-				// An imported root may belong to an existing account. Explicit
-				// setup initializes only a genuinely new account; existing profiles
-				// retain their AccountSecret.
-				if err := manager.InitializeAccountManagement(request.Password); err != nil {
-					return err
-				}
-				repository, err := manager.NewAccountRepositoryForStorage(*storage)
-				if err != nil {
-					return err
-				}
-				accountIDProvider, ok := repository.(interface{ AccountID() string })
-				if !ok {
-					return fmt.Errorf("account repository does not expose account id")
-				}
-				questions := make([]account.QuestionAnswer, len(request.Questions))
-				for index, input := range request.Questions {
-					questions[index] = account.QuestionAnswer{
-						Question: account.KnowledgeQuestion{ID: input.ID, Prompt: input.Prompt, CaseSensitive: input.CaseSensitive, IgnorePunctuation: input.IgnorePunctuation},
-						Answer:   input.Answer, Confirmation: input.Confirmation,
-					}
-				}
-				bootstrap, err := account.RootBootstrapBackup(backup)
-				if err != nil {
-					return err
-				}
-				options := account.CreateOptions{AccountID: accountIDProvider.AccountID(), Backup: bootstrap, RecoveryMode: request.RecoveryMode, Questions: questions}
-				if request.RecoveryMode == account.RecoveryMode2Of3 {
-					if request.Guardian == nil {
-						return fmt.Errorf("guardian contact is required")
-					}
-					if request.Guardian.Network != manager.GetChain() {
-						return fmt.Errorf("guardian network does not match the account")
-					}
-					guardianPublicKey, err := base64.RawURLEncoding.DecodeString(request.Guardian.PublicKey)
-					if err != nil || len(guardianPublicKey) != 32 {
-						return fmt.Errorf("invalid guardian public key")
-					}
-					options.GuardianMailboxID = request.Guardian.MailboxID
-					options.GuardianPublicKey = guardianPublicKey
-				}
-				recovery := account.NewManager(repository)
-				pkg, err := manager.CreateAccountRecoveryPackage(options)
-				if err != nil {
-					return err
-				}
-				if err := recovery.Publish(context.Background(), *pkg); err != nil {
-					return err
-				}
-				if _, err := recovery.Load(context.Background(), pkg.Envelope.Locator); err != nil {
-					return fmt.Errorf("verify published recovery package: %w", err)
-				}
-				locator := accountLocatorPayload{
-					Version: account.Version, Network: manager.GetChain(),
-					StorageLocation: storage.Location, StorageMode: storage.Mode,
-					RecordTTL: storage.RecordOptions.TTL, Locator: pkg.Envelope.Locator,
-				}
-				if storage.Autopay != nil {
-					locator.AutopayContract = storage.Autopay.PoolContract
-				}
-				if err := manager.SignAccountPublicLocator(&locator); err != nil {
-					return err
-				}
-				locatorText, err := walletsdk.EncodeAccountPublicLocator(locator, manager.GetChain())
-				if err != nil {
-					return err
-				}
-				userShare, err := account.EncodeRecoveryShare(pkg.UserShare)
-				if err != nil {
-					return err
-				}
-				sessionID, err = accountRandomID(nil)
-				if err != nil {
-					return err
-				}
-				summary := account.SummarizeBackup(pkg.Envelope.Locator, backup)
-				session = &accountActivationSession{Package: pkg, Summary: summary, Authorization: *storage,
-					Locator: locator}
-				result := map[string]any{
-					"session_id": sessionID, "locator": locatorText, "user_share": userShare,
-					"summary": summary, "storage": storage.Summary,
-				}
-				if pkg.GuardianCapsule != nil && pkg.Manifest.Guardian != nil {
-					setup := accountGuardianSetupPayload{Version: account.Version, Locator: locator,
-						MailboxID: pkg.Manifest.Guardian.MailboxID, Capsule: *pkg.GuardianCapsule}
-					encoded, err := json.Marshal(setup)
-					if err != nil {
-						return err
-					}
-					result["guardian_setup"] = string(encoded)
-				}
-				data, err = accountStructData(result)
-				return err
-			})
-		if err != nil {
-			if session != nil && session.Package != nil {
-				session.Package.UserShare = account.RecoveryShare{}
-			}
-			return accountAsyncError(nil, err)
-		}
-		// Do not expose a session from a cancelled or superseded SDK operation.
-		accountSessions.Lock()
-		accountSessions.activation[sessionID] = session
-		accountSessions.Unlock()
-		return data, 0, "ok"
+		return accountViewResult(_mgr.CreateRecovery(context.Background(), request))
 	}))
 }
 
-func accountAcceptGuardianSetup(this js.Value, args []js.Value) any {
+func accountAcceptGuardianSetup(_ js.Value, args []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
 	var request struct {
-		Password     string `json:"password"`
-		SetupPayload string `json:"setup_payload"`
+		Password string `json:"password"`
+		Setup    string `json:"setup"`
 	}
 	if err := accountParseJSON(args, &request); err != nil {
 		return createJsRet(nil, -1, err.Error())
 	}
 	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
-		manager := _mgr
-		if manager == nil {
-			return nil, -1, "Manager not initialized"
-		}
-		var setup accountGuardianSetupPayload
-		if err := json.Unmarshal([]byte(request.SetupPayload), &setup); err != nil || setup.Version != account.Version {
-			return nil, -1, "invalid guardian setup payload"
-		}
-		var encoded []byte
-		err := manager.UseAccountStorageAuthorization(walletsdk.AccountStoragePurposeGuardian,
-			func(storage *walletsdk.AccountStorageAuthorization) error {
-				identity, err := manager.GetOrCreateAccountGuardianIdentity(request.Password)
-				if err != nil {
-					return err
-				}
-				if identity.MailboxID != setup.MailboxID {
-					return fmt.Errorf("guardian setup is addressed to another mailbox")
-				}
-				if err := manager.PutGuardianCapsuleForStorage(*storage, setup.MailboxID, setup.Capsule); err != nil {
-					return err
-				}
-				receipt := accountGuardianReceipt{Version: account.Version, Location: storage.Location,
-					MailboxID: setup.MailboxID, PackageID: setup.Capsule.PackageID, ShareID: setup.Capsule.ShareID,
-					Storage: storage.Summary}
-				encoded, err = json.Marshal(receipt)
-				return err
-			})
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		return map[string]any{"receipt": string(encoded)}, 0, "ok"
+		return accountViewResult(_mgr.AcceptGuardianSetup(context.Background(), request.Password, request.Setup))
 	}))
 }
 
-func accountCheckGuardianSetup(this js.Value, args []js.Value) any {
+func accountConfirmGuardianSetup(_ js.Value, args []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
 	var request struct {
 		SessionID string `json:"session_id"`
 		Receipt   string `json:"receipt"`
@@ -634,200 +189,62 @@ func accountCheckGuardianSetup(this js.Value, args []js.Value) any {
 		return createJsRet(nil, -1, err.Error())
 	}
 	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
-		var receipt accountGuardianReceipt
-		if err := json.Unmarshal([]byte(request.Receipt), &receipt); err != nil || receipt.Version != account.Version {
-			return nil, -1, "invalid guardian receipt"
-		}
-		accountSessions.Lock()
-		session := accountSessions.activation[request.SessionID]
-		accountSessions.Unlock()
-		if session == nil || session.Package == nil || session.Package.Manifest.Guardian == nil {
-			return nil, -1, "activation session expired"
-		}
-		reference := session.Package.Manifest.Guardian
-		if receipt.MailboxID != reference.MailboxID || receipt.PackageID != session.Package.Manifest.Locator.PackageID || receipt.ShareID != reference.ShareID {
-			return nil, -1, "guardian receipt does not match recovery package"
-		}
-		encodedCapsule, err := _mgr.LoadAccountGuardianCapsule(
-			receipt.Location, receipt.MailboxID, receipt.PackageID, receipt.ShareID,
-		)
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		var capsule account.GuardianShareCapsule
-		if err := json.Unmarshal(encodedCapsule, &capsule); err != nil {
-			return nil, -1, "invalid guardian capsule"
-		}
-		hash, err := account.HashGuardianCapsule(capsule)
-		if err != nil || hash != reference.CapsuleHash {
-			return nil, -1, "guardian capsule verification failed"
-		}
-		session.GuardianVerified = true
-		session.Locator.GuardianLocation = &receipt.Location
-		if err := _mgr.SignAccountPublicLocator(&session.Locator); err != nil {
-			return accountAsyncError(nil, err)
-		}
-		locatorText, err := encodeAccountLocator(session.Locator)
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		data, err := accountStructData(map[string]any{"stored": true, "locator": locatorText, "storage": receipt.Storage})
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		return data, 0, "ok"
+		return accountViewResult(_mgr.ConfirmGuardianSetup(context.Background(), request.SessionID, request.Receipt))
 	}))
 }
 
-func accountRehearse(this js.Value, args []js.Value) any {
-	var request accountAnswersRequest
-	if err := accountParseJSON(args, &request); err != nil {
-		return createJsRet(nil, -1, err.Error())
+func accountActivateRecovery(_ js.Value, args []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
 	}
-	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
-		accountSessions.Lock()
-		session := accountSessions.activation[request.SessionID]
-		accountSessions.Unlock()
-		if session == nil || session.Package == nil {
-			return nil, -1, "activation session expired"
-		}
-		if strings.TrimSpace(request.Password) == "" {
-			return nil, -1, "wallet password is required"
-		}
-		if session.Package.Envelope.Locator.RecoveryMode == account.RecoveryMode2Of3 && !session.GuardianVerified {
-			return nil, -1, "guardian share has not been verified"
-		}
-		dkvsShare, err := account.RecoverDKVSShare(session.Package.DKVSShareCapsule, session.Package.KnowledgeBundle, request.Answers)
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		companion := account.RecoveryShare{}
-		if session.Package.Envelope.Locator.RecoveryMode == account.RecoveryMode2Of3 {
-			if session.GuardianShare == nil {
-				return nil, -1, "guardian recovery response is required for the rehearsal"
-			}
-			companion = *session.GuardianShare
-		} else {
-			supplied, err := account.DecodeRecoveryShare(request.UserShare)
-			if err != nil {
-				return accountAsyncError(nil, err)
-			}
-			if supplied != session.Package.UserShare {
-				return nil, -1, "user recovery share does not match the activation session"
-			}
-			companion = session.Package.UserShare
-		}
-		backup, secret, err := account.RecoverAccount(session.Package.Envelope, dkvsShare, companion)
-		if err != nil {
-			if session.Package.Envelope.Locator.RecoveryMode == account.RecoveryMode2Of2 {
-				return nil, -1, "knowledge recovery share does not match the activation package"
-			}
-			return nil, -1, "recovered shares do not match the activation package"
-		}
-		defer zeroAccountBytes(secret)
-		defer clearWASMBackup(&backup)
-		publicLocator, err := encodeAccountLocator(session.Locator)
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		if err := _mgr.ActivateAccountManagement(secret, request.Password, session.Authorization,
-			session.Package.Envelope.Locator, publicLocator); err != nil {
-			return accountAsyncError(nil, err)
-		}
-		accountSessions.Lock()
-		clearAccountActivationSession(session)
-		delete(accountSessions.activation, request.SessionID)
-		accountSessions.Unlock()
-		data, err := accountStructData(map[string]any{"summary": session.Summary, "verified": true})
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		return data, 0, "ok"
-	}))
-}
-
-func accountLoadRecovery(this js.Value, args []js.Value) any {
 	var request struct {
-		Locator string `json:"locator"`
+		SessionID string                 `json:"session_id"`
+		Input     wallet.ActivationInput `json:"input"`
 	}
 	if err := accountParseJSON(args, &request); err != nil {
 		return createJsRet(nil, -1, err.Error())
 	}
 	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
-		locator, err := decodeAccountLocator(request.Locator)
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		pkg, err := _mgr.LoadAccountRecoveryPackage(locator.StorageLocation, locator.Locator)
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		sessionID, err := accountRandomID(nil)
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		accountSessions.Lock()
-		accountSessions.recovery[sessionID] = &accountRecoverySession{Package: pkg, Locator: locator}
-		accountSessions.Unlock()
-		questions := make([]account.KnowledgeQuestion, 0, len(pkg.KnowledgeBundle.QuestionShares))
-		for _, entry := range pkg.KnowledgeBundle.QuestionShares {
-			questions = append(questions, entry.Question)
-		}
-		data, err := accountStructData(map[string]any{"session_id": sessionID, "locator": locator.Locator, "questions": questions,
-			"guardian": pkg.Manifest.Guardian, "has_guardian_location": locator.GuardianLocation != nil})
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		return data, 0, "ok"
+		return accountViewResult(_mgr.ActivateRecovery(context.Background(), request.SessionID, request.Input))
 	}))
 }
 
-func accountRecoverKnowledge(this js.Value, args []js.Value) any {
-	var request accountAnswersRequest
-	if err := accountParseJSON(args, &request); err != nil {
-		return createJsRet(nil, -1, err.Error())
+func accountLoadRecovery(_ js.Value, args []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
 	}
-	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
-		accountSessions.Lock()
-		session := accountSessions.recovery[request.SessionID]
-		accountSessions.Unlock()
-		if session == nil || session.Package == nil {
-			return nil, -1, "recovery session expired"
-		}
-		share, err := account.RecoverDKVSShare(session.Package.DKVSShareCapsule, session.Package.KnowledgeBundle, request.Answers)
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		session.DKVSShare = &share
-		return map[string]any{"recovered": true}, 0, "ok"
-	}))
-}
-
-func accountSetUserShare(this js.Value, args []js.Value) any {
 	var request struct {
-		SessionID string `json:"session_id"`
-		UserShare string `json:"user_share"`
+		Locator   string `json:"locator"`
+		Rehearsal bool   `json:"rehearsal"`
 	}
 	if err := accountParseJSON(args, &request); err != nil {
 		return createJsRet(nil, -1, err.Error())
 	}
 	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
-		share, err := account.DecodeRecoveryShare(request.UserShare)
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		accountSessions.Lock()
-		session := accountSessions.recovery[request.SessionID]
-		accountSessions.Unlock()
-		if session == nil || session.Package == nil || share.PackageID != session.Package.Envelope.Locator.PackageID {
-			return nil, -1, "user share does not match recovery package"
-		}
-		session.UserShare = &share
-		return map[string]any{"accepted": true}, 0, "ok"
+		return accountViewResult(_mgr.LoadRecovery(context.Background(), request.Locator, request.Rehearsal))
 	}))
 }
 
-func accountCreateGuardianRequest(this js.Value, args []js.Value) any {
+func accountPreviewRecovery(_ js.Value, args []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	var request struct {
+		SessionID string                 `json:"session_id"`
+		Factors   wallet.RecoveryFactors `json:"factors"`
+	}
+	if err := accountParseJSON(args, &request); err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
+		return accountViewResult(_mgr.PreviewRecovery(context.Background(), request.SessionID, request.Factors))
+	}))
+}
+
+func accountCreateGuardianRequest(_ js.Value, args []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
 	var request struct {
 		SessionID string `json:"session_id"`
 	}
@@ -835,51 +252,14 @@ func accountCreateGuardianRequest(this js.Value, args []js.Value) any {
 		return createJsRet(nil, -1, err.Error())
 	}
 	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
-		accountSessions.Lock()
-		recoverySession := accountSessions.recovery[request.SessionID]
-		activationSession := accountSessions.activation[request.SessionID]
-		accountSessions.Unlock()
-		var pkg *account.RecoveryPackage
-		var locator accountLocatorPayload
-		var storeKey func([]byte)
-		switch {
-		case recoverySession != nil:
-			pkg, locator = recoverySession.Package, recoverySession.Locator
-			storeKey = func(value []byte) {
-				zeroAccountBytes(recoverySession.RequestPrivate)
-				recoverySession.RequestPrivate = value
-			}
-		case activationSession != nil:
-			pkg, locator = activationSession.Package, activationSession.Locator
-			if !activationSession.GuardianVerified {
-				return nil, -1, "guardian capsule has not been stored"
-			}
-			storeKey = func(value []byte) {
-				zeroAccountBytes(activationSession.RequestPrivate)
-				activationSession.RequestPrivate = value
-			}
-		default:
-			return nil, -1, "guardian recovery session expired"
-		}
-		if pkg == nil || pkg.Manifest.Guardian == nil || locator.GuardianLocation == nil || pkg.Envelope.Locator.RecoveryMode != account.RecoveryMode2Of3 {
-			return nil, -1, "guardian recovery is unavailable"
-		}
-		privateKey, publicKey, err := account.GenerateGuardianKey(nil)
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		storeKey(privateKey)
-		reference := pkg.Manifest.Guardian
-		payload := accountGuardianRecoveryRequest{Version: account.Version, Locator: locator,
-			GuardianLocation: *locator.GuardianLocation, MailboxID: reference.MailboxID,
-			PackageID: pkg.Envelope.Locator.PackageID, ShareID: reference.ShareID,
-			RecoveryPublicKey: base64.RawURLEncoding.EncodeToString(publicKey)}
-		encoded, _ := json.Marshal(payload)
-		return map[string]any{"request": string(encoded)}, 0, "ok"
+		return accountViewResult(_mgr.CreateGuardianRequest(context.Background(), request.SessionID))
 	}))
 }
 
-func accountCreateGuardianResponse(this js.Value, args []js.Value) any {
+func accountCreateGuardianResponse(_ js.Value, args []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
 	var request struct {
 		Password string `json:"password"`
 		Request  string `json:"request"`
@@ -888,330 +268,79 @@ func accountCreateGuardianResponse(this js.Value, args []js.Value) any {
 		return createJsRet(nil, -1, err.Error())
 	}
 	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
-		if _mgr == nil {
-			return nil, -1, "Manager not initialized"
-		}
-		var payload accountGuardianRecoveryRequest
-		if err := json.Unmarshal([]byte(request.Request), &payload); err != nil || payload.Version != account.Version {
-			return nil, -1, "invalid guardian recovery request"
-		}
-		encodedCapsule, err := _mgr.LoadAccountGuardianCapsule(
-			payload.GuardianLocation, payload.MailboxID, payload.PackageID, payload.ShareID,
-		)
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		var stored account.GuardianShareCapsule
-		if err := json.Unmarshal(encodedCapsule, &stored); err != nil {
-			return nil, -1, "invalid guardian capsule"
-		}
-		if stored.PackageID != payload.PackageID || stored.ShareID != payload.ShareID {
-			return nil, -1, "guardian capsule does not match the recovery request"
-		}
-		privateKey, err := _mgr.LoadAccountGuardianPrivateKey(request.Password)
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		defer zeroAccountBytes(privateKey)
-		share, err := account.DecryptGuardianShare(stored, privateKey)
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		publicKey, err := base64.RawURLEncoding.DecodeString(payload.RecoveryPublicKey)
-		if err != nil || len(publicKey) != 32 {
-			return nil, -1, "invalid recovery public key"
-		}
-		response, err := account.EncryptGuardianShare(share, publicKey, nil)
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		encoded, _ := json.Marshal(response)
-		return map[string]any{"response": string(encoded)}, 0, "ok"
+		return accountViewResult(_mgr.CreateGuardianResponse(context.Background(), request.Password, request.Request))
 	}))
 }
 
-func accountConsumeGuardianResponse(this js.Value, args []js.Value) any {
-	var request struct {
-		SessionID string `json:"session_id"`
-		Response  string `json:"response"`
-	}
-	if err := accountParseJSON(args, &request); err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
-		accountSessions.Lock()
-		recoverySession := accountSessions.recovery[request.SessionID]
-		activationSession := accountSessions.activation[request.SessionID]
-		accountSessions.Unlock()
-		var pkg *account.RecoveryPackage
-		var privateKey []byte
-		var accept func(account.RecoveryShare)
-		switch {
-		case recoverySession != nil:
-			pkg, privateKey = recoverySession.Package, recoverySession.RequestPrivate
-			accept = func(share account.RecoveryShare) {
-				recoverySession.GuardianShare = &share
-				zeroAccountBytes(recoverySession.RequestPrivate)
-				recoverySession.RequestPrivate = nil
-			}
-		case activationSession != nil:
-			pkg, privateKey = activationSession.Package, activationSession.RequestPrivate
-			accept = func(share account.RecoveryShare) {
-				activationSession.GuardianShare = &share
-				zeroAccountBytes(activationSession.RequestPrivate)
-				activationSession.RequestPrivate = nil
-			}
-		default:
-			return nil, -1, "guardian recovery request has expired"
-		}
-		if pkg == nil || pkg.Manifest.Guardian == nil || len(privateKey) != 32 {
-			return nil, -1, "guardian recovery request has expired"
-		}
-		var capsule account.GuardianShareCapsule
-		if err := json.Unmarshal([]byte(request.Response), &capsule); err != nil {
-			return nil, -1, "invalid guardian response"
-		}
-		share, err := account.DecryptGuardianShare(capsule, privateKey)
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		reference := pkg.Manifest.Guardian
-		if share.PackageID != pkg.Envelope.Locator.PackageID || share.Checksum != reference.ShareID ||
-			share.Role != account.ShareRoleGuardian || share.Threshold != pkg.Manifest.Threshold || share.Total != pkg.Manifest.Total {
-			return nil, -1, "guardian response does not match the recovery package"
-		}
-		accept(share)
-		return map[string]any{"accepted": true}, 0, "ok"
-	}))
-}
-
-func accountPreviewRecovery(this js.Value, args []js.Value) any {
-	var request struct {
-		SessionID string `json:"session_id"`
-	}
-	if err := accountParseJSON(args, &request); err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
-		accountSessions.Lock()
-		session := accountSessions.recovery[request.SessionID]
-		accountSessions.Unlock()
-		if session == nil || session.Package == nil {
-			return nil, -1, "recovery session expired"
-		}
-		shares := make([]account.RecoveryShare, 0, 2)
-		if session.DKVSShare != nil {
-			shares = append(shares, *session.DKVSShare)
-		}
-		if session.UserShare != nil && len(shares) < 2 {
-			shares = append(shares, *session.UserShare)
-		}
-		if session.GuardianShare != nil && len(shares) < 2 {
-			shares = append(shares, *session.GuardianShare)
-		}
-		if len(shares) < 2 {
-			return nil, -1, account.ErrInsufficientShares.Error()
-		}
-		backup, secret, err := account.RecoverAccount(session.Package.Envelope, shares...)
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		if len(backup.Wallets) == 0 || backup.Wallets[0].Type != account.WalletMnemonic {
-			zeroAccountBytes(secret)
-			return nil, -1, "recovery package does not contain a root wallet"
-		}
-		managed, err := _mgr.LoadAccountManagementStateForRecovery(
-			session.Locator.StorageLocation, session.Locator.Locator, secret, string(backup.Wallets[0].Secret))
-		if err != nil {
-			zeroAccountBytes(secret)
-			clearWASMBackup(&backup)
-			return accountAsyncError(nil, fmt.Errorf("load latest account state: %w", err))
-		}
-		latestBackup, err := account.BackupFromManagedState(managed.State)
-		if err != nil {
-			zeroAccountBytes(secret)
-			clearWASMBackup(&backup)
-			return accountAsyncError(nil, err)
-		}
-		clearWASMBackup(&backup)
-		accountSessions.Lock()
-		if accountSessions.recovery[request.SessionID] != session {
-			accountSessions.Unlock()
-			zeroAccountBytes(secret)
-			clearWASMBackup(&latestBackup)
-			clearAccountRecoverySession(&accountRecoverySession{ManagedState: managed})
-			return nil, -1, "recovery session expired"
-		}
-		clearAccountRecoverySession(&accountRecoverySession{
-			Secret: session.Secret, Backup: session.Backup, ManagedState: session.ManagedState,
-		})
-		session.Secret = secret
-		session.Backup = &latestBackup
-		session.ManagedState = managed
-		accountSessions.Unlock()
-		data, err := accountStructData(map[string]any{"summary": account.SummarizeBackup(session.Package.Envelope.Locator, latestBackup)})
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		return data, 0, "ok"
-	}))
-}
-
-func accountCommitRecovery(this js.Value, args []js.Value) any {
-	var request struct {
-		SessionID string `json:"session_id"`
-		Password  string `json:"password"`
-	}
-	if err := accountParseJSON(args, &request); err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
-		if _mgr == nil {
-			return nil, -1, "Manager not initialized"
-		}
-		accountSessions.Lock()
-		session := accountSessions.recovery[request.SessionID]
-		if session == nil {
-			accountSessions.Unlock()
-			return nil, -1, "recovery session expired"
-		}
-		if session.Backup == nil {
-			accountSessions.Unlock()
-			return nil, -1, "account recovery preview is required"
-		}
-		if session.ManagedState == nil || len(session.Secret) != 32 {
-			accountSessions.Unlock()
-			return nil, -1, "latest managed account state is unavailable"
-		}
-		// Once the user confirms restore, it owns an independent snapshot.
-		// Aborting/expiring the preview must not zero buffers used by its commit.
-		snapshot := snapshotAccountRecoveryForCommit(session)
-		accountSessions.Unlock()
-		defer clearAccountRecoverySession(snapshot)
-		locator := snapshot.Locator
-		publicLocator, err := encodeAccountLocator(locator)
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		wallets, err := _mgr.RestoreAccountManagementState(
-			*snapshot.ManagedState, snapshot.Secret, request.Password, locator.Locator,
-			walletsdk.AccountManagementRestoreOptions{
-				Location: locator.StorageLocation, StorageMode: locator.StorageMode,
-				RecordTTL: locator.RecordTTL, AutopayContract: locator.AutopayContract,
-				PublicLocator: publicLocator,
-			})
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		status := _mgr.GetAccountManagementStatus()
-		if !status.Active || status.RootWalletID == 0 || status.AccountID == "" {
-			return nil, -1, "restored account has no explicit root wallet"
-		}
-		accountSessions.Lock()
-		clearAccountRecoverySession(session)
-		delete(accountSessions.recovery, request.SessionID)
-		accountSessions.Unlock()
-		data, err := accountStructData(map[string]any{
-			"wallets": wallets, "root_wallet_id": status.RootWalletID,
-			"account_id": status.AccountID,
-		})
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		return data, 0, "ok"
-	}))
-}
-
-func accountAbortSession(this js.Value, args []js.Value) any {
-	var request struct {
-		SessionID string `json:"session_id"`
-	}
-	if err := accountParseJSON(args, &request); err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	accountSessions.Lock()
-	clearAccountRecoverySession(accountSessions.recovery[request.SessionID])
-	clearAccountActivationSession(accountSessions.activation[request.SessionID])
-	delete(accountSessions.activation, request.SessionID)
-	delete(accountSessions.recovery, request.SessionID)
-	accountSessions.Unlock()
-	return createJsRet(map[string]any{"aborted": true}, 0, "ok")
-}
-
-func accountRetryDKVSSync(this js.Value, args []js.Value) any {
+func accountCommitRecovery(_ js.Value, args []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
-	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
-		if err := _mgr.RetryDKVSSync(); err != nil {
-			return accountAsyncError(nil, err)
-		}
-		return map[string]any{"queued": true}, 0, "ok"
-	}))
-}
-
-func accountStatus(this js.Value, args []js.Value) any {
-	if _mgr == nil {
-		return createJsRet(nil, -1, "Manager not initialized")
+	var request struct {
+		SessionID   string `json:"session_id"`
+		NewPassword string `json:"new_password"`
 	}
-	// A managed mutation can hold the wallet lock while awaiting IndexedDB.
-	// Yield the JS callback so the transaction can finish before reading status.
-	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
-		data, err := accountStructData(_mgr.GetAccountManagementStatus())
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		return data, 0, "ok"
-	}))
-}
-
-func accountInspectDKVS(this js.Value, args []js.Value) any {
-	if _mgr == nil {
-		return createJsRet(nil, -1, "Manager not initialized")
-	}
-	var options walletsdk.AccountDKVSInspectOptions
-	if err := accountParseJSON(args, &options); err != nil {
+	if err := accountParseJSON(args, &request); err != nil {
 		return createJsRet(nil, -1, err.Error())
 	}
 	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
-		view, err := _mgr.InspectCurrentAccountDKVS(options)
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		data, err := accountStructData(view)
-		if err != nil {
-			return accountAsyncError(nil, err)
-		}
-		return data, 0, "ok"
+		return accountViewResult(_mgr.CommitRecovery(context.Background(), request.SessionID, request.NewPassword))
+	}))
+}
+
+func accountAbortRecovery(_ js.Value, args []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	var request struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := accountParseJSON(args, &request); err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
+		return accountViewResult(nil, _mgr.AbortRecovery(request.SessionID))
 	}))
 }
 
 func init() {
 	obj := js.Global().Get("Object").New()
-	obj.Set("status", js.FuncOf(accountStatus))
-	obj.Set("retryDKVSSync", js.FuncOf(accountRetryDKVSSync))
-	obj.Set("inspectDKVS", js.FuncOf(accountInspectDKVS))
-	obj.Set("preflight", js.FuncOf(accountPreflight))
+
+	obj.Set("getAccountView", js.FuncOf(accountGetAccountView))
+
+	obj.Set("refreshAccount", js.FuncOf(accountRefreshAccount))
+
+	obj.Set("preflightRecovery", js.FuncOf(accountPreflightRecovery))
+
 	obj.Set("getStorageOptions", js.FuncOf(accountGetStorageOptions))
-	obj.Set("autopayStatus", js.FuncOf(accountAutopayStatus))
-	obj.Set("fundAutopay", js.FuncOf(accountFundAutopay))
+
 	obj.Set("confirmStorage", js.FuncOf(accountConfirmStorage))
-	obj.Set("resumeStorageAuthorization", js.FuncOf(accountResumeStorageAuthorization))
-	obj.Set("cancelStorageAuthorization", js.FuncOf(accountCancelStorageAuthorization))
-	obj.Set("reusePaidStorage", js.FuncOf(accountReusePaidStorage))
-	obj.Set("guardianIdentity", js.FuncOf(accountGuardianIdentity))
+
+	obj.Set("cancelStorageSetup", js.FuncOf(accountCancelStorageSetup))
+
+	obj.Set("fundAutopay", js.FuncOf(accountFundAutopay))
+
+	obj.Set("getGuardianContact", js.FuncOf(accountGetGuardianContact))
+
 	obj.Set("createRecovery", js.FuncOf(accountCreateRecovery))
+
 	obj.Set("acceptGuardianSetup", js.FuncOf(accountAcceptGuardianSetup))
-	obj.Set("checkGuardianSetup", js.FuncOf(accountCheckGuardianSetup))
-	obj.Set("rehearse", js.FuncOf(accountRehearse))
+
+	obj.Set("confirmGuardianSetup", js.FuncOf(accountConfirmGuardianSetup))
+
+	obj.Set("activateRecovery", js.FuncOf(accountActivateRecovery))
+
 	obj.Set("loadRecovery", js.FuncOf(accountLoadRecovery))
-	obj.Set("recoverKnowledge", js.FuncOf(accountRecoverKnowledge))
-	obj.Set("setUserShare", js.FuncOf(accountSetUserShare))
-	obj.Set("createGuardianRequest", js.FuncOf(accountCreateGuardianRequest))
-	obj.Set("createGuardianResponse", js.FuncOf(accountCreateGuardianResponse))
-	obj.Set("consumeGuardianResponse", js.FuncOf(accountConsumeGuardianResponse))
+
 	obj.Set("previewRecovery", js.FuncOf(accountPreviewRecovery))
+
+	obj.Set("createGuardianRequest", js.FuncOf(accountCreateGuardianRequest))
+
+	obj.Set("createGuardianResponse", js.FuncOf(accountCreateGuardianResponse))
+
 	obj.Set("commitRecovery", js.FuncOf(accountCommitRecovery))
-	obj.Set("abortSession", js.FuncOf(accountAbortSession))
+
+	obj.Set("abortRecovery", js.FuncOf(accountAbortRecovery))
+
 	js.Global().Set("sat20account_wasm", obj)
 }

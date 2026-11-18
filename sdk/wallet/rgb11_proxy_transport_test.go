@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/btcsuite/btcd/txscript"
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -684,7 +685,7 @@ func TestRGB11ProxyDeliveryWaitsForAckBeforeBroadcast(t *testing.T) {
 	if err := packet.Serialize(&preparedPSBT); err != nil {
 		t.Fatal(err)
 	}
-	consignment, err := os.ReadFile("../../../rgb11/testvectors/rc11/nia-transfer.rgba")
+	consignment, err := os.ReadFile("../../../rgb11/testvectors/rc1/nia-transfer.rgba")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -711,6 +712,76 @@ func TestRGB11ProxyDeliveryWaitsForAckBeforeBroadcast(t *testing.T) {
 	}
 	if err := manager.rgbManager.projectionStore.SavePendingTransfer(pending); err != nil {
 		t.Fatal(err)
+	}
+
+	// A transient proxy error after expiry must not pin the unsigned witness
+	// forever. This relayed transfer has no locally observed ACK or broadcast
+	// intent; expiry cleanup should be local and must not broadcast it.
+	expiredID := "proxy-expired-ack-error"
+	expired := *pending
+	expired.State = pending.State
+	expired.State.TransferID = expiredID
+	expired.State.BatchTransferIDs = []string{expiredID}
+	expired.State.Expiry = time.Now().Add(-time.Hour).Unix()
+	expired.State.Status = "relayed"
+	expired.State.AckStatus = "awaiting"
+	expiredTx := tx.Copy()
+	expiredInput := strings.Repeat("55", 32) + ":0"
+	expiredOutpoint, err := wire.NewOutPointFromString(expiredInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiredTx.TxIn[0].PreviousOutPoint = *expiredOutpoint
+	var expiredSigned bytes.Buffer
+	if err := expiredTx.Serialize(&expiredSigned); err != nil {
+		t.Fatal(err)
+	}
+	expired.State.WitnessTxID = expiredTx.TxHash().String()
+	expired.State.InputOutPoints = []string{expiredInput}
+	expired.State.OutputOutPoints = []string{expired.State.WitnessTxID + ":0"}
+	expired.SignedTx = expiredSigned.Bytes()
+	expiredPacket, err := CreatePsbt(expiredTx, txscript.NewCannedPrevOutputFetcher(script, 10_000), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var expiredPSBT bytes.Buffer
+	if err := expiredPacket.Serialize(&expiredPSBT); err != nil {
+		t.Fatal(err)
+	}
+	expired.SignedPSBT = expiredPSBT.Bytes()
+	expired.ReservationID = "proxy-expired-reservation"
+	if err := manager.rgbManager.projectionStore.SavePendingTransfer(&expired); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.utxoLockerL1.TryReserve([]string{expiredInput},
+		sdkcommon.UtxoLockRGBPending, expired.ReservationID, sdkcommon.UtxoLockRGB); err != nil {
+		t.Fatal(err)
+	}
+	state.mu.Lock()
+	state.ackGetHTTPStatus = http.StatusServiceUnavailable
+	state.mu.Unlock()
+	broadcastsBeforeExpiry := len(evidence.broadcasted)
+	expiredResult, expiredErr := manager.rgbManager.DeliverAndBroadcastRGB11ProxyTransfer(
+		context.Background(), []string{expiredID},
+	)
+	state.mu.Lock()
+	state.ackGetHTTPStatus = 0
+	state.mu.Unlock()
+	if expiredErr != nil || expiredResult == nil || !expiredResult.Rejected ||
+		expiredResult.AwaitingACK || expiredResult.Broadcast {
+		t.Fatalf("expired proxy with ACK transport failure was not cancelled: result=%+v err=%v",
+			expiredResult, expiredErr)
+	}
+	storedExpired, err := manager.rgbManager.projectionStore.LoadPendingTransfer(expiredID)
+	if err != nil || storedExpired.State.Status != "rejected" ||
+		storedExpired.State.RejectReason != "invoice-expired" {
+		t.Fatalf("expired proxy state=%+v err=%v", storedExpired, err)
+	}
+	if lock := manager.utxoLockerL1.GetLockedUtxoList()[expiredInput]; lock != nil {
+		t.Fatalf("expired proxy retained input lock: %+v", lock)
+	}
+	if len(evidence.broadcasted) != broadcastsBeforeExpiry {
+		t.Fatal("expired proxy crossed the broadcast boundary without ACK")
 	}
 
 	delivered, err := manager.rgbManager.DeliverAndBroadcastRGB11ProxyTransfer(
@@ -807,7 +878,7 @@ func TestRGB11ProxyDeliveryWaitsForAckBeforeBroadcast(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := manager.utxoLockerL1.TryReserve([]string{nackInput},
-		rgb11wallet.LockReasonPending, nack.ReservationID); err != nil {
+		sdkcommon.UtxoLockRGBPending, nack.ReservationID); err != nil {
 		t.Fatal(err)
 	}
 	rejectedDecision := false
@@ -846,7 +917,7 @@ func TestRGB11ProxyDeliveryWaitsForAckBeforeBroadcast(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := manager.utxoLockerL1.TryReserve([]string{inputOutpoint},
-		rgb11wallet.LockReasonPending, conflict.ReservationID); err != nil {
+		sdkcommon.UtxoLockRGBPending, conflict.ReservationID); err != nil {
 		t.Fatal(err)
 	}
 	state.mu.Lock()
@@ -872,6 +943,42 @@ func TestRGB11ProxyDeliveryWaitsForAckBeforeBroadcast(t *testing.T) {
 	}
 	if lock := manager.utxoLockerL1.GetLockedUtxoList()[inputOutpoint]; lock != nil {
 		t.Fatalf("terminal proxy conflict left input locked: %+v", lock)
+	}
+}
+
+func TestRGBProxyExpirySafety(t *testing.T) {
+	unsigned := &rgb11wallet.PendingTransfer{State: rgb11wallet.TransferState{
+		TransportMode: RGB11ProxyTransport, Status: "relayed", AckStatus: "awaiting", Expiry: 1,
+	}}
+	if !rgb11ProxyCanExpire([]*rgb11wallet.PendingTransfer{unsigned}, 2) {
+		t.Fatal("unsigned, unacknowledged expired proxy batch should be cancellable")
+	}
+
+	for name, mutate := range map[string]func(*rgb11wallet.PendingTransfer){
+		"broadcast-attempted": func(pending *rgb11wallet.PendingTransfer) {
+			pending.State.Status = rgb11StatusBroadcastAttempted
+		},
+		"channel-signed": func(pending *rgb11wallet.PendingTransfer) {
+			pending.ChannelSend = &rgb11wallet.ChannelSendData{Signed: true}
+		},
+		"witness-signed": func(pending *rgb11wallet.PendingTransfer) {
+			tx := wire.NewMsgTx(wire.TxVersion)
+			tx.AddTxIn(wire.NewTxIn(&wire.OutPoint{}, nil, wire.TxWitness{[]byte{0x01}}))
+			var raw bytes.Buffer
+			if err := tx.Serialize(&raw); err != nil {
+				t.Fatalf("serialize signed witness: %v", err)
+			}
+			pending.SignedTx = raw.Bytes()
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			pending := *unsigned
+			pending.State = unsigned.State
+			mutate(&pending)
+			if rgb11ProxyCanExpire([]*rgb11wallet.PendingTransfer{&pending}, 2) {
+				t.Fatal("signed or broadcast-attempted proxy batch was considered cancellable")
+			}
+		})
 	}
 }
 
@@ -967,7 +1074,7 @@ func TestRGB11ProxyBlindReceiveAcknowledgesBeforeBroadcast(t *testing.T) {
 	sender := newRGB11FlowManager(t, senderWallet, rpc, evidence, 92)
 	recipientEvidence := &rgb11ProxyFaultEvidence{BitcoinEvidenceProvider: evidence}
 	recipient := newRGB11FlowManager(t, recipientWallet, rpc, recipientEvidence, 93)
-	// This native fixture intentionally has no account-root identity. Exercise
+	// This RGB11 fixture intentionally has no account-root identity. Exercise
 	// the RGB protocol/ACK state machine at its owning manager boundary; public
 	// SDK synchronization barriers are covered by the managed-gate and
 	// CoreModules account-recovery tests.
@@ -1068,10 +1175,10 @@ func TestRGB11ProxyBlindReceiveAcknowledgesBeforeBroadcast(t *testing.T) {
 			t.Fatal(err)
 		}
 		lockBefore := recipient.utxoLockerL1.GetLockedUtxoList()[reservationBefore.OutPoint]
-		if lockBefore == nil || lockBefore.Reason != rgb11wallet.LockReasonPending ||
+		if lockBefore == nil || lockBefore.Reason != sdkcommon.UtxoLockRGBPending ||
 			lockBefore.ReservationID != reservationBefore.ReservationID {
 			t.Fatalf("positive ACK receive carrier was not held by its reservation: present=%t reason_pending=%t reservation_match=%t",
-				lockBefore != nil, lockBefore != nil && lockBefore.Reason == rgb11wallet.LockReasonPending,
+				lockBefore != nil, lockBefore != nil && lockBefore.Reason == sdkcommon.UtxoLockRGBPending,
 				lockBefore != nil && lockBefore.ReservationID == reservationBefore.ReservationID)
 		}
 
@@ -1210,10 +1317,10 @@ func TestRGB11ProxyBlindReceiveAcknowledgesBeforeBroadcast(t *testing.T) {
 			t.Fatal(err)
 		}
 		lockBefore := recipient.utxoLockerL1.GetLockedUtxoList()[reservationBefore.OutPoint]
-		if lockBefore == nil || lockBefore.Reason != rgb11wallet.LockReasonPending ||
+		if lockBefore == nil || lockBefore.Reason != sdkcommon.UtxoLockRGBPending ||
 			lockBefore.ReservationID != reservationBefore.ReservationID {
 			t.Fatalf("ACKed receive carrier is not held: present=%t pending=%t reservation_match=%t",
-				lockBefore != nil, lockBefore != nil && lockBefore.Reason == rgb11wallet.LockReasonPending,
+				lockBefore != nil, lockBefore != nil && lockBefore.Reason == sdkcommon.UtxoLockRGBPending,
 				lockBefore != nil && lockBefore.ReservationID == reservationBefore.ReservationID)
 		}
 
@@ -1327,9 +1434,9 @@ func TestRGB11ProxyBlindReceiveAcknowledgesBeforeBroadcast(t *testing.T) {
 		cold := newRGB11FlowManager(t, recipientWallet.Clone(), rpc, evidence, 94)
 		importRGB11RecoveryForTest(t, cold, exportRGB11RecoveryForTest(t, recipient))
 		lock := cold.utxoLockerL1.GetLockedUtxoList()[receiveOutpoint]
-		if lock == nil || lock.Reason != rgb11wallet.LockReasonPending || lock.ReservationID == "" {
+		if lock == nil || lock.Reason != sdkcommon.UtxoLockRGBPending || lock.ReservationID == "" {
 			t.Fatalf("expired ACKed receive reservation was released during recovery: present=%t reason_pending=%t has_reservation=%t",
-				lock != nil, lock != nil && lock.Reason == rgb11wallet.LockReasonPending,
+				lock != nil, lock != nil && lock.Reason == sdkcommon.UtxoLockRGBPending,
 				lock != nil && lock.ReservationID != "")
 		}
 		if !cold.isL1SendInputProtected(receiveOutpoint) {
@@ -1397,7 +1504,7 @@ func TestRGB11ProxyBlindReceiveAcknowledgesBeforeBroadcast(t *testing.T) {
 		t.Fatalf("unconfirmed transition made blind allocation available: %d", available)
 	}
 	if lock := recipient.utxoLockerL1.GetLockedUtxoList()[receiveOutpoint]; lock == nil ||
-		lock.Reason != rgb11wallet.LockReasonPending {
+		lock.Reason != sdkcommon.UtxoLockRGBPending {
 		t.Fatalf("accepted blind carrier lock=%+v", lock)
 	}
 	evidence.mu.Lock()

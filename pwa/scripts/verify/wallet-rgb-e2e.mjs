@@ -1,1244 +1,349 @@
 import assert from 'node:assert/strict'
-import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { expect } from '@playwright/test'
-import { Transaction } from 'bitcoinjs-lib'
+import { setupAccount } from './account-fixture-e2e.mjs'
 import { waitForAccountWrite } from './account-management-usage-e2e.mjs'
 
+const messages = JSON.parse(readFileSync(new URL('../../locales/en.json', import.meta.url), 'utf8'))
+const tr = messages.rgb11Transfer
+const inv = messages.rgb11Invoice
 export const requiredPwaRgbCases = [
-  'RGB PWA: issue a real NIA contract and protect its confirmed carrier',
-  'RGB PWA: export and import a standard contract without crediting the recipient',
-  'RGB PWA: an out-of-band witness invoice survives authenticated reload',
-  'RGB PWA: prepare an unsigned transfer before receiver validation',
-  'RGB PWA: receiver validation persists the same package and grants no spendable balance',
-  'RGB PWA: restored sender matches the receiver summary before broadcasting the actual transaction',
-  'RGB PWA: confirmed receive conserves RGB supply and persists the actual carrier proofs',
-  'RGB PWA: cancelling an unbroadcast transfer releases its reservations and preserves carrier protection',
-  'RGB PWA: issue a real IFA with separately committed inflation rights',
-  'RGB PWA: consume IFA inflation rights and confirm the added supply',
-  'RGB PWA: issue a real indivisible UDA',
-  'RGB PWA: transfer the unique UDA to another wallet and persist its carrier proof',
-  'RGB PWA: direct-address transfer waits for ACK and confirms conserved balances',
+  'RGB PWA: NIA manual batch review receipt cancellation and pending resume',
+  'RGB PWA: IFA issue and inflation through actual forms',
+  'RGB PWA: UDA direct transfer pending status and confirmed receipt',
 ]
-
-const poll = { timeout: 180000, intervals: [250, 500, 1000, 2000] }
-const assetKey = name => `${name.Protocol}:${name.Type}:${name.Ticker}`
-const sum = (assets, key) => (assets || []).filter(asset => assetKey(asset.Name) === key).reduce((total, asset) => {
-  assert.equal(asset.Amount.Precision, 0, 'fixture RGB assets use atomic unit precision')
-  assert.match(String(asset.Amount.Value), /^\d+$/)
-  return total + BigInt(asset.Amount.Value)
-}, 0n)
-const sha256 = value => createHash('sha256').update(value).digest('hex')
-const sameTxIDs = (before, after) => assert.deepEqual(after.l1.broadcast_count, before.l1.broadcast_count,
-  'an operation that must remain unbroadcast submitted an L1 transaction')
+const poll = { timeout: 180000, intervals: [500, 1000, 2000] }
 
 export async function runPwaRgbCases(t, fixture) {
-  const failures = []
-  const udaTransferCase = 'RGB PWA: transfer the unique UDA to another wallet and persist its carrier proof'
-  assert.equal(requiredPwaRgbCases.filter(name => name === udaTransferCase).length, 1,
-    'the UDA-only group must select exactly its unique transfer case')
-  const ordinaryCases = requiredPwaRgbCases.filter(name => name !== udaTransferCase)
-  for (const [udaOnly, names] of [[false, ordinaryCases], [true, [udaTransferCase]]]) {
-    if (t.selectedCases && !names.some(name => t.selectedCases.includes(name))) continue
-    try { await runPwaRgbCaseGroup(t, fixture, udaOnly) } catch (error) { failures.push(error) }
-  }
-  if (failures.length) throw new AggregateError(failures, failures.map(error => error.message).join('\n'))
-}
-
-async function runPwaRgbCaseGroup(t, fixture, udaOnly) {
-  const { check, device, ready, walletCall, accountCall, questions, answers } = t
-  const senderActor = udaOnly ? fixture.udaWallets.sender : (fixture.rgbWallets?.sender ?? fixture.basicWallet)
-  const receiverActor = udaOnly ? fixture.udaWallets.recipient : (fixture.rgbWallets?.recipient ?? fixture.recipient)
-  for (const actor of [senderActor, receiverActor]) assert.ok(actor?.mnemonic && actor.address && actor.password)
-  assert.notEqual(senderActor.address, receiverActor.address)
-  const endpoint = fixture.config.IndexerL1
-  const l1 = `${endpoint.Scheme}://${endpoint.Host}/${String(endpoint.Proxy || 'testnet').replace(/^\/+|\/+$/g, '')}`
-  const contexts = []
-  const broadcastCount = Object.create(null)
-  const broadcastErrors = []
-  const issuanceRequests = []
-  let sender, receiver, contractId, canonicalName, armor, contractFile, invoice, requestId, transferId, witnessTxid, consignment, summary
-  let beforePrepare, receiveAlreadySettled = false
-  const state = async page => {
-    const result = await walletCall(page, 'getRGB11State')
-    assert.equal(typeof result.state, 'string')
-    return JSON.parse(result.state)
-  }
-  const locks = async (page, actor) => Object.fromEntries(Object.entries(await walletCall(page, 'getAllLockedUtxo', actor.address))
-    .map(([point, value]) => [point, typeof value === 'string' ? JSON.parse(value) : value]))
-  const control = async (action, body = {}) => {
-    const response = await fetch(new URL(`/${action}`, fixture.control_url), { method: 'POST',
-      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(240000) })
-    const text = await response.text()
-    assert.ok(response.ok, `${action}: ${response.status}: ${text}`)
-    const result = JSON.parse(text)
-    assert.ok(!result.error, `${action}: ${result.error}`)
-    if (fixture.realBitcoinControl) {
-      assert.deepEqual(broadcastErrors, [], 'real L1 broadcast observation must decode every request')
-      result.l1.broadcast_count = { ...broadcastCount }
-    }
-    return result
-  }
-  const evidence = async (path, body) => {
-    const response = await fetch(`${l1}${path}`, body === undefined ? { signal: AbortSignal.timeout(30000) } : {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(30000),
-    })
-    assert.ok(response.ok, `${path}: HTTP ${response.status}`)
-    const result = await response.json()
-    assert.equal(result.code, 0, `${path}: ${result.msg}`)
+  const { walletCall, accountCall } = t
+  const actors = fixture.rgbWallets || { sender: fixture.basicWallet, recipient: fixture.recipient }
+  const pages = []
+  const button = (scope, name) => scope.getByRole('button', { name, exact: true })
+  const dialog = (page, name) => page.getByRole('dialog', { name, exact: true })
+  const card = (page, asset) => page.locator('div.flex.min-w-0.overflow-hidden').filter({ has: page.locator(`[title=${JSON.stringify(asset.asset)}]`) })
+  const view = page => walletCall(page, 'getRGB11View')
+  const observe = async (page, method, action, success = true) => {
+    await page.evaluate(method => {
+      window.__rgbPageResult = null
+      const original = window.sat20wallet_wasm[method]
+      window.sat20wallet_wasm[method] = async (...args) => {
+        window.sat20wallet_wasm[method] = original
+        window.__rgbPageArgs = args
+        const result = await original(...args)
+        window.__rgbPageResult = result
+        return result
+      }
+    }, method)
+    await action()
+    await page.waitForFunction(() => window.__rgbPageResult !== null, undefined, { timeout: 180000 })
+    const result = await page.evaluate(() => { const result = window.__rgbPageResult; delete window.__rgbPageResult; return result })
+    if (success) assert.equal(result.code, 0, `${method}: ${result.msg}`)
+    else assert.notEqual(result.code, 0, `${method} must reject invalid input`)
     return result.data
   }
-  const dialog = (page, title) => page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: title, exact: true }) })
-  const visitRGB = async (page, preparedTransferId) => {
-    await page.evaluate(() => { location.hash = '#/wallet' })
-    await page.getByRole('tab', { name: 'Bitcoin', exact: true }).click()
-    await page.getByRole('button', { name: 'RGB', exact: true }).click()
-    if (preparedTransferId) {
-      // An unbroadcast prepared witness is unresolved on-chain. Verify this
-      // exact recoverable intent and its confirmed carrier, not a global ok.
-      const current = await state(page)
-      const pending = current.transfers.find(item => item.transfer_id === preparedTransferId)
-      assert.equal(pending?.direction, 'send')
-      assert.equal(pending.status, 'prepared')
-      assert.equal(pending.ack_status, 'awaiting')
-      assert.equal(current.proofs.length, 1)
-      assert.equal(current.proofs[0].status, 'settled')
-      assert.ok(current.proofs[0].confirmations >= 1)
-      assert.ok(pending.input_outpoints.includes(current.proofs[0].outpoint))
-      await expect(page.getByText(/^Consistency: (ok|warning)$/)).toBeVisible({ timeout: 120000 })
-    } else {
-      await expect(page.getByText('Consistency: ok', { exact: true })).toBeVisible({ timeout: 120000 })
-    }
-  }
-  const refreshRGB = async page => {
-    const typeButton = page.getByRole('button', { name: 'RGB', exact: true })
-    // The asset-type navigation's only following button is its refresh action.
-    await typeButton.locator('../..').getByRole('button').last().click()
-  }
-  const assetCard = (page, id = contractId) => page.locator('div.flex.min-w-0.overflow-hidden')
-    .filter({ has: page.locator(`[title=${JSON.stringify(id)}]`) })
   const fresh = async actor => {
-    const diagnosticRole = actor === senderActor ? 'rgb-sender' : actor === receiverActor ? 'rgb-receiver' : 'rgb-other'
-    const page = await device(undefined, true, undefined, diagnosticRole)
-    contexts.push(page.context())
-    if (fixture.realBitcoinControl) {
-      page.context().on('response', response => {
-        if (/\/v3\/(?:address\/asset|bitcoin\/utxos\/status)/.test(response.url())) issuanceRequests.push({ url: response.url(), status: response.status() })
-      })
-      page.context().on('requestfailed', request => {
-        if (/\/v3\/(?:address\/asset|bitcoin\/utxos\/status)/.test(request.url())) issuanceRequests.push({ url: request.url(), error: request.failure()?.errorText })
-      })
-    }
-    if (fixture.realBitcoinControl) page.context().on('request', request => {
-      const url = new URL(request.url())
-      if (request.method() !== 'POST' || ![`${l1}/btc/tx`, `${l1}/btc/txs`, `${l1}/v3/bitcoin/tx/broadcast`].includes(url.href)) return
-      try {
-        const body = request.postDataJSON()
-        const raws = body.signedTxsHex ?? [body.signedTxHex ?? body.raw_tx]
-        for (const raw of raws) {
-          const txid = Transaction.fromHex(raw).getId()
-          broadcastCount[txid] = (broadcastCount[txid] ?? 0) + 1
-        }
-      } catch (error) { broadcastErrors.push(error.message) }
-    })
-    page.on('console', message => {
-      let value = message.text()
-      if (!/^(?:fatal error:|panic:|goroutine \d|TypeError:|\[Vue warn\]|\s*(?:runtime\.|sync\.|github\.com\/sat20-labs\/|\/Users\/.*\.go:))/.test(value)
-        && !/RGB11 (?:chain reconciliation .*|L1 (?:monitor tick|startup reconciliation)) failed:/.test(value)
-        && !/activation_baseline_mismatch phase=local_builder_compare/.test(value)) return
-      for (const fixtureActor of [senderActor, receiverActor]) {
-        for (const secret of [fixtureActor.mnemonic, fixtureActor.password]) value = value.replaceAll(secret, '[redacted]')
-      }
-      console.error(`[RGB runtime] ${value}`)
-    })
-    await page.evaluate(() => { location.hash = '#/import' })
-    await page.getByRole('textbox', { name: 'Recovery Phrase', exact: true }).fill(actor.mnemonic)
-    await page.getByLabel('New Wallet Password', { exact: true }).fill(actor.password)
-    await page.getByLabel('Confirm Password', { exact: true }).fill(actor.password)
-    const started = Date.now()
-    await page.getByRole('button', { name: 'Import Wallet', exact: true }).click()
-    try { await expect(page.getByRole('tab', { name: 'Bitcoin', exact: true })).toBeVisible({ timeout: 90000 }) } catch (error) {
-      const diagnostic = await page.evaluate(async () => {
-        const { snapshotWasmRuntimeDiagnostics } = await import('/utils/wasmRuntimeDiagnostics.ts')
-        return { route: location.hash, visibility: document.visibilityState,
-          breadcrumbs: snapshotWasmRuntimeDiagnostics(),
-          rootRecovery: window.__observedRootRecovery ?? null,
-          tabs: [...document.querySelectorAll('[role="tab"]')].map(element => element.textContent),
-          dialogs: [...document.querySelectorAll('[role="dialog"]')].map(element => element.getAttribute('data-state')) }
-      })
-      error.message += `; import_start=${started}; startup=${JSON.stringify(diagnostic)}`
-      throw error
-    }
-    const accountIndex = Number(actor.account_index ?? 0)
-    assert.ok(Number.isInteger(accountIndex) && accountIndex >= 0 && accountIndex <= 3)
+    const page = await t.device(); pages.push(page)
+    await page.evaluate(async actor => {
+      const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
+      const [error] = await store.importWallet(actor.mnemonic, actor.password)
+      if (error) throw error
+      if (Number(actor.account_index || 0)) await store.switchToAccount(Number(actor.account_index))
+      if (store.address !== actor.address) throw new Error('RGB fixture scope does not match the selected wallet address')
+      location.hash = '#/wallet'
+    }, actor)
     await waitForAccountWrite(page, accountCall)
-    await page.evaluate(async index => {
-      const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
-      await store.switchToAccount(index)
-      if (Number(store.accountIndex) !== index) throw new Error('RGB fixture account selection did not complete')
-    }, accountIndex)
-    assert.equal((await walletCall(page, 'getWalletAddress', accountIndex)).address, actor.address)
-    assert.deepEqual(await page.evaluate(() => {
-      const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
-      return { index: Number(store.accountIndex), address: store.address }
-    }), { index: accountIndex, address: actor.address })
-    // RGB mutations require an actual configured recovery account. Complete
-    // the same public setup/rehearsal as the account suite before using it.
-    if (!(await accountCall(page, 'status')).recovery_configured) {
-      await accountCall(page, 'preflight', actor.password, [])
-      await accountCall(page, 'confirmStorage', 'temporary')
-      const material = await accountCall(page, 'createRecovery', {
-        password: actor.password, wallets: [], recovery_mode: '2of2', questions,
-      })
-      const rehearsal = await accountCall(page, 'rehearse', material.session_id,
-        answers, material.user_share, actor.password)
-      assert.equal(rehearsal.verified, true)
-    }
-    await expect.poll(async () => {
-      const status = await accountCall(page, 'status')
-      return status.recovery_configured && !status.pending_changes && !status.managed_data_dirty
-    }, poll).toBe(true)
-    await visitRGB(page)
+    await button(page, 'RGB').click()
+    await expect(button(page, tr.issue)).toBeVisible()
     return page
   }
-  const reload = async (page, actor, preparedTransferId) => {
-    await page.reload()
-    await ready(page)
-    await expect.poll(() => new URL(page.url()).hash.startsWith('#/unlock'), poll).toBe(true)
-    await page.locator('form input[type="password"]').fill(actor.password)
-    await page.evaluate(async () => {
-      const { resetWasmRuntimeDiagnostics } = await import('/utils/wasmRuntimeDiagnostics.ts')
-      resetWasmRuntimeDiagnostics()
+  const close = async form => { await form.getByRole('button', { name: 'Close', exact: true }).last().click(); await expect(form).not.toBeVisible() }
+  const mine = async () => {
+    const response = await fetch(new URL('/confirm-l1', fixture.control_url), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wait_anchors: false, empty_blocks: 1 }), signal: AbortSignal.timeout(240000),
     })
-    const started = Date.now()
-    await page.locator('form button[type="submit"]').click()
-    try { await expect(page.getByRole('tab', { name: 'Bitcoin', exact: true })).toBeVisible({ timeout: 90000 }) } catch (error) {
-      const diagnostic = await page.evaluate(async () => {
-        const { snapshotWasmRuntimeDiagnostics } = await import('/utils/wasmRuntimeDiagnostics.ts')
-        return { route: location.hash, breadcrumbs: snapshotWasmRuntimeDiagnostics(),
-          tabs: [...document.querySelectorAll('[role="tab"]')].map(element => ({
-            label: element.textContent, hidden: !!element.closest('[aria-hidden="true"], [inert]'),
-            display: getComputedStyle(element).display, boxes: element.getClientRects().length,
-          })), dialogs: [...document.querySelectorAll('[role="dialog"]')].map(element => ({
-            state: element.getAttribute('data-state'), open: getComputedStyle(element).display !== 'none',
-          })) }
-      })
-      error.message += `; reload_start=${started}; startup=${JSON.stringify(diagnostic)}`
-      throw error
-    }
-    console.log(`[RGB startup timing] ${JSON.stringify({ elapsed_ms: Date.now() - started,
-      breadcrumbs: await page.evaluate(async () => {
-        const { snapshotWasmRuntimeDiagnostics } = await import('/utils/wasmRuntimeDiagnostics.ts')
-        return snapshotWasmRuntimeDiagnostics()
-      }) })}`)
-    const accountIndex = Number(actor.account_index ?? 0)
-    assert.deepEqual(await page.evaluate(() => {
-      const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
-      return { index: Number(store.accountIndex), address: store.address }
-    }), { index: accountIndex, address: actor.address }, 'authenticated reload must preserve the selected RGB actor')
-    assert.equal((await walletCall(page, 'getWalletAddress', accountIndex)).address, actor.address)
-    await waitForAccountWrite(page, accountCall)
-    await visitRGB(page, preparedTransferId)
+    assert.equal(response.ok, true)
+    assert.equal(Boolean((await response.json()).error), false)
   }
-  const downloadBytes = async (page, button) => {
-    const waiting = page.waitForEvent('download')
-    await button.click()
-    const download = await waiting
-    assert.equal(await download.failure(), null)
-    const stream = await download.createReadStream()
-    assert.ok(stream)
-    const chunks = []
-    for await (const chunk of stream) chunks.push(chunk)
-    const bytes = Buffer.concat(chunks)
-    assert.ok(bytes.length > 0)
-    return { bytes, filename: download.suggestedFilename() }
+  const refreshed = async page => {
+    await walletCall(page, 'refreshRGB11State')
+    await page.evaluate(() => window.dispatchEvent(new Event('sat20:wallet-data-updated')))
   }
-  const issue = async (schema, ticker, supply, inflation) => {
-    if (!sender) sender = await fresh(senderActor)
-    await sender.getByRole('button', { name: 'Issue RGB Asset', exact: true }).click()
-    const form = dialog(sender, 'Issue RGB Asset')
-    await form.locator('select').selectOption(schema)
+  const balance = async (page, asset, expected) => {
+    await expect.poll(async () => {
+      await refreshed(page)
+      return (await view(page)).assets.find(item => item.asset === asset.asset)?.available
+    }, poll).toBe(expected)
+  }
+  const issue = async (page, kind, ticker) => {
+    await button(page, tr.issue).click()
+    const form = dialog(page, tr.issueTitle)
+    await form.locator('select').selectOption(kind)
     await form.getByPlaceholder('USDT', { exact: true }).fill(ticker)
-    await form.getByRole('textbox', { name: /^Display name\b/ }).fill(`PWA ${schema} acceptance`)
-    await form.locator('input[type="number"]').fill('0')
-    if (schema !== 'UDA') await form.getByPlaceholder('1000', { exact: true }).fill(supply)
-    if (schema === 'IFA') await form.getByPlaceholder('9000', { exact: true }).fill(inflation)
-    await form.getByRole('button', { name: 'Issue RGB Asset', exact: true }).click()
-    await expect(form.locator('p.text-red-400, p.text-emerald-400')).toBeVisible({ timeout: 180000 })
-    if (await form.locator('p.text-red-400').isVisible()) {
-      const current = await state(sender)
-      const plain = await evidence(`/v3/address/asset/${senderActor.address}/::`)
-      const locked = await locks(sender, senderActor)
-      console.error(JSON.stringify({ observation: 'RGB issue rejected', schema, requests: issuanceRequests.slice(-30),
-        error: await form.locator('p.text-red-400').innerText(),
-        candidates: plain.map(row => ({ outpoint: row.Outpoint, value: row.Value, locked: locked[row.Outpoint] ?? null })),
-        outputs: (current.outputs ?? []).map(row => ({ outpoint: row.OutPointStr, assets: row.Assets })),
-        proofs: (current.proofs ?? []).map(row => ({ outpoint: row.outpoint, status: row.status, asset: row.asset_name, confirmations: row.confirmations })),
-        transfers: (current.transfers ?? []).map(row => ({ id: row.transfer_id, status: row.status, txid: row.witness_txid })) }))
-      throw new Error(`RGB ${schema} issuance rejected: ${await form.locator('p.text-red-400').innerText()}`)
-    }
-    await expect(form.getByText('Asset issued. The contract consignment is shown for other wallets to import.', { exact: true })).toBeVisible()
-    const id = (await form.getByText('RGB Contract ID', { exact: true }).locator('..').locator('p').last().textContent()).trim()
-    const key = (await form.getByText('Full asset name', { exact: true }).locator('..').locator('p').last().textContent()).trim()
-    assert.match(id, /^rgb:/)
-    assert.match(key, schema === 'UDA' ? /^rgb11:o:[0-9a-f]{64}$/ : /^rgb11:f:[0-9a-f]{64}$/)
-    const contractArmor = await form.locator('textarea[readonly]').inputValue()
-    assert.match(contractArmor, /-----BEGIN RGB CONSIGNMENT-----/)
-    const standard = await downloadBytes(sender, form.getByRole('button', { name: 'Download Standard Contract File (.rgb)', exact: true }))
-    assert.match(standard.filename, /\.rgb$/)
-    const issued = await state(sender)
-    if (issued.consistency_status !== 'ok') {
-      console.error(JSON.stringify({ observation: 'RGB issue consistency failure', schema, contract_id: id,
-        asset: key, consistency: issued.consistency_status, sync: issued.sync_status,
-        proofs: (issued.proofs ?? []).map(proof => ({ outpoint: proof.outpoint, asset: proof.asset_name,
-          status: proof.status, confirmations: proof.confirmations, witness_txid: proof.witness_txid,
-          policy_status: proof.policy_status, policy_reason: proof.policy_reason })),
-        transfers: (issued.transfers ?? []).map(transfer => ({ id: transfer.transfer_id,
-          direction: transfer.direction, asset: transfer.asset?.Name, status: transfer.status,
-          witness_txid: transfer.witness_txid, reject_reason: transfer.reject_reason,
-          input_outpoints: transfer.input_outpoints, output_outpoints: transfer.output_outpoints })) }))
-      // One diagnostic refresh after failure; the assertion below still uses
-      // the original failed snapshot. This must never become retry-to-pass.
-      const diagnostic = await sender.evaluate(async () => {
-        const [error, result] = await window.sat20.refreshRGB11State()
-        return { error: error?.message ?? null, result: result?.result ?? null }
-      }).catch(error => ({ error: error.message, result: null }))
-      console.error(JSON.stringify({ observation: 'RGB failed issuance diagnostic refresh', schema, ...diagnostic }))
-    }
-    assert.equal(issued.consistency_status, 'ok')
-    assert.equal(sum(issued.available_assets, key), BigInt(schema === 'UDA' ? '1' : supply))
-    const info = issued.ticker_infos.find(info => info.contract_id === id)
-    assert.ok(info)
-    assert.equal(info.asset_key, key)
-    assert.equal(info.canonical_name ?? '', '')
-    assert.equal(info.verified, false)
-    assert.equal(info.ticker, `${ticker.toLowerCase()}@${info.genesis_address.slice(-12)}`)
-    await form.getByRole('button', { name: 'Close', exact: true }).first().click()
-    await expect(assetCard(sender, id)).toBeVisible()
-    return { id, key, contractArmor, standard, issued }
+    await form.getByRole('textbox', { name: /^Display name\b/ }).fill(`PWA ${kind} acceptance`)
+    await form.locator('input[type=number]').fill(kind === 'UDA' ? '0' : '2')
+    if (kind !== 'UDA') await form.getByPlaceholder('1000', { exact: true }).fill('100')
+    if (kind === 'IFA') await form.getByPlaceholder('9000', { exact: true }).fill('20')
+    const asset = await observe(page, 'issueRGB11Asset', () => button(form, tr.issue).click())
+    await expect(form.getByText(asset.contract_id, { exact: true })).toBeVisible()
+    const pending = page.waitForEvent('download')
+    await button(form, tr.downloadContract).click()
+    const contract = readFileSync(await (await pending).path())
+    await close(form)
+    await expect(card(page, asset)).toBeVisible()
+    return { asset, contract }
   }
-  const openReceive = async () => {
-    await assetCard(receiver).getByRole('button', { name: 'Receive', exact: true }).click()
-    const receive = dialog(receiver, 'Receive RGB Asset')
-    await expect(receive).toBeVisible()
-    return receive
+  const importContract = async (page, issued) => {
+    await button(page, tr.import).click()
+    const form = dialog(page, tr.importTitle)
+    await form.locator('textarea').fill('invalid contract')
+    await observe(page, 'importRGB11Contract', () => button(form, tr.import).click(), false)
+    await expect(form.locator('p.text-red-400')).toBeVisible()
+    await form.locator('#rgb11-contract-file').setInputFiles({ name: 'pwa-contract.rgb', mimeType: 'application/octet-stream', buffer: issued.contract })
+    const asset = await observe(page, 'importRGB11Contract', () => button(form, tr.import).click())
+    assert.equal(asset.contract_id, issued.asset.contract_id)
+    assert.equal(asset.available, '0')
+    await close(form)
+    await expect(card(page, asset)).toBeVisible()
   }
-  const prepareSend = async (invoiceText, amount) => {
-    await sender.bringToFront()
-    const card = assetCard(sender)
-    const sendButton = card.getByRole('button', { name: 'Send', exact: true })
-    try {
-      await sendButton.click()
-    } catch (error) {
-      // Observe the exact sender gate; the receiver dialog is a different page.
-      // Keep the original failure even if a blocked WASM callback prevents reads.
-      let timer
-      try {
-        const diagnostic = await Promise.race([
-          (async () => {
-            const ui = await sender.evaluate(async asset => {
-              const { useRGB11Store } = await import('/store/rgb11.ts')
-              const store = useRGB11Store()
-              const reads = (window.__observedAssetReads || []).filter(read => read.method === 'getRGB11State').slice(-8)
-              return { state: JSON.parse(JSON.stringify(store.state)), error: store.error,
-                reads: reads.map(read => ({ ...read, rgb: read.rgb ? { ...read.rgb,
-                  assets: read.rgb.assets.filter(item => item.asset === asset),
-                  available: read.rgb.available.filter(item => item.asset === asset),
-                  pending: read.rgb.pending.filter(item => item.asset === asset) } : undefined })) }
-            }, canonicalName)
-            return { asset: canonicalName, ui: { initialized: ui.state.initialized,
-              consistency: ui.state.consistency_status, sync: ui.state.sync_status,
-              total: String(sum(ui.state.assets, canonicalName)),
-              available: String(sum(ui.state.available_assets, canonicalName)),
-              pending: String(sum(ui.state.pending_assets, canonicalName)) }, asset_reads: ui.reads,
-              ui_error: ui.error, card: await card.innerText(), disabled: await sendButton.isDisabled() }
-          })(),
-          new Promise(resolve => { timer = setTimeout(() => resolve({ read_timed_out: true }), 3000) }),
-        ])
-        console.error(JSON.stringify({ observation: 'RGB sender Send gate failure', diagnostic }))
-      } catch (diagnosticError) {
-        console.error(JSON.stringify({ observation: 'RGB sender Send gate read failed', message: diagnosticError.message }))
-      } finally { clearTimeout(timer) }
-      throw error
+  const receive = async (page, asset, amount, mode = 'witness', transport = 'manual') => {
+    await button(card(page, asset), messages.l1AssetsTabs.receive).click()
+    const form = dialog(page, inv.title)
+    await form.locator('input').first().fill(amount)
+    await form.locator('select:has(option[value="witness"])').selectOption(mode)
+    await form.locator('select:has(option[value="manual"])').selectOption(transport)
+    if (transport === 'proxy') {
+      assert.ok(fixture.rgbProxy, 'the real RGB relay must be provided')
+      await expect(form.locator('input').nth(1)).toBeVisible()
+      await form.locator('input').nth(1).fill('')
+      await observe(page, 'createRGB11Invoice', () => button(form, inv.generate).click(), false)
+      await expect(form.getByRole('alert')).toBeVisible()
+      await form.locator('input').nth(1).fill(fixture.rgbProxy)
+    } else await expect(form.locator('input')).toHaveCount(1)
+    const result = await observe(page, 'createRGB11Invoice', () => button(form, inv.generate).click())
+    const input = await page.evaluate(() => JSON.parse(window.__rgbPageArgs[0]))
+    assert.equal(input.receive_mode, mode)
+    assert.equal(input.transport, transport)
+    if (transport === 'proxy') assert.equal(input.proxy_endpoint, fixture.rgbProxy)
+    assert.equal(result.receive_mode, mode)
+    assert.equal(result.transport, transport)
+    await expect(form.locator('textarea[readonly]').first()).toHaveValue(result.invoice)
+    await close(form)
+    return result
+  }
+  const receivePackage = async (page, asset, request, data, keepOpen = false) => {
+    await button(card(page, asset), messages.l1AssetsTabs.receive).click()
+    const form = dialog(page, inv.title)
+    await form.locator('select:has(option[value=' + JSON.stringify(request.id) + '])').selectOption(request.id)
+    await expect(form.locator('textarea[readonly]').first()).toHaveValue(request.invoice)
+    await form.locator('input[type=file]').setInputFiles({ name: 'pwa-transfer.asc', mimeType: 'text/plain', buffer: Buffer.from(data, 'base64') })
+    const result = await observe(page, 'prepareRGB11Consignment', () => button(form, tr.prepareReceive).click())
+    assert.equal(Boolean(result.receipt), true)
+    await expect(form.locator('textarea[readonly]').last()).toHaveValue(result.receipt)
+    if (!keepOpen) await close(form)
+    return result
+  }
+  const prepare = async (owner, asset, requests, inflate = false) => {
+    await button(card(owner, asset), inflate ? tr.inflate : messages.l1AssetsTabs.send).click()
+    const form = dialog(owner, inflate ? tr.inflate : tr.sendTitle)
+    if (!inflate) await form.locator('select').selectOption('invoice')
+    await form.locator('textarea').fill(requests.map(item => item.invoice).join('\n'))
+    const prepared = await observe(owner, inflate ? 'prepareRGB11Inflation' : 'prepareRGB11Transfer', () => button(form, tr.prepare).click())
+    for (const recipient of prepared.recipients) {
+      await expect(form.getByText(`${recipient.amount.amount} · ${recipient.amount.asset}`, { exact: true })).toBeVisible()
+      await expect(form.getByText(recipient.destination, { exact: true })).toBeVisible()
     }
-    const send = dialog(sender, 'Send RGB Asset')
-    await send.getByRole('button', { name: 'Invoice', exact: true }).click()
-    await send.getByPlaceholder('1', { exact: true }).fill(amount)
-    await send.locator('textarea').first().fill(invoiceText)
-    await send.getByRole('button', { name: 'Prepare Transfer', exact: true }).click()
-    await expect(send.getByRole('button', { name: 'Download armored consignment for PWA', exact: true })).toBeVisible({ timeout: 180000 })
-    return send
+    assert.equal(prepared.needs_receipts, true)
+    return { form, prepared }
   }
-
+  const cancel = async (page, form) => {
+    page.once('dialog', popup => popup.accept())
+    const result = await observe(page, 'cancelRGB11Transfer', () => button(form, messages.common.cancel).click())
+    assert.equal(result.can_confirm, false)
+    await close(form)
+  }
+  const manual = async (owner, recipient, asset, amounts, inflate = false) => {
+    const requests = []
+    for (const amount of amounts) requests.push(await receive(recipient, asset, amount))
+    let { form, prepared } = await prepare(owner, asset, requests, inflate)
+    // Close and continue from the actual pending list. Preparing again would
+    // create a different intent and would miss the UI recovery boundary.
+    await close(form)
+    await refreshed(owner)
+    const pending = owner.locator('div.rounded.border.border-zinc-700').filter({ has: owner.getByText(prepared.id, { exact: true }) })
+    await button(pending, tr.retryTask).click()
+    form = dialog(owner, tr.sendTitle)
+    await expect(form.getByText(prepared.id, { exact: true })).toBeVisible()
+    const files = await observe(owner, 'exportRGB11Transfer', () => button(form, tr.downloadConsignment).click())
+    const receipts = []
+    for (const [index, request] of requests.entries()) {
+      const file = files.find(item => item.recipient_index === index && item.file.name.endsWith('.asc'))
+      assert.ok(file, 'each recipient needs its own consignment')
+      receipts.push((await receivePackage(recipient, asset, request, file.file.data, index === requests.length - 1)).receipt)
+    }
+    await form.locator('textarea').first().fill('invalid receipt')
+    await observe(owner, 'confirmRGB11Transfer', () => button(form, messages.common.confirm).click(), false)
+    await expect(form.getByRole('alert')).toBeVisible()
+    for (const [index, receipt] of receipts.entries()) await form.locator('textarea').nth(index).fill(receipt)
+    const broadcast = await observe(owner, 'confirmRGB11Transfer', () => button(form, messages.common.confirm).click())
+    assert.match(broadcast.tx_id, /^[0-9a-f]{64}$/)
+    assert.notEqual(broadcast.status, 'completed', 'broadcast is not confirmed receipt')
+    await close(form)
+    await mine()
+    // The last prepared receipt remains open across broadcast/confirmation,
+    // so this journey always exercises the actual Accept button once.
+    const openReceive = dialog(recipient, inv.title)
+    await observe(recipient, 'acceptRGB11Consignment', () => button(openReceive, tr.acceptAfterBroadcast).click())
+    await close(openReceive)
+    for (const request of requests) {
+      await button(card(recipient, asset), messages.l1AssetsTabs.receive).click()
+      const receiveForm = dialog(recipient, inv.title)
+      await receiveForm.locator('select:has(option[value=' + JSON.stringify(request.id) + '])').selectOption(request.id)
+      await expect(receiveForm.locator('textarea[readonly]').first()).toHaveValue(request.invoice)
+      const checked = await observe(recipient, 'refreshRGB11State', () => button(receiveForm, tr.checkRequestState).click())
+      assert.equal(checked.receives.find(item => item.id === request.id)?.status, 'completed')
+      await expect(receiveForm.getByText(messages.walletComponents.states_completed, { exact: true })).toBeVisible()
+      await expect(button(receiveForm, tr.acceptAfterBroadcast)).toHaveCount(0)
+      await close(receiveForm)
+    }
+  }
+  let sender, receiver
   try {
-    if (udaOnly) {
-      await check(requiredPwaRgbCases[11], async () => {
-        if (fixture.rgbReadbackWitness) {
-          sender = await fresh(senderActor); receiver = await fresh(receiverActor)
-          const original = (await state(sender)).transfers.find(item => item.direction === 'send' && item.witness_txid === fixture.rgbReadbackWitness)
-          assert.ok(original, 'identify original confirmed UDA transfer')
-          canonicalName = assetKey(original.asset.Name)
-          const samples = []
-          const observe = async label => {
-            const snapshot = await state(receiver)
-            const proof = snapshot.proofs.find(item => item.witness_txid === fixture.rgbReadbackWitness && assetKey(item.asset_name) === canonicalName)
-            samples.push({ label, initialized: snapshot.initialized, sync: snapshot.sync_status,
-              consistency: snapshot.consistency_status, amount: String(sum(snapshot.available_assets, canonicalName)), total: String(sum(snapshot.assets, canonicalName)), pending: String(sum(snapshot.pending_assets, canonicalName)),
-              proof: proof ? { outpoint: proof.outpoint, status: proof.status, confirmations: proof.confirmations, validation_hash: proof.validation_hash } : null })
-            console.log(JSON.stringify({ observation: 'original UDA readback', ...samples.at(-1) }))
-            return snapshot
-          }
-          await observe('fresh-dkvs-import')
-          await reload(receiver, receiverActor)
-          await observe('immediate-unlock')
-          for (const delay of [250, 1000, 3000]) { await receiver.waitForTimeout(delay); await observe(`after-${delay}ms`) }
-          const unverified = await state(receiver)
-          assert.equal(sum(unverified.assets, canonicalName), 1n, 'persisted ownership must survive unlock')
-          await refreshRGB(receiver)
-          await expect.poll(async () => sum((await state(receiver)).available_assets, canonicalName), poll).toBe(1n)
-          await observe('after-explicit-chain-refresh')
-          const restored = await state(receiver)
-          assert.equal(sum((await state(sender)).assets, canonicalName), 0n)
-          assert.equal(sum(restored.available_assets, canonicalName), 1n)
-          const proof = restored.proofs.find(item => item.witness_txid === fixture.rgbReadbackWitness && assetKey(item.asset_name) === canonicalName)
-          assert.ok(proof); assert.equal(proof.status, 'settled'); assert.ok(proof.confirmations >= 1)
-          assert.equal((await locks(receiver, receiverActor))[proof.outpoint]?.reason, 'rgb')
-          const [output] = await evidence('/v3/bitcoin/utxos/status', { outpoints: [proof.outpoint] })
-          assert.ok(output.exists && output.unspent && output.confirmations >= 1)
-          await expect(assetCard(receiver, (await state(receiver)).ticker_infos.find(item => item.asset_key === canonicalName).contract_id)).toContainText('Available: 1')
-          return
-        }
-        const unique = await issue('UDA', 'PWAUDAT', '1')
-        contractId = unique.id; canonicalName = unique.key
-        assert.match(canonicalName, /^rgb11:o:[0-9a-f]{64}$/)
-        const originalProofs = unique.issued.proofs.filter(proof => assetKey(proof.asset_name) === canonicalName)
-        assert.ok(originalProofs.length)
-        receiver = await fresh(receiverActor)
-        await receiver.getByRole('button', { name: 'Import RGB Contract', exact: true }).click()
-        const form = dialog(receiver, 'Import RGB Contract')
-        await form.locator('#rgb11-contract-file').setInputFiles({ name: unique.standard.filename,
-          mimeType: 'application/octet-stream', buffer: unique.standard.bytes })
-        await form.getByRole('button', { name: 'Import RGB Contract', exact: true }).click()
-        await expect(form.getByText('Imported; 0 wallet allocation(s) projected.', { exact: true })).toBeVisible({ timeout: 180000 })
-        await form.getByRole('button', { name: 'Close', exact: true }).click()
-        assert.equal(sum((await state(receiver)).assets, canonicalName), 0n)
-        const receive = await openReceive()
-        await receive.locator('select').nth(0).selectOption('out-of-band')
-        await receive.locator('select').nth(1).selectOption('witness')
-        await receive.getByPlaceholder('Enter amount to receive', { exact: true }).fill('1')
-        // Observe the real UI-created request; standard witness invoices use an
-        // independent receive key rather than the wallet's primary address script.
-        await receiver.evaluate(async () => {
-          const { default: manager } = await import('/utils/sat20.ts')
-          const create = manager.createRGB11Invoice.bind(manager)
-          manager.createRGB11Invoice = async (...args) => {
-            const note = phase => window.__SAT20_E2E_NOTE__?.('createRGB11Invoice', phase, {
-              same_global_instance: manager === window.sat20,
-              same_verify_instance: manager === window.__SAT20_PWA_VERIFY__?.sat20,
-            })
-            note('enter')
-            try {
-              const result = await create(...args)
-              note(result[0] ? 'returned-error' : 'returned')
-              if (!result[0]) window.__rgbUDAReceiveRequest = result[1]
-              return result
-            } catch (error) { note('threw'); throw error }
-          }
-        })
-        await receive.getByRole('button', { name: 'Generate Invoice', exact: true }).click()
-        await expect(receive.locator('textarea[readonly]')).toBeVisible({ timeout: 180000 })
-        const uniqueInvoice = await receive.locator('textarea[readonly]').inputValue()
-        const uniqueRequest = await receiver.evaluate(() => window.__rgbUDAReceiveRequest)
-        assert.equal(uniqueRequest?.invoice, uniqueInvoice)
-        const uniqueReservation = (await state(receiver)).reservations.find(item => item.invoice === uniqueInvoice)
-        assert.equal(uniqueReservation?.contract_id, unique.id)
-        assert.equal(uniqueRequest.request_id, uniqueReservation?.request_id)
-        const requestedScript = Buffer.from(uniqueRequest.witness_script, 'base64').toString('hex')
-        assert.match(requestedScript, /^5120[0-9a-f]{64}$/)
-        assert.notEqual(requestedScript, receiverActor.pk_script)
-        beforePrepare = await control('snapshot')
-        const send = await prepareSend(uniqueInvoice, '1')
-        const transfer = (await state(sender)).transfers.find(item => item.direction === 'send' && item.invoice === uniqueInvoice)
-        assert.ok(transfer?.transfer_id)
-        const packageFile = await downloadBytes(sender, send.getByRole('button', { name: 'Download armored consignment for PWA', exact: true }))
-        assert.equal(sha256(packageFile.bytes), transfer.consignment_hash)
-        await expect(send.getByRole('button', { name: 'Confirm receiver validation and broadcast', exact: true })).toBeDisabled()
-        sameTxIDs(beforePrepare, await control('snapshot'))
-        await receive.locator('#rgb11-consignment-file').setInputFiles({ name: 'pwa-uda.asc',
-          mimeType: 'text/plain', buffer: packageFile.bytes })
-        await receive.getByRole('button', { name: 'Validate before broadcast', exact: true }).click()
-        await expect(receive.locator('textarea[readonly]')).toHaveCount(2, { timeout: 180000 })
-        const recipientSummary = JSON.parse(await receive.locator('textarea[readonly]').nth(1).inputValue())
-        assert.equal(recipientSummary.contract_id, unique.id)
-        assert.equal(recipientSummary.amount_raw, '1'); assert.equal(recipientSummary.precision, 0)
-        assert.equal(recipientSummary.witness_txid, transfer.witness_txid)
-        assert.equal(recipientSummary.consignment_hash, transfer.consignment_hash)
-        assert.equal(recipientSummary.invoice_hash, sha256(uniqueInvoice))
-        assert.equal(sum((await state(receiver)).available_assets, canonicalName), 0n)
-        const broadcast = send.getByRole('button', { name: 'Confirm receiver validation and broadcast', exact: true })
-        await send.locator('#rgb-summary-0').fill(JSON.stringify({ ...recipientSummary, amount_raw: '2' }))
-        await send.getByRole('button', { name: 'Match summary fields', exact: true }).click()
-        await expect(send.getByText('Validation summary does not match this transfer, recipient, amount or consignment.', { exact: true })).toBeVisible()
-        await expect(send.locator('input[type="checkbox"]')).toBeDisabled()
-        await expect(broadcast).toBeDisabled()
-        sameTxIDs(beforePrepare, await control('snapshot'))
-        await send.locator('#rgb-summary-0').fill(JSON.stringify(recipientSummary))
-        await send.getByRole('button', { name: 'Match summary fields', exact: true }).click()
-        await send.locator('input[type="checkbox"]').check()
-        await broadcast.click()
-        await expect(send.getByText(`Transaction broadcast: ${transfer.witness_txid}`, { exact: true })).toBeVisible({ timeout: 180000 })
-        const submitted = await control('snapshot')
-        assert.equal(submitted.l1.broadcast_count[transfer.witness_txid], 1)
-        const actual = Transaction.fromHex(await evidence(`/btc/rawtx/${transfer.witness_txid}`))
-        assert.equal(actual.getId(), transfer.witness_txid)
-        assert.ok(actual.ins.every(input => input.witness.length))
-        const actualInputs = actual.ins.map(input => `${Buffer.from(input.hash).reverse().toString('hex')}:${input.index}`)
-        assert.deepEqual([...actualInputs].sort(), [...transfer.input_outpoints].sort())
-        assert.ok(originalProofs.some(proof => actualInputs.includes(proof.outpoint)), 'UDA transfer did not consume its original carrier')
-        const [recipientTxid, recipientIndex] = recipientSummary.recipient_outpoint.split(':')
-        assert.equal(recipientTxid, actual.getId())
-        assert.equal(actual.outs[Number(recipientIndex)].script.toString('hex'), requestedScript)
-        await control('confirm-l1', { wait_anchors: false })
-        await receive.getByRole('button', { name: 'Complete receive after broadcast', exact: true }).click()
-        await expect(receive.locator('p.text-red-400, p.text-emerald-400')).toBeVisible({ timeout: 180000 })
-        assert.equal((await receive.locator('p.text-red-400').allTextContents()).join(' '), '',
-          `original UDA receive failed; witness=${transfer.witness_txid}; request=${uniqueRequest.request_id}`)
-        await expect(receive.getByText('Consignment accepted. Notify the sender through the external channel so it can record the out-of-band ACK.', { exact: true }))
-          .toBeVisible({ timeout: 180000 })
-        await sender.keyboard.press('Escape'); await receiver.keyboard.press('Escape')
-        await refreshRGB(sender)
-        await expect.poll(async () => sum((await state(receiver)).available_assets, canonicalName), poll).toBe(1n)
-        await expect.poll(async () => sum((await state(sender)).assets, canonicalName), poll).toBe(0n)
-        const proof = (await state(receiver)).proofs.find(item => item.outpoint === recipientSummary.recipient_outpoint && assetKey(item.asset_name) === canonicalName)
-        assert.equal(proof?.status, 'settled'); assert.ok(proof.confirmations >= 1)
-        assert.equal((await locks(receiver, receiverActor))[proof.outpoint]?.reason, 'rgb')
-        const [status] = await evidence('/v3/bitcoin/utxos/status', { outpoints: [proof.outpoint] })
-        assert.ok(status.exists && status.unspent && status.confirmations >= 1)
-        await reload(sender, senderActor); await reload(receiver, receiverActor)
-        await refreshRGB(receiver)
-        await expect.poll(async () => sum((await state(receiver)).available_assets, canonicalName), poll).toBe(1n)
-        assert.equal(sum((await state(sender)).assets, canonicalName), 0n)
-        assert.equal(sum((await state(receiver)).available_assets, canonicalName), 1n)
-        assert.ok((await state(receiver)).proofs.some(saved => saved.outpoint === proof.outpoint && saved.validation_hash === proof.validation_hash))
-        assert.equal((await locks(receiver, receiverActor))[proof.outpoint]?.reason, 'rgb')
-        await expect(assetCard(receiver)).toContainText('Available: 1')
-        await expect(assetCard(receiver).getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
-        const sentState = await state(sender), receivedState = await state(receiver)
-        assert.equal(sum(sentState.assets, canonicalName) + sum(receivedState.assets, canonicalName), 1n)
-      })
-      return
-    }
-    const resumeExisting = fixture.resumeRGBWitnessTxID
-    if (resumeExisting) {
-      assert.ok(fixture.realBitcoinControl, 'continuation requires actual chain evidence')
-      sender = await fresh(senderActor)
-      receiver = await fresh(receiverActor)
-      const candidates = (await state(sender)).transfers.filter(item => item.direction === 'send' && item.witness_txid === resumeExisting)
-      assert.equal(candidates.length, 1, 'must identify exactly the original transfer')
-      const original = candidates[0]
-      transferId = original.transfer_id; witnessTxid = original.witness_txid
-      canonicalName = assetKey(original.asset.Name); invoice = original.invoice
-      const info = (await state(sender)).ticker_infos.find(item => item.asset_key === canonicalName)
-      assert.ok(info?.contract_id); contractId = info.contract_id
-      // Prepared-only Resume API cannot reload an already broadcast transfer.
-      // The fixture reads this exact immutable object from a DKVS-recovered SDK DB.
-      consignment = fixture.resumeRGBConsignment
-      assert.ok(consignment)
-      assert.equal(sha256(consignment), original.consignment_hash)
-      const receiverState = await state(receiver)
-      const histories = receiverState.transfers.filter(item => item.invoice === invoice && item.direction === 'receive' && item.witness_txid === witnessTxid)
-      assert.equal(histories.length, 1)
-      assert.equal(histories[0].consignment_hash, original.consignment_hash)
-      receiveAlreadySettled = histories[0].status === 'settled'
-      if (receiveAlreadySettled) {
-        assert.equal(histories[0].output_outpoints.length, 1)
-        summary = { recipient_outpoint: histories[0].output_outpoints[0] }
-        requestId = histories[0].receive_request_id
-        assert.equal(sum(receiverState.available_assets, canonicalName), 25n)
-      } else {
-        const requests = receiverState.reservations.filter(item => item.invoice === invoice)
-        assert.equal(requests.length, 1); requestId = requests[0].request_id
-        const receive = await openReceive()
-        await expect(receive.locator('textarea[readonly]')).toHaveCount(2, { timeout: 180000 })
-        assert.equal(await receive.locator('textarea[readonly]').first().inputValue(), invoice)
-        summary = JSON.parse(await receive.locator('textarea[readonly]').nth(1).inputValue())
-        assert.equal(summary.witness_txid, witnessTxid); assert.equal(summary.contract_id, contractId)
-        assert.equal(summary.consignment_hash, sha256(consignment)); assert.equal(summary.invoice_hash, sha256(invoice))
-        assert.equal(summary.amount_raw, '25'); assert.equal(summary.precision, 0)
-        await receive.locator('#rgb11-consignment-file').setInputFiles({ name: 'original-pwa-rgb.asc', mimeType: 'text/plain', buffer: Buffer.from(consignment) })
-        await expect(receive.getByRole('button', { name: 'Complete receive after broadcast', exact: true })).toBeEnabled()
+    sender = await fresh(actors.sender); receiver = await fresh(actors.recipient)
+    const cases = [async () => {
+      const issued = await issue(sender, 'NIA', 'PWANIA')
+      await importContract(receiver, issued)
+      await receive(receiver, issued.asset, '1', 'blind', 'proxy')
+      const request = await receive(receiver, issued.asset, '1')
+      const canceled = await prepare(sender, issued.asset, [request])
+      await cancel(sender, canceled.form)
+      await manual(sender, receiver, issued.asset, ['1', '2'])
+      await balance(receiver, issued.asset, '3')
+      await balance(sender, issued.asset, '97')
+    }, async () => {
+      const issued = await issue(sender, 'IFA', 'PWAIFA')
+      await importContract(receiver, issued)
+      await manual(sender, receiver, issued.asset, ['10'], true)
+      await balance(receiver, issued.asset, '10')
+      await balance(sender, issued.asset, '100')
+    }, async () => {
+      const pair = fixture.directWallets
+      assert.ok(pair, 'Direct needs independent root wallet actors')
+      for (const actor of Object.values(pair)) assert.equal(Number(actor.account_index || 0), 0)
+      sender = await fresh(pair.sender); receiver = await fresh(pair.recipient)
+      for (const [page, actor] of [[sender, pair.sender], [receiver, pair.recipient]]) {
+        await setupAccount({ ...t, catalog: async p => (await walletCall(p, 'getWalletCatalog')).wallets }, page, actor.password)
       }
-      beforePrepare = await control('snapshot')
-    } else {
-    await check(requiredPwaRgbCases[0], async () => {
-      sender = await fresh(senderActor)
-      const issued = await issue('NIA', 'PWARGB', '1000')
-      contractId = issued.id; canonicalName = issued.key; armor = issued.contractArmor; contractFile = issued.standard
-      const ownProofs = issued.issued.proofs.filter(proof => assetKey(proof.asset_name) === canonicalName && proof.status === 'settled')
-      assert.ok(ownProofs.length)
-      const locked = await locks(sender, senderActor)
-      for (const proof of ownProofs) {
-        assert.ok(proof.confirmations >= 1)
-        assert.equal(locked[proof.outpoint]?.reason, 'rgb')
-        const [status] = await evidence('/v3/bitcoin/utxos/status', { outpoints: [proof.outpoint] })
-        assert.equal(status.exists, true); assert.equal(status.unspent, true); assert.ok(status.confirmations >= 1)
-        const [txid, vout] = proof.outpoint.split(':')
-        const raw = Transaction.fromHex(await evidence(`/btc/rawtx/${txid}`))
-        assert.equal(raw.getId(), txid)
-        assert.equal(raw.outs[Number(vout)].script.toString('hex'), status.pk_script)
-      }
-      // Garbage selection must honor the same carrier protection as normal
-      // sends, including when the caller explicitly names the carrier input.
-      const before = await control('snapshot')
-      const beforeAmount = await walletCall(sender, 'getAssetAmount', senderActor.address, '::')
-      for (const proof of ownProofs) {
-        const refused = await sender.evaluate(async ({ address, point }) =>
-          window.sat20wallet_wasm.sendGarbage(address, [point], 0, '1'),
-        { address: receiverActor.address, point: proof.outpoint })
-        assert.ok(refused && typeof refused.code === 'number', 'carrier refusal must return a WASM envelope')
-        assert.notEqual(refused.code, 0, 'garbage send accepted a confirmed RGB carrier')
-      }
-      const after = await control('snapshot')
-      sameTxIDs(before, after)
-      assert.deepEqual(after.l1.pending_txids, before.l1.pending_txids)
-      assert.deepEqual(await walletCall(sender, 'getAssetAmount', senderActor.address, '::'), beforeAmount)
-      assert.deepEqual(await locks(sender, senderActor), locked)
-      assert.equal(sum((await state(sender)).available_assets, canonicalName), 1000n)
-      for (const proof of ownProofs) {
-        const [status] = await evidence('/v3/bitcoin/utxos/status', { outpoints: [proof.outpoint] })
-        assert.equal(status.unspent, true, 'refused garbage send spent a protected carrier')
-      }
-    })
-
-    await check(requiredPwaRgbCases[1], async () => {
-      receiver = await fresh(receiverActor)
-      await receiver.getByRole('button', { name: 'Import RGB Contract', exact: true }).click()
-      const form = dialog(receiver, 'Import RGB Contract')
-      await form.locator('#rgb11-contract-file').setInputFiles({ name: contractFile.filename,
-        mimeType: 'application/octet-stream', buffer: contractFile.bytes })
-      await form.getByRole('button', { name: 'Import RGB Contract', exact: true }).click()
-      await expect(form.getByText('Imported; 0 wallet allocation(s) projected.', { exact: true })).toBeVisible({ timeout: 180000 })
-      await receiver.bringToFront()
-      await form.getByRole('button', { name: 'Close', exact: true }).click()
-      await expect(form).toBeHidden()
-      const received = await state(receiver)
-      const info = received.ticker_infos.find(info => info.contract_id === contractId)
-      assert.ok(info)
-      assert.equal(info.asset_key, canonicalName)
-      assert.equal(info.canonical_name ?? '', '')
-      assert.equal(info.verified, false)
-      assert.equal(info.ticker, `pwargb@${info.genesis_address.slice(-12)}`)
-      assert.equal(sum(received.assets, canonicalName), 0n)
-      assert.equal(sum(received.available_assets, canonicalName), 0n)
-      await expect(assetCard(receiver)).toContainText('Available: 0')
-      // Also exercise the standard export action in the persisted asset list.
-      const exported = await downloadBytes(sender, assetCard(sender).getByRole('button', { name: 'Download Standard Contract File (.rgb)', exact: true }))
-      assert.deepEqual(exported.bytes, contractFile.bytes, 'asset-list export differs from the actual issued contract')
-    })
-
-    await check(requiredPwaRgbCases[2], async () => {
-      const receive = await openReceive()
-      await receive.locator('select').nth(0).selectOption('out-of-band')
-      await receive.locator('select').nth(1).selectOption('witness')
-      await receive.getByPlaceholder('Enter amount to receive', { exact: true }).fill('25')
-      await receive.getByRole('button', { name: 'Generate Invoice', exact: true }).click()
-      await expect(receive.locator('textarea[readonly]')).toBeVisible({ timeout: 180000 })
-      invoice = await receive.locator('textarea[readonly]').inputValue()
-      assert.match(invoice, /^rgb:/)
-      const reservation = (await state(receiver)).reservations.find(item => item.invoice === invoice)
-      assert.ok(reservation?.request_id)
-      requestId = reservation.request_id
-      assert.equal(reservation.transport_mode, 'out-of-band')
-      assert.equal(reservation.amount_raw, '25')
-      await reload(receiver, receiverActor)
-      const restored = await openReceive()
-      await expect(restored.locator('textarea[readonly]')).toHaveValue(invoice, { timeout: poll.timeout })
-      assert.equal((await state(receiver)).reservations.filter(item => item.request_id === requestId).length, 1)
-    })
-
-    await check(requiredPwaRgbCases[3], async () => {
-      beforePrepare = await control('snapshot')
-      const send = await prepareSend(invoice, '25')
-      const outgoing = (await state(sender)).transfers.filter(item => item.direction === 'send' && item.invoice === invoice)
-      assert.equal(outgoing.length, 1)
-      const transfer = outgoing[0]
-      transferId = transfer.transfer_id; witnessTxid = transfer.witness_txid
-      assert.match(witnessTxid, /^[0-9a-f]{64}$/)
-      assert.equal(transfer.transport_mode, 'out-of-band')
-      assert.ok(transfer.input_outpoints.length)
-      const downloaded = await downloadBytes(sender, send.getByRole('button', { name: 'Download armored consignment for PWA', exact: true }))
-      consignment = downloaded.bytes.toString('utf8')
-      assert.equal(sha256(consignment), transfer.consignment_hash)
-      await expect(send.getByRole('button', { name: 'Confirm receiver validation and broadcast', exact: true })).toBeDisabled()
-      assert.equal(sum((await state(sender)).available_assets, canonicalName), 0n)
-      sameTxIDs(beforePrepare, await control('snapshot'))
-    })
-
-    await check(requiredPwaRgbCases[4], async () => {
-      let receive = dialog(receiver, 'Receive RGB Asset')
-      await receive.locator('#rgb11-consignment-file').setInputFiles({ name: 'pwa-rgb-consignment.asc', mimeType: 'text/plain', buffer: Buffer.from(consignment) })
-      await receive.getByRole('button', { name: 'Validate before broadcast', exact: true }).click()
-      await expect(receive.locator('textarea[readonly]')).toHaveCount(2, { timeout: 180000 })
-      summary = JSON.parse(await receive.locator('textarea[readonly]').nth(1).inputValue())
-      assert.equal(summary.stage, 'validated-awaiting-broadcast')
-      assert.equal(summary.contract_id, contractId)
-      assert.equal(summary.witness_txid, witnessTxid)
-      assert.equal(summary.amount_raw, '25')
-      assert.equal(summary.precision, 0)
-      assert.equal(summary.consignment_hash, sha256(consignment))
-      assert.equal(summary.invoice_hash, sha256(invoice))
-      assert.equal(sum((await state(receiver)).available_assets, canonicalName), 0n)
-      await reload(receiver, receiverActor)
-      receive = await openReceive()
-      // Opening the dialog starts an asynchronous SDK reservation read. Its
-      // visible shell does not yet establish that the persisted request loaded.
-      await expect(receive.locator('textarea[readonly]')).toHaveCount(2, { timeout: poll.timeout })
-      await expect(receive.locator('textarea[readonly]').first()).toHaveValue(invoice)
-      await expect(receive.locator('textarea[readonly]').nth(1)).toHaveValue(JSON.stringify(summary, null, 2))
-      await expect(receive.getByRole('button', { name: 'Complete receive after broadcast', exact: true })).toBeDisabled()
-      await receive.locator('#rgb11-consignment-file').setInputFiles({ name: 'pwa-rgb-consignment.asc', mimeType: 'text/plain', buffer: Buffer.from(consignment) })
-      await expect(receive.getByRole('button', { name: 'Complete receive after broadcast', exact: true })).toBeEnabled()
-      sameTxIDs(beforePrepare, await control('snapshot'))
-    })
-
-    }
-
-    await check(requiredPwaRgbCases[5], async () => {
-      let submitted
-      if (resumeExisting) {
-        // Original run already restored, matched, signed and broadcast this
-        // exact transaction. Validate the cold-restored state without a replay.
-        submitted = await control('snapshot')
-        const [currentWitness] = await evidence('/v3/bitcoin/tx/status/batch', { txids: [witnessTxid] })
-        assert.ok(currentWitness.in_mempool || (currentWitness.confirmed && currentWitness.confirmations >= 1))
-        assert.equal(submitted.l1.broadcast_count[witnessTxid] ?? 0, 0, 'continuation must not broadcast again')
-        sameTxIDs(beforePrepare, submitted)
-      } else {
-      await reload(sender, senderActor, transferId)
-      await sender.getByRole('button', { name: 'Match summary fields', exact: true }).click()
-      const send = dialog(sender, 'Send RGB Asset')
-      await expect(send).toContainText(transferId)
-      const resumed = await downloadBytes(sender, send.getByRole('button', { name: 'Download armored consignment for PWA', exact: true }))
-      assert.equal(resumed.bytes.toString('utf8'), consignment)
-      const broadcast = send.getByRole('button', { name: 'Confirm receiver validation and broadcast', exact: true })
-      await expect(broadcast).toBeDisabled()
-      await send.locator('#rgb-summary-0').fill(JSON.stringify(summary))
-      await send.getByRole('button', { name: 'Match summary fields', exact: true }).click()
-      await expect(send.getByText('Fields match this recipient. Confirm the external message before broadcasting.', { exact: true })).toBeVisible()
-      await expect(broadcast).toBeDisabled()
-      await send.locator('input[type="checkbox"]').check()
+      const issued = await issue(sender, 'UDA', 'PWAUDA')
+      await importContract(receiver, issued)
+      await refreshed(receiver) // SDK registers its own Direct receive endpoint.
+      await button(card(sender, issued.asset), messages.l1AssetsTabs.send).click()
+      const form = dialog(sender, tr.sendTitle)
+      await form.locator('textarea').fill(pair.recipient.address)
+      await form.locator('input').fill('1')
+      await receiver.context().setOffline(true)
+      const locksBeforePreview = await walletCall(sender, 'getAllLockedUtxo', pair.sender.address)
+      const abandoned = await observe(sender, 'prepareRGB11Transfer', () => button(form, tr.prepare).click())
+      assert.equal(abandoned.status, 'preview')
+      assert.equal((await view(sender)).transfers.some(item => item.id === abandoned.id), false, 'Direct preview must not create a saved transfer')
+      assert.deepEqual(await walletCall(sender, 'getAllLockedUtxo', pair.sender.address), locksBeforePreview, 'Direct preview must not reserve inputs')
+      await observe(sender, 'cancelRGB11Transfer', () => close(form))
+      assert.equal((await view(sender)).transfers.some(item => item.id === abandoned.id), false, 'Closing a preview must not save a cancelled transfer')
+      assert.deepEqual(await walletCall(sender, 'getAllLockedUtxo', pair.sender.address), locksBeforePreview)
+      await button(card(sender, issued.asset), messages.l1AssetsTabs.send).click()
+      await form.locator('textarea').fill(pair.recipient.address)
+      await form.locator('input').fill('1')
+      const prepared = await observe(sender, 'prepareRGB11Transfer', () => button(form, tr.prepare).click())
+      assert.equal(prepared.status, 'preview')
+      // A normal delivery outage can happen after confirmation saved the exact
+      // candidate. Observe the real SDK and only interrupt this page's transport.
+      let deliveryFailures = 0
+      const unavailable = route => { deliveryFailures++; return route.abort('failed') }
+      await sender.route('**/message/service', unavailable)
       try {
-        await broadcast.click()
-        await expect(send.getByText(`Transaction broadcast: ${witnessTxid}`, { exact: true })).toBeVisible({ timeout: 180000 })
+        await observe(sender, 'confirmRGB11Transfer', () => button(form, messages.common.confirm).click(), false)
+        assert.ok(deliveryFailures > 0, 'the actual Direct delivery request must hit the outage')
+        const saved = (await view(sender)).transfers.find(item => item.id === prepared.id)
+        assert.ok(saved && saved.status !== 'preview', 'the failed confirmation must already have saved this candidate')
+        assert.equal(saved.can_cancel, false)
+        assert.equal(saved.can_confirm, true)
+        await expect(form.getByText(tr.preview, { exact: true })).toHaveCount(0)
+        await expect(form.getByText(prepared.id, { exact: true })).toBeVisible()
+        await expect(button(form, messages.common.cancel)).toHaveCount(0)
+        await expect(button(form, messages.common.confirm)).toBeEnabled()
+        await expect(form.getByRole('alert')).toBeVisible()
+      } finally { await sender.unroute('**/message/service', unavailable) }
+      const delivered = await observe(sender, 'confirmRGB11Transfer', () => button(form, messages.common.confirm).click())
+      assert.equal(delivered.id, prepared.id, 'retry must continue the original candidate')
+      assert.ok(['awaiting_ack', 'awaiting_persistence'].includes(delivered.status))
+      await expect(form.getByText(messages.walletComponents[`states_${delivered.status}`], { exact: true })).toBeVisible()
+      assert.equal((await view(receiver)).assets.find(a => a.asset === issued.asset.asset).available, '0')
+      await close(form)
+      await refreshed(sender)
+      // Inspect the real pending transaction's protection locks. The RGB page
+      // is read-only; visiting it must not release a carrier or fee input.
+      const pendingLocks = await walletCall(sender, 'getAllLockedUtxo', pair.sender.address)
+      const rgbLocks = Object.entries(pendingLocks).filter(([, raw]) => {
+        const lock = JSON.parse(raw)
+        return ['rgb', 'pending-rgb'].includes(lock.reason) || lock.reservation_previous_reason === 'rgb'
+      })
+      assert.ok(rgbLocks.some(([, raw]) => JSON.parse(raw).reason === 'pending-rgb'))
+      await sender.evaluate(() => { location.hash = '#/wallet/setting/utxo' })
+      await expect(sender.getByRole('tab', { name: 'RGB', exact: true })).toBeVisible()
+      await sender.getByRole('tab', { name: 'RGB', exact: true }).click()
+      for (const [outpoint] of rgbLocks) {
+        await expect(sender.locator(`tr[data-outpoint=${JSON.stringify(outpoint)}]`)).toBeVisible()
+      }
+      await expect(button(sender, 'Unlock')).toHaveCount(0)
+      await expect(sender.getByPlaceholder('Enter UTXO (e.g. txid:vout)', { exact: true })).toHaveCount(0)
+      const lockView = await view(sender)
+      assert.ok(lockView.locks.some(row => row.scope === 'current' && row.transfer_ids.includes(prepared.id)),
+        'pending RGB locks must identify their existing transfer, including its fee inputs')
+      await sender.getByRole('tab', { name: 'BTC', exact: true }).click()
+      for (const [outpoint] of rgbLocks) await expect(sender.locator(`tr[data-outpoint=${JSON.stringify(outpoint)}]`)).toHaveCount(0)
+      assert.deepEqual(await walletCall(sender, 'getAllLockedUtxo', pair.sender.address), pendingLocks,
+        'read-only RGB lock inspection changed protection locks')
+      await sender.evaluate(() => { location.hash = '#/wallet' })
+      await button(sender, 'RGB').click()
+      const task = sender.locator('div.rounded.border.border-zinc-700').filter({ has: sender.getByText(prepared.id, { exact: true }) })
+      // Reopen the original pending action while the recipient is still offline.
+      await button(task, tr.retryTask).click()
+      const pendingForm = dialog(sender, tr.sendTitle)
+      await expect(pendingForm.getByText(prepared.id, { exact: true })).toBeVisible()
+      await close(pendingForm)
+      await receiver.context().setOffline(false)
+      // Restoring browser transport does not restore the SDK's online grant.
+      // Observe its real background recovery before the original RGB refresh.
+      let reconnected
+      try {
+        await expect.poll(async () => {
+          const state = await accountCall(receiver, 'getAccountView')
+          reconnected = { state: state.state, error_code: state.error_code, modules: state.modules }
+          return state.state === 'ready' && state.modules?.some(module => module.name === 'rgb11' && module.can_write)
+        }, { timeout: 90000, message: 'reconnected recipient must regain SDK write qualification' }).toBe(true)
       } catch (error) {
-        if (process.env.SAT20_PWA_DIAGNOSTIC === 'debug') {
-          try {
-            const observed = await control('snapshot')
-            console.log(JSON.stringify({ observation: 'RGB original broadcast failure',
-              tx_hash: sha256(witnessTxid).slice(0, 16),
-              accepted_count: observed.l1.broadcast_count[witnessTxid] ?? 0,
-              in_pending: observed.l1.pending_txids.includes(witnessTxid),
-              confirmed: observed.l1.confirmed_txids.includes(witnessTxid) }))
-          } catch { console.log(JSON.stringify({ observation: 'RGB broadcast snapshot unavailable' })) }
-        }
+        console.error(JSON.stringify({ rgbRecipientReconnect: reconnected }))
         throw error
       }
-      submitted = await control('snapshot')
-      assert.ok(submitted.l1.pending_txids.includes(witnessTxid))
-      assert.equal(submitted.l1.broadcast_count[witnessTxid], 1)
-      }
-      const raw = Transaction.fromHex(await evidence(`/btc/rawtx/${witnessTxid}`))
-      assert.equal(raw.getId(), witnessTxid)
-      assert.ok(raw.ins.every(input => input.witness.length > 0), 'actual RGB witness transaction lacks signatures')
-      const actualInputs = raw.ins.map(input => `${Buffer.from(input.hash).reverse().toString('hex')}:${input.index}`).sort()
-      const prepared = (await state(sender)).transfers.find(item => item.transfer_id === transferId)
-      assert.deepEqual(actualInputs, [...prepared.input_outpoints].sort())
-      const [pointTxid, pointIndex] = summary.recipient_outpoint.split(':')
-      assert.equal(pointTxid, witnessTxid)
-      const [output] = await evidence('/v3/bitcoin/utxos/status', { outpoints: [summary.recipient_outpoint] })
-      assert.equal(output.exists, true); assert.equal(output.unspent, true); if (!resumeExisting) assert.equal(output.confirmations || 0, 0)
-      assert.equal(raw.outs[Number(pointIndex)].script.toString('hex'), output.pk_script)
-      assert.equal(sum((await state(receiver)).available_assets, canonicalName), receiveAlreadySettled ? 25n : 0n)
-      await sender.keyboard.press('Escape')
-    })
-
-    await check(requiredPwaRgbCases[6], async () => {
-      const observePhase = async label => {
-        const sample = async page => {
-          try {
-            const status = await accountCall(page, 'status')
-            return { state_seq: status.state_seq, managed_data_revision: status.managed_data_revision,
-              pending_changes: status.pending_changes, dkvs_pending_requests: status.dkvs_pending_requests,
-              dkvs_status: status.dkvs_status, dkvs_write_allowed: status.dkvs_write_allowed,
-              last_dkvs_sync_error_code: status.last_dkvs_sync_error_code }
-          } catch (error) { return { error: error?.message ?? String(error) } }
-        }
-        console.log(JSON.stringify({ rgbReceivePhase: label, sender: await sample(sender), receiver: await sample(receiver) }))
-      }
-      await observePhase('before-confirm')
-      const [statusBefore] = await evidence('/v3/bitcoin/tx/status/batch', { txids: [witnessTxid] })
-      if (!statusBefore.confirmed) {
-        const confirmed = await control('confirm-l1', { wait_anchors: false })
-        assert.ok(confirmed.l1.confirmed_txids.includes(witnessTxid))
-      }
-      const [statusAfter] = await evidence('/v3/bitcoin/tx/status/batch', { txids: [witnessTxid] })
-      assert.ok(statusAfter.confirmed && statusAfter.confirmations >= 1)
-      await observePhase('after-confirm')
-      if (!receiveAlreadySettled) {
-      const receive = dialog(receiver, 'Receive RGB Asset')
-      await receive.getByRole('button', { name: 'Complete receive after broadcast', exact: true }).click()
-      await expect(receive.locator('p.text-red-400, p.text-emerald-400')).toBeVisible({ timeout: 180000 })
-      assert.equal((await receive.locator('p.text-red-400').allTextContents()).join(' '), '',
-        `original RGB receive failed; witness=${witnessTxid}; request=${requestId}`)
-      await expect(receive.getByText('Consignment accepted. Notify the sender through the external channel so it can record the out-of-band ACK.', { exact: true }))
-        .toBeVisible({ timeout: 180000 })
-      await receiver.keyboard.press('Escape')
-      }
-      await observePhase('after-receive')
-      await refreshRGB(sender)
-      await observePhase('after-sender-refresh')
-      await expect.poll(async () => sum((await state(sender)).available_assets, canonicalName), poll).toBe(975n)
-      await expect.poll(async () => sum((await state(receiver)).available_assets, canonicalName), poll).toBe(25n)
-      const sent = await state(sender), received = await state(receiver)
-      assert.equal(sum(sent.assets, canonicalName) + sum(received.assets, canonicalName), 1000n)
-      const proof = received.proofs.find(item => item.outpoint === summary.recipient_outpoint && assetKey(item.asset_name) === canonicalName)
-      assert.ok(proof)
-      assert.equal(proof.status, 'settled'); assert.ok(proof.confirmations >= 1)
-      assert.equal((await locks(receiver, receiverActor))[proof.outpoint]?.reason, 'rgb')
-      const [output] = await evidence('/v3/bitcoin/utxos/status', { outpoints: [proof.outpoint] })
-      assert.equal(output.unspent, true); assert.ok(output.confirmations >= 1)
-      await reload(receiver, receiverActor)
-      await refreshRGB(receiver)
-      await expect.poll(async () => sum((await state(receiver)).available_assets, canonicalName), poll).toBe(25n)
-      assert.equal(sum((await state(receiver)).available_assets, canonicalName), 25n)
-      assert.equal((await locks(receiver, receiverActor))[proof.outpoint]?.reason, 'rgb')
-      await expect(assetCard(receiver)).toContainText('Available: 25')
-      await expect(assetCard(sender)).toContainText('Available: 975')
-    })
-
-    await check(requiredPwaRgbCases[7], async () => {
-      if (fixture.rgbCancellationDiagnostic) {
-        const observe = async label => {
-          const snapshot = await state(sender)
-          const locked = await locks(sender, senderActor)
-          console.log(JSON.stringify({ observation: 'original cancel gate', label,
-            total: String(sum(snapshot.assets, canonicalName)), available: String(sum(snapshot.available_assets, canonicalName)), pending: String(sum(snapshot.pending_assets, canonicalName)),
-            sync: snapshot.sync_status, consistency: snapshot.consistency_status,
-            proofs: snapshot.proofs.filter(item => assetKey(item.asset_name) === canonicalName).map(item => ({ outpoint: item.outpoint, status: item.status, confirmations: item.confirmations, validation_hash: item.validation_hash, lock_reason: locked[item.outpoint]?.reason ?? null })),
-            transfers: snapshot.transfers.filter(item => assetKey(item.asset.Name) === canonicalName).map(item => ({ id: item.transfer_id, status: item.status, reject_reason: item.reject_reason, min_confirmations: item.min_confirmations, input_outpoints: item.input_outpoints, output_outpoints: item.output_outpoints })),
-            reservations: snapshot.reservations.filter(item => item.direction === 'send').map(item => ({ id: item.id, status: item.status, transfer_status: item.transfer?.status })) }))
-        }
-        const pending = (await state(sender)).transfers.filter(item => item.direction === 'send' && item.status === 'prepared' && assetKey(item.asset.Name) === canonicalName)
-        assert.equal(pending.length, 1, 'resume the original unbroadcast cancellation, without preparing a new transfer')
-        const before = await control('snapshot')
-        await sender.evaluate(async () => {
-          const { default: manager } = await import('/utils/sat20.ts')
-          const cancel = manager.cancelRGB11OutOfBandTransfer.bind(manager)
-          manager.cancelRGB11OutOfBandTransfer = async (...args) => {
-            window.__observedRGB11Cancellation = { started: true }
-            try {
-              const result = await cancel(...args)
-              window.__observedRGB11Cancellation = { started: true, finished: true, error: result[0]?.message ?? null, cancelled: result[1]?.cancelled }
-              return result
-            } catch (error) {
-              window.__observedRGB11Cancellation = { started: true, finished: true, thrown: String(error) }
-              throw error
-            }
-          }
-        })
-        await observe('before-cancel')
-        sender.once('dialog', async confirmation => {
-          assert.equal(confirmation.type(), 'confirm')
-          assert.match(confirmation.message(), /unbroadcast out-of-band/)
-          await confirmation.accept()
-        })
-        await sender.getByRole('button', { name: 'Cancel and release reservation', exact: true }).click()
-        await sender.waitForFunction(() => window.__observedRGB11Cancellation?.started, undefined, { timeout: 10000 })
-        await sender.waitForFunction(() => window.__observedRGB11Cancellation?.finished, undefined, { timeout: 180000 })
-        const result = await sender.evaluate(() => window.__observedRGB11Cancellation)
-        console.log(JSON.stringify({ observation: 'original cancel result', ...result }))
-        await observe('after-cancel')
-        assert.deepEqual(result, { started: true, finished: true, error: null, cancelled: true })
-        await refreshRGB(sender)
-        await expect.poll(async () => (await state(sender)).transfers.find(item => item.transfer_id === pending[0].transfer_id)?.status, poll).toBe('rejected')
-        await expect.poll(async () => sum((await state(sender)).available_assets, canonicalName), poll).toBe(975n)
-        assert.equal((await state(sender)).transfers.find(item => item.transfer_id === pending[0].transfer_id)?.reject_reason, 'user-rejected')
-        const protectedInputs = await locks(sender, senderActor)
-        for (const point of pending[0].input_outpoints) assert.equal(protectedInputs[point]?.reason, 'rgb')
-        const outputs = await evidence('/v3/bitcoin/utxos/status', { outpoints: pending[0].input_outpoints })
-        assert.ok(outputs.every(output => output.exists && output.unspent))
-        sameTxIDs(before, await control('snapshot'))
-        return
-      }
-      // Focused continuation skips the preceding receive case's chain refresh.
-      // Establish its real readiness prerequisite rather than re-running it.
-      await refreshRGB(sender)
-      await expect.poll(async () => sum((await state(sender)).available_assets, canonicalName), poll).toBe(975n)
-      const before = await control('snapshot')
-      const lockedBefore = await locks(sender, senderActor)
-      let receive = await openReceive()
-      // Settled receives remain in transfer history, while the resumable request
-      // list is empty. The next invoice starts from the actual fresh UI form.
-      const prior = (await state(receiver)).transfers.find(item => item.invoice === invoice && item.direction === 'receive')
-      assert.equal(prior?.status, 'settled')
-      assert.ok(!(await state(receiver)).reservations.some(item => item.request_id === requestId))
-      if (await receive.locator('textarea[readonly]').count()) {
-        // A failed cancellation run can leave its unused receiver request.
-        // Reuse only the exact authenticated amount/contract request; no reset.
-        const existingInvoice = await receive.locator('textarea[readonly]').inputValue()
-        const unused = (await state(receiver)).reservations.filter(item => item.invoice === existingInvoice)
-        assert.equal(unused.length, 1)
-        assert.equal(unused[0].contract_id, contractId); assert.equal(unused[0].amount_raw, '5')
-        assert.equal(unused[0].transport_mode, 'out-of-band')
-      } else {
-        await receive.locator('select').nth(0).selectOption('out-of-band')
-        await receive.locator('select').nth(1).selectOption('witness')
-        await receive.getByPlaceholder('Enter amount to receive', { exact: true }).fill('5')
-        await receive.getByRole('button', { name: 'Generate Invoice', exact: true }).click()
-        await expect(receive.locator('textarea[readonly]')).toBeVisible({ timeout: 180000 })
-      }
-      const unusedInvoice = await receive.locator('textarea[readonly]').inputValue()
-      assert.notEqual(unusedInvoice, invoice)
-      await receiver.keyboard.press('Escape')
-      await prepareSend(unusedInvoice, '5')
-      const prepared = (await state(sender)).transfers.find(item => item.direction === 'send' && item.invoice === unusedInvoice)
-      assert.ok(prepared?.transfer_id)
-      assert.equal(sum((await state(sender)).available_assets, canonicalName), 0n)
-      await sender.keyboard.press('Escape')
-      await refreshRGB(sender)
-      sender.once('dialog', async dialog => {
-        assert.equal(dialog.type(), 'confirm')
-        assert.match(dialog.message(), /unbroadcast out-of-band/)
-        await dialog.accept()
-      })
-      await sender.evaluate(async () => {
-        const { default: manager } = await import('/utils/sat20.ts')
-        const cancel = manager.cancelRGB11OutOfBandTransfer.bind(manager)
-        manager.cancelRGB11OutOfBandTransfer = async (...args) => {
-          const note = phase => window.__SAT20_E2E_NOTE__?.('cancelRGB11OutOfBandTransfer', phase, {
-            same_global_instance: manager === window.sat20,
-            same_verify_instance: manager === window.__SAT20_PWA_VERIFY__?.sat20,
-          })
-          note('enter')
-          try {
-            const result = await cancel(...args)
-            note(result[0] ? 'returned-error' : 'returned')
-            window.__observedRGB11Cancellation = { finished: true, error: result[0]?.message ?? null, cancelled: result[1]?.cancelled }
-            return result
-          } catch (error) { note('threw'); throw error }
-        }
-      })
-      await sender.getByRole('button', { name: 'Cancel and release reservation', exact: true }).click()
-      await sender.waitForFunction(() => window.__observedRGB11Cancellation?.finished, undefined, { timeout: 180000 })
-      assert.deepEqual(await sender.evaluate(() => window.__observedRGB11Cancellation), { finished: true, error: null, cancelled: true })
-      await refreshRGB(sender)
-      await expect.poll(async () => (await state(sender)).transfers.find(item => item.transfer_id === prepared.transfer_id)?.status, poll).toBe('rejected')
-      assert.equal((await state(sender)).transfers.find(item => item.transfer_id === prepared.transfer_id)?.reject_reason, 'user-rejected')
-      await expect.poll(async () => sum((await state(sender)).available_assets, canonicalName), poll).toBe(975n)
-      const lockedAfter = await locks(sender, senderActor)
-      for (const point of prepared.input_outpoints) {
-        assert.equal(lockedAfter[point]?.reason, lockedBefore[point]?.reason, `cancel changed the original carrier protection at ${point}`)
-      }
-      const unspent = await evidence('/v3/bitcoin/utxos/status', { outpoints: prepared.input_outpoints })
-      assert.ok(unspent.every(output => output.exists && output.unspent))
-      sameTxIDs(before, await control('snapshot'))
-      const cancelledState = await state(sender)
-      console.log(JSON.stringify({ observation: 'RGB after unbroadcast cancellation',
-        consistency: cancelledState.consistency_status, sync: cancelledState.sync_status }))
-    })
-
-    await check(requiredPwaRgbCases[8], async () => {
-      if (sender) {
-        const beforeIFA = await state(sender)
-        console.log(JSON.stringify({ observation: 'RGB before IFA issuance',
-          consistency: beforeIFA.consistency_status, sync: beforeIFA.sync_status }))
-      }
-      const issued = await issue('IFA', 'PWAIFA', '1000', '9000')
-      const controlKey = issued.key.replace(/^rgb11:f:/, 'rgb11:control:')
-      assert.equal(sum(issued.issued.available_assets, controlKey), 9000n)
-      const controls = issued.issued.proofs.filter(proof => assetKey(proof.asset_name) === controlKey)
-      const ordinary = issued.issued.proofs.filter(proof => assetKey(proof.asset_name) === issued.key)
-      assert.ok(controls.length && ordinary.length)
-      const assertControls = async () => {
-        const persisted = await state(sender)
-        assert.equal(sum(persisted.available_assets, controlKey), 9000n)
-        const locked = await locks(sender, senderActor)
-        for (const proof of controls) {
-          assert.ok(persisted.proofs.some(saved => saved.outpoint === proof.outpoint && saved.validation_hash === proof.validation_hash && assetKey(saved.asset_name) === controlKey))
-          assert.ok(ordinary.every(allocation => allocation.outpoint !== proof.outpoint), 'inflation authority must have a distinct carrier')
-          assert.equal(proof.status, 'settled'); assert.ok(proof.confirmations >= 1)
-          assert.equal(locked[proof.outpoint]?.reason, 'rgb')
-          const [output] = await evidence('/v3/bitcoin/utxos/status', { outpoints: [proof.outpoint] })
-          assert.ok(output.exists && output.unspent && output.confirmations >= 1)
-        }
-      }
-      await assertControls()
-      await reload(sender, senderActor)
-      // Unlock resets RAM verification; verify current chain facts before spendability assertions.
-      await refreshRGB(sender)
-      await expect.poll(async () => sum((await state(sender)).available_assets, controlKey), poll).toBe(9000n)
-      await assertControls()
-    })
-    await check(requiredPwaRgbCases[9], async () => {
-      if (!sender) sender = await fresh(senderActor)
-      if (!receiver) receiver = await fresh(receiverActor)
-      const issued = await issue('IFA', 'PWAIFM', '1000', '9000')
-      contractId = issued.id
-      canonicalName = issued.key
-      const controlKey = canonicalName.replace(/^rgb11:f:/, 'rgb11:control:')
-      assert.equal(sum(issued.issued.available_assets, canonicalName), 1000n)
-      assert.equal(sum(issued.issued.available_assets, controlKey), 9000n)
-
-      await receiver.getByRole('button', { name: 'Import RGB Contract', exact: true }).click()
-      const importForm = dialog(receiver, 'Import RGB Contract')
-      await importForm.locator('#rgb11-contract-file').setInputFiles({ name: issued.standard.filename,
-        mimeType: 'application/octet-stream', buffer: issued.standard.bytes })
-      await importForm.getByRole('button', { name: 'Import RGB Contract', exact: true }).click()
-      await expect(importForm.getByText('Imported; 0 wallet allocation(s) projected.', { exact: true }))
-        .toBeVisible({ timeout: 180000 })
-      await importForm.getByRole('button', { name: 'Close', exact: true }).click()
-
-      const receive = await openReceive()
-      await receive.locator('select').nth(0).selectOption('out-of-band')
-      await receive.locator('select').nth(1).selectOption('witness')
-      await receive.getByPlaceholder('Enter amount to receive', { exact: true }).fill('100')
-      await receive.getByRole('button', { name: 'Generate Invoice', exact: true }).click()
-      await expect(receive.locator('textarea[readonly]')).toBeVisible({ timeout: 180000 })
-      invoice = await receive.locator('textarea[readonly]').inputValue()
-      assert.match(invoice, /^rgb:/)
-      const reservation = (await state(receiver)).reservations.find(item => item.invoice === invoice)
-      assert.equal(reservation?.amount_raw, '100')
-      assert.equal(reservation?.transport_mode, 'out-of-band')
-
-      const beforeInflation = await control('snapshot')
-      const inflationButton = assetCard(sender, issued.id).getByRole('button', { name: 'Inflate RGB asset', exact: true })
-      await expect(inflationButton).toBeEnabled()
-      await inflationButton.click()
-      const inflation = dialog(sender, 'Inflate RGB asset')
-      await inflation.locator('textarea').first().fill(invoice)
-      await inflation.getByRole('button', { name: 'Prepare RGB inflation', exact: true }).click()
-      await expect(inflation.getByRole('button', { name: 'Download armored consignment for PWA', exact: true }))
-        .toBeVisible({ timeout: 180000 })
-      const prepared = (await state(sender)).transfers.find(item => item.direction === 'send' && item.invoice === invoice)
-      assert.ok(prepared?.transfer_id)
-      assert.equal(prepared.transport_mode, 'out-of-band')
-      assert.match(prepared.witness_txid, /^[0-9a-f]{64}$/)
-      const transferId = prepared.transfer_id
-      const witnessTxid = prepared.witness_txid
-      const downloaded = await downloadBytes(sender,
-        inflation.getByRole('button', { name: 'Download armored consignment for PWA', exact: true }))
-      const consignment = downloaded.bytes.toString('utf8')
-      assert.equal(sha256(consignment), prepared.consignment_hash)
-      await receive.locator('#rgb11-consignment-file').setInputFiles({ name: 'pwa-ifa-inflation-consignment.asc',
-        mimeType: 'text/plain', buffer: Buffer.from(consignment) })
-      await receive.getByRole('button', { name: 'Validate before broadcast', exact: true }).click()
-      await expect(receive.locator('textarea[readonly]')).toHaveCount(2, { timeout: 180000 })
-      const summary = JSON.parse(await receive.locator('textarea[readonly]').nth(1).inputValue())
-      assert.equal(summary.stage, 'validated-awaiting-broadcast')
-      assert.equal(summary.contract_id, issued.id)
-      assert.equal(summary.witness_txid, witnessTxid)
-      assert.equal(summary.amount_raw, '100')
-      assert.equal(summary.consignment_hash, sha256(consignment))
-      sameTxIDs(beforeInflation, await control('snapshot'))
-
-      await inflation.locator('#rgb-summary-0').fill(JSON.stringify(summary))
-      await inflation.getByRole('button', { name: 'Match summary fields', exact: true }).click()
-      await expect(inflation.getByText('Fields match this recipient. Confirm the external message before broadcasting.', { exact: true }))
-        .toBeVisible()
-      await inflation.locator('input[type="checkbox"]').check()
-      await inflation.getByRole('button', { name: 'Confirm receiver validation and broadcast', exact: true }).click()
-      await expect(inflation.getByText(`Transaction broadcast: ${witnessTxid}`, { exact: true }))
-        .toBeVisible({ timeout: 180000 })
-
-      const [mempoolStatus] = await evidence('/v3/bitcoin/tx/status/batch', { txids: [witnessTxid] })
-      assert.ok(mempoolStatus.in_mempool || mempoolStatus.confirmed)
-      const afterBroadcast = await control('snapshot')
-      assert.equal(afterBroadcast.l1.broadcast_count[witnessTxid], 1)
-      const newBroadcasts = Object.keys(afterBroadcast.l1.broadcast_count).filter(txid =>
-        afterBroadcast.l1.broadcast_count[txid] > (beforeInflation.l1.broadcast_count[txid] || 0))
-      assert.deepEqual(newBroadcasts, [witnessTxid], 'IFA inflation must broadcast exactly its prepared witness once')
-      const raw = Transaction.fromHex(await evidence(`/btc/rawtx/${witnessTxid}`))
-      assert.equal(raw.getId(), witnessTxid)
-      assert.ok(raw.ins.every(input => input.witness.length > 0), 'IFA inflation transaction lacks signatures')
-      const confirmed = await control('confirm-l1', { wait_anchors: false })
-      assert.ok(confirmed.l1.confirmed_txids.includes(witnessTxid))
-      const [confirmedStatus] = await evidence('/v3/bitcoin/tx/status/batch', { txids: [witnessTxid] })
-      assert.ok(confirmedStatus.confirmed && confirmedStatus.confirmations >= 1)
-
-      await receive.getByRole('button', { name: 'Complete receive after broadcast', exact: true }).click()
-      await expect(receive.locator('p.text-red-400, p.text-emerald-400')).toBeVisible({ timeout: 180000 })
-      assert.equal((await receive.locator('p.text-red-400').allTextContents()).join(' '), '',
-        `IFA inflation receive failed; witness=${witnessTxid}; transfer=${transferId}`)
-      await expect(receive.getByText('Consignment accepted. Notify the sender through the external channel so it can record the out-of-band ACK.', { exact: true }))
-        .toBeVisible({ timeout: 180000 })
-
-      await inflation.getByRole('button', { name: 'Close', exact: true }).click()
-      await expect(inflation).toBeHidden()
-      await receive.getByRole('button', { name: 'Close', exact: true }).click()
-      await expect(receive).toBeHidden()
-      await refreshRGB(sender)
-      await refreshRGB(receiver)
-      await expect.poll(async () => sum((await state(sender)).available_assets, controlKey), poll).toBe(8900n)
-      await expect.poll(async () => sum((await state(receiver)).available_assets, canonicalName), poll).toBe(100n)
-      const senderState = await state(sender)
-      const receiverState = await state(receiver)
-      assert.equal(sum(senderState.assets, canonicalName), 1000n)
-      assert.equal(sum(receiverState.assets, canonicalName), 100n)
-      assert.equal(sum(senderState.assets, canonicalName) + sum(receiverState.assets, canonicalName), 1100n,
-        'IFA inflation must increase the contract supply by the invoice amount')
-      assert.equal(sum(senderState.available_assets, controlKey), 8900n,
-        'IFA inflation must consume exactly 100 units of inflation authority')
-      const proof = receiverState.proofs.find(item => item.witness_txid === witnessTxid && assetKey(item.asset_name) === canonicalName)
-      assert.ok(proof)
-      assert.equal(proof.status, 'settled')
-      assert.ok(proof.confirmations >= 1)
-      const [output] = await evidence('/v3/bitcoin/utxos/status', { outpoints: [proof.outpoint] })
-      assert.ok(output.exists && output.unspent && output.confirmations >= 1)
-      console.log(JSON.stringify({ observation: 'PWA IFA actual inflation confirmed', contract_id: issued.id,
-        transfer_id: transferId, txid: witnessTxid, amount_raw: '100', sender_supply: '1000',
-        recipient_supply: '100', total_supply: '1100', remaining_inflation_rights: '8900' }))
-    })
-    await check(requiredPwaRgbCases[10], async () => {
-      const unique = await issue('UDA', 'PWAUDA', '1')
-      await expect(assetCard(sender, unique.id)).toContainText('Available: 1')
-      await expect(assetCard(sender, unique.id).getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
-    })
-    await check(requiredPwaRgbCases[12], async () => {
-      sender = await fresh(fixture.basicWallet)
-      receiver = await fresh(fixture.recipient)
-      const unique = await issue('NIA', 'PWAADR', '100')
-      contractId = unique.id
-      canonicalName = unique.key
-      const senderRoot = await sender.evaluate(() => {
-        const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
-        return { accountIndex: Number(store.accountIndex), rootAccountId: store.rootAccountId, address: store.address }
-      })
-      const receiverRoot = await receiver.evaluate(() => {
-        const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
-        return { accountIndex: Number(store.accountIndex), rootAccountId: store.rootAccountId, address: store.address }
-      })
-      assert.equal(senderRoot.accountIndex, 0)
-      assert.equal(receiverRoot.accountIndex, 0)
-      assert.notEqual(senderRoot.rootAccountId, receiverRoot.rootAccountId)
-      assert.equal(senderRoot.address, fixture.basicWallet.address)
-      assert.equal(receiverRoot.address, fixture.recipient.address)
-
-      await receiver.getByRole('button', { name: 'Import RGB Contract', exact: true }).click()
-      const importForm = dialog(receiver, 'Import RGB Contract')
-      await importForm.locator('#rgb11-contract-file').setInputFiles({ name: unique.standard.filename,
-        mimeType: 'application/octet-stream', buffer: unique.standard.bytes })
-      await importForm.getByRole('button', { name: 'Import RGB Contract', exact: true }).click()
-      await expect(importForm.getByText('Imported; 0 wallet allocation(s) projected.', { exact: true }))
-        .toBeVisible({ timeout: 180000 })
-      await importForm.getByRole('button', { name: 'Close', exact: true }).click()
-
-      const enabledEndpoint = await receiver.evaluate(async () => {
-        const [error, result] = await window.__SAT20_PWA_VERIFY__.rgb11Address.enableReceive({})
-        if (error || !result?.endpoint) throw error || new Error('PWA address receive endpoint was not created')
-        return JSON.parse(result.endpoint)
-      })
-      assert.equal(enabledEndpoint.account_id, receiverRoot.rootAccountId)
-      assert.equal(enabledEndpoint.address, receiverRoot.address)
-      assert.equal(sum((await state(receiver)).available_assets, canonicalName), 0n)
-      // Keep the receiver offline until the sender has persisted and delivered
-      // the exact direct transfer, so the no-broadcast-before-ACK boundary is
-      // observable rather than racing the receiver's mailbox discovery poll.
-      await receiver.close()
-
-      const beforeAddress = await control('snapshot')
-      const sendButton = assetCard(sender, unique.id).getByRole('button', { name: 'Send', exact: true })
-      await sendButton.click()
-      const send = dialog(sender, 'Send RGB Asset')
-      const addressMode = send.getByRole('button', { name: 'Address', exact: true })
-      await expect(addressMode).toBeEnabled()
-      await addressMode.click()
-      await send.getByPlaceholder('Enter the recipient SAT20 P2TR address', { exact: true }).fill(receiverRoot.address)
-      await send.getByPlaceholder('1', { exact: true }).fill('10')
-      await send.getByRole('button', { name: 'Send to Address', exact: true }).click()
-      await expect(send.getByText('The consignment was delivered. The transaction will be broadcast only after the recipient persists and acknowledges it.', { exact: true }))
-        .toBeVisible({ timeout: 180000 })
+      await refreshed(receiver)
+      let transfer
+      // ACK persistence lets the SDK advance the already approved transaction.
+      // The UI observes that original action; it must not confirm a second time.
       await expect.poll(async () => {
-        const current = await state(sender)
-        return current.transfers.some(item => item.direction === 'send' && item.address_mode &&
-          assetKey(item.asset?.Name || {}) === canonicalName && String(item.asset?.Amount?.Value || '') === '10')
-      }, poll).toBe(true)
-      let senderState = await state(sender)
-      let direct = senderState.transfers.find(item => item.direction === 'send' && item.address_mode &&
-        assetKey(item.asset?.Name || {}) === canonicalName && String(item.asset?.Amount?.Value || '') === '10')
-      assert.ok(direct?.transfer_id)
-      assert.equal(direct.ack_status, 'awaiting-persistence')
-      const transferId = direct.transfer_id
-      const waitingForAck = await control('snapshot')
-      sameTxIDs(beforeAddress, waitingForAck)
-      assert.ok(!waitingForAck.l1.pending_txids.includes(direct.witness_txid))
-      assert.ok(!waitingForAck.l1.confirmed_txids.includes(direct.witness_txid))
-
-      receiver = await fresh(fixture.recipient)
-      const deliveryResult = await receiver.evaluate(async () => {
-        const [error, result] = await window.__SAT20_PWA_VERIFY__.rgb11Address.syncMailbox({})
-        if (error) throw error
-        return JSON.parse(result?.result || '{}')
-      })
-      await expect.poll(async () => (await state(receiver)).transfers.some(item =>
-        item.direction === 'receive' && item.transfer_id === transferId), poll).toBe(true)
-      const receivedDirect = (await state(receiver)).transfers.find(item =>
-        item.direction === 'receive' && item.transfer_id === transferId)
-      assert.equal(receivedDirect.ack_status, 'ack-sent')
-      assert.equal(receivedDirect.delivery_acknowledged, true)
-
-      let witnessTxid = direct.witness_txid
-      const ackDeadline = Date.now() + 180000
-      while (Date.now() < ackDeadline) {
-        const [mailboxError] = await sender.evaluate(async () => window.__SAT20_PWA_VERIFY__.rgb11Address.syncMailbox({}))
-        if (mailboxError) throw mailboxError
-        senderState = await state(sender)
-        direct = senderState.transfers.find(item => item.transfer_id === transferId)
-        witnessTxid = direct?.witness_txid || witnessTxid
-        const [status] = witnessTxid ? await evidence('/v3/bitcoin/tx/status/batch', { txids: [witnessTxid] }) : [null]
-        if (status && (status.in_mempool || status.confirmed)) break
-        await sender.waitForTimeout(1000)
-      }
-      assert.match(witnessTxid || '', /^[0-9a-f]{64}$/)
-      assert.ok(deliveryResult.received > 0 || deliveryResult.already_done > 0 ||
-        (receivedDirect.ack_status === 'ack-sent' && receivedDirect.delivery_acknowledged === true),
-        'receiver root must persist the direct-address consignment and ACK it')
-      const [pendingStatus] = await evidence('/v3/bitcoin/tx/status/batch', { txids: [witnessTxid] })
-      assert.ok(pendingStatus.in_mempool || pendingStatus.confirmed,
-        'the direct-address witness must be broadcast after the recipient ACK')
-      const afterAddressBroadcast = await control('snapshot')
-      assert.equal(afterAddressBroadcast.l1.broadcast_count[witnessTxid], 1)
-      const newBroadcasts = Object.keys(afterAddressBroadcast.l1.broadcast_count).filter(txid =>
-        afterAddressBroadcast.l1.broadcast_count[txid] > (beforeAddress.l1.broadcast_count[txid] || 0))
-      assert.deepEqual(newBroadcasts, [witnessTxid], 'direct-address transfer must broadcast once')
-      const confirmed = await control('confirm-l1', { wait_anchors: false })
-      assert.ok(confirmed.l1.confirmed_txids.includes(witnessTxid))
-      const [confirmedStatus] = await evidence('/v3/bitcoin/tx/status/batch', { txids: [witnessTxid] })
-      assert.ok(confirmedStatus.confirmed && confirmedStatus.confirmations >= 1)
-
-      await receiver.evaluate(async () => {
-        const [error] = await window.__SAT20_PWA_VERIFY__.rgb11Address.syncMailbox({})
-        if (error) throw error
-      })
-      await send.getByRole('button', { name: 'Close', exact: true }).click()
-      await expect(send).toBeHidden()
-      await refreshRGB(sender)
-      await refreshRGB(receiver)
-      await expect.poll(async () => sum((await state(sender)).available_assets, canonicalName), poll).toBe(90n)
-      await expect.poll(async () => sum((await state(receiver)).available_assets, canonicalName), poll).toBe(10n)
-      senderState = await state(sender)
-      const receiverState = await state(receiver)
-      assert.equal(sum(senderState.assets, canonicalName) + sum(receiverState.assets, canonicalName), 100n,
-        'direct-address transfer must conserve the issued RGB supply')
-      const receivedProof = receiverState.proofs.find(item => item.witness_txid === witnessTxid &&
-        assetKey(item.asset_name) === canonicalName)
-      assert.ok(receivedProof)
-      assert.equal(receivedProof.status, 'settled')
-      assert.ok(receivedProof.confirmations >= 1)
-      const [output] = await evidence('/v3/bitcoin/utxos/status', { outpoints: [receivedProof.outpoint] })
-      assert.ok(output.exists && output.unspent && output.confirmations >= 1)
-      console.log(JSON.stringify({ observation: 'PWA direct-address transfer confirmed', contract_id: unique.id,
-        transfer_id: transferId, txid: witnessTxid, sender_balance: '90', receiver_balance: '10', total_supply: '100' }))
-    })
-  } finally {
-    for (const context of contexts.reverse()) await context.close().catch(() => {})
-  }
+        transfer = (await view(sender)).transfers.find(item => item.id === prepared.id)
+        return transfer?.status
+      }, poll).toBe('pending_chain')
+      assert.equal(transfer.tx_id, prepared.tx_id)
+      await sender.evaluate(() => window.dispatchEvent(new Event('sat20:wallet-data-updated')))
+      await expect(task.getByText(messages.walletComponents.states_pending_chain, { exact: true })).toBeVisible()
+      await expect(task.getByText(prepared.tx_id, { exact: true })).toBeVisible()
+      await expect(button(task, tr.retryTask)).toHaveCount(0)
+      await mine()
+      await balance(receiver, issued.asset, '1'); await balance(sender, issued.asset, '0')
+    }]
+    for (const [index, run] of cases.entries()) {
+      if (t.selectedCases && !t.selectedCases.includes(requiredPwaRgbCases[index])) continue
+      await t.check(requiredPwaRgbCases[index], run)
+    }
+  } catch (error) { await t.preserveBrowserFailureState?.(); throw error }
+  finally { for (const page of pages) if (!page.isClosed()) await page.context().close() }
 }

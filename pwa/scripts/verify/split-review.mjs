@@ -14,17 +14,19 @@ const body = ast.statements.filter(s => !ts.isImportDeclaration(s)).map(s => pri
 const code = ts.transpileModule(body + '\nglobalThis.api = { form, review, onSubmit, confirmSplit, cancelReview };', { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText
 const en = JSON.parse(readFileSync('locales/en.json', 'utf8'))
 const t = key => key.split('.').reduce((v, k) => v?.[k], en) ?? key
-function fixture({ validation, valid = true, realFields = false } = {}) {
+function fixture({ validation, valid = true, realFields = false, embedded = false, sendError, onRefresh } = {}) {
   const writes = [], disposed = [], notices = [], watchers = [], identityListeners = []
+  const nav = { backs: 0, events: [] }
   let generation = 1, ready = true, refreshes = 0
   const wallet = V.reactive({ address: 'source', walletId: 11, wallet: { name: 'Source wallet' }, rootAccountId: 'root-a', accountIndex: 0, network: 'testnet', btcFeeRate: 2 })
-  const props = V.reactive({ assetName: '::' }), global = V.reactive({ env: 'prd' })
+  const props = V.reactive({ assetName: '::', embedded }), global = V.reactive({ env: 'prd' })
   const context = {
     ref: V.ref, reactive: V.reactive, computed: V.computed,
     watch: (...args) => { const stop = V.watch(...args); watchers.push(stop); return stop }, onBeforeUnmount: fn => disposed.push(fn),
-    useI18n: () => ({ t }), useRoute: () => ({}), useRouter: () => ({ back() {} }), defineProps: () => props,
+    useI18n: () => ({ t }), useRouter: () => ({ back() { nav.backs++ } }), defineProps: () => props,
+    defineEmits: () => event => nav.events.push(event),
     useWalletStore: () => wallet, useGlobalStore: () => global, storeToRefs: V.toRefs,
-    useL1Assets: () => ({ refreshL1Assets: async () => { refreshes++ } }), useToast: () => ({ toast: item => notices.push(item) }),
+    useL1Assets: () => ({ refreshL1Assets: async () => { refreshes++; onRefresh?.() } }), useToast: () => ({ toast: item => notices.push(item) }),
     assertWalletIdentityReady: expected => { if (!ready || expected !== undefined && expected !== generation) throw Error('Stale identity'); return generation },
     subscribeWalletIdentity: fn => { identityListeners.push(fn); return () => identityListeners.splice(identityListeners.indexOf(fn), 1) },
     toTypedSchema: schema => realFields ? realTypedSchema(schema) : schema, z,
@@ -37,14 +39,14 @@ function fixture({ validation, valid = true, realFields = false } = {}) {
     walletManager: {
       getAssetAmount: async () => [undefined, { availableAmt: 10000 }],
       validateBitcoinAddress: async () => validation ? await validation : [undefined, { valid }],
-      batchSendAssets: async (...args) => { writes.push(args); return [undefined, { txId: 'split-tx' }] },
+      batchSendAssets: async (...args) => { writes.push(args); return sendError ? [sendError] : [undefined, { txId: 'split-tx' }] },
     },
-    console: { log() {}, error() {} }, setTimeout() {},
+    console: { log() {}, error() {} },
   }
   vm.runInNewContext(code, context)
   const api = context.api
   for (const [key, value] of Object.entries({ amt: '1000', n: 2, destAddr: 'destination' })) api.form.setFieldValue(key, value)
-  return { api, wallet, global, props, writes, notices, get refreshes() { return refreshes },
+  return { api, wallet, global, props, writes, notices, nav, get refreshes() { return refreshes },
     transition() { generation++; ready = false; identityListeners.slice().forEach(fn => fn({ generation, phase: 'QUIESCING' })) },
     dispose() { disposed.forEach(fn => fn()); watchers.forEach(fn => fn()) } }
 }
@@ -53,9 +55,22 @@ assert.equal(f.writes.length, 0)
 for (const [key, value] of Object.entries({ amt: '1000', n: 2, total: '2000', destAddr: 'destination', feeRate: 2, network: 'testnet', accountIndex: 0, sourceAddress: 'source' })) assert.equal(f.api.review.value[key], value)
 assert.ok(Object.isFrozen(f.api.review.value))
 f.api.cancelReview(); assert.equal(f.api.review.value, null); assert.equal(f.writes.length, 0)
+assert.deepEqual(f.nav, { backs: 0, events: [] })
 await f.api.onSubmit(); await Promise.all([f.api.confirmSplit(), f.api.confirmSplit()])
 assert.deepEqual(f.writes, [['destination', '::', '1000', 2, 2]])
+assert.deepEqual(f.nav, { backs: 1, events: [] })
 assert.equal(f.refreshes, 1); assert.equal(f.api.review.value, null); f.dispose()
+const nested = fixture({ embedded: true }); await nested.api.onSubmit(); nested.api.cancelReview()
+assert.deepEqual(nested.nav, { backs: 0, events: [] }); assert.equal(nested.writes.length, 0)
+await nested.api.onSubmit(); await Promise.all([nested.api.confirmSplit(), nested.api.confirmSplit()])
+assert.deepEqual(nested.nav, { backs: 0, events: ['completed'] }); assert.equal(nested.writes.length, 1); nested.dispose()
+for (const embedded of [false, true]) {
+  const failed = fixture({ embedded, sendError: Error('send rejected') }); await failed.api.onSubmit(); await failed.api.confirmSplit()
+  assert.deepEqual(failed.nav, { backs: 0, events: [] }); assert.equal(failed.writes.length, 1)
+  assert.equal(failed.notices.at(-1).description, 'send rejected'); assert.ok(failed.api.review.value); failed.dispose()
+  const stale = fixture({ embedded, onRefresh: () => stale.dispose() }); await stale.api.onSubmit(); await stale.api.confirmSplit()
+  assert.deepEqual(stale.nav, { backs: 0, events: [] }); assert.equal(stale.refreshes, 1)
+}
 for (const change of [f => { f.api.form.values.amt = '1001' }, f => { f.api.form.values.n = 3 }, f => { f.api.form.values.destAddr = 'other' }, f => { f.wallet.walletId = 22 }, f => { f.wallet.accountIndex++ }, f => { f.wallet.network = 'mainnet' }, f => { f.wallet.btcFeeRate++ }, f => { f.global.env = 'test' }, f => f.transition()]) {
   const f = fixture(); await f.api.onSubmit(); change(f); assert.equal(f.api.review.value, null)
   await f.api.confirmSplit(); assert.equal(f.writes.length, 0); f.dispose()

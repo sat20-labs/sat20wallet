@@ -56,10 +56,10 @@ func (protocol rgb11STPProtocol) confirmedFundingInputs(p *Manager, evidence rgb
 	}
 	last := pkg.Steps[len(pkg.Steps)-1]
 	if stored.ChannelId != last.Context.ChannelID || !bytes.Equal(inventory.LastPackage, raw) ||
-		!slices.ContainsFunc(stored.NativeParents, func(parent *wire.MsgTx) bool { return sameRGB11UnsignedTx(parent, tx) }) {
+		!slices.ContainsFunc(stored.FundingParents, func(parent *wire.MsgTx) bool { return sameRGB11UnsignedTx(parent, tx) }) {
 		return nil, ErrRGB11AssetPreservation
 	}
-	chains, err := p.newNativeSettlementChainsWithEvidence(context.Background(), evidence)
+	chains, err := p.newSettlementChainsWithEvidence(context.Background(), evidence)
 	if err != nil {
 		return nil, err
 	}
@@ -109,6 +109,12 @@ func (protocol rgb11STPProtocol) ImportChannelSettlement(p *Manager, tx *wire.Ms
 	// channel inventory has already consumed its outputs. Current inventory
 	// authorizes candidate signing, while this import separately requires the
 	// complete observed history and exact current ownership of each terminal.
+	// For a mined splice the local funding parent identifies the spender even
+	// when L1 has no historical spend index. confirmedFundingInputs binds the
+	// exact package and parent to the signed transaction on the active chain.
+	if protocol.prepared == nil {
+		protocol.prepared = &channel.ChannelInDB
+	}
 	if _, err := protocol.VerifyChannelProof(p, nil, tx, raw, STPOpForceClose); err != nil {
 		return err
 	}
@@ -160,7 +166,7 @@ func (p *Manager) stpRGB11SettlementOwner(channelID string) (*Channel, common.Wa
 			return channel, account.Wallet, nil
 		}
 	}
-	return nil, nil, fmt.Errorf("native settlement has no matching local wallet")
+	return nil, nil, fmt.Errorf("RGB11 settlement has no matching local wallet")
 }
 
 func (p *Manager) loadRGB11SettlementChannel(channelID string) (*ChannelInDB, error) {
@@ -177,7 +183,7 @@ func (p *Manager) confirmedRGB11ParentSpend(evidence rgb11wallet.BitcoinEvidence
 	if err != nil {
 		return false, err
 	}
-	for _, parent := range stored.NativeParents {
+	for _, parent := range stored.FundingParents {
 		if parent == nil || !slices.ContainsFunc(parent.TxIn, func(input *wire.TxIn) bool {
 			return input != nil && input.PreviousOutPoint == point
 		}) {
@@ -194,7 +200,7 @@ func (p *Manager) confirmedRGB11ParentSpend(evidence rgb11wallet.BitcoinEvidence
 // established independently for each final output, so an already spent sibling
 // neither breaks import nor resurrects an ancestor as a spendable balance.
 func (p *rgb11Manager) importObservedRGB11ChannelTransfer(ctx context.Context, tx *wire.MsgTx, pkg *rgb11wallet.ChannelPackage) (*RGB11ImportResult, error) {
-	return retryNativeProjection(ctx, func() (*RGB11ImportResult, error) {
+	return retryRGB11Projection(ctx, func() (*RGB11ImportResult, error) {
 		return p.importObservedRGB11ChannelTransferAttempt(ctx, tx, pkg)
 	})
 }
@@ -216,10 +222,10 @@ func (p *rgb11Manager) importObservedRGB11ChannelTransferAttempt(ctx context.Con
 		}
 		reveals = append(reveals, seal)
 	}
-	validator := rgb11wallet.NewNativeConsensusValidatorWithReveals(reveals...)
+	validator := rgb11wallet.NewRGB11ValidatorWithReveals(reveals...)
 	history, err := validator.ValidateHistoricalConsignmentReport(ctx, material, p.evidence)
 	if err != nil || history == nil || history.MaterialReceipt == nil {
-		return nil, fmt.Errorf("validate native settlement history: %w", errRGB11ProjectionEvidence(err))
+		return nil, fmt.Errorf("validate RGB11 settlement history: %w", errRGB11ProjectionEvidence(err))
 	}
 	container, err := coreconsignment.Decode(material)
 	if err != nil {
@@ -292,7 +298,7 @@ func (p *rgb11Manager) importObservedRGB11ChannelTransferAttempt(ctx context.Con
 		seen[allocation.OutPoint] = true
 		spend, err := p.evidence.GetOutspend(allocation.OutPoint)
 		if err != nil || spend == nil {
-			return nil, fmt.Errorf("native settlement outspend unavailable: %w", errRGB11ProjectionEvidence(err))
+			return nil, fmt.Errorf("RGB11 settlement outspend unavailable: %w", errRGB11ProjectionEvidence(err))
 		}
 		if spend.Spent {
 			observed := rgb11KnownObservedChannelSpend(p.evidence, allocation.OutPoint, spend.SpendingTx)
@@ -305,12 +311,12 @@ func (p *rgb11Manager) importObservedRGB11ChannelTransferAttempt(ctx context.Con
 				}
 			}
 			if !observed {
-				return nil, fmt.Errorf("native settlement has no exact observed spender")
+				return nil, fmt.Errorf("RGB11 settlement has no exact observed spender")
 			}
 			continue
 		}
 		if spend.SpendingTx != "" {
-			return nil, fmt.Errorf("contradictory native settlement outspend")
+			return nil, fmt.Errorf("contradictory RGB11 settlement outspend")
 		}
 		funding, err := rgb11wallet.ChannelFundingFromStep(last, point.Index, allocation.Amount)
 		if err != nil {
@@ -321,7 +327,7 @@ func (p *rgb11Manager) importObservedRGB11ChannelTransferAttempt(ctx context.Con
 		}
 		utxo, err := p.evidence.GetUTXO(allocation.OutPoint)
 		if err != nil || utxo == nil || utxo.Value != funding.Value || !bytes.Equal(utxo.PkScript, walletScript) {
-			return nil, fmt.Errorf("native settlement current carrier changed")
+			return nil, fmt.Errorf("RGB11 settlement current carrier changed")
 		}
 		binding, err := p.rgb11CarrierBinding(allocation, utxo)
 		if err != nil {
@@ -427,7 +433,7 @@ func (p *rgb11Manager) importObservedRGB11ChannelTransferAttempt(ctx context.Con
 		}
 		outspend, err := p.evidence.GetOutspend(proof.OutPoint)
 		if err != nil || outspend == nil || !outspend.Spent || outspend.SpendingTx != "" && outspend.SpendingTx != expected {
-			return nil, fmt.Errorf("native consumed source is not independently observed")
+			return nil, fmt.Errorf("RGB11 consumed source is not independently observed")
 		}
 		var observed bool
 		if outspend.SpendingTx == "" {
@@ -437,7 +443,7 @@ func (p *rgb11Manager) importObservedRGB11ChannelTransferAttempt(ctx context.Con
 			observed = rgb11KnownObservedChannelSpend(p.evidence, proof.OutPoint, expected)
 		}
 		if !observed {
-			return nil, fmt.Errorf("native consumed source is not independently observed")
+			return nil, fmt.Errorf("RGB11 consumed source is not independently observed")
 		}
 		updates = append(updates, rgb11wallet.SnapshotProofUpdate{OutPoint: proof.OutPoint, AssetName: proof.AssetName,
 			Status: "spending", Confirmations: proof.Confirmations})
@@ -450,23 +456,12 @@ func (p *rgb11Manager) importObservedRGB11ChannelTransferAttempt(ctx context.Con
 	}
 	candidate := *current
 	candidate.ProjectionRecords = projectionRecords
-	changed := !sameNativeProjectionRecords(current.ProjectionRecords, projectionRecords)
-	if owner := p.accountManagementOwner(); changed && owner != nil {
-		scopeID, err := p.rgb11AccountManagedScopeID()
-		if err != nil {
-			return nil, err
-		}
-		if _, err := owner.preflightRGB11TerminalRecovery(scopeID, &candidate); err != nil {
-			return nil, err
-		}
-	}
+	changed := !sameRGB11ProjectionRecords(current.ProjectionRecords, projectionRecords)
 	if changed {
 		if _, err := p.applyRGB11CandidateSnapshot(ctx, current, &candidate); err != nil {
-			return nil, nativeProjectionPublicationError(err)
+			return nil, rgb11ProjectionPublicationError(err)
 		}
-		if err := p.autoBackupRGB11AfterMutation(); err != nil {
-			return nil, err
-		}
+		p.accountManagementOwner().NotifyAccountChanged()
 	}
 	return &RGB11ImportResult{ContractID: container.ContractID, SchemaID: container.SchemaID,
 		AssetName: last.Sources[0].AssetName, Receipt: projectionReceipt, Projected: len(replacements)}, nil

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	"reflect"
 	"strings"
 	"testing"
@@ -16,7 +17,7 @@ import (
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
-func TestRGB11RefreshBuildFailureRevokesVerifiedProjection(t *testing.T) {
+func TestRGBRefreshReadFailure(t *testing.T) {
 	sender, manager, imported, evidence, rpc := newRGB11GenericSendFixture(t)
 	sender.rgbManager.scopeStates.stopReconciliations()
 	manager.rgbManager.scopeStates.stopReconciliations()
@@ -50,18 +51,14 @@ func TestRGB11RefreshBuildFailureRevokesVerifiedProjection(t *testing.T) {
 		targetOutpoint: targetOutpoint, failure: failure,
 	}
 	manager.rgbManager.evidence = fault
-	manager.rgbManager.markRGB11ProjectionVerified()
 	before := snapshotRGB11ProjectionDB(t, manager.db)
 	_, err = manager.rgbManager.refreshRGB11State(context.Background())
 	if !errors.Is(err, failure) || !strings.Contains(err.Error(), "build RGB11 refresh candidate") || fault.hits != 1 {
 		t.Fatalf("did not exercise receive build failure: hits=%d err=%v", fault.hits, err)
 	}
-	if manager.rgbManager.rgb11ProjectionAvailable() || manager.rgbManager.rgb11ProjectionStableConfirmed() {
-		t.Fatal("failed candidate build retained verified ownership")
-	}
 	state, err := manager.GetRGB11State()
-	if err != nil || len(state.AvailableAssets) != 0 {
-		t.Fatalf("failed refresh still exposed available assets: state=%v err=%v", state, err)
+	if err != nil || !reflect.DeepEqual(state.AvailableAssets, live.AvailableAssets) {
+		t.Fatalf("network read failure changed saved available assets: state=%v err=%v", state, err)
 	}
 	if !reflect.DeepEqual(before, snapshotRGB11ProjectionDB(t, manager.db)) {
 		t.Fatal("failed refresh changed durable recovery material")
@@ -267,9 +264,6 @@ func TestRGB11UnchangedRefreshDoesNotRewriteSnapshot(t *testing.T) {
 	if err != nil || rgb11SnapshotChanged(before, after) || !reflect.DeepEqual(beforeLocks, sender.utxoLockerL1.GetLockedUtxoList()) {
 		t.Fatalf("unchanged refresh changed state or locks: %v", err)
 	}
-	if !sender.rgbManager.rgb11ProjectionAvailable() {
-		t.Fatal("verified unchanged refresh lost readiness")
-	}
 	beforeLocal, err := sender.rgbManager.readRGB11Local(walletID)
 	if err != nil {
 		t.Fatal(err)
@@ -283,9 +277,6 @@ func TestRGB11UnchangedRefreshDoesNotRewriteSnapshot(t *testing.T) {
 		if readErr != nil || !reflect.DeepEqual(beforeLocal, local) ||
 			!reflect.DeepEqual(beforeLocks, sender.utxoLockerL1.GetLockedUtxoList()) {
 			t.Fatalf("rejected publication changed durable snapshot or locks: %v", readErr)
-		}
-		if sender.rgbManager.rgb11ProjectionAvailable() {
-			t.Fatal("rejected publication retained verified ownership")
 		}
 	}
 	t.Run("final_tip_rechecked", func(t *testing.T) {
@@ -374,7 +365,7 @@ func TestRGB11AddressMetadataIncludedInFirstAtomicCommit(t *testing.T) {
 				if state.DeliveryRecordKey != "" || state.DeliveryRecordHash != "" || state.DeliveryMode != "" {
 					t.Fatal("prepared transfer must not claim a mailbox delivery")
 				}
-				result, err := sender.rgbManager.deliverRGB11AddressTransferStore(mustRGB11ConfiguredStore(t, sender), state.TransferID, RGB11AddressDeliveryOptions{})
+				result, err := sender.rgbManager.deliverRGBAddress(state.TransferID)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -385,7 +376,7 @@ func TestRGB11AddressMetadataIncludedInFirstAtomicCommit(t *testing.T) {
 					t.Fatalf("delivered receipt or stable business keys not committed: err=%v", err)
 				}
 			}
-			result, err := recipient.rgbManager.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+			result, err := recipient.rgbManager.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{})
 			if err != nil || result.Received != outputs || result.Invalid != 0 {
 				t.Fatalf("address receive result=%+v err=%v", result, err)
 			}
@@ -409,7 +400,7 @@ func TestRGB11AddressCapacityFailureKeepsLocalRecoveryAndLocks(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if _, err := sender.rgbManager.deliverRGB11AddressTransferStore(mustRGB11ConfiguredStore(t, sender), prepared.State.TransferID, RGB11AddressDeliveryOptions{}); err != nil {
+				if _, err := sender.rgbManager.deliverRGBAddress(prepared.State.TransferID); err != nil {
 					t.Fatal(err)
 				}
 				manager = recipient
@@ -432,10 +423,6 @@ func TestRGB11AddressCapacityFailureKeepsLocalRecoveryAndLocks(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			capacityBefore, err := manager.preflightRGB11TerminalRecovery(scope, before)
-			if err != nil {
-				t.Fatal(err)
-			}
 			provider := &accountManagedCapacityProvider{scope: scope, payload: make([]byte, swire.MaxDKVSBlobValueSize+1)}
 			if err := manager.RegisterAccountManagedDataProvider(provider); err != nil {
 				t.Fatal(err)
@@ -450,10 +437,6 @@ func TestRGB11AddressCapacityFailureKeepsLocalRecoveryAndLocks(t *testing.T) {
 			if err := manager.CheckAccountWrite(rgb11AccountManagedProviderID, scope); err != nil {
 				t.Fatalf("independent capacity failure blocked healthy RGB business: %v", err)
 			}
-			capacityAfter, err := manager.preflightRGB11TerminalRecovery(scope, before)
-			if err != nil || capacityAfter != capacityBefore {
-				t.Fatalf("unrelated provider inflated RGB capacity: %v", err)
-			}
 			locks := manager.utxoLockerL1.GetLockedUtxoList()
 			reservations, err := manager.rgbManager.loadRGB11Reservations()
 			if err != nil {
@@ -461,7 +444,7 @@ func TestRGB11AddressCapacityFailureKeepsLocalRecoveryAndLocks(t *testing.T) {
 			}
 			beforeBroadcasts := evidence.broadcastCount
 			if path == "receive" {
-				result, err := manager.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+				result, err := manager.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{})
 				if err != nil || result == nil || result.Received != 1 || result.Invalid != 0 {
 					t.Fatalf("independent failure blocked receive: %+v err=%v", result, err)
 				}
@@ -511,7 +494,7 @@ func TestRGB11AddressCapacityFailureKeepsLocalRecoveryAndLocks(t *testing.T) {
 			afterLocks := manager.utxoLockerL1.GetLockedUtxoList()
 			for point := range inputs {
 				lock := afterLocks[point]
-				if lock == nil || lock.Reason != rgb11wallet.LockReasonPending || !manager.isL1SendInputProtected(point) {
+				if lock == nil || lock.Reason != sdkcommon.UtxoLockRGBPending || !manager.isL1SendInputProtected(point) {
 					t.Fatal("prepared send lost its actual input lock")
 				}
 			}

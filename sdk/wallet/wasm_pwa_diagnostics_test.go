@@ -70,6 +70,7 @@ func TestAccountStorageAuthorizationIsSDKOwnedAndNonFunding(t *testing.T) {
 	sdk := readRepoTextForTest(t, "../../pwa/utils/accountManagement.ts")
 	page := readRepoTextForTest(t, "../../pwa/entrypoints/popup/pages/wallet/settings/account-management/Index.vue")
 	wasm := readRepoTextForTest(t, "../wasm/account_management.go")
+	views := readRepoTextForTest(t, "account_ui_status.go")
 	wallet := readRepoTextForTest(t, "account_pwa.go")
 
 	if strings.Contains(sdk, "pendingStorageAuthorization") {
@@ -78,19 +79,24 @@ func TestAccountStorageAuthorizationIsSDKOwnedAndNonFunding(t *testing.T) {
 	if strings.Contains(sdk, "walletStorage") || strings.Contains(sdk, "localStorage") {
 		t.Fatal("unfinished storage authorization must not be persisted by the PWA SDK")
 	}
-	if !strings.Contains(page, "resumePendingStorageAuthorization()") ||
-		!strings.Contains(page, "accountManagement.ui.reuseAutopay") ||
-		!strings.Contains(page, "accountSDK.reusePaidStorage(") {
-		t.Fatal("account setup page does not expose SDK resume/reuse behavior")
+	if !strings.Contains(page, "(await accountSDK.getAccountView()).storage") ||
+		!strings.Contains(page, "accountSDK.confirmStorage(option)") ||
+		!strings.Contains(page, "accountSDK.cancelStorageSetup()") {
+		t.Fatal("account setup page must resume, confirm and cancel through the SDK")
 	}
 	for _, want := range []string{
-		"PendingAccountStorageAuthorization()",
-		"CancelPendingAccountStorageAuthorization()",
-		"ReusePaidAccountStorage",
+		"p.PendingAccountStorageAuthorization()",
+		"p.CancelPendingAccountStorageAuthorization()",
+		"p.ReusePaidAccountStorage(confirmed.RecordCount)",
 	} {
-		if !strings.Contains(wasm+wallet, want) {
+		if !strings.Contains(views, want) {
 			t.Fatalf("SDK-owned account storage support missing %q", want)
 		}
+	}
+	reuseCall := strings.Index(views, "p.ReusePaidAccountStorage(confirmed.RecordCount)")
+	confirmCall := strings.Index(views, "p.confirmAccountStorage(confirmed.ID, confirmed.RecordCount, &confirmed.TTLBlocks)")
+	if confirmCall <= reuseCall || !strings.Contains(views[reuseCall:confirmCall], "return p.storageView(auth), nil") {
+		t.Fatal("a reusable paid authorization must return before a fresh storage confirmation")
 	}
 	if strings.Contains(wasm, "accountSessions.storage") ||
 		strings.Contains(wasm, "StorageAuthorizationID") {
@@ -112,36 +118,57 @@ func TestAccountStorageAuthorizationIsSDKOwnedAndNonFunding(t *testing.T) {
 
 func TestRGB11DirectLifecycleAuthorityIsSDKOwned(t *testing.T) {
 	tabs := readRepoTextForTest(t, "../../pwa/components/asset/L1AssetsTabs.vue")
-	facade := readRepoTextForTest(t, "../../pwa/utils/rgb11Address.ts")
-	dkvs := readRepoTextForTest(t, "rgb11_dkvs.go")
-	reservations := readRepoTextForTest(t, "rgb11_transfer_reservation.go")
-	broadcast := readRepoTextForTest(t, "rgb11_broadcast.go")
+	dialog := readRepoTextForTest(t, "../../pwa/components/wallet/RGB11SendDialog.vue")
+	store := readRepoTextForTest(t, "../../pwa/store/rgb11.ts")
+	facade := readRepoTextForTest(t, "../../pwa/utils/sat20.ts")
+	requireSteps := func(label, source string, steps ...string) {
+		t.Helper()
+		for _, step := range steps {
+			_, rest, ok := strings.Cut(source, step)
+			if !ok {
+				t.Fatalf("%s: Direct lifecycle step missing or out of order: %q", label, step)
+			}
+			source = rest
+		}
+	}
 
+	pwa := strings.Join([]string{tabs, dialog, store, facade}, "\n")
 	for _, forbidden := range []string{
 		"directAutoTried", "canResumeDirect", "directAttemptKey",
 		"needsDirectResume", "resumeRGB11Task(task, true)", "beforeDispatch",
 	} {
-		if strings.Contains(tabs+facade, forbidden) {
+		if strings.Contains(pwa, forbidden) {
 			t.Fatalf("PWA still owns Direct lifecycle state %q", forbidden)
 		}
 	}
-	for _, want := range []string{
-		"resumeReadyRGB11AddressTransfers()",
-		"p.continueRGB11AddressSend(state.TransferID)",
-		"result, err := p.continueRGB11AddressSend(transferID)",
-		"p.scopeStates.sendFlights.Do(key, func() (any, error)",
-		"pending, batch, err := p.readRGB11AddressBatch(transferID)",
-		"txID, err := p.broadcastRGB11PendingBatch(batch, nil)",
-		"owner.SubscribeDKVSPrefix(mailboxTarget)",
-	} {
-		if !strings.Contains(dkvs, want) {
-			t.Fatalf("SDK Direct recovery path missing %q", want)
-		}
+	requireSteps("task list", tabs, `@click="resumeRGB11Task(task)"`, "resumeTaskId.value = task.id", "walletManager.refreshRGB11State()")
+	requireSteps("view store", store, "const setState = (next: RGBView)", "state.value = next")
+	requireSteps("send dialog", dialog, `v-if="transfer.can_confirm"`, `@click="confirm"`, "const confirm =", "const id = transfer.value.id", "walletManager.confirmRGB11Transfer(id, receipts.value)")
+	// Reopening a saved task reads its SDK view. Only the explicit confirmation may dispatch it.
+	_, onOpen, _ := strings.Cut(dialog, "watch([isOpen, assetKey]")
+	onOpen, _, _ = strings.Cut(onOpen, "\n},")
+	requireSteps("reopened task", onOpen, "if (props.resumeTransferId)", "walletManager.getRGB11View()", "item.id === props.resumeTransferId")
+	if strings.Contains(onOpen, "confirm(") || strings.Count(tabs+store+dialog, ".confirmRGB11Transfer(") != 1 {
+		t.Fatal("the PWA must not confirm a Direct transfer when reopening or refreshing it")
 	}
-	if !strings.Contains(reservations, "State         *rgb11wallet.TransferState") ||
-		!strings.Contains(broadcast, "rgb11StatusBroadcastAttempted") {
-		t.Fatal("Direct durable lifecycle is not anchored in RGB11 reservation/broadcast state")
-	}
+	wasm := readRepoTextForTest(t, "../wasm/rgb_ui.go")
+	view := readRepoTextForTest(t, "rgb_ui.go")
+	requireSteps("refresh facade", facade, "async refreshRGB11State(", "this._handleRequest('refreshRGB11State')")
+	requireSteps("confirm facade", facade, "async confirmRGB11Transfer(", "this._handleRequest('confirmRGB11Transfer'")
+	requireSteps("refresh bridge", wasm, "func refreshRGB11State(", "_mgr.RefreshRGBState(")
+	requireSteps("confirm bridge", wasm, "func confirmRGB11Transfer(", "_mgr.ConfirmRGBTransfer(")
+	requireSteps("SDK refresh", view, "func (p *Manager) RefreshRGBState(", "p.syncRootRGB11AddressMailbox(")
+	requireSteps("SDK confirmation", view, "func (p *Manager) ConfirmRGBTransfer(", "case first.AddressMode:", "p.DeliverAndBroadcastConfiguredRGB11AddressTransfer(first.TransferID)")
+	requireSteps("account mailbox", readRepoTextForTest(t, "account_rgb_messages.go"), "mailboxSubscriptionTarget(id)", "p.SubscribeDKVSPrefix(target)", "p.watchAccountMailbox(wallet)", "store.ListMailboxVerified(id, verify)")
+	requireSteps("SDK Direct recovery", readRepoTextForTest(t, "rgb11_dkvs.go"),
+		"readAccountMessages(p.wallet, verify)", "p.resumeReadyRGB11AddressTransfers()", "p.continueRGB11AddressSend(state.TransferID)",
+		"p.scopeStates.sendFlights.Do(key,", "p.readRGB11AddressBatch(transferID)", "for _, item := range batch", "!rgbDeliveryReady(item)",
+		"p.broadcastRGB11PendingBatch(batch, nil)", "result, err := p.continueRGB11AddressSend(transferID)")
+	requireSteps("Direct delivery", readRepoTextForTest(t, "rgb11_contract_withdrawal.go"), "if isRGBPublicPayout(item)", "item.State.RelayDurability == rgbMailboxCommitted", `item.State.DeliveryAcknowledged && item.State.AckStatus == "accepted"`)
+	requireSteps("reservation", readRepoTextForTest(t, "rgb11_transfer_reservation.go"), "State         *rgb11wallet.TransferState")
+	requireSteps("broadcast", readRepoTextForTest(t, "rgb11_broadcast.go"), "func (p *rgb11Manager) broadcastRGB11PendingBatch(",
+		"pending.State.Status = rgb11StatusBroadcastAttempted", "CompareAndSavePendingTransferStates(intentBaseline, pendingList)",
+		"p.expectedRGB11TransactionStatus(first)", "if !visible && broadcastErr == nil", "p.evidence.Broadcast(first.SignedTx)")
 }
 
 func TestRGB11GenericReservationWASMViewDoesNotExposeInternalJSON(t *testing.T) {

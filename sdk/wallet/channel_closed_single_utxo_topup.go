@@ -153,12 +153,12 @@ func (p *Manager) closedSingleUTXOQuoteChannel(c *closedSingleUTXOTopupContext, 
 		!bytes.Equal(stored.RemoteChanCfg.PaymentKey.SerializeCompressed(), c.peer) || stored.RemoteCommitment == nil || stored.RemoteCommitment.CommitTx == nil {
 		return nil, fmt.Errorf("exact local closed channel and old parent are required; a seed cannot recreate them")
 	}
-	if record, err := p.loadSTPNativeRevocationRecovery(stored); err != nil {
+	if record, err := p.loadSTPRevocationRecovery(stored); err != nil {
 		return nil, err
 	} else if record != nil {
 		return nil, fmt.Errorf("revoked commitment recovery is pending")
 	}
-	if record, err := p.readSTPNativePreparedRecovery(&Channel{ChannelInDB: *stored}); err != nil {
+	if record, err := p.readSTPPreparedRecovery(&Channel{ChannelInDB: *stored}); err != nil {
 		return nil, err
 	} else if record != nil {
 		return nil, fmt.Errorf("prepared commitment recovery is pending")
@@ -406,6 +406,12 @@ func closedSingleUTXOTopupResult(record *closedSingleUTXOTopupRecord) string {
 }
 
 func (p *Manager) ConfirmClosedChannelSingleUTXOTopup(rawQuote string) (string, error) {
+	release, gateErr := p.beginAccountWrite(rgb11AccountManagedProviderID, nil)
+	if gateErr != nil {
+		return "", gateErr
+	}
+	defer release()
+
 	if p == nil {
 		return "", fmt.Errorf("wallet manager is unavailable")
 	}
@@ -593,7 +599,7 @@ func (p *Manager) broadcastClosedSingleUTXOTopup(c *closedSingleUTXOTopupContext
 		inputs = append(inputs, input.PreviousOutPoint.String())
 	}
 	reservationID := fmt.Sprintf("closedchannelrecovery:%d:topup", owner.Id)
-	if err = c.locker.TryReserve(inputs, "closed-channel-topup", reservationID); err != nil {
+	if err = c.locker.TryReserve(inputs, common.UtxoLockClosedTopup, reservationID); err != nil {
 		return "", err
 	}
 	if err = c.l1.TestRawTx_Bitcoin([]string{record.SignedRaw}); err != nil {
@@ -602,9 +608,6 @@ func (p *Manager) broadcastClosedSingleUTXOTopup(c *closedSingleUTXOTopupContext
 	p.channelIdentityMu.RLock()
 	matches := p.closedSingleUTXOIdentityMatches(c) && !p.hasPendingLockWithExpand(q.ChannelID)
 	if matches {
-		if err = p.checkAccountManagedDataImport(); err != nil {
-			matches = false
-		}
 		for _, input := range tx.TxIn {
 			if p.isL1RGBInputProtected(input.PreviousOutPoint.String()) {
 				matches = false
@@ -759,8 +762,8 @@ func (p *Manager) closedSingleUTXOOfflineHint(c *closedSingleUTXOTopupContext, s
 	if err != nil || parent.TxID() != parentID {
 		return "", fmt.Errorf("canonical server closing parent does not match local state")
 	}
-	if nativeForceClose(&ClosingReservation{Channel: &Channel{ChannelInDB: *stored}}) {
-		return "server is offline; local RGB/native recovery is not supported through this withdrawal entry; no BTC was moved", nil
+	if needsWithdrawalFacts(&Channel{ChannelInDB: *stored}) {
+		return "server is offline; local RGB/channel recovery is not supported through this withdrawal entry; no BTC was moved", nil
 	}
 	unavailable := "server is offline; no complete verified local exit package is available; no BTC was moved"
 	txs, err := closedWithdrawalPackage(parent, stored.RemoteCommitment)

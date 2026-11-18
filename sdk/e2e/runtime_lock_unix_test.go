@@ -17,6 +17,12 @@ import (
 
 func TestMain(m *testing.M) {
 	flag.Parse()
+	// Ownership helpers are child test binaries used only to exercise process
+	// cleanup. They must not reacquire the package-wide E2E runtime lock held by
+	// their parent, and they never start or clean SatoshiNet nodes.
+	if isOwnedProcessTestHelper() {
+		os.Exit(m.Run())
+	}
 	// Serialize the real-node workload and inherited node processes, including
 	// builds. Each process owns a fresh runtime root under this lock.
 	if err := flag.Set("test.parallel", "1"); err != nil {
@@ -51,6 +57,18 @@ func TestMain(m *testing.M) {
 	// interrupted test cannot release shared directories while its nodes live.
 	_ = lock.Close()
 	os.Exit(rc)
+}
+
+func isOwnedProcessTestHelper() bool {
+	switch os.Getenv("SAT20_TEST_OWNED_PROCESS_HELPER") {
+	case "owner", "exit23":
+		return true
+	}
+	switch os.Getenv("SAT20_TEST_OWNED_PROCESS_GROUP_HELPER") {
+	case "leader", "member":
+		return true
+	}
+	return false
 }
 
 func TestSatoshiNetRuntimeLockInheritedByNode(t *testing.T) {

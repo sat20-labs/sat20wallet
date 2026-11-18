@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -47,6 +48,10 @@ func TestSDKAccountReviewMultiDevice(t *testing.T) {
 		require.NoError(t, device.SwitchWallet(localSecondary.ID, ""))
 		require.NoError(t, device.SwitchAccount(1))
 		require.Equal(t, uint32(1), device.GetCurrentAccountId())
+		point := strings.Repeat("d", 64) + ":0"
+		owner := wallet.UtxoLockOwner{Origin: "https://app.test", Network: device.GetChain(),
+			WalletFingerprint: localSecondary.Fingerprint, AccountIndex: 1}
+		require.NoError(t, device.GetUtxoLocker().LockUtxoForOwner(point, "app", owner))
 		require.NoError(t, f.manager.DeleteWallet(secondary.ID))
 		require.NoError(t, f.manager.SyncAccountManagementState(context.Background()))
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -54,6 +59,7 @@ func TestSDKAccountReviewMultiDevice(t *testing.T) {
 		require.NoError(t, f.manager.WaitAccountBackup(ctx, "", ""), "confirmed deletion must not wait for physical blob reclamation")
 		require.False(t, f.manager.GetAccountManagementStatus().ManagedDataDirty)
 		require.NoError(t, device.SyncAccountManagementState(context.Background()))
+		require.False(t, device.GetUtxoLocker().IsLocked(point))
 		require.Len(t, device.GetWalletCatalog(), 1)
 		root := accountReviewFind(t, device, rootFingerprint)
 		require.Equal(t, root.ID, device.GetCurrentWalletId())

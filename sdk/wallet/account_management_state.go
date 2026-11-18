@@ -26,6 +26,7 @@ const (
 )
 
 var (
+	ErrAccountRootRequired                = errors.New("account management requires a mnemonic root wallet")
 	ErrAccountManagementSecretConflict    = errors.New("account management secret conflicts with the active profile")
 	ErrAccountManagementWalletUnavailable = errors.New("account management wallet is unavailable")
 	ErrAccountStorageModeDowngrade        = errors.New("paid account storage cannot switch to temporary")
@@ -90,7 +91,7 @@ func (p *Manager) withAccountLocalState(alreadyLocked bool, operation func() err
 		return operation()
 	}
 	p.channelIdentityMu.Lock()
-	release := p.beginRGB11ScopeChange()
+	release := p.beginExclusiveRGB11Operation()
 	defer func() {
 		release()
 		p.channelIdentityMu.Unlock()
@@ -139,23 +140,22 @@ func (p *Manager) bumpAccountGenerationLocked() {
 }
 
 type AccountManagementStatus struct {
-	AccountState        string                `json:"account_state"`
-	WriteAllowed        bool                  `json:"write_allowed"`
-	BackupState         string                `json:"backup_state"`
-	Modules             []AccountModuleStatus `json:"modules,omitempty"`
-	Active              bool                  `json:"active"`
-	RecoveryConfigured  bool                  `json:"recovery_configured"`
-	LocalOnly           bool                  `json:"local_only"`
-	DiscoveryStatus     string                `json:"discovery_status"`
-	ActivationPending   bool                  `json:"activation_pending"`
-	ManagedDataRevision uint64                `json:"managed_data_revision,omitempty"`
-	ManagedDataDirty    bool                  `json:"managed_data_dirty,omitempty"`
-	AccountID           string                `json:"account_id,omitempty"`
-	PackageID           string                `json:"package_id,omitempty"`
-	RecoveryMode        string                `json:"recovery_mode,omitempty"`
-	StorageMode         string                `json:"storage_mode,omitempty"`
-	PublicLocator       string                `json:"public_locator,omitempty"`
-	RootFingerprint     string                `json:"root_fingerprint,omitempty"`
+	AccountState       string                `json:"account_state"`
+	WriteAllowed       bool                  `json:"write_allowed"`
+	BackupState        string                `json:"backup_state"`
+	Modules            []AccountModuleStatus `json:"modules,omitempty"`
+	Active             bool                  `json:"active"`
+	RecoveryConfigured bool                  `json:"recovery_configured"`
+	LocalOnly          bool                  `json:"local_only"`
+	DiscoveryStatus    string                `json:"discovery_status"`
+	ActivationPending  bool                  `json:"activation_pending"`
+	ManagedDataDirty   bool                  `json:"managed_data_dirty,omitempty"`
+	AccountID          string                `json:"account_id,omitempty"`
+	PackageID          string                `json:"package_id,omitempty"`
+	RecoveryMode       string                `json:"recovery_mode,omitempty"`
+	StorageMode        string                `json:"storage_mode,omitempty"`
+	PublicLocator      string                `json:"public_locator,omitempty"`
+	RootFingerprint    string                `json:"root_fingerprint,omitempty"`
 	// RootWalletID is only a process-local wallet handle. The stable root
 	// identity persisted by account management is AccountID (the BIP340
 	// x-only public key); callers must never persist or compare RootWalletID
@@ -194,15 +194,12 @@ type AccountManagementRestoreOptions struct {
 }
 
 type RecoveredAccountManagementState struct {
-	Index               account.ManagedIndex
-	Copies              []AccountKVCopy
-	State               account.ManagedState
-	Seq                 uint64
-	Hash                string
-	Envelope            []byte
-	ManagedData         account.ManagedDataBundle
-	ManagedDataHash     string
-	ManagedDataEnvelope []byte
+	Index    account.ManagedIndex
+	Copies   []AccountKVCopy
+	State    account.ManagedState
+	Seq      uint64
+	Hash     string
+	Envelope []byte
 }
 
 type AccountKVCopy struct {
@@ -216,28 +213,35 @@ func validateRecoveredAccountManagementState(value RecoveredAccountManagementSta
 	return validateAccountCopies(value, secret, locator)
 }
 
+func (p *Manager) accountLocalOnlyLocked(service string) bool {
+	if p.accountProfile == nil && service == "unknown" {
+		root := p.firstWalletLocked()
+		// An empty or non-mnemonic catalog has no managed root to discover.
+		return root == nil || root.Type != WALLET_TYPE_MNEMONIC
+	}
+	return service == "inactive" && (p.accountProfile == nil || !p.accountProfile.RecoveryConfigured)
+}
+
 func (p *Manager) GetAccountManagementStatus() AccountManagementStatus {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
+	service, _ := p.accountServiceStateLocked()
+	localOnly := p.accountLocalOnlyLocked(service)
 	if p.accountProfile == nil {
-		service, _ := p.accountServiceStateLocked()
-		result := AccountManagementStatus{LocalOnly: service == "inactive", DiscoveryStatus: service}
+		result := AccountManagementStatus{LocalOnly: localOnly, DiscoveryStatus: service}
 		p.fillAccountStatus(&result)
 		return result
 	}
-	service, _ := p.accountServiceStateLocked()
 	result := AccountManagementStatus{
 		Active: true, RecoveryConfigured: p.accountProfile.RecoveryConfigured,
-		LocalOnly:           service == "inactive",
-		DiscoveryStatus:     service,
-		ActivationPending:   p.accountProfile.Activation != nil,
-		ManagedDataRevision: p.accountProfile.ManagedDataRevision,
-		ManagedDataDirty:    p.accountProfile.ManagedDataDirty,
-		AccountID:           p.accountProfile.AccountID,
-		PackageID:           p.accountProfile.PackageID, RecoveryMode: string(p.accountProfile.RecoveryMode),
+		LocalOnly:         localOnly,
+		DiscoveryStatus:   service,
+		ActivationPending: p.accountProfile.Activation != nil,
+		AccountID:         p.accountProfile.AccountID,
+		PackageID:         p.accountProfile.PackageID, RecoveryMode: string(p.accountProfile.RecoveryMode),
 		StorageMode: p.accountProfile.StorageMode, PublicLocator: p.accountProfile.PublicLocator,
-		RootFingerprint: p.accountProfile.RootFingerprint, StateSeq: p.accountProfile.StateSeq,
-		PendingChanges: len(p.accountProfile.Pending), LastRehearsalAt: p.accountProfile.LastRehearsalAt,
+		RootFingerprint: p.accountProfile.RootFingerprint,
+		PendingChanges:  len(p.accountProfile.Pending), LastRehearsalAt: p.accountProfile.LastRehearsalAt,
 	}
 	if root, err := p.accountManagementRootWalletLocked(); err == nil {
 		result.RootWalletID = root.Id
@@ -265,8 +269,11 @@ func (p *Manager) GetAccountManagementStatus() AccountManagementStatus {
 
 func (p *Manager) accountManagementCandidateRootLocked() (*WalletInfo, error) {
 	root := p.firstWalletLocked()
-	if root == nil || root.Wallet == nil || root.Type != WALLET_TYPE_MNEMONIC {
-		return nil, fmt.Errorf("the first mnemonic wallet must be unlocked")
+	if root == nil || root.Wallet == nil {
+		return nil, ErrAccountManagementWalletUnavailable
+	}
+	if root.Type != WALLET_TYPE_MNEMONIC {
+		return nil, ErrAccountRootRequired
 	}
 	clone := root.Wallet.Clone()
 	if clone == nil {
@@ -399,6 +406,9 @@ func (p *Manager) prepareInitialAccountManagementLocked(password string, rootInf
 	if rootInfo == nil || rootInfo.Wallet == nil {
 		return nil, nil, ErrAccountManagementWalletUnavailable
 	}
+	if rootInfo.Type != WALLET_TYPE_MNEMONIC {
+		return nil, nil, ErrAccountRootRequired
+	}
 	root := cloneWalletAtAccountZero(rootInfo.Wallet)
 	rootFingerprint := walletFingerprint(root)
 	accountID, err := dkvsAccountID(root)
@@ -414,8 +424,7 @@ func (p *Manager) prepareInitialAccountManagementLocked(password string, rootInf
 		zeroBytes(secret)
 		return nil, nil, err
 	}
-	envelope, err := account.SealManagedState(secret, accountID, state, nil)
-	if err != nil {
+	if err := account.ValidateManagedState(state); err != nil {
 		zeroBytes(secret)
 		return nil, nil, err
 	}
@@ -442,8 +451,6 @@ func (p *Manager) prepareInitialAccountManagementLocked(password string, rootInf
 		// every synchronization. A zero value here means "not resolved yet".
 		RecordTTL:    0,
 		SecretCipher: secretCipher, SecretSalt: secretSalt, DeviceID: deviceID,
-		StateSeq: 0, StateHash: accountStateDigest(envelope),
-		StateEnvelope: envelope, ManagedDataDirty: true, ManagedDataGeneration: 1,
 		RecoveryConfigured: false,
 	}
 	return profile, secret, nil
@@ -617,17 +624,15 @@ func (p *Manager) restoreAccountManagementStateOperation(value RecoveredAccountM
 
 func (p *Manager) finishAccountManagementRestorePostSync() {
 	defer p.scheduleAccountManagedStateSync()
+	defer p.startAccountRuntime(false)
 	// Core wallet/profile/provider recovery is already durable and its crash
-	// marker is closed. Registration and active-mailbox refresh are retryable
+	// marker is closed. Registration refresh is retryable
 	// network maintenance: a transport failure must not turn a completed local
 	// restore into an API failure which cannot safely be retried from an empty DB.
 	if err := p.refreshDKVSRegistrations(); err != nil {
 		Log.Warningf("post-restore DKVS registration refresh failed: %v", err)
 		p.wakeChannelHeartbeat()
 		return
-	}
-	if err := p.importAccountManagedActiveDataForSync(false); err != nil {
-		Log.Warningf("post-restore active account data refresh failed: %v", err)
 	}
 	p.wakeChannelHeartbeat()
 }
@@ -647,7 +652,7 @@ func (p *Manager) requestAccountSync() {
 		return
 	}
 	p.ensureDKVSManager().schedule(accountManagedStateJobID, func(_ *dkvsStore) error {
-		return p.refreshAccountService()
+		return p.refreshAccountService(false)
 	})
 }
 
@@ -657,30 +662,8 @@ func (p *Manager) scheduleAccountManagedStateSync() {
 	}
 	manager := p.ensureDKVSManager()
 	manager.scheduleCoalesced(accountManagedStateJobID, accountManagedBackupQuiet, accountManagedBackupMaximum, func(_ *dkvsStore) error {
-		return p.refreshAccountService()
+		return p.refreshAccountService(false)
 	})
-}
-
-func (p *Manager) queueAccountMutationLocked(mutation accountManagementMutation) error {
-	profile, err := p.prepareAccountMutationLocked(mutation)
-	if err != nil {
-		return err
-	}
-	if profile != nil {
-		encoded, err := EncodeToBytes(profile)
-		if err != nil {
-			return err
-		}
-		if err := p.db.Write(accountManagementProfileKey(), encoded); err != nil {
-			return err
-		}
-		p.accountProfile = profile
-		Log.Debugf("account generation advanced: source=catalog activation_pending=%t data_generation=%d",
-			profile.ManagedEntered && !profile.RecoveryConfigured, profile.ManagedDataGeneration)
-		p.scheduleAccountManagedStateSync()
-	}
-	p.bumpAccountGenerationLocked()
-	return nil
 }
 
 func (p *Manager) prepareAccountMutationLocked(mutation accountManagementMutation) (*accountManagementProfile, error) {
@@ -693,11 +676,6 @@ func (p *Manager) prepareAccountMutationLocked(mutation accountManagementMutatio
 	// Persist an owned overlay before making it visible to background sync.
 	profile := *p.accountProfile
 	profile.Pending = append([]accountManagementMutation(nil), profile.Pending...)
-	profile.ManagedDataDirty = true
-	profile.ManagedDataGeneration++
-	if profile.ManagedDataGeneration == 0 {
-		profile.ManagedDataGeneration = 1
-	}
 	if mutation.ID == "" {
 		id, err := randomAccountMutationID()
 		if err != nil {
@@ -1085,79 +1063,48 @@ func (p *Manager) SyncAccountManagementState(ctx context.Context) error {
 	err := p.runAccountOperation(ctx, func() error {
 		return p.syncAccountModules(ctx)
 	})
-	if err == nil {
-		p.cleanupAccountManagedActiveDataAfterDurable(rgb11AccountManagedProviderID)
-	}
 	return err
-}
-
-func (p *Manager) syncAccountManagementState(ctx context.Context, attempt int,
-	authoritativeRebase bool) error {
-	return p.syncAccountManagementStateMode(ctx, attempt, authoritativeRebase, false)
-}
-
-func (p *Manager) syncAccountManagementStateMode(ctx context.Context, attempt int,
-	authoritativeRebase, applicationLocked bool) (resultErr error) {
-	return p.syncAccountModules(ctx)
 }
 
 // Caller owns p.mutex. Account management alone interprets service state.
 // This local check never refreshes, waits, finalizes an ACK, or requires clean
-// backup state. An active account needs an online verified state/data baseline.
+// backup state. An active account needs its initial verified receive completed
+// and a currently trusted online session for its fixed account entry points.
 func (p *Manager) requireAccountManagedWriteLocked() error {
 	if err := p.accountDBFailure(); err != nil {
 		return err
 	}
-	if err := p.checkAccountManagedDataImport(); err != nil {
+	if err := p.checkAccountRestore("wallets", AccountManagedDataGlobalScope); err != nil {
 		return err
 	}
-	if p.accountProfile == nil || !p.accountProfile.RecoveryConfigured {
-		service, discoveryErr := p.accountServiceStateLocked()
-		if discoveryErr != nil {
-			return discoveryErr
-		}
-		if service == "inactive" {
-			return nil
-		}
+	if p.accountProfile != nil && p.accountProfile.Activation != nil &&
+		(!p.accountProfile.RecoveryConfigured || p.accountProfile.Activation.Initial) {
 		return ErrDKVSPathNotSynced
 	}
-	if p.dkvs == nil {
-		Log.Debugf("account managed write rejected: phase=no_manager")
+	if p.accountProfile == nil || !p.accountProfile.RecoveryConfigured {
+		if service, _ := p.accountServiceStateLocked(); !p.accountLocalOnlyLocked(service) {
+			return ErrRootAccountDiscoveryPending
+		}
+		return nil
+	}
+	if scope := p.accountWriteScopeLocked(); scope == "" || !p.dkvs.scopeReady(scope) {
 		return ErrDKVSPathNotSynced
 	}
 	client, err := p.dkvs.primaryClient()
 	if err != nil {
-		Log.Debugf("account managed write rejected: phase=primary_client")
 		return err
 	}
-	info, err := p.accountManagementRootWalletLocked()
+	root, err := p.accountManagementRootWalletLocked()
 	if err != nil {
 		return err
 	}
-	root := cloneWalletAtAccountZero(info.Wallet)
-	stateKey, err := accountRootWrapperKey(root)
+	wrapperKey, err := accountRootWrapperKey(cloneWalletAtAccountZero(root.Wallet))
 	if err != nil {
 		return err
 	}
-	dataKey, err := account.ManagedIndexKey(p.accountProfile.AccountID)
+	indexKey, err := account.ManagedIndexKey(p.accountProfile.AccountID)
 	if err != nil {
 		return err
 	}
-	if err := p.dkvs.requireOnlineGroup(client, []string{stateKey, dataKey}); err != nil {
-		Log.Debugf("account managed write rejected: phase=online_group manager=%d scope_tag=%s dirty=%t pending=%d generation=%d read_ready=%t write_ready=%t account_ready=%t",
-			p.debugID, accountTraceScope(p.dkvs.sessionKey(client, "account-write:"+p.accountProfile.AccountID)),
-			p.accountProfile.ManagedDataDirty, len(p.accountProfile.Pending), p.accountProfile.ManagedDataGeneration,
-			p.dkvs.scopeReady(p.dkvs.sessionKey(client, "read")), p.dkvs.scopeReady(p.dkvs.sessionKey(client, "write")), p.dkvs.scopeReady(p.accountWriteScopeLocked()))
-		return err
-	}
-	if err := p.requireAccountSyncLocked(client, stateKey, dataKey); err != nil {
-		return err
-	}
-	if err := p.requireAccountManagedBaselineLocked(client); err != nil {
-		Log.Debugf("account managed write rejected: phase=confirmed_baseline dirty=%t pending=%d generation=%d",
-			p.accountProfile.ManagedDataDirty, len(p.accountProfile.Pending),
-			p.accountProfile.ManagedDataGeneration)
-		return err
-	}
-	return nil
+	return p.dkvs.requireOnlineGroup(client, []string{wrapperKey, indexKey})
 }

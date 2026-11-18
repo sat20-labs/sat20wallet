@@ -25,7 +25,7 @@ func (p *Manager) registerObservedRGB11ChannelPoolSources(ctx context.Context, o
 	}
 	bootstrap := p.GetBootstrapNodePaymentPubKey()
 	if bootstrap == nil {
-		return fmt.Errorf("native private settlement has no bootstrap payment key")
+		return fmt.Errorf("RGB11 private settlement has no bootstrap payment key")
 	}
 	_, script, err := GetP2WSHscript(owner.GetPaymentPubKey().SerializeCompressed(), bootstrap.SerializeCompressed())
 	if err != nil {
@@ -54,18 +54,18 @@ func (p *Manager) registerObservedRGB11ChannelPoolSources(ctx context.Context, o
 		}
 		spend, err := evidence.GetOutspend(funding.OutPoint)
 		if err != nil || spend == nil {
-			return fmt.Errorf("native pool settlement outspend unavailable: %w", errRGB11ProjectionEvidence(err))
+			return fmt.Errorf("RGB11 pool settlement outspend unavailable: %w", errRGB11ProjectionEvidence(err))
 		}
 		if spend.Spent {
 			if !rgb11KnownObservedChannelSpend(evidence, funding.OutPoint, spend.SpendingTx) {
-				return fmt.Errorf("native pool settlement has no exact observed spender")
+				return fmt.Errorf("RGB11 pool settlement has no exact observed spender")
 			}
 			continue
 		}
 		if spend.SpendingTx != "" {
-			return fmt.Errorf("contradictory native pool outspend")
+			return fmt.Errorf("contradictory RGB11 pool outspend")
 		}
-		proof, err := funding.NativeProof()
+		proof, err := funding.RGB11Proof()
 		if err != nil {
 			return err
 		}
@@ -79,7 +79,7 @@ func (p *Manager) registerObservedRGB11ChannelPoolSources(ctx context.Context, o
 		sourceOutput.OutPointStr, sourceOutput.OutValue.PkScript = funding.OutPoint, append([]byte(nil), output.PkScript...)
 		sourceOutput.Assets = indexer.TxAssets{{Name: funding.AssetName, Amount: *funding.Amount.Clone(), BindingSat: 0}}
 		var locators []string
-		previous, err := p.loadNativeChannelSource(channelID, funding.OutPoint)
+		previous, err := p.loadRGB11ChannelSource(channelID, funding.OutPoint)
 		if err == nil {
 			locators = append(locators, previous.DescendTxIDs...)
 		} else if !errors.Is(err, indexer.ErrKeyNotFound) {
@@ -95,9 +95,9 @@ func (p *Manager) registerObservedRGB11ChannelPoolSources(ctx context.Context, o
 				seen[id] = true
 			}
 		}
-		source := &NativeChannelSource{Version: 1, ChannelID: channelID, Output: sourceOutput, PublicProof: proof,
+		source := &RGB11ChannelSource{Version: 1, ChannelID: channelID, Output: sourceOutput, PublicProof: proof,
 			DescendTxIDs: locators, PrivateWitness: append([]byte(nil), privateWitness...)}
-		if err := p.registerNativeSettlementSource(ctx, owner, channelID, source, true); err != nil {
+		if err := p.registerRGB11SettlementSource(ctx, owner, channelID, source, true); err != nil {
 			return err
 		}
 	}

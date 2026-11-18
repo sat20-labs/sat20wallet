@@ -162,29 +162,29 @@ func (p *Manager) loadPendingPaymentChannel(resv *PaymentReservation) (*Channel,
 	if err != nil || expectedID != stored.ChannelId {
 		return nil, fmt.Errorf("payment keys do not match channel id")
 	}
-	// Do not run native proof validation here: RGB evidence may require network
+	// Do not run channel proof validation here: RGB evidence may require network
 	// access. Inspect only the local next-generation obligation. A normal,
 	// unrevoked journal does not prevent restoring an ordinary payment.
 	context := &Channel{ChannelInDB: *stored}
-	raw, err := p.db.Read(stpNativeCommitmentKey(context, "local"))
+	raw, err := p.db.Read(stpCommitmentKey(context, "local"))
 	if err == nil {
-		var record stpNativeCommitmentRecord
+		var record stpCommitmentRecord
 		if err := DecodeFromBytes(raw, &record); err != nil {
 			return nil, err
 		}
 		if record.Version != 1 || record.ChannelID != stored.ChannelId ||
 			record.Height != uint64(stored.CommitHeight)+1 || record.Role != "local" {
-			return nil, fmt.Errorf("native payment recovery journal has inconsistent context")
+			return nil, fmt.Errorf("channel payment recovery journal has inconsistent context")
 		}
 		if record.RevokedPrevious {
-			return nil, fmt.Errorf("payment channel has a pending native revocation obligation")
+			return nil, fmt.Errorf("payment channel has a pending channel revocation obligation")
 		}
 	} else if !errors.Is(err, indexer.ErrKeyNotFound) {
 		return nil, err
 	}
-	if _, err := p.db.Read(stpNativePreparedRecoveryKey(context)); err == nil {
+	if _, err := p.db.Read(stpPreparedRecoveryKey(context)); err == nil {
 		// A malformed preparation must also block ordinary READY installation.
-		return nil, fmt.Errorf("payment channel has a pending native prepared recovery")
+		return nil, fmt.Errorf("payment channel has a pending channel prepared recovery")
 	} else if !errors.Is(err, indexer.ErrKeyNotFound) {
 		return nil, err
 	}

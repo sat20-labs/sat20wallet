@@ -183,7 +183,9 @@ func TestBTCLuckyClaimRechecksAfterCosigning(t *testing.T) {
 			var err error
 			p.wallet, _, err = NewInternalWalletWithPrivKey(bytes.Repeat([]byte{41}, 32), GetChainParam())
 			require.NoError(t, err)
-			p.walletInfoMap = map[int64]*WalletInfo{p.wallet.GetId(): {Wallet: p.wallet}}
+			p.walletInfoMap = map[int64]*WalletInfo{p.wallet.GetId(): {
+				WalletInDB: WalletInDB{Id: p.wallet.GetId(), Type: WALLET_TYPE_PRIVKEY, Accounts: 1}, Wallet: p.wallet,
+			}}
 			peerWallet, _, err := NewInternalWalletWithPrivKey(bytes.Repeat([]byte{42}, 32), GetChainParam())
 			require.NoError(t, err)
 			client1 := &luckyAscendRPC{luckyRewardRPC: l1, peer: peerWallet.GetPubKey().SerializeCompressed()}
@@ -231,7 +233,7 @@ func TestBTCLuckyClaimRechecksAfterCosigning(t *testing.T) {
 			if mode == "L1 source spent before signing" {
 				expectedRequests = 0
 			}
-			require.Equal(t, expectedRequests, requests)
+			require.Equal(t, expectedRequests, requests, "claim error: %v", err)
 			if mode == "unchanged" {
 				require.NoError(t, err)
 				require.NotEmpty(t, id)

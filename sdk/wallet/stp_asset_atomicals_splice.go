@@ -58,7 +58,7 @@ func (protocol atomicalsSTPProtocol) SplitOutputs(inputs []*TxOutput, name *Asse
 	var change *TxOutput
 	if totalAmount > requested {
 		// Plain fee inputs have their own change output. Only the remaining
-		// native carrier belongs here; otherwise splice-in would persist a
+		// ARC20 carrier belongs here; otherwise splice-in would persist a
 		// change value containing the entire fee budget rather than vout 1.
 		// The complete transaction may top up this carrier from those fees.
 		changeValue := assetValue - value

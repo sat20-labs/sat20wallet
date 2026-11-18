@@ -200,7 +200,7 @@ export const useWalletStore = defineStore('wallet', () => {
       }
       return rootAccountId.value
     }
-    const status = await accountManagementSDK.status()
+    const status = await accountManagementSDK.getAccountView()
     const managedRoot = status.active && status.account_id
       ? String(status.account_id)
       : ''
@@ -583,6 +583,9 @@ export const useWalletStore = defineStore('wallet', () => {
 		  if (recoveryError || !recovery) {
 			return [recoveryError || new Error('Root account discovery failed'), undefined]
 		  }
+		  if (recovery.status === 'pending') {
+			return [new Error('Root account discovery is unavailable; retry when connected'), undefined]
+		  }
 		  const env = 'prd'
 		  const recoveredRootAccountId = recovery.accountId || mnemonicIdentity.accountId
 		  if (!recoveredRootAccountId) {
@@ -661,8 +664,7 @@ export const useWalletStore = defineStore('wallet', () => {
         if (!runtimeRunning) await getWalletInfo()
         // The SDK keeps syncing while the UI is locked. Reconcile its local
         // catalog before authorizing the displayed identity, including offline.
-        const catalog = await syncWalletCatalog(String(result.walletId))
-        await backfillTrustedRootAccountId(catalog)
+        await syncWalletCatalog(String(result.walletId))
         checkSession()
         await setLocked(false)
         checkSession()

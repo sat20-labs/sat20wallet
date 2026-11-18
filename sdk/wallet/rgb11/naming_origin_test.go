@@ -38,17 +38,22 @@ func namingGenesisFixture(outpoints ...wire.OutPoint) strict_types.Value {
 	items := make([]strict_types.Value, 0, len(outpoints))
 	for _, outpoint := range outpoints {
 		index := uint64(outpoint.Index)
+		blinding, amount := uint64(1), uint64(1)
 		seal := strict_types.Value{Kind: strict_types.ValueStruct, Fields: []strict_types.Field{
 			{Name: "txid", Value: strict_types.Value{Kind: strict_types.ValueBytes, Raw: append([]byte(nil), outpoint.Hash[:]...)}},
 			{Name: "vout", Value: strict_types.Value{Kind: strict_types.ValueNumber, Unsigned: &index}},
+			{Name: "blinding", Value: strict_types.Value{Kind: strict_types.ValueNumber, Unsigned: &blinding}},
 		}}
-		fields := strict_types.Value{Kind: strict_types.ValueStruct, Fields: []strict_types.Field{{Name: "seal", Value: seal}}}
-		items = append(items, strict_types.Value{Kind: strict_types.ValueUnion, Name: "revealed", Inner: &fields})
+		state := strict_types.Value{Kind: strict_types.ValueNumber, Unsigned: &amount}
+		items = append(items, strict_types.Value{Kind: strict_types.ValueStruct, Fields: []strict_types.Field{
+			{Name: "seal", Value: strict_types.Value{Kind: strict_types.ValueUnion, Name: "revealed", Tag: 0, Inner: &seal}},
+			{Name: "state", Value: strict_types.Value{Kind: strict_types.ValueUnion, Name: "bits64", Tag: 8, Inner: &state}},
+		}})
 	}
 	list := strict_types.Value{Kind: strict_types.ValueList, Items: items}
 	assignments := strict_types.Value{Kind: strict_types.ValueMap, Entries: []strict_types.Entry{{
 		Key:   strict_types.Value{Kind: strict_types.ValueNumber, Unsigned: &kind},
-		Value: strict_types.Value{Kind: strict_types.ValueUnion, Name: "fungible", Inner: &list},
+		Value: strict_types.Value{Kind: strict_types.ValueUnion, Name: "fungible", Tag: 1, Inner: &list},
 	}}}
 	return strict_types.Value{Kind: strict_types.ValueStruct, Fields: []strict_types.Field{{Name: "assignments", Value: assignments}}}
 }
@@ -106,7 +111,10 @@ func TestGenesisNamingRequiresAllOriginsAtSameAddress(t *testing.T) {
 
 func TestGenesisNamingRejectsConcealedSealsBeforeNetworkIO(t *testing.T) {
 	genesis := namingGenesisFixture(wire.OutPoint{})
-	genesis.Fields[0].Value.Entries[0].Value.Inner.Items[0] = strict_types.Value{Kind: strict_types.ValueUnion, Name: "confidential"}
+	secret := strict_types.Value{Kind: strict_types.ValueBytes, Raw: bytes.Repeat([]byte{1}, 32)}
+	genesis.Fields[0].Value.Entries[0].Value.Inner.Items[0].Fields[0].Value = strict_types.Value{
+		Kind: strict_types.ValueUnion, Name: "concealed", Tag: 1, Inner: &secret,
+	}
 	evidence := &namingOriginEvidence{}
 	if _, err := ResolveGenesisNamingAddress(context.Background(), genesis, evidence, &chaincfg.MainNetParams); !errors.Is(err, ErrNamingOriginUnavailable) || evidence.rawCalls != 0 || evidence.utxoCalls != 0 {
 		t.Fatalf("concealed origin must not pick an arbitrary address: %v %+v", err, evidence)

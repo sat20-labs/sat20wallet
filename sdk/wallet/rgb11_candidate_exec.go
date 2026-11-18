@@ -20,6 +20,11 @@ const (
 	rgb11RefreshCandidate
 )
 
+// Only refresh may rebuild on a proven extension of the canonical chain.
+type rgb11RefreshContext struct{ context.Context }
+
+var errRGB11TipAdvanced = errors.New("Bitcoin chain advanced during RGB11 refresh")
+
 type rgb11CandidateOp struct {
 	kind            rgb11CandidateKind
 	requestID       string
@@ -57,6 +62,10 @@ func (p *rgb11Manager) runRGB11Candidate(ctx context.Context,
 		return nil, err
 	}
 	scope := p.rgb11ScopeKey()
+	if op.kind == rgb11RefreshCandidate {
+		ctx = rgb11RefreshContext{ctx}
+	}
+	lastRetry := errRGB11StaleLocal
 	for attempt := 0; attempt < 3; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -77,19 +86,10 @@ func (p *rgb11Manager) runRGB11Candidate(ctx context.Context,
 		switch op.kind {
 		case rgb11AcceptCandidate:
 			result.candidate, result.receipt, _, err = p.buildRGB11AcceptedConsignmentCandidateWithID(
-				ctx, current, op.requestID, op.raw, op.expectedTxID, op.expectedVout, op.localTransferID)
+				ctx, current, op.requestID, op.raw, op.expectedTxID, op.expectedVout, op.localTransferID, nil)
 		case rgb11PrepareCandidate:
 			result.candidate, result.receipt, err = p.buildRGB11PreparedReceiveCandidate(
 				ctx, current, op.requestID, op.raw, op.expectedTxID, op.expectedVout, op.localTransferID)
-			if err == nil {
-				if owner := p.accountManagementOwner(); owner != nil {
-					var scopeID string
-					scopeID, err = p.rgb11AccountManagedScopeID()
-					if err == nil {
-						_, err = owner.preflightRGB11TerminalRecovery(scopeID, result.candidate)
-					}
-				}
-			}
 		case rgb11RefreshCandidate:
 			first, err = p.resolveRGB11Local(ctx, current)
 			if err == nil {
@@ -109,7 +109,8 @@ func (p *rgb11Manager) runRGB11Candidate(ctx context.Context,
 		}
 		if err != nil {
 			if op.kind == rgb11RefreshCandidate {
-				if !p.revokeRGB11At(current) {
+				if errors.Is(err, errRGB11TipAdvanced) {
+					lastRetry = err
 					continue
 				}
 				return result, fmt.Errorf("build RGB11 refresh candidate: %w", err)
@@ -125,7 +126,8 @@ func (p *rgb11Manager) runRGB11Candidate(ctx context.Context,
 		} else {
 			result.resolved, err = p.applyRGB11CandidateSnapshot(ctx, current, result.candidate)
 		}
-		if errors.Is(err, errRGB11StaleLocal) {
+		if errors.Is(err, errRGB11StaleLocal) || errors.Is(err, errRGB11TipAdvanced) {
+			lastRetry = err
 			// Neither the result nor evidence/lock plan from this attempt is usable.
 			continue
 		}
@@ -137,5 +139,5 @@ func (p *rgb11Manager) runRGB11Candidate(ctx context.Context,
 		}
 		return result, nil
 	}
-	return nil, fmt.Errorf("RGB11 local candidate changed during three attempts: %w", errRGB11StaleLocal)
+	return nil, fmt.Errorf("RGB11 candidate changed during three attempts: %w", lastRetry)
 }

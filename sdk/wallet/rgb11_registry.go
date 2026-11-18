@@ -16,7 +16,7 @@ import (
 // contract; this client additionally requires an authenticated readback.
 // Ordinary wallet clients have no Core signing key and cannot use this to
 // register arbitrary names or private recovery data.
-func (p *SatsNetDKVSClient) RegisterRGB11SignedContract(record *swire.DKVSRecord) (*rgb11wallet.RGB11Registration, error) {
+func (p *SatsNetDKVSClient) registerRGB11SignedContract(record *swire.DKVSRecord) (*rgb11wallet.RGB11Registration, error) {
 	if record == nil {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
@@ -66,14 +66,14 @@ func (rgb11NetworkRegistryVerifier) CanWriteSystem(key string, pubKey []byte) er
 
 // GetRGB11Registration reads an authenticated public technical record.
 // It does not establish a DID alias or give the submitting wallet issuer rights.
-func (p *SatsNetDKVSClient) GetRGB11Registration(contractID string) (*rgb11wallet.RGB11Registration, error) {
-	return p.GetRGB11RegistrationWithVerifier(contractID, rgb11NetworkRegistryVerifier{})
+func (p *SatsNetDKVSClient) getRGB11Registration(contractID string) (*rgb11wallet.RGB11Registration, error) {
+	return p.getRGB11RegWithVerifier(contractID, rgb11NetworkRegistryVerifier{})
 }
 
 // GetRGB11RegistrationWithVerifier supports explicitly configured registry
 // authorities. The verifier must come from trusted local network configuration,
 // never from the endpoint response. A nil verifier fails closed.
-func (p *SatsNetDKVSClient) GetRGB11RegistrationWithVerifier(contractID string,
+func (p *SatsNetDKVSClient) getRGB11RegWithVerifier(contractID string,
 	verifier dkvsindexer.SystemVerifier) (*rgb11wallet.RGB11Registration, error) {
 	registration, _, err := p.getRGB11ContractWithVerifier(contractID, verifier)
 	return registration, err

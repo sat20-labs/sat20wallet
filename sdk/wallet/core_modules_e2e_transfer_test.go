@@ -14,11 +14,15 @@ import (
 	"time"
 
 	indexer "github.com/sat20-labs/indexer/common"
+	corewallet "github.com/sat20-labs/rgb11/wallet"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
 func coreInvoiceTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 	sender, receiver *Manager, senderMaterial, receiverMaterial *coreRecoveryMaterial) {
+	if !coreProxySafetyE2E(t, chain, sender, receiver) {
+		return
+	}
 	originalSender, originalReceiver := sender, receiver
 	coreTransferDeviceCleanup(t, originalSender, originalReceiver)
 	proxy := &rgb11ProxyTestServer{}
@@ -79,38 +83,64 @@ func coreInvoiceTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain
 	prepared, err := sender.PrepareRGB11Transfer(context.Background(), RGB11SendRequest{
 		Invoice: invoice.Invoice, FeeRate: 2, MinConfirmations: 1,
 	})
-	coreRequire(t, "prepare native invoice transfer", err)
+	coreRequire(t, "prepare RGB11 invoice transfer", err)
 	preparedJSON, err := json.Marshal(prepared)
 	coreRequire(t, "serialize public standard-proxy prepare result", err)
 	coreAssert(t, !bytes.Contains(preparedJSON, []byte(`"signed_psbt"`)),
 		"public CoreModules Prepare result exposed a broadcastable signed PSBT")
 	coreAssert(t, chain.broadcastCount() == before, "prepare unexpectedly broadcast")
 	sender = corePendingCheckpoint(t, "03_prepared_sender", sender, cfg, chain, senderMaterial)
-	// Inject a CoreNode outage before the external proxy delivery. This keeps
-	// the real account CAS and proxy fixture in place while proving that an
-	// unavailable recovery barrier cannot leak the consignment or broadcast.
+	// This is the first external confirmation of an unsigned prepared transfer,
+	// not completion of an already ACKed or broadcast transaction. A real account
+	// outage must reject it without losing the original candidate or reservation.
 	store, err := sender.accountDKVSStore()
-	coreRequire(t, "open sender's real account DKVS client for outage injection", err)
+	coreRequire(t, "open sender's account backup transport", err)
+	beforeDelivery, err := sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
+	coreRequire(t, "read unconfirmed proxy candidate before outage", err)
+	coreAssert(t, beforeDelivery.State.Status == "prepared" && !beforeDelivery.State.DeliveryAcknowledged &&
+		beforeDelivery.State.AckStatus != "accepted" && beforeDelivery.State.AckStatus != "accepted-out-of-band" &&
+		(beforeDelivery.ChannelSend == nil || !beforeDelivery.ChannelSend.Signed) && !rgb11PendingHasWitness(beforeDelivery),
+		"offline first-confirmation fixture was already acknowledged or signed")
 	oldHTTP := store.client.Http
 	store.client.Http = coreOfflineHTTP{HttpClient: oldHTTP}
 	coreAssert(t, sender.SyncAccountManagementState(context.Background()) != nil,
 		"controlled offline transport did not fail a real synchronization")
-	blocked, blockedErr := sender.DeliverAndBroadcastRGB11ProxyTransfer(
+	queued, queueErr := sender.DeliverAndBroadcastRGB11ProxyTransfer(
 		context.Background(), []string{prepared.State.TransferID})
 	store.client.Http = oldHTTP
-	coreAssert(t, blockedErr != nil && blocked == nil,
-		"proxy delivery proceeded without a confirmed account recovery barrier")
-	coreAssert(t, chain.broadcastCount() == before,
-		"CoreNode outage before proxy delivery caused a Bitcoin broadcast")
+	coreAssert(t, errors.Is(queueErr, ErrDKVSPathNotSynced) && queued == nil,
+		"offline account accepted a first proxy confirmation")
+	afterRejected, err := sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
+	coreRequire(t, "read original candidate after rejected offline confirmation", err)
+	coreAssert(t, coreDigest(beforeDelivery) == coreDigest(afterRejected),
+		"offline rejection changed the exact prepared transaction or pending state")
+	coreAssertRGB11Reservation(t, sender, prepared.State.TransferID, true)
 	proxy.mu.Lock()
-	blockedProxyDelivery := proxy.txID != "" || len(proxy.consignment) != 0
+	unpublished := proxy.txID == "" && len(proxy.consignment) == 0 && proxy.ack == nil
 	proxy.mu.Unlock()
-	coreAssert(t, !blockedProxyDelivery,
-		"CoreNode outage before proxy delivery exposed the consignment to the receiver")
+	coreAssert(t, unpublished && chain.broadcastCount() == before,
+		"offline rejection posted a consignment, ACK or Bitcoin transaction")
+	coreReplayManagedOutbox(t, sender)
+	proxy.mu.Lock()
+	proxy.postHTTPStatus = http.StatusBadGateway // store proof, then lose the first response
+	proxy.mu.Unlock()
+	queued, queueErr = sender.DeliverAndBroadcastRGB11ProxyTransfer(
+		context.Background(), []string{prepared.State.TransferID})
+	coreRequire(t, "confirm the same proxy candidate after account recovery", queueErr)
+	coreAssert(t, queued != nil && queued.AwaitingACK && !queued.Broadcast,
+		"independent proxy delivery did not retain its ACK boundary")
+	coreAssert(t, chain.broadcastCount() == before,
+		"proxy delivery without ACK caused a Bitcoin broadcast")
+	proxy.mu.Lock()
+	postedOriginal := proxy.txID == prepared.TxID && len(proxy.consignment) != 0
+	proxy.postHTTPStatus = 0
+	proxy.mu.Unlock()
+	coreAssert(t, postedOriginal, "recovered confirmation did not post the original proof and transaction")
 	preparedPending, err := sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
-	coreRequire(t, "read prepared transfer after rejected offline delivery", err)
-	coreAssert(t, preparedPending.State.Status == "prepared" && preparedPending.State.WitnessTxID == prepared.TxID,
-		"rejected offline delivery discarded or changed the resumable prepared transaction")
+	coreRequire(t, "read pending transfer after recovered account delivery", err)
+	coreAssert(t, preparedPending.State.WitnessTxID == prepared.TxID &&
+		rgb11TransferKeepsInputsLocked(&preparedPending.State),
+		"delivery changed the original transaction or released its inputs")
 
 	coreReplayManagedOutbox(t, sender)
 
@@ -121,9 +151,6 @@ func coreInvoiceTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain
 		coreRequire(t, "balance after invalid payload", err)
 		coreAssert(t, balance.Sign() == 0, "invalid consignment changed ownership")
 	})
-	proxy.mu.Lock()
-	proxy.postHTTPStatus = http.StatusBadGateway // store the consignment, then lose the successful HTTP response
-	proxy.mu.Unlock()
 	delivered, err := sender.DeliverAndBroadcastRGB11ProxyTransfer(
 		context.Background(), []string{prepared.State.TransferID})
 	coreRequire(t, "publish standard-proxy consignment before ACK", err)
@@ -635,19 +662,37 @@ func coreRGBBackupOutage(t *testing.T, manager *Manager, cfg coreE2EConfig, cont
 		frozenSeq := mutations[0].Record.Seq
 		coreAssertManagedRemoteEqual(t, "failed asynchronous RGB backup", remote, coreManagedRemoteRecords(t, manager, cfg))
 		local := coreLocalRGBBundleDigests(t, manager)
-		coreAssert(t, contractID != "" && errors.Is(manager.CheckAccountWrite(rgb11AccountManagedProviderID, scope), ErrDKVSPathNotSynced),
-			"negative control did not establish the actual account write gate failure")
-		rejected, err := manager.CreateRGB11Invoice(RGB11InvoiceRequest{
+		coreRequire(t, "upload failure keeps local RGB writable",
+			manager.CheckAccountWrite(rgb11AccountManagedProviderID, scope))
+		nextInvoice, err := manager.CreateRGB11Invoice(RGB11InvoiceRequest{
 			Mode: "witness", TransportMode: "out-of-band", ContractID: contractID,
 			AmountRaw: "1", WitnessVout: 1, Expiry: time.Now().Add(time.Hour).Unix(),
 		})
-		coreAssert(t, rejected == nil && errors.Is(err, ErrDKVSPathNotSynced),
-			"new business bypassed the actual failed online synchronization")
-		coreAssertMapEqual(t, "rejected new business retained local recovery", local, coreLocalRGBBundleDigests(t, manager))
-		unchanged, err := manager.readAccountLocal(accountID, rgb11AccountManagedProviderID, scope)
-		coreRequire(t, "read module after rejected new business", err)
-		coreAssert(t, unchanged.Generation == pending.Generation,
-			"rejected business advanced the durable module generation")
+		coreRequire(t, "persist new invoice during failed backup", err)
+		coreAssert(t, nextInvoice != nil, "local invoice result is missing during failed backup")
+		changed, err := manager.readAccountLocal(accountID, rgb11AccountManagedProviderID, scope)
+		coreRequire(t, "read next local generation during failed backup", err)
+		coreAssert(t, changed.Generation > pending.Generation && changed.Confirmed == pending.Confirmed,
+			"new business did not persist its independent unconfirmed generation")
+		updated := coreLocalRGBBundleDigests(t, manager)
+		coreAssert(t, coreDigest(updated) != coreDigest(local), "new invoice did not change durable local material")
+		local = updated
+		entries, err = replica.LoadOutbox(store.client.replicaNamespace)
+		coreRequire(t, "read original request after another local edit", err)
+		retained := false
+		for _, entry := range entries {
+			if entry.OriginKey != before.Key {
+				continue
+			}
+			coreAssert(t, entry.RequestID == frozen.RequestID, "another local edit replaced the frozen request")
+			stored, err := entry.DecodeMutations()
+			coreRequire(t, "read frozen mutation after local edit", err)
+			coreAssert(t, len(stored) == 1 && dkvsindexer.RecordHash(stored[0].Record).String() == frozenHash,
+				"another local edit changed the original signed record")
+			retained = true
+		}
+		coreAssert(t, retained, "new local edit discarded the unresolved backup request")
+
 		store.client.Http = oldHTTP
 		coreReplayManagedOutbox(t, manager)
 		coreWaitPrivateBackup(t, manager)
@@ -691,7 +736,7 @@ func coreDirectTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 	}, dkvsindexer.RecordVerificationOptions{})
 	coreRequire(t, "prepare Direct transfer", err)
 	sender = corePendingCheckpoint(t, "02_prepared_sender", sender, cfg, chain, senderMaterial)
-	result, err := sender.DeliverAndBroadcastConfiguredRGB11AddressTransfer(prepared.State.TransferID, RGB11AddressDeliveryOptions{})
+	result, err := sender.DeliverAndBroadcastConfiguredRGB11AddressTransfer(prepared.State.TransferID)
 	coreRequire(t, "deliver Direct consignment via real CoreNode", err)
 	coreAssert(t, result.AwaitingACK && !result.Broadcast && chain.broadcastCount() == before, "Direct broadcast crossed receiver ACK boundary")
 	sender = corePendingCheckpoint(t, "03_delivered_waiting_ACK_sender", sender, cfg, chain, senderMaterial)
@@ -703,7 +748,7 @@ func coreDirectTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 	localBeforeDirectACKFault := coreLocalRGBBundleDigests(t, receiver)
 	finishDirectACK := coreRGBBackupOutage(t, receiver, cfg, issued.ContractID)
 	directACK, err := receiver.SyncConfiguredRGB11AddressMailbox(context.Background(),
-		dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+		dkvsindexer.RecordVerificationOptions{})
 	coreRequire(t, "locally accept and ACK Direct consignment", err)
 	coreAssert(t, directACK != nil && directACK.Received == 1 && chain.broadcastCount() == before,
 		"Direct receive did not commit exactly once ahead of Bitcoin broadcast")
@@ -727,12 +772,12 @@ func coreDirectTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 	coreRequire(t, "derive Direct ACK mailbox identity", err)
 	senderRoot, err := sender.accountManagementRootWallet()
 	coreRequire(t, "resolve sender root to read actual Direct ACK", err)
-	senderMailbox, err := sender.freshDirectMessages(senderRoot)
+	senderMailbox, err := sender.readAccountMessages(senderRoot, dkvsindexer.RecordVerificationOptions{})
 	coreRequire(t, "read sender mailbox after local Direct ACK", err)
 	ackCount := 0
 	for _, message := range senderMailbox {
-		if message != nil && message.Payload != nil && message.Payload.Kind == AccountMessageKindRGB11ACK &&
-			message.Payload.ApplicationID == ackMessageID {
+		if message != nil && message.Kind == AccountMessageKindRGB11ACK &&
+			message.ID == ackMessageID {
 			ackCount++
 		}
 	}
@@ -748,7 +793,7 @@ func coreDirectTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 	coreRequire(t, "capture Direct sender scope", err)
 	finishDirectBroadcast := coreRGBBackupOutage(t, sender, cfg, issued.ContractID)
 	_, err = sender.SyncConfiguredRGB11AddressMailbox(context.Background(),
-		dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+		dkvsindexer.RecordVerificationOptions{})
 	coreRequire(t, "consume Direct ACK and broadcast local transaction", err)
 	coreAssert(t, chain.broadcastCount() == before+1, "Direct ACK did not broadcast exactly once")
 	retainedDirectPending, err := senderRootView.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
@@ -761,7 +806,7 @@ func coreDirectTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 	finishDirectBroadcast()
 	coreWaitRGB11MailboxBroadcast(t, chain, sender, prepared, before)
 	sender = corePendingCheckpoint(t, "05_ACK_and_broadcast_sender", sender, cfg, chain, senderMaterial)
-	_, err = receiver.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+	_, err = receiver.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{})
 	coreRequire(t, "receiver discovers broadcast", err)
 	receiver = corePendingCheckpoint(t, "06_broadcast_receiver", receiver, cfg, chain, receiverMaterial)
 
@@ -778,9 +823,9 @@ func coreDirectTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 	coreRequire(t, "received Direct amount", err)
 	coreAssert(t, left.Value.Uint64() == 700 && right.Value.Uint64() == 500, "Direct transfer violated asset conservation")
 	for i := 0; i < 2; i++ {
-		_, err = sender.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+		_, err = sender.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{})
 		coreRequire(t, "replayed sender mailbox", err)
-		_, err = receiver.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+		_, err = receiver.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{})
 		coreRequire(t, "replayed receiver mailbox", err)
 	}
 	coreAssert(t, chain.broadcastCount() == before+1, "mailbox replay rebroadcast the settled transaction")
@@ -789,7 +834,7 @@ func coreDirectTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 	// adopt the confirmed cold writer's complete recovery closure.
 	coreWaitPrivateBackup(t, sender)
 	coreRequire(t, "verify cold sender confirmed closure before original-device sync",
-		sender.verifyCurrentRGB11RecoveryClosure())
+		sender.CheckAccountWrite(rgb11AccountManagedProviderID, coreSelectedRGBScope(sender)))
 	// This cold sender has finished its business. Join it before the original
 	// device comes online, so only one device can consume this root's mailbox.
 	sender.StopDKVSSync()
@@ -808,4 +853,185 @@ func coreDirectTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 		"original-device synchronization rebroadcast the settled Direct transaction")
 	coreWaitPrivateBackup(t, originalSender)
 	coreWaitPrivateBackup(t, receiver)
+}
+
+// Exercise the PWA cancellation entry and standard proxy receive lifecycle on
+// the existing connected accounts. Only the existing Bitcoin evidence boundary
+// is faulted; invoices, consignments, locks, ACKs and signatures remain real.
+func coreProxySafetyE2E(t *testing.T, chain *coreE2EChain, sender, receiver *Manager) bool {
+	controlled, ok := sender.l1IndexerClient.getActiveIndexer().(*coreE2EL1Indexer)
+	coreAssert(t, ok && controlled.chain == chain, "proxy safety fixture is not using its controlled Bitcoin indexer")
+	for _, name := range []string{"proxy_no_ack_cancel", "proxy_expired_cancel", "proxy_expired_nack", "proxy_first_ack_retry", "proxy_prepared_expiry"} {
+		if !t.Run(name, func(t *testing.T) {
+			proxy := &rgb11ProxyTestServer{}
+			server := httptest.NewServer(http.HandlerFunc(proxy.serveHTTP))
+			defer server.Close()
+			endpoint := "rpc://" + strings.TrimPrefix(server.URL, "http://")
+			issued, err := sender.IssueRGB11Asset(context.Background(), RGB11IssueRequest{
+				Schema: "NIA", Ticker: "SAFE", Name: name, Amounts: []uint64{10},
+			})
+			coreRequire(t, "issue proxy safety asset", err)
+			expiry := time.Now().Add(time.Hour).Unix()
+			if strings.HasPrefix(name, "proxy_expired_") || name == "proxy_prepared_expiry" {
+				expiry = time.Now().Add(30 * time.Second).Unix()
+			}
+			invoice, err := receiver.CreateRGB11Invoice(RGB11InvoiceRequest{
+				Mode: "blind", TransportMode: RGB11ProxyTransport,
+				TransportEndpoints: []string{endpoint}, ContractID: issued.ContractID,
+				AmountRaw: "1", Expiry: expiry,
+			})
+			coreRequire(t, "create proxy safety invoice", err)
+			prepared, err := sender.PrepareRGB11Transfer(context.Background(), RGB11SendRequest{
+				Invoice: invoice.Invoice, FeeRate: 2, MinConfirmations: 1,
+			})
+			coreRequire(t, "prepare proxy safety transfer", err)
+			before := chain.broadcastCount()
+			var sent *RGB11ProxyDeliveryResult
+			if name == "proxy_prepared_expiry" {
+				coreRequire(t, "tick before unconfirmed proxy expiry",
+					sender.handleRGB11L1MonitorTick(context.Background()))
+				pending, err := sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
+				coreRequire(t, "read unconfirmed proxy after tick", err)
+				proxy.mu.Lock()
+				unpublished := len(proxy.consignment) == 0
+				proxy.mu.Unlock()
+				coreAssert(t, pending.State.Status == "prepared" && unpublished && chain.broadcastCount() == before,
+					"background tick advanced an unconfirmed proxy transfer")
+			} else {
+				sent, err = sender.DeliverAndBroadcastRGB11ProxyTransfer(context.Background(), []string{prepared.State.TransferID})
+				coreRequire(t, "deliver without recipient ACK", err)
+				coreAssert(t, sent.AwaitingACK && !sent.Broadcast && chain.broadcastCount() == before,
+					"unacknowledged proxy delivery broadcast")
+			}
+			original, err := sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
+			coreRequire(t, "read original proxy reservation", err)
+			coreAssertRGB11Reservation(t, sender, prepared.State.TransferID, true)
+			if name == "proxy_first_ack_retry" {
+				reserve, err := receiver.rgbManager.projectionStore.LoadReceiveReservation(invoice.RequestID)
+				coreRequire(t, "read blind receive reservation before outage", err)
+				fault := errors.New("core-e2e temporary Bitcoin tip outage")
+				chain.mu.Lock()
+				chain.tipError = fault
+				chain.mu.Unlock()
+				// Keep the outage active for the entire receive attempt so a
+				// background refresh cannot consume a one-shot fault first.
+				func() {
+					defer func() {
+						chain.mu.Lock()
+						chain.tipError = nil
+						chain.mu.Unlock()
+					}()
+					_, receiveErr := receiver.ReceiveRGB11ProxyConsignment(context.Background(), invoice.RequestID)
+					coreAssert(t, receiveErr != nil && strings.Contains(receiveErr.Error(), "read RGB11 projection starting tip"),
+						"controlled outage did not reach the first receive candidate publication")
+				}()
+				proxy.mu.Lock()
+				noACK := proxy.ack == nil
+				proxy.mu.Unlock()
+				request, err := receiver.rgbManager.engine.LoadReceive(invoice.RequestID)
+				coreRequire(t, "read invoice after transient evidence failure", err)
+				coreAssert(t, noACK, "temporary indexer failure posted a terminal proxy NACK")
+				coreAssert(t, request.Status == corewallet.ReceivePrepared && request.TransferID == "",
+					"temporary indexer failure permanently changed the unused receive request")
+				current, err := receiver.rgbManager.projectionStore.LoadReceiveReservation(invoice.RequestID)
+				coreRequire(t, "retain blind reservation after transient evidence failure", err)
+				lock := receiver.utxoLockerL1.GetLockedUtxoList()[reserve.OutPoint]
+				coreAssert(t, current.ReservationID == reserve.ReservationID && lock != nil && lock.ReservationID == reserve.ReservationID,
+					"temporary indexer failure released the blind carrier")
+				received, err := receiver.ReceiveRGB11ProxyConsignment(context.Background(), invoice.RequestID)
+				coreRequire(t, "retry the same invoice after indexer recovery", err)
+				coreAssert(t, received.AckPosted && received.AwaitingBroadcast && chain.broadcastCount() == before,
+					"retry failed to retain the ACK-before-broadcast boundary")
+				coreRequire(t, "follow positive ACK on L1 monitor tick",
+					sender.handleRGB11L1MonitorTick(context.Background()))
+				coreAssert(t, chain.broadcastCount() == before+1, "background ACK follow-up did not broadcast once")
+				sent, err = sender.DeliverAndBroadcastRGB11ProxyTransfer(context.Background(), []string{prepared.State.TransferID})
+				coreRequire(t, "broadcast once after successful receive retry", err)
+				coreAssert(t, sent.Broadcast && sent.TxID == prepared.TxID && chain.broadcastCount() == before+1,
+					"receive retry changed or duplicated the transaction")
+				chain.confirm(sent.TxID)
+				_, err = receiver.ReceiveRGB11ProxyConsignment(context.Background(), invoice.RequestID)
+				coreRequire(t, "settle the retried receive", err)
+				_, err = sender.RefreshRGB11State(context.Background())
+				coreRequire(t, "settle sender after retry", err)
+				return
+			}
+			if strings.HasPrefix(name, "proxy_expired_") || name == "proxy_prepared_expiry" {
+				coreAssert(t, time.Now().Unix() < expiry, "proxy fixture expired before delivery")
+				time.Sleep(time.Until(time.Unix(expiry, 0)) + 100*time.Millisecond)
+			}
+			var view *RGBTransferView
+			if name == "proxy_expired_nack" {
+				_, receiveErr := receiver.ReceiveRGB11ProxyConsignment(context.Background(), invoice.RequestID)
+				coreAssert(t, receiveErr != nil, "expired unaccepted invoice was accepted")
+				proxy.mu.Lock()
+				rejected := proxy.ack != nil && !*proxy.ack
+				proxy.mu.Unlock()
+				coreAssert(t, rejected, "expired recipient did not publish its rejection")
+				ack, ackErr := sender.FetchRGB11ProxyAck(context.Background(), prepared.State.TransferID)
+				coreRequire(t, "consume late proxy NACK after invoice expiry", ackErr)
+				coreAssert(t, ack.Available && !ack.Accepted, "late NACK was not consumed")
+				view, err = sender.rgbCurrentTransfer(prepared.State.TransferID)
+				coreRequire(t, "read terminal late-NACK transfer", err)
+			} else if name == "proxy_prepared_expiry" {
+				coreRequire(t, "expire unconfirmed proxy on existing tick",
+					sender.handleRGB11L1MonitorTick(context.Background()))
+				proxy.mu.Lock()
+				unpublished := len(proxy.consignment) == 0
+				proxy.mu.Unlock()
+				coreAssert(t, unpublished, "expiry published an unconfirmed proxy consignment")
+				view, err = sender.rgbCurrentTransfer(prepared.State.TransferID)
+				coreRequire(t, "read expired unconfirmed proxy", err)
+			} else if name == "proxy_expired_cancel" {
+				// Exercise the real monitor scope loop, including its chain
+				// checkpoint. The fixture has never accepted an ACK; a 503
+				// alone is not evidence of that fact.
+				proxy.mu.Lock()
+				noACK := proxy.ack == nil
+				proxy.ackGetHTTPStatus = http.StatusServiceUnavailable
+				proxy.mu.Unlock()
+				coreAssert(t, noACK && original.State.Status == "relayed" &&
+					original.State.AckStatus != "accepted" && original.State.AckStatus != "accepted-out-of-band" &&
+					!original.State.DeliveryAcknowledged && (original.ChannelSend == nil || !original.ChannelSend.Signed) &&
+					!rgb11PendingHasWitness(original),
+					"expired cancellation fixture was already acknowledged or signed")
+				coreRequire(t, "cancel expired unsigned proxy despite ACK service outage",
+					sender.handleRGB11L1MonitorTick(context.Background()))
+				checkpoint, checkpointErr := sender.rgbManager.loadRGB11L1MonitorCheckpoint()
+				coreRequire(t, "retain chain checkpoint despite proxy outage", checkpointErr)
+				coreAssert(t, checkpoint != nil && checkpoint.Tip.Height == 100 && checkpoint.Tip.Hash == strings.Repeat("1", 64),
+					"proxy outage prevented the current chain checkpoint")
+
+				view, err = sender.rgbCurrentTransfer(prepared.State.TransferID)
+				coreRequire(t, "read expired proxy during ACK service outage", err)
+				coreAssert(t, view != nil && (view.Status == "rejected" || view.Status == "cancelled" || view.Status == "expired"),
+					"expired unsigned proxy remained pending while ACK service was unavailable")
+				coreAssertRGB11Reservation(t, sender, prepared.State.TransferID, false, original)
+				coreAssert(t, chain.broadcastCount() == before, "offline expiry cancellation broadcast a transaction")
+				proxy.mu.Lock()
+				proxy.ackGetHTTPStatus = 0
+				proxy.mu.Unlock()
+				coreRequire(t, "repeat expiry tick after ACK service recovery",
+					sender.handleRGB11L1MonitorTick(context.Background()))
+				view, err = sender.rgbCurrentTransfer(prepared.State.TransferID)
+				coreRequire(t, "read timed-out proxy transfer", err)
+			} else {
+				view, err = sender.rgbCurrentTransfer(prepared.State.TransferID)
+				coreRequire(t, "read standard proxy cancel action", err)
+				coreAssert(t, view.CanCancel, "PWA standard proxy cancel action is hidden")
+				view, err = sender.CancelRGBTransfer(context.Background(), prepared.State.TransferID)
+				coreRequire(t, "cancel unacknowledged standard proxy via PWA API", err)
+			}
+			coreAssert(t, view != nil && (view.Status == "rejected" || view.Status == "cancelled" || view.Status == "expired"),
+				"proxy cancellation did not report a terminal state")
+			coreAssertRGB11Reservation(t, sender, prepared.State.TransferID, false, original)
+			_, err = sender.RefreshRGB11State(context.Background())
+			coreRequire(t, "refresh after proxy cancellation", err)
+			coreAssertRGB11Reservation(t, sender, prepared.State.TransferID, false, original)
+			coreAssert(t, chain.broadcastCount() == before, "proxy cancellation broadcast a transaction")
+		}) {
+			return false
+		}
+	}
+	return true
 }

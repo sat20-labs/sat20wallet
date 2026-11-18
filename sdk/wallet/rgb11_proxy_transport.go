@@ -9,11 +9,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	"io"
 	"mime/multipart"
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -211,6 +213,10 @@ func decodeRGB11ProxyResponse[T any](reader io.Reader) (*T, error) {
 	if response.Error != nil {
 		return nil, &rgb11ProxyRPCError{Code: response.Error.Code, Message: response.Error.Message}
 	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil || len(fields["result"]) == 0 {
+		return nil, errors.New("RGB11 proxy response has no result")
+	}
 	return response.Result, nil
 }
 
@@ -320,14 +326,14 @@ func (p *rgb11Manager) publishRGB11ProxyConsignment(ctx context.Context,
 	if rgb11BroadcastCompleteStatus(pending.State.Status) {
 		return endpoints[0].invoice, nil
 	}
-	if pending.State.Expiry <= time.Now().Unix() {
-		return "", ErrRGB11ProxyNoEndpoint
-	}
 	if pending.State.Status == "relayed" || pending.State.Status == rgb11StatusBroadcastAttempted {
 		return endpoints[0].invoice, nil
 	}
+	if pending.State.Expiry <= time.Now().Unix() {
+		return "", ErrRGB11ProxyNoEndpoint
+	}
 	if owner := p.accountManagementOwner(); owner != nil {
-		if err := p.syncRGB11OperationRecovery(ctx); err != nil {
+		if err := p.checkRGB11Write(); err != nil {
 			return "", err
 		}
 	}
@@ -370,9 +376,7 @@ func (p *rgb11Manager) publishRGB11ProxyConsignment(ctx context.Context,
 		if err := p.rgbManager.projectionStore.CompareAndSavePendingTransferStates([]*rgb11wallet.PendingTransfer{baseline}, []*rgb11wallet.PendingTransfer{pending}); err != nil {
 			return "", err
 		}
-		if err := p.autoBackupRGB11AfterMutation(); err != nil {
-			return "", err
-		}
+		p.accountManagementOwner().NotifyAccountChanged()
 		return endpoint.invoice, nil
 	}
 	return "", errors.Join(attempts...)
@@ -381,7 +385,7 @@ func (p *rgb11Manager) publishRGB11ProxyConsignment(ctx context.Context,
 func (p *rgb11Manager) ensureRGB11ProxyPositiveAck(ctx context.Context,
 	endpoint, recipientID string, expected *corewallet.ReceiveRequest) error {
 	if owner := p.accountManagementOwner(); owner != nil {
-		if err := p.syncRGB11OperationRecovery(ctx); err != nil {
+		if err := p.checkRGB11Write(); err != nil {
 			return err
 		}
 	}
@@ -521,7 +525,17 @@ func (p *rgb11Manager) ReceiveRGB11ProxyConsignment(ctx context.Context,
 		raw, err := base64.StdEncoding.DecodeString(remote.Consignment)
 		if err != nil || len(raw) == 0 || len(raw) > rgb11ProxyMaxConsignmentLen {
 			_ = rgb11ProxyPostAck(ctx, endpoint.url, recipientID, false)
-			validationErr := errors.New("RGB11 proxy returned an invalid consignment")
+			validationErr := fmt.Errorf("%w: invalid proxy consignment", ErrRGB11InvoiceMismatch)
+			return nil, p.finishRGB11ProxyTerminal(requestID, raw, validationErr)
+		}
+		if _, err := coreconsignment.Decode(raw); err != nil {
+			validationErr := fmt.Errorf("%w: decode consignment: %v", ErrRGB11InvoiceMismatch, err)
+			rgb11ProxyPostNackIfTerminal(ctx, endpoint.url, recipientID, validationErr)
+			return nil, p.finishRGB11ProxyTerminal(requestID, raw, validationErr)
+		}
+		if invoice.Expiry != nil && time.Now().Unix() >= *invoice.Expiry {
+			validationErr := fmt.Errorf("%w: invoice expired", ErrRGB11InvoiceMismatch)
+			rgb11ProxyPostNackIfTerminal(ctx, endpoint.url, recipientID, validationErr)
 			return nil, p.finishRGB11ProxyTerminal(requestID, raw, validationErr)
 		}
 		preflight, err := p.ValidateRGB11Consignment(ctx, raw)
@@ -550,20 +564,21 @@ func (p *rgb11Manager) ReceiveRGB11ProxyConsignment(ctx context.Context,
 		if !validRGB11TxID(remote.TxID) ||
 			(invoice.Beneficiary.Kind == invoicing.BeneficiaryWitnessVout && remote.Vout == nil) {
 			_ = rgb11ProxyPostAck(ctx, endpoint.url, recipientID, false)
-			validationErr := errors.New("RGB11 proxy metadata does not match the accepted consignment")
+			validationErr := fmt.Errorf("%w: proxy metadata", ErrRGB11InvoiceMismatch)
 			return nil, p.finishRGB11ProxyTerminal(requestID, raw, validationErr)
 		}
 		matched, err := p.matchRGB11ReceiveAllocation(
 			preflight, request, invoice, nil, remote.TxID, remote.Vout,
 		)
-		if err != nil || matched.TxID != remote.TxID ||
+		if err != nil {
+			rgb11ProxyPostNackIfTerminal(ctx, endpoint.url, recipientID, err)
+			return nil, p.finishRGB11ProxyTerminal(requestID, raw, err)
+		}
+		if matched.TxID != remote.TxID ||
 			(invoice.Beneficiary.Kind == invoicing.BeneficiaryWitnessVout &&
 				(matched.Vout == nil || *matched.Vout != *remote.Vout)) {
 			_ = rgb11ProxyPostAck(ctx, endpoint.url, recipientID, false)
-			validationErr := errors.New("RGB11 proxy metadata does not match the accepted consignment")
-			if err != nil {
-				validationErr = fmt.Errorf("%w: %v", validationErr, err)
-			}
+			validationErr := fmt.Errorf("%w: proxy metadata", ErrRGB11InvoiceMismatch)
 			return nil, p.finishRGB11ProxyTerminal(requestID, raw, validationErr)
 		}
 		receipt, err := p.acceptRGB11Consignment(
@@ -588,6 +603,9 @@ func (p *rgb11Manager) ReceiveRGB11ProxyConsignment(ctx context.Context,
 }
 
 func (p *rgb11Manager) finishRGB11ProxyTerminal(requestID string, raw []byte, validationErr error) error {
+	if !rgb11ProxyTerminalError(validationErr) {
+		return validationErr
+	}
 	if p == nil || p.rgbManager == nil || p.rgbManager.engine == nil ||
 		p.rgbManager.projectionStore == nil {
 		return validationErr
@@ -634,7 +652,7 @@ func (p *rgb11Manager) finishRGB11ProxyTerminal(requestID string, raw []byte, va
 			}
 			locked := p.utxoLockerL1.GetLockedUtxoList()
 			for _, outpoint := range state.OutputOutPoints {
-				if lock := locked[outpoint]; lock != nil && lock.Reason == rgb11wallet.LockReasonPending {
+				if lock := locked[outpoint]; lock != nil && lock.Reason == sdkcommon.UtxoLockRGBPending {
 					if err := p.utxoLockerL1.UnlockUtxo(outpoint); err != nil {
 						cleanupErr = errors.Join(cleanupErr, err)
 					}
@@ -650,9 +668,7 @@ func (p *rgb11Manager) finishRGB11ProxyTerminal(requestID string, raw []byte, va
 }
 
 func rgb11ProxyPostNackIfTerminal(ctx context.Context, endpoint, recipientID string, err error) {
-	if errors.Is(err, coreconsignment.ErrWitnessUnresolved) ||
-		errors.Is(err, coreconsignment.ErrOutpointUnknown) ||
-		errors.Is(err, rgb11wallet.ErrWalletScope) {
+	if !rgb11ProxyTerminalError(err) {
 		return
 	}
 	_ = rgb11ProxyPostAck(ctx, endpoint, recipientID, false)
@@ -693,6 +709,26 @@ func rgb11ProxyEnsureAck(ctx context.Context, endpoint, recipientID string, acce
 
 func (p *rgb11Manager) DeliverAndBroadcastRGB11ProxyTransfer(ctx context.Context,
 	transferIDs []string) (*RGB11ProxyDeliveryResult, error) {
+	if p == nil || p.scopeStates == nil {
+		return nil, ErrRGB11Inconsistent
+	}
+	batch, err := p.loadRGB11ProxyPendingBatch(transferIDs)
+	if err != nil {
+		return nil, err
+	}
+	value, err, _ := p.scopeStates.sendFlights.Do(p.rgb11ProxyFlightKey(batch), func() (any, error) {
+		if err := p.checkRGB11OperationSource(); err != nil {
+			return nil, err
+		}
+		return p.deliverRGB11Proxy(ctx, transferIDs)
+	})
+	if value == nil {
+		return nil, err
+	}
+	return value.(*RGB11ProxyDeliveryResult), err
+}
+
+func (p *rgb11Manager) deliverRGB11Proxy(ctx context.Context, transferIDs []string) (*RGB11ProxyDeliveryResult, error) {
 	pendingList, err := p.loadRGB11ProxyPendingBatch(transferIDs)
 	if err != nil {
 		return nil, err
@@ -748,11 +784,22 @@ func (p *rgb11Manager) DeliverAndBroadcastRGB11ProxyTransfer(ctx context.Context
 	for _, transferID := range transferIDs {
 		ack, ackErr := p.FetchRGB11ProxyAck(ctx, transferID)
 		if ackErr != nil {
+			current, loadErr := p.loadRGB11ProxyPendingBatch(transferIDs)
+			if loadErr == nil && rgb11ProxyCanExpire(current, time.Now().Unix()) {
+				if cancelErr := p.cancelRGB11PendingBatch(current, "invoice-expired", nil); cancelErr != nil {
+					return result, errors.Join(ackErr, cancelErr)
+				}
+				result.AwaitingACK, result.Rejected = false, true
+				return result, nil
+			}
+			if loadErr != nil {
+				return result, errors.Join(ackErr, loadErr)
+			}
 			return result, ackErr
 		}
 		if ack == nil || !ack.Available {
 			result.AwaitingACK = true
-			return result, nil
+			continue
 		}
 		if !ack.Accepted {
 			result.Rejected = true
@@ -762,6 +809,15 @@ func (p *rgb11Manager) DeliverAndBroadcastRGB11ProxyTransfer(ctx context.Context
 	pendingList, err = p.loadRGB11ProxyPendingBatch(transferIDs)
 	if err != nil {
 		return result, err
+	}
+	if result.AwaitingACK {
+		if rgb11ProxyCanExpire(pendingList, time.Now().Unix()) {
+			if err := p.cancelRGB11PendingBatch(pendingList, "invoice-expired", nil); err != nil {
+				return result, err
+			}
+			result.AwaitingACK, result.Rejected = false, true
+		}
+		return result, nil
 	}
 	txID, err := p.broadcastRGB11PendingBatch(pendingList, nil)
 	if txID != "" {
@@ -839,6 +895,9 @@ func (p *rgb11Manager) FetchRGB11ProxyAck(ctx context.Context,
 		}
 		return result, nil
 	}
+	if len(attempts) != 0 {
+		return nil, errors.Join(attempts...)
+	}
 	if unavailable != nil {
 		return unavailable, nil
 	}
@@ -882,8 +941,6 @@ func (p *rgb11Manager) loadRGB11ProxyPendingBatch(
 	}
 	for _, pending := range pendingList {
 		if pending.State.TransportMode != RGB11ProxyTransport ||
-			(pending.State.Expiry <= time.Now().Unix() &&
-				!rgb11BroadcastCompleteStatus(pending.State.Status)) ||
 			pending.State.WitnessTxID != first.State.WitnessTxID ||
 			pending.State.BatchID != first.State.BatchID ||
 			!bytes.Equal(pending.SignedTx, first.SignedTx) {
@@ -909,4 +966,147 @@ func rgb11ProxyInvoice(raw string) (*invoicing.Invoice, []rgb11ProxyEndpoint, er
 func validRGB11TxID(value string) bool {
 	decoded, err := hex.DecodeString(value)
 	return err == nil && len(decoded) == 32
+}
+
+// Unknown evidence, storage and scope errors are retryable, never a rejection.
+func rgb11ProxyTerminalError(err error) bool {
+	return errors.Is(err, ErrRGB11InvoiceMismatch) ||
+		errors.Is(err, coreconsignment.ErrContractMismatch) ||
+		errors.Is(err, coreconsignment.ErrSchemaMismatch) ||
+		errors.Is(err, coreconsignment.ErrGenesisSchema) ||
+		errors.Is(err, coreconsignment.ErrWitnessMismatch) ||
+		errors.Is(err, coreconsignment.ErrBundleAnchor) ||
+		errors.Is(err, coreconsignment.ErrSealNotClosed) ||
+		errors.Is(err, coreconsignment.ErrInputMapMismatch)
+}
+
+func (p *rgb11Manager) rgb11ProxyFlightKey(batch []*rgb11wallet.PendingTransfer) string {
+	ids := make([]string, 0, len(batch))
+	for _, item := range batch {
+		ids = append(ids, item.State.TransferID)
+	}
+	sort.Strings(ids)
+	return p.rgb11ScopeKey() + "\x00proxy\x00" + batch[0].State.WitnessTxID + "\x00" + batch[0].State.BatchID + "\x00" + strings.Join(ids, "\x00")
+}
+
+func rgb11ProxyCanExpire(pendingList []*rgb11wallet.PendingTransfer, now int64) bool {
+	if len(pendingList) == 0 {
+		return false
+	}
+	expired := false
+	for _, pending := range pendingList {
+		if pending == nil || pending.State.TransportMode != RGB11ProxyTransport ||
+			pending.State.Expiry <= 0 ||
+			pending.State.Status != "prepared" && pending.State.Status != "relayed" ||
+			pending.State.AckStatus == "accepted" ||
+			pending.State.AckStatus == "accepted-out-of-band" || pending.State.DeliveryAcknowledged ||
+			pending.ChannelSend != nil && pending.ChannelSend.Signed ||
+			rgb11PendingHasWitness(pending) {
+			return false
+		}
+		if pending.State.Expiry <= now {
+			expired = true
+		}
+	}
+	return expired
+}
+
+func (p *rgb11Manager) cancelRGB11Proxy(ctx context.Context, id, reason string) error {
+	pending, err := p.projectionStore.LoadPendingTransfer(id)
+	if err != nil {
+		return err
+	}
+	ids := pending.State.BatchTransferIDs
+	if len(ids) == 0 {
+		ids = []string{id}
+	}
+	batch, err := p.loadRGB11ProxyPendingBatch(ids)
+	if err != nil {
+		return err
+	}
+	if reason == "invoice-expired" &&
+		rgb11ProxyCanExpire(batch, time.Now().Unix()) {
+		return p.cancelRGB11PendingBatch(batch, reason, nil)
+	}
+	for _, item := range batch {
+		if item.State.Status != "prepared" && item.State.Status != "relayed" {
+			return ErrRGB11BatchAckRequired
+		}
+		ack, err := p.FetchRGB11ProxyAck(ctx, item.State.TransferID)
+		if err != nil {
+			return err
+		}
+		if ack.Available {
+			if !ack.Accepted {
+				return nil
+			}
+			return ErrRGB11BatchAckRequired
+		}
+	}
+	batch, err = p.loadRGB11ProxyPendingBatch(ids)
+	if err != nil {
+		return err
+	}
+	return p.cancelRGB11PendingBatch(batch, reason, nil)
+}
+
+// Existing monitor ticks follow only deliveries the user already confirmed.
+func (p *rgb11Manager) followRGB11Proxy(ctx context.Context) error {
+	states, err := p.projectionStore.ListTransfers()
+	if err != nil {
+		return err
+	}
+	seen := make(map[string]bool)
+	var failures []error
+	for _, state := range states {
+		if state == nil || state.AddressMode || state.Direction != "send" || state.TransportMode != RGB11ProxyTransport ||
+			state.Status != "prepared" && state.Status != "relayed" && state.Status != rgb11StatusBroadcastAttempted {
+			continue
+		}
+		ids := state.BatchTransferIDs
+		if len(ids) == 0 {
+			ids = []string{state.TransferID}
+		}
+		batch, err := p.loadRGB11ProxyPendingBatch(ids)
+		if err != nil {
+			failures = append(failures, err)
+			continue
+		}
+		key := p.rgb11ProxyFlightKey(batch)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		expired, cancellable, hasPrepared := false, true, false
+		for _, item := range batch {
+			if item.State.Status == "prepared" {
+				hasPrepared = true
+			}
+			if item.State.Expiry > 0 && item.State.Expiry <= time.Now().Unix() {
+				expired = true
+			}
+			if item.State.Status != "prepared" && item.State.Status != "relayed" {
+				cancellable = false
+			}
+		}
+		if expired && cancellable && hasPrepared {
+			if err := p.cancelRGB11Proxy(ctx, state.TransferID, "invoice-expired"); err != nil {
+				failures = append(failures, err)
+			}
+			continue
+		}
+		ready := true
+		for _, item := range batch {
+			if item.State.Status != "relayed" && item.State.Status != rgb11StatusBroadcastAttempted && !rgb11BroadcastCompleteStatus(item.State.Status) {
+				ready = false
+			}
+		}
+		if !ready {
+			continue
+		}
+		if _, err := p.DeliverAndBroadcastRGB11ProxyTransfer(ctx, ids); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
 }

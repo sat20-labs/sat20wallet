@@ -34,7 +34,7 @@ func recognizesSTPSweepDataCarrier(script []byte) bool {
 }
 
 // VerifySTPChannelInputsWithoutProof rejects locally known client-validated
-// carriers when no native material accompanies their spend. Success does not
+// carriers when no channel material accompanies their spend. Success does not
 // establish that an otherwise undisclosed asset is absent from the transaction.
 func (p *Manager) VerifySTPChannelInputsWithoutProof(tx *wire.MsgTx) error {
 	if p == nil || tx == nil {
@@ -42,7 +42,7 @@ func (p *Manager) VerifySTPChannelInputsWithoutProof(tx *wire.MsgTx) error {
 	}
 	for _, input := range tx.TxIn {
 		if input == nil {
-			return fmt.Errorf("nil STP input for native proof verification")
+			return fmt.Errorf("nil STP input for channel proof verification")
 		}
 	}
 	for _, protocol := range stpAssetProtocols.ordered {
@@ -66,13 +66,13 @@ func STPSweepRGB11Proof(tx *wire.MsgTx, proofs map[string][]byte) (*wwire.RGB11S
 		return nil, err
 	}
 	if tx == nil || len(pkg.Steps) == 0 {
-		return nil, fmt.Errorf("native sweep has no terminal transaction")
+		return nil, fmt.Errorf("channel sweep has no terminal transaction")
 	}
 	last := pkg.Steps[len(pkg.Steps)-1]
 	declared := new(wire.MsgTx)
 	reader := bytes.NewReader(last.Tx)
 	if declared.Deserialize(reader) != nil || reader.Len() != 0 || declared.TxHash() != tx.TxHash() || len(last.Consignment) == 0 {
-		return nil, fmt.Errorf("native sweep proof does not bind the exact transaction")
+		return nil, fmt.Errorf("channel sweep proof does not bind the exact transaction")
 	}
 	proof := &wwire.RGB11SigningProof{Consignment: append([]byte(nil), last.Consignment...)}
 	for _, seal := range last.Reveals {
@@ -104,7 +104,7 @@ func (p *Manager) ValidateSTPServerSweep(tx *wire.MsgTx, destination []byte,
 			return nil, fmt.Errorf("STP sweep changed its recipient or valued commitment")
 		}
 		if proof == nil && txscript.IsUnspendable(output.PkScript) && !recognizesSTPSweepDataCarrier(output.PkScript) {
-			return nil, fmt.Errorf("STP sweep has an unrecognized commitment without a native proof")
+			return nil, fmt.Errorf("STP sweep has an unrecognized commitment without a channel proof")
 		}
 	}
 	var inputs, outputs []*TxOutput
@@ -155,7 +155,7 @@ func (p *Manager) ValidateSTPServerSweep(tx *wire.MsgTx, destination []byte,
 				return err
 			}
 			if asset.Name.Protocol == rgb11wallet.Protocol && proof == nil {
-				return fmt.Errorf("known RGB11 sweep input requires a native proof")
+				return fmt.Errorf("known RGB11 sweep input requires a channel proof")
 			}
 			totals[asset.Name] = totals[asset.Name].Add(&asset.Amount)
 		}

@@ -35,7 +35,7 @@ func legacyFixtureCanonical(v reflect.Value) any {
 		result := make(map[string]any)
 		for i := 0; i < v.NumField(); i++ {
 			field := v.Type().Field(i)
-			if field.PkgPath != "" || legacyFixtureNativeField(v.Type().Name(), field.Name) {
+			if field.PkgPath != "" || legacyFixtureRGB11Field(v.Type().Name(), field.Name) {
 				continue
 			}
 			result[field.Name] = legacyFixtureCanonical(v.Field(i))
@@ -88,10 +88,10 @@ func legacyFixtureCanonical(v reflect.Value) any {
 	}
 }
 
-func legacyFixtureNativeField(typ, field string) bool {
+func legacyFixtureRGB11Field(typ, field string) bool {
 	switch typ {
 	case "ChannelInDB":
-		return field == "AssetFunding" || field == "AssetEntropy" || field == "ClosingAssetProofs" || field == "NativeParents" || field == "NativePrevouts"
+		return field == "AssetFunding" || field == "AssetEntropy" || field == "ClosingAssetProofs" || field == "FundingParents" || field == "FundingPrevouts"
 	case "ChannelCommitmentV1":
 		return field == "AssetProofs" || field == "RecoveryProofs" || field == "RecoveryFeeIndexes" || field == "RGBClientRecovery"
 	case "CommitmentTx":
@@ -99,7 +99,7 @@ func legacyFixtureNativeField(typ, field string) bool {
 	case "ClosingDataInDB":
 		return field == "AssetProofs"
 	case "SplicingDataInDB":
-		return field == "AssetFunding" || field == "AssetProofs" || field == "AssetEntropy" || field == "NativeAnchorProof"
+		return field == "AssetFunding" || field == "AssetProofs" || field == "AssetEntropy" || field == "RGB11AnchorProof"
 	}
 	return false
 }
@@ -107,7 +107,7 @@ func legacyFixtureNativeField(typ, field string) bool {
 // RGBClientRecovery did not exist in the pinned legacy schema. Classifying
 // that additive field must not make a nonnil old-asset value invisible to the
 // semantic oracle: the same explicit isolation guard is used by every legacy
-// channel native-state assertion and the negative control.
+// channel custody-state assertion and the negative control.
 func legacyFixtureRGBRecoveryIsolation(c *ChannelInDB) error {
 	if c == nil {
 		return fmt.Errorf("missing legacy channel")

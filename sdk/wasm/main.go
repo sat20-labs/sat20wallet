@@ -313,7 +313,6 @@ func releaseManager(this js.Value, p []js.Value) any {
 	managerLifecycleMu.Unlock()
 	handler := createUntrackedAsyncJsHandler(func() (interface{}, int, string) {
 		managerAsyncTasks.Wait()
-		clearAccountSessions()
 		managerLifecycleMu.Lock()
 		if _mgr == mgr {
 			_mgr = nil
@@ -1215,7 +1214,7 @@ func channelData(channel *wallet.Channel) (map[string]any, error) {
 	if channel == nil {
 		return nil, fmt.Errorf("channel is nil")
 	}
-	info := wallet.ConvertChannel(channel)
+	info := _mgr.GetChannelInfo(channel)
 	channelJSON, err := json.Marshal(info)
 	if err != nil {
 		return nil, err
@@ -1290,7 +1289,7 @@ func getAllChannels(this js.Value, p []js.Value) any {
 		channels := _mgr.GetAllChannels()
 		result := make([]*wallet.ChannelInfo, 0, len(channels))
 		for _, c := range channels {
-			result = append(result, wallet.ConvertChannel(c))
+			result = append(result, _mgr.GetChannelInfo(c))
 		}
 		channelsJSON, err := json.Marshal(result)
 		if err != nil {
@@ -1363,28 +1362,6 @@ func resumeLockWithExpandFromL1Tx(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, err.Error())
 	}
 	return createJsRet(map[string]interface{}{"reservation_id": id}, 0, "ok")
-}
-
-func allReservations(this js.Value, p []js.Value) any {
-	if _mgr == nil {
-		return createJsRet(nil, -1, "Manager not initialized")
-	}
-	resvs := _mgr.GetAllResv()
-	items := make([]interface{}, 0, len(resvs))
-	for _, resv := range resvs {
-		item := map[string]interface{}{
-			"reservation_id": resv.GetId(),
-			"type":           resv.GetType(),
-			"status":         int(resv.GetStatus()),
-		}
-		if resv.GetType() != wallet.RESV_TYPE_RGB11 {
-			if buf, err := json.Marshal(resv.GetStructInDB()); err == nil {
-				item["json"] = string(buf)
-			}
-		}
-		items = append(items, item)
-	}
-	return createJsRet(map[string]interface{}{"reservations": items}, 0, "ok")
 }
 
 func safetyJSONData(value any) (map[string]any, error) {
@@ -2443,16 +2420,14 @@ func buildBatchSellOrder_SatsNet(this js.Value, p []js.Value) any {
 	}
 	network := p[2].String()
 
-	result, err := wallet.BuildBatchSellOrder_SatsNet(utxoList, address, network)
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-
-	data := map[string]any{
-		"psbt": result,
-	}
-
-	return createJsRet(data, 0, "ok")
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		result, err := _mgr.BuildL2SellOrder(utxoList, address, network)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{"psbt": result}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
 }
 
 func splitBatchSignedPsbt_SatsNet(this js.Value, p []js.Value) any {
@@ -2557,16 +2532,14 @@ func finalizeSellOrder_SatsNet(this js.Value, p []js.Value) any {
 	}
 	networkFee := p[6].Int()
 
-	result, err := wallet.FinalizeSellOrder_SatsNet(psbt, utxoList, address1, address2, network, int64(serviceFee), int64(networkFee))
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-
-	data := map[string]any{
-		"psbt": result,
-	}
-
-	return createJsRet(data, 0, "ok")
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		result, err := _mgr.FinalizeL2SellOrder(psbt, utxoList, address1, address2, network, int64(serviceFee), int64(networkFee))
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{"psbt": result}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
 }
 
 func addInputsToPsbt_SatsNet(this js.Value, p []js.Value) any {
@@ -3301,7 +3274,7 @@ func getAllLockedUtxo(this js.Value, p []js.Value) any {
 
 		result := make(map[string]any)
 		for k, v := range utxoMap {
-			buf, err := json.Marshal(v)
+			buf, err := json.Marshal(wallet.DescribeUtxoLock(v))
 			if err != nil {
 				continue
 			}
@@ -3460,7 +3433,7 @@ func getAllLockedUtxo_SatsNet(this js.Value, p []js.Value) any {
 
 		result := make(map[string]any)
 		for k, v := range utxoMap {
-			buf, err := json.Marshal(v)
+			buf, err := json.Marshal(wallet.DescribeUtxoLock(v))
 			if err != nil {
 				continue
 			}
@@ -5228,177 +5201,6 @@ func validateSatsNetAddress(this js.Value, p []js.Value) interface{} {
 	return createJsRet(map[string]interface{}{"valid": err == nil}, 0, "ok")
 }
 
-func getRGB11State(this js.Value, p []js.Value) any {
-	if _mgr == nil {
-		return createJsRet(nil, -1, "Manager not initialized")
-	}
-	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		state, err := _mgr.GetRGB11State()
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		encoded, err := json.Marshal(state)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		return map[string]any{"state": string(encoded)}, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(jsHandler)
-}
-
-func createRGB11Invoice(this js.Value, p []js.Value) any {
-	if _mgr == nil {
-		return createJsRet(nil, -1, "Manager not initialized")
-	}
-	if len(p) < 1 {
-		return createJsRet(nil, -1, "missing RGB11 invoice request")
-	}
-	var request wallet.RGB11InvoiceRequest
-	if err := json.Unmarshal([]byte(p[0].String()), &request); err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		receive, err := _mgr.CreateRGB11Invoice(request)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		encoded, err := json.Marshal(receive)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		var result map[string]any
-		if err := json.Unmarshal(encoded, &result); err != nil {
-			return nil, -1, err.Error()
-		}
-		return result, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(jsHandler)
-}
-
-func acceptRGB11Consignment(this js.Value, p []js.Value) any {
-	if _mgr == nil {
-		return createJsRet(nil, -1, "Manager not initialized")
-	}
-	if len(p) < 2 {
-		return createJsRet(nil, -1, "missing RGB11 request id or consignment")
-	}
-	requestID, consignment := p[0].String(), p[1].String()
-	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		receipt, err := _mgr.AcceptRGB11Consignment(context.Background(), requestID, []byte(consignment))
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		encoded, err := json.Marshal(receipt)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		return map[string]any{"receipt": string(encoded)}, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(jsHandler)
-}
-
-func prepareRGB11Consignment(this js.Value, p []js.Value) any {
-	if _mgr == nil {
-		return createJsRet(nil, -1, "Manager not initialized")
-	}
-	if len(p) < 2 {
-		return createJsRet(nil, -1, "missing RGB11 request id or consignment")
-	}
-	requestID, consignment := p[0].String(), p[1].String()
-	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		receipt, err := _mgr.PrepareRGB11Consignment(context.Background(), requestID, []byte(consignment))
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		encoded, err := json.Marshal(receipt)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		return map[string]any{"receipt": string(encoded)}, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(jsHandler)
-}
-
-func receiveRGB11ProxyConsignment(this js.Value, p []js.Value) any {
-	if _mgr == nil || len(p) < 1 {
-		return createJsRet(nil, -1, "missing RGB11 request id")
-	}
-	requestID := p[0].String()
-	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		result, err := _mgr.ReceiveRGB11ProxyConsignment(context.Background(), requestID)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		data, err := jsonObject(result)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		return data, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(jsHandler)
-}
-
-func importRGB11Contract(this js.Value, p []js.Value) any {
-	if _mgr == nil || len(p) < 1 {
-		return createJsRet(nil, -1, "missing RGB11 contract consignment")
-	}
-	raw := p[0].String()
-	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		result, err := _mgr.ImportRGB11Contract(context.Background(), []byte(raw))
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		encoded, err := json.Marshal(result)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		return map[string]any{"result": string(encoded)}, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(jsHandler)
-}
-
-func importRGB11ContractFile(this js.Value, p []js.Value) any {
-	if _mgr == nil || len(p) < 1 {
-		return createJsRet(nil, -1, "missing RGB11 contract file")
-	}
-	encoded := p[0].String()
-	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		raw, err := base64.StdEncoding.DecodeString(encoded)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		result, err := _mgr.ImportRGB11ContractFile(context.Background(), raw)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		encoded, err := json.Marshal(result)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		return map[string]any{"result": string(encoded)}, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(jsHandler)
-}
-
-func exportRGB11Contract(this js.Value, p []js.Value) any {
-	if _mgr == nil || len(p) < 1 {
-		return createJsRet(nil, -1, "missing RGB11 contract id")
-	}
-	contractID := p[0].String()
-	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		result, err := _mgr.ExportRGB11Contract(contractID)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		encoded, err := json.Marshal(result)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		return map[string]any{"result": string(encoded)}, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(jsHandler)
-}
-
 func exportPublicRGB11Contract(this js.Value, p []js.Value) any {
 	if _mgr == nil || len(p) < 1 {
 		return createJsRet(nil, -1, "missing RGB11 contract id")
@@ -5433,223 +5235,6 @@ func verifyRGB11PublicContract(this js.Value, p []js.Value) any {
 			return nil, -1, err.Error()
 		}
 		return map[string]any{"result": string(encoded)}, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(jsHandler)
-}
-
-func exportRGB11SettledConsignment(this js.Value, p []js.Value) any {
-	if _mgr == nil || len(p) < 1 {
-		return createJsRet(nil, -1, "missing RGB11 transfer id")
-	}
-	transferID := p[0].String()
-	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		result, err := _mgr.ExportRGB11SettledConsignment(transferID)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		encoded, err := json.Marshal(result)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		return map[string]any{"transfer": string(encoded)}, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(jsHandler)
-}
-
-func issueRGB11Asset(this js.Value, p []js.Value) any {
-	if _mgr == nil || len(p) < 1 {
-		return createJsRet(nil, -1, "missing RGB11 issuance request")
-	}
-	var request wallet.RGB11IssueRequest
-	if err := json.Unmarshal([]byte(p[0].String()), &request); err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		result, err := _mgr.IssueRGB11Asset(context.Background(), request)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		encoded, err := json.Marshal(result)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		return map[string]any{"result": string(encoded)}, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(jsHandler)
-}
-
-func prepareRGB11Transfer(this js.Value, p []js.Value) any {
-	if _mgr == nil || len(p) < 1 {
-		return createJsRet(nil, -1, "missing RGB11 send request")
-	}
-	var request wallet.RGB11SendRequest
-	if err := json.Unmarshal([]byte(p[0].String()), &request); err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		result, err := _mgr.PrepareRGB11Transfer(context.Background(), request)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		encoded, err := json.Marshal(result)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		return map[string]any{"transfer": string(encoded)}, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(jsHandler)
-}
-
-func prepareRGB11Inflation(this js.Value, p []js.Value) any {
-	if _mgr == nil || len(p) < 1 {
-		return createJsRet(nil, -1, "missing RGB11 inflation request")
-	}
-	var request wallet.RGB11InflationRequest
-	if err := json.Unmarshal([]byte(p[0].String()), &request); err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		result, err := _mgr.PrepareRGB11Inflation(context.Background(), request)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		encoded, err := json.Marshal(result)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		return map[string]any{"transfer": string(encoded)}, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(jsHandler)
-}
-
-func resumeRGB11PreparedTransfer(this js.Value, p []js.Value) any {
-	if _mgr == nil {
-		return createJsRet(nil, -1, "Manager not initialized")
-	}
-	if len(p) != 1 || p[0].Type() != js.TypeString || strings.TrimSpace(p[0].String()) == "" {
-		return createJsRet(nil, -1, "expected one RGB11 transfer id")
-	}
-	transferID := strings.TrimSpace(p[0].String())
-	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		result, err := _mgr.ResumeRGB11PreparedTransfer(transferID)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		encoded, err := json.Marshal(result)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		return map[string]any{"transfer": string(encoded)}, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(jsHandler)
-}
-
-func cancelRGB11OutOfBandTransfer(this js.Value, p []js.Value) any {
-	if _mgr == nil || len(p) < 1 {
-		return createJsRet(nil, -1, "missing RGB11 transfer id")
-	}
-	transferID := p[0].String()
-	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		if err := _mgr.CancelRGB11OutOfBandTransfer(transferID); err != nil {
-			return nil, -1, err.Error()
-		}
-		return map[string]any{"cancelled": true}, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(jsHandler)
-}
-
-func cancelExpiredRGB11Transfer(this js.Value, p []js.Value) any {
-	if _mgr == nil || len(p) != 1 || p[0].Type() != js.TypeString || strings.TrimSpace(p[0].String()) == "" {
-		return createJsRet(nil, -1, "expected one RGB11 transfer id")
-	}
-	transferID := strings.TrimSpace(p[0].String())
-	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		if err := _mgr.CancelExpiredRGB11Transfer(transferID); err != nil {
-			return nil, -1, err.Error()
-		}
-		return map[string]any{"cancelled": true}, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(jsHandler)
-}
-
-func broadcastRGB11OutOfBand(this js.Value, p []js.Value) any {
-	if _mgr == nil || len(p) < 1 {
-		return createJsRet(nil, -1, "missing RGB11 out-of-band transfer ids")
-	}
-	var transferIDs []string
-	if err := json.Unmarshal([]byte(p[0].String()), &transferIDs); err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		txID, err := _mgr.BroadcastRGB11OutOfBand(transferIDs)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		return map[string]any{"txid": txID}, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(jsHandler)
-}
-
-func deliverAndBroadcastRGB11ProxyTransfer(this js.Value, p []js.Value) any {
-	if _mgr == nil || len(p) < 1 {
-		return createJsRet(nil, -1, "missing RGB11 proxy transfer ids")
-	}
-	var transferIDs []string
-	if err := json.Unmarshal([]byte(p[0].String()), &transferIDs); err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		result, err := _mgr.DeliverAndBroadcastRGB11ProxyTransfer(context.Background(), transferIDs)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		data, err := jsonObject(result)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		return data, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(jsHandler)
-}
-
-func fetchRGB11ProxyAck(this js.Value, p []js.Value) any {
-	if _mgr == nil || len(p) < 1 {
-		return createJsRet(nil, -1, "missing RGB11 transfer id")
-	}
-	transferID := p[0].String()
-	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		result, err := _mgr.FetchRGB11ProxyAck(context.Background(), transferID)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		data, err := jsonObject(result)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		return data, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(jsHandler)
-}
-
-func refreshRGB11State(this js.Value, p []js.Value) any {
-	if _mgr == nil {
-		return createJsRet(nil, -1, "Manager not initialized")
-	}
-	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		result, err := _mgr.RefreshRGB11State(context.Background())
-		if err != nil && result == nil {
-			return nil, -1, err.Error()
-		}
-		encoded, encodeErr := json.Marshal(result)
-		if encodeErr != nil {
-			return nil, -1, encodeErr.Error()
-		}
-		message := "ok"
-		code := 0
-		if err != nil {
-			message, code = err.Error(), -1
-		}
-		return map[string]any{"result": string(encoded)}, code, message
 	})
 	return js.Global().Get("Promise").New(jsHandler)
 }
@@ -5718,7 +5303,6 @@ func main() {
 	obj.Set("getAllChannels", js.FuncOf(getAllChannels))
 	obj.Set("reservationStatus", js.FuncOf(reservationStatus))
 	obj.Set("resumeLockWithExpandFromL1Tx", js.FuncOf(resumeLockWithExpandFromL1Tx))
-	obj.Set("allReservations", js.FuncOf(allReservations))
 	obj.Set("safetySnapshot", js.FuncOf(safetySnapshot))
 	obj.Set("commitmentExport", js.FuncOf(commitmentExport))
 	obj.Set("punishStatus", js.FuncOf(punishStatus))
@@ -5798,34 +5382,9 @@ func main() {
 	obj.Set("getAssetAmount", js.FuncOf(getAssetAmount))
 	obj.Set("getAssetAmount_SatsNet", js.FuncOf(getAssetAmount_SatsNet))
 	obj.Set("getAssetSummary", js.FuncOf(getAssetSummary))
-	obj.Set("getRGB11State", js.FuncOf(getRGB11State))
-	obj.Set("getRGB11TransferOutboxMetadata", js.FuncOf(getRGB11TransferOutboxMetadata))
-	obj.Set("createRGB11Invoice", js.FuncOf(createRGB11Invoice))
-	obj.Set("prepareRGB11Consignment", js.FuncOf(prepareRGB11Consignment))
-	obj.Set("acceptRGB11Consignment", js.FuncOf(acceptRGB11Consignment))
-	obj.Set("receiveRGB11ProxyConsignment", js.FuncOf(receiveRGB11ProxyConsignment))
-	obj.Set("importRGB11Contract", js.FuncOf(importRGB11Contract))
-	obj.Set("importRGB11ContractFile", js.FuncOf(importRGB11ContractFile))
-	obj.Set("exportRGB11Contract", js.FuncOf(exportRGB11Contract))
+	registerRGBViews(obj)
 	obj.Set("exportPublicRGB11Contract", js.FuncOf(exportPublicRGB11Contract))
 	obj.Set("verifyRGB11PublicContract", js.FuncOf(verifyRGB11PublicContract))
-	obj.Set("exportRGB11SettledConsignment", js.FuncOf(exportRGB11SettledConsignment))
-	obj.Set("issueRGB11Asset", js.FuncOf(issueRGB11Asset))
-	obj.Set("prepareRGB11Transfer", js.FuncOf(prepareRGB11Transfer))
-	obj.Set("prepareRGB11Inflation", js.FuncOf(prepareRGB11Inflation))
-	obj.Set("resumeRGB11PreparedTransfer", js.FuncOf(resumeRGB11PreparedTransfer))
-	obj.Set("cancelRGB11OutOfBandTransfer", js.FuncOf(cancelRGB11OutOfBandTransfer))
-	obj.Set("cancelExpiredRGB11Transfer", js.FuncOf(cancelExpiredRGB11Transfer))
-	obj.Set("broadcastRGB11OutOfBand", js.FuncOf(broadcastRGB11OutOfBand))
-	obj.Set("deliverAndBroadcastRGB11ProxyTransfer", js.FuncOf(deliverAndBroadcastRGB11ProxyTransfer))
-	obj.Set("fetchRGB11ProxyAck", js.FuncOf(fetchRGB11ProxyAck))
-	obj.Set("refreshRGB11State", js.FuncOf(refreshRGB11State))
-	obj.Set("enableRGB11AddressReceive", js.FuncOf(enableRGB11AddressReceive))
-	obj.Set("resolveRGB11AddressEndpoint", js.FuncOf(resolveRGB11AddressEndpoint))
-	obj.Set("prepareRGB11AddressTransfer", js.FuncOf(prepareRGB11AddressTransfer))
-	obj.Set("deliverAndBroadcastRGB11AddressTransfer", js.FuncOf(deliverAndBroadcastRGB11AddressTransfer))
-	obj.Set("syncRGB11AddressMailbox", js.FuncOf(syncRGB11AddressMailbox))
-	obj.Set("getRGB11AddressCarrierWarning", js.FuncOf(getRGB11AddressCarrierWarning))
 
 	obj.Set("queryContract", js.FuncOf(queryContract))
 	obj.Set("buildUnifiedContractContent", js.FuncOf(buildUnifiedContractContent))
@@ -5861,6 +5420,7 @@ func main() {
 	obj.Set("deployTickerBrc20", js.FuncOf(deployTickerBrc20))
 	obj.Set("mintAssetBrc20", js.FuncOf(mintAssetBrc20))
 	obj.Set("inscribeName", js.FuncOf(inscribeName))
+	obj.Set("checkDIDName", js.FuncOf(checkDIDName))
 	obj.Set("getAllRegisteredReferrerName", js.FuncOf(getAllRegisteredReferrerName))
 	obj.Set("registerAsReferrer", js.FuncOf(registerAsReferrer))
 	obj.Set("bindReferrerForServer", js.FuncOf(bindReferrerForServer))

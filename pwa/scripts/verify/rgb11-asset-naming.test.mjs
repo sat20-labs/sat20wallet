@@ -17,68 +17,42 @@ vm.runInNewContext(compiled, { exports, require: () => ({}) }, { filename: 'useR
 const decorate = exports.decorateRGB11AssetItems
 assert.equal(typeof decorate, 'function')
 
-const contractA = 'rgb:Ar4ouaLv-b7f7Dc_-z5EMvtu-FA5KNh1-nlae~jk-8xMBo7E'
-const contractB = 'rgb:k0vsa6zj-CLYfnru-63unuJv-qZ2IVJ5-zlENzlF-MkiJNuw'
-const keyA = '01'.repeat(32)
-const keyB = '02'.repeat(32)
-const item = (ticker) => ({ protocol: 'rgb11', type: 'f', ticker, amount: '42', precision: 0 })
-const info = (key, contract, label, extra = {}) => ({
-  name: { Protocol: 'rgb11', Type: 'f', Ticker: key },
-  asset_key: `rgb11:f:${key}`,
-  contract_id: contract,
-  ticker: label,
-  naming_status: 'local-address',
-  canonical_name: '',
-  verified: false,
-  ...extra,
-})
-
-test('local renames change labels but never selection or transfer keys', () => {
-  const first = decorate([item(keyA)], { ticker_infos: [info(keyA, contractA, 'usdt@123456789012')] })[0]
-  const renamed = decorate([item(keyA)], { ticker_infos: [info(keyA, contractA, 'usdt@alice')] })[0]
-  assert.equal(first.label, 'usdt@123456789012')
-  assert.equal(renamed.label, 'usdt@alice')
-  assert.equal(first.key, renamed.key)
+const keyA = `rgb11:f:${'01'.repeat(32)}`
+const keyB = `rgb11:f:${'02'.repeat(32)}`
+const item = (asset, ticker = '', name = '', metadata = {}) => ({asset, ticker, name, available:'42', pending:'3', precision:0, ...metadata})
+// The SDK owns verification/canonical naming policy. This adapter only decorates
+// its RGBAssetView for display and must never change selection/transfer identity.
+test('renames change display labels but never selection or transfer keys', () => {
+  const first = decorate([item(keyA, 'usdt@alice')])[0]
+  const renamed = decorate([item(keyA, 'usdt@bob')])[0]
+  assert.equal(first.label, 'usdt@alice')
+  assert.equal(renamed.label, 'usdt@bob')
+  for (const field of ['id','key','asset_key','asset']) assert.equal(renamed[field], keyA)
   assert.equal(first.id, renamed.id)
-  assert.equal(renamed.key, `rgb11:f:${keyA}`)
-  assert.equal(renamed.contract_id, contractA)
-  assert.equal(renamed.amount, '42')
-  assert.equal(renamed.canonical_name, '')
-  assert.equal(renamed.verified, false)
-  assert.equal(Object.hasOwn(renamed, 'fingerprint'), false)
+  assert.equal(renamed.amount,'42'); assert.equal(renamed.pending_amount,'3')
+})
+test('identical labels do not merge distinct assets', () => {
+  const result = decorate([item(keyA,'USDT','',{contract_id:'rgb:contract-a'}), item(keyB,'USDT','',{contract_id:'rgb:contract-b'})])
+  assert.equal(result.length,2); assert.equal(result[0].label,result[1].label)
+  assert.notEqual(result[0].key,result[1].key)
+  assert.notEqual(result[0].contract_id,result[1].contract_id)
+})
+test('missing ticker falls back to SDK name then full identity', () => {
+  assert.equal(decorate([item(keyA,'','Asset name')])[0].label,'Asset name')
+  const result = decorate([item(keyA)])[0]
+  assert.equal(result.label,keyA)
+  assert.equal(result.ticker,'01'.repeat(32))
+  assert.equal(result.protocol,'rgb11'); assert.equal(result.type,'f')
 })
 
-test('identical local labels on different contracts do not merge assets', () => {
-  const result = decorate([item(keyA), item(keyB)], { ticker_infos: [
-    info(keyA, contractA, 'usdt@alice'), info(keyB, contractB, 'usdt@alice'),
-  ] })
-  assert.equal(result[0].label, result[1].label)
-  assert.notEqual(result[0].key, result[1].key)
-  assert.notEqual(result[0].contract_id, result[1].contract_id)
-})
-
-test('local metadata alone cannot set the verified badge', () => {
-  const result = decorate([item(keyA)], { ticker_infos: [info(keyA, contractA, 'usdt@alice', { verified: true })] })[0]
-  assert.equal(result.verified, false)
-  assert.equal(result.canonical_name, '')
-})
-
-test('registered names remain separate from the complete contract key', () => {
-  const canonical = 'rgb11:f:usdt_2@alice'
-  const result = decorate([item(keyA)], { ticker_infos: [info(keyA, contractA, 'usdt_2@alice', {
-    canonical_name: canonical, verified: true,
-  })] })[0]
-  assert.equal(result.canonical_name, canonical)
-  assert.equal(result.key, `rgb11:f:${keyA}`)
-  assert.equal(result.contract_id, contractA)
-  assert.equal(result.verified, true)
-})
-
-test('missing origin uses full identity instead of an invented provider', () => {
-  const result = decorate([item(keyA)], { ticker_infos: [info(keyA, contractA, '')] })[0]
-  assert.equal(result.label, contractA)
-  assert.equal(result.canonical_name, '')
-  const missing = decorate([item(keyA)], { ticker_infos: [] })[0]
-  assert.equal(missing.label, `rgb11:f:${keyA}`)
-  assert.equal(missing.verified, false)
+test('SDK local and registered naming metadata is preserved without PWA policy', () => {
+  for (const metadata of [
+    {contract_id:'rgb:contract-a', canonical_name:'', verified:false},
+    {contract_id:'rgb:contract-a', canonical_name:'rgb11:f:usdt@alice', verified:true},
+  ]) {
+    const result = decorate([item(keyA,'USDT','',metadata)])[0]
+    for (const field of ['contract_id','canonical_name','verified']) assert.equal(result[field],metadata[field])
+    assert.equal(result.key,keyA)
+    assert.equal(result.asset_key,keyA)
+  }
 })

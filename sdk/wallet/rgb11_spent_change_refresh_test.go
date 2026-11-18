@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	"reflect"
 	"strings"
 	"testing"
@@ -205,7 +206,7 @@ func TestRGB11RefreshSpentChangeHistory(t *testing.T) {
 						}
 						for _, outpoint := range rgb11PendingChangeOutpoints(second) {
 							current := manager.utxoLockerL1.GetLockedUtxoList()[outpoint]
-							if current == nil || current.Reason != rgb11wallet.LockReasonRGB || current.ReservationID != "" {
+							if current == nil || current.Reason != sdkcommon.UtxoLockRGB || current.ReservationID != "" {
 								t.Fatalf("current unspent carrier not finalized: %+v", current)
 							}
 						}
@@ -270,7 +271,7 @@ func TestRGB11RefreshSpentChangeHistory(t *testing.T) {
 							switch kind {
 							case "unknown_owner":
 								writeLocks(map[string]*LockedUtxo{spentChange: {
-									LockedTime: time.Now().Unix(), Reason: rgb11wallet.LockReasonPending,
+									LockedTime: time.Now().Unix(), Reason: sdkcommon.UtxoLockRGBPending,
 									ReservationID: "unknown-owner",
 								}})
 							case "multiple_owners":

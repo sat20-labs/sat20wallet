@@ -29,12 +29,12 @@ func TestClosedWithdrawalCurrentFrontierIncludesCapturedLocalRGB(t *testing.T) {
 		t.Fatalf("actual validated local RGB projection is unavailable: %v", err)
 	}
 	if _, err := scoped.Manager.indexedClosedWithdrawalFact(merged); err == nil {
-		t.Fatal("native fact verifier did not reject the real local RGB co-asset")
+		t.Fatal("channel fact verifier did not reject the real local RGB co-asset")
 	}
-	chains := &nativeSettlementChains{bitcoin: evidence}
+	chains := &settlementChains{bitcoin: evidence}
 	t.Run("same-captured-account", func(t *testing.T) {
 		if err := scoped.Manager.validateIndexedWithdrawalCurrent(chains, chainOnly); err == nil {
-			t.Fatal("CURRENT C2 native frontier accepted a public-plain fee carrier with a real locally validated RGB allocation")
+			t.Fatal("CURRENT C2 channel frontier accepted a public-plain fee carrier with a real locally validated RGB allocation")
 		}
 	})
 	t.Run("later-selection-does-not-change-captured-scope", func(t *testing.T) {

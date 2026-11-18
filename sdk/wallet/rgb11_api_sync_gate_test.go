@@ -1,14 +1,10 @@
 package wallet
 
 import (
-	"context"
-	"errors"
-	"net"
 	"reflect"
 	"testing"
 	"time"
 
-	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -34,7 +30,7 @@ func installRGB11DirtyCASRejector(t *testing.T, manager *Manager) (*rgb11MemoryD
 	}
 	manager.mutex.RLock()
 	profile := manager.accountProfile
-	profileHasPending := profile != nil && profile.ManagedDataDirty
+	profileHasPending := profile != nil && len(profile.Pending) != 0
 	mutationFound := false
 	if profile != nil {
 		for _, mutation := range profile.Pending {
@@ -155,92 +151,4 @@ func TestRGB11PublicOperationsRequireRecoveryBeforeMutation(t *testing.T) {
 		}
 	})
 
-	t.Run("projection-does-not-run-while-offline", func(t *testing.T) {
-		manager := configuredRGB11ManagedOperationTestManager(t)
-		remote := observeRGB11OfflineSession(t, manager)
-		beforeRecords := snapshotRGB11MemoryRecords(remote)
-		beforeOutputs, err := manager.rgbManager.projectionStore.ListOutputs()
-		if err != nil {
-			t.Fatal(err)
-		}
-		beforeLocks := manager.utxoLockerL1.GetLockedUtxoList()
-
-		err = manager.ProjectRGB11Allocation("", nil, nil)
-		if !errors.Is(err, ErrDKVSPathNotSynced) {
-			t.Fatalf("ProjectRGB11Allocation ran before rejecting its baseline: %v", err)
-		}
-		if afterRecords := snapshotRGB11MemoryRecords(remote); !reflect.DeepEqual(beforeRecords, afterRecords) {
-			t.Fatal("rejected projection changed the authoritative account baseline")
-		}
-		afterOutputs, err := manager.rgbManager.projectionStore.ListOutputs()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !reflect.DeepEqual(beforeOutputs, afterOutputs) ||
-			!reflect.DeepEqual(beforeLocks, manager.utxoLockerL1.GetLockedUtxoList()) {
-			t.Fatal("rejected projection changed local outputs or input locks")
-		}
-	})
-
-	t.Run("direct-receive-mapping-does-not-run-while-offline", func(t *testing.T) {
-		manager := configuredRGB11ManagedOperationTestManager(t)
-		remote := observeRGB11OfflineSession(t, manager)
-		beforeRecords := snapshotRGB11MemoryRecords(remote)
-
-		endpoint, err := manager.EnableConfiguredRGB11AddressReceive(RGB11ReceiveCapabilityOptions{})
-		if !errors.Is(err, ErrDKVSPathNotSynced) || endpoint != nil {
-			t.Fatalf("Direct receive escaped before its baseline CAS: endpoint=%v error=%v", endpoint != nil, err)
-		}
-		if afterRecords := snapshotRGB11MemoryRecords(remote); !reflect.DeepEqual(beforeRecords, afterRecords) {
-			t.Fatal("rejected Direct receive changed account DKVS records")
-		}
-	})
-
-	t.Run("ack-refresh-does-not-run-while-offline", func(t *testing.T) {
-		manager := configuredRGB11ManagedOperationTestManager(t)
-		remote := observeRGB11OfflineSession(t, manager)
-		beforeRecords := snapshotRGB11MemoryRecords(remote)
-
-		ack, err := manager.RefreshRGB11AddressACK(&swire.DKVSRecord{}, dkvsindexer.RecordVerificationOptions{})
-		if !errors.Is(err, ErrDKVSPathNotSynced) || ack != nil {
-			t.Fatalf("ACK refresh escaped before its baseline CAS: ack=%v error=%v", ack != nil, err)
-		}
-		if afterRecords := snapshotRGB11MemoryRecords(remote); !reflect.DeepEqual(beforeRecords, afterRecords) {
-			t.Fatal("rejected ACK refresh changed account DKVS records")
-		}
-	})
-}
-
-func observeRGB11OfflineSession(t *testing.T, manager *Manager) *rgb11MemoryDKVSHTTP {
-	t.Helper()
-	manager.accountBackgroundWG.Wait()
-	remote, ok := manager.http.(*rgb11MemoryDKVSHTTP)
-	if !ok {
-		t.Fatal("unexpected test transport")
-	}
-	fault := &reviewAcceptanceHTTP{rgb11MemoryDKVSHTTP: remote}
-	fault.post = func(context.Context, string, []byte) ([]byte, error) {
-		return nil, &net.DNSError{Err: "offline test transport", IsTimeout: true}
-	}
-	client, err := manager.GetDKVSClient()
-	if err != nil {
-		t.Fatal(err)
-	}
-	client.Http = fault
-	root, err := manager.accountManagementRootWallet()
-	if err != nil {
-		t.Fatal(err)
-	}
-	key, err := manager.accountManagedStateKey(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	store, err := manager.accountDKVSStore()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SyncCurrent(key); err == nil {
-		t.Fatal("fixture did not observe an actual offline synchronization failure")
-	}
-	return remote
 }

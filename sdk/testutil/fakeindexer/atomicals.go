@@ -9,7 +9,7 @@ import (
 	"github.com/sat20-labs/sat20wallet/sdk/wallet"
 )
 
-// atomicalsAllocationsLocked derives ARC20 output state from the same native
+// atomicalsAllocationsLocked derives ARC20 output state from the same ARC20
 // coloring rules used by the production indexer. Initial fixture holdings are
 // explicit SeedOutput allocations; ordinary broadcasts cannot create units.
 // The caller holds Network.Mutex, and this preflight never mutates the model.
@@ -17,18 +17,18 @@ func (p *Client) atomicalsAllocationsLocked(tx *wire.MsgTx) (map[int]indexer.TxA
 	if !p.Network.IsBitcoinNet() || len(tx.TxIn) == 0 || string(tx.TxIn[0].SignatureScript) == "genesis" {
 		return nil, nil
 	}
-	hasNative := false
+	hasARC20 := false
 	for _, input := range tx.TxIn {
 		if input == nil {
 			return nil, fmt.Errorf("nil fixture transaction input")
 		}
 		if position, ok := p.Network.UtxoIndex[input.PreviousOutPoint.String()]; ok {
 			for _, asset := range p.Network.UtxoAssets[position] {
-				hasNative = hasNative || asset.Name.Protocol == indexer.PROTOCOL_NAME_ATOM
+				hasARC20 = hasARC20 || asset.Name.Protocol == indexer.PROTOCOL_NAME_ATOM
 			}
 		}
 	}
-	if !hasNative {
+	if !hasARC20 {
 		return nil, nil
 	}
 	heights, err := coloring.HeightsForNetwork(wallet.GetChainParam().Net)
@@ -42,7 +42,7 @@ func (p *Client) atomicalsAllocationsLocked(tx *wire.MsgTx) (map[int]indexer.TxA
 		outpoint := input.PreviousOutPoint.String()
 		position, ok := p.Network.UtxoIndex[outpoint]
 		if !ok || p.Network.UtxoUsed[outpoint] != "" {
-			return nil, fmt.Errorf("ARC20 fixture requires unspent native prevout %s", outpoint)
+			return nil, fmt.Errorf("ARC20 fixture requires unspent ARC20 prevout %s", outpoint)
 		}
 		facts[vin].Value = p.Network.UtxoValue[position]
 		if facts[vin].Value < 0 || facts[vin].Value > 21_000_000*100_000_000-inputValue {
@@ -61,7 +61,7 @@ func (p *Client) atomicalsAllocationsLocked(tx *wire.MsgTx) (map[int]indexer.TxA
 				return nil, fmt.Errorf("invalid ARC20 fixture allocation facts")
 			}
 			if other, exists := names[metadata.InscriptionId]; exists && other != asset.Name {
-				return nil, fmt.Errorf("inconsistent ARC20 fixture native identity")
+				return nil, fmt.Errorf("inconsistent ARC20 fixture ARC20 identity")
 			}
 			names[metadata.InscriptionId] = asset.Name
 			facts[vin].Assets = append(facts[vin].Assets, coloring.Asset{AtomicalID: metadata.InscriptionId, Amount: asset.Amount.Int64()})

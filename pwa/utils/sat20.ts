@@ -1,8 +1,8 @@
+import type { RGBView, RGBSendRequest, RGBTransferView, RGBInvoiceRequest, RGBReceiveView, RGBIssueRequest, RGBAssetView, RGBTransferFile, ExportFile } from './walletViews'
 import { beginWalletAwaitTrace } from '@/utils/walletAwaitTrace'
 import { beginVersionDispatch } from '@/utils/pwaVersionPolicy'
 import { tryit } from 'radash'
 import { walletRequestSessionGuard } from '@/lib/walletSession'
-import { beginPwaWalletOperation, finishPwaOperation } from '@/utils/pwaOperationLog'
 import { noteWasmOperation } from '@/utils/wasmRuntimeDiagnostics'
 import { wasmResponseError } from '@/utils/wasmError'
 
@@ -25,8 +25,8 @@ class WalletManager {
       const checkSession = walletRequestSessionGuard(methodName)
       const trace = beginWalletAwaitTrace(methodName)
       noteWasmOperation(methodName, 'request-start')
-      trace('begin-log')
-      const operation = await beginPwaWalletOperation(methodName, args)
+
+
       let finishVersion: (() => void) | undefined
       try {
         checkSession()
@@ -39,8 +39,8 @@ class WalletManager {
         trace('returned')
         checkSession()
         if (response && response.code !== 0) throw wasmResponseError(response.msg, response.error_code)
-        trace('finish-log')
-        await finishPwaOperation(operation, null, response?.data)
+
+
         trace('finished')
         noteWasmOperation(methodName, 'finished')
         checkSession()
@@ -50,8 +50,8 @@ class WalletManager {
         console.error(`${methodName} failed`)
         noteWasmOperation(methodName, 'failed')
         const failure = error instanceof Error ? error : new Error(String(error))
-        trace('failure-log')
-        await finishPwaOperation(operation, failure)
+
+
         trace('failed')
         throw failure
       } finally { finishVersion?.() }
@@ -349,44 +349,45 @@ class WalletManager {
     return this._handleRequest('getVersion')
   }
 
-  async getRGB11State(): Promise<
-    [Error | undefined, { state: string } | undefined]
-  > {
-    return this._handleRequest('getRGB11State')
+  async getRGB11View(): Promise<[Error | undefined, RGBView | undefined]> {
+    return this._handleRequest('getRGB11View')
   }
-
-  async createRGB11Invoice(request: {
-    mode?: 'blind' | 'witness'
-    transport_mode?: 'sat20' | 'rgb-json-rpc' | 'out-of-band'
-    transport_endpoints?: string[]
-    contract_id: string
-    schema_id?: string
-    amount_raw: number | string
-    assignment_name?: string
-    expiry?: number
-    witness_vout?: number
-  }): Promise<[Error | undefined, any | undefined]> {
+  async refreshRGB11State(): Promise<[Error | undefined, RGBView | undefined]> {
+    return this._handleRequest('refreshRGB11State')
+  }
+  async prepareRGB11Transfer(request: RGBSendRequest): Promise<[Error | undefined, RGBTransferView | undefined]> {
+    return this._handleRequest('prepareRGB11Transfer', JSON.stringify(request))
+  }
+  async prepareRGB11Inflation(invoice: string, feeRate: number): Promise<[Error | undefined, RGBTransferView | undefined]> {
+    return this._handleRequest('prepareRGB11Inflation', JSON.stringify({invoice, fee_rate: feeRate}))
+  }
+  async confirmRGB11Transfer(id: string, receipts: string[] = []): Promise<[Error | undefined, RGBTransferView | undefined]> {
+    return this._handleRequest('confirmRGB11Transfer', JSON.stringify({id, receipts}))
+  }
+  async cancelRGB11Transfer(id: string): Promise<[Error | undefined, RGBTransferView | undefined]> {
+    return this._handleRequest('cancelRGB11Transfer', JSON.stringify({id}))
+  }
+  async exportRGB11Transfer(id: string): Promise<[Error | undefined, RGBTransferFile[] | undefined]> {
+    return this._handleRequest('exportRGB11Transfer', JSON.stringify({id}))
+  }
+  async createRGB11Invoice(request: RGBInvoiceRequest): Promise<[Error | undefined, RGBReceiveView | undefined]> {
     return this._handleRequest('createRGB11Invoice', JSON.stringify(request))
   }
-
-  async importRGB11Contract(consignment: string): Promise<
-    [Error | undefined, { result: string } | undefined]
-  > {
-    return this._handleRequest('importRGB11Contract', consignment)
+  async prepareRGB11Consignment(id: string, data: string): Promise<[Error | undefined, RGBReceiveView | undefined]> {
+    return this._handleRequest('prepareRGB11Consignment', JSON.stringify({id, data}))
   }
-
-  async importRGB11ContractFile(fileBase64: string): Promise<
-    [Error | undefined, { result: string } | undefined]
-  > {
-    return this._handleRequest('importRGB11ContractFile', fileBase64)
+  async acceptRGB11Consignment(id: string): Promise<[Error | undefined, RGBReceiveView | undefined]> {
+    return this._handleRequest('acceptRGB11Consignment', JSON.stringify({id}))
   }
-
-  async exportRGB11Contract(contractId: string): Promise<
-    [Error | undefined, { result: string } | undefined]
-  > {
-    return this._handleRequest('exportRGB11Contract', contractId)
+  async issueRGB11Asset(request: RGBIssueRequest): Promise<[Error | undefined, RGBAssetView | undefined]> {
+    return this._handleRequest('issueRGB11Asset', JSON.stringify(request))
   }
-
+  async importRGB11Contract(data: string): Promise<[Error | undefined, RGBAssetView | undefined]> {
+    return this._handleRequest('importRGB11Contract', JSON.stringify({data}))
+  }
+  async exportRGB11Contract(asset: string): Promise<[Error | undefined, ExportFile[] | undefined]> {
+    return this._handleRequest('exportRGB11Contract', JSON.stringify({asset}))
+  }
   async exportPublicRGB11Contract(contractId: string): Promise<
     [Error | undefined, { result: string } | undefined]
   > {
@@ -399,123 +400,6 @@ class WalletManager {
     return this._handleRequest('verifyRGB11PublicContract', contractId, contentBase64)
   }
 
-  async exportRGB11SettledConsignment(transferId: string): Promise<
-    [Error | undefined, { transfer: string } | undefined]
-  > {
-    return this._handleRequest('exportRGB11SettledConsignment', transferId)
-  }
-
-  async issueRGB11Asset(request: {
-    schema: 'NIA' | 'IFA' | 'UDA'
-    ticker?: string
-    name: string
-    details?: string
-    precision: number
-    terms?: string
-    amounts: string[]
-    inflation_amounts?: string[]
-    reject_list_url?: string
-    min_confirmations?: number
-  }): Promise<[Error | undefined, { result: string } | undefined]> {
-    return this._handleRequest('issueRGB11Asset', JSON.stringify(request))
-  }
-
-  async prepareRGB11Transfer(request: {
-    invoice?: string
-    invoices?: string[]
-    contract_id?: string
-    amount_raw?: string
-    fee_rate?: number
-    min_confirmations?: number
-  }): Promise<[Error | undefined, { transfer: string } | undefined]> {
-    return this._handleRequest('prepareRGB11Transfer', JSON.stringify(request))
-  }
-
-  async prepareRGB11Inflation(request: {
-    invoice: string
-    fee_rate?: number
-    min_confirmations?: number
-  }): Promise<[Error | undefined, { transfer: string } | undefined]> {
-    return this._handleRequest('prepareRGB11Inflation', JSON.stringify(request))
-  }
-
-  async resumeRGB11PreparedTransfer(transferId: string): Promise<
-    [Error | undefined, { transfer: string } | undefined]
-  > {
-    return this._handleRequest('resumeRGB11PreparedTransfer', transferId)
-  }
-
-  async acceptRGB11Consignment(requestId: string, consignment: string): Promise<
-    [Error | undefined, { receipt: string } | undefined]
-  > {
-    return this._handleRequest('acceptRGB11Consignment', requestId, consignment)
-  }
-
-  async prepareRGB11Consignment(requestId: string, consignment: string): Promise<
-    [Error | undefined, { receipt: string } | undefined]
-  > {
-    return this._handleRequest('prepareRGB11Consignment', requestId, consignment)
-  }
-
-  async receiveRGB11ProxyConsignment(requestId: string): Promise<
-    [Error | undefined, {
-      request_id: string
-      endpoint: string
-      txid: string
-      vout?: number
-      ack_posted: boolean
-    } | undefined]
-  > {
-    return this._handleRequest('receiveRGB11ProxyConsignment', requestId)
-  }
-
-  async cancelRGB11OutOfBandTransfer(transferId: string): Promise<
-    [Error | undefined, { cancelled: boolean } | undefined]
-  > {
-    return this._handleRequest('cancelRGB11OutOfBandTransfer', transferId)
-  }
-
-  async cancelExpiredRGB11Transfer(transferId: string): Promise<
-    [Error | undefined, { cancelled: boolean } | undefined]
-  > {
-    return this._handleRequest('cancelExpiredRGB11Transfer', transferId)
-  }
-
-  async broadcastRGB11OutOfBand(transferIds: string[]): Promise<
-    [Error | undefined, { txid: string } | undefined]
-  > {
-    return this._handleRequest('broadcastRGB11OutOfBand', JSON.stringify(transferIds))
-  }
-
-  async deliverAndBroadcastRGB11ProxyTransfer(transferIds: string[]): Promise<
-	[Error | undefined, {
-	  transfer_ids: string[]
-	  endpoints: string[]
-	  txid?: string
-	  awaiting_ack?: boolean
-	  broadcast?: boolean
-	  rejected?: boolean
-	} | undefined]
-  > {
-    return this._handleRequest('deliverAndBroadcastRGB11ProxyTransfer', JSON.stringify(transferIds))
-  }
-
-  async fetchRGB11ProxyAck(transferId: string): Promise<
-    [Error | undefined, {
-      transfer_id: string
-      available: boolean
-      accepted: boolean
-      endpoint?: string
-    } | undefined]
-  > {
-    return this._handleRequest('fetchRGB11ProxyAck', transferId)
-  }
-
-  async refreshRGB11State(): Promise<
-    [Error | undefined, { result: string } | undefined]
-  > {
-    return this._handleRequest('refreshRGB11State')
-  }
 
   async startBTCLuckyMining(config: {
     jobs: string
@@ -1129,6 +1013,10 @@ class WalletManager {
     feeRate: string
   ): Promise<[Error | undefined, { txId: string; commitTxId: string; revealTxId: string; resvId: string } | undefined]> {
     return this._handleRequest('mintAssetBrc20', ticker, String(amount), String(feeRate))
+  }
+
+  async checkDIDName(name: string): Promise<[Error | undefined, { status: 'available' | 'registered' | 'submitted' | 'invalid' } | undefined]> {
+    return this._handleRequest('checkDIDName', name)
   }
 
   async inscribeName(

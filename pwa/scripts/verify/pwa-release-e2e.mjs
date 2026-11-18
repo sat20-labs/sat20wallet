@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
-import { copyFile, mkdir, readFile, readdir, stat, symlink } from 'node:fs/promises'
+import { mkdir, readFile, readdir, stat, symlink } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { createServer } from 'node:http'
 import { spawn } from 'node:child_process'
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
@@ -9,9 +9,11 @@ import { fileURLToPath } from 'node:url'
 import { chromium, expect } from '@playwright/test'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
-const [wasmPath, runtimePath, temporary] = process.argv.slice(2)
-assert.ok(wasmPath && runtimePath && temporary, 'launch via TestPWAProductionReleaseE2E')
+const [temporary] = process.argv.slice(2)
+assert.ok(temporary, 'launch via TestPWAProductionReleaseE2E')
 const regtestMode = process.argv.includes('--regtest')
+const previousDist = process.env.SAT20_PWA_PREVIOUS_DIST
+if (previousDist) assert.ok(!regtestMode && isAbsolute(previousDist), 'previous release must be an absolute production dist directory')
 const pageErrorsOnly = process.argv.includes('--page-errors-only')
 const continueAfterBuild = pageErrorsOnly || process.argv.includes('--continue-after-build')
 assert.ok(!continueAfterBuild || regtestMode, 'focused continuation is only for the existing regtest gate')
@@ -25,8 +27,9 @@ const required = [
   'Release PWA: update preserves the running page then switches and retires the old cache after READY',
   'Release PWA: corrupted WASM rejects startup and cannot activate an incomplete release',
   'Release PWA: production online offline and update flows have no unhandled page errors',
+  'Release PWA: current release CSS keeps Tools Confirm reachable at 375x564',
 ]
-const activeRequired = pageErrorsOnly ? required.slice(7) : continueAfterBuild ? required.slice(1) : required
+const activeRequired = pageErrorsOnly ? [required[7]] : continueAfterBuild ? required.slice(1) : required
 const verdicts = new Map()
 const errors = []
 const hash = bytes => createHash('sha256').update(bytes).digest('hex')
@@ -75,8 +78,6 @@ const build = async label => {
     if (['wasm', 'version.json', 'integrity-manifest.json'].includes(name)) continue
     await symlink(join(root, 'public', name), join(publicDir, name))
   }
-  await copyFile(wasmPath, join(publicDir, 'wasm/sat20wallet.wasm'))
-  await copyFile(runtimePath, join(publicDir, 'wasm/wasm_exec.js'))
   await new Promise((resolve, reject) => {
     const child = spawn('npm', ['run', regtestMode ? 'build:regtest' : 'build'], {
       cwd: root, stdio: 'inherit', env: { ...process.env, SAT20_PWA_BUILD_DIR: buildDir,
@@ -153,14 +154,46 @@ const state = (page, selected = false) => page.evaluate(async selected => {
   })
 }, selected)
 
+const verifyExports = async page => {
+  const missing = await page.evaluate(() => [
+    [window.sat20account_wasm, ['getAccountView', 'preflightRecovery']],
+    [window.sat20wallet_wasm, ['getRGB11View', 'confirmRGB11Transfer']],
+  ].flatMap(([api, methods]) => methods.filter(method => typeof api?.[method] !== 'function')))
+  assert.deepEqual(missing, [], 'release WASM must provide the account and RGB11 entry points')
+}
+const password = previousDist && randomBytes(24).toString('hex')
+const readCatalog = async (page, unlock = false) => page.evaluate(async ({unlock, password}) => {
+  const api = window.sat20wallet_wasm
+  if (password && unlock && (await api.unlockWallet(password)).code !== 0) throw new Error('previous wallet did not unlock')
+  const result = await api.getWalletCatalog()
+  if (result.code !== 0) throw new Error('wallet catalog unavailable')
+  return result.data
+}, { unlock, password })
 try {
-  let releaseA, context, page, origin, catalog
-  const prepareBuild = async () => { dist = await build('a') }
+  let releaseA, context, page, origin, catalog, candidateDist
+  const prepareBuild = async () => { candidateDist = dist = await build(previousDist ? 'b' : 'a') }
   if (continueAfterBuild) {
     await prepareBuild()
     console.log(JSON.stringify({ setup: 'rebuilt private artifacts through the ordinary typechecked npm entry for unfinished cases' }))
   } else await check(0, prepareBuild)
   await check(1, async () => { releaseA = await manifests(dist) })
+  if (!pageErrorsOnly) await check(8, async () => {
+    await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, ['--test', 'scripts/diagnostic/tools-confirm-viewport.test.mjs'], {
+        cwd: root, stdio: 'inherit', env: { ...process.env, SAT20_PWA_VIEWPORT_DIST: dist },
+      })
+      const timeout = setTimeout(() => child.kill('SIGTERM'), 60000)
+      child.once('error', error => { clearTimeout(timeout); reject(error) })
+      child.once('exit', (code, signal) => {
+        clearTimeout(timeout)
+        code === 0 ? resolve() : reject(new Error(`Tools viewport gate: ${signal || code}`))
+      })
+    })
+  })
+  if (previousDist) {
+    dist = resolve(previousDist)
+    releaseA = await manifests(dist)
+  }
   server = createServer(async (request, response) => {
     try {
       const url = new URL(request.url, 'http://127.0.0.1')
@@ -183,9 +216,14 @@ try {
   browser = await chromium.launch({ headless: true, ...(executable ? { executablePath: executable } : {}) })
   await check(2, async () => {
     context = await newContext(); page = await context.newPage(); await page.goto(origin); await boot(page, releaseA)
-    const result = await page.evaluate(async () => await window.sat20wallet_wasm.getWalletCatalog())
-    assert.equal(result.code, 0); assert.deepEqual(result.data.wallets, [])
-    catalog = result.data
+    if (!previousDist) await verifyExports(page)
+    catalog = await readCatalog(page)
+    assert.deepEqual(catalog.wallets, [])
+    if (previousDist) {
+      assert.equal(await page.evaluate(async pw => (await window.sat20wallet_wasm.createWallet(pw)).code, password), 0)
+      catalog = await readCatalog(page)
+      assert.equal(catalog.wallets.length, 1)
+    }
   })
   await check(3, async () => {
     await expect.poll(async () => (await cacheKeys(page)).includes(cacheName(releaseA)), { timeout: 120000 }).toBe(true)
@@ -206,13 +244,13 @@ try {
   await check(4, async () => {
     await context.setOffline(true); await page.close()
     page = await context.newPage(); await page.goto(origin); await boot(page, releaseA)
-    const result = await page.evaluate(async () => await window.sat20wallet_wasm.getWalletCatalog())
-    assert.equal(result.code, 0); assert.deepEqual(result.data, catalog)
+    assert.deepEqual(await readCatalog(page, true), catalog)
     assert.equal((await state(page)).releaseId, releaseA.releaseId)
     await context.setOffline(false)
   })
   await check(5, async () => {
-    const next = await build('b'); const releaseB = await manifests(next); dist = next
+    const next = previousDist ? candidateDist : await build('b')
+    const releaseB = await manifests(next); dist = next
     assert.notEqual(releaseB.releaseId, releaseA.releaseId)
     await page.evaluate(async () => { const registration = await navigator.serviceWorker.ready; await registration.update() })
     await expect.poll(() => page.evaluate(async () => Boolean((await navigator.serviceWorker.ready).waiting)), { timeout: 120000 }).toBe(true)
@@ -232,10 +270,12 @@ try {
     await page.close(); page = await context.newPage(); await page.goto(origin); await boot(page, releaseB)
     await expect.poll(async () => (await cacheKeys(page)).includes(cacheName(releaseA)), { timeout: 60000 }).toBe(false)
     assert.ok((await cacheKeys(page)).includes(cacheName(releaseB)))
-    const result = await page.evaluate(async () => await window.sat20wallet_wasm.getWalletCatalog())
-    assert.equal(result.code, 0); assert.deepEqual(result.data, catalog)
+    await verifyExports(page)
+    assert.deepEqual(await readCatalog(page, true), catalog)
     await context.setOffline(true); await page.close(); page = await context.newPage()
-    await page.goto(origin); await boot(page, releaseB); await context.setOffline(false)
+    await page.goto(origin); await boot(page, releaseB)
+    assert.deepEqual(await readCatalog(page, true), catalog)
+    await context.setOffline(false)
   })
   await check(6, async () => {
     tamper = true

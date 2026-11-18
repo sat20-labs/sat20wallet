@@ -20,20 +20,20 @@ func signRPCMessage(localWallet common.Wallet, msg interface{}) ([]byte, error) 
 	return localWallet.SignMessage(data)
 }
 
-func (p *NodeClient) prepareNativeCommitmentRecovery(info *RevocationInfo,
+func (p *NodeClient) prepareCommitRecovery(info *RevocationInfo,
 	exchange func(*wwire.CommitSigInfo) (*wwire.CommitSigInfo, error)) error {
 	if info == nil || info.Channel == nil {
 		return fmt.Errorf("missing commitment recovery context")
 	}
-	if !needsSTPNativeOtherExchange(info.Channel, info.Channel.RemoteCommitment) &&
+	if !needsRecoveryExchange(info.Channel, info.Channel.RemoteCommitment) &&
 		!hasSTPRGBClientRecoveryContext(info.Channel, info.Channel.RemoteCommitment) {
 		return nil
 	}
 	manager := info.Channel.manager
 	if manager == nil {
-		return fmt.Errorf("native commitment recovery has no durable manager")
+		return fmt.Errorf("commitment recovery has no durable manager")
 	}
-	request, err := manager.NativeCommitmentRecoveryRequest(info)
+	request, err := manager.CommitRecoveryRequest(info)
 	if err != nil {
 		return err
 	}
@@ -41,7 +41,7 @@ func (p *NodeClient) prepareNativeCommitmentRecovery(info *RevocationInfo,
 	if err != nil {
 		return err
 	}
-	return manager.AcceptNativeCommitmentRecovery(info, response)
+	return manager.AcceptCommitRecovery(info, response)
 }
 
 func (p *NodeClient) SendUnlockReservationReq(info *PaymentReservation) error {
@@ -65,7 +65,7 @@ func (p *NodeClient) SendUnlockReq(info *PaymentReservation) error {
 }
 
 func (p *NodeClient) SendUnlockCommitSigReservationReq(info *PaymentReservation) error {
-	if err := p.prepareNativeCommitmentRecovery(&info.RevocationInfo, func(prepared *wwire.CommitSigInfo) (*wwire.CommitSigInfo, error) {
+	if err := p.prepareCommitRecovery(&info.RevocationInfo, func(prepared *wwire.CommitSigInfo) (*wwire.CommitSigInfo, error) {
 		req := &wwire.UnlockCommitSigReq{ChannelId: info.Channel.ChannelId, Id: info.Id,
 			CommitSigInfo: *prepared, RevKey: info.LocalRevKey, NextRevKey: info.LocalNextRevKey}
 		var err error
@@ -154,7 +154,7 @@ func (p *NodeClient) SendRecoverPaymentReq(info *PaymentReservation) error {
 }
 
 func (p *NodeClient) SendRecoverPaymentCommitSigReq(info *PaymentReservation) error {
-	if err := p.prepareNativeCommitmentRecovery(&info.RevocationInfo, func(prepared *wwire.CommitSigInfo) (*wwire.CommitSigInfo, error) {
+	if err := p.prepareCommitRecovery(&info.RevocationInfo, func(prepared *wwire.CommitSigInfo) (*wwire.CommitSigInfo, error) {
 		req := &wwire.RecoverPaymentCommitSigReq{ChannelId: info.Channel.ChannelId, Id: info.Id,
 			CommitSigInfo: *prepared, RevKey: info.LocalRevKey, NextRevKey: info.LocalNextRevKey}
 		var err error
@@ -241,7 +241,7 @@ func (p *NodeClient) SendLockReq(info *PaymentReservation) error {
 }
 
 func (p *NodeClient) SendLockCommitSigAndRevokeReservationReq(info *PaymentReservation) error {
-	if err := p.prepareNativeCommitmentRecovery(&info.RevocationInfo, func(prepared *wwire.CommitSigInfo) (*wwire.CommitSigInfo, error) {
+	if err := p.prepareCommitRecovery(&info.RevocationInfo, func(prepared *wwire.CommitSigInfo) (*wwire.CommitSigInfo, error) {
 		req := &wwire.LockCommitSigAndRevokeReq{ChannelId: info.Channel.ChannelId, Id: info.Id, CommitSigInfo: *prepared}
 		var err error
 		req.Sig, err = signRPCMessage(info.LocalWallet(), req)
@@ -256,10 +256,15 @@ func (p *NodeClient) SendLockCommitSigAndRevokeReservationReq(info *PaymentReser
 			return nil, fmt.Errorf("invalid recovery-only lock response")
 		}
 		return &wwire.CommitSigInfo{RecoveryOnly: resp.RecoveryOnly, RecoveryCommitTxID: resp.RecoveryCommitTxID,
-			NativeOtherTxs: resp.NativeOtherTxs, RGBRecoveryTxs: resp.RGBRecoveryTxs}, nil
+			OtherTxs: resp.OtherTxs, RGBRecoveryTxs: resp.RGBRecoveryTxs}, nil
 	}); err != nil {
 		return err
 	}
+	rev, err := info.Channel.manager.RevokeCurrentCommitment(&info.RevocationInfo)
+	if err != nil {
+		return err
+	}
+	info.LocalRev = rev
 	req := &wwire.LockCommitSigAndRevokeReq{
 		ChannelId:     info.Channel.ChannelId,
 		Id:            info.Id,
@@ -451,7 +456,7 @@ func (p *NodeClient) SendSplicingInReq(info *SplicingReservation) error {
 }
 
 func (p *NodeClient) SendSplicingInCommitSigReq(info *SplicingReservation) error {
-	if err := p.prepareNativeCommitmentRecovery(&info.RevocationInfo, func(prepared *wwire.CommitSigInfo) (*wwire.CommitSigInfo, error) {
+	if err := p.prepareCommitRecovery(&info.RevocationInfo, func(prepared *wwire.CommitSigInfo) (*wwire.CommitSigInfo, error) {
 		req := &wwire.SplicingInCommitSigReq{ChannelId: info.Channel.ChannelId, Id: info.Id,
 			CommitSigInfo: *prepared, RevKey: info.LocalRevKey, NextRevKey: info.LocalNextRevKey}
 		var err error
@@ -547,7 +552,7 @@ func (p *NodeClient) SendSplicingOutReq(info *SplicingReservation) error {
 }
 
 func (p *NodeClient) SendSplicingOutCommitSigReq(info *SplicingReservation) error {
-	if err := p.prepareNativeCommitmentRecovery(&info.RevocationInfo, func(prepared *wwire.CommitSigInfo) (*wwire.CommitSigInfo, error) {
+	if err := p.prepareCommitRecovery(&info.RevocationInfo, func(prepared *wwire.CommitSigInfo) (*wwire.CommitSigInfo, error) {
 		req := &wwire.SplicingOutCommitSigReq{ChannelId: info.Channel.ChannelId, Id: info.Id,
 			CommitSigInfo: *prepared, RevKey: info.LocalRevKey, NextRevKey: info.LocalNextRevKey}
 		var err error

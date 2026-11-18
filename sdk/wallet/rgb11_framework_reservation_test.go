@@ -8,6 +8,7 @@ import (
 	"github.com/btcsuite/btcd/chaincfg"
 	indexer "github.com/sat20-labs/indexer/common"
 	corewallet "github.com/sat20-labs/rgb11/wallet"
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	"strings"
 	"testing"
@@ -83,7 +84,7 @@ func TestRGB11ReservationExpiryProtectsKnownTransfer(t *testing.T) {
 				t.Fatal(err)
 			}
 			outpoint := strings.Repeat("ab", 32) + ":0"
-			if err := mgr.utxoLockerL1.TryReserve([]string{outpoint}, rgb11wallet.LockReasonPending, "receive-owner"); err != nil {
+			if err := mgr.utxoLockerL1.TryReserve([]string{outpoint}, sdkcommon.UtxoLockRGBPending, "receive-owner"); err != nil {
 				t.Fatal(err)
 			}
 			if err := mgr.rgbManager.projectionStore.SaveReceiveReservation(&rgb11wallet.ReceiveReservation{Version: 1, RequestID: req.RequestID, OutPoint: outpoint, ReservationID: "receive-owner", Expiry: req.Expiry}); err != nil {
@@ -139,7 +140,7 @@ func TestRGB11ReservationBatchFailureDoesNotPublishInvoice(t *testing.T) {
 	}
 }
 
-// Called by the native-consensus out-of-band and standard proxy virtual
+// Called by the RGB11-consensus out-of-band and standard proxy virtual
 // Bitcoin flows. Restart uses the durable DB and the shared resv loader.
 func assertRGB11FrameworkRecovery(t *testing.T, managers ...*Manager) {
 	t.Helper()

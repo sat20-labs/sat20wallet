@@ -42,7 +42,7 @@ type STPAssetSplicePlanner interface {
 
 // SplitOutputs creates a transaction-local asset view. It does not attest that
 // an allocation is valid: BindSplice and the final protocol verifier must check
-// the completed transaction against the protocol's native evidence.
+// the completed transaction against the protocol's channel evidence.
 type STPAssetOutputSplitter interface {
 	SplitOutputs([]*TxOutput, *AssetName, int64, *Decimal) (*TxOutput, *TxOutput, error)
 }
@@ -72,7 +72,7 @@ type STPAssetLifecycle interface {
 
 // Verification is deliberately independent of Manager, wallet keys and network
 // reads. Current indexer-backed protocols verify the layout supplied by their
-// planner; a client-validated protocol must additionally validate its native
+// planner; a client-validated protocol must additionally validate its channel
 // evidence here before it can be registered for STP operations.
 type STPAssetVerifier interface {
 	VerifyInput(*AssetName, *TxOutput) error
@@ -140,7 +140,7 @@ type STPAssetSpliceRequest struct {
 
 // STPAssetPlan describes a transaction package rather than a single transfer.
 // Plans are transient: STP signs and stores their transactions in reservation
-// and commitment records. Native adapters also persist proof sidecars and a
+// and commitment records. channel adapters also persist proof sidecars and a
 // recovery journal; legacy assets keep their existing transaction encoding.
 type STPAssetPlan struct {
 	Tx             *wire.MsgTx
@@ -151,10 +151,10 @@ type STPAssetPlan struct {
 	OtherTxs       []*CommitmentTx
 	PlainInputs    []*TxOutput
 	ExtraPlainSats int64
-	// Native carrier value belongs to the channel initiator in both views of
+	// channel carrier value belongs to the channel initiator in both views of
 	// a commitment; it is distinct from the commitment owner's plain balance.
 	InitiatorPlainSats int64
-	NativeProofs       map[string][]byte
+	AssetProofs       map[string][]byte
 	// ProtocolData is ephemeral planner/verifier state, never wire or DB data.
 	ProtocolData   any
 	FixedPrefix    bool
@@ -453,15 +453,15 @@ func verifySTPCommitmentAssets(req STPAssetCommitmentRequest, plans []stpPlanned
 func collectSTPAssetProofs(plans []stpPlannedAsset) (map[string][]byte, error) {
 	var result map[string][]byte
 	for _, item := range plans {
-		for protocol, proof := range item.plan.NativeProofs {
+		for protocol, proof := range item.plan.AssetProofs {
 			if protocol != item.protocol.Protocol() || len(proof) == 0 {
-				return nil, fmt.Errorf("invalid %s native plan proof", protocol)
+				return nil, fmt.Errorf("invalid %s channel plan proof", protocol)
 			}
 			if result == nil {
 				result = make(map[string][]byte)
 			}
 			if _, exists := result[protocol]; exists {
-				return nil, fmt.Errorf("duplicate %s native proof", protocol)
+				return nil, fmt.Errorf("duplicate %s channel proof", protocol)
 			}
 			result[protocol] = append([]byte(nil), proof...)
 		}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	"reflect"
 	"testing"
 
@@ -180,7 +181,7 @@ func TestRGB11SnapshotFailureRevokesLiveReadiness(t *testing.T) {
 					badOutpoint := proofs[0].OutPoint
 					if kind == "invalid_proof" {
 						healthyProofLock := beforeLocks[badOutpoint]
-						if healthyProofLock == nil || healthyProofLock.Reason != rgb11wallet.LockReasonRGB || healthyProofLock.ReservationID != "" {
+						if healthyProofLock == nil || healthyProofLock.Reason != sdkcommon.UtxoLockRGB || healthyProofLock.ReservationID != "" {
 							t.Fatalf("fixture proof carrier is not at a healthy RGB lock baseline: outpoint=%s lock=%+v", badOutpoint, healthyProofLock)
 						}
 					}
@@ -233,10 +234,6 @@ func TestRGB11SnapshotFailureRevokesLiveReadiness(t *testing.T) {
 					} else {
 						result, refreshErr = manager.rgbManager.RefreshRGB11State(ctx)
 					}
-					if snapshotFault != nil {
-						// State inspection reads intact records while preserving the closed RAM gate.
-						snapshotFault.armed = false
-					}
 					if hits() == 0 || !errors.Is(refreshErr, wantErr) {
 						t.Fatalf("wrong local failure: hits=%d err=%v", hits(), refreshErr)
 					}
@@ -257,12 +254,26 @@ func TestRGB11SnapshotFailureRevokesLiveReadiness(t *testing.T) {
 					}
 					// Both paths must expose the actual local snapshot failure;
 					// a background backup is no longer a business precondition.
+					if snapshotFault != nil {
+						readHits := hits()
+						unreadable, readErr := manager.GetRGB11State()
+						if hits() <= readHits || !errors.Is(readErr, wantErr) || unreadable != nil {
+							t.Fatalf("Get did not report its own snapshot read failure: hits=%d->%d state_present=%t err=%v",
+								readHits, hits(), unreadable != nil, readErr)
+						}
+						// Restore only readability. The public getter can now re-read intact proofs.
+						snapshotFault.armed = false
+					}
 					failedState, stateErr := manager.GetRGB11State()
 					if stateErr != nil || failedState == nil {
 						t.Fatalf("history read failed: %v", stateErr)
 					}
-					t.Logf("local failure path=%s kind=%s available_count=%d readiness=%t consistency=%s hits=%d", path, kind, len(failedState.AvailableAssets), manager.rgbManager.rgb11ProjectionAvailable(), failedState.ConsistencyStatus, hits())
-					if len(failedState.AvailableAssets) != 0 || manager.rgbManager.rgb11ProjectionAvailable() {
+					t.Logf("local failure path=%s kind=%s available_count=%d consistency=%s hits=%d", path, kind, len(failedState.AvailableAssets), failedState.ConsistencyStatus, hits())
+					if snapshotFault != nil {
+						if !state.AvailableAssets.Equal(failedState.AvailableAssets) || !reflect.DeepEqual(state.Proofs, failedState.Proofs) {
+							t.Fatal("restored DB reads did not expose original balances and proofs")
+						}
+					} else if len(failedState.AvailableAssets) != 0 {
 						t.Fatal("snapshot failure left live ownership available")
 					}
 					wantConsistency := "warning"
@@ -306,9 +317,6 @@ func TestRGB11SnapshotFailureRevokesLiveReadiness(t *testing.T) {
 						!reflect.DeepEqual(beforeTransfers, afterTransfers) {
 						t.Fatal("snapshot fault changed typed proof/output/transfer records")
 					}
-					if manager.rgbManager.rgb11ProjectionAvailable() {
-						t.Fatal("read-only recovery audit reopened the faulted readiness gate")
-					}
 					if kind == "invalid_proof" {
 						hitsBeforeBackup := hits()
 						backupSnapshot, _, backupErr := originalRuntime.exportRGB11WalletSnapshot(walletID)
@@ -317,11 +325,8 @@ func TestRGB11SnapshotFailureRevokesLiveReadiness(t *testing.T) {
 							t.Fatalf("complete backup did not reject injected invalid proof %s: hits=%d->%d snapshot_present=%t err=%v",
 								proofs[0].OutPoint, hitsBeforeBackup, hits(), backupSnapshot != nil, backupErr)
 						}
-						if manager.rgbManager.rgb11ProjectionAvailable() {
-							t.Fatal("blocked backup check reopened the faulted readiness gate")
-						}
 					} else {
-						after, _, backupErr := originalRuntime.exportRGB11WalletSnapshot(walletID)
+						after, _, backupErr := faultRuntime.exportRGB11WalletSnapshot(walletID)
 						if backupErr != nil || !reflect.DeepEqual(before, after) {
 							t.Fatalf("read failure changed a healthy complete backup: %v", backupErr)
 						}
@@ -329,9 +334,6 @@ func TestRGB11SnapshotFailureRevokesLiveReadiness(t *testing.T) {
 					// Keep the fault runtime installed; only remove the injected read error.
 					if proofFault != nil {
 						proofFault.enabled = false
-					}
-					if snapshotFault != nil {
-						snapshotFault.armed = false
 					}
 					afterLocks := manager.utxoLockerL1.GetLockedUtxoList()
 					if kind == "invalid_proof" {
@@ -346,7 +348,7 @@ func TestRGB11SnapshotFailureRevokesLiveReadiness(t *testing.T) {
 							}
 						}
 						quarantineLock := afterLocks[badOutpoint]
-						if quarantineLock == nil || (quarantineLock.Reason != rgb11wallet.LockReasonRGB && quarantineLock.Reason != rgb11wallet.LockReasonPending) {
+						if quarantineLock == nil || (quarantineLock.Reason != sdkcommon.UtxoLockRGB && quarantineLock.Reason != sdkcommon.UtxoLockRGBPending) {
 							t.Fatalf("damaged proof carrier is not quarantined from BTC selection: lock=%+v", quarantineLock)
 						}
 					} else if !reflect.DeepEqual(beforeLocks, afterLocks) {
@@ -365,9 +367,9 @@ func TestRGB11SnapshotFailureRevokesLiveReadiness(t *testing.T) {
 					if manager.rgbManager != faultRuntime {
 						t.Fatal("fault runtime was replaced before the healthy retry")
 					}
-					if manager.rgbManager.consistencyStatus != wantConsistency || manager.rgbManager.rgb11ProjectionAvailable() {
-						t.Fatalf("disarming the read fault changed the pre-retry failure state: consistency=%s gate=%t",
-							manager.rgbManager.consistencyStatus, manager.rgbManager.rgb11ProjectionAvailable())
+					if manager.rgbManager.consistencyStatus != wantConsistency {
+						t.Fatalf("disarming the read fault changed the pre-retry failure state: consistency=%s",
+							manager.rgbManager.consistencyStatus)
 					}
 					hitsBeforeRetry := hits()
 					retryResult, err := manager.RefreshRGB11State(ctx)
@@ -382,9 +384,9 @@ func TestRGB11SnapshotFailureRevokesLiveReadiness(t *testing.T) {
 					}
 					recovered, err := manager.GetRGB11State()
 					if err != nil || recovered == nil || recovered.ConsistencyStatus != "ok" ||
-						len(recovered.AvailableAssets) == 0 || !manager.rgbManager.rgb11ProjectionAvailable() {
-						t.Fatalf("healthy retry did not recover the same runtime: state=%+v err=%v gate=%t",
-							recovered, err, manager.rgbManager.rgb11ProjectionAvailable())
+						len(recovered.AvailableAssets) == 0 {
+						t.Fatalf("healthy retry did not recover the same runtime: state=%+v err=%v",
+							recovered, err)
 					}
 					if retryResult == nil || len(retryResult.Inconsistent) != 0 ||
 						retryResult.Settled != healthyResult.Settled || retryResult.Pending != healthyResult.Pending ||
@@ -452,7 +454,7 @@ func TestRGB11SnapshotFailureRevokesLiveReadiness(t *testing.T) {
 						}
 						expectedTargetLock := cloneLockedUtxo(beforeLocks[badOutpoint])
 						recoveredTargetLock := recoveredLocks[badOutpoint]
-						if recoveredTargetLock == nil || recoveredTargetLock.Reason != rgb11wallet.LockReasonRGB ||
+						if recoveredTargetLock == nil || recoveredTargetLock.Reason != sdkcommon.UtxoLockRGB ||
 							!reflect.DeepEqual(recoveredTargetLock, expectedTargetLock) {
 							t.Fatalf("healthy retry did not restore the target carrier lock and preserve its reservation/owner/value/assets: outpoint=%s want=%+v got=%+v",
 								badOutpoint, expectedTargetLock, recoveredTargetLock)

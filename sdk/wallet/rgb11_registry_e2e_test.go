@@ -70,7 +70,7 @@ type rgb11RegistryE2EClient struct {
 }
 
 func (c *rgb11RegistryE2EClient) GetRGB11Registration(id string) (*rgb11wallet.RGB11Registration, error) {
-	return c.GetRGB11RegistrationWithVerifier(id, c.verifier)
+	return c.getRGB11RegWithVerifier(id, c.verifier)
 }
 
 // Serve the current single-record application HTTP API with a genuine signed
@@ -245,11 +245,11 @@ func rgb11RegistryAuthorityPolicyE2E(t *testing.T) {
 	got, err := client.GetRGB11Registration(id)
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	got, err = client.SatsNetDKVSClient.GetRGB11Registration(id)
+	got, err = client.SatsNetDKVSClient.getRGB11Registration(id)
 	require.ErrorIs(t, err, dkvsindexer.ErrPermissionDenied)
 	require.Nil(t, got)
 	require.EqualValues(t, 2, reads.Load())
-	got, err = client.GetRGB11RegistrationWithVerifier(id, nil)
+	got, err = client.getRGB11RegWithVerifier(id, nil)
 	require.ErrorIs(t, err, dkvsindexer.ErrPermissionDenied)
 	require.Nil(t, got)
 	require.EqualValues(t, 2, reads.Load())

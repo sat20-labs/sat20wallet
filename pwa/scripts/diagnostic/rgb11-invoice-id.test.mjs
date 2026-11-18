@@ -21,37 +21,41 @@ const componentInit = async (name) => {
   return initializer
 }
 
-const invoiceContractID = async (asset) => {
-  const initializer = await componentInit('assetContractID')
-  const js = ts.transpileModule(`globalThis.value = ${initializer}`, {
+const evaluateInit = async (name, mocks, dependencies = []) => {
+  const initializers = await Promise.all([...dependencies, name].map(async key =>
+    `const ${key} = ${await componentInit(key)}`))
+  const js = ts.transpileModule(initializers.join('\n'), {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 },
   }).outputText
-  const computed = (factory) => ({ value: factory() })
-  return Function('props', 'computed', `${js}; return globalThis.value.value`)({ asset }, computed)
+  return Function(...Object.keys(mocks), `${js}; return ${name}`)(...Object.values(mocks))
 }
 
-test('invoice uses only contract ID', async () => {
-  const valid = 'rgb:z3e7NRle-UqSW2WZ-5LYn8wm-3xghXWw-9ZX6c9P-gTVSI4E'
-  assert.equal(await invoiceContractID({ ticker: 'r2direct@gvml24je', contract_id: valid }), valid)
-  assert.equal(await invoiceContractID({ ticker: 'r2direct@gvml24je' }), '')
+test('invoice uses the complete SDK asset key, never the display ticker', async () => {
+  const key = `rgb11:f:${'01'.repeat(32)}`
+  for (const [asset, expected] of [[{key, ticker: 'USDT'}, key], [{asset:key, ticker:'USDT'}, key], [{ticker:'USDT'}, '']]) {
+    const value = await evaluateInit('assetKey', {props: {asset}, computed: factory => ({value:factory()})})
+    assert.equal(value.value, expected)
+  }
 })
 
-test('missing ID blocks invoice call', async () => {
-  const initializer = await componentInit('generateInvoice')
-  const js = ts.transpileModule(`globalThis.generate = ${initializer}`, {
-    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 },
-  }).outputText
-  let calls = 0
-  const mocks = {
-    rgb11WriteAllowed: { value: true }, restoring: { value: false }, restoreFailed: { value: false }, scopeKey: { value: 'scope' }, requestId: { value: '' },
-    assetContractID: { value: '' }, errorMessage: { value: '' }, t: (key) => key,
-    props: { asset: { ticker: 'r2direct@gvml24je', precision: 0 } }, amount: { value: '1' },
-    decimalToRaw: () => '1', proxyEndpoint: { value: '' }, transportMode: { value: 'out-of-band' },
-    loading: { value: false }, receiveMode: { value: 'blind' }, Storage: { set: async () => {} },
-    walletManager: { createRGB11Invoice: async () => { calls++; return [null, { invoice: 'unexpected' }] } },
+test('invoice forwards SDK asset input and displays SDK rejection without a receive result', async () => {
+  // SDK validation is not duplicated here. The real WASM negative cases are in
+  // sdk-wasm-e2e.mjs (createRGB11Invoice: missing asset, zero amount, invalid transport).
+  for (const asset of ['', `rgb11:f:${'01'.repeat(32)}`]) {
+    const calls = [], message = {value:''}, loading = {value:false}, receive = {value:null}
+    const mocks = {assetKey:{value:asset}, amount:{value:' 1 '}, receiveMode:{value:'witness'},
+      transport:{value:'manual'}, proxyEndpoint:{value:' '}, message, loading, receive,
+      isOpen:{value:true}, generation:0, createWaitTimer:undefined,
+      invoiceCreationPending:{value:false}, createWaiting:{value:false}, createTimedOut:{value:false},
+      t:key=>key, load:async()=>{throw new Error('must not load on rejection')},
+      walletManager:{createRGB11Invoice:async input=>{calls.push(input);return [new Error('SDK rejected invoice'),null]}},
+    }
+    // Keep the real request guards and timer cleanup in the same closure as generate.
+    const generate = await evaluateInit('generate', mocks, ['createPending', 'isCurrent', 'clearCreateWait', 'run'])
+    await generate()
+    assert.deepEqual(calls, [{asset,amount:'1',receive_mode:'witness',transport:'manual',proxy_endpoint:''}])
+    assert.equal(message.value,'SDK rejected invoice')
+    assert.equal(receive.value,null)
+    assert.equal(loading.value,false)
   }
-  const generate = Function(...Object.keys(mocks), `${js}; return globalThis.generate`)(...Object.values(mocks))
-  await generate()
-  assert.equal(calls, 0)
-  assert.equal(mocks.errorMessage.value, 'rgb11Invoice.contractIdMissing')
 })

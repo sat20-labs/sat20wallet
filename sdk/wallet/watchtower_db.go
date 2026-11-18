@@ -73,17 +73,17 @@ func loadPunishTx(db db.KVDB, channelId, commitTxId string) ([]*wire.MsgTx, erro
 }
 
 func decodePunishTxValue(buf []byte) ([]*wire.MsgTx, error) {
-	var native nativePunishRecord
-	if DecodeFromBytes(buf, &native) == nil && native.Version != 0 {
-		if native.Version != 1 || native.ChannelID == "" || native.CommitTxID == "" || len(native.Transactions) == 0 || len(native.Proofs) == 0 {
-			return nil, fmt.Errorf("invalid native punishment record")
+	var receipt rgb11PunishRecord
+	if DecodeFromBytes(buf, &receipt) == nil && receipt.Version != 0 {
+		if receipt.Version != 1 || receipt.ChannelID == "" || receipt.CommitTxID == "" || len(receipt.Transactions) == 0 || len(receipt.Proofs) == 0 {
+			return nil, fmt.Errorf("invalid RGB11 punishment record")
 		}
-		for _, tx := range native.Transactions {
+		for _, tx := range receipt.Transactions {
 			if tx == nil {
-				return nil, fmt.Errorf("nil native punishment transaction")
+				return nil, fmt.Errorf("nil RGB11 punishment transaction")
 			}
 		}
-		return native.Transactions, nil
+		return receipt.Transactions, nil
 	}
 	result := make([]*wire.MsgTx, 0)
 	var textErr error
@@ -275,11 +275,11 @@ func deleteAllWatchtowerDataWithPending(kv db.KVDB, channelId, commitTxId string
 	}
 
 	var batch db.WriteBatch
-	native, err := loadNativePunishRecord(kv, channelId, commitTxId)
+	receipt, err := loadRGB11PunishRecord(kv, channelId, commitTxId)
 	if err != nil && !errors.Is(err, db.ErrKeyNotFound) {
 		return nil, nil, err
 	}
-	if native != nil {
+	if receipt != nil {
 		batch, err = NewAtomicWriteBatch(kv)
 		if err != nil {
 			return nil, nil, err

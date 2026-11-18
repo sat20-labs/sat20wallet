@@ -850,7 +850,7 @@ func (p *DaoContractRunTime) InitFromDB(stp ContractManager, resv ContractDeploy
 
 	// }
 
-	return p.restoreNativePublicMetadata()
+	return p.restoreRGB11PublicMetadata()
 }
 
 func (p *DaoContractRunTime) IsIdle() bool {

@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"errors"
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	"reflect"
 	"testing"
 
@@ -105,7 +106,7 @@ func TestRGB11ProjectAllocationRejectsMismatchAndPublishesAtomically(t *testing.
 		t.Fatalf("successful ProjectRGB11Allocation asset=%v, want %s", storedAsset, projectedAsset.Amount.String())
 	}
 	lock := sender.utxoLockerL1.GetLockedUtxoList()[proof.OutPoint]
-	if lock == nil || lock.Reason != rgb11wallet.LockReasonRGB || lock.ReservationID != "" {
+	if lock == nil || lock.Reason != sdkcommon.UtxoLockRGB || lock.ReservationID != "" {
 		t.Fatalf("successful ProjectRGB11Allocation carrier lock=%+v", lock)
 	}
 }

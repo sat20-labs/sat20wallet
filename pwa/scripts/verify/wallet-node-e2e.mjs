@@ -35,37 +35,40 @@ export async function runPwaNodeCases(t, fixture) {
     return api.getMinerInfo({ pubkey, network })
   }, { pubkey: publicKey, network })
   const readLocalAction = async (page, reservationID) => page.evaluate(async id => {
-    const [error, response] = await (await import('/utils/stp.ts')).default.allReservations()
-    if (error) throw error
-    if (!Array.isArray(response?.reservations)) {
-      const { snapshotWasmRuntimeDiagnostics } = await import('/utils/wasmRuntimeDiagnostics.ts')
-      const steps = snapshotWasmRuntimeDiagnostics().slice(-8)
-      throw new Error(`allReservations missing list: response=${typeof response}; keys=${Object.keys(response || {}).join(',')}; ready=${document.readyState}; wasm=${JSON.stringify(steps)}`)
+    const [error, item] = await (await import('/utils/stp.ts')).default.reservationStatus(String(id))
+    if (error) {
+      if (error.message.includes('reservation not found')) return null
+      throw error
     }
-    const item = response.reservations.find(entry => String(entry.reservation_id) === String(id))
     if (!item?.json) return null
     return { outerStatus: item.status, action: JSON.parse(item.json) }
   }, reservationID)
-  const readOperationLog = async (page, reservationID) => page.evaluate(async id => {
-    const [error, records] = await (await import('/utils/operationLog.ts')).getOperationLogs()
-    if (error) throw error
-    return records.find(record => record.action === 'miner_unstake' &&
-      record.parameters?.action === 'unstakeminer' && String(record.reservation_id) === String(id)) || null
-  }, reservationID)
+  const operationLogs = page => page.evaluate(async () =>
+    (await import('/utils/operationLog.ts')).getOperationLogs())
+  const readOperationLog = async (page, priorIDs) => {
+    const records = (await operationLogs(page)).filter(record =>
+      record.kind === 'miner_unstake' && !priorIDs.includes(record.id))
+    assert.ok(records.length <= 1, 'one unstake must create only one operation record')
+    return records[0] || null
+  }
   const totalAsset = async (page, address, asset) => {
     const amount = await walletCall(page, 'getAssetAmount', address, asset)
     return BigInt(amount.availableAmt) + BigInt(amount.lockedAmt)
   }
-  const waitForUnstake = async (page, reservationID) => {
+  const waitForUnstake = async (page, reservationID, priorIDs) => {
     const deadline = Date.now() + 15 * 60 * 1000
     let lastMineAt = 0
     while (Date.now() < deadline) {
-      const log = await readOperationLog(page, reservationID)
+      const log = await readOperationLog(page, priorIDs)
       if (log?.status === 'failed') throw new Error(`MinerUnstake failed: ${JSON.stringify(log)}`)
       if (log?.status === 'succeeded') return log
 
       const localAction = await readLocalAction(page, reservationID)
       const action = localAction?.action
+      if (action) {
+        assert.equal(String(action.Id), String(reservationID))
+        assert.equal(action.Action, 'unstakeminer')
+      }
       if (action?.TxId) {
         if (action.IsL1Tx) {
           const snapshot = await control('snapshot')
@@ -83,7 +86,7 @@ export async function runPwaNodeCases(t, fixture) {
       }
       await new Promise(resolve => setTimeout(resolve, 750))
     }
-    const finalLog = await readOperationLog(page, reservationID)
+    const finalLog = await readOperationLog(page, priorIDs)
     const finalAction = await readLocalAction(page, reservationID).catch(error => ({ readError: error.message }))
     throw new Error(`MinerUnstake did not complete within 15 minutes: ${JSON.stringify({ finalLog, finalAction })}`)
   }
@@ -274,16 +277,18 @@ export async function runPwaNodeCases(t, fixture) {
         const beforeSnapshot = await control('snapshot')
         assert.deepEqual(beforeSnapshot.l1.pending_txids, [], 'previous node action left L1 transactions pending')
         const beforeBalance = await totalAsset(page, actor.address, fixture.stake.asset)
+        const priorIDs = (await operationLogs(page)).map(record => record.id)
         const receipt = await walletCall(page, 'minerUnstake', '1')
         const reservationID = Number(receipt.resvId)
         assert.ok(Number.isSafeInteger(reservationID) && reservationID >= 0,
           'unstake must create a tracked local action')
         assert.match(receipt.txId, /^[0-9a-f]{64}$/)
-        const completion = await waitForUnstake(page, receipt.resvId)
+        const original = await readLocalAction(page, receipt.resvId)
+        assert.equal(String(original.action.Id), String(receipt.resvId))
+        assert.equal(original.action.Action, 'unstakeminer')
+        const completion = await waitForUnstake(page, receipt.resvId, priorIDs)
         assert.equal(completion.status, 'succeeded')
-        assert.equal(completion.action, 'miner_unstake')
-        assert.equal(completion.reservation_type, 'localaction')
-        assert.equal(String(completion.reservation_id), String(receipt.resvId))
+        assert.equal(completion.kind, 'miner_unstake')
 
         await expect.poll(async () => {
           const result = await readMiner(page, publicKey)

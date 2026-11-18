@@ -150,7 +150,7 @@ func (e *rgb11ReadFault) GetUTXO(outpoint string) (*rgb11wallet.BitcoinUTXO, err
 
 func mustRGB11ConfiguredStore(t *testing.T, manager *Manager) *dkvsStore {
 	t.Helper()
-	store, err := manager.rgbManager.configuredRGB11Store()
+	store, err := manager.accountDKVSStore()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,9 +387,7 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 		t.Fatalf("unregistered receiver err=%v", err)
 	}
 
-	endpoint, err := recipient.EnableConfiguredRGB11AddressReceive(RGB11ReceiveCapabilityOptions{
-		RecordOptions: recordOptions,
-	})
+	endpoint, err := recipient.EnableConfiguredRGB11AddressReceive(RGB11ReceiveCapabilityOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -432,7 +430,7 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < rgb11AddressMailboxPageSize; i++ {
+	for i := 0; i < 256; i++ {
 		messageID := fmt.Sprintf("%064x", i)
 		key, err := dkvsindexer.MailMsgKey(endpoint.AccountID, senderID, messageID)
 		if err != nil {
@@ -455,9 +453,8 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 		}
 		remote.seedInternalMailboxRecord(record)
 	}
-	deliveryOptions := RGB11AddressDeliveryOptions{RecordOptions: recordOptions, InlineLimit: 1}
-	firstDelivery, err := sender.rgbManager.deliverRGB11AddressTransferStore(
-		mustRGB11ConfiguredStore(t, sender), prepared.State.TransferID, deliveryOptions,
+	firstDelivery, err := sender.rgbManager.deliverRGBAddress(
+		prepared.State.TransferID,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -469,8 +466,8 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondDelivery, err := sender.rgbManager.deliverRGB11AddressTransferStore(
-		mustRGB11ConfiguredStore(t, sender), prepared.State.TransferID, deliveryOptions,
+	secondDelivery, err := sender.rgbManager.deliverRGBAddress(
+		prepared.State.TransferID,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -518,8 +515,7 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 		t.Fatalf("refresh restored source before ACK: %v", err)
 	}
 	sourceProof, err := sender.rgbManager.projectionStore.LoadProof(sourceOutpoint, imported.AssetName)
-	if err != nil || sourceProof == nil || sourceProof.OutPoint != sourceOutpoint ||
-		!sender.rgbManager.rgb11CarrierAvailable(sourceOutpoint) {
+	if err != nil || sourceProof == nil || sourceProof.OutPoint != sourceOutpoint {
 		t.Fatalf("restored original source is not verified: proof_present=%t err=%v", sourceProof != nil, err)
 	}
 	foundPending := false
@@ -563,28 +559,24 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	recipientStore := mustRGB11ConfiguredStore(t, recipient)
-	if _, _, err := recipient.rgbManager.acceptRGB11AddressMailboxStore(
-		context.Background(), recipientStore, cloneDKVSValue(forged),
-		deliveryOptions,
-	); !errors.Is(err, ErrRGB11AddressMailbox) {
-		t.Fatalf("replayed consignment err=%v", err)
+	if _, err := decodeWalletDirectRecord(recipientWallet, forged); err == nil {
+		t.Fatal("replayed consignment accepted with a forged outer record")
 	}
 
 	firstSync, err := recipient.SyncConfiguredRGB11AddressMailbox(
-		context.Background(), dkvsindexer.RecordVerificationOptions{}, deliveryOptions,
+		context.Background(), dkvsindexer.RecordVerificationOptions{},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if firstSync.Scanned != rgb11AddressMailboxPageSize || firstSync.Received != 0 ||
-		firstSync.Invalid != rgb11AddressMailboxPageSize {
+	if firstSync.Scanned != 256 || firstSync.Received != 0 ||
+		firstSync.Invalid != 256 {
 		t.Fatalf("first mailbox page=%+v", firstSync)
 	}
 	savedNode := recipient.serverNode
 	recipient.serverNode = nil
 	failedSync, err := recipient.SyncConfiguredRGB11AddressMailbox(
-		context.Background(), dkvsindexer.RecordVerificationOptions{}, deliveryOptions,
+		context.Background(), dkvsindexer.RecordVerificationOptions{},
 	)
 	recipient.serverNode = savedNode
 	if err != nil {
@@ -612,7 +604,7 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	recipient.serverNode = NewNode(ackClient, "message.test", SERVER_NODE,
 		messageClient.CoreNodePubKey(), messageClient.CoreNodePubKey())
 	syncResult, err := recipient.SyncConfiguredRGB11AddressMailbox(
-		context.Background(), dkvsindexer.RecordVerificationOptions{}, deliveryOptions,
+		context.Background(), dkvsindexer.RecordVerificationOptions{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -658,7 +650,7 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	// reservation itself. No PWA-side "already tried" state is required.
 	logRGB11BroadcastState(t, "before-ack", sender, prepared.State.TransferID, accepted)
 	senderSync, err := sender.SyncConfiguredRGB11AddressMailbox(
-		context.Background(), dkvsindexer.RecordVerificationOptions{}, deliveryOptions,
+		context.Background(), dkvsindexer.RecordVerificationOptions{},
 	)
 	logRGB11BroadcastState(t, "after-ack", sender, prepared.State.TransferID, accepted)
 	if err != nil {
@@ -737,7 +729,7 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 			expectedSpends[sourceOutpoint], err)
 	}
 	locked = recipient.utxoLockerL1.GetLockedUtxoList()
-	if locked[recipientOutpoint] == nil || locked[recipientOutpoint].Reason != rgb11wallet.LockReasonRGB {
+	if locked[recipientOutpoint] == nil || locked[recipientOutpoint].Reason != sdkcommon.UtxoLockRGB {
 		t.Fatalf("confirmed lock=%+v", locked[recipientOutpoint])
 	}
 	pending, err = sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
@@ -814,7 +806,7 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 		t.Fatal(err)
 	}
 	recoveryResult, err := restoredRecipient.SyncConfiguredRGB11AddressMailbox(
-		context.Background(), dkvsindexer.RecordVerificationOptions{}, deliveryOptions,
+		context.Background(), dkvsindexer.RecordVerificationOptions{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -841,7 +833,7 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	}
 	beforeLocks := recipient.utxoLockerL1.GetLockedUtxoList()
 	beforeLock := beforeLocks[recipientOutpoint]
-	if beforeLock == nil || beforeLock.Reason != rgb11wallet.LockReasonRGB {
+	if beforeLock == nil || beforeLock.Reason != sdkcommon.UtxoLockRGB {
 		t.Fatal("read-fault boundary requires the original verified RGB lock")
 	}
 	beforeRecords, err := recipient.rgbManager.projectionStore.ReadLocalRecords()
@@ -870,9 +862,8 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 		stateErr == nil, diagState != nil, stateErr == nil && reflect.DeepEqual(beforeState, diagState),
 		proofErr == nil, diagProof != nil, proofErr == nil && reflect.DeepEqual(beforeProof, diagProof),
 		diagLock != nil, reflect.DeepEqual(beforeLock, diagLock))
-	t.Logf("rgb-read-fault-diag result_nil=%t raw_error=%t inconsistent_error=%t carrier_available=%t scope_available=%t consistency=%s",
+	t.Logf("rgb-read-fault-diag result_nil=%t raw_error=%t inconsistent_error=%t consistency=%s",
 		result == nil, errors.Is(refreshErr, readErr), errors.Is(refreshErr, ErrRGB11Inconsistent),
-		recipient.rgbManager.rgb11CarrierAvailable(recipientOutpoint), recipient.rgbManager.rgb11ProjectionAvailable(),
 		recipient.rgbManager.consistencyStatus)
 	if beforeLock != nil && diagLock != nil {
 		diagExpected := *beforeLock
@@ -896,9 +887,6 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 		result.Settled != 0 || result.Pending != 0 || result.Reorged != 0 || result.Conflicted != 0 || result.Unresolved != 0 {
 		t.Fatalf("read fault result=%+v err=%v", result, refreshErr)
 	}
-	if recipient.rgbManager.rgb11CarrierAvailable(recipientOutpoint) {
-		t.Fatal("unavailable evidence left the affected carrier spendable")
-	}
 	afterState, err := recipient.rgbManager.projectionStore.LoadTransferState(prepared.State.TransferID)
 	if err != nil {
 		t.Fatal(err)
@@ -910,7 +898,7 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	afterLocks := recipient.utxoLockerL1.GetLockedUtxoList()
 	afterLock := afterLocks[recipientOutpoint]
 	expectedLock := *beforeLock
-	expectedLock.Reason = rgb11wallet.LockReasonPending
+	expectedLock.Reason = sdkcommon.UtxoLockRGBPending
 	if !reflect.DeepEqual(beforeState, afterState) || !reflect.DeepEqual(beforeProof, afterProof) ||
 		!reflect.DeepEqual(&expectedLock, afterLock) {
 		t.Fatal("read fault lost data or changed more than the target carrier lock reason")
@@ -951,8 +939,7 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(beforeProof, retryProof) {
 		t.Fatalf("healthy retry changed original proof: %v", err)
 	}
-	if !recipient.rgbManager.rgb11CarrierAvailable(recipientOutpoint) ||
-		recipient.rgbManager.consistencyStatus != "ok" ||
+	if recipient.rgbManager.consistencyStatus != "ok" ||
 		!reflect.DeepEqual(beforeLocks, recipient.utxoLockerL1.GetLockedUtxoList()) {
 		t.Fatal("healthy retry did not restore the original carrier protection")
 	}
@@ -1002,9 +989,8 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := sender.rgbManager.AcceptRGB11AddressACK(oldFormatACK,
-		dkvsindexer.RecordVerificationOptions{}); !errors.Is(err, ErrRGB11AddressMailbox) {
-		t.Fatalf("outer-signed ACK format was accepted: %v", err)
+	if _, err := decodeWalletDirectRecord(senderWallet, oldFormatACK); err == nil {
+		t.Fatal("outer-signed ACK format was accepted")
 	}
 
 	if _, err := hex.DecodeString(prepared.State.AddressMessageID); err != nil {
@@ -1060,5 +1046,286 @@ func TestRGB11AddressNACKCancelsBeforeBroadcast(t *testing.T) {
 	}
 	if lock := fixture.manager.utxoLockerL1.GetLockedUtxoList()[fixture.input]; lock != nil {
 		t.Fatalf("address NACK left input locked: %+v", lock)
+	}
+}
+
+func TestRGBDirectPreview(t *testing.T) {
+	sender, recipient, imported, _, _ := newRGB11GenericSendFixture(t)
+	pendingKeys := func() map[string]bool {
+		t.Helper()
+		records, err := sender.rgbManager.projectionStore.ExportSnapshot()
+		if err != nil {
+			t.Fatal(err)
+		}
+		keys := make(map[string]bool)
+		for _, record := range records {
+			if strings.HasPrefix(record.Key, "pending-") {
+				keys[record.Key] = true
+			}
+		}
+		return keys
+	}
+	operationIDs := func() map[string]bool {
+		t.Helper()
+		logs, err := sender.GetOperationLogs()
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := make(map[string]bool, len(logs))
+		for _, log := range logs {
+			ids[log.ID] = true
+		}
+		return ids
+	}
+	beforePending := pendingKeys()
+	beforeLocks := sender.utxoLockerL1.GetLockedUtxoList()
+	beforeLogs := operationIDs()
+
+	preview, err := sender.PrepareRGBTransfer(context.Background(), RGBSendRequest{
+		Recipients: []RGBRecipient{{
+			Destination: recipient.wallet.GetAddress(),
+			Asset:       imported.AssetName.String(),
+			Amount:      "20000",
+		}},
+		FeeRate: 2,
+	})
+	if err != nil {
+		t.Fatalf("prepare direct address preview: %v", err)
+	}
+	if preview == nil || preview.Status != "preview" || preview.FeeSats <= 0 {
+		t.Fatalf("direct preview did not return its fee: %+v", preview)
+	}
+	assertUnchanged := func(phase string) {
+		t.Helper()
+		if after := pendingKeys(); !reflect.DeepEqual(beforePending, after) {
+			t.Fatalf("%s changed pending records: before=%v after=%v", phase, beforePending, after)
+		}
+		if after := sender.utxoLockerL1.GetLockedUtxoList(); !reflect.DeepEqual(beforeLocks, after) {
+			t.Fatalf("%s changed lock reasons or reservations: before=%v after=%v", phase, beforeLocks, after)
+		}
+		if after := operationIDs(); !reflect.DeepEqual(beforeLogs, after) {
+			t.Fatalf("%s created or changed operation logs: before=%v after=%v", phase, beforeLogs, after)
+		}
+	}
+	assertUnchanged("preview")
+
+	cancelled, err := sender.CancelRGBTransfer(context.Background(), preview.ID)
+	if err != nil || cancelled == nil || cancelled.Status != "cancelled" {
+		t.Fatalf("cancel in-memory preview: result=%+v err=%v", cancelled, err)
+	}
+	assertUnchanged("cancel preview")
+	if _, err := sender.ConfirmRGBTransfer(context.Background(), preview.ID, nil); err == nil {
+		t.Fatal("confirmation after preview cancellation unexpectedly succeeded")
+	}
+	assertUnchanged("confirm cancelled preview")
+}
+
+func TestRGBDirectPreviewConflict(t *testing.T) {
+	sender, recipient, imported, evidence, _ := newRGB11GenericSendFixtureWithCarrier(t, 1_000)
+	preview, err := sender.PrepareRGBTransfer(context.Background(), RGBSendRequest{
+		Recipients: []RGBRecipient{{
+			Destination: recipient.wallet.GetAddress(),
+			Asset:       imported.AssetName.String(),
+			Amount:      "20000",
+		}},
+		FeeRate: 2,
+	})
+	if err != nil || preview == nil {
+		t.Fatalf("prepare direct address preview: result=%+v err=%v", preview, err)
+	}
+	value, ok := sender.rgbDirectPreviews.Load(preview.ID)
+	if !ok || len(value.(*rgb11DirectPreview).inputs) == 0 {
+		t.Fatal("preview did not retain its selected inputs in memory")
+	}
+	locksBefore := sender.utxoLockerL1.GetLockedUtxoList()
+	var reservedInput string
+	for _, input := range value.(*rgb11DirectPreview).inputs {
+		if locksBefore[input] == nil {
+			reservedInput = input
+			break
+		}
+	}
+	if reservedInput == "" {
+		t.Fatalf("preview has no unreserved input for a competing-spend check: inputs=%v locks=%v",
+			value.(*rgb11DirectPreview).inputs, locksBefore)
+	}
+	const competingReservation = "competing-direct-send"
+	if err := sender.utxoLockerL1.TryReserve([]string{reservedInput},
+		sdkcommon.UtxoLockRGBPending, competingReservation); err != nil {
+		t.Fatalf("reserve preview input as competing operation: %v", err)
+	}
+	defer func() {
+		_ = sender.utxoLockerL1.ReleaseReservation([]string{reservedInput}, competingReservation)
+	}()
+	beforePending, err := sender.rgbManager.projectionStore.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeLogs, err := sender.GetOperationLogs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence.rgb11FlowEvidence.mu.Lock()
+	broadcastsBefore := evidence.rgb11FlowEvidence.broadcastCount
+	evidence.rgb11FlowEvidence.mu.Unlock()
+	if _, err := sender.ConfirmRGBTransfer(context.Background(), preview.ID, nil); err == nil {
+		t.Fatal("confirmation succeeded despite a competing input reservation")
+	}
+	afterPending, err := sender.rgbManager.projectionStore.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(beforePending, afterPending) {
+		t.Fatal("failed input reservation created a pending transfer")
+	}
+	afterLogs, err := sender.GetOperationLogs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(beforeLogs, afterLogs) {
+		t.Fatal("failed input reservation created an operation log")
+	}
+	evidence.rgb11FlowEvidence.mu.Lock()
+	broadcastsAfter := evidence.rgb11FlowEvidence.broadcastCount
+	evidence.rgb11FlowEvidence.mu.Unlock()
+	if broadcastsAfter != broadcastsBefore {
+		t.Fatalf("failed input reservation broadcast: before=%d after=%d", broadcastsBefore, broadcastsAfter)
+	}
+	lock := sender.utxoLockerL1.GetLockedUtxoList()[reservedInput]
+	if lock == nil || lock.ReservationID != competingReservation {
+		t.Fatalf("failed confirmation changed competing reservation: %+v", lock)
+	}
+	if _, err := sender.CancelRGBTransfer(context.Background(), preview.ID); err != nil {
+		t.Fatalf("clean up uncommitted preview: %v", err)
+	}
+}
+
+func TestRGBDirectConfirmOriginal(t *testing.T) {
+	sender, recipient, imported, evidence, rpc := newRGB11GenericSendFixtureWithCarrier(t, 1_000)
+	operationIDs := func() map[string]bool {
+		t.Helper()
+		logs, err := sender.GetOperationLogs()
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := make(map[string]bool, len(logs))
+		for _, log := range logs {
+			ids[log.ID] = true
+		}
+		return ids
+	}
+	beforeLogs := operationIDs()
+	preview, err := sender.PrepareRGBTransfer(context.Background(), RGBSendRequest{
+		Recipients: []RGBRecipient{{
+			Destination: recipient.wallet.GetAddress(),
+			Asset:       imported.AssetName.String(),
+			Amount:      "20000",
+		}},
+		FeeRate: 2,
+	})
+	if err != nil || preview == nil || preview.Status != "preview" {
+		t.Fatalf("prepare direct preview: result=%+v err=%v", preview, err)
+	}
+	value, ok := sender.rgbDirectPreviews.Load(preview.ID)
+	if !ok {
+		t.Fatal("SDK did not retain the preview candidate")
+	}
+	candidate := value.(*rgb11DirectPreview)
+	originalTxID := candidate.pending[0].State.WitnessTxID
+	originalInputs := append([]string(nil), candidate.pending[0].State.InputOutPoints...)
+	if preview.TxID != originalTxID || len(originalInputs) == 0 {
+		t.Fatalf("preview identity mismatch: view=%+v candidate=%+v", preview, candidate.pending[0].State)
+	}
+	if !reflect.DeepEqual(beforeLogs, operationIDs()) {
+		t.Fatal("preview created an operation log")
+	}
+
+	// If Confirm tries to resolve the recipient, select assets, fetch UTXOs,
+	// or rebuild fees, the existing candidate cannot be reproduced from these
+	// unavailable source views. Confirmation must consume the exact preview.
+	savedOutputs, savedPlain := rpc.outputs, rpc.plain
+	evidence.rgb11FlowEvidence.mu.Lock()
+	savedUTXOs := evidence.rgb11FlowEvidence.utxos
+	evidence.rgb11FlowEvidence.utxos = make(map[string]*rgb11wallet.BitcoinUTXO)
+	evidence.rgb11FlowEvidence.mu.Unlock()
+	rpc.outputs, rpc.plain = make(map[string]*TxOutput), nil
+	dependenciesRestored := false
+	restoreDependencies := func() {
+		rpc.outputs, rpc.plain = savedOutputs, savedPlain
+		evidence.rgb11FlowEvidence.mu.Lock()
+		evidence.rgb11FlowEvidence.utxos = savedUTXOs
+		evidence.rgb11FlowEvidence.mu.Unlock()
+		dependenciesRestored = true
+	}
+	defer func() {
+		if !dependenciesRestored {
+			restoreDependencies()
+		}
+	}()
+	evidence.rgb11FlowEvidence.mu.Lock()
+	broadcastsBefore := evidence.rgb11FlowEvidence.broadcastCount
+	evidence.rgb11FlowEvidence.mu.Unlock()
+
+	confirmed, err := sender.ConfirmRGBTransfer(context.Background(), preview.ID, nil)
+	restoreDependencies()
+	if err != nil || confirmed == nil || confirmed.TxID != originalTxID || confirmed.Status != "awaiting_persistence" {
+		t.Fatalf("confirm did not reuse unbroadcast preview: result=%+v err=%v", confirmed, err)
+	}
+	stored, err := sender.rgbManager.projectionStore.LoadPendingTransfer(preview.ID)
+	if err != nil || stored.State.WitnessTxID != originalTxID ||
+		!reflect.DeepEqual(stored.State.InputOutPoints, originalInputs) || stored.State.Status != "delivered" {
+		t.Fatalf("confirmation changed preview transaction/input set: state=%+v err=%v", stored, err)
+	}
+	evidence.rgb11FlowEvidence.mu.Lock()
+	broadcastsAfterConfirm := evidence.rgb11FlowEvidence.broadcastCount
+	evidence.rgb11FlowEvidence.mu.Unlock()
+	if broadcastsAfterConfirm != broadcastsBefore {
+		t.Fatalf("unacknowledged direct transaction broadcast: before=%d after=%d", broadcastsBefore, broadcastsAfterConfirm)
+	}
+	if !reflect.DeepEqual(beforeLogs, operationIDs()) {
+		t.Fatal("confirmation created an operation log before broadcast")
+	}
+
+	// Simulate the wallet closing after its first confirmation. The existing
+	// mailbox worker receives the recipient's durable ACK and resumes broadcast.
+	received, err := recipient.SyncConfiguredRGB11AddressMailbox(
+		context.Background(), dkvsindexer.RecordVerificationOptions{},
+	)
+	if err != nil || received == nil || received.Received != 1 {
+		t.Fatalf("recipient did not accept direct delivery: result=%+v err=%v", received, err)
+	}
+	sent, err := sender.SyncConfiguredRGB11AddressMailbox(
+		context.Background(), dkvsindexer.RecordVerificationOptions{},
+	)
+	if err != nil || sent == nil || sent.ACKs != 1 {
+		t.Fatalf("sender did not consume direct ACK: result=%+v err=%v", sent, err)
+	}
+	stored, err = sender.rgbManager.projectionStore.LoadPendingTransfer(preview.ID)
+	if err != nil || stored.State.WitnessTxID != originalTxID ||
+		!reflect.DeepEqual(stored.State.InputOutPoints, originalInputs) ||
+		!rgb11BroadcastCompleteStatus(stored.State.Status) {
+		t.Fatalf("ACK continuation did not broadcast the preview transaction: state=%+v err=%v", stored, err)
+	}
+	evidence.rgb11FlowEvidence.mu.Lock()
+	broadcastsAfterACK := evidence.rgb11FlowEvidence.broadcastCount
+	evidence.rgb11FlowEvidence.mu.Unlock()
+	if broadcastsAfterACK != broadcastsBefore+1 {
+		t.Fatalf("ACK continuation broadcast count: before=%d after=%d", broadcastsBefore, broadcastsAfterACK)
+	}
+	logs, err := sender.GetOperationLogs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundBroadcastLog := false
+	for _, log := range logs {
+		if log.Result["rgb_id"] == preview.ID {
+			if log.TxID != originalTxID {
+				t.Fatalf("Direct operation log references %q instead of preview tx %q", log.TxID, originalTxID)
+			}
+			foundBroadcastLog = true
+		}
+	}
+	if !foundBroadcastLog {
+		t.Fatal("background ACK broadcast did not create a Direct operation log")
 	}
 }

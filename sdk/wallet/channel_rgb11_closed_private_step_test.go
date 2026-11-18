@@ -12,20 +12,20 @@ import (
 	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
 )
 
-func rgbClosedPrivateStepFixture(t *testing.T) (*rgbClosedPrivateBurnFixture, *nativeReceiptStep) {
+func rgbClosedPrivateStepFixture(t *testing.T) (*rgbClosedPrivateBurnFixture, *rgb11ReceiptStep) {
 	t.Helper()
 	f := newRGBClosedPrivateBurnFixture(t)
 	id := f.receipt.payload.L1TxId
 	f.graph.closedPrivateProducer, f.graph.requiredPrivate = id, string(f.mapping.script)
-	f.graph.descends = map[string]*nativeReceiptDescend{id: f.receipt}
+	f.graph.descends = map[string]*rgb11ReceiptDescend{id: f.receipt}
 	f.graph.usedDescends = map[string]bool{f.receipt.id: false}
-	step := &nativeReceiptStep{id: id, inputs: []*nativeReceiptAllocation{{amount: big.NewInt(6000), mapping: f.mapping}}}
+	step := &rgb11ReceiptStep{id: id, inputs: []*rgb11ReceiptAllocation{{amount: big.NewInt(6000), mapping: f.mapping}}}
 	for i, amount := range []int64{2500, 2475, 1025} {
 		script := f.mapping.script
 		if i == 2 {
 			script = []byte{0x51}
 		}
-		step.outputs = append(step.outputs, &nativeReceiptAllocation{point: id + ":" + string(rune('0'+i)), producer: id,
+		step.outputs = append(step.outputs, &rgb11ReceiptAllocation{point: id + ":" + string(rune('0'+i)), producer: id,
 			amount: big.NewInt(amount), output: wire.NewTxOut(330, script)})
 	}
 	return f, step
@@ -122,9 +122,9 @@ func TestSTPRGBClosedPrivateTerminalRejectsConsumedOrRemappedSelection(t *testin
 				t.Fatal(err)
 			}
 			step.complete = true
-			f.graph.steps = map[string]*nativeReceiptStep{step.id: step}
+			f.graph.steps = map[string]*rgb11ReceiptStep{step.id: step}
 			selected := step.outputs[0]
-			f.graph.points = map[string][]*nativeReceiptAllocation{selected.point: {selected}}
+			f.graph.points = map[string][]*rgb11ReceiptAllocation{selected.point: {selected}}
 			f.graph.seenRequiredPrivate = true
 			switch name {
 			case "selectedMissing":
@@ -140,7 +140,7 @@ func TestSTPRGBClosedPrivateTerminalRejectsConsumedOrRemappedSelection(t *testin
 			case "releasedSibling":
 				step.outputs[2].mapping = nil
 			case "publicSibling":
-				step.outputs[2].mapping = &nativeReceiptMapping{public: true}
+				step.outputs[2].mapping = &rgb11ReceiptMapping{public: true}
 			case "unseenPrivate":
 				f.graph.seenRequiredPrivate = false
 			case "incompleteMain":
@@ -182,7 +182,7 @@ func TestSTPRGBClosedPrivateRequiresExactCurrentSource(t *testing.T) {
 			case "invalidProducer":
 				producer = "not-a-transaction"
 			}
-			if err := manager.validateSTPRGBClosedPrivateTerminal(&nativeSettlementChains{}, validated, point, script, producer, nil); err == nil {
+			if err := manager.validateSTPRGBClosedPrivateTerminal(&settlementChains{}, validated, point, script, producer, nil); err == nil {
 				t.Fatal("non-current or foreign private carrier reached settlement validation")
 			}
 		})

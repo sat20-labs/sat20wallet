@@ -47,6 +47,7 @@ type spAccountSyncDisk struct {
 
 type spScanAccount struct {
 	walletID     int64
+	wallet       *InternalWallet
 	accountIndex uint32
 	keys         SilentPayKeys
 	fingerprint  string
@@ -88,7 +89,7 @@ func (p *Manager) getSPScanAccounts() ([]*spScanAccount, error) {
 				return nil, err
 			}
 			result = append(result, &spScanAccount{
-				walletID: id, accountIndex: index, fingerprint: walletFingerprint(info.Wallet),
+				walletID: id, wallet: w, accountIndex: index, fingerprint: walletFingerprint(info.Wallet),
 				keys:   keys,
 				result: SPAccountBalance{WalletID: id, AccountIndex: index},
 			})
@@ -99,6 +100,18 @@ func (p *Manager) getSPScanAccounts() ([]*spScanAccount, error) {
 
 func spIndexerExpectedNetwork() string {
 	return GetChainParam().Name
+}
+
+// A completed network scan must not recreate rows after a wallet deletion.
+// Caller holds the catalog read lock until the scan's local batch is flushed.
+func (p *Manager) checkSPScanAccounts(accounts []*spScanAccount) error {
+	for _, a := range accounts {
+		info := p.walletInfoMap[a.walletID]
+		if info == nil || info.Wallet != a.wallet || !info.SPEnabled[a.accountIndex] {
+			return errAccountSnapshotChanged
+		}
+	}
+	return nil
 }
 
 func spParseFoundTransaction(raw string, txid string) (*wire.MsgTx, error) {
@@ -310,6 +323,11 @@ func (p *Manager) SyncSilentPayLive(ctx context.Context) ([]SPAccountBalance, er
 		next = page.NextCursor
 	}
 	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	if err := p.checkSPScanAccounts(accounts); err != nil {
 		return nil, err
 	}
 	batch := p.db.NewWriteBatch()

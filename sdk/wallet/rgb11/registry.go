@@ -85,14 +85,7 @@ func (value *RGB11ContractValue) registration() (*RGB11Registration, error) {
 	if err != nil || !bytes.Equal(public, canonical) {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
-	schema, ok := container.Value.Field("schema")
-	if !ok {
-		return nil, dkvsindexer.ErrInvalidRecord
-	}
-	types, ok := container.Value.Field("types")
-	if !ok {
-		return nil, dkvsindexer.ErrInvalidRecord
-	}
+	schema, types := container.SchemaValues()
 	genesis, ok := container.Value.Field("genesis")
 	if !ok {
 		return nil, dkvsindexer.ErrInvalidRecord

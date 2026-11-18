@@ -138,8 +138,8 @@ type RemoteSignMoreData_Contract struct {
 	Action                   string                            `json:"action"`
 	MoreData                 []byte                            `json:"more"` // 有时候Tx中无法放入足够数据
 	RGB11Proof               *RGB11SigningProof                `json:"rgb11,omitempty"`
-	NativeWithdrawal         bool                              `json:"nativeWithdrawal,omitempty"`
-	NativeSettlementReceipts []*NativeChannelSettlementReceipt `json:"nativeSettlementReceipts,omitempty"`
+	RGB11Withdrawal         bool                              `json:"rgb11Withdrawal,omitempty"`
+	RGB11SettlementReceipts []*RGB11ChannelSettlementReceipt `json:"rgb11SettlementReceipts,omitempty"`
 }
 
 // RGB11SigningProof is the private proof sidecar of a channel signing request.

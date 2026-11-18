@@ -108,7 +108,7 @@ func (p *LaunchPoolContract) GetAssetName() *swire.AssetName {
 // 发射水位：asset num
 func (p *LaunchPoolContract) TotalAssetToMint() *Decimal {
 	if p.AssetName.Protocol == "rgb11" {
-		return p.nativeLaunchRatioAmount(p.LaunchRatio)
+		return p.rgb11LaunchRatioAmount(p.LaunchRatio)
 	}
 	return p.launchAssetAmount(p.MaxSupply * int64(p.LaunchRatio) / 100)
 }
@@ -116,7 +116,7 @@ func (p *LaunchPoolContract) TotalAssetToMint() *Decimal {
 // 铸造的总额度: asset num
 func (p *LaunchPoolContract) MaxAssetToMint() *Decimal {
 	if p.AssetName.Protocol == "rgb11" {
-		return p.nativeLaunchRatioAmount(LAUNCH_POOL_MAX_RATION)
+		return p.rgb11LaunchRatioAmount(LAUNCH_POOL_MAX_RATION)
 	}
 	return p.launchAssetAmount(p.MaxSupply * int64(LAUNCH_POOL_MAX_RATION) / 100)
 }
@@ -134,7 +134,7 @@ func (p *LaunchPoolContract) CheckContent() error {
 	if err != nil {
 		return err
 	}
-	if err := p.checkNativeLaunchPoolContent(); err != nil {
+	if err := p.checkRGB11LaunchPoolContent(); err != nil {
 		return err
 	}
 	if p.AssetName.Protocol == indexer.PROTOCOL_NAME_BRC20 && len(p.AssetName.Ticker) != 4 { // 暂时不支持5字符
@@ -226,7 +226,7 @@ func (p *LaunchPoolContract) Encode() ([]byte, error) {
 		AddInt64(int64(p.ReserveRatio)).
 		AddData([]byte(p.DisplayName))
 	if p.AssetName.Protocol == "rgb11" {
-		extension, err := p.encodeNativeLaunchPoolIdentity()
+		extension, err := p.encodeRGB11LaunchPoolIdentity()
 		if err != nil {
 			return nil, err
 		}
@@ -325,7 +325,7 @@ func (p *LaunchPoolContract) Decode(data []byte) error {
 		if !tokenizer.Next() || tokenizer.Err() != nil {
 			return fmt.Errorf("missing fixed RGB genesis identity")
 		}
-		if err := p.decodeNativeLaunchPoolIdentity(tokenizer.Data()); err != nil {
+		if err := p.decodeRGB11LaunchPoolIdentity(tokenizer.Data()); err != nil {
 			return err
 		}
 		if tokenizer.Next() || tokenizer.Err() != nil {
@@ -403,7 +403,7 @@ func (p *LaunchPoolContract) DeployFee(feeRate int64) int64 {
 		total += DEFAULT_SERVICE_FEE_DEPLOY_CONTRACT
 
 	case "rgb11":
-		// The fixed NIA is issued locally; installation funds one native
+		// The fixed NIA is issued locally; installation funds one RGB11
 		// Bitcoin transfer, its carrier and the L2 activation/AMM operations.
 		total = CalcFee_SplicingIn(1, feeLen, p.GetAssetName(), feeRate, 0, 0) + 330 +
 			2*DEFAULT_FEE_SATSNET + SWAP_INVOKE_FEE + DEFAULT_SERVICE_FEE_DEPLOY_CONTRACT
@@ -625,7 +625,7 @@ func (p *LaunchPoolContractRunTime) InitFromContent(content []byte, stp Contract
 	p.N = p.BindingSat
 	if p.AssetName.Protocol == "rgb11" {
 		p.Divisibility, p.N = p.RGBPrecision, 0
-		p.nativeMetadataInitialized = true
+		p.rgb11MetadataInitialized = true
 	}
 	return nil
 }
@@ -648,12 +648,12 @@ func (p *LaunchPoolContractRunTime) InitFromDB(stp ContractManager, resv Contrac
 	}
 	p.init()
 	if p.AssetName.Protocol == "rgb11" {
-		if err := p.checkNativeLaunchPoolContent(); err != nil {
+		if err := p.checkRGB11LaunchPoolContent(); err != nil {
 			return err
 		}
 		p.Divisibility, p.N = p.RGBPrecision, 0
-		p.nativeMetadataInitialized = true
-		if err := p.restoreNativePublicMetadata(); err != nil {
+		p.rgb11MetadataInitialized = true
+		if err := p.restoreRGB11PublicMetadata(); err != nil {
 			return err
 		}
 	}
@@ -747,7 +747,7 @@ func (p *LaunchPoolContractRunTime) DeploySelf() bool {
 
 func (p *LaunchPoolContractRunTime) AllowDeploy() error {
 	if p.AssetName.Protocol == "rgb11" {
-		return p.allowNativeLaunchPoolDeploy()
+		return p.allowRGB11LaunchPoolDeploy()
 	}
 
 	// 看看对应的资产是否存在
@@ -797,7 +797,7 @@ func (p *LaunchPoolContractRunTime) UnconfirmedTxId_SatsNet() string {
 
 func (p *LaunchPoolContractRunTime) GetDeployAction() *ContractDeployAction {
 	if p.AssetName.Protocol == "rgb11" && p.HasExpanded == 0 {
-		return &ContractDeployAction{Action: installNativeLaunchPool, Name: "installNativeRGBLaunchPool"}
+		return &ContractDeployAction{Action: installRGB11LaunchPool, Name: "installRGB11LaunchPool"}
 	}
 	if p.HasDeployed == 0 {
 		return &ContractDeployAction{
@@ -1429,7 +1429,7 @@ func (p *LaunchPoolContractRunTime) CheckInvokeParam(param string) (int64, error
 			if dAmt.Sign() <= 0 || (p.Limit > 0 && dAmt.Cmp(p.launchAssetAmount(p.Limit)) > 0) {
 				return 0, fmt.Errorf("invalid RGB launchpool mint amount %s", amt)
 			}
-			return p.nativeLaunchMintValue(dAmt)
+			return p.rgb11LaunchMintValue(dAmt)
 		}
 		if p.Limit > 0 && dAmt.Int64() > p.Limit {
 			return 0, fmt.Errorf("mint amount %s exceed the limit %d", amt, p.Limit)
@@ -1549,7 +1549,7 @@ func (p *LaunchPoolContractRunTime) InvokeWithBlock_SatsNet(data *InvokeDataInBl
 func (p *LaunchPoolContractRunTime) handleReserveRatio() {
 	if p.ReserveRatio != 0 && p.Status == CONTRACT_STATUS_CLOSING {
 		if p.AssetName.Protocol == "rgb11" {
-			p.handleNativeLaunchReserve()
+			p.handleRGB11LaunchReserve()
 			return
 		}
 		totalReservedAmt := p.MaxSupply * int64(p.ReserveRatio) / 100
@@ -1757,7 +1757,7 @@ func (p *LaunchPoolContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *
 	amtParam := string(param.Param)
 	if amtParam == "0" || amtParam == "" {
 		if p.AssetName.Protocol == "rgb11" {
-			amt, err = p.nativeLaunchMintAmount(value)
+			amt, err = p.rgb11LaunchMintAmount(value)
 			if err != nil {
 				return nil, err
 			}
@@ -1772,7 +1772,7 @@ func (p *LaunchPoolContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *
 		}
 		requiredValue := indexer.GetBindingSatNum(amt, uint32(p.MintAmtPerSat))
 		if p.AssetName.Protocol == "rgb11" {
-			requiredValue, err = p.nativeLaunchMintValue(amt)
+			requiredValue, err = p.rgb11LaunchMintValue(amt)
 			if err != nil || amt.Sign() <= 0 {
 				return nil, fmt.Errorf("invalid RGB launchpool mint quantity: %w", err)
 			}
@@ -1818,7 +1818,7 @@ func (p *LaunchPoolContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *
 			}
 			if amt.Cmp(available) > 0 {
 				amt = available.Clone()
-				requiredValue, err := p.nativeLaunchMintValue(amt)
+				requiredValue, err := p.rgb11LaunchMintValue(amt)
 				if err != nil {
 					return nil, err
 				}
@@ -2395,7 +2395,7 @@ func (p *LaunchPoolContractRunTime) AllowPeerAction(action string, param any) (a
 		return nil, err
 	}
 
-	// Installing a native pool materializes its confirmed Bitcoin receipt and
+	// Installing a RGB11 pool materializes its confirmed Bitcoin receipt and
 	// initializes durable asset metadata. That operation acquires the runtime
 	// write lock, so it must finish before the legacy read-only action checks.
 	if action == wwire.STP_ACTION_SIGN && p.AssetName.Protocol == "rgb11" {
@@ -2404,7 +2404,7 @@ func (p *LaunchPoolContractRunTime) AllowPeerAction(action string, param any) (a
 			installing := p.HasRun == 0
 			p.mutex.RUnlock()
 			if installing {
-				return p.verifyNativeLaunchAnchor(req)
+				return p.verifyRGB11LaunchAnchor(req)
 			}
 		}
 	}

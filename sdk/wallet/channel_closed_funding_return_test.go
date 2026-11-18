@@ -99,8 +99,11 @@ func (c *closedFundingReturnClient) SendFundingBroadcastedReq(*FundingReservatio
 	return nil
 }
 func closedFundingReturnSigned(c *closedFundingReturnClient, f *FundingReservation) error {
+	return signTestCommitAt(c, f, uint32(f.Channel.CommitHeight))
+}
+func signTestCommitAt(c *closedFundingReturnClient, f *FundingReservation, height uint32) error {
 	server := NewInternalWalletWithMnemonic("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about", "", GetChainParam())
-	point := f.LocalWallet().GetCommitSecret(f.Channel.PeerNodeId, uint32(f.Channel.CommitHeight))
+	point := f.LocalWallet().GetCommitSecret(f.Channel.PeerNodeId, height)
 	bootstrap := c.manager.GetBootstrapNodePaymentPubKey()
 	keys := DeriveCommitmentKeys(point.PubKey(), 0, bootstrap, nil, f.Channel)
 	tx, _, _, err := c.manager.CreateCommitTx(0, f.Channel, keys, bootstrap, f.Req.FeeRate)
@@ -140,6 +143,7 @@ func newClosedFundingReturnFixture(t *testing.T) (*Manager, *Channel, *closedFun
 	manager.l2IndexerClient = &IndexerRPCClientMgr{active: &closedFundingReturnIndexer{}}
 	client := &closedFundingReturnClient{manager: manager, old: old, database: database}
 	manager.serverNode.SetRPCClient(client)
+	prepareLocalAccountGroup(t, manager)
 	return manager, old, client, database, directory
 }
 func callClosedFundingReturn(m *Manager, old *Channel) error {

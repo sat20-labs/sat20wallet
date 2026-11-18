@@ -53,7 +53,7 @@ func TestRGB11ConflictCandidateCASRejectionRequiresReconciliation(t *testing.T) 
 	if f.journal(t).State.Status != "conflicted" {
 		t.Fatal("remote CAS error rolled back local safe state")
 	}
-	if verifyErr := f.sender.verifyCurrentRGB11RecoveryClosure(); verifyErr == nil {
+	if verifyErr := f.sender.WaitAccountBackup(context.Background(), rgb11AccountManagedProviderID, coreSelectedRGBScope(f.sender)); verifyErr == nil {
 		t.Fatal("unconfirmed remote closure reported ready")
 	}
 	if err := f.sender.SyncAccountManagementState(context.Background()); err == nil {
@@ -86,7 +86,7 @@ func TestRGB11ConflictCandidateCASRejectionRequiresReconciliation(t *testing.T) 
 		!reflect.DeepEqual(retained[0].Authorization, entries[0].Authorization) {
 		t.Fatalf("retry replaced or discarded the original conflicting intent: %v", err)
 	}
-	if err := f.sender.verifyCurrentRGB11RecoveryClosure(); err == nil {
+	if !rgb11LocalModulePendingForTest(t, f.sender) {
 		t.Fatal("unresolved rejected backup was reported synchronized")
 	}
 	if f.journal(t).State.Status != "conflicted" || f.sender.GetRGB11ConsistencyStatus() != "broken" {

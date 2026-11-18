@@ -25,7 +25,7 @@ func atomicalsFixture(t *testing.T, quantity, value int64) (*Client, *TxOutput, 
 	return NewClient(network), input, name
 }
 
-func TestAtomicalsFixtureRetainsNativeQuantitiesWithoutOrdinalOffsets(t *testing.T) {
+func TestARC20IndexedAmounts(t *testing.T) {
 	client, input, name := atomicalsFixture(t, 1000, 1400)
 	tx := wire.NewMsgTx(2)
 	tx.AddTxIn(input.TxIn())

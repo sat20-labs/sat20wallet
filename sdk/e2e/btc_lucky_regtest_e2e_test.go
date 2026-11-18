@@ -1009,6 +1009,11 @@ pubkey: %q
 
 func (p *luckyIndexerProc) start(t *testing.T) {
 	t.Helper()
+	p.startWithin(t, 90*time.Second)
+}
+
+func (p *luckyIndexerProc) startWithin(t *testing.T, budget time.Duration) {
+	t.Helper()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	require.Nil(t, p.cmd, "indexer process already running")
@@ -1032,7 +1037,7 @@ func (p *luckyIndexerProc) start(t *testing.T) {
 			Status string `json:"status"`
 		}
 		return resp.StatusCode == http.StatusOK && json.NewDecoder(resp.Body).Decode(&health) == nil && health.Status == "ok"
-	}, 90*time.Second, 250*time.Millisecond, "isolated L1 indexer did not become healthy; log=%s", logPath)
+	}, budget, 250*time.Millisecond, "isolated L1 indexer did not become healthy; log=%s", logPath)
 }
 
 func (p *luckyIndexerProc) stop(t *testing.T) {

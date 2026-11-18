@@ -10,7 +10,7 @@ import (
 	"github.com/sat20-labs/indexer/indexer/atom/coloring"
 )
 
-func TestClosedWithdrawalInputFactsRequireCompleteNativeAllocation(t *testing.T) {
+func TestARC20WithdrawalInputFacts(t *testing.T) {
 	atomicalsTestEnvironment(t)
 	name := atomicalsTestName()
 	manager := safetyTestManager(t, &Channel{ChannelInDB: *NewChannelInDB()})
@@ -18,10 +18,10 @@ func TestClosedWithdrawalInputFactsRequireCompleteNativeAllocation(t *testing.T)
 	input := atomicalsTestInput(77, name, 700, 900, []byte{0x51})
 	fact, err := manager.indexedClosedWithdrawalFact(input)
 	if err != nil || fact.Protocol != indexer.PROTOCOL_NAME_ATOM || fact.Identity == "" {
-		t.Fatalf("complete native fact positive control: %v", err)
+		t.Fatalf("complete ARC20 fact positive control: %v", err)
 	}
 	if roundTrip, err := manager.indexedClosedWithdrawalFact(closedWithdrawalFactOutput(fact)); err != nil || !reflect.DeepEqual(fact, roundTrip) {
-		t.Fatalf("native fact round trip changed protocol/identity/quantity: %v", err)
+		t.Fatalf("ARC20 fact round trip changed protocol/identity/quantity: %v", err)
 	}
 	tests := []struct {
 		name   string
@@ -43,13 +43,13 @@ func TestClosedWithdrawalInputFactsRequireCompleteNativeAllocation(t *testing.T)
 			copy := input.Clone()
 			test.mutate(copy)
 			if _, err := manager.indexedClosedWithdrawalFact(copy); err == nil {
-				t.Fatal("incomplete, mixed or non-native facts were accepted")
+				t.Fatal("incomplete, mixed or non-ARC20 facts were accepted")
 			}
 		})
 	}
-	manager.tickerInfoMap[name.String()].InscriptionId = "not-a-native-identity"
+	manager.tickerInfoMap[name.String()].InscriptionId = "not-a-ARC20-identity"
 	if _, err := manager.indexedClosedWithdrawalFact(input); err == nil {
-		t.Fatal("an invalid native identity was accepted")
+		t.Fatal("an invalid ARC20 identity was accepted")
 	}
 }
 
@@ -64,10 +64,10 @@ func TestClosedWithdrawalInputFactsRemainOptionalOwnerJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, exists := decoded["InputFacts"]; exists {
-		t.Fatal("old legacy owners acquired native verification metadata")
+		t.Fatal("old legacy owners acquired ARC20 verification metadata")
 	}
 	legacy.InputFacts = &closedWithdrawalInputFacts{Version: 1, Protocol: indexer.PROTOCOL_NAME_ATOM,
-		Inputs: []closedWithdrawalInputFact{{Outpoint: "point", Protocol: indexer.PROTOCOL_NAME_ATOM, Identity: "native-id", Value: 900, PkScript: []byte{1}}}}
+		Inputs: []closedWithdrawalInputFact{{Outpoint: "point", Protocol: indexer.PROTOCOL_NAME_ATOM, Identity: "ARC20-id", Value: 900, PkScript: []byte{1}}}}
 	raw, err = json.Marshal(legacy)
 	if err != nil {
 		t.Fatal(err)
@@ -81,7 +81,7 @@ func TestClosedWithdrawalInputFactsRemainOptionalOwnerJSON(t *testing.T) {
 	}
 }
 
-func TestClosedWithdrawalNativeClassificationUsesActualHeight(t *testing.T) {
+func TestARC20WithdrawalAtHeight(t *testing.T) {
 	atomicalsTestEnvironment(t)
 	name := atomicalsTestName()
 	manager := safetyTestManager(t, &Channel{ChannelInDB: *NewChannelInDB()})
@@ -102,7 +102,7 @@ func TestClosedWithdrawalNativeClassificationUsesActualHeight(t *testing.T) {
 		t.Fatal("failed historical classification partially mutated its output")
 	}
 	if err := manager.classifySTPAtomicalsOutputsAtHeight(tx, []*TxOutput{input}, outputs, heights.Activation); err != nil || outputs[0].GetAsset(&name.AssetName).Int64() != 700 {
-		t.Fatalf("actual native activation-height positive control: %v", err)
+		t.Fatalf("actual ARC20 activation-height positive control: %v", err)
 	}
 }
 
@@ -120,6 +120,6 @@ func TestClosedWithdrawalFrontierIncludesEveryFixedClientMainOutput(t *testing.T
 	}
 	child.TxIn = append(child.TxIn, child.TxIn[0])
 	if _, _, err := indexedClosedWithdrawalFrontier(channel, parent, []*wire.MsgTx{parent, child}); err == nil {
-		t.Fatal("native frontier accepted duplicate package consumption")
+		t.Fatal("ARC20 frontier accepted duplicate package consumption")
 	}
 }

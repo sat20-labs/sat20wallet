@@ -22,6 +22,9 @@ import (
 // and broadcast the required fee/action tx, and then ACKs the server.
 func (p *Manager) PerformRemoteAction(doAction StartRemoteAction, action string, actionParam, more []byte,
 	feeRate int64, sendTxInL1, toBootstrap bool) (string, int64, []byte, error) {
+	if gateErr := p.CheckAccountWrite("wallets", AccountManagedDataGlobalScope); gateErr != nil {
+		return "", -1, nil, gateErr
+	}
 
 	start := time.Now()
 	Log.Infof("PerformRemoteAction %s", action)

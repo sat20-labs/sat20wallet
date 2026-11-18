@@ -379,11 +379,11 @@ export async function runPwaDappCases(t, fixture) {
         const [group] = await api('/v3/bitcoin/utxos/by-scripts', { scripts: [actor.pk_script] })
         assert.ok(group && !group.error)
         const locked = await walletCall(page, 'getAllLockedUtxo', actor.address)
-        const rgb = JSON.parse((await walletCall(page, 'getRGB11State')).state)
-        const carrierPoints = new Set(rgb.proofs.map(proof => proof.outpoint))
+        const selected = await walletCall(page, 'getUtxosWithAsset', actor.address, '10000', '::')
+        const plainPoints = new Set(selected.utxos)
         const plain = []
         for (const coin of group.utxos) {
-          if (coin.confirmations < 1 || coin.value < 10000 || Object.hasOwn(locked, coin.outpoint) || carrierPoints.has(coin.outpoint)) continue
+          if (coin.confirmations < 1 || coin.value < 10000 || Object.hasOwn(locked, coin.outpoint) || !plainPoints.has(coin.outpoint)) continue
           const assets = await api(`/v3/utxo/info/${coin.outpoint}`)
           if (!assets || (assets.Assets || []).length) continue
           plain.push({ Outpoint: coin.outpoint, Value: coin.value, Assets: [] })

@@ -75,7 +75,16 @@ func (p *Manager) inscribe(req *InscriptionRequest) (*InscribeResv, error) {
 	return inscribe, nil
 }
 
-func (p *Manager) DeployTicker_ordx(ticker string, max, lim int64, n int, feeRate int64) (*InscribeResv, error) {
+func (p *Manager) DeployTicker_ordx(ticker string, max, lim int64, n int, feeRate int64) (opValue0 *InscribeResv, opErr error) {
+	release, gateErr := p.beginAccountWrite(rgb11AccountManagedProviderID, nil)
+	if gateErr != nil {
+		return nil, gateErr
+	}
+	defer release()
+
+	opLogID := p.beginWalletLog("asset", "deploy_ordx_asset", "Deploy ORDX asset")
+	defer func() { p.finishWalletLog(opLogID, opErr, opValue0) }()
+
 	if max < 0 {
 		return nil, fmt.Errorf("invalid max %d", max)
 	}
@@ -166,7 +175,15 @@ func EstimatedMintFee(inputLen int, feeRate, revealOutValue int64) int64 {
 
 // 需要调用方确保amt<=limit
 func (p *Manager) MintAsset_ordx(destAddr string, tickInfo *indexer.TickerInfo,
-	amt int64, defaultUtxos []string, feeRate int64) (*InscribeResv, error) {
+	amt int64, defaultUtxos []string, feeRate int64) (opValue0 *InscribeResv, opErr error) {
+	release, gateErr := p.beginAccountWrite(rgb11AccountManagedProviderID, nil)
+	if gateErr != nil {
+		return nil, gateErr
+	}
+	defer release()
+
+	opLogID := p.beginWalletLog("asset", "mint_ordx_asset", "Mint ORDX asset")
+	defer func() { p.finishWalletLog(opLogID, opErr, opValue0) }()
 
 	limit, err := strconv.ParseInt(tickInfo.Limit, 10, 64)
 	if err != nil {
@@ -345,6 +362,11 @@ func (p *Manager) GetOrgAssetName(lpt *AssetName) *AssetName {
 }
 
 func (p *Manager) InscribeKeyValueInName(name string, key string, value string, feeRate int64) (*InscribeResv, error) {
+	release, gateErr := p.beginAccountWrite(rgb11AccountManagedProviderID, nil)
+	if gateErr != nil {
+		return nil, gateErr
+	}
+	defer release()
 
 	wallet := p.wallet
 	address := wallet.GetAddress()
@@ -460,11 +482,31 @@ func (p *Manager) InscribeMultiKeyValueInName(name string, kv map[string]string,
 	return p.inscribe(req)
 }
 
-func (p *Manager) InscribeName(name string, feeRate int64) (*InscribeResv, error) {
-	name = strings.ToLower(strings.TrimSpace(name))
-	if !indexer.IsValidSNSName(name) {
-		return nil, fmt.Errorf("invalid SNS name %q", name)
+func (p *Manager) InscribeName(name string, feeRate int64) (opValue0 *InscribeResv, opErr error) {
+	release, gateErr := p.beginAccountWrite(rgb11AccountManagedProviderID, nil)
+	if gateErr != nil {
+		return nil, gateErr
 	}
+	defer release()
+
+	name = strings.ToLower(strings.TrimSpace(name))
+	status, err := p.CheckDIDName(name)
+	if err != nil {
+		return nil, err
+	}
+	switch status {
+	case "invalid":
+		return nil, fmt.Errorf("invalid SNS name %q", name)
+	case "registered":
+		return nil, fmt.Errorf("name %s is already registered", name)
+	case "submitted":
+		return nil, fmt.Errorf("name %s has already been submitted", name)
+	}
+	// Record only accepted attempts. A rejected duplicate must not replace the
+	// previous pending/successful submission with a newer failed log.
+	opLogID := p.beginWalletLog("name", "inscribe_name", "Inscribe name", map[string]string{"name": name, "network": p.GetChain()})
+	defer func() { p.finishWalletLog(opLogID, opErr, opValue0) }()
+
 	wallet := p.wallet
 	address := wallet.GetAddress()
 

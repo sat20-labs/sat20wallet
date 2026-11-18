@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	"sort"
 	"strings"
 	"sync"
@@ -255,7 +256,18 @@ func (s *ProjectionStore) localMetadataKey(name string) ([]byte, error) {
 	if scope == "" {
 		return nil, ErrWalletScope
 	}
-	return []byte("rgb11-local-" + scope + "-" + name), nil
+	return append(localMetadataPrefix(scope), name...), nil
+}
+
+func localMetadataPrefix(scope string) []byte { return []byte("rgb11-local-" + scope + "-") }
+
+func (s *ProjectionStore) StageDeleteLocalMetadata(batch indexer.WriteBatch) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.scope == "" {
+		return ErrWalletScope
+	}
+	return s.db.BatchRead(localMetadataPrefix(s.scope), false, func(key, _ []byte) error { return batch.Delete(key) })
 }
 
 func (s *ProjectionStore) SaveLocalMetadata(name string, value []byte) error {
@@ -1083,7 +1095,7 @@ func (s *ProjectionStore) CommitProjection(output *indexer.TxOutput, asset *inde
 	if !matched {
 		return ErrInvalidProof
 	}
-	if err := s.locker.LockUtxo(output.OutPointStr, LockReasonRGB); err != nil {
+	if err := s.locker.LockUtxo(output.OutPointStr, sdkcommon.UtxoLockRGB); err != nil {
 		return err
 	}
 	projected := output.Clone()
@@ -1236,7 +1248,7 @@ func (s *ProjectionStore) prepareProjectionReplacements(replacements []Projectio
 		if !matched {
 			return nil, nil, ErrInvalidProof
 		}
-		if err := s.locker.LockUtxo(replacement.Output.OutPointStr, LockReasonRGB); err != nil {
+		if err := s.locker.LockUtxo(replacement.Output.OutPointStr, sdkcommon.UtxoLockRGB); err != nil {
 			return nil, nil, err
 		}
 		projected := outputs[replacement.Output.OutPointStr]

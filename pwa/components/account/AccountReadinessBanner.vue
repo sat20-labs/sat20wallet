@@ -6,18 +6,24 @@
     :role="isError ? 'alert' : 'status'"
     aria-live="polite"
   >
-    <div class="flex items-start justify-between gap-3">
+    <div class="flex flex-wrap items-start justify-between gap-3">
       <div class="min-w-0 space-y-1 text-sm">
         <p>{{ message }}</p>
         <p v-if="store.retryQueued" class="text-xs text-muted-foreground">
           {{ t('accountManagement.readiness.retryQueued') }}
         </p>
       </div>
-      <div class="flex shrink-0 items-center gap-2">
+      <div class="flex flex-wrap items-center gap-2">
+        <Button v-if="discoveryIssue" size="sm" variant="outline" @click="router.push('/restore-account')">
+          {{ t('accountManagement.readiness.restoreAccount') }}
+        </Button>
         <Button v-if="canRetry" size="sm" variant="outline" :disabled="store.retrying" @click="store.retryNow">
           {{ store.retrying ? t('accountManagement.readiness.retrying') : t('accountManagement.readiness.retryNow') }}
         </Button>
-        <Button size="sm" variant="ghost" @click="openSettings">
+        <Button v-if="discoveryIssue && !store.localRiskAccepted" size="sm" @click="store.localRiskAccepted = true">
+          {{ t('accountManagement.readiness.continueLocal') }}
+        </Button>
+        <Button v-if="!discoveryIssue" size="sm" variant="ghost" @click="openSettings">
           {{ store.hasQuotaIssue ? t(store.quotaActionKey) : t('accountManagement.readiness.manage') }}
         </Button>
       </div>
@@ -36,9 +42,13 @@ const store = useAccountManagementStore()
 const router = useRouter()
 const { t } = useI18n()
 const state = computed(() => store.status)
-const isError = computed(() => store.statusReadFailed || store.retryFailed || state.value?.account_state === 'error' ||
+// Local access is already granted by the SDK. This only explains an unknown
+// remote result and records the user's choice for this unlocked identity.
+const discoveryIssue = computed(() => !store.hasDatabaseIssue && !store.hasQuotaIssue && !store.statusReadFailed &&
+  state.value?.state === 'local' && state.value.discovery_status === 'unknown')
+const isError = computed(() => store.statusReadFailed || store.retryFailed || state.value?.state === 'error' ||
   store.hasQuotaIssue)
-const canRetry = computed(() => !store.hasDatabaseIssue && (store.statusReadFailed || store.retryFailed || state.value?.account_state === 'error' ||
+const canRetry = computed(() => !store.hasDatabaseIssue && (discoveryIssue.value || store.statusReadFailed || store.retryFailed || state.value?.state === 'error' ||
   state.value?.backup_state === 'pending' || state.value?.backup_state === 'uploading' ||
   state.value?.backup_state === 'cleanup' || store.moduleIssues.length > 0 ||
   store.hasQuotaIssue))
@@ -47,9 +57,11 @@ const message = computed(() => {
   if (store.hasDatabaseIssue) return t('accountManagement.readiness.databaseFailed')
   if (store.quotaNoticeKey) return t(store.quotaNoticeKey)
   if (store.statusReadFailed) return t('accountManagement.readiness.readFailed')
+  if (discoveryIssue.value) return t(store.localRiskAccepted
+    ? 'accountManagement.readiness.discoveryContinued' : 'accountManagement.readiness.discoveryUnverified')
   if (store.retryFailed) return t('accountManagement.readiness.retryFailed')
   if (store.loading && !state.value) return t('accountManagement.readiness.syncing')
-  switch (state.value?.account_state) {
+  switch (state.value?.state) {
     case 'local': return t('accountManagement.readiness.local')
     case 'locked': return t('accountManagement.readiness.locked')
     case 'syncing': return t('accountManagement.readiness.syncing')

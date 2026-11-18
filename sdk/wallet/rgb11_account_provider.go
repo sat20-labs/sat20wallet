@@ -109,36 +109,6 @@ func (p *rgb11AccountManagedDataProvider) Export(catalog AccountManagedDataCatal
 	return payloads, nil
 }
 
-// HasActiveTransition reports whether any local account scope currently has
-// an active RGB transition. It does not make active mailbox data authoritative:
-// the versioned stable recovery package contains the complete recovery closure.
-func (p *rgb11AccountManagedDataProvider) HasActiveTransition(
-	catalog AccountManagedDataCatalog) (bool, error) {
-
-	accounts, err := p.accountsByScope()
-	if err != nil {
-		return false, err
-	}
-	for _, scope := range catalog.Scopes {
-		accountValue, ok := accounts[scope.ID()]
-		if !ok {
-			return false, fmt.Errorf("RGB11 scope %s is unavailable", scope.ID())
-		}
-		manager, err := p.owner.newScopedRGB11Manager(accountValue)
-		if err != nil {
-			return false, err
-		}
-		active, err := manager.hasActiveRGB11Transition()
-		if err != nil {
-			return false, err
-		}
-		if active {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
 func (p *rgb11AccountManagedDataProvider) Validate(catalog AccountManagedDataCatalog,
 	payloads []AccountManagedDataPayload) error {
 
@@ -175,7 +145,7 @@ func (p *rgb11AccountManagedDataProvider) Validate(catalog AccountManagedDataCat
 		walletID, err := manager.RGB11WalletID()
 		if err != nil || packageValue.WalletID != walletID ||
 			packageValue.AccountIndex != accountValue.AccountIndex ||
-			packageValue.EngineBuildID != rgb11wallet.NativeEngineBuildID {
+			packageValue.EngineBuildID != rgb11wallet.RGB11EngineBuildID {
 			return ErrRGB11Inconsistent
 		}
 	}
@@ -215,14 +185,14 @@ func (p *rgb11AccountManagedDataProvider) Import(catalog AccountManagedDataCatal
 		if err != nil {
 			return err
 		}
-		previous, _, err := manager.exportRGB11WalletSnapshot(walletID)
+		previous, err := manager.readRGB11SelectedBase(walletID)
 		if err != nil {
 			return err
 		}
 
 		target := &rgb11wallet.RGB11WalletSnapshot{
 			Version: rgb11wallet.WalletSnapshotVersion, WalletID: walletID,
-			AccountIndex: scope.AccountIndex, EngineBuildID: rgb11wallet.NativeEngineBuildID,
+			AccountIndex: scope.AccountIndex, EngineBuildID: rgb11wallet.RGB11EngineBuildID,
 		}
 		if encoded, supplied := byScope[scope.ID()]; supplied {
 			packageValue, err := rgb11wallet.DecodeRecoveryPackage(encoded)
@@ -238,41 +208,41 @@ func (p *rgb11AccountManagedDataProvider) Import(catalog AccountManagedDataCatal
 			// local scope. Avoid constructing/importing a synthetic empty package;
 			// any recovery root in the local snapshot still goes through selected
 			// merge and is rejected unless incoming evidence safely completes it.
-			localClosure, err := rgb11wallet.RecoveryPackageFromSnapshot(previous, 0)
+			localClosure, err := rgb11wallet.RecoveryPackageFromSnapshot(previous.snapshot, 0)
 			if err != nil {
 				return err
 			}
-			if len(localClosure.ProjectionRecords) == 0 && len(localClosure.EngineRecords) == 0 {
+			if len(previous.faults) == 0 && len(localClosure.ProjectionRecords) == 0 && len(localClosure.EngineRecords) == 0 {
 				continue
 			}
 		}
 
 		mgr := manager
-		before := previous
-		after := target
-		var applied *RGB11WalletSnapshot
+		applied := &rgb11ImportState{}
 		steps = append(steps, rgb11AccountImportStep{
 			apply: func() error {
 				var err error
 				// This authenticated remote apply is already represented by the
 				// account profile, rather than a new local business mutation.
-				applied, err = mgr.importRGB11AccountRecoverySnapshotResultMode(after, true, false)
+				applied.snapshot, err = mgr.applyRGB11Recovery(previous.snapshot, target, false,
+					&rgb11ImportSwap{from: previous, to: applied})
 				return err
 			},
 			rollback: func() error {
-				if applied == nil {
+				if applied.snapshot == nil {
 					return nil
 				}
-				if err := mgr.restoreRGB11AccountSnapshotIfCurrentMode(before, applied, false); err != nil {
+				if err := mgr.restoreRGB11AccountSnapshotIfCurrentMode(previous.snapshot, applied.snapshot, false,
+					&rgb11ImportSwap{from: applied, to: previous, undo: true}); err != nil {
 					return err
 				}
-				mgr.scheduleRGB11ChainReconciliation()
+				mgr.scheduleRGB11ChainReconciliation(false)
 				return nil
 			},
 			commit: func() {
 				// The selected snapshot and all derived locks/caches have already
 				// committed atomically; schedule only a fresh chain-evidence pass.
-				mgr.scheduleRGB11ChainReconciliation()
+				mgr.scheduleRGB11ChainReconciliation(false)
 			},
 		})
 	}

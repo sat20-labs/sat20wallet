@@ -339,7 +339,6 @@ const walletStatus = async (operation: string) => {
   const channelStore = useChannelStore()
   const channels = await safeTuple(() => satsnetStp.getAllChannels())
   const currentChannel = await safeTuple(() => satsnetStp.getCurrentChannel())
-  const reservations = await safeTuple(() => satsnetStp.allReservations())
   const l1Utxos = walletStore.hasWallet
     ? await safeTuple(() => walletManager.getUtxos())
     : { result: undefined }
@@ -361,7 +360,6 @@ const walletStatus = async (operation: string) => {
     channels: {
       current: currentChannel,
       all: channels,
-      reservations,
       store_current: channelStore.channel,
       store_assets: {
         btc: channelStore.plainList,

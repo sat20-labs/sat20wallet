@@ -104,7 +104,7 @@ func TestDKVSPWAReviewBindingRefusalReturnsErrorAndKeepsReceiving(t *testing.T) 
 			manager.cfg.IndexerL2.Scheme = "http"
 			manager.cfg.IndexerL2.Host = strings.TrimPrefix(server.URL, "http://")
 			manager.http = &NetClient{Client: server.Client()}
-			client, err := manager.GetDKVSClient()
+			client, err := manager.accountDKVSClient()
 			require.NoError(t, err)
 			key := accountTestKey(t, manager, "pwa-cycle-receive/value")
 			prefix, err := dkvs.CollectionPathForKey(key)
@@ -209,7 +209,7 @@ func TestDKVSPWAReviewSelectedRecoverySourceDoesNotChangeReplicaHeight(t *testin
 	for _, kind := range []string{"authoritative-recovery", "on-demand-record"} {
 		t.Run(kind, func(t *testing.T) {
 			manager, source := finalDKVSTestManager(t)
-			client, err := manager.GetDKVSClient()
+			client, err := manager.accountDKVSClient()
 			require.NoError(t, err)
 			key := accountTestKey(t, manager, "pwa-cycle-main/value")
 			prefix, err := dkvs.CollectionPathForKey(key)
@@ -258,7 +258,7 @@ func TestDKVSPWAReviewSelectedRecoverySourceDoesNotChangeReplicaHeight(t *testin
 
 func TestDKVSPWAReviewKnownSourceMismatchCannotRefreshReplicaHeight(t *testing.T) {
 	manager, source := finalDKVSTestManager(t)
-	client, err := manager.GetDKVSClient()
+	client, err := manager.accountDKVSClient()
 	require.NoError(t, err)
 	key := accountTestKey(t, manager, "pwa-cycle-height/value")
 	prefix, err := dkvs.CollectionPathForKey(key)
@@ -287,7 +287,7 @@ func TestDKVSPWAReviewStorageFallbackKeepsSourceBoundary(t *testing.T) {
 		for _, failure := range []string{"config-refresh", "height-query"} {
 			t.Run(origin+"/"+failure, func(t *testing.T) {
 				manager, source := finalDKVSTestManager(t)
-				client, err := manager.GetDKVSClient()
+				client, err := manager.accountDKVSClient()
 				require.NoError(t, err)
 				key := accountTestKey(t, manager, "pwa-cycle-estimate/value")
 				prefix, err := dkvs.CollectionPathForKey(key)
@@ -344,7 +344,7 @@ func TestDKVSPWAReviewStorageFallbackKeepsSourceBoundary(t *testing.T) {
 
 func TestDKVSPWAReviewLowerRecoveryHeightCannotReviveExpiredReplica(t *testing.T) {
 	manager, source := finalDKVSTestManager(t)
-	client, err := manager.GetDKVSClient()
+	client, err := manager.accountDKVSClient()
 	require.NoError(t, err)
 	key := accountTestKey(t, manager, "pwa-cycle-expired/value")
 	prefix, err := dkvs.CollectionPathForKey(key)

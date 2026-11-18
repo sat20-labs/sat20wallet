@@ -18,7 +18,7 @@ test('closed current channels clear balances without clearing closing channels o
     ref: (value) => ({ value }),
     computed: (fn) => ({ get value() { return fn() } }),
     watch: () => {},
-    satsnetStp: { allReservations: async () => [undefined, { reservations: [] }], getCurrentChannel: () => new Promise((resolve) => requests.push(resolve)) },
+    satsnetStp: { getCurrentChannel: () => new Promise((resolve) => requests.push(resolve)) },
     console: { log() {}, warn() {} },
   })
   const seed = () => {
@@ -266,204 +266,6 @@ test('network identity uses mainnet and migrates legacy livenet storage', () => 
   assert.match(storage, /state\.accountRecovery && \(state\.accountRecovery\.network as string\) === 'livenet'[\s\S]*state\.accountRecovery\.network = Network\.MAINNET/)
 })
 
-test('account live setup distinguishes the automatic temporary profile from configured active state', () => {
-  const source = read('scripts/live/account-management-pwa-live.mjs')
-  const start = source.indexOf('const requiresPaidRecoverySetup')
-  const end = source.indexOf('const waitSynced', start)
-  assert.ok(start >= 0 && end > start)
-  const classifier = source.slice(start, end)
-  const requiresSetup = (status) => runInNewContext(
-    `${classifier}; requiresPaidRecoverySetup(status)`, { status },
-  )
-
-  assert.equal(requiresSetup({ active: false }), true)
-  assert.equal(requiresSetup({
-    active: true, storage_mode: 'temporary', recovery_configured: false, state_seq: 1,
-  }), true)
-  for (const status of [
-    { active: true, storage_mode: 'temporary', recovery_configured: false, state_seq: 2 },
-    { active: true, storage_mode: 'temporary', recovery_configured: true, state_seq: 1 },
-    { active: true, storage_mode: 'paid', recovery_configured: false, state_seq: 1 },
-    { active: true, storage_mode: 'paid', recovery_configured: true, state_seq: 5 },
-  ]) {
-    assert.equal(requiresSetup(status), false)
-  }
-  assert.match(source, /if \(requiresPaidRecoverySetup\(status\)\)[\s\S]*else if \(continueActive\)[\s\S]*already active/)
-})
-
-test('account live setup imports only missing configured mnemonics', () => {
-  const source = read('scripts/live/account-management-pwa-live.mjs')
-  const start = source.indexOf('const hasMnemonicWallet')
-  const end = source.indexOf('const requiresPaidRecoverySetup', start)
-  assert.ok(start >= 0 && end > start)
-  const matcher = source.slice(start, end)
-  const known = (wallets, identity) => runInNewContext(
-    `${matcher}; hasMnemonicWallet(wallets, identity)`, { wallets, identity },
-  )
-  const firstValidation = {
-    code: 0,
-    msg: 'ok',
-    data: {
-      normalized: 'first twelve word test mnemonic',
-      language: 'english',
-      wordCount: '12',
-      fingerprint: 'first-fingerprint',
-      address: 'tb1-first',
-    },
-  }
-  const secondValidation = {
-    code: 0,
-    msg: 'ok',
-    data: {
-      normalized: 'second twelve word test mnemonic',
-      language: 'english',
-      wordCount: '12',
-      fingerprint: 'second-fingerprint',
-      address: 'tb1-second',
-    },
-  }
-  const first = firstValidation.data
-  const second = secondValidation.data
-  const lockedWallets = [{
-    id: '1788164317331000',
-    name: 'Wallet 1',
-    accounts: [{ index: 0, name: 'Account 1', did: '' }],
-  }]
-  const wallets = [{
-    id: '1788164317331000',
-    name: 'Wallet 1',
-    accounts: [{
-      index: 0,
-      name: 'Account 1',
-      did: '',
-      address: first.address,
-      pubKey: 'first-pubkey',
-    }],
-  }]
-  const configured = [first, second]
-
-  assert.equal(known(lockedWallets, first), false)
-  assert.equal(known(wallets, first), true)
-  assert.equal(known(wallets, second), false)
-  assert.equal(known([], first), false)
-  assert.deepEqual(configured.filter((identity) => !known([], identity)), configured)
-  assert.deepEqual(configured.filter((identity) => !known(wallets, identity)), [second])
-  assert.deepEqual(configured.filter((identity) => !known([
-    { accounts: [{ index: 0, address: second.address }] },
-  ], identity)), [first])
-  assert.match(source, /syncWalletCatalog\(\)\.catch[\s\S]*if \(wallet\.wallets\.length > 0\)[\s\S]*wallet\.unlockWallet\(credential\)[\s\S]*wallet\.syncWalletCatalog\(\)[\s\S]*for \(const mnemonic of mnemonics\)/)
-  assert.match(source, /for \(const mnemonic of mnemonics\)[\s\S]*validateMnemonic\(mnemonic, ''\)[\s\S]*hasMnemonicWallet\(wallet\.wallets, validation\.data\)\) continue[\s\S]*wallet\.importWallet\(mnemonic, credential\)/)
-})
-
-test('account live checks both browser origins before any paid recovery write', () => {
-  const source = read('scripts/live/account-management-pwa-live.mjs')
-  const primaryCheck = source.indexOf("await assertMessageServiceCors(primary, 'primary')")
-  const recoveryCheck = source.indexOf("await assertMessageServiceCors(recovery, 'recovery')")
-  const paidWrite = source.indexOf("call('confirmStorage', { option_id: 'paid'")
-  assert.ok(primaryCheck >= 0 && recoveryCheck > primaryCheck && paidWrite > recoveryCheck)
-  const probeStart = source.indexOf('const assertMessageServiceCors = async')
-  const probeEnd = source.indexOf('const primeEnvironment', probeStart)
-  const probe = source.slice(probeStart, probeEnd)
-  assert.match(probe, /fetch\(url,[\s\S]*method: 'GET'[\s\S]*mode: 'cors'[\s\S]*credentials: 'omit'/)
-  assert.doesNotMatch(probe, /method: 'POST'/)
-  assert.match(source, /primaryOrigin === recoveryOrigin[\s\S]*primary and recovery PWA origins must be different/)
-})
-
-test('account live checkpoints a created recovery before rehearsal and resumes it safely', () => {
-  const source = read('scripts/live/account-management-pwa-live.mjs')
-  assert.match(source, /SAT20_ACCOUNT_RECOVERY_CHECKPOINT[\s\S]*\/private\/tmp\/sat20-account-management-pwa-live-checkpoint\.json/)
-  assert.match(source, /RECOVERY_CHECKPOINT\.startsWith\('\/private\/tmp\/'\)/)
-  assert.match(source, /lstatSync\(RECOVERY_CHECKPOINT\)[\s\S]*isSymbolicLink\(\)[\s\S]*info\.mode & 0o077/)
-  assert.match(source, /writeFileSync\(temporary,[\s\S]*mode: 0o600, flag: 'wx'[\s\S]*renameSync\(temporary, RECOVERY_CHECKPOINT\)/)
-  assert.match(source, /finally\s*\{[\s\S]*existsSync\(temporary\)[\s\S]*unlinkSync\(temporary\)/)
-  assert.match(source, /if \(savedCheckpoint\)[\s\S]*original primary PWA\/WASM session preserved[\s\S]*else \{[\s\S]*primeEnvironment\(primary, PRIMARY_URL\)/)
-  assert.match(source, /savedCheckpoint && !primary[\s\S]*checkpoint resume requires the original primary PWA page/)
-
-  const created = source.indexOf("const created = await call('createRecovery'")
-  const checkpointResult = source.indexOf("phase: 'created'", created)
-  const persisted = source.indexOf('writeRecoveryCheckpoint(setup.checkpoint)', checkpointResult)
-  const rehearsal = source.indexOf("const rehearsal = await call('rehearse'", persisted)
-  assert.ok(created >= 0 && checkpointResult > created && persisted > checkpointResult && rehearsal > persisted)
-  assert.match(source.slice(created, checkpointResult), /createRecovery/)
-  assert.match(source, /if \(resumeCheckpoint\)[\s\S]*phase: 'resume'[\s\S]*confirmStorage/)
-  assert.match(source, /setup\.phase === 'created' \|\| setup\.phase === 'resume'[\s\S]*session_id: checkpoint\.session_id[\s\S]*user_share: checkpoint\.user_share/)
-
-  const checkpointFields = source.slice(source.indexOf('checkpoint: {', created), source.indexOf('session_expires_at:', created) + 80)
-  for (const field of ['session_id', 'locator', 'user_share', 'account_id', 'root_wallet_id']) {
-    assert.match(checkpointFields, new RegExp(`${field}:`))
-  }
-  assert.doesNotMatch(checkpointFields, /password:|mnemonics:|answers:/)
-  const verification = source.indexOf('for (const expected of activation.finalCatalog)')
-  const cleanup = source.indexOf('clearRecoveryCheckpoint()', verification)
-  assert.ok(verification >= 0 && cleanup > verification)
-  assert.match(source.slice(cleanup - 100, cleanup + 200), /if \(recoveryCheckpoint\)[\s\S]*clearRecoveryCheckpoint\(\)/)
-})
-
-test('account live checkpoints managed mutation progress and never guesses a resumed temporary wallet', () => {
-  const source = read('scripts/live/account-management-pwa-live.mjs')
-  assert.match(source, /value\?\.version === 1 \|\| value\?\.version === 2/)
-  assert.match(source, /managed_progress:[\s\S]*phase: 'not_started'[\s\S]*second_wallet_id:/)
-  assert.match(source, /inferLegacyManagedProgress[\s\S]*extras\.length !== 1[\s\S]*legacy checkpoint cannot safely identify/)
-  assert.match(source, /String\(wallet\.walletId\) !== String\(temporary\.id\)[\s\S]*legacy checkpoint temporary wallet evidence is ambiguous/)
-  assert.match(source, /indexes\.includes\(1\) \? 'temporary_account_added' : 'temporary_wallet_created'/)
-  assert.match(source, /resumeCheckpoint\?\.version === 1[\s\S]*checkpointUpdate = \{ \.\.\.resumeCheckpoint, version: 2/)
-
-  const create = source.indexOf("tuple(await wallet.createWallet(password), 'create temporary wallet')")
-  const createdReturn = source.indexOf("phase: 'temporary_wallet_created'", create)
-  const createdPersist = source.indexOf('persistManagedProgress(recoveryCheckpoint, managedProgress)', createdReturn)
-  const addAccount = source.indexOf("wallet.addAccount('Temporary Account 2', 1)", createdPersist)
-  assert.ok(create >= 0 && createdReturn > create && createdPersist > createdReturn && addAccount > createdPersist)
-
-  assert.match(source, /if \(managedPhases\.indexOf\(progress\.phase\) >= createdIndex\)[\s\S]*checkpointed temporary wallet is missing before resume[\s\S]*return progress/)
-  assert.match(source, /temporary_wallet_id: temporaryWalletID/)
-  assert.match(source, /'temporary_account_added'/)
-  assert.match(source, /'temporary_wallet_synced'/)
-  assert.match(source, /phase: 'temporary_wallet_deleted'/)
-  assert.match(source, /managedProgress = \{ \.\.\.managedProgress, phase: 'complete' \}/)
-
-  const inferStart = source.indexOf('const inferLegacyManagedProgress = () => {')
-  const inferEnd = source.indexOf('    const validateManagedProgress =', inferStart)
-  assert.ok(inferStart >= 0 && inferEnd > inferStart)
-  const declaration = source.slice(inferStart, inferEnd).trim()
-  const infer = new Function(
-    'wallet', 'status', 'configuredIDs', 'configuredWallets', 'secondWalletID',
-    `${declaration}; return inferLegacyManagedProgress()`,
-  )
-  const configuredWallets = [
-    { id: '11', accounts: [{ index: 0 }] },
-    { id: '22', accounts: [{ index: 0 }, { index: 2 }] },
-  ]
-  const currentFailureCatalog = {
-    walletId: '33',
-    wallets: [...configuredWallets, { id: '33', accounts: [{ index: 0 }, { index: 1 }] }],
-  }
-  const currentFailureStatus = {
-    active: true,
-    storage_mode: 'paid',
-    recovery_configured: true,
-    pending_changes: 1,
-    managed_data_dirty: true,
-  }
-  assert.deepEqual(infer(
-    currentFailureCatalog,
-    currentFailureStatus,
-    new Set(['11', '22']),
-    configuredWallets,
-    '22',
-  ), {
-    phase: 'temporary_account_added',
-    second_wallet_id: '22',
-    temporary_wallet_id: '33',
-  })
-  assert.throws(() => infer(
-    { ...currentFailureCatalog, walletId: '22' },
-    currentFailureStatus,
-    new Set(['11', '22']),
-    configuredWallets,
-    '22',
-  ), /temporary wallet evidence is ambiguous/)
-})
-
 test('an explicit local market URL is not rewritten to the production swap path', () => {
   const source = read('entrypoints/popup/pages/wallet/DappMarket.vue')
   const start = source.indexOf('const resolveMarketUrl =')
@@ -479,17 +281,11 @@ test('available sats reset immediately when the wallet context changes', () => {
   assert.match(source, /watch\(availableSatsContextKey,[\s\S]*availableAmt: 0, lockedAmt: 0[\s\S]*flush: 'sync'/)
 })
 
-test('RGB11 free address transfer is exposed only for the account-management root', () => {
-  const source = read('components/wallet/RGB11SendDialog.vue')
-  assert.match(source, /const directAddressAvailable = computed\([\s\S]*Number\(walletStore\.accountIndex\) === 0/)
-  assert.match(source, /account\.accountId === walletStore\.rootAccountId/)
-  assert.match(source, /:disabled="!directAddressAvailable"/)
-  assert.match(source, /transferMode\.value = 'invoice'/)
-  assert.match(source, /rgb11Transfer\.directRootOnly/)
-})
-
-test('live account root repair requires explicit apply opt-in', () => {
-  const source = read('scripts/live/account-root-wrapper-repair-live.mjs')
-  assert.match(source, /SAT20_ACCOUNT_REPAIR_APPLY === '1'/)
-  assert.doesNotMatch(source, /SAT20_ACCOUNT_REPAIR_APPLY !== '0'/)
+test('RGB11 direct root admission belongs to SDK, not the thin PWA', () => {
+  // Static ownership guard only. rgb11_address_api_test.go checks child-account
+  // transfer rejection and non-root public-key scope rejection; RGBDirectOffline
+  // exercises the ordinary root sending flow, not non-root admission.
+  const source = readRepo('sdk/wallet/rgb_direct_preview.go')
+  assert.match(source, /if !p\.rgb11ManagerIsRoot\(manager\)\s*\{\s*return nil, ErrRGB11TraditionalReceiveRequired\s*\}/)
+  assert.match(readRepo('sdk/wallet/rgb11_address_api_test.go'), /if manager\.rgb11ManagerIsRoot\(manager\.rgbManager\)/)
 })

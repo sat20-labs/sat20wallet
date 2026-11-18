@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	"strings"
 	"testing"
 
@@ -14,6 +15,10 @@ import (
 )
 
 type testEvidence struct{}
+
+func (testEvidence) GetGenesisHash() (string, error) {
+	return "", errors.New("store-only test evidence has no Bitcoin chain")
+}
 
 func (testEvidence) GetUTXO(string) (*BitcoinUTXO, error)         { return nil, nil }
 func (testEvidence) GetRawTx(string) ([]byte, error)              { return nil, nil }
@@ -63,7 +68,7 @@ func TestProjectionAndProofAreStoredTogether(t *testing.T) {
 	raw := []byte("consensus-validated-consignment")
 	objectHash := sha256.Sum256(raw)
 	receipt, err := store.ValidateAndStoreConsignment(context.Background(), testValidator{receipt: &ValidationReceipt{
-		Version: 1, EngineBuildID: "test-engine", ConsignmentHash: hex.EncodeToString(objectHash[:]),
+		Version: 1, EngineBuildID: RGB11EngineBuildID, ConsignmentHash: hex.EncodeToString(objectHash[:]),
 		ContractID: official, SchemaID: "schema", StateHash: [32]byte{1}, Status: "valid",
 		Allocations: []ValidatedAllocation{{OutPoint: output.OutPointStr, AssetName: asset.Name, Amount: *amount.Clone(), OperationID: "op", AssignmentType: 4000, StateClass: "fungible", SealDisclosure: []byte{1}}},
 	}}, testEvidence{}, raw)
@@ -78,7 +83,7 @@ func TestProjectionAndProofAreStoredTogether(t *testing.T) {
 	if err := store.CommitProjection(output, asset, proof); err != nil {
 		t.Fatal(err)
 	}
-	if locker.utxo != output.OutPointStr || locker.reason != LockReasonRGB {
+	if locker.utxo != output.OutPointStr || locker.reason != sdkcommon.UtxoLockRGB {
 		t.Fatalf("carrier not locked: %+v", locker)
 	}
 	if err := store.AssertConsistent(output.OutPointStr, asset.Name); err != nil {
@@ -134,7 +139,7 @@ func TestProjectionAndProofAreStoredTogether(t *testing.T) {
 	secondRaw := []byte("second-consensus-validated-consignment")
 	secondObjectHash := sha256.Sum256(secondRaw)
 	secondReceipt, err := store.ValidateAndStoreConsignment(context.Background(), testValidator{receipt: &ValidationReceipt{
-		Version: 1, EngineBuildID: "test-engine", ConsignmentHash: hex.EncodeToString(secondObjectHash[:]),
+		Version: 1, EngineBuildID: RGB11EngineBuildID, ConsignmentHash: hex.EncodeToString(secondObjectHash[:]),
 		ContractID: secondOfficial, SchemaID: "schema", StateHash: [32]byte{2}, Status: "valid",
 		Allocations: []ValidatedAllocation{{OutPoint: output.OutPointStr, AssetName: secondName, Amount: *secondAmount.Clone(), OperationID: "op-2", AssignmentType: 4000, StateClass: "fungible", SealDisclosure: []byte{2}}},
 	}}, testEvidence{}, secondRaw)
@@ -203,7 +208,7 @@ func TestBalanceExcludesOrphanedProof(t *testing.T) {
 	raw := []byte("orphaned allocation consignment")
 	digest := sha256.Sum256(raw)
 	receipt, err := store.ValidateAndStoreConsignment(context.Background(), testValidator{receipt: &ValidationReceipt{
-		Version: 1, EngineBuildID: "test-engine", ConsignmentHash: hex.EncodeToString(digest[:]),
+		Version: 1, EngineBuildID: RGB11EngineBuildID, ConsignmentHash: hex.EncodeToString(digest[:]),
 		ContractID: contractID, SchemaID: "schema", StateHash: [32]byte{1}, Status: "valid",
 		Allocations: []ValidatedAllocation{{
 			OutPoint: output.OutPointStr, AssetName: assetName, Amount: *amount.Clone(),

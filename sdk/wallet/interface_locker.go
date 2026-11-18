@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+	"time"
 
 	"github.com/btcsuite/btcd/btcutil/psbt"
 	indexer "github.com/sat20-labs/indexer/common"
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 )
@@ -30,12 +32,43 @@ func (p *Manager) GetTickerInfoV2(assetName string) *indexer.TickerInfo {
 	return p.l1IndexerClient.GetTickInfo(asset)
 }
 
-func (p *Manager) LockUtxo(address, utxo, reason string) error {
-	p.utxoLockerL1.Reload(address)
-	return p.utxoLockerL1.LockUtxo(utxo, reason)
+func (p *Manager) LockUtxo(address, utxo, reason string) (opErr error) {
+	opLogID := p.beginWalletLog("utxo", "lock_utxo_l1", "Lock L1 UTXO")
+	defer func() { p.finishWalletLog(opLogID, opErr, nil) }()
+
+	return p.lockWalletOutput(p.utxoLockerL1, address, utxo, reason)
 }
 
-func (p *Manager) UnlockUtxo(address, utxo string) error {
+func (p *Manager) lockWalletOutput(locker *UtxoLocker, address, point, reason string) error {
+	if reason != sdkcommon.UtxoLockManual {
+		locker.Reload(address)
+		return locker.LockUtxo(point, reason)
+	}
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	if p.wallet == nil {
+		return fmt.Errorf("manual lock requires an unlocked wallet")
+	}
+	if address != "" && address != p.wallet.GetAddress() {
+		pub := p.wallet.GetPubKey()
+		if pub == nil || address != PublicKeyToP2TRAddress_SatsNet(pub) {
+			return fmt.Errorf("manual lock address does not match the selected account")
+		}
+	}
+	locker.mutex.Lock()
+	defer locker.mutex.Unlock()
+	locker.reload()
+	if locker.lockmap[point] != nil {
+		return nil
+	}
+	lock := &LockedUtxo{LockedTime: time.Now().Unix(), Reason: reason, ManualWalletID: p.wallet.GetId()}
+	return locker.persistReservationChangesLocked(map[string]*LockedUtxo{point: lock}, nil)
+}
+
+func (p *Manager) UnlockUtxo(address, utxo string) (opErr error) {
+	opLogID := p.beginWalletLog("utxo", "unlock_utxo_l1", "Unlock L1 UTXO")
+	defer func() { p.finishWalletLog(opLogID, opErr, nil) }()
+
 	p.utxoLockerL1.Reload(address)
 	return p.utxoLockerL1.UnlockUtxo(utxo)
 }
@@ -58,12 +91,17 @@ func (p *Manager) GetLockedUtxoList(address string) (map[string]*LockedUtxo, err
 	return p.utxoLockerL1.GetLockedUtxoList(), nil
 }
 
-func (p *Manager) LockUtxo_SatsNet(address, utxo, reason string) error {
-	p.utxoLockerL2.Reload(address)
-	return p.utxoLockerL2.LockUtxo(utxo, reason)
+func (p *Manager) LockUtxo_SatsNet(address, utxo, reason string) (opErr error) {
+	opLogID := p.beginWalletLog("utxo", "lock_utxo_l2", "Lock L2 UTXO")
+	defer func() { p.finishWalletLog(opLogID, opErr, nil) }()
+
+	return p.lockWalletOutput(p.utxoLockerL2, address, utxo, reason)
 }
 
-func (p *Manager) UnlockUtxo_SatsNet(address, utxo string) error {
+func (p *Manager) UnlockUtxo_SatsNet(address, utxo string) (opErr error) {
+	opLogID := p.beginWalletLog("utxo", "unlock_utxo_l2", "Unlock L2 UTXO")
+	defer func() { p.finishWalletLog(opLogID, opErr, nil) }()
+
 	p.utxoLockerL2.Reload(address)
 	return p.utxoLockerL2.UnlockUtxo(utxo)
 }

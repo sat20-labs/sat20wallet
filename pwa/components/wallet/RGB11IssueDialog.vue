@@ -130,6 +130,7 @@ import { useClipboard } from '@vueuse/core'
 import walletManager from '@/utils/sat20'
 import { useAccountManagementStore } from '@/store/accountManagement'
 import { downloadRGB11ContractFile } from '@/utils/rgb11ContractFile'
+import { exportFileText } from '@/utils/accountManagement'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -184,27 +185,8 @@ const handlePrimaryAction = () => {
   void runIssue()
 }
 
-const MAX_UINT64 = 18446744073709551615n
-
-const atomicAmounts = (value: string, parsedPrecision: number): string[] | null => {
-  if (!value.trim()) return []
-  const values = advancedAllocations.value
-    ? value.split(',').map((item) => item.trim()).filter(Boolean)
-    : [value.trim()]
-  if (!values.length || !Number.isInteger(parsedPrecision) || parsedPrecision < 0 || parsedPrecision > 18) {
-    return null
-  }
-  const result: string[] = []
-  for (const item of values) {
-    const match = item.match(/^(0|[1-9][0-9]*)(?:\.([0-9]+))?$/)
-    if (!match || (match[2]?.length || 0) > parsedPrecision) return null
-    const atomic = `${match[1]}${(match[2] || '').padEnd(parsedPrecision, '0')}`.replace(/^0+(?=\d)/, '')
-    const amount = BigInt(atomic || '0')
-    if (amount <= 0n || amount > MAX_UINT64) return null
-    result.push(amount.toString())
-  }
-  return result
-}
+const decimalAmounts = (value: string): string[] => value.trim()
+  ? (advancedAllocations.value ? value.split(',') : [value]).map(item => item.trim()).filter(Boolean) : []
 
 const validTicker = (value: string) => /^[A-Za-z][A-Za-z0-9]{0,7}$/.test(value)
 const validPrintableASCII = (value: string, min: number, max: number) => (
@@ -221,9 +203,9 @@ const formatAssetName = (value: any) => {
 const parsedPrecision = computed(() => Number(precision.value))
 const parsedIssueAmounts = computed(() => schema.value === 'UDA'
   ? ['1']
-  : atomicAmounts(amounts.value, parsedPrecision.value))
+  : decimalAmounts(amounts.value))
 const parsedInflationAmounts = computed(() => schema.value === 'IFA'
-  ? atomicAmounts(inflationAmounts.value, parsedPrecision.value)
+  ? decimalAmounts(inflationAmounts.value)
   : [])
 const allocationCount = computed(() => {
   if (schema.value === 'UDA') return 1
@@ -274,26 +256,22 @@ const runIssue = async () => {
   issuedSummary.value = null
   try {
     const [err, result] = await walletManager.issueRGB11Asset({
-      schema: schema.value,
+      kind: schema.value,
       ticker: normalizedTicker,
       name: normalizedName,
-      details: normalizedDetails || undefined,
+      details: normalizedDetails,
       precision: issuePrecision,
       amounts: issueAmounts,
-      inflation_amounts: inflation,
-      reject_list_url: normalizedRejectListURL || undefined,
-      min_confirmations: 1,
+      inflation: inflation,
+      reject_url: normalizedRejectListURL,
     })
-    if (err || !result?.result) throw err || new Error(t('rgb11Transfer.issueFailed'))
-    const issued = JSON.parse(result.result)
-    armor.value = issued.armor || ''
-    contractConsignmentBase64.value = issued.contract_consignment_base64 || ''
-    issuedSummary.value = {
-      ticker: normalizedTicker,
-      displayName: normalizedName,
-      contractId: issued.contract_id || '',
-      assetName: formatAssetName(issued.asset_name),
-    }
+    if (err || !result) throw err || new Error(t('rgb11Transfer.issueFailed'))
+    issuedSummary.value = { ticker: result.ticker, displayName: result.name, contractId: result.contract_id, assetName: result.asset }
+    const [exportError, files] = await walletManager.exportRGB11Contract(result.asset)
+    if (exportError) throw exportError
+    const armored = files?.find(file => file.name.endsWith('.asc'))
+    armor.value = armored ? exportFileText(armored) : ''
+    contractConsignmentBase64.value = files?.find(file => file.name.endsWith('.rgb'))?.data || ''
     success.value = true
     message.value = t('rgb11Transfer.issued')
     emit('completed')

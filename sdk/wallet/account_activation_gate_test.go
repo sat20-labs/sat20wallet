@@ -56,7 +56,7 @@ func TestActivationMarkerColdResume(t *testing.T) {
 		t.Fatalf("initial activation error=%v", err)
 	}
 	status := manager.GetAccountManagementStatus()
-	if !status.ActivationPending || status.LocalOnly || status.RecoveryConfigured {
+	if !status.ActivationPending || status.RecoveryConfigured || status.WriteAllowed || status.DKVSWriteAllowed {
 		t.Fatalf("activation marker status=%+v", status)
 	}
 	encoded, err := manager.db.Read(accountManagementProfileKey())
@@ -249,7 +249,7 @@ func TestActivationAckColdFinalize(t *testing.T) {
 // next real request observes the fault; keep the authenticated pre-fault view.
 func setActivationTestHTTP(t *testing.T, manager *Manager, transport HttpClient) {
 	t.Helper()
-	client, err := manager.GetDKVSClient()
+	client, err := manager.accountDKVSClient()
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -115,8 +115,14 @@ func prepareAccountManagementAutopaySync(t *testing.T, fixture *templateFixture,
 	defaults := dkvsindexer.NetworkDefaultsForParams(&chaincfg.TestNetParams)
 	gas := contractcommon.GetGasAssetName()
 	owner := newDKVSKeyPathActor(t, keyFromMnemonic(t, dkvsClientMnemonic, 0))
-	guardianMnemonic := accountSyncMnemonic(t, 241)
-	guardianActor := newDKVSKeyPathActor(t, keyFromMnemonic(t, guardianMnemonic, 0))
+	guardianMnemonic := ""
+	var guardianActor *dkvsKeyPathActor
+	extraActor := owner
+	if guardianTests {
+		guardianMnemonic = accountSyncMnemonic(t, 241)
+		guardianActor = newDKVSKeyPathActor(t, keyFromMnemonic(t, guardianMnemonic, 0))
+		extraActor = guardianActor
+	}
 	var successor *dkvsKeyPathActor
 	if successorMnemonic != "" {
 		successor = newDKVSKeyPathActor(t, keyFromMnemonic(t, successorMnemonic, 0))
@@ -126,14 +132,14 @@ func prepareAccountManagementAutopaySync(t *testing.T, fixture *templateFixture,
 	require.Equal(t, "1", defaults.AutopayMinAmountPerBlock)
 	gasOuts := splitToDKVSKeyPathActors(t, fixture, fixture.gasAnchor, gas,
 		[]int64{300000, 300000, 300000, 300000}, []int64{10000, 10000, 10000, 10000},
-		[]*dkvsKeyPathActor{owner, owner, guardianActor, owner})
+		[]*dkvsKeyPathActor{owner, owner, extraActor, owner})
 	feeAmounts := []int64{5000, 10000}
 	feeValues := []int64{10000, 10000}
-	feeRecipients := []*dkvsKeyPathActor{owner, guardianActor}
+	feeRecipients := []*dkvsKeyPathActor{owner, extraActor}
 	if successor != nil {
 		feeAmounts = []int64{5000, 5000, 10000}
 		feeValues = []int64{10000, 10000, 10000}
-		feeRecipients = []*dkvsKeyPathActor{owner, successor, guardianActor}
+		feeRecipients = []*dkvsKeyPathActor{owner, successor, extraActor}
 	}
 	feeOuts := splitToDKVSKeyPathActors(t, fixture, fixture.assetAnchors[defaults.AutopayFeeAssetName],
 		defaults.AutopayFeeAssetName, feeAmounts, feeValues, feeRecipients)
@@ -180,10 +186,15 @@ func prepareAccountManagementAutopaySync(t *testing.T, fixture *templateFixture,
 	require.NoError(t, err)
 	require.NoError(t, walletManager.InitializeAccountManagement("123456"))
 	require.Equal(t, pubKey, walletManager.GetWallet().GetPubKey().SerializeCompressed())
-	guardianManager, guardianLocation := accountReviewDevice(t, fixture.Network, guardianMnemonic)
-	require.NoError(t, guardianManager.RegisterAccountManagedDataProvider(&e2eAccountManagedProvider{}))
 	ownerBlobLimit := accountReviewBlobLimit(t, walletManager)
-	guardianBlobLimit := accountReviewBlobLimit(t, guardianManager)
+	var guardianManager *wallet.Manager
+	var guardianLocation wallet.AccountIndexerLocation
+	var guardianBlobLimit uint32
+	if guardianTests {
+		guardianManager, guardianLocation = accountReviewDevice(t, fixture.Network, guardianMnemonic)
+		require.NoError(t, guardianManager.RegisterAccountManagedDataProvider(&e2eAccountManagedProvider{}))
+		guardianBlobLimit = accountReviewBlobLimit(t, guardianManager)
+	}
 	if successor != nil {
 		delegateParam, delegateErr := (&contractcommon.TemplateAutopayConfigInvokeParam{
 			AmountPerBlock: defaults.AutopayMinAmountPerBlock,
@@ -215,19 +226,22 @@ func prepareAccountManagementAutopaySync(t *testing.T, fixture *templateFixture,
 		contractcommon.TemplateInvokeAPIConfig, configParam, []dkvsPrevOut{gasOuts[1]},
 		wire.TxOut{Value: 9000, Assets: txAsset(gas, 290000)})
 	fixture.Network.sendManyAndMine(t, []*wire.MsgTx{configTx}, 0)
-	guardianFeeOut := feeOuts[1]
-	if successor != nil {
-		guardianFeeOut = feeOuts[2]
+	if guardianTests {
+		guardianFeeOut := feeOuts[1]
+		if successor != nil {
+			guardianFeeOut = feeOuts[2]
+		}
+		guardianFunding := buildDKVSKeyPathTemplateDefaultInvoke(t, guardianActor, contractAddress,
+			[]dkvsPrevOut{guardianFeeOut}, wire.TxOut{Value: 10000, Assets: txAsset(defaults.AutopayFeeAssetName, 10000)})
+		fixture.Network.sendManyAndMine(t, []*wire.MsgTx{guardianFunding}, 0)
+		guardianConfig, err := (&contractcommon.TemplateAutopayConfigInvokeParam{AmountPerBlock: "10", BlobKeyLimit: guardianBlobLimit}).Encode()
+		require.NoError(t, err)
+		guardianConfigTx := buildDKVSKeyPathTemplateInvoke(t, guardianActor, contractAddress, 1,
+			contractcommon.TemplateInvokeAPIConfig, guardianConfig, []dkvsPrevOut{gasOuts[2]},
+			wire.TxOut{Value: 9000, Assets: txAsset(gas, 290000)})
+		fixture.Network.sendManyAndMine(t, []*wire.MsgTx{guardianConfigTx}, 0)
+
 	}
-	guardianFunding := buildDKVSKeyPathTemplateDefaultInvoke(t, guardianActor, contractAddress,
-		[]dkvsPrevOut{guardianFeeOut}, wire.TxOut{Value: 10000, Assets: txAsset(defaults.AutopayFeeAssetName, 10000)})
-	fixture.Network.sendManyAndMine(t, []*wire.MsgTx{guardianFunding}, 0)
-	guardianConfig, err := (&contractcommon.TemplateAutopayConfigInvokeParam{AmountPerBlock: "10", BlobKeyLimit: guardianBlobLimit}).Encode()
-	require.NoError(t, err)
-	guardianConfigTx := buildDKVSKeyPathTemplateInvoke(t, guardianActor, contractAddress, 1,
-		contractcommon.TemplateInvokeAPIConfig, guardianConfig, []dkvsPrevOut{gasOuts[2]},
-		wire.TxOut{Value: 9000, Assets: txAsset(gas, 290000)})
-	fixture.Network.sendManyAndMine(t, []*wire.MsgTx{guardianConfigTx}, 0)
 
 	// The next block performs the first per-block storage payment. AUTOPAY
 	// records are accepted only after this payment is visible in contract state.
@@ -286,105 +300,117 @@ func runAccountManagementAutopaySync(t *testing.T, setup *accountManagementAutop
 	initialRecovery, err := coreDKVSClient.ReadPrefixContext(context.Background(), prefix)
 	require.NoError(t, err)
 	require.Empty(t, initialRecovery.Records, "account recovery namespace must start empty")
-	guardianBinding, err := dkvsindexer.AccountMappingKey("testnet", setup.guardianActor.Address)
-	require.NoError(t, err)
-	requireDKVSAbsent(t, fixture.Network.Core, guardianBinding)
+	var guardianPublic, guardianPrivate []byte
+	var guardianID string
+	if guardianTests {
+		guardianBinding, err := dkvsindexer.AccountMappingKey("testnet", setup.guardianActor.Address)
+		require.NoError(t, err)
+		requireDKVSAbsent(t, fixture.Network.Core, guardianBinding)
 
-	require.NoError(t, guardianManager.InitializeAccountManagement(accountReviewPassword))
-	require.NoError(t, guardianManager.StartDKVSSync())
-	t.Cleanup(guardianManager.StopDKVSSync)
-	require.Eventually(t, func() bool {
-		status := guardianManager.GetAccountManagementStatus()
-		return status.DiscoveryStatus == "inactive" && status.LocalOnly &&
-			!status.RecoveryConfigured && !status.ActivationPending
-	}, 30*time.Second, 100*time.Millisecond,
-		"Guardian must establish authenticated inactive discovery before paid storage setup")
-	guardianIdentity, err := guardianManager.GetOrCreateAccountGuardianIdentity(accountReviewPassword)
-	require.NoError(t, err)
-	guardianPublic, err := base64.RawURLEncoding.DecodeString(guardianIdentity.PublicKey)
-	require.NoError(t, err)
-	guardianPrivate, err := guardianManager.LoadAccountGuardianPrivateKey(accountReviewPassword)
-	require.NoError(t, err)
-	defer clearBytes(guardianPrivate)
-	guardianID := guardianIdentity.MailboxID
-	setup.guardianID = guardianID
-	require.NotEqual(t, accountID, guardianID)
-	initialMailbox, err := coreDKVSClient.ReadPrefixContext(context.Background(), "/mail/"+guardianID)
-	require.NoError(t, err)
-	require.Empty(t, initialMailbox.Records, "Guardian mailbox must start empty")
-	t.Logf("paid-account-mailbox-baseline: guardian_id=%s prefix=/mail/%s records=0", guardianID, guardianID)
+		require.NoError(t, guardianManager.InitializeAccountManagement(accountReviewPassword))
+		discoveryCtx, discoveryCancel := context.WithTimeout(context.Background(), 20*time.Second)
+		_, discoveryErr := guardianManager.RecoverAccountManagementFromCurrentWallet(discoveryCtx, accountReviewPassword)
+		discoveryCancel()
+		require.ErrorIs(t, discoveryErr, wallet.ErrRootAccountNotFound)
+		t.Cleanup(guardianManager.StopDKVSSync)
+		require.Eventually(t, func() bool {
+			status := guardianManager.GetAccountManagementStatus()
+			return status.DiscoveryStatus == "inactive" && status.LocalOnly &&
+				!status.RecoveryConfigured && !status.ActivationPending
+		}, 30*time.Second, 100*time.Millisecond,
+			"Guardian must establish authenticated inactive discovery before paid storage setup")
+		guardianIdentity, err := guardianManager.GetOrCreateAccountGuardianIdentity(accountReviewPassword)
+		require.NoError(t, err)
+		guardianPublic, err = base64.RawURLEncoding.DecodeString(guardianIdentity.PublicKey)
+		require.NoError(t, err)
+		guardianPrivate, err = guardianManager.LoadAccountGuardianPrivateKey(accountReviewPassword)
+		require.NoError(t, err)
+		defer clearBytes(guardianPrivate)
+		guardianID = guardianIdentity.MailboxID
+		setup.guardianID = guardianID
+		require.NotEqual(t, accountID, guardianID)
+		initialMailbox, err := coreDKVSClient.ReadPrefixContext(context.Background(), "/mail/"+guardianID)
+		require.NoError(t, err)
+		require.Empty(t, initialMailbox.Records, "Guardian mailbox must start empty")
+		t.Logf("paid-account-mailbox-baseline: guardian_id=%s prefix=/mail/%s records=0", guardianID, guardianID)
+	}
+
 	questions := []account.QuestionAnswer{
 		{Question: account.KnowledgeQuestion{ID: "book", Prompt: "指定版本书籍第十页最后十个字", IgnorePunctuation: true}, Answer: "月光落在安静的旧桥上", Confirmation: "月光落在安静的旧桥上"},
 		{Question: account.KnowledgeQuestion{ID: "note", Prompt: "私人纸条中的指定句子", IgnorePunctuation: true}, Answer: "yellow bicycle beside the winter river", Confirmation: "yellow bicycle beside the winter river"},
 		{Question: account.KnowledgeQuestion{ID: "family", Prompt: "未公开的家庭约定", IgnorePunctuation: true}, Answer: "周日傍晚六点在老树下见", Confirmation: "周日傍晚六点在老树下见"},
 	}
-	// Guardian must itself complete a real paid activation before it stores
-	// the Owner's share. The already-active AUTOPAY delegate is reused: this
-	// confirms paid storage without weakening the contract's payment rules.
-	guardianAuthorization, err := guardianManager.ConfirmAccountStorage(wallet.AccountStoragePaid, 100)
-	require.NoError(t, err)
-	require.Equal(t, wallet.AccountStoragePaid, guardianAuthorization.Mode)
-	require.Empty(t, guardianAuthorization.TransactionID, "ready Guardian AUTOPAY must not be funded twice")
-	guardianBackup, err := guardianManager.ExportAccountBackupForPWA("123456", nil)
-	require.NoError(t, err)
-	defer clearAccountBackup(&guardianBackup)
-	guardianPkg, err := guardianManager.CreateAccountRecoveryPackage(account.CreateOptions{
-		AccountID: guardianID, Backup: guardianBackup, RecoveryMode: account.RecoveryMode2Of2, Questions: questions,
-	})
-	require.NoError(t, err)
-	guardianRepo, err := guardianManager.NewAccountRepositoryForStorage(*guardianAuthorization)
-	require.NoError(t, err)
-	require.NoError(t, account.NewManager(guardianRepo).Publish(context.Background(), *guardianPkg))
-	guardianAnswers := []account.AnswerAttempt{
-		{QuestionID: "book", Answer: "月光落在安静的旧桥上。"},
-		{QuestionID: "note", Answer: "yellow bicycle beside the winter river"},
-	}
-	guardianDKVSShare, err := account.RecoverDKVSShare(guardianPkg.DKVSShareCapsule,
-		guardianPkg.KnowledgeBundle, guardianAnswers)
-	require.NoError(t, err)
-	guardianRestored, guardianSecret, err := account.RecoverAccount(guardianPkg.Envelope,
-		guardianPkg.UserShare, guardianDKVSShare)
-	require.NoError(t, err)
-	defer clearBytes(guardianSecret)
-	defer clearAccountBackup(&guardianRestored)
-	require.NoError(t, guardianManager.ActivateAccountManagement(guardianSecret,
-		"123456", *guardianAuthorization, guardianPkg.Envelope.Locator, ""))
-	guardianReadyCtx, guardianReadyCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer guardianReadyCancel()
-	require.NoError(t, guardianManager.WaitAccountManagedDataReady(guardianReadyCtx),
-		"Guardian first paid backup must reach confirmed DKVS state and data")
-	guardianStatus := guardianManager.GetAccountManagementStatus()
-	require.Equal(t, "active", guardianStatus.DiscoveryStatus)
-	require.True(t, guardianStatus.RecoveryConfigured)
-	require.False(t, guardianStatus.ActivationPending)
-	require.True(t, guardianStatus.DKVSWriteAllowed)
-	require.Equal(t, wallet.AccountStoragePaid, guardianStatus.StorageMode)
-	require.False(t, guardianStatus.ManagedDataDirty)
-	require.Zero(t, guardianStatus.PendingChanges)
-	require.Zero(t, guardianStatus.DKVSPendingRequests)
-	guardianLatest, err := guardianManager.LoadAccountManagementStateForRecovery(
-		guardianLocation, guardianPkg.Envelope.Locator, guardianSecret, guardianMnemonic)
-	require.NoError(t, err, "Guardian's first paid backup must be independently recoverable")
-	require.NotZero(t, guardianLatest.Seq)
-	require.NotEmpty(t, guardianLatest.Index.Entries)
-	guardianIndex, guardianIndexRecord := readAccountE2EIndex(t, fixture.Network.Core, guardianSecret, guardianID)
-	guardianModules, guardianRecords := readAccountE2EModules(t, fixture.Network.Core, guardianSecret, guardianID, guardianIndex)
-	require.NotEmpty(t, guardianModules)
-	guardianPubKey := guardianManager.GetWallet().GetPubKey().SerializeCompressed()
-	guardianStateKey, err := dkvsindexer.PersonalKey(guardianPubKey, "account/state")
-	require.NoError(t, err)
-	guardianDataKey, err := account.ManagedIndexKey(guardianID)
-	require.NoError(t, err)
-	for _, record := range append(guardianRecords, guardianIndexRecord,
-		waitForDKVSRecord(t, fixture.Network.Core, guardianStateKey),
-		waitForDKVSRecord(t, fixture.Network.Core, guardianDataKey)) {
-		require.Zero(t, record.TTL)
-		proof, proofErr := dkvsindexer.ParseFeeProof(record.FeeProof)
-		require.NoError(t, proofErr)
-		require.Equal(t, dkvsindexer.FeeModeAutopay, proof.Mode)
-		require.Equal(t, contractAddress.MustEncode(), proof.PoolContract)
-		t.Logf("paid-account-proof: owner=guardian key=%s seq=%d hash=%s mode=%s pool=%s",
-			record.Key, record.Seq, dkvsindexer.RecordHash(record).String(), proof.Mode, proof.PoolContract)
+	if guardianTests {
+		// Guardian must itself complete a real paid activation before it stores
+		// the Owner's share. The already-active AUTOPAY delegate is reused: this
+		// confirms paid storage without weakening the contract's payment rules.
+		guardianAuthorization, err := guardianManager.ConfirmAccountStorage(wallet.AccountStoragePaid, 100)
+		require.NoError(t, err)
+		require.Equal(t, wallet.AccountStoragePaid, guardianAuthorization.Mode)
+		require.Empty(t, guardianAuthorization.TransactionID, "ready Guardian AUTOPAY must not be funded twice")
+		guardianBackup, err := guardianManager.ExportAccountBackupForPWA("123456", nil)
+		require.NoError(t, err)
+		defer clearAccountBackup(&guardianBackup)
+		guardianPkg, err := guardianManager.CreateAccountRecoveryPackage(account.CreateOptions{
+			AccountID: guardianID, Backup: guardianBackup, RecoveryMode: account.RecoveryMode2Of2, Questions: questions,
+		})
+		require.NoError(t, err)
+		guardianRepo, err := guardianManager.NewAccountRepositoryForStorage(*guardianAuthorization)
+		require.NoError(t, err)
+		require.NoError(t, account.NewManager(guardianRepo).Publish(context.Background(), *guardianPkg))
+		guardianAnswers := []account.AnswerAttempt{
+			{QuestionID: "book", Answer: "月光落在安静的旧桥上。"},
+			{QuestionID: "note", Answer: "yellow bicycle beside the winter river"},
+		}
+		guardianDKVSShare, err := account.RecoverDKVSShare(guardianPkg.DKVSShareCapsule,
+			guardianPkg.KnowledgeBundle, guardianAnswers)
+		require.NoError(t, err)
+		guardianRestored, guardianSecret, err := account.RecoverAccount(guardianPkg.Envelope,
+			guardianPkg.UserShare, guardianDKVSShare)
+		require.NoError(t, err)
+		defer clearBytes(guardianSecret)
+		defer clearAccountBackup(&guardianRestored)
+		require.NoError(t, guardianManager.ActivateAccountManagement(guardianSecret,
+			"123456", *guardianAuthorization, guardianPkg.Envelope.Locator, ""))
+		require.NoError(t, guardianManager.StartDKVSSync())
+		guardianReadyCtx, guardianReadyCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer guardianReadyCancel()
+		require.NoError(t, guardianManager.WaitAccountManagedDataReady(guardianReadyCtx),
+			"Guardian first paid backup must reach confirmed DKVS state and data")
+		guardianStatus := guardianManager.GetAccountManagementStatus()
+		require.Equal(t, "active", guardianStatus.DiscoveryStatus)
+		require.True(t, guardianStatus.RecoveryConfigured)
+		require.False(t, guardianStatus.ActivationPending)
+		require.True(t, guardianStatus.DKVSWriteAllowed)
+		require.Equal(t, wallet.AccountStoragePaid, guardianStatus.StorageMode)
+		require.False(t, guardianStatus.ManagedDataDirty)
+		require.Zero(t, guardianStatus.PendingChanges)
+		require.Zero(t, guardianStatus.DKVSPendingRequests)
+		guardianLatest, err := guardianManager.LoadAccountManagementStateForRecovery(
+			guardianLocation, guardianPkg.Envelope.Locator, guardianSecret, guardianMnemonic)
+		require.NoError(t, err, "Guardian's first paid backup must be independently recoverable")
+		require.NotZero(t, guardianLatest.Seq)
+		require.NotEmpty(t, guardianLatest.Index.Entries)
+		guardianIndex, guardianIndexRecord := readAccountE2EIndex(t, fixture.Network.Core, guardianSecret, guardianID)
+		guardianModules, guardianRecords := readAccountE2EModules(t, fixture.Network.Core, guardianSecret, guardianID, guardianIndex)
+		require.NotEmpty(t, guardianModules)
+		guardianPubKey := guardianManager.GetWallet().GetPubKey().SerializeCompressed()
+		guardianStateKey, err := dkvsindexer.PersonalKey(guardianPubKey, "account/state")
+		require.NoError(t, err)
+		guardianDataKey, err := account.ManagedIndexKey(guardianID)
+		require.NoError(t, err)
+		for _, record := range append(guardianRecords, guardianIndexRecord,
+			waitForDKVSRecord(t, fixture.Network.Core, guardianStateKey),
+			waitForDKVSRecord(t, fixture.Network.Core, guardianDataKey)) {
+			require.Zero(t, record.TTL)
+			proof, proofErr := dkvsindexer.ParseFeeProof(record.FeeProof)
+			require.NoError(t, proofErr)
+			require.Equal(t, dkvsindexer.FeeModeAutopay, proof.Mode)
+			require.Equal(t, contractAddress.MustEncode(), proof.PoolContract)
+			t.Logf("paid-account-proof: owner=guardian key=%s seq=%d hash=%s mode=%s pool=%s",
+				record.Key, record.Seq, dkvsindexer.RecordHash(record).String(), proof.Mode, proof.PoolContract)
+		}
+
 	}
 
 	backup := account.Backup{Version: account.BackupVersion, Wallets: []account.WalletBackup{{
@@ -404,7 +430,10 @@ func runAccountManagementAutopaySync(t *testing.T, setup *accountManagementAutop
 	_, _, bindingDescriptor, err := dkvsindexer.ValidateAccountMappingBindingRecord(binding)
 	require.NoError(t, err)
 	require.Equal(t, fixture.Network.Core.nodePubKey, bindingDescriptor.CoreNodeID)
-	require.NoError(t, walletManager.StartDKVSSync())
+	discoveryCtx, discoveryCancel := context.WithTimeout(context.Background(), 20*time.Second)
+	_, discoveryErr := walletManager.RecoverAccountManagementFromCurrentWallet(discoveryCtx, "123456")
+	discoveryCancel()
+	require.ErrorIs(t, discoveryErr, wallet.ErrRootAccountNotFound)
 	t.Cleanup(walletManager.StopDKVSSync)
 	require.Eventually(t, func() bool {
 		status := walletManager.GetAccountManagementStatus()
@@ -429,17 +458,24 @@ func runAccountManagementAutopaySync(t *testing.T, setup *accountManagementAutop
 	repository, err := walletManager.NewAccountRepositoryForStorage(authorization)
 	require.NoError(t, err)
 	manager := account.NewManager(repository)
-	pkg, err := walletManager.CreateAccountRecoveryPackage(account.CreateOptions{AccountID: accountID, Backup: backup,
-		RecoveryMode: account.RecoveryMode2Of3, Questions: questions, GuardianMailboxID: guardianID,
-		GuardianPublicKey: guardianPublic})
+	create := account.CreateOptions{AccountID: accountID, Backup: backup,
+		RecoveryMode: account.RecoveryMode2Of2, Questions: questions}
+	if guardianTests {
+		create.RecoveryMode = account.RecoveryMode2Of3
+		create.GuardianMailboxID, create.GuardianPublicKey = guardianID, guardianPublic
+	}
+	pkg, err := walletManager.CreateAccountRecoveryPackage(create)
 	require.NoError(t, err)
 	require.NoError(t, manager.Publish(context.Background(), *pkg))
-	guardianCapsuleAuthorization, err := guardianManager.ReusePaidAccountStorage(100)
-	require.NoError(t, err)
-	require.Empty(t, guardianCapsuleAuthorization.TransactionID)
-	require.NoError(t, guardianManager.PutGuardianCapsuleForStorage(
-		*guardianCapsuleAuthorization, guardianID, *pkg.GuardianCapsule,
-	))
+	if guardianTests {
+		guardianCapsuleAuthorization, err := guardianManager.ReusePaidAccountStorage(100)
+		require.NoError(t, err)
+		require.Empty(t, guardianCapsuleAuthorization.TransactionID)
+		require.NoError(t, guardianManager.PutGuardianCapsuleForStorage(
+			*guardianCapsuleAuthorization, guardianID, *pkg.GuardianCapsule,
+		))
+
+	}
 
 	packageBytes, err := account.EncodeRecoveryPackageStorage(*pkg)
 	require.NoError(t, err)
@@ -447,18 +483,24 @@ func runAccountManagementAutopaySync(t *testing.T, setup *accountManagementAutop
 		"account/recovery/"+pkg.Envelope.Locator.PackageID)
 	require.NoError(t, err)
 	setup.packageKey = packageKey
-	guardianBytes, err := account.EncodeGuardianCapsuleStorage(*pkg.GuardianCapsule)
-	require.NoError(t, err)
-	guardianKey, err := dkvsindexer.MailShareKey(guardianID, pkg.GuardianCapsule.PackageID, pkg.GuardianCapsule.ShareID)
-	require.NoError(t, err)
-	setup.guardianKey = guardianKey
+	var guardianBytes []byte
+	var guardianKey string
+	if guardianTests {
+		guardianBytes, err = account.EncodeGuardianCapsuleStorage(*pkg.GuardianCapsule)
+		require.NoError(t, err)
+		guardianKey, err = dkvsindexer.MailShareKey(guardianID, pkg.GuardianCapsule.PackageID, pkg.GuardianCapsule.ShareID)
+		require.NoError(t, err)
+		setup.guardianKey = guardianKey
+	}
 	// Canonical recovery package data relays normally. The guardian share is
 	// AccountBound mailbox data and remains only on the selected CoreNode even
 	// when another miner subscribes to /mail.
 	requireDKVSValue(t, fixture.Network.Core, packageKey, packageBytes)
 	requireDKVSValue(t, fixture.Network.Bootstrap, packageKey, packageBytes)
-	requireDKVSValue(t, fixture.Network.Core, guardianKey, guardianBytes)
-	requireDKVSAbsent(t, fixture.Network.Bootstrap, guardianKey)
+	if guardianTests {
+		requireDKVSValue(t, fixture.Network.Core, guardianKey, guardianBytes)
+		requireDKVSAbsent(t, fixture.Network.Bootstrap, guardianKey)
+	}
 	packageRecord := waitForDKVSRecord(t, fixture.Network.Core, packageKey)
 	packagePeerRecord := waitForDKVSRecord(t, fixture.Network.Bootstrap, packageKey)
 	t.Logf("paid-account-replica: key=%s core_seq=%d core_hash=%s bootstrap_seq=%d bootstrap_hash=%s",
@@ -471,49 +513,66 @@ func runAccountManagementAutopaySync(t *testing.T, setup *accountManagementAutop
 	require.NoError(t, subscribeDKVSNodeInternal(t, fixture.Network.Miner, dkvsindexer.Subscription{
 		Type: dkvsindexer.SubscriptionPrefix, Target: prefix,
 	}))
-	require.NoError(t, subscribeDKVSNodeInternal(t, fixture.Network.Miner, dkvsindexer.Subscription{
-		Type: dkvsindexer.SubscriptionMailbox, Target: "/mail/" + guardianID,
-	}))
+	if guardianTests {
+		require.NoError(t, subscribeDKVSNodeInternal(t, fixture.Network.Miner, dkvsindexer.Subscription{
+			Type: dkvsindexer.SubscriptionMailbox, Target: "/mail/" + guardianID,
+		}))
+	}
 	require.NoError(t, connectNode(fixture.Network.Miner, fixture.Network.Core))
 	requireDKVSValue(t, fixture.Network.Miner, packageKey, packageBytes)
-	requireDKVSAbsent(t, fixture.Network.Miner, guardianKey)
-	guardianMailboxRecord := waitForDKVSRecord(t, fixture.Network.Core, guardianKey)
-	t.Logf("paid-account-mailbox: key=%s core=present:%d:%s bootstrap=absent miner=absent",
-		guardianKey, guardianMailboxRecord.Seq, dkvsindexer.RecordHash(guardianMailboxRecord).String())
+	if guardianTests {
+		requireDKVSAbsent(t, fixture.Network.Miner, guardianKey)
+		guardianMailboxRecord := waitForDKVSRecord(t, fixture.Network.Core, guardianKey)
+		t.Logf("paid-account-mailbox: key=%s core=present:%d:%s bootstrap=absent miner=absent",
+			guardianKey, guardianMailboxRecord.Seq, dkvsindexer.RecordHash(guardianMailboxRecord).String())
+
+	}
 
 	coreClient := dkvsClientForNode(t, fixture.Network.Core)
 	loaded, err := walletManager.LoadAccountRecoveryPackage(coreLocation, pkg.Envelope.Locator)
 	t.Logf("account-e2e: load_recovery_package_error=%v", err)
 	require.NoError(t, err)
-	guardianValue, err := guardianManager.LoadAccountGuardianCapsule(
-		guardianLocation, guardianID, pkg.GuardianCapsule.PackageID, pkg.GuardianCapsule.ShareID,
-	)
-	require.NoError(t, err)
-	guardianKey, err = dkvsindexer.MailShareKey(guardianID, pkg.GuardianCapsule.PackageID, pkg.GuardianCapsule.ShareID)
-	require.NoError(t, err)
-	guardianRecord, err := coreClient.GetRecord(guardianKey)
-	require.NoError(t, err)
-	require.Zero(t, guardianRecord.TTL)
-	require.Zero(t, dkvsindexer.RecordExpiryHeight(guardianRecord))
-	guardianProof, err := dkvsindexer.ParseFeeProof(guardianRecord.FeeProof)
-	require.NoError(t, err)
-	require.Equal(t, dkvsindexer.FeeModeAutopay, guardianProof.Mode)
-	t.Logf("paid-account-proof: owner=guardian-mailbox key=%s seq=%d hash=%s mode=%s pool=%s",
-		guardianKey, guardianRecord.Seq, dkvsindexer.RecordHash(guardianRecord).String(),
-		guardianProof.Mode, guardianProof.PoolContract)
-	var storedGuardian account.GuardianShareCapsule
-	require.NoError(t, json.Unmarshal(guardianValue, &storedGuardian))
-	guardianShare, err := account.DecryptGuardianShare(storedGuardian, guardianPrivate)
-	require.NoError(t, err)
+	secondShare := pkg.UserShare
+	if guardianTests {
+		guardianValue, err := guardianManager.LoadAccountGuardianCapsule(
+			guardianLocation, guardianID, pkg.GuardianCapsule.PackageID, pkg.GuardianCapsule.ShareID,
+		)
+		require.NoError(t, err)
+		guardianKey, err = dkvsindexer.MailShareKey(guardianID, pkg.GuardianCapsule.PackageID, pkg.GuardianCapsule.ShareID)
+		require.NoError(t, err)
+		guardianRecord, err := coreClient.GetRecord(guardianKey)
+		require.NoError(t, err)
+		require.Zero(t, guardianRecord.TTL)
+		require.Zero(t, dkvsindexer.RecordExpiryHeight(guardianRecord))
+		guardianProof, err := dkvsindexer.ParseFeeProof(guardianRecord.FeeProof)
+		require.NoError(t, err)
+		require.Equal(t, dkvsindexer.FeeModeAutopay, guardianProof.Mode)
+		t.Logf("paid-account-proof: owner=guardian-mailbox key=%s seq=%d hash=%s mode=%s pool=%s",
+			guardianKey, guardianRecord.Seq, dkvsindexer.RecordHash(guardianRecord).String(),
+			guardianProof.Mode, guardianProof.PoolContract)
+		var storedGuardian account.GuardianShareCapsule
+		require.NoError(t, json.Unmarshal(guardianValue, &storedGuardian))
+		secondShare, err = account.DecryptGuardianShare(storedGuardian, guardianPrivate)
+		require.NoError(t, err)
+	}
+
 	dkvsShare, err := account.RecoverDKVSShare(loaded.DKVSShareCapsule, loaded.KnowledgeBundle,
 		[]account.AnswerAttempt{{QuestionID: "book", Answer: "月光落在安静的旧桥上。"},
 			{QuestionID: "note", Answer: "yellow bicycle beside the winter river"}})
 	require.NoError(t, err)
-	restored, secret, err := account.RecoverAccount(loaded.Envelope, dkvsShare, guardianShare)
+	restored, secret, err := account.RecoverAccount(loaded.Envelope, dkvsShare, secondShare)
 	require.NoError(t, err)
 	require.NoError(t, walletManager.ActivateAccountManagement(
 		secret, "123456", authorization, pkg.Envelope.Locator, "",
 	))
+	require.NoError(t, walletManager.StartDKVSSync())
+	ownerReadyCtx, ownerReadyCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer ownerReadyCancel()
+	require.NoError(t, walletManager.WaitAccountManagedDataReady(ownerReadyCtx),
+		"Owner first paid backup must be confirmed locally before reconfirming storage")
+	require.Eventually(t, func() bool { return walletManager.GetAccountManagementStatus().DKVSWriteAllowed },
+		30*time.Second, 100*time.Millisecond,
+		"reconfirm storage only after the owner has a verified online write session")
 	t.Run("PWAReadyPaidStorageDoesNotFundTwiceOrDowngrade", func(t *testing.T) {
 		confirmed, err := walletManager.ConfirmAccountStorage(wallet.AccountStoragePaid, 100)
 		require.NoError(t, err)
@@ -542,10 +601,6 @@ func runAccountManagementAutopaySync(t *testing.T, setup *accountManagementAutop
 		_, err = walletManager.ConfirmAccountStorage(wallet.AccountStorageTemporary, 0)
 		require.ErrorIs(t, err, wallet.ErrAccountStorageModeDowngrade)
 	})
-	ownerReadyCtx, ownerReadyCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer ownerReadyCancel()
-	require.NoError(t, walletManager.WaitAccountManagedDataReady(ownerReadyCtx),
-		"Owner first paid backup must be confirmed locally before checking its peer copy")
 	ownerStatus := walletManager.GetAccountManagementStatus()
 	require.Equal(t, "active", ownerStatus.DiscoveryStatus)
 	require.True(t, ownerStatus.RecoveryConfigured)

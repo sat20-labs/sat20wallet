@@ -13,8 +13,8 @@ import (
 
 // These are local boundary tests, not RGB consensus fixtures. A collector must
 // reject a detached or malformed dedicated slot rather than silently omit it.
-// The real native 50/10 punishment integration supplies the positive proof.
-func TestNativeWatchtowerCannotSilentlyOmitRGBRecovery(t *testing.T) {
+// The real RGB11 50/10 punishment integration supplies the positive proof.
+func TestTowerRequiresRGB11Recovery(t *testing.T) {
 	for _, scenario := range []string{"missing-proof", "foreign-parent", "missing-signature", "foreign-proof", "missing-child"} {
 		t.Run(scenario, func(t *testing.T) {
 			f, encoded := rgbRecoveryExchangeFixture(t)
@@ -39,7 +39,7 @@ func TestNativeWatchtowerCannotSilentlyOmitRGBRecovery(t *testing.T) {
 				txs = []*wire.MsgTx{minimalPersistedCommitmentTx(95)}
 			}
 			tower := newWatchTower(f.manager, false)
-			if _, err := tower.nativePunishProofs(f.channel, f.channel.RemoteCommitment.CommitTx, txs); err == nil {
+			if _, err := tower.rgb11PunishProofs(f.channel, f.channel.RemoteCommitment.CommitTx, txs); err == nil {
 				t.Fatal("watchtower silently omitted an unbound RGB recovery obligation")
 			}
 			if tower.HasCommitTx(f.channel.RemoteCommitment.CommitTx.TxID()) {
@@ -104,10 +104,10 @@ func (p *punishReceiptBoundaryProtocol) ImportChannelSettlement(_ *Manager, tx *
 	return nil
 }
 
-func TestNativeWatchtowerIndependentReceiptsSurviveRestart(t *testing.T) {
+func TestRGB11TowerReceiptRestart(t *testing.T) {
 	for _, missing := range []int{0, 1} {
 		t.Run(fmt.Sprintf("unconfirmed-branch-%d", missing), func(t *testing.T) {
-			f := newNativeRecoveryFixture(t)
+			f := newRecoveryFixture(t)
 			protocol := &punishReceiptBoundaryProtocol{accepted: make(map[string]bool), blocked: make(map[string]bool)}
 			previous := stpAssetProtocols
 			protocols := append([]STPAssetProtocol{}, previous.ordered...)
@@ -119,7 +119,7 @@ func TestNativeWatchtowerIndependentReceiptsSurviveRestart(t *testing.T) {
 			t.Cleanup(func() { stpAssetProtocols = previous })
 			commit := f.channel.RemoteCommitment.CommitTx
 			txs := []*wire.MsgTx{minimalPersistedCommitmentTx(96), minimalPersistedCommitmentTx(97)}
-			record := &nativePunishRecord{Version: 1, ChannelID: f.channel.ChannelId, CommitTxID: commit.TxID(),
+			record := &rgb11PunishRecord{Version: 1, ChannelID: f.channel.ChannelId, CommitTxID: commit.TxID(),
 				Transactions: txs, Proofs: make(map[string]map[string][]byte)}
 			for i, tx := range txs {
 				hash := tx.TxHash()
@@ -130,7 +130,7 @@ func TestNativeWatchtowerIndependentReceiptsSurviveRestart(t *testing.T) {
 				}
 				f.rpc.confirmed[tx.TxID()] = i != missing
 			}
-			if err := saveNativePunishRecord(f.db, record); err != nil {
+			if err := saveRGB11PunishRecord(f.db, record); err != nil {
 				t.Fatal(err)
 			}
 			tower := newWatchTower(f.manager, false)
@@ -147,7 +147,7 @@ func TestNativeWatchtowerIndependentReceiptsSurviveRestart(t *testing.T) {
 			f.db.KVDB = NewKVDB(f.directory)
 			tower = newWatchTower(f.manager, false)
 			f.manager.watchTower = tower
-			loaded, err := loadNativePunishRecord(f.db, f.channel.ChannelId, commit.TxID())
+			loaded, err := loadRGB11PunishRecord(f.db, f.channel.ChannelId, commit.TxID())
 			if err != nil || loaded == nil || !equalSTPBitcoinChain(record.Transactions, loaded.Transactions) {
 				t.Fatalf("restart lost exact independent transaction bytes: %v", err)
 			}
@@ -171,7 +171,7 @@ func TestNativeWatchtowerIndependentReceiptsSurviveRestart(t *testing.T) {
 			}
 			delete(protocol.blocked, txs[1].TxID())
 			for i := 0; i < 2; i++ {
-				if err := tower.importNativePunishment(f.channel.ChannelId, commit.TxID()); err != nil {
+				if err := tower.importRGB11Punishment(f.channel.ChannelId, commit.TxID()); err != nil {
 					t.Fatal(err)
 				}
 			}

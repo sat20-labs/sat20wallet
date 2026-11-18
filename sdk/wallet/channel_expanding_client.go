@@ -85,7 +85,7 @@ func (p *Manager) AllowExpand(resv *SplicingReservation, utxo string) error {
 	if err != nil {
 		return err
 	}
-	if _, native := protocol.(STPAssetFundingProtocol); native {
+	if _, supportsFunding := protocol.(STPAssetFundingProtocol); supportsFunding {
 		if err := p.acceptSTPChannelFundingWithRGBView(channel, assetName, []*TxOutput{info}, resv.AssetFunding, resv.AssetEntropy, view); err != nil {
 			return err
 		}
@@ -93,12 +93,12 @@ func (p *Manager) AllowExpand(resv *SplicingReservation, utxo string) error {
 		if !ok {
 			return fmt.Errorf("%s does not support proof-backed expansion", protocol.Protocol())
 		}
-		resv.NativeAnchorProof, err = builder.BuildExpansionAnchorProof(p, channel, assetName, info)
+		resv.RGB11AnchorProof, err = builder.BuildExpansionAnchorProof(p, channel, assetName, info)
 		if err != nil {
 			return err
 		}
-		if len(resv.NativeAnchorProof) == 0 {
-			return fmt.Errorf("missing native expansion anchor proof")
+		if len(resv.RGB11AnchorProof) == 0 {
+			return fmt.Errorf("missing RGB11 expansion anchor proof")
 		}
 	}
 	amt, _ := info.GetAssetV2(&assetName.AssetName)
@@ -433,7 +433,7 @@ func (p *Manager) funderInitExpandingProcessWithRGBEvidenceAndPolicy(channel *Ch
 	if viewErr != nil {
 		return "", nil, 0, viewErr
 	}
-	if _, native := protocol.(STPAssetFundingProtocol); native {
+	if _, supportsFunding := protocol.(STPAssetFundingProtocol); supportsFunding {
 		input, err := p.GetIndexerClient().GetTxOutput(utxo)
 		if err != nil {
 			return "", nil, 0, err
@@ -796,11 +796,6 @@ func (p *Manager) funderInitExpandingProcessSatsNetWithRGBEvidence(channel *Chan
 		err = p.ReceiveNewCommitment(&resv.RevocationInfo, &resv.LocalCommitInfo.CommitSigInfo, nil)
 		if err != nil {
 			Log.Errorf("ReceiveNewCommitment %s failed. %v", channelID, err)
-			break
-		}
-		resv.LocalRev, err = p.RevokeCurrentCommitment(&resv.RevocationInfo)
-		if err != nil {
-			Log.Errorf("RevokeCurrentCommitment %s failed. %v", channelID, err)
 			break
 		}
 		err = p.SignNextCommitment(&resv.RevocationInfo)

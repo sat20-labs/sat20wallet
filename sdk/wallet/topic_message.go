@@ -3,7 +3,6 @@ package wallet
 import (
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 
 	indexer "github.com/sat20-labs/indexer/common"
@@ -677,20 +676,6 @@ func (p *Manager) RetryMessageTopicPublish(applicationID string) (*swire.TopicPu
 	return p.sendPersistedTopicMessage(outbox)
 }
 
-func validateTopicMailboxOuter(accountID string, record *swire.DKVSRecord, topicName, kind string) (dkvsindexer.ParsedKey, error) {
-	var empty dkvsindexer.ParsedKey
-	if record == nil || record.Version != dkvsindexer.Version || record.Seq != 1 || len(record.Value) == 0 ||
-		len(record.PubKey) != 0 || len(record.Signature) != 0 || len(record.FeeProof) != 0 || record.Flags != 0 {
-		return empty, dkvsindexer.ErrInvalidRecord
-	}
-	parsed, err := dkvsindexer.ParseKey(record.Key)
-	if err != nil || parsed.Namespace != "mail" || len(parsed.Segments) < 4 || parsed.Segments[0] != accountID ||
-		parsed.Segments[1] != "topic" || parsed.Segments[2] != topicName || parsed.Segments[3] != kind {
-		return empty, dkvsindexer.ErrInvalidRecord
-	}
-	return parsed, nil
-}
-
 func (p *Manager) SyncMessageTopicKeys(topicName string) (int, error) {
 	wallet, err := p.messageTopicWallet()
 	if err != nil {
@@ -704,42 +689,19 @@ func (p *Manager) SyncMessageTopicKeys(topicName string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	store, err := p.accountDKVSStore()
-	if err != nil {
-		return 0, err
-	}
-	// An explicit topic-key sync must first compare the managed mailbox
-	// generation with the CoreNode. Reads normally use the local snapshot, but
-	// this operation is the application-level request to refresh it.
-	if err := store.manager.ensureCurrentSubscription(store.client); err != nil {
-		return 0, err
-	}
-	prefix := "/mail/" + accountID + "/topic/" + topicName + "/key"
-	records, _, err := store.client.ListRecords(prefix, 0, 0)
-	if err != nil {
-		return 0, err
-	}
+	keys, readErr := p.readAccountTopicKeys(accountID, topicName)
 	cryptoManager, err := NewTopicCryptoManager(p, wallet)
 	if err != nil {
 		return 0, err
 	}
 	accepted := 0
-	for _, record := range records {
-		parsed, err := validateTopicMailboxOuter(accountID, record, topicName, "key")
-		if err != nil || len(parsed.Segments) != 5 {
-			return accepted, dkvsindexer.ErrInvalidRecord
-		}
-		fanout, err := swire.DeserializeTopicKeyFanoutMessage(record.Value)
-		if err != nil || fanout.TopicName != topicName || len(fanout.Recipients) != 1 ||
-			strconv.FormatUint(fanout.KeySeq, 10) != parsed.Segments[4] {
-			return accepted, dkvsindexer.ErrInvalidRecord
-		}
+	for _, fanout := range keys {
 		if err := cryptoManager.AcceptKeyPackage(fanout); err != nil {
 			return accepted, err
 		}
 		accepted++
 	}
-	return accepted, nil
+	return accepted, readErr
 }
 
 func (p *Manager) ReadMessageTopicMessages(topicName string, start, limit int) ([]*TopicMessage, int, error) {
@@ -758,12 +720,7 @@ func (p *Manager) ReadMessageTopicMessages(topicName string, start, limit int) (
 	if _, err := p.SyncMessageTopicKeys(topicName); err != nil {
 		return nil, 0, err
 	}
-	store, err := p.accountDKVSStore()
-	if err != nil {
-		return nil, 0, err
-	}
-	prefix := "/mail/" + accountID + "/topic/" + topicName + "/msg"
-	records, total, err := store.client.ListRecords(prefix, start, limit)
+	messages, total, err := p.readAccountTopicMessages(accountID, topicName, start, limit)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -771,22 +728,13 @@ func (p *Manager) ReadMessageTopicMessages(topicName string, start, limit int) (
 	if err != nil {
 		return nil, 0, err
 	}
-	result := make([]*TopicMessage, 0, len(records))
-	for _, record := range records {
-		parsed, err := validateTopicMailboxOuter(accountID, record, topicName, "msg")
-		if err != nil || len(parsed.Segments) != 6 {
-			return nil, 0, dkvsindexer.ErrInvalidRecord
-		}
-		publish, err := swire.DeserializeTopicPublishMessage(record.Value)
-		if err != nil || publish.TopicName != topicName || publish.SenderAccount != parsed.Segments[4] ||
-			publish.MessageID != parsed.Segments[5] {
-			return nil, 0, dkvsindexer.ErrInvalidRecord
-		}
+	result := make([]*TopicMessage, 0, len(messages))
+	for _, publish := range messages {
 		plaintext, err := cryptoManager.DecryptPublish(publish)
 		if err != nil {
 			return nil, 0, err
 		}
-		result = append(result, &TopicMessage{Publish: publish, Plaintext: plaintext, Record: record})
+		result = append(result, &TopicMessage{Publish: publish, Plaintext: plaintext})
 	}
 	return result, total, nil
 }

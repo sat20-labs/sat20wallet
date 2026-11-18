@@ -3,7 +3,6 @@ package e2e
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -32,43 +31,140 @@ func TestSDKAccountPWAEntryPoints(t *testing.T) {
 	waitForDKVSPeerReady(t, network)
 	t.Run("UnavailableDiscoveryCannotAuthorizeNewAccountSecret", func(t *testing.T) {
 		config, _ := accountReviewConfig(t, network)
-		config.IndexerL2.Host = "127.0.0.1:1"
+		target, err := url.Parse("http://" + config.IndexerL2.Host)
+		require.NoError(t, err)
+		proxy := httputil.NewSingleHostReverseProxy(target)
+		var unavailable atomic.Bool
+		var requests atomic.Int32
+		unavailable.Store(true)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.URL.Path, "/active/sync") {
+				requests.Add(1)
+				if unavailable.Load() {
+					http.Error(w, "controlled first discovery unavailable", http.StatusServiceUnavailable)
+					return
+				}
+			}
+			proxy.ServeHTTP(w, r)
+		}))
+		t.Cleanup(server.Close)
+		config.IndexerL2.Host = strings.TrimPrefix(server.URL, "http://")
 		db := indexerdb.NewKVDB(t.TempDir())
 		require.NotNil(t, db)
 		manager := wallet.NewManager(config, db)
 		t.Cleanup(func() { manager.Close(); db.Close() })
 		mnemonic := accountSyncMnemonic(t, 207)
-		_, err := manager.RecoverAccountManagementFromRootMnemonic(context.Background(), mnemonic, accountReviewPassword)
-		require.ErrorIs(t, err, wallet.ErrRootAccountDiscoveryPending)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		// This covers the SDK discovery boundary. The real PWA import-page
+		// test separately observes that its orchestrator never calls ImportWallet
+		// while discovery is pending; raw ImportWallet is not that orchestrator.
+		for attempt := 0; attempt < 2; attempt++ {
+			before := requests.Load()
+			_, err = manager.RecoverAccountManagementFromRootMnemonic(ctx, mnemonic, accountReviewPassword)
+			require.ErrorIs(t, err, wallet.ErrRootAccountDiscoveryPending)
+			require.NotErrorIs(t, err, wallet.ErrRootAccountNotFound)
+			require.Greater(t, requests.Load(), before, "each unfinished attempt must contact the same node")
+			require.Empty(t, manager.GetWalletCatalog())
+			status := manager.GetAccountManagementStatus()
+			require.False(t, status.Active)
+			require.False(t, status.RecoveryConfigured)
+			require.False(t, status.ActivationPending)
+			require.False(t, status.DKVSWriteAllowed)
+			_, err = manager.ConfirmAccountStorage(wallet.AccountStorageTemporary, 0)
+			require.Error(t, err, "unfinished first discovery must not authorize an account secret")
+			pending, err := manager.PendingAccountStorageAuthorization()
+			require.ErrorIs(t, err, wallet.ErrAccountStorageAuthorizationMissing)
+			require.Nil(t, pending)
+			require.Empty(t, manager.GetWalletCatalog())
+		}
+		unavailable.Store(false)
+		before := requests.Load()
+		_, err = manager.RecoverAccountManagementFromRootMnemonic(ctx, mnemonic, accountReviewPassword)
+		require.ErrorIs(t, err, wallet.ErrRootAccountNotFound)
+		require.Greater(t, requests.Load(), before, "not-found requires one successful online confirmation")
 		require.Empty(t, manager.GetWalletCatalog())
+		confirmed := requests.Load()
 		walletID, err := manager.ImportWallet(mnemonic, accountReviewPassword)
 		require.NoError(t, err)
-		require.NoError(t, manager.StartDKVSSync())
-		t.Cleanup(manager.StopDKVSSync)
-		require.Eventually(t, func() bool {
-			status := manager.GetAccountManagementStatus()
-			return status.DiscoveryStatus == "unknown" && status.LastDKVSSyncError != ""
-		}, 30*time.Second, 20*time.Millisecond, "observe the real failed online discovery")
+		require.Equal(t, walletID, manager.GetAccountManagementStatus().RootWalletID)
+		require.False(t, manager.GetAccountManagementStatus().RecoveryConfigured)
+		require.Equal(t, confirmed, requests.Load(), "import must reuse the completed discovery")
+	})
+
+	t.Run("ConfirmedLocalWalletAllowsOfflineOperations", func(t *testing.T) {
+		config, _ := accountReviewConfig(t, network)
+		target, err := url.Parse("http://" + config.IndexerL2.Host)
+		require.NoError(t, err)
+		proxy := httputil.NewSingleHostReverseProxy(target)
+		var offline atomic.Bool
+		var rootWrapperLookups atomic.Int32
+		var rootWrapperKey string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if offline.Load() {
+				if strings.HasSuffix(r.URL.Path, "/v3/dkvs/record") && r.URL.Query().Get("key") == rootWrapperKey {
+					rootWrapperLookups.Add(1)
+				}
+				http.Error(w, "controlled node unavailable after confirmation", http.StatusServiceUnavailable)
+				return
+			}
+			proxy.ServeHTTP(w, r)
+		}))
+		t.Cleanup(server.Close)
+		config.IndexerL2.Host = strings.TrimPrefix(server.URL, "http://")
+		dir := t.TempDir()
+		db := indexerdb.NewKVDB(dir)
+		require.NotNil(t, db)
+		manager := wallet.NewManager(config, db)
+		t.Cleanup(func() { manager.Close(); db.Close() })
+		mnemonic := accountSyncMnemonic(t, 210)
+		_, err = manager.RecoverAccountManagementFromRootMnemonic(context.Background(), mnemonic, accountReviewPassword)
+		require.ErrorIs(t, err, wallet.ErrRootAccountNotFound)
+		walletID, err := manager.ImportWallet(mnemonic, accountReviewPassword)
+		require.NoError(t, err)
+		root := manager.GetWallet()
+		require.NotNil(t, root)
+		rootWrapperKey, err = dkvs.PersonalKey(root.GetPubKey().SerializeCompressed(), "account/root")
+		require.NoError(t, err)
+		identity := manager.GetAccountManagementStatus().AccountID
+		before := manager.GetWalletCatalog()
+		manager.Close()
+		db.Close()
+		offline.Store(true)
+		db = indexerdb.NewKVDB(dir)
+		require.NotNil(t, db)
+		manager = wallet.NewManager(config, db)
+		require.NotNil(t, manager)
+		manager.Start()
+		_, err = manager.UnlockWallet(accountReviewPassword)
+		require.NoError(t, err)
+		require.Equal(t, before, manager.GetWalletCatalog())
 		status := manager.GetAccountManagementStatus()
 		require.True(t, status.Active, "minimum local identity is not service activation")
 		require.Equal(t, walletID, status.RootWalletID)
-		require.Equal(t, "unknown", status.DiscoveryStatus)
-		require.False(t, status.LocalOnly, "Unknown must not authorize the inactive-account path")
+		require.Equal(t, identity, status.AccountID)
+		require.True(t, status.LocalOnly, "confirmed local identity remains available offline")
+		require.True(t, status.WriteAllowed)
 		require.False(t, status.RecoveryConfigured)
 		require.False(t, status.ActivationPending)
 		require.False(t, status.DKVSWriteAllowed)
-		before := manager.GetWalletCatalog()
-		require.ErrorIs(t, manager.UpdateWalletName(walletID, "must remain read only"), wallet.ErrDKVSPathNotSynced)
+		view, err := manager.GetAccountView(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, "notConfigured", view.BackupRisk, "offline local use must retain the missing-backup warning")
+		require.NoError(t, manager.UpdateWalletName(walletID, "local while discovery is unavailable"))
+		before = manager.GetWalletCatalog()
+		require.Equal(t, "local while discovery is unavailable", before[0].Name)
 		require.ErrorIs(t, manager.SyncAccountManagementState(context.Background()), wallet.ErrDKVSPathNotSynced)
+		require.Never(t, func() bool { return rootWrapperLookups.Load() > 0 }, time.Second, 20*time.Millisecond,
+			"after authoritative NotFound, cold start must not repeat the root-wrapper lookup")
 		_, err = manager.ConfirmAccountStorage(wallet.AccountStorageTemporary, 0)
-		require.ErrorIs(t, err, wallet.ErrDKVSPathNotSynced, "Unknown must not prepare an activation or remote write")
+		require.Error(t, err, "unavailable storage policy must not prepare an activation or remote write")
 		pending, err := manager.PendingAccountStorageAuthorization()
 		require.ErrorIs(t, err, wallet.ErrAccountStorageAuthorizationMissing)
 		require.Nil(t, pending)
 		require.Equal(t, before, manager.GetWalletCatalog(), "rejected operations must not replace local identity/catalog")
 		after := manager.GetAccountManagementStatus()
 		require.Equal(t, status.AccountID, after.AccountID)
-		require.Equal(t, "unknown", after.DiscoveryStatus)
 		require.False(t, after.RecoveryConfigured)
 		require.False(t, after.ActivationPending)
 	})
@@ -97,7 +193,8 @@ func TestSDKAccountPWAEntryPoints(t *testing.T) {
 		require.ErrorIs(t, err, wallet.ErrRootAccountNotFound)
 		require.Empty(t, manager.GetWalletCatalog())
 		require.False(t, manager.GetAccountManagementStatus().Active)
-		require.NoError(t, manager.StartDKVSSync())
+		require.ErrorIs(t, manager.StartDKVSSync(), wallet.ErrDKVSPathNotSynced,
+			"authoritative NotFound has no configured backup worker; discovery is explicit")
 		require.Eventually(t, func() bool {
 			_, err = manager.RecoverAccountManagementFromRootMnemonic(context.Background(), mnemonic, accountReviewPassword)
 			return errors.Is(err, wallet.ErrRootAccountNotFound)
@@ -107,6 +204,9 @@ func TestSDKAccountPWAEntryPoints(t *testing.T) {
 		require.True(t, manager.GetAccountManagementStatus().Active)
 		require.Equal(t, id, manager.GetAccountManagementStatus().RootWalletID)
 	})
+	if t.Failed() {
+		return
+	}
 
 	f := prepareAccountReviewWithMnemonic(t, network, accountSyncMnemonic(t, 202), true)
 	f.activate(t)
@@ -121,9 +221,11 @@ func TestSDKAccountPWAEntryPoints(t *testing.T) {
 
 	t.Run("RootMnemonicRestoresLatestCatalogWithNewLocalPassword", func(t *testing.T) {
 		fresh, _ := accountReviewDevice(t, network, "")
-		require.NoError(t, fresh.StartDKVSSync())
 		const newPassword = "pwa-new-device-password"
 		requireAccountPWARootRecovery(t, fresh, f.rootMnemonic, newPassword)
+		// Explicit root recovery configures this account before its ordinary
+		// backup worker starts.
+		require.NoError(t, fresh.StartDKVSSync())
 		require.Equal(t, f.manager.GetWalletCatalog()[0].Fingerprint, fresh.GetWalletCatalog()[0].Fingerprint)
 		require.Equal(t, "Latest root", fresh.GetWalletCatalog()[0].Name)
 		require.Len(t, fresh.GetWalletCatalog(), 2)
@@ -222,6 +324,41 @@ func TestSDKAccountPWAOfflineRestart(t *testing.T) {
 	f := prepareAccountReviewWithMnemonic(t, network, accountSyncMnemonic(t, 203), true)
 	f.activate(t)
 	config, _ := accountReviewConfig(t, network)
+	target, err := url.Parse("http://" + config.IndexerL2.Host)
+	require.NoError(t, err)
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	accountPrefix := "/personal/" + f.manager.GetAccountManagementStatus().AccountID + "/account"
+	var accountSyncRequests atomic.Int32
+	var accountPrefixSyncs atomic.Int32
+	var otherPrefixSyncs atomic.Int32
+	var unreadableSyncRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/v3/dkvs/active/sync") {
+			accountSyncRequests.Add(1)
+			body, readErr := io.ReadAll(r.Body)
+			_ = r.Body.Close()
+			if readErr != nil {
+				unreadableSyncRequests.Add(1)
+			} else {
+				var request struct {
+					Scope struct {
+						Prefix string `json:"prefix"`
+					} `json:"scope"`
+				}
+				if json.Unmarshal(body, &request) != nil {
+					unreadableSyncRequests.Add(1)
+				} else if request.Scope.Prefix == accountPrefix {
+					accountPrefixSyncs.Add(1)
+				} else {
+					otherPrefixSyncs.Add(1)
+				}
+				r.Body = io.NopCloser(bytes.NewReader(body))
+			}
+		}
+		proxy.ServeHTTP(w, r)
+	}))
+	t.Cleanup(server.Close)
+	config.IndexerL2.Host = strings.TrimPrefix(server.URL, "http://")
 	dir := t.TempDir()
 	db := indexerdb.NewKVDB(dir)
 	require.NotNil(t, db)
@@ -231,9 +368,75 @@ func TestSDKAccountPWAOfflineRestart(t *testing.T) {
 	t.Cleanup(hold.unblock)
 	transport := &accountBackupHTTP{inner: wallet.NewHTTPClient(), holds: []*accountStateHold{hold}}
 	manager.SetDKVSHttpClient(transport)
-	require.NoError(t, manager.StartDKVSSync())
+	var coldRestartDiagActive atomic.Bool
+	var beforeRuntimeRestartSyncRequests, beforeRuntimeRestartPrefixSyncs int32
+	logRestartStatus := func(stage string) {
+		status := manager.GetAccountManagementStatus()
+		t.Logf("configured-account restart status: stage=%s account_state=%s active=%t recovery_configured=%t activation_pending=%t write_allowed=%t dkvs_write_allowed=%t dkvs_status=%s discovery_status=%s sync_error_code=%s pending_changes=%d pending_requests=%d",
+			stage, status.AccountState, status.Active, status.RecoveryConfigured, status.ActivationPending,
+			status.WriteAllowed, status.DKVSWriteAllowed, status.DKVSStatus, status.DiscoveryStatus,
+			status.LastDKVSSyncErrorCode, status.PendingChanges, status.DKVSPendingRequests)
+	}
+	t.Cleanup(func() {
+		if !coldRestartDiagActive.Load() || !t.Failed() {
+			return
+		}
+		status := manager.GetAccountManagementStatus()
+		t.Logf("configured-account cold-unlock failure status: account_state=%s active=%t recovery_configured=%t activation_pending=%t write_allowed=%t dkvs_write_allowed=%t dkvs_status=%s discovery_status=%s sync_error_code=%s pending_changes=%d pending_requests=%d",
+			status.AccountState, status.Active, status.RecoveryConfigured, status.ActivationPending,
+			status.WriteAllowed, status.DKVSWriteAllowed, status.DKVSStatus, status.DiscoveryStatus,
+			status.LastDKVSSyncErrorCode, status.PendingChanges, status.DKVSPendingRequests)
+		t.Logf("configured-account cold-unlock sync requests: total=%d matching_account_prefix=%d other_prefix=%d unreadable=%d; delta_total=%d delta_matching_prefix=%d",
+			accountSyncRequests.Load(), accountPrefixSyncs.Load(), otherPrefixSyncs.Load(), unreadableSyncRequests.Load(),
+			accountSyncRequests.Load()-beforeRuntimeRestartSyncRequests,
+			accountPrefixSyncs.Load()-beforeRuntimeRestartPrefixSyncs)
+	})
 	requireAccountPWARootRecovery(t, manager, f.rootMnemonic, accountReviewPassword)
+	require.True(t, manager.GetAccountManagementStatus().RecoveryConfigured,
+		"the backup worker starts only after explicit root recovery configures this account")
+	require.NoError(t, manager.StartDKVSSync())
 	require.Eventually(t, func() bool { return manager.GetAccountManagementStatus().DKVSWriteAllowed }, 30*time.Second, 50*time.Millisecond)
+	// No pending edit or remote change may be needed to restore account write
+	// permission after restarting either the sync worker or the whole runtime.
+	requireE2EFirstBackup(t, manager)
+	recoveryAccountID := manager.GetAccountManagementStatus().AccountID
+	require.NoError(t, manager.SwitchAccount(2))
+	require.Equal(t, uint32(2), manager.GetCurrentAccountId(), "the existing sub-account must remain selected")
+	require.Equal(t, recoveryAccountID, manager.GetAccountManagementStatus().AccountID,
+		"switching sub-accounts must retain the root-derived account identity")
+	require.Equal(t, "/personal/"+recoveryAccountID+"/account", accountPrefix,
+		"the sync prefix is determined by the root account, not its selected sub-account")
+	reconnectCatalog := manager.GetWalletCatalog()
+	manager.StopDKVSSync()
+	require.NoError(t, manager.StartDKVSSync())
+	require.NoError(t, manager.StartDKVSSync())
+	require.Eventually(t, func() bool {
+		return manager.GetAccountManagementStatus().WriteAllowed
+	}, 30*time.Second, 50*time.Millisecond, "sync restart must recover account permission without a manual refresh")
+	require.Equal(t, reconnectCatalog, manager.GetWalletCatalog())
+	requireE2EFirstBackup(t, manager)
+	beforeRuntimeRestartSyncRequests = accountSyncRequests.Load()
+	beforeRuntimeRestartPrefixSyncs = accountPrefixSyncs.Load()
+	logRestartStatus("before_runtime_stop")
+	coldRestartDiagActive.Store(true)
+	manager.Stop()
+	manager.Start()
+	require.Equal(t, "locked", manager.GetAccountManagementStatus().AccountState)
+	require.False(t, manager.GetAccountManagementStatus().WriteAllowed)
+	logRestartStatus("after_start_before_unlock")
+	_, resumeErr := manager.UnlockWallet(accountReviewPassword)
+	require.NoError(t, resumeErr)
+	logRestartStatus("immediately_after_unlock")
+	require.Eventually(t, func() bool {
+		return manager.GetAccountManagementStatus().WriteAllowed
+	}, 30*time.Second, 50*time.Millisecond,
+		"runtime restart must recover configured-account permission")
+	require.Eventually(t, func() bool {
+		return accountPrefixSyncs.Load() > beforeRuntimeRestartPrefixSyncs
+	}, 30*time.Second, 50*time.Millisecond,
+		"configured-account cold unlock must align its /personal/<accountID>/account prefix")
+	require.Equal(t, reconnectCatalog, manager.GetWalletCatalog())
+	coldRestartDiagActive.Store(false)
 	transport.armed.Store(true)
 	root := manager.GetWalletCatalog()[0]
 	require.NoError(t, manager.UpdateWalletName(root.ID, "Unsynced before restart"))
@@ -254,7 +457,7 @@ func TestSDKAccountPWAOfflineRestart(t *testing.T) {
 	manager = wallet.NewManager(config, db)
 	manager.SetDKVSHttpClient(transport)
 	require.Nil(t, manager.GetWallet())
-	_, err := manager.UnlockWallet(accountReviewPassword)
+	_, err = manager.UnlockWallet(accountReviewPassword)
 	require.NoError(t, err)
 	require.Equal(t, "Unsynced before restart", manager.GetWalletCatalog()[0].Name)
 	require.Greater(t, manager.GetAccountManagementStatus().PendingChanges, 0)
@@ -272,68 +475,6 @@ func TestSDKAccountPWAOfflineRestart(t *testing.T) {
 	require.Zero(t, manager.GetAccountManagementStatus().PendingChanges)
 }
 
-func TestSDKAccountPWAIndependentGuardian(t *testing.T) {
-	network := newDKVSNoPluginUnfundedNetwork(t)
-	waitForDKVSPeerReady(t, network)
-	f := prepareAccountReviewWithMnemonic(t, network, accountSyncMnemonic(t, 204), true)
-	guardian, guardianLocation := accountReviewDevice(t, network, accountSyncMnemonic(t, 205))
-	require.NoError(t, guardian.InitializeAccountManagement(accountReviewPassword))
-	require.NoError(t, guardian.BindAccountToCurrentCoreNode())
-	identity, err := guardian.GetOrCreateAccountGuardianIdentity(accountReviewPassword)
-	require.NoError(t, err)
-	require.NotEqual(t, f.manager.GetAccountManagementStatus().AccountID, identity.MailboxID)
-	publicKey, err := base64.RawURLEncoding.DecodeString(identity.PublicKey)
-	require.NoError(t, err)
-	backup, err := f.manager.ExportAccountBackupForPWA(accountReviewPassword, nil)
-	require.NoError(t, err)
-	pkg, err := f.manager.CreateAccountRecoveryPackage(account.CreateOptions{
-		AccountID: f.manager.GetAccountManagementStatus().AccountID, Backup: backup,
-		RecoveryMode: account.RecoveryMode2Of3, Questions: e2eKnowledgeQuestions(),
-		GuardianMailboxID: identity.MailboxID, GuardianPublicKey: publicKey})
-	require.NoError(t, err)
-	repo, err := f.manager.NewAccountRepositoryForStorage(*f.authorization)
-	require.NoError(t, err)
-	require.NoError(t, account.NewManager(repo).Publish(context.Background(), *pkg))
-	auth, err := guardian.ConfirmAccountStorage(wallet.AccountStorageTemporary, 0)
-	require.NoError(t, err)
-	require.NoError(t, guardian.UseAccountStorageAuthorization(wallet.AccountStoragePurposeGuardian,
-		func(value *wallet.AccountStorageAuthorization) error {
-			return guardian.PutGuardianCapsuleForStorage(*value, identity.MailboxID, *pkg.GuardianCapsule)
-		}))
-	require.Equal(t, guardianLocation, auth.Location)
-	_, err = guardian.GetOrCreateAccountGuardianIdentity("wrong-password")
-	require.Error(t, err)
-	stable, err := guardian.GetOrCreateAccountGuardianIdentity(accountReviewPassword)
-	require.NoError(t, err)
-	require.Equal(t, identity, stable)
-	encoded, err := guardian.LoadAccountGuardianCapsule(guardianLocation, identity.MailboxID, pkg.Envelope.Locator.PackageID, pkg.Manifest.Guardian.ShareID)
-	require.NoError(t, err)
-	var capsule account.GuardianShareCapsule
-	require.NoError(t, json.Unmarshal(encoded, &capsule))
-	privateKey, err := guardian.LoadAccountGuardianPrivateKey(accountReviewPassword)
-	require.NoError(t, err)
-	defer clearBytes(privateKey)
-	guardianShare, err := account.DecryptGuardianShare(capsule, privateKey)
-	require.NoError(t, err)
-	knowledge, err := account.RecoverDKVSShare(pkg.DKVSShareCapsule, pkg.KnowledgeBundle, e2eKnowledgeAnswers())
-	require.NoError(t, err)
-	_, secret, err := account.RecoverAccount(pkg.Envelope, knowledge, guardianShare)
-	require.NoError(t, err)
-	defer clearBytes(secret)
-	require.Equal(t, f.secret, secret)
-	require.NoError(t, f.manager.ActivateAccountManagement(secret, accountReviewPassword, *f.authorization, pkg.Envelope.Locator, ""))
-	requireE2EFirstBackup(t, f.manager)
-	fresh, _ := accountReviewDevice(t, network, "")
-	state, err := fresh.LoadAccountManagementStateForRecovery(f.location, pkg.Envelope.Locator, secret, f.rootMnemonic)
-	require.NoError(t, err)
-	_, err = fresh.RestoreAccountManagementState(*state, secret, accountReviewPassword, pkg.Envelope.Locator, f.restoreOptions())
-	require.NoError(t, err)
-	require.Equal(t, f.manager.GetWalletCatalog()[0].Accounts, fresh.GetWalletCatalog()[0].Accounts)
-	key, err := dkvs.MailShareKey(identity.MailboxID, pkg.Envelope.Locator.PackageID, pkg.Manifest.Guardian.ShareID)
-	require.NoError(t, err)
-	requireDKVSAbsent(t, network.Bootstrap, key)
-}
-
 // The proxy forwards the production request to the real node and loses only
 // its first successful ACK. Reopening the SDK must retry the original signed
 // request, including its RequestID, authorization and CAS preconditions.
@@ -348,6 +489,7 @@ func TestSDKAccountPWACommitResponseLossRestart(t *testing.T) {
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	var loseACK atomic.Bool
 	ackHeld, ackRelease := make(chan struct{}), make(chan struct{})
+	ackCanceled := make(chan struct{})
 	var releaseOnce sync.Once
 	releaseACK := func() { releaseOnce.Do(func() { close(ackRelease) }) }
 	t.Cleanup(releaseACK)
@@ -359,6 +501,9 @@ func TestSDKAccountPWACommitResponseLossRestart(t *testing.T) {
 			close(ackHeld)
 			select {
 			case <-ackRelease:
+			case <-response.Request.Context().Done():
+				close(ackCanceled)
+				return response.Request.Context().Err()
 			case <-time.After(20 * time.Second):
 				return context.DeadlineExceeded
 			}
@@ -404,8 +549,8 @@ func TestSDKAccountPWACommitResponseLossRestart(t *testing.T) {
 	require.NotNil(t, db)
 	manager := wallet.NewManager(config, db)
 	t.Cleanup(func() { manager.Close(); db.Close() })
-	require.NoError(t, manager.StartDKVSSync())
 	requireAccountPWARootRecovery(t, manager, f.rootMnemonic, accountReviewPassword)
+	require.NoError(t, manager.StartDKVSSync())
 	require.Eventually(t, func() bool { return manager.GetAccountManagementStatus().DKVSWriteAllowed }, 30*time.Second, 50*time.Millisecond)
 	requestMu.Lock()
 	requests = nil
@@ -421,7 +566,11 @@ func TestSDKAccountPWACommitResponseLossRestart(t *testing.T) {
 	// is held. This prevents a warm retry from replacing the cold-start proof.
 	stopped := make(chan struct{})
 	go func() { manager.StopDKVSSync(); close(stopped) }()
-	require.Eventually(t, func() bool { return !manager.GetAccountManagementStatus().DKVSWriteAllowed }, 5*time.Second, 10*time.Millisecond)
+	select {
+	case <-ackCanceled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stopping account sync did not cancel its held HTTP request")
+	}
 	releaseACK()
 	select {
 	case <-stopped:

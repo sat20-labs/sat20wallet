@@ -942,6 +942,9 @@ func (f *posPWAL1Indexer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		posPWAL1JSON(w, indexerwire.BestBlockHeightResp{BaseResp: ok, Data: f.height})
 	case path == "/btc/block/bestblockhash":
 		posPWAL1JSON(w, indexerwire.BestBlockhashResp{BaseResp: ok, Data: f.blockLocked(f.height).BlockHash().String()})
+	case path == "/btc/block/blockhash/0":
+		// The genesis hash identifies the network; history below the fixture checkpoint is otherwise unavailable.
+		posPWAL1JSON(w, indexerwire.BlockHashResp{BaseResp: ok, Data: btcchaincfg.TestNet4Params.GenesisHash.String()})
 	case strings.HasPrefix(path, "/btc/block/blockhash/"):
 		height, err := strconv.ParseInt(strings.TrimPrefix(path, "/btc/block/blockhash/"), 10, 64)
 		if err != nil || height < f.checkpointHeight || height > f.height {
@@ -1238,6 +1241,13 @@ func TestPOSPWAL1IndexerPreservesRealSignedTransactionAndAssetFlow(t *testing.T)
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 		require.NoError(t, json.NewDecoder(resp.Body).Decode(response))
 	}
+
+	var genesis, gap indexerwire.BlockHashResp
+	get("/btc/block/blockhash/0", &genesis)
+	require.Zero(t, genesis.Code, genesis.Msg)
+	require.Equal(t, btcchaincfg.TestNet4Params.GenesisHash.String(), genesis.Data)
+	get("/btc/block/blockhash/1", &gap)
+	require.NotZero(t, gap.Code)
 
 	var outspends indexerwire.BitcoinOutspendsResp
 	post("/v3/bitcoin/outspends/batch", indexerwire.BitcoinOutpointsReq{Outpoints: []string{point}}, &outspends)

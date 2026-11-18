@@ -364,13 +364,13 @@ func (p *Manager) closedReopenIntentForWalletWithInitialTopup(w common.Wallet, c
 	if expectedParent != "" && stored.RemoteCommitment.CommitTx.TxID() != expectedParent {
 		return nil, nil, fmt.Errorf("reviewed closing parent changed before top-up approval")
 	}
-	// Do not replace a prepared or revoked native obligation with a reopen.
-	if recovered, err := p.loadSTPNativeRevocationRecovery(stored); err != nil {
+	// Do not replace a prepared or revoked channel obligation with a reopen.
+	if recovered, err := p.loadSTPRevocationRecovery(stored); err != nil {
 		return nil, nil, err
 	} else if recovered != nil {
 		return nil, nil, fmt.Errorf("closed channel has an unresolved revoked commitment")
 	}
-	if prepared, err := p.readSTPNativePreparedRecovery(&Channel{ChannelInDB: *stored}); err != nil {
+	if prepared, err := p.readSTPPreparedRecovery(&Channel{ChannelInDB: *stored}); err != nil {
 		return nil, nil, err
 	} else if prepared != nil {
 		return nil, nil, fmt.Errorf("closed channel has an unresolved prepared commitment")

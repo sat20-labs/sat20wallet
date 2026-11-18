@@ -72,10 +72,10 @@ func assertMixedRecoveryColoring(t *testing.T, manager *Manager, commit *Channel
 		outputs = append(outputs, indexer.GenerateTxOutput(tx, index))
 	}
 	if err := manager.ClassifySTPAtomicalsOutputs(tx, inputs, outputs); err != nil {
-		t.Fatalf("native regular coloring rejected mixed recovery: %v", err)
+		t.Fatalf("RGB11 regular coloring rejected mixed recovery: %v", err)
 	}
 	if outputs[0].GetAsset(&atomicalsTestName().AssetName).Int64() != 1000 {
-		t.Fatal("ARC20 recovery changed the native quantity or recipient")
+		t.Fatal("ARC20 recovery changed the RGB11 quantity or recipient")
 	}
 	for _, output := range outputs[1:] {
 		if output.GetAsset(&atomicalsTestName().AssetName).Sign() != 0 {
@@ -84,7 +84,7 @@ func assertMixedRecoveryColoring(t *testing.T, manager *Manager, commit *Channel
 	}
 }
 
-func TestMixedARCAndBRCRecoveryPreservesNativeCarriers(t *testing.T) {
+func TestMixedARC20BRC20Recovery(t *testing.T) {
 	for _, branch := range []string{"sweep", "punish"} {
 		t.Run(branch, func(t *testing.T) {
 			manager, commit, facts, selected, script := mixedRecoveryFixture(t, 10_000)

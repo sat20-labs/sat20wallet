@@ -15,23 +15,26 @@ import (
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 )
 
-// Bitcoin consensus/network is the one controlled boundary. Native RGB
+// Bitcoin consensus/network is the one controlled boundary. RGB11
 // validation and transaction construction/signatures are not replaced.
 type coreE2EChain struct {
-	mu         sync.Mutex
-	sequence   int
-	outputs    map[string]*TxOutput
-	raw        map[string][]byte
-	status     map[string]rgb11wallet.BitcoinTxStatus
-	spent      map[string]string
-	broadcasts int
+	mu          sync.Mutex
+	genesisHash string // Captured with the controlled chain, not the later UI selection.
+	sequence    int
+	outputs     map[string]*TxOutput
+	raw         map[string][]byte
+	status      map[string]rgb11wallet.BitcoinTxStatus
+	spent       map[string]string
+	broadcasts  int
+	tipError    error // Controlled indexer outage for the existing lifecycle E2E.
 	// Optional test observation only; the real backend validation is unchanged.
 	observeBroadcast func([]byte)
 }
 
 func newCoreE2EChain() *coreE2EChain {
-	return &coreE2EChain{outputs: map[string]*TxOutput{}, raw: map[string][]byte{}, status: map[string]rgb11wallet.BitcoinTxStatus{}, spent: map[string]string{}}
+	return &coreE2EChain{genesisHash: GetChainParam().GenesisHash.String(), outputs: map[string]*TxOutput{}, raw: map[string][]byte{}, status: map[string]rgb11wallet.BitcoinTxStatus{}, spent: map[string]string{}}
 }
+func (c *coreE2EChain) GetGenesisHash() (string, error) { return c.genesisHash, nil }
 func (c *coreE2EChain) fund(t *testing.T, address string, count int) {
 	t.Helper()
 	script, err := AddrToPkScript(address, GetChainParam())
@@ -100,7 +103,12 @@ func (c *coreE2EChain) GetOutspend(point string) (*rgb11wallet.BitcoinOutspend, 
 	}
 	return outspend, nil
 }
-func (*coreE2EChain) GetTip() (*rgb11wallet.BitcoinTip, error) {
+func (c *coreE2EChain) GetTip() (*rgb11wallet.BitcoinTip, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.tipError != nil {
+		return nil, c.tipError
+	}
 	return &rgb11wallet.BitcoinTip{Height: 100, BlockHash: strings.Repeat("1", 64)}, nil
 }
 func (c *coreE2EChain) Broadcast(raw []byte) (string, error) {
@@ -196,3 +204,20 @@ func (p *coreE2EL1Indexer) GetUtxoListWithTicker(address string, _ *indexer.Asse
 	return result
 }
 func (*coreE2EL1Indexer) GetSyncHeight() int { return 100 }
+
+func (p *coreE2EL1Indexer) GetBlockHash(height int) (string, error) {
+	if height == 0 {
+		return p.chain.GetGenesisHash()
+	}
+	tip, err := p.chain.GetTip()
+	if err != nil {
+		return "", err
+	}
+	if height < 0 || int64(height) > int64(tip.Height) {
+		return "", fmt.Errorf("controlled Bitcoin height out of range: %d", height)
+	}
+	if int64(height) == int64(tip.Height) {
+		return tip.BlockHash, nil
+	}
+	return fmt.Sprintf("%064x", height), nil
+}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/btcsuite/btcd/wire"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
+
 	"github.com/sat20-labs/indexer/share/btclucky"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
@@ -101,6 +102,8 @@ func (noopChannelBackupHandler) BackupChannel(*Channel, []byte) error {
 
 // 密码只有一个，助记词可以有多组，对应不同的wallet
 type Manager struct {
+	recoverySessions  recoverySessions
+	rgbDirectPreviews sync.Map
 	mutex             sync.RWMutex
 	rgbOperationMu    sync.RWMutex
 	channelIdentityMu sync.RWMutex
@@ -160,20 +163,13 @@ type Manager struct {
 	accountStorageStopped       bool
 	accountAutopayFundingActive bool
 
-	managedDataMu             sync.RWMutex
-	managedDataProviders      map[string]AccountManagedDataProvider
-	rgbManagedExecutionMu     sync.Mutex
-	rgbManagedOperationMu     sync.Mutex
-	rgbManagedOperationActive bool
-	rgbManagedOperationDirty  bool
-	managedActiveSyncMu       sync.Mutex
-	managedActiveStateMu      sync.Mutex
-	managedActiveGen          map[string]uint64
-	managedActiveRunning      map[string]bool
-	accountBackgroundMu       sync.Mutex
-	accountBackgroundStop     chan struct{}
-	accountBackgroundWG       sync.WaitGroup
-	accountBackgroundStopped  bool
+	managedDataMu            sync.RWMutex
+	managedDataProviders     map[string]AccountManagedDataProvider
+	rgbManagedExecutionMu    sync.RWMutex
+	accountBackgroundMu      sync.Mutex
+	accountBackgroundStop    chan struct{}
+	accountBackgroundWG      sync.WaitGroup
+	accountBackgroundStopped bool
 
 	feeRateL1             int64 // sat/vkb
 	refreshTimeL1         int64
@@ -233,10 +229,8 @@ func (p *Manager) captureWalletIdentity() (common.Wallet, error) {
 	if p.wallet == nil || p.status == nil {
 		return nil, fmt.Errorf("wallet is not created/unlocked")
 	}
-	if p.db != nil {
-		if err := p.checkAccountManagedDataImport(); err != nil {
-			return nil, err
-		}
+	if err := p.checkAccountRestore("wallets", AccountManagedDataGlobalScope); err != nil {
+		return nil, err
 	}
 	wallet := p.wallet.Clone()
 	if wallet == nil {
@@ -1198,11 +1192,6 @@ func (p *Manager) GetAssetBalance_SatsNet(address string, name *swire.AssetName)
 }
 
 func (p *Manager) BroadcastTx(tx *wire.MsgTx) (string, error) {
-	if p.db != nil {
-		if err := p.checkAccountManagedDataImport(); err != nil {
-			return "", err
-		}
-	}
 	if ENABLE_TESTING && NOT_SEND_TX {
 		return tx.TxID(), nil
 	}
@@ -1222,11 +1211,6 @@ func (p *Manager) BroadcastTxs(txs []*wire.MsgTx) error {
 }
 
 func (p *Manager) BroadcastTxsContext(ctx context.Context, txs []*wire.MsgTx) error {
-	if p.db != nil {
-		if err := p.checkAccountManagedDataImport(); err != nil {
-			return err
-		}
-	}
 	if ENABLE_TESTING && NOT_SEND_TX {
 		return nil
 	}

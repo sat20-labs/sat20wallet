@@ -3,6 +3,7 @@ package e2e
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -22,17 +23,18 @@ var errAccountE2EProfileWrite = errors.New("account E2E: injected profile write 
 // actual online baseline before enabling a local persistence fault.
 type accountE2EProfileWriteDB struct {
 	indexercommon.KVDB
-	fail      atomic.Bool
-	key       string
-	failRead  atomic.Bool
-	writes    atomic.Int64
-	failures  atomic.Int64
-	failFlush bool
+	fail          atomic.Bool
+	key           string
+	failRead      atomic.Bool
+	writes        atomic.Int64
+	failures      atomic.Int64
+	failFlush     bool
+	moduleReceipt bool
 }
 
 func (d *accountE2EProfileWriteDB) Write(key, value []byte) error {
 	d.writes.Add(1)
-	if d.fail.Load() && d.matches(key) {
+	if d.fail.Load() && d.matchesWrite(key, value) {
 		d.failures.Add(1)
 		return errAccountE2EProfileWrite
 	}
@@ -45,6 +47,24 @@ func (d *accountE2EProfileWriteDB) matches(key []byte) bool {
 		name = wallet.GetDBKeyPrefix() + "account-management-profile-v1"
 	}
 	return string(key) == name
+}
+
+// The module completion receipt replaced the redundant profile write. Fault
+// that same durable completion boundary without adding a production test API.
+func (d *accountE2EProfileWriteDB) matchesWrite(key, value []byte) bool {
+	if !d.moduleReceipt {
+		return d.matches(key)
+	}
+	if !strings.HasPrefix(string(key), wallet.GetDBKeyPrefix()+"account/") {
+		return false
+	}
+	var row struct {
+		Provider  string
+		Scope     string
+		Restoring bool
+	}
+	return wallet.DecodeFromBytes(value, &row) == nil && row.Provider == "wallets" &&
+		row.Scope == wallet.AccountManagedDataGlobalScope && !row.Restoring
 }
 
 func (d *accountE2EProfileWriteDB) Read(key []byte) ([]byte, error) {
@@ -79,8 +99,9 @@ type accountE2EProfileWriteBatch struct {
 
 func (b *accountE2EProfileWriteBatch) Put(key, value []byte) error {
 	b.database.writes.Add(1)
-	b.profile = b.profile || b.database.matches(key)
-	if b.database.fail.Load() && !b.database.failFlush && b.database.matches(key) {
+	matched := b.database.matchesWrite(key, value)
+	b.profile = b.profile || matched
+	if b.database.fail.Load() && !b.database.failFlush && matched {
 		b.database.failures.Add(1)
 		return errAccountE2EProfileWrite
 	}
@@ -258,7 +279,7 @@ func TestSDKAccountFailureRegressions(t *testing.T) {
 		})
 	}
 
-	t.Run("RemoteApplyProfileFailureCanRetry", func(t *testing.T) {
+	t.Run("RemoteApplyReceiptFailureCanRetry", func(t *testing.T) {
 		for _, failure := range []string{"put", "flush"} {
 			t.Run(failure, func(t *testing.T) {
 				f := prepareAccountReviewWithMnemonic(t, network, "", true)
@@ -267,7 +288,7 @@ func TestSDKAccountFailureRegressions(t *testing.T) {
 				dir := t.TempDir()
 				database := indexerdb.NewKVDB(dir)
 				require.NotNil(t, database)
-				faultDB := &accountE2EProfileWriteDB{KVDB: database, failFlush: failure == "flush"}
+				faultDB := &accountE2EProfileWriteDB{KVDB: database, failFlush: failure == "flush", moduleReceipt: true}
 				device := wallet.NewManager(config, faultDB)
 				require.NotNil(t, device)
 				t.Cleanup(func() { device.Close(); database.Close() })

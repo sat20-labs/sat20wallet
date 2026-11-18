@@ -15,7 +15,7 @@ import (
 
 // Delegate export/validation and successful imports to the actual RGB11
 // provider. Only the first import returns a local module failure; the recovery
-// bundle still comes from real issuance, native proofs and paid DKVS records.
+// bundle still comes from real issuance, RGB11 proofs and paid DKVS records.
 type coreRGBImportFailureOnce struct {
 	AccountManagedDataProvider
 	failure     error
@@ -494,18 +494,16 @@ func coreRGBRecoveryFailuresE2E(t *testing.T, source *Manager, cfg coreE2EConfig
 						nonemptyScopes++
 					}
 					if cold {
-						// Readiness is intentionally RAM-only. With automatic workers
-						// stopped, cold ownership must remain unspendable until the
-						// public refresh path has obtained fresh Bitcoin evidence.
-						require.False(t, target.rgbManager.rgb11ProjectionAvailable())
-						require.Empty(t, targetView.Available)
-						require.Equal(t, targetView.Assets, targetView.Pending)
+						// Saved confirmations and proofs determine the cold local view.
+						require.Equal(t, sourceView.Available, targetView.Available)
+						require.Equal(t, sourceView.Pending, targetView.Pending)
 						require.Equal(t, sourceView.Assets, targetView.Assets)
 						require.Equal(t, sourceView.Outputs, targetView.Outputs)
 						require.Equal(t, sourceView.Proofs, targetView.Proofs)
 						require.Equal(t, sourceView.Tasks, targetView.Tasks)
 						require.Equal(t, sourceView.Invoices, targetView.Invoices)
 						require.Equal(t, sourceView.Locked, targetView.Locked)
+						continue
 					}
 					// Compare runtime health only after both managers reconcile the same
 					// selected scope against current chain evidence. This avoids comparing
@@ -531,11 +529,10 @@ func coreRGBRecoveryFailuresE2E(t *testing.T, source *Manager, cfg coreE2EConfig
 					require.Equal(t, sourceRefresh.Unresolved, targetRefresh.Unresolved,
 						"fresh source and recovered target must agree on unresolved chain evidence")
 					if coreDigest(sourceView) != coreDigest(targetView) {
-						t.Logf("core-e2e: cold recovery mismatch cold=%t account=%d source_wallet=%d target_wallet=%d initialized=%t/%t sync=%q/%q consistency=%q/%q projection_available=%t/%t",
+						t.Logf("core-e2e: cold recovery mismatch cold=%t account=%d source_wallet=%d target_wallet=%d initialized=%t/%t sync=%q/%q consistency=%q/%q",
 							cold, sub.Index, entry.ID, restoredID,
 							sourceView.Initialized, targetView.Initialized, sourceView.SyncStatus, targetView.SyncStatus,
-							sourceView.ConsistencyStatus, targetView.ConsistencyStatus,
-							source.rgbManager.rgb11ProjectionAvailable(), target.rgbManager.rgb11ProjectionAvailable())
+							sourceView.ConsistencyStatus, targetView.ConsistencyStatus)
 						for _, field := range []struct {
 							name           string
 							source, target map[string]string
@@ -592,7 +589,17 @@ func coreRGBRecoveryFailuresE2E(t *testing.T, source *Manager, cfg coreE2EConfig
 		_, err = target.UnlockWallet(coreE2EPassword)
 		samples = append(samples, coreE2EDuration("clean_cold_unlock", started))
 		require.NoError(t, err)
+		require.True(t, target.GetAccountManagementStatus().RecoveryConfigured)
+		require.False(t, target.GetAccountManagementStatus().DKVSWriteAllowed,
+			"cold local data does not establish an online write session")
+		// Check every cold scope before a remote receive could repair it. This
+		// native fixture has no background worker; fresh reconciliation needs
+		// the same real account synchronization as an online wallet entry.
 		verify(true)
+		coreSynchronizeRestoredAccount(t, target)
+		require.True(t, target.GetAccountManagementStatus().DKVSWriteAllowed,
+			"fresh chain reconciliation requires verified account readiness")
+		verify(false)
 		samples = append(samples, map[string]any{"phase": "scenario_counts", "counts": map[string]int{"broadcast": chain.broadcastCount() - broadcasts}, "workload": map[string]int{"wallets": len(source.GetWalletCatalog()), "rgb_scopes": rgbItems, "nonempty_rgb_scopes": nonemptyScopes, "physical_reopens": 2}})
 	})
 

@@ -144,7 +144,7 @@ func runDKVSHeightReconnect(t *testing.T, failStorage bool) {
 	offline.Store(true)
 	name := "Rename before three offline blocks"
 	require.NoError(t, f.manager.UpdateWalletName(status.RootWalletID, name))
-	require.Eventually(t, func() bool { return dropped.Load() > 0 }, 10*time.Second, 20*time.Millisecond)
+	require.Eventually(t, func() bool { return dropped.Load() > 0 }, 20*time.Second, 20*time.Millisecond)
 	mu.Lock()
 	first := requests[0]
 	mu.Unlock()

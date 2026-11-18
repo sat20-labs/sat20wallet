@@ -79,16 +79,16 @@ func testRGB11ThreeHopHistory(t *testing.T, manager *Manager, evidence rgb11wall
 	defer func() { manager.rgbManager.evidence = evidence }()
 	// A consignment describing the current third hop remains valid. The middle
 	// consignment is historical and its former terminal is now spent.
-	if _, err := rgb11wallet.ValidateWith(ctx, rgb11wallet.NewNativeConsensusValidatorWithReveals(third.ChangeSeals...), third.LocalConsignment, fault); err != nil {
+	if _, err := rgb11wallet.ValidateWith(ctx, rgb11wallet.NewRGB11ValidatorWithReveals(third.ChangeSeals...), third.LocalConsignment, fault); err != nil {
 		t.Fatalf("current third-hop consignment is invalid: %v", err)
 	}
-	_, middleErr := rgb11wallet.ValidateWith(ctx, rgb11wallet.NewNativeConsensusValidatorWithReveals(second.ChangeSeals...), second.LocalConsignment, fault)
+	_, middleErr := rgb11wallet.ValidateWith(ctx, rgb11wallet.NewRGB11ValidatorWithReveals(second.ChangeSeals...), second.LocalConsignment, fault)
 	if !errors.Is(middleErr, coreconsignment.ErrOutpointSpend) {
 		t.Fatalf("middle historical terminal control: %v", middleErr)
 	}
 	t.Logf("independent confirmed edges verified; current third consignment valid; middle-only current-state validation=%v", middleErr)
 	// Revalidate the middle historical DAG without writing receipts/projections.
-	validator := rgb11wallet.NewNativeConsensusValidatorWithReveals(second.ChangeSeals...)
+	validator := rgb11wallet.NewRGB11ValidatorWithReveals(second.ChangeSeals...)
 	before, err := manager.rgbManager.projectionStore.ExportSnapshot()
 	if err != nil {
 		t.Fatal(err)

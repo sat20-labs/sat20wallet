@@ -148,7 +148,7 @@ func coreRGB11SameRootThreeDeviceE2E(t *testing.T, cfg coreE2EConfig, chain *cor
 			coreAssert(t, errors.Is(broadcastErr, ErrRGB11AddressDeliveryRequired),
 				"returning computer broadcast the canceled preparation")
 		} else {
-			staleDelivery, deliveryErr := device.DeliverAndBroadcastConfiguredRGB11AddressTransfer(firstPrepared.State.TransferID, RGB11AddressDeliveryOptions{})
+			staleDelivery, deliveryErr := device.DeliverAndBroadcastConfiguredRGB11AddressTransfer(firstPrepared.State.TransferID)
 			coreRequire(t, "resume canceled preparation without side effects", deliveryErr)
 			coreAssert(t, staleDelivery != nil && !staleDelivery.Broadcast && staleDelivery.TxID == "" &&
 				staleDelivery.RecordKey == "" && staleDelivery.RecordHash == "" && staleDelivery.ObjectID == "",
@@ -157,7 +157,7 @@ func coreRGB11SameRootThreeDeviceE2E(t *testing.T, cfg coreE2EConfig, chain *cor
 		coreAssertRGB11Reservation(t, device, firstPrepared.State.TransferID, false, firstPending)
 		coreRGB11RetireDevice(t, device)
 	}
-	noDelivery, err := receiver.SyncConfiguredRGB11AddressMailbox(ctx, dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+	noDelivery, err := receiver.SyncConfiguredRGB11AddressMailbox(ctx, dkvsindexer.RecordVerificationOptions{})
 	coreRequire(t, "check receiver mailbox after canceled delivery attempt", err)
 	coreAssert(t, noDelivery != nil && noDelivery.Received == 0 && noDelivery.ACKs == 0 && noDelivery.Invalid == 0,
 		"canceled preparation reached the receiver mailbox")
@@ -176,7 +176,7 @@ func coreRGB11SameRootThreeDeviceE2E(t *testing.T, cfg coreE2EConfig, chain *cor
 		overlapsRGB11Outpoints(issued.OutPoints, directPrepared.State.InputOutPoints),
 		"cancel did not free the actual issued carrier for the new intent")
 	directBaseline := cloneRGB11BroadcastIntent(assertRGB11UnsignedPending(t, deviceA.rgbManager, directPrepared.State.TransferID))
-	delivered, err := deviceA.DeliverAndBroadcastConfiguredRGB11AddressTransfer(directPrepared.State.TransferID, RGB11AddressDeliveryOptions{})
+	delivered, err := deviceA.DeliverAndBroadcastConfiguredRGB11AddressTransfer(directPrepared.State.TransferID)
 	coreRequire(t, "deliver direct consignment before ACK", err)
 	coreAssert(t, delivered.AwaitingACK && !delivered.Broadcast && chain.broadcastCount() == beforeTransfers,
 		"direct delivery crossed its positive-ACK barrier")
@@ -933,212 +933,6 @@ func coreRGB11SameRootCASLoserE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2
 		device.StopDKVSSync()
 	}
 	coreRGB11UseDevice(t, seed)
-}
-
-// coreRGB11StableOnlyColdRestoreE2E puts both a valid stale RGB active cache
-// and a corrupt cache with a valid old-style application ID in the real
-// CoreNode mailbox. Two new databases must recover only the current stable
-// account bundle; one then spends the recovered allocation through Direct.
-func coreRGB11StableOnlyColdRestoreE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
-	seed, receiver *Manager, senderMaterial, receiverMaterial *coreRecoveryMaterial) {
-	t.Helper()
-	ctx := context.Background()
-	coreTransferDeviceCleanup(t, seed, receiver)
-	coreRGB11RetireDevice(t, seed)
-	coreRGB11RetireDevice(t, receiver)
-	source := coreRestoreE2E(t, cfg, chain, senderMaterial)
-	coreSynchronizeRestoredAccount(t, source)
-	coldReceiver := coreRestoreE2E(t, cfg, chain, receiverMaterial)
-	coreSynchronizeRestoredAccount(t, coldReceiver)
-	issued, err := source.IssueRGB11Asset(ctx, RGB11IssueRequest{
-		Schema: "NIA", Ticker: "E2EC", Name: "E2E stable-only cache asset", Amounts: []uint64{1000},
-	})
-	coreRequire(t, "issue stable-only cache NIA", err)
-	exported, err := source.ExportRGB11Contract(issued.ContractID)
-	coreRequire(t, "export stable-only cache contract", err)
-	contract, err := base64.StdEncoding.DecodeString(exported.ContractConsignmentBase64)
-	coreRequire(t, "decode stable-only cache contract", err)
-	_, err = coldReceiver.ImportRGB11ContractFile(ctx, contract)
-	coreRequire(t, "import stable-only cache contract", err)
-	_, err = coldReceiver.EnableConfiguredRGB11AddressReceive(RGB11ReceiveCapabilityOptions{})
-	coreRequire(t, "publish stable-only cache Direct capability", err)
-
-	// Capture an authentic, signed prepared sender closure that predates a
-	// definitive local cancellation. If mailbox active data were still treated
-	// as authority, this old prepared phase could resurrect the canceled lock.
-	oldInvoice, err := coldReceiver.CreateRGB11Invoice(RGB11InvoiceRequest{
-		Mode: "witness", TransportMode: "out-of-band", ContractID: issued.ContractID,
-		AmountRaw: "1", WitnessVout: 1, Expiry: time.Now().Add(time.Hour).Unix(),
-	})
-	coreRequire(t, "create old-cache witness invoice", err)
-	oldPrepared, err := source.PrepareRGB11Transfer(ctx, RGB11SendRequest{
-		Invoice: oldInvoice.Invoice, FeeRate: 2, MinConfirmations: 1,
-	})
-	coreRequire(t, "prepare operation for stale active cache", err)
-	walletID, err := source.RGB11WalletID()
-	coreRequire(t, "read stable-only cache wallet identity", err)
-	oldSnapshot, _, err := source.rgbManager.exportRGB11WalletSnapshot(walletID)
-	coreRequire(t, "capture authentic old active sender snapshot", err)
-	oldActive, err := rgb11wallet.ActiveRecoveryPackageFromSnapshot(oldSnapshot)
-	coreRequire(t, "select authentic old active sender closure", err)
-	oldActiveBytes, err := rgb11wallet.EncodeActiveRecoveryPackage(oldActive)
-	coreRequire(t, "encode authentic old active sender closure", err)
-	if oldPrepared == nil || oldPrepared.State == nil {
-		t.Fatal("core-e2e: prepare returned no stale-cache transfer identity")
-	}
-	oldTransfers, err := rgb11wallet.TransfersFromProjectionSnapshot(oldActive.ProjectionRecords)
-	coreRequire(t, "decode authentic old active transfer states", err)
-	var oldTransfer *rgb11wallet.TransferState
-	for _, transfer := range oldTransfers {
-		if transfer != nil && transfer.TransferID == oldPrepared.State.TransferID {
-			oldTransfer = transfer
-			break
-		}
-	}
-	coreAssert(t, oldTransfer != nil && oldTransfer.Status == "prepared" &&
-		oldTransfer.WitnessTxID == oldPrepared.TxID,
-		"stale mailbox fixture is not the original prepared transaction")
-	oldPending, err := source.rgbManager.projectionStore.LoadPendingTransfer(oldPrepared.State.TransferID)
-	coreRequire(t, "capture original stale-cache cancellation owner", err)
-	oldPending = cloneRGB11BroadcastIntent(oldPending)
-	coreAssertRGB11Reservation(t, source, oldPrepared.State.TransferID, true)
-	coreRequire(t, "cancel never-shared stale-cache transaction",
-		source.CancelRGB11OutOfBandTransfer(oldPrepared.State.TransferID))
-	cancelled, err := source.rgbManager.projectionStore.LoadPendingTransfer(oldPrepared.State.TransferID)
-	coreRequire(t, "read canceled stale-cache transaction", err)
-	coreAssert(t, cancelled.State.Status == "rejected" && cancelled.State.AckStatus == "rejected" &&
-		cancelled.State.RejectReason == RGB11RejectReasonUser && cancelled.State.WitnessTxID == oldPrepared.TxID &&
-		cancelled.State.ConsignmentHash == oldPrepared.State.ConsignmentHash &&
-		equalRGB11StringSet(cancelled.State.InputOutPoints, oldPrepared.State.InputOutPoints),
-		"source did not durably cancel the original stale-cache transaction")
-	coreAssertRGB11Reservation(t, source, oldPrepared.State.TransferID, false, oldPending)
-
-	// Advance the authoritative bundle again with a real accepted Direct send,
-	// so the stale prepared cache conflicts with both a terminal cancel and a
-	// newer settled ownership history.
-	beforeBroadcast := chain.broadcastCount()
-	coreSendRGB11AddressAmountAndSettle(t, chain, source, coldReceiver,
-		issued.AssetName, "100", beforeBroadcast)
-	_, err = source.RefreshRGB11State(ctx)
-	coreRequire(t, "refresh authoritative stable-only cache source", err)
-	_, err = coldReceiver.RefreshRGB11State(ctx)
-	coreRequire(t, "refresh stable-only cache receiver", err)
-	coreWaitPrivateBackup(t, source)
-	coreWaitPrivateBackup(t, coldReceiver)
-	stableBeforeCache := coreRemoteStableRGB(t, source, cfg)
-	localBeforeCache := coreLocalRGBBundleDigests(t, source)
-	remoteRecordsBeforeCache := coreManagedRemoteRecords(t, source, cfg)
-	selectedCancel := coreRGB11SelectedTransfer(t, source, cfg, oldPrepared.State.TransferID)
-	coreAssert(t, selectedCancel.Status == "rejected" && selectedCancel.TransferID == oldPrepared.State.TransferID &&
-		selectedCancel.WitnessTxID == oldPrepared.TxID && selectedCancel.ConsignmentHash == oldPrepared.State.ConsignmentHash &&
-		equalRGB11StringSet(selectedCancel.InputOutPoints, oldPrepared.State.InputOutPoints),
-		"selected canceled history changed the original transaction/input identity")
-
-	catalog, err := source.accountManagedDataCatalog()
-	coreRequire(t, "read stable-only cache account catalog", err)
-	scopeID, err := source.rgbManager.rgb11AccountManagedScopeID()
-	coreRequire(t, "resolve stable-only cache RGB scope", err)
-	if _, ok := accountManagedScopeSet(catalog)[scopeID]; !ok {
-		t.Fatal("core-e2e: current RGB scope is absent from the stable account catalog")
-	}
-	staleEnvelope, staleHash, err := encodeAccountManagedActiveEnvelope(
-		rgb11AccountManagedProviderID,
-		AccountManagedDataPayload{Scope: scopeID, Payload: oldActiveBytes},
-	)
-	coreRequire(t, "encode valid stale RGB active cache", err)
-	corruptEnvelope, corruptHash, err := encodeAccountManagedActiveEnvelope(
-		rgb11AccountManagedProviderID,
-		AccountManagedDataPayload{Scope: scopeID, Payload: []byte("obsolete cache body")},
-	)
-	coreRequire(t, "build corrupt RGB active cache", err)
-	corruptEnvelope[len(corruptEnvelope)-1] ^= 0xff
-	staleID := accountManagedActiveApplicationID(rgb11AccountManagedProviderID, scopeID, staleHash)
-	corruptID := accountManagedActiveApplicationID(rgb11AccountManagedProviderID, scopeID, corruptHash)
-	root, err := source.accountManagementRootWallet()
-	coreRequire(t, "resolve stable-only cache root wallet", err)
-	for _, item := range []struct {
-		id   string
-		body []byte
-	}{
-		{id: staleID, body: staleEnvelope},
-		{id: corruptID, body: corruptEnvelope},
-	} {
-		_, err = source.sendWalletDirectMessage(root, item.id,
-			AccountMessageKindManagedActive, catalog.AccountID, item.body)
-		coreRequire(t, "publish legacy RGB cache to real CoreNode", err)
-	}
-	mailbox, err := source.freshDirectMessages(root)
-	coreRequire(t, "read back old RGB caches from real CoreNode", err)
-	foundStale, foundCorrupt := false, false
-	for _, message := range mailbox {
-		if message == nil || message.Payload == nil || message.Payload.Kind != AccountMessageKindManagedActive {
-			continue
-		}
-		switch message.Payload.ApplicationID {
-		case staleID:
-			foundStale = bytes.Equal(message.Payload.Body, staleEnvelope)
-		case corruptID:
-			foundCorrupt = bytes.Equal(message.Payload.Body, corruptEnvelope)
-		}
-	}
-	if !foundStale || !foundCorrupt {
-		t.Fatalf("core-e2e: real CoreNode cache readback stale=%t corrupt=%t stale_bytes=%d", foundStale, foundCorrupt, len(staleEnvelope))
-	}
-	coreAssertManagedRemoteEqual(t, "legacy RGB cache publication", remoteRecordsBeforeCache,
-		coreManagedRemoteRecords(t, source, cfg))
-
-	beforeColdSync := chain.broadcastCount()
-	sourceCatalog, sourceView := coreCanonicalCatalog(source), coreRGBSemantic(t, source)
-	coreRGB11RetireDevice(t, source)
-	var coldA, coldB *Manager
-	for index := 0; index < 2; index++ {
-		cold := coreRestoreE2E(t, cfg, chain, senderMaterial)
-		coreAssert(t, source.db != cold.db && (index == 0 || coldA.db != cold.db),
-			"stable-only cache recovery did not use independent databases")
-		if index == 0 {
-			coldA = cold
-		} else {
-			coldB = cold
-		}
-		beforeColdSync := chain.broadcastCount()
-		coreRGB11UseDevice(t, cold)
-		coreAssert(t, coreDigest(sourceCatalog) == coreDigest(coreCanonicalCatalog(cold)),
-			"stable-only cold recovery changed the account catalog")
-		coreAssertMapEqual(t, "stable-only cold recovery bundle", localBeforeCache,
-			coreLocalRGBBundleDigests(t, cold))
-		coreAssertMapEqual(t, "stable-only cold recovery authoritative bundle", stableBeforeCache,
-			coreRemoteStableRGB(t, cold, cfg))
-		coreAssert(t, coreDigest(sourceView) == coreDigest(coreRGBSemantic(t, cold)),
-			"valid or corrupt legacy active cache changed recovered ownership, spendability, phase or lock")
-		staleRecovered, err := cold.rgbManager.projectionStore.LoadPendingTransfer(oldPrepared.State.TransferID)
-		coreRequire(t, "load stale transaction after cold recovery", err)
-		// The verified selected package, rather than local delivery bookkeeping,
-		// defines the entire terminal state that an independent device restores.
-		coreAssert(t, coreDigest(staleRecovered.State) == coreDigest(*selectedCancel),
-			"cold recovery resurrected a stale active cache over the selected canceled phase")
-		coreAssertRGB11Reservation(t, cold, oldPrepared.State.TransferID, false, oldPending)
-		coreAssert(t, chain.broadcastCount() == beforeColdSync,
-			"cold stable-only cache recovery broadcast a transaction")
-		coreRGB11RetireDevice(t, cold)
-	}
-	// The first independent cold database proves the recovered stable output is
-	// actually spendable after it ignores both mailbox entries.
-	coreAssert(t, coldA.db != coldB.db, "cold cache readers share a local database")
-	coreRGB11UseDevice(t, coldA)
-	beforeRespend := chain.broadcastCount()
-	coreSendRGB11AddressAmountAndSettle(t, chain, coldA, coldReceiver,
-		issued.AssetName, "50", beforeRespend)
-	remaining, err := coldA.GetRGB11AssetBalance(&issued.AssetName)
-	coreRequire(t, "read cold sender balance after cache-isolation re-spend", err)
-	received, err := coldReceiver.GetRGB11AssetBalance(&issued.AssetName)
-	coreRequire(t, "read cold receiver balance after cache-isolation re-spend", err)
-	coreAssert(t, remaining != nil && remaining.Value.Uint64() == 850 &&
-		received != nil && received.Value.Uint64() == 150,
-		"cold stable-only recovery could not complete a real subsequent Direct spend")
-	coreAssert(t, chain.broadcastCount() == beforeColdSync+1,
-		"cache recovery or re-spend caused an unexpected broadcast count")
-	coreRGB11RetireDevice(t, coldA)
-	coreRGB11RetireDevice(t, coldReceiver)
 }
 
 func coreRGB11RetireDevice(t *testing.T, device *Manager) {

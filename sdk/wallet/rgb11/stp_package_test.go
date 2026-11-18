@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/rgb11/issuance"
@@ -19,6 +20,10 @@ import (
 type channelPackageFacts struct {
 	transactions map[string]*wire.MsgTx
 	spent        map[string]string
+}
+
+func (*channelPackageFacts) GetGenesisHash() (string, error) {
+	return chaincfg.RegressionNetParams.GenesisHash.String(), nil
 }
 
 func (p *channelPackageFacts) GetRawTx(id string) ([]byte, error) {

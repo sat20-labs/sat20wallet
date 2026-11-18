@@ -35,7 +35,6 @@ const i18n = createI18n({
 watch(i18n.global.locale, (locale) => { document.documentElement.lang = locale }, { immediate: true })
 
 import sat20 from './utils/sat20'
-import rgb11Address from './utils/rgb11Address'
 import { walletStorage } from '@/lib/walletStorage'
 
 const clearDevelopmentServiceWorkerCache = async () => {
@@ -183,7 +182,6 @@ clearDevelopmentServiceWorkerCache().then(() => {
       DAPP_CAPABILITIES,
       Chain,
       Network,
-      rgb11Address,
       sat20,
       useGlobalStore,
       useApproveStore,

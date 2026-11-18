@@ -1,18 +1,15 @@
 //go:build js && wasm
-// +build js,wasm
 
 package main
 
 import (
 	"encoding/json"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet"
 	"strings"
 	"syscall/js"
-
-	"github.com/sat20-labs/sat20wallet/sdk/wallet"
 )
 
-const operationLogModule = "sat20wallet_operation_log"
-
+// Retained for the three existing PWA L1 execution entries.
 type operationLogCreateRequest struct {
 	Category   string            `json:"category"`
 	Action     string            `json:"action"`
@@ -89,68 +86,23 @@ func updateOperationLog(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(handler)
 }
 
-func getOperationLogs(this js.Value, p []js.Value) any {
+func getOperationLogs(_ js.Value, _ []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
-	handler := createAsyncJsHandler(func() (interface{}, int, string) {
-		items, err := _mgr.GetOperationLogs()
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		encoded, err := json.Marshal(items)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		return map[string]any{"logs": string(encoded)}, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(handler)
+	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) { return accountViewResult(_mgr.GetOperationViews()) }))
 }
-
-func getOperationLog(this js.Value, p []js.Value) any {
+func deleteOperationHistory(_ js.Value, _ []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
-	if len(p) != 1 || p[0].Type() != js.TypeString || strings.TrimSpace(p[0].String()) == "" {
-		return createJsRet(nil, -1, "operation log id is required")
-	}
-	id := strings.TrimSpace(p[0].String())
-	handler := createAsyncJsHandler(func() (interface{}, int, string) {
-		item, err := _mgr.GetOperationLog(id)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		if item == nil {
-			return nil, -1, "operation log not found"
-		}
-		encoded, err := json.Marshal(item)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		return map[string]any{"log": string(encoded)}, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(handler)
+	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) { return accountViewResult(nil, _mgr.DeleteOperationHistory()) }))
 }
-
-func deleteAllOperationLogs(this js.Value, p []js.Value) any {
-	if _mgr == nil {
-		return createJsRet(nil, -1, "Manager not initialized")
-	}
-	handler := createAsyncJsHandler(func() (interface{}, int, string) {
-		if err := _mgr.DeleteAllOperationLogs(); err != nil {
-			return nil, -1, err.Error()
-		}
-		return nil, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(handler)
-}
-
 func init() {
 	obj := js.Global().Get("Object").New()
 	obj.Set("beginOperationLog", js.FuncOf(beginOperationLog))
 	obj.Set("updateOperationLog", js.FuncOf(updateOperationLog))
 	obj.Set("getOperationLogs", js.FuncOf(getOperationLogs))
-	obj.Set("getOperationLog", js.FuncOf(getOperationLog))
-	obj.Set("deleteAllOperationLogs", js.FuncOf(deleteAllOperationLogs))
-	js.Global().Set(operationLogModule, obj)
+	obj.Set("deleteOperationHistory", js.FuncOf(deleteOperationHistory))
+	js.Global().Set("sat20wallet_operation_log", obj)
 }

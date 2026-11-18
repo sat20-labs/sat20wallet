@@ -41,7 +41,15 @@ func (p *Manager) confirmedUtxoAfterHeight(utxoId uint64, maxConfirmedInputHeigh
 
 // 发送给多个地址不同数量资产
 func (p *Manager) BatchSendAssetsV2_SatsNet(destAddr []string,
-	assetName string, amtVect []string, memo []byte) (string, error) {
+	assetName string, amtVect []string, memo []byte) (opValue0 string, opErr error) {
+	release, gateErr := p.beginAccountWrite("wallets", nil)
+	if gateErr != nil {
+		return "", gateErr
+	}
+	defer release()
+
+	opLogID := p.beginWalletLog("transfer", "batch_send_l2", "Batch send L2 asset")
+	defer func() { p.finishWalletLog(opLogID, opErr, opValue0) }()
 
 	if p.wallet == nil {
 		return "", fmt.Errorf("wallet is not created/unlocked")
@@ -208,6 +216,11 @@ func (p *Manager) BuildBatchSendTx_SatsNet(localAddress string, destAddr []strin
 // 发送给不同地址不同数量的资产和白聪，资产只能同一种
 func (p *Manager) BatchSendAssetsV3_SatsNet(dest []*SendAssetInfo,
 	assetName string, memo []byte) (string, error) {
+	release, gateErr := p.beginAccountWrite("wallets", nil)
+	if gateErr != nil {
+		return "", gateErr
+	}
+	defer release()
 
 	if p.wallet == nil {
 		return "", fmt.Errorf("wallet is not created/unlocked")
@@ -391,7 +404,16 @@ func SplitChangeAsset(input *TxOutput_SatsNet, changePkScript []byte, tx *swire.
 
 // 发送资产到一个地址上，拆分n个输出
 func (p *Manager) BatchSendAssets_SatsNet(destAddr string,
-	assetName string, amt string, n int) (string, error) {
+	assetName string, amt string, n int) (opValue0 string, opErr error) {
+	release, gateErr := p.beginAccountWrite("wallets", nil)
+	if gateErr != nil {
+		return "", gateErr
+	}
+	defer release()
+
+	opLogID := p.beginWalletLog("transfer", "split_send_l2", "Split L2 asset")
+	defer func() { p.finishWalletLog(opLogID, opErr, opValue0) }()
+
 	if n <= 0 {
 		return "", fmt.Errorf("batch output count must be positive")
 	}
@@ -562,13 +584,21 @@ func (p *Manager) BatchSendAssets_SatsNet(destAddr string,
 
 // 发送资产到一个地址上
 func (p *Manager) SendAssets_SatsNet(destAddr string,
-	assetName string, amt string, memo []byte) (*swire.MsgTx, error) {
+	assetName string, amt string, memo []byte) (opValue0 *swire.MsgTx, opErr error) {
+	opLogID := p.beginWalletLog("transfer", "send_asset_l2", "Send L2 asset", map[string]string{"destination": destAddr, "asset": assetName, "amount": amt})
+	defer func() { p.finishWalletLog(opLogID, opErr, opValue0) }()
+
 	return p.sendAssets_SatsNet(destAddr, assetName, amt, memo, true)
 }
 
 // 发送资产到一个地址上
 func (p *Manager) sendAssets_SatsNet(destAddr string,
 	assetName string, amt string, memo []byte, autoAdjust bool) (*swire.MsgTx, error) {
+	release, gateErr := p.beginAccountWrite("wallets", nil)
+	if gateErr != nil {
+		return nil, gateErr
+	}
+	defer release()
 
 	if p.wallet == nil {
 		return nil, fmt.Errorf("wallet is not created/unlocked")
@@ -833,7 +863,9 @@ func (p *Manager) SendNullData_SatsNet(memo []byte) (string, error) {
 
 // 发送utxo
 func (p *Manager) SendUtxos_SatsNet(destAddr string,
-	utxos []string, memo []byte) (string, error) {
+	utxos []string, memo []byte) (opValue0 string, opErr error) {
+	opLogID := p.beginWalletLog("transfer", "send_utxos_l2", "Send L2 UTXOs", map[string]string{"destination": destAddr})
+	defer func() { p.finishWalletLog(opLogID, opErr, opValue0) }()
 
 	if p.wallet == nil {
 		return "", fmt.Errorf("wallet is not created/unlocked")
@@ -913,6 +945,11 @@ func (p *Manager) SendUtxos_SatsNet(destAddr string,
 // 同时发送资产和聪，资产可以是聪
 func (p *Manager) SendAssetsV3_SatsNet(destAddr string,
 	assetName string, amt string, value int64, memo []byte) (string, error) {
+	release, gateErr := p.beginAccountWrite("wallets", nil)
+	if gateErr != nil {
+		return "", gateErr
+	}
+	defer release()
 
 	if p.wallet == nil {
 		return "", fmt.Errorf("wallet is not created/unlocked")
@@ -1167,7 +1204,10 @@ func (p *Manager) BatchSendPlainSats(destAddr string, value int64, n int,
 
 // 发送资产到一个地址上，拆分n个输出
 func (p *Manager) BatchSendAssets(destAddr string, assetName string,
-	amt string, n int, feeRate int64, memo []byte) (*wire.MsgTx, int64, error) {
+	amt string, n int, feeRate int64, memo []byte) (opValue0 *wire.MsgTx, opValue1 int64, opErr error) {
+	opLogID := p.beginWalletLog("transfer", "split_send_l1", "Split L1 asset")
+	defer func() { p.finishWalletLog(opLogID, opErr, opValue0) }()
+
 	return p.BatchSendAssetsWithWallet(p.wallet, destAddr, assetName, amt, n, feeRate, memo)
 }
 
@@ -1176,11 +1216,6 @@ func (p *Manager) BatchSendAssetsWithWallet(localWallet common.Wallet, destAddr 
 	amt string, n int, feeRate int64, memo []byte) (*wire.MsgTx, int64, error) {
 	if n <= 0 {
 		return nil, 0, fmt.Errorf("batch output count must be positive")
-	}
-	if p.db != nil {
-		if err := p.checkAccountManagedDataImport(); err != nil {
-			return nil, 0, err
-		}
 	}
 
 	if localWallet == nil {
@@ -1225,6 +1260,12 @@ func (p *Manager) BatchSendAssetsWithWallet(localWallet common.Wallet, destAddr 
 		}
 		return p.sendRGB11Assets(localWallet, dest, name, feeRate, memo)
 	}
+
+	release, restoreErr := p.beginAccountWrite(rgb11AccountManagedProviderID, localWallet)
+	if restoreErr != nil {
+		return nil, 0, restoreErr
+	}
+	defer release()
 
 	p.l1SendMu.Lock()
 	defer p.l1SendMu.Unlock()
@@ -2071,7 +2112,10 @@ func (p *Manager) BuildBatchSendTx_brc20(localAddr, destAddr string,
 // SendAssetsV3 delegates ORDX carrier/stub handling and RGB proof delivery
 // to the established batch paths.
 func (p *Manager) SendAssetsV3(destAddr string, assetName string,
-	amt string, feeRate int64, memo []byte) (string, error) {
+	amt string, feeRate int64, memo []byte) (opValue0 string, opErr error) {
+	opLogID := p.beginWalletLog("transfer", "send_asset_l1", "Send L1 asset", map[string]string{"destination": destAddr, "asset": assetName, "amount": amt})
+	defer func() { p.finishWalletLog(opLogID, opErr, opValue0) }()
+
 	name := ParseAssetString(assetName)
 	if name == nil || (name.Protocol != indexer.PROTOCOL_NAME_ORDX && name.Protocol != "rgb11") {
 		return "", fmt.Errorf("SendAssetsV3 only supports ORDX or RGB11 assets")
@@ -2097,7 +2141,9 @@ func (p *Manager) SendAssetsV3(destAddr string, assetName string,
 
 // 发送指定资产
 func (p *Manager) SendAssets(destAddr string, assetName string,
-	amt string, feeRate int64, memo []byte) (*wire.MsgTx, error) {
+	amt string, feeRate int64, memo []byte) (opValue0 *wire.MsgTx, opErr error) {
+	opLogID := p.beginWalletLog("transfer", "send_asset_l1", "Send L1 asset", map[string]string{"destination": destAddr, "asset": assetName, "amount": amt})
+	defer func() { p.finishWalletLog(opLogID, opErr, opValue0) }()
 
 	if p.wallet == nil {
 		return nil, fmt.Errorf("wallet is not created/unlocked")
@@ -2110,7 +2156,7 @@ func (p *Manager) SendAssets(destAddr string, assetName string,
 		feeRate = p.GetFeeRate()
 	}
 
-	tx, _, err := p.BatchSendAssets(destAddr, assetName, amt, 1, feeRate, memo)
+	tx, _, err := p.BatchSendAssetsWithWallet(p.wallet, destAddr, assetName, amt, 1, feeRate, memo)
 	if err != nil {
 		return nil, err
 	}
@@ -2120,6 +2166,11 @@ func (p *Manager) SendAssets(destAddr string, assetName string,
 // 发送所谓的”垃圾“UTXO。 utxos和value，两个参数至少需要有一个有确定的值。
 func (p *Manager) SendGarbage(destAddr string, utxos []string,
 	value int64, feeRate int64) (*wire.MsgTx, error) {
+	release, gateErr := p.beginAccountWrite(rgb11AccountManagedProviderID, nil)
+	if gateErr != nil {
+		return nil, gateErr
+	}
+	defer release()
 
 	if p.wallet == nil {
 		return nil, fmt.Errorf("wallet is not created/unlocked")
@@ -2252,7 +2303,7 @@ func (p *Manager) RebuildTxOutput(tx *wire.MsgTx, preFectcher map[string]*TxOutp
 		ordinal := info.Clone()
 		filtered := ordinal.Assets[:0]
 		for _, asset := range ordinal.Assets {
-			if _, native := stpAssetProtocols.byName[asset.Name.Protocol].(STPAssetOutputClassifier); native {
+			if _, classified := stpAssetProtocols.byName[asset.Name.Protocol].(STPAssetOutputClassifier); classified {
 				delete(ordinal.Offsets, asset.Name)
 				continue
 			}
@@ -3702,6 +3753,12 @@ func (p *Manager) BatchSendAssetsV3(dest []*SendAssetInfo,
 		}
 		return tx.TxID(), fee, err
 	}
+
+	release, restoreErr := p.beginAccountWrite(rgb11AccountManagedProviderID, p.wallet)
+	if restoreErr != nil {
+		return "", 0, restoreErr
+	}
+	defer release()
 
 	p.l1SendMu.Lock()
 	defer p.l1SendMu.Unlock()

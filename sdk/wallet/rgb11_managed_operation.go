@@ -1,14 +1,8 @@
 package wallet
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"fmt"
-	"strings"
-
-	"github.com/sat20-labs/sat20wallet/sdk/account"
-	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
 var (
@@ -28,61 +22,6 @@ const (
 	rgb11ManagedOperationReconcile
 )
 
-func (p *Manager) beginRGB11ManagedOperationState() {
-	p.rgbManagedOperationMu.Lock()
-	p.rgbManagedOperationActive = true
-	p.rgbManagedOperationDirty = false
-	p.rgbManagedOperationMu.Unlock()
-}
-
-func (p *Manager) endRGB11ManagedOperationState() bool {
-	p.rgbManagedOperationMu.Lock()
-	dirty := p.rgbManagedOperationDirty
-	p.rgbManagedOperationActive = false
-	p.rgbManagedOperationDirty = false
-	p.rgbManagedOperationMu.Unlock()
-	return dirty
-}
-
-// noteRGB11ManagedOperationMutation lets low-level RGB code preserve its
-// existing mutation hooks without triggering a PUT for every sub-step. The
-// first mutation persists one local dirty-generation marker; the operation
-// boundary performs the only stable PUT.
-func (p *Manager) noteRGB11ManagedOperationMutation() (bool, bool) {
-	if p == nil {
-		return false, false
-	}
-	p.rgbManagedOperationMu.Lock()
-	defer p.rgbManagedOperationMu.Unlock()
-	if !p.rgbManagedOperationActive {
-		return false, false
-	}
-	first := !p.rgbManagedOperationDirty
-	p.rgbManagedOperationDirty = true
-	return true, first
-}
-
-func (p *Manager) hasAccountManagedRGB11Transition() (bool, error) {
-	if p == nil {
-		return false, ErrDKVSPathNotSynced
-	}
-	var provider *rgb11AccountManagedDataProvider
-	for _, registered := range p.accountManagedDataProviders() {
-		if registered != nil && registered.ID() == rgb11AccountManagedProviderID {
-			provider, _ = registered.(*rgb11AccountManagedDataProvider)
-			break
-		}
-	}
-	if provider == nil {
-		return false, nil
-	}
-	catalog, err := p.accountManagedDataCatalog()
-	if err != nil {
-		return false, err
-	}
-	return provider.HasActiveTransition(catalog)
-}
-
 func (p *Manager) accountManagedRecoveryConfigured() bool {
 	if p == nil {
 		return false
@@ -93,16 +32,16 @@ func (p *Manager) accountManagedRecoveryConfigured() bool {
 	return configured
 }
 
-// Refresh and explicitly recorded settlements reconcile existing operations.
-// Continue also includes delivery/signing/broadcast paths and retains the same
-// business qualification as New.
+// Refresh may receive proofs and change managed balances, so it has the same
+// qualification as New and Continue. Only an already observed settlement uses
+// the internal reconciliation check.
 func (p *rgb11Manager) checkRGB11Account(mode rgb11ManagedOperationMode) error {
 	scope, err := p.rgb11AccountManagedScopeID()
 	if err != nil {
 		return err
 	}
 	owner := p.accountManagementOwner()
-	if mode == rgb11ManagedOperationRefresh || mode == rgb11ManagedOperationReconcile {
+	if mode == rgb11ManagedOperationReconcile {
 		return owner.CheckAccountRestore(rgb11AccountManagedProviderID, scope)
 	}
 	return owner.CheckAccountWrite(rgb11AccountManagedProviderID, scope)
@@ -123,162 +62,17 @@ func (p *rgb11Manager) checkRGB11OperationSource() error {
 		walletFingerprint(info.Wallet) != walletFingerprint(p.wallet) {
 		return ErrRGB11OperationScopeChanged
 	}
-	if err := owner.checkAccountManagedDataImport(); err != nil {
+	if err := owner.checkAccountRestore("wallets", AccountManagedDataGlobalScope); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (p *rgb11Manager) syncRGB11OperationRecovery(ctx context.Context) error {
+func (p *rgb11Manager) checkRGB11Write() error {
 	if err := p.checkRGB11OperationSource(); err != nil {
 		return err
 	}
-	if err := p.checkRGB11Account(rgb11ManagedOperationNew); err != nil {
-		return err
-	}
-	return p.checkRGB11OperationSource()
-}
-
-func (p *Manager) verifyCurrentRGB11RecoveryClosure() error {
-	if p == nil {
-		return ErrDKVSPathNotSynced
-	}
-	p.mutex.Lock()
-	snapshot, _, err := p.captureAccountManagementSyncSnapshotBaseLocked()
-	p.mutex.Unlock()
-	if err != nil {
-		return err
-	}
-	if snapshot == nil {
-		return ErrDKVSPathNotSynced
-	}
-	defer zeroBytes(snapshot.secret)
-	catalog, err := p.accountManagedDataCatalog()
-	if err != nil {
-		return err
-	}
-	if catalog.AccountID != snapshot.profile.AccountID {
-		return errAccountSnapshotChanged
-	}
-	root, err := p.accountManagementRootWallet()
-	if err != nil {
-		return err
-	}
-	if walletFingerprint(root) != snapshot.profile.RootFingerprint {
-		return ErrRGB11OperationScopeChanged
-	}
-	store, err := p.accountDKVSStore()
-	if err != nil {
-		return err
-	}
-	coreNodeID, err := p.currentCoreNodeID()
-	if err != nil {
-		return err
-	}
-	config, err := store.client.GetDKVSClientConfig()
-	if err != nil {
-		return err
-	}
-	if config == nil || strings.TrimSpace(config.EndpointID) != coreNodeID {
-		return dkvsindexer.ErrEndpointMismatch
-	}
-	indexKey, err := account.ManagedIndexKey(snapshot.profile.AccountID)
-	if err != nil {
-		return err
-	}
-	indexValue, err := store.GetAuthoritative(indexKey)
-	if err != nil {
-		return err
-	}
-	index, err := account.OpenManagedIndex(snapshot.secret, snapshot.profile.AccountID, snapshot.network, indexValue.Value)
-	if err != nil {
-		return err
-	}
-	registered := accountEntryMap(index)
-	values := make([]*accountLocalKV, 0, len(catalog.Scopes))
-	for _, scope := range catalog.Scopes {
-		entry, err := accountEntry(catalog.AccountID, rgb11AccountManagedProviderID, scope.ID())
-		if err != nil {
-			return err
-		}
-		if selected, ok := registered[entry.Provider+"\x00"+entry.Scope]; !ok || selected != entry {
-			return ErrDKVSPathNotSynced
-		}
-		p.mutex.RLock()
-		value, err := p.readAccountLocal(catalog.AccountID, entry.Provider, entry.Scope)
-		p.mutex.RUnlock()
-		if err != nil {
-			return err
-		}
-		if value == nil || value.Deleted || value.Restoring || value.Conflict || value.LastError != "" ||
-			value.Generation == 0 || value.Generation != value.Confirmed || value.Captured != value.Generation ||
-			value.Baseline == nil || len(value.Value) == 0 {
-			return ErrDKVSPathNotSynced
-		}
-		payload, err := openAccountPayload(snapshot.secret, catalog.AccountID, snapshot.network, entry, value.Value)
-		if err != nil {
-			return err
-		}
-		current, err := p.exportAccountPayload(entry, catalog)
-		equal := err == nil && bytes.Equal(payload, current)
-		zeroBytes(payload)
-		zeroBytes(current)
-		if err != nil {
-			return err
-		}
-		if !equal {
-			return fmt.Errorf("local RGB11 recovery closure differs from confirmed module data")
-		}
-		remote, err := store.GetAuthoritative(entry.Key)
-		if err != nil {
-			return err
-		}
-		if remote.record == nil || remote.record.Seq < value.Baseline.Seq || !bytes.Equal(remote.Value, value.Value) {
-			return ErrDKVSPathNotSynced
-		}
-		values = append(values, value)
-	}
-	latestIndex, err := store.GetAuthoritative(indexKey)
-	if err != nil {
-		return err
-	}
-	if latestIndex.Hash != indexValue.Hash {
-		return errAccountSnapshotChanged
-	}
-	// Network readback must not confirm a module dirtied or rebound meanwhile.
-	p.mutex.RLock()
-	current := p.accountSyncSnapshotCurrentLocked(snapshot)
-	for _, value := range values {
-		live, readErr := p.readAccountLocal(value.AccountID, value.Provider, value.Scope)
-		if readErr != nil || live == nil || live.Generation != value.Generation ||
-			live.Captured != value.Captured || live.Confirmed != value.Confirmed ||
-			live.Restoring || live.Deleted || live.Conflict || live.LastError != "" ||
-			!bytes.Equal(live.Value, value.Value) {
-			current = false
-			break
-		}
-	}
-	p.mutex.RUnlock()
-	if !current {
-		return errAccountSnapshotChanged
-	}
-	currentCoreNodeID, err := p.currentCoreNodeID()
-	if err != nil {
-		return err
-	}
-	currentStore, err := p.accountDKVSStore()
-	if err != nil {
-		return err
-	}
-	currentConfig, err := currentStore.client.GetDKVSClientConfig()
-	if err != nil {
-		return err
-	}
-	if currentConfig == nil || currentCoreNodeID != coreNodeID ||
-		currentStore.client != store.client || strings.TrimSpace(currentConfig.EndpointID) != coreNodeID {
-		return dkvsindexer.ErrEndpointMismatch
-	}
-	return nil
+	return p.checkRGB11Account(rgb11ManagedOperationNew)
 }
 
 // Public RGB operations use a captured scope and existing local candidate
@@ -309,6 +103,10 @@ func runRGB11ManagedOperationWithManager[T any](p *Manager, ctx context.Context,
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if !p.rgbManagedExecutionMu.TryRLock() {
+		return zero, ErrAccountManagedDataImportIncomplete
+	}
+	defer p.rgbManagedExecutionMu.RUnlock()
 	manager, err := selectManager()
 	if err != nil {
 		return zero, err
@@ -323,9 +121,5 @@ func runRGB11ManagedOperationWithManager[T any](p *Manager, ctx context.Context,
 		return zero, err
 	}
 	defer manager.publishRGB11ConsistencyStatus()
-	manager.Manager.beginRGB11ManagedOperationState()
-	// The durable StageAccountChange completion already wakes account sync.
-	// Keep legacy mutation hooks coalesced without a second boundary wakeup.
-	defer manager.Manager.endRGB11ManagedOperationState()
 	return operation(manager)
 }

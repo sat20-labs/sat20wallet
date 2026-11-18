@@ -61,7 +61,17 @@ func (p *Manager) publishAccountValue(store *dkvsStore, value *accountLocalKV,
 			p.accountProfile.Location == profile.Location && p.cfg.Chain == value.Network &&
 			p.accountProfile.PackageID == profile.PackageID && p.accountProfile.StorageMode == profile.StorageMode &&
 			p.accountProfile.RecordTTL == profile.RecordTTL && p.accountProfile.AutopayContract == profile.AutopayContract
+		var readErr error
+		if current {
+			var live *accountLocalKV
+			live, readErr = p.readAccountLocal(value.AccountID, value.Provider, value.Scope)
+			current = readErr == nil && live != nil && live.Deleted == value.Deleted &&
+				live.Generation == value.Generation && live.Captured == value.Captured
+		}
 		p.mutex.RUnlock()
+		if readErr != nil {
+			return nil, readErr
+		}
 		client, clientErr := store.manager.primaryClient()
 		store.manager.mu.Lock()
 		sameRun := store.manager.done == run
@@ -108,6 +118,20 @@ func (p *Manager) publishAccountValue(store *dkvsStore, value *accountLocalKV,
 		return []dkvsValueMutation{mutation}, nil
 	}, dkvsOutboxOrigin{Key: value.Key, Domain: accountKVOutboxDomain, Generation: value.Captured})
 	return err
+}
+
+// Equal content can still need a storage-policy migration. Reuse the exact
+// observed ciphertext and baseline through the existing signed CAS sender.
+func (p *Manager) confirmAccountValue(store *dkvsStore, snapshot *accountManagementSyncSnapshot,
+	value *accountLocalKV, remote *dkvsValue) error {
+	if accountRecordMatchesStorage(remote, &snapshot.profile) {
+		return p.recordAccountEffect(value, remote)
+	}
+	value, err := p.setAccountBaseline(value, remote)
+	if err != nil {
+		return err
+	}
+	return p.publishAccountValue(store, value, snapshot.root, snapshot.profile)
 }
 
 // recordAccountEffect confirms equal content observed at the current service.

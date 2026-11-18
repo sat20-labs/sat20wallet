@@ -94,7 +94,6 @@ func (p *Manager) fillAccountStatus(status *AccountManagementStatus) {
 	if p.accountProfile.InitialBackupPending {
 		status.BackupState, status.ManagedDataDirty = "pending", true
 	}
-	status.ManagedDataRevision = 0
 	states := make(map[string]string)
 	failures := make(map[string]*DKVSBatchOutboxEntry)
 	for _, entry := range outbox {
@@ -115,7 +114,7 @@ func (p *Manager) fillAccountStatus(status *AccountManagementStatus) {
 		}
 		deleted := accountDeleteConfirmed(value, entries)
 		backup := "backed_up"
-		if value.Generation > value.Confirmed {
+		if value.Generation > value.Confirmed || !deleted && !accountStorageConfirmed(value, p.accountProfile) {
 			if deleted {
 				backup = "cleanup"
 				if status.BackupState == "backed_up" {
@@ -128,7 +127,7 @@ func (p *Manager) fillAccountStatus(status *AccountManagementStatus) {
 				status.PendingChanges++
 			}
 		}
-		if state := states[value.Key]; (!deleted && state == "uploading") || (state == "cleanup" && value.Generation <= value.Confirmed) {
+		if state := states[value.Key]; (!deleted && state == "uploading") || (state == "cleanup" && value.Generation <= value.Confirmed && (deleted || accountStorageConfirmed(value, p.accountProfile))) {
 			backup = state
 			if status.BackupState == "backed_up" || state == "uploading" {
 				status.BackupState = state
@@ -160,11 +159,11 @@ func (p *Manager) fillAccountStatus(status *AccountManagementStatus) {
 				}
 			}
 		case value.Restoring:
-			module.BackupState, module.WriteAllowed = "restoring", false
+			module.BackupState, module.WriteAllowed, module.LastErrorCode = "restoring", false, "RESTORE_INCOMPLETE"
 		case value.Conflict:
 			module.BackupState, module.WriteAllowed = "conflict", false
 		case module.LastError != "" || module.LastErrorCode != "":
-			module.BackupState, module.WriteAllowed = "error", false
+			module.BackupState = "error"
 		}
 		status.Modules = append(status.Modules, module)
 	}

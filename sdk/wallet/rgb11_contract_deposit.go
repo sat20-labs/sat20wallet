@@ -1,0 +1,641 @@
+package wallet
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strconv"
+	"time"
+
+	"github.com/btcsuite/btcd/txscript"
+	"github.com/btcsuite/btcd/wire"
+	indexer "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/rgb11/consensus"
+	"github.com/sat20-labs/rgb11/invoicing"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
+	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
+	"github.com/sat20-labs/satoshinet/anchortx/nativeproof"
+)
+
+const RGB11DepositPrepareAction = "rgb11-contract-deposit"
+const RGB11DepositPeerPrepareAction = "rgb11-contract-deposit-peer"
+const RGB11ContractDepositVersion = 1
+
+var ErrRGB11ContractInputNotFound = errors.New("RGB11 contract input not found")
+
+type RGB11ContractDepositIntent struct {
+	Version     uint32 `json:"version"`
+	ContractURL string `json:"contract_url"`
+	Recipient   string `json:"recipient"`
+	AssetName   string `json:"asset_name"`
+	Amount      string `json:"amount"` // exact atomic quantity
+}
+
+// RGB11ContractDeposit is safe to send to both pool owners. It contains no
+// sender change secrets or private channel package. Sender recovery remains in
+// the existing RGB pending-transfer store and its protected input reservation.
+type RGB11ContractDeposit struct {
+	Version    uint32                      `json:"version"`
+	TransferID string                      `json:"transfer_id"`
+	Intent     RGB11ContractDepositIntent `json:"intent"`
+	// Like PendingTransfer.SignedTx at prepare time, this is the fixed unsigned
+	// transaction. Final signatures belong to the existing RGB broadcast record.
+	SignedTx      []byte               `json:"signed_tx"`
+	WitnessScript []byte               `json:"witness_script"`
+	Source        *RGB11ChannelSource `json:"source"`
+}
+
+type rgb11ContractDepositJournal struct {
+	Deposit          RGB11ContractDeposit `json:"deposit"`
+	PeerAcknowledged bool                  `json:"peer_acknowledged"`
+	Broadcast        bool                  `json:"broadcast"`
+	DirectPeer       bool                  `json:"direct_peer,omitempty"`
+	OwnerPublicKey   []byte                `json:"owner_public_key"`
+	PeerPublicKey    []byte                `json:"peer_public_key"`
+}
+
+type RGB11ContractInput struct {
+	Output      *TxOutput
+	Recipient   string
+	ProofDigest []byte
+	RGB11Proof []byte
+}
+
+func rgb11ContractIntentScript(intent RGB11ContractDepositIntent) ([]byte, error) {
+	channel, asset, _, err := ParseContractURL(intent.ContractURL)
+	if err != nil || channel == "" || asset != intent.AssetName || intent.Version != RGB11ContractDepositVersion {
+		return nil, fmt.Errorf("invalid RGB11 deposit contract identity")
+	}
+	amount, err := strconv.ParseUint(intent.Amount, 10, 64)
+	if err != nil || amount == 0 || strconv.FormatUint(amount, 10) != intent.Amount || !IsBtcAddress(intent.Recipient) {
+		return nil, fmt.Errorf("invalid RGB11 deposit beneficiary or amount")
+	}
+	raw, err := json.Marshal(intent)
+	if err != nil {
+		return nil, err
+	}
+	h := sha256.Sum256(append([]byte("sat20/rgb11-contract-deposit/intent/v1\x00"), raw...))
+	return txscript.NewScriptBuilder().AddOp(txscript.OP_RETURN).AddData([]byte("STP/RGB/DEP/1")).AddData(h[:]).Script()
+}
+
+func rgb11DepositKey(direction, id string) []byte {
+	h := sha256.Sum256([]byte(id))
+	return []byte(GetDBKeyPrefix() + "rgb11-contract-deposit/" + _chain + "/" + direction + "/" + hex.EncodeToString(h[:]))
+}
+
+func rgb11ContractWitness(contract ContractRuntime) ([]byte, error) {
+	base := contract.GetRuntimeBase()
+	witness, err := utils.GenMultiSigScript(base.LocalPubKey, base.RemotePubKey)
+	if err != nil {
+		return nil, err
+	}
+	script, err := utils.WitnessScriptHash(witness)
+	if err != nil {
+		return nil, err
+	}
+	expected, err := GetPkScriptFromAddress(contract.Address())
+	if err != nil || !bytes.Equal(script, expected) {
+		return nil, fmt.Errorf("contract owners do not derive the public channel")
+	}
+	return witness, nil
+}
+
+// PrepareRGB11ContractDeposit fixes the unsigned Bitcoin transaction before
+// delivery. Retrying uses ResumeRGB11ContractDeposit with this TransferID;
+// it never reselects inputs or creates another RGB11 transition.
+func (p *Manager) PrepareRGB11ContractDeposit(ctx context.Context, contractURL, recipient,
+	assetName, amount string, feeRate int64) (*RGB11ContractDeposit, error) {
+	contract := p.getRemoteDeployedContract(contractURL)
+	if contract == nil || !contract.GetRuntimeBase().IsActive() {
+		return nil, fmt.Errorf("RGB11 deposit contract is not active")
+	}
+	return p.prepareRGB11ContractDeposit(ctx, contract, recipient, assetName, amount, feeRate, nil, false)
+}
+
+func (p *Manager) prepareRGB11ContractDeposit(ctx context.Context, contract ContractRuntime, recipient,
+	assetName, amount string, feeRate int64, owner common.Wallet, directPeer bool) (*RGB11ContractDeposit, error) {
+	if p.l2IndexerClient == nil {
+		return nil, fmt.Errorf("RGB11 deposit requires a SatsNet indexer")
+	}
+	batch, err := NewAtomicWriteBatch(p.GetDB())
+	if err != nil {
+		return nil, err
+	}
+	batch.Close()
+	if contract == nil || contract.GetAssetName().String() != assetName {
+		return nil, fmt.Errorf("RGB11 deposit contract does not match the requested asset")
+	}
+	contractURL := contract.URL()
+	witness, err := rgb11ContractWitness(contract)
+	if err != nil {
+		return nil, err
+	}
+	name := ParseAssetString(assetName)
+	if name == nil || name.Protocol != rgb11wallet.Protocol {
+		return nil, rgb11wallet.ErrInvalidRGB11Asset
+	}
+	info := p.GetTickerInfo(name)
+	if info == nil {
+		return nil, fmt.Errorf("RGB11 deposit requires validated genesis metadata")
+	}
+	value, err := indexer.NewDecimalFromString(amount, info.Divisibility)
+	if err != nil || value.Sign() <= 0 || !value.Value.IsUint64() {
+		return nil, fmt.Errorf("invalid RGB11 deposit quantity")
+	}
+	if recipient == "" {
+		recipient = p.GetWallet().GetAddress()
+	}
+	intent := RGB11ContractDepositIntent{Version: 1, ContractURL: contractURL, Recipient: recipient,
+		AssetName: assetName, Amount: value.Value.String()}
+	memo, err := rgb11ContractIntentScript(intent)
+	if err != nil {
+		return nil, err
+	}
+	return runRGB11ManagedOperationWithManager(p, ctx, rgb11ManagedOperationNew,
+		func() (*rgb11Manager, error) { return p.stpRGB11Scope(owner) }, func(rgb *rgb11Manager) (*RGB11ContractDeposit, error) {
+			id, err := rgb.rgb11ContractIDForAssetName(*name)
+			if err != nil {
+				return nil, err
+			}
+			contractID, err := consensus.ParseContractID(id)
+			if err != nil {
+				return nil, err
+			}
+			script, err := utils.WitnessScriptHash(witness)
+			if err != nil {
+				return nil, err
+			}
+			beneficiary, err := invoicing.NewWitnessBeneficiary(rgb11InvoiceNetwork(GetChainParam()), script, nil)
+			if err != nil {
+				return nil, err
+			}
+			expiry := time.Now().Add(24 * time.Hour).Unix()
+			invoice := invoicing.Invoice{Contract: &contractID, Beneficiary: beneficiary, Expiry: &expiry,
+				Assignment: &invoicing.InvoiceState{Kind: invoicing.StateAmount, Amount: invoicing.Amount(value.Value.Uint64())}}
+			rgb.rgb11DepositMemo = memo
+			defer func() { rgb.rgb11DepositMemo = nil }()
+			prepared, err := rgb.prepareRGB11TransferForEndpoints(ctx, RGB11SendRequest{Invoice: invoice.String(), FeeRate: feeRate, MinConfirmations: 1}, false, nil)
+			if err != nil {
+				return nil, err
+			}
+			pending, err := rgb.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
+			if err != nil {
+				return nil, err
+			}
+			proof, err := nativeproof.BuildRGB11(pending.RecipientConsignment, nil)
+			if err != nil {
+				return nil, err
+			}
+			tx := new(wire.MsgTx)
+			if err := tx.Deserialize(bytes.NewReader(pending.SignedTx)); err != nil {
+				return nil, err
+			}
+			vout := pending.State.RecipientVout
+			if int(vout) >= len(tx.TxOut) {
+				return nil, ErrRGB11Inconsistent
+			}
+			output := indexer.NewTxOutput(tx.TxOut[vout].Value)
+			output.OutPointStr = fmt.Sprintf("%s:%d", tx.TxID(), vout)
+			output.OutValue.PkScript = append([]byte(nil), tx.TxOut[vout].PkScript...)
+			output.Assets = indexer.TxAssets{pending.State.Asset}
+			deposit := &RGB11ContractDeposit{Version: 1, TransferID: pending.State.TransferID, Intent: intent,
+				SignedTx: append([]byte(nil), pending.SignedTx...), WitnessScript: witness,
+				Source: &RGB11ChannelSource{Version: 1, ChannelID: contract.Address(), Output: output, PublicProof: proof}}
+			var peerKey []byte
+			if directPeer {
+				peerKey = contract.GetRuntimeBase().RemotePubKey
+			} else if node := p.GetServerNode(); node != nil && node.Pubkey != nil {
+				peerKey = node.Pubkey.SerializeCompressed()
+			}
+			if len(peerKey) == 0 {
+				return nil, fmt.Errorf("RGB11 deposit peer unavailable")
+			}
+			raw, err := json.Marshal(rgb11ContractDepositJournal{Deposit: *deposit, DirectPeer: directPeer,
+				OwnerPublicKey: rgb.wallet.GetPaymentPubKey().SerializeCompressed(), PeerPublicKey: append([]byte(nil), peerKey...)})
+			if err != nil {
+				return nil, err
+			}
+			if err := p.GetDB().Write(rgb11DepositKey("send", deposit.TransferID), raw); err != nil {
+				return deposit, fmt.Errorf("persist RGB11 deposit %s: %w", deposit.TransferID, err)
+			}
+			return deposit, nil
+		})
+}
+
+func (p *Manager) ResumeRGB11ContractDeposit(ctx context.Context, transferID string) (string, error) {
+	raw, err := p.GetDB().Read(rgb11DepositKey("send", transferID))
+	if err != nil {
+		return "", err
+	}
+	var journal rgb11ContractDepositJournal
+	if json.Unmarshal(raw, &journal) != nil || journal.Deposit.TransferID != transferID || journal.Deposit.Source == nil {
+		return "", fmt.Errorf("invalid RGB11 deposit journal")
+	}
+	point, err := wire.NewOutPointFromString(journal.Deposit.Source.Output.OutPointStr)
+	if err != nil {
+		return "", err
+	}
+	if journal.Broadcast {
+		return point.Hash.String(), nil
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	var owner common.Wallet
+	for _, account := range p.localRGB11Accounts() {
+		if bytes.Equal(account.Wallet.GetPaymentPubKey().SerializeCompressed(), journal.OwnerPublicKey) {
+			owner = account.Wallet
+			break
+		}
+	}
+	if owner == nil {
+		return "", fmt.Errorf("RGB11 deposit's fixed wallet is unavailable")
+	}
+	if !journal.PeerAcknowledged {
+		raw, err := json.Marshal(journal.Deposit)
+		if err != nil {
+			return "", err
+		}
+		peer, err := p.configuredSigningPeer(journal.PeerPublicKey)
+		if err != nil {
+			return "", err
+		}
+		action := RGB11DepositPrepareAction
+		if journal.DirectPeer {
+			action = RGB11DepositPeerPrepareAction
+		}
+		if err := peer.client.SendActionResultNfty(owner, 0, action, 0, string(raw)); err != nil {
+			return "", err
+		}
+		journal.PeerAcknowledged = true
+		raw, err = json.Marshal(journal)
+		if err != nil {
+			return "", err
+		}
+		if err := p.GetDB().Write(rgb11DepositKey("send", transferID), raw); err != nil {
+			return "", err
+		}
+	}
+	// Only the existing RGB broadcast boundary may sign. It persists the ACK
+	// and broadcast intent before signing, verifies the signed spend, and lets
+	// the Bitcoin backend apply mempool policy to those final bytes.
+	txid, err := runRGB11ManagedOperationWithManager(p, ctx, rgb11ManagedOperationContinue,
+		func() (*rgb11Manager, error) { return p.stpRGB11Scope(owner) },
+		func(rgb *rgb11Manager) (string, error) {
+			pending, err := rgb.projectionStore.LoadPendingTransfer(transferID)
+			if err != nil {
+				return "", err
+			}
+			fixed, err := decodeRGB11BroadcastTx(journal.Deposit.SignedTx)
+			if err != nil {
+				return "", err
+			}
+			current, err := decodeRGB11BroadcastTx(pending.SignedTx)
+			if err != nil || !sameRGB11UnsignedTx(fixed, current) {
+				return "", fmt.Errorf("RGB11 deposit pending transaction changed")
+			}
+			if status, statusErr := rgb.evidence.GetTxStatus(point.Hash.String()); statusErr == nil && status != nil && (status.Confirmed || status.InMempool) {
+				if err := validateObservedRGB11Deposit(rgb.evidence, &journal.Deposit, false); err != nil {
+					return "", err
+				}
+			}
+			return rgb.BroadcastRGB11OutOfBand([]string{transferID})
+		})
+	if err != nil {
+		return txid, err
+	}
+	if txid != point.Hash.String() {
+		return "", fmt.Errorf("RGB11 deposit broadcaster changed the fixed transaction")
+	}
+	journal.Broadcast = true
+	raw, err = json.Marshal(journal)
+	if err != nil {
+		return txid, err
+	}
+	if err := p.GetDB().Write(rgb11DepositKey("send", transferID), raw); err != nil {
+		return txid, err
+	}
+	return txid, nil
+}
+
+// ReceiveRGB11ContractDeposit acknowledges the exact unsigned transition and
+// proof, not Bitcoin spend authorization. Materialize independently requires
+// the matching confirmed transaction and validates its complete signatures.
+func (p *Manager) ReceiveRGB11ContractDeposit(ctx context.Context, contract ContractRuntime, deposit *RGB11ContractDeposit) error {
+	if deposit == nil || deposit.Version != 1 || deposit.Source == nil || deposit.Source.Output == nil ||
+		deposit.Intent.ContractURL != contract.URL() || deposit.Intent.AssetName != contract.GetAssetName().String() {
+		return fmt.Errorf("invalid RGB11 deposit envelope")
+	}
+	if err := p.registerRGB11ContractBinding(contract); err != nil {
+		return err
+	}
+	witness, err := rgb11ContractWitness(contract)
+	if err != nil || !bytes.Equal(witness, deposit.WitnessScript) {
+		return fmt.Errorf("RGB11 deposit witness mismatch")
+	}
+	memo, err := rgb11ContractIntentScript(deposit.Intent)
+	if err != nil {
+		return err
+	}
+	tx := new(wire.MsgTx)
+	reader := bytes.NewReader(deposit.SignedTx)
+	if err := tx.Deserialize(reader); err != nil || reader.Len() != 0 {
+		return fmt.Errorf("invalid RGB11 deposit Bitcoin transaction")
+	}
+	if tx.HasWitness() {
+		return fmt.Errorf("RGB11 deposit preparation must not contain signatures")
+	}
+	for _, input := range tx.TxIn {
+		if len(input.SignatureScript) != 0 {
+			return fmt.Errorf("RGB11 deposit preparation must not contain signatures")
+		}
+	}
+	point, err := wire.NewOutPointFromString(deposit.Source.Output.OutPointStr)
+	if err != nil || point.Hash.String() != tx.TxID() || int(point.Index) >= len(tx.TxOut) {
+		return fmt.Errorf("RGB11 deposit carrier mismatch")
+	}
+	out := tx.TxOut[point.Index]
+	if out.Value != deposit.Source.Output.Value() || !bytes.Equal(out.PkScript, deposit.Source.Output.OutValue.PkScript) {
+		return fmt.Errorf("RGB11 deposit carrier facts differ from signed transaction")
+	}
+	count := 0
+	for _, output := range tx.TxOut {
+		if bytes.Equal(output.PkScript, memo) {
+			if output.Value != 0 {
+				return fmt.Errorf("valued RGB11 intent")
+			}
+			count++
+		}
+	}
+	if count != 1 {
+		return fmt.Errorf("RGB11 deposit requires one signed intent commitment")
+	}
+	// A durable, previously verified envelope is an immutable ACK. Replaying
+	// it after its inputs have been spent must not require those inputs to be
+	// unspent again; new or changed envelopes still undergo every check below.
+	raw, err := json.Marshal(deposit)
+	if err != nil {
+		return err
+	}
+	key := rgb11DepositKey("receive", deposit.Source.Output.OutPointStr)
+	old, err := p.GetDB().Read(key)
+	if err == nil {
+		if !bytes.Equal(old, raw) {
+			return fmt.Errorf("RGB11 deposit is immutable")
+		}
+		return nil
+	}
+	if !errors.Is(err, indexer.ErrKeyNotFound) {
+		return err
+	}
+	if pool, ok := contract.(*LaunchPoolContractRunTime); ok && !pool.IsActive() {
+		if err := pool.validateRGB11LaunchDeposit(ctx, deposit); err != nil {
+			return err
+		}
+	}
+	validated, err := p.validateRGB11ChannelSource(ctx, contract.GetRuntimeBase().GetLocalWallet(), contract.Address(), deposit.Source, nativeproof.Prepared)
+	if err != nil {
+		return err
+	}
+	if validated.Asset.Amount.Value.String() != deposit.Intent.Amount {
+		return fmt.Errorf("RGB11 deposit amount differs from signed intent")
+	}
+	// Preparation checks every input independently of the RGB assignment proof.
+	// Spend authorization is checked against the observed final witness before
+	// any contract input or anchor can be authorized.
+	rgb, err := p.captureRGB11NetworkScope(true)
+	if err != nil {
+		return err
+	}
+	for _, input := range tx.TxIn {
+		prev, err := rgb.evidence.GetUTXO(input.PreviousOutPoint.String())
+		if err != nil || prev == nil {
+			return fmt.Errorf("RGB11 deposit input evidence unavailable: %w", err)
+		}
+		if !txscript.IsPayToTaproot(prev.PkScript) {
+			return fmt.Errorf("RGB11 deposit input must use taproot")
+		}
+	}
+	rgb11ChannelInventoryMu.Lock()
+	defer rgb11ChannelInventoryMu.Unlock()
+	old, err = p.GetDB().Read(key)
+	if err == nil && !bytes.Equal(old, raw) {
+		return fmt.Errorf("RGB11 deposit is immutable")
+	}
+	if err != nil && !errors.Is(err, indexer.ErrKeyNotFound) {
+		return err
+	}
+	return p.GetDB().Write(key, raw)
+}
+
+// The prepared receipt never authorizes minting. Resolve the final Bitcoin
+// witness and historical prevouts independently, including after those inputs
+// have been spent, before using the receipt as a contract input or anchor.
+func validateObservedRGB11Deposit(evidence rgb11wallet.BitcoinEvidenceProvider,
+	deposit *RGB11ContractDeposit, requireConfirmed bool) error {
+	if evidence == nil || deposit == nil {
+		return fmt.Errorf("RGB11 deposit evidence unavailable")
+	}
+	fixed, err := decodeRGB11BroadcastTx(deposit.SignedTx)
+	if err != nil {
+		return err
+	}
+	txid := fixed.TxID()
+	status, err := evidence.GetTxStatus(txid)
+	if err != nil {
+		return err
+	}
+	if status == nil || status.TxID != txid || (!status.Confirmed && (requireConfirmed || !status.InMempool)) {
+		return fmt.Errorf("RGB11 deposit Bitcoin transaction is not observed at the required confirmation state")
+	}
+	raw, err := evidence.GetRawTx(txid)
+	if err != nil {
+		return err
+	}
+	tx, err := decodeRGB11BroadcastTx(raw)
+	if err != nil || !sameRGB11UnsignedTx(fixed, tx) {
+		return fmt.Errorf("observed RGB11 deposit differs from the acknowledged transaction")
+	}
+	var canonical bytes.Buffer
+	if err := tx.Serialize(&canonical); err != nil || !bytes.Equal(canonical.Bytes(), raw) {
+		return fmt.Errorf("invalid observed RGB11 deposit transaction encoding")
+	}
+	fetcher := txscript.NewMultiPrevOutFetcher(nil)
+	for _, input := range tx.TxIn {
+		parentRaw, err := evidence.GetRawTx(input.PreviousOutPoint.Hash.String())
+		if err != nil {
+			return err
+		}
+		parent, err := decodeRGB11BroadcastTx(parentRaw)
+		if err != nil || parent.TxHash() != input.PreviousOutPoint.Hash || int(input.PreviousOutPoint.Index) >= len(parent.TxOut) {
+			return fmt.Errorf("RGB11 deposit input transaction evidence mismatch")
+		}
+		prev := parent.TxOut[input.PreviousOutPoint.Index]
+		if !txscript.IsPayToTaproot(prev.PkScript) || len(input.SignatureScript) != 0 || len(input.Witness) != 1 ||
+			(len(input.Witness[0]) != 64 && !(len(input.Witness[0]) == 65 && input.Witness[0][64] == byte(txscript.SigHashAll))) {
+			return fmt.Errorf("RGB11 deposit input does not commit all outputs")
+		}
+		fetcher.AddPrevOut(input.PreviousOutPoint, prev)
+	}
+	hashes := txscript.NewTxSigHashes(tx, fetcher)
+	for i, input := range tx.TxIn {
+		prev := fetcher.FetchPrevOutput(input.PreviousOutPoint)
+		engine, err := txscript.NewEngine(prev.PkScript, tx, i, txscript.StandardVerifyFlags, nil, hashes, prev.Value, fetcher)
+		if err != nil {
+			return err
+		}
+		if err := engine.Execute(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// HasRGB11DepositMaterial identifies a replay candidate only. The
+// matching durable receive record never substitutes for full materialization.
+func (p *Manager) HasRGB11DepositMaterial(contractURL, outpoint string) (bool, error) {
+	_, err := p.loadRGB11ContractDeposit(contractURL, outpoint)
+	if errors.Is(err, ErrRGB11ContractInputNotFound) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func (p *Manager) loadRGB11ContractDeposit(contractURL, outpoint string) (*RGB11ContractDeposit, error) {
+	raw, err := p.GetDB().Read(rgb11DepositKey("receive", outpoint))
+	if errors.Is(err, indexer.ErrKeyNotFound) {
+		return nil, ErrRGB11ContractInputNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	var deposit RGB11ContractDeposit
+	if json.Unmarshal(raw, &deposit) != nil || deposit.Version != RGB11ContractDepositVersion ||
+		deposit.Intent.Version != RGB11ContractDepositVersion || deposit.Source == nil || deposit.Source.Output == nil ||
+		deposit.Source.Output.OutPointStr != outpoint {
+		return nil, fmt.Errorf("invalid RGB11 deposit record")
+	}
+	if deposit.Intent.ContractURL != contractURL {
+		return nil, ErrRGB11ContractInputNotFound
+	}
+	return &deposit, nil
+}
+
+func (p *Manager) MaterializeRGB11ContractInput(ctx context.Context, contract ContractRuntime, outpoint string) (*RGB11ContractInput, error) {
+	deposit, err := p.loadRGB11ContractDeposit(contract.URL(), outpoint)
+	if err != nil {
+		return nil, err
+	}
+	scope, err := p.stpRGB11Scope(contract.GetRuntimeBase().GetLocalWallet())
+	if err != nil {
+		return nil, err
+	}
+	if err := validateObservedRGB11Deposit(scope.evidence, deposit, true); err != nil {
+		return nil, err
+	}
+	if p.l2IndexerClient == nil {
+		return nil, fmt.Errorf("RGB11 deposit mapping lookup unavailable")
+	}
+	locator, err := p.l2IndexerClient.GetAscendData(outpoint)
+	switch {
+	case errors.Is(err, indexer.ErrKeyNotFound):
+		// Only an explicitly absent mapping permits new admission. Current
+		// source, ownership and co-asset checks remain mandatory here.
+		if err := p.RegisterRGB11SettlementSource(ctx, contract.GetRuntimeBase().GetLocalWallet(), contract.Address(), deposit.Source); err != nil {
+			return nil, err
+		}
+	case err != nil:
+		return nil, fmt.Errorf("RGB11 deposit mapping lookup failed: %w", err)
+	case locator == nil || locator.AnchorTxId == "":
+		return nil, fmt.Errorf("RGB11 deposit mapping has no anchor")
+	default:
+		// Replay proves the existing canonical mapping. Later spending does
+		// not change that fact and must not recreate spendable inventory.
+		if err := p.validateRGB11DepositHistory(ctx, contract, deposit.Source, locator.AnchorTxId); err != nil {
+			return nil, err
+		}
+	}
+	if err := contract.GetRuntimeBase().initializeRGB11PublicMetadata(deposit.Source.Output); err != nil {
+		return nil, err
+	}
+	h := sha256.Sum256(deposit.Source.PublicProof)
+	return &RGB11ContractInput{Output: deposit.Source.Output.Clone(), Recipient: deposit.Intent.Recipient,
+		ProofDigest: h[:], RGB11Proof: append([]byte(nil), deposit.Source.PublicProof...)}, nil
+}
+
+// A UTXO-only indexer cannot name a confirmed consumer. Recover its identity
+// only from this contract's existing fixed signed withdrawals, then verify it
+// against Bitcoin. This read never creates inventory or rewrites a proof.
+func (p *Manager) confirmedPoolSpender(evidence rgb11wallet.BitcoinEvidenceProvider,
+	contractURL, outpoint, observedSpender string) (string, error) {
+	var candidate string
+	var signed []byte
+	err := p.GetDB().BatchRead(rgb11ContractWithdrawKey("signed", ""), false, func(key, raw []byte) error {
+		var pair rgb11ContractBroadcastPair
+		if json.Unmarshal(raw, &pair) != nil || pair.Version != 1 {
+			return fmt.Errorf("invalid durable RGB11 withdrawal pair")
+		}
+		if pair.ContractURL != contractURL {
+			return nil
+		}
+		tx := new(wire.MsgTx)
+		reader := bytes.NewReader(pair.Bitcoin)
+		if tx.Deserialize(reader) != nil || reader.Len() != 0 || pair.Proof == nil || len(pair.Proof.Consignment) == 0 || len(pair.Descend) == 0 ||
+			!bytes.Equal(key, rgb11ContractWithdrawKey("signed", tx.TxID())) {
+			return fmt.Errorf("invalid durable RGB11 withdrawal pair")
+		}
+		matches := 0
+		for _, input := range tx.TxIn {
+			if input.PreviousOutPoint.String() == outpoint {
+				matches++
+			}
+		}
+		if matches == 0 {
+			return nil
+		}
+		if matches != 1 || (candidate != "" && candidate != tx.TxID()) {
+			return fmt.Errorf("historical RGB11 pool source has ambiguous recorded consumers")
+		}
+		candidate, signed = tx.TxID(), append([]byte(nil), pair.Bitcoin...)
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	if candidate == "" {
+		return "", fmt.Errorf("historical RGB11 pool source has no recorded consumer")
+	}
+	if observedSpender != "" && observedSpender != candidate {
+		return "", fmt.Errorf("historical RGB11 pool source spender conflicts with its recorded consumer")
+	}
+	if _, confirmed := verifyRGB11ExpectedSpend(evidence, outpoint, candidate); !confirmed {
+		return "", fmt.Errorf("historical RGB11 pool source consumer is not independently confirmed")
+	}
+	raw, err := evidence.GetRawTx(candidate)
+	if err != nil || !bytes.Equal(raw, signed) {
+		return "", fmt.Errorf("historical RGB11 pool source consumer differs from its signed withdrawal")
+	}
+	return candidate, nil
+}
+
+// RGB11ContractInputProtected guards generic Bitcoin fee selection even
+// before a derived RGB wallet projection or transient UTXO lock is rebuilt.
+// A storage error must be treated as protected by the caller.
+func (p *Manager) RGB11ContractInputProtected(outpoint string) (bool, error) {
+	_, err := p.GetDB().Read(rgb11DepositKey("receive", outpoint))
+	if errors.Is(err, indexer.ErrKeyNotFound) {
+		_, err = p.GetDB().Read(rgb11LaunchPoolKey("source", outpoint))
+		if errors.Is(err, indexer.ErrKeyNotFound) {
+			return false, nil
+		}
+	}
+	if err != nil {
+		return true, err
+	}
+	return true, nil
+}

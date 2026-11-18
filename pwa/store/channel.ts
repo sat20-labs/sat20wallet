@@ -163,28 +163,8 @@ export const useChannelStore = defineStore('channel', () => {
       }
 
       if (currentChannel?.json) {
-        const [reservationError, reservationResult] = await satsnetStp.allReservations()
-        if (reservationError) throw reservationError
-        if (!Array.isArray(reservationResult?.reservations)) {
-          throw new Error('Invalid channel reservation response')
-        }
-        if (generation !== channelRequestGeneration) return
         try {
           const c = JSON.parse(currentChannel.json)
-          // Operation progress is persisted in reservations; the channel itself
-          // stays READY during splicing. Keep only the matching display value.
-          for (const item of reservationResult.reservations) {
-            if (item.type !== 'splicing') continue
-            const status = Number(item.status)
-            const direction = status >= 0x200 && status <= 0x203 ? 'in'
-              : status >= 0x300 && status <= 0x303 ? 'out' : undefined
-            if (!direction) continue
-            const reservation = JSON.parse(item.json)
-            if (reservation.ChannelId === c.channelId) {
-              c.pendingSplicing = direction
-              break
-            }
-          }
           if (generation !== channelRequestGeneration) {
             return
           }

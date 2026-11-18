@@ -15,7 +15,7 @@ import (
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
-// These are internally observed current facts, not a native proof supplied by
+// These are internally observed current facts, not a ARC20 proof supplied by
 // a caller. They live only in the existing owner's JSON and are committed with
 // the exact approved closing package, before its first broadcast. Old legacy
 // owners have nil InputFacts and never consume this envelope.
@@ -30,6 +30,17 @@ type closedWithdrawalInputFact struct {
 	Value                        int64
 	PkScript                     []byte
 	Assets                       indexer.TxAssets
+}
+
+// Read indexed assets in the captured wallet. Include its known RGB11
+// allocations so a mixed carrier cannot be admitted as a pure ARC20 input.
+func (p *Manager) indexedAccountView(channel *Channel) (*Manager, error) {
+	w := channel.LocalWallet().Clone()
+	scope, err := p.newScopedRGB11Manager(localRGB11Account{WalletID: w.GetId(), AccountIndex: w.GetSubAccount(), Address: w.GetAddress(), Wallet: w})
+	if err != nil {
+		return nil, err
+	}
+	return scope.Manager, nil
 }
 
 func closedWithdrawalUsesInputFacts(channel *ChannelInDB) bool {
@@ -54,7 +65,7 @@ func closedWithdrawalUsesInputFacts(channel *ChannelInDB) bool {
 	return false
 }
 
-// Adapter admission is deliberately bounded to the existing indexed native
+// Adapter admission is deliberately bounded to the existing indexed ARC20
 // classifier and plain fees. It does not give another registered protocol an
 // unimplemented receipt merely because its Bitcoin signatures are valid.
 func validateIndexedClosedWithdrawalChannel(channel *Channel) error {
@@ -78,7 +89,7 @@ func validateIndexedClosedWithdrawalChannel(channel *Channel) error {
 			continue
 		}
 		if len(commitment.AssetProofs) != 0 || len(commitment.RecoveryProofs) != 0 {
-			return fmt.Errorf("indexed withdrawal cannot consume native sidecar proofs")
+			return fmt.Errorf("indexed withdrawal cannot consume ARC20 sidecar proofs")
 		}
 		for _, balances := range []map[AssetName]*Decimal{commitment.LocalBalance, commitment.RemoteBalance} {
 			for name, amount := range balances {
@@ -100,7 +111,7 @@ func (p *Manager) indexedClosedWithdrawalFact(output *TxOutput) (closedWithdrawa
 	var fact closedWithdrawalInputFact
 	if output == nil || output.OutPoint() == nil || output.Value() <= 0 || len(output.Invalids) != 0 ||
 		len(output.Offsets) != 0 || len(output.SatBindingMap) != 0 {
-		return fact, fmt.Errorf("indexed withdrawal requires complete valid native input facts")
+		return fact, fmt.Errorf("indexed withdrawal requires complete valid ARC20 input facts")
 	}
 	fact.Outpoint, fact.Value, fact.PkScript = output.OutPointStr, output.Value(), append([]byte(nil), output.OutValue.PkScript...)
 	fact.Assets = output.Assets.Clone()
@@ -111,7 +122,7 @@ func (p *Manager) indexedClosedWithdrawalFact(output *TxOutput) (closedWithdrawa
 		return fact, nil
 	}
 	if len(output.Assets) != 1 || output.Assets[0].Name.Protocol != indexer.PROTOCOL_NAME_ATOM {
-		return fact, fmt.Errorf("indexed withdrawal contains an unsupported or mixed native carrier")
+		return fact, fmt.Errorf("indexed withdrawal contains an unsupported or mixed ARC20 carrier")
 	}
 	name := &AssetName{AssetName: output.Assets[0].Name, N: 1}
 	protocol, err := stpAssetProtocols.Resolve(&name.AssetName, STPOpForceClose)
@@ -183,14 +194,14 @@ func indexedClosedWithdrawalFrontier(channel *Channel, parent *wire.MsgTx, txs [
 
 // The receiver is the captured-account SDK view created below, never the
 // live selected wallet. Its mandatory getL1TxOutput preserves RPC failures.
-func (p *Manager) validateIndexedWithdrawalCurrent(chains *nativeSettlementChains, output *TxOutput) error {
+func (p *Manager) validateIndexedWithdrawalCurrent(chains *settlementChains, output *TxOutput) error {
 	spent, err := chains.bitcoin.GetOutspend(output.OutPointStr)
 	if err != nil || spent == nil || spent.Spent || spent.SpendingTx != "" {
 		return fmt.Errorf("indexed withdrawal carrier is not independently current: %v", err)
 	}
 	current, err := p.getL1TxOutput(output.OutPointStr)
 	if err != nil {
-		return fmt.Errorf("read complete current native allocation: %w", err)
+		return fmt.Errorf("read complete current ARC20 allocation: %w", err)
 	}
 	want, err := p.indexedClosedWithdrawalFact(output)
 	if err != nil {
@@ -198,11 +209,11 @@ func (p *Manager) validateIndexedWithdrawalCurrent(chains *nativeSettlementChain
 	}
 	actual, err := p.indexedClosedWithdrawalFact(current)
 	if err != nil || !reflect.DeepEqual(want, actual) {
-		return fmt.Errorf("current native allocation differs from validated coloring: %v", err)
+		return fmt.Errorf("current ARC20 allocation differs from validated coloring: %v", err)
 	}
 	utxo, err := chains.bitcoin.GetUTXO(output.OutPointStr)
 	if err != nil || utxo == nil || utxo.OutPoint != output.OutPointStr || utxo.Value != output.Value() || !bytes.Equal(utxo.PkScript, output.OutValue.PkScript) {
-		return fmt.Errorf("current native carrier differs from canonical Bitcoin: %v", err)
+		return fmt.Errorf("current ARC20 carrier differs from canonical Bitcoin: %v", err)
 	}
 	return nil
 }
@@ -211,7 +222,7 @@ func addIndexedWithdrawalAmounts(totals map[indexer.AssetName]int64, output *TxO
 	for _, asset := range output.Assets {
 		amount, err := atomicalsAmount(&asset.Amount)
 		if err != nil || asset.Name.Protocol != indexer.PROTOCOL_NAME_ATOM || asset.BindingSat != 1 {
-			return fmt.Errorf("invalid indexed withdrawal native amount")
+			return fmt.Errorf("invalid indexed withdrawal ARC20 amount")
 		}
 		totals[asset.Name], err = atomicalsAdd(totals[asset.Name], amount)
 		if err != nil {
@@ -240,7 +251,7 @@ func (p *Manager) prepareIndexedClosedWithdrawal(channel *Channel, parent *wire.
 	if client == nil {
 		return nil, fmt.Errorf("indexed withdrawal Bitcoin evidence is unavailable")
 	}
-	chains, err := p.newNativeSettlementChainsWithEvidence(context.Background(), newIndexerBitcoinEvidenceProvider(client))
+	chains, err := p.newSettlementChainsWithEvidence(context.Background(), newIndexerBitcoinEvidenceProvider(client))
 	if err != nil {
 		return nil, err
 	}
@@ -254,7 +265,7 @@ func (p *Manager) prepareIndexedClosedWithdrawal(channel *Channel, parent *wire.
 	if err := chains.verifyBitcoinSpend(actual); err != nil {
 		return nil, err
 	}
-	witness, _, err := p.nativeChannelWitness(channel.LocalWallet(), channel.ChannelId)
+	witness, _, err := p.channelOwnerWitness(channel.LocalWallet(), channel.ChannelId)
 	if err != nil || !bytes.Equal(witness, channel.RedeemScript) {
 		return nil, fmt.Errorf("indexed withdrawal changed its fixed channel pair")
 	}
@@ -262,9 +273,7 @@ func (p *Manager) prepareIndexedClosedWithdrawal(channel *Channel, parent *wire.
 	// projection. This is the established scoped SDK view, not a new scan or
 	// the potentially changed p.wallet/p.rgbManager selection.
 	captured := channel.LocalWallet().Clone()
-	view, err := p.newScopedRGB11Manager(localRGB11Account{
-		WalletID: captured.GetId(), AccountIndex: captured.GetSubAccount(), Address: captured.GetAddress(), Wallet: captured,
-	})
+	view, err := p.indexedAccountView(channel)
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +292,7 @@ func (p *Manager) prepareIndexedClosedWithdrawal(channel *Channel, parent *wire.
 	}
 	available := make(map[string]*TxOutput)
 	expectedBurn := make(map[indexer.AssetName]int64)
-	nativeIDs := make(map[string]indexer.AssetName)
+	atomicalIDs := make(map[string]indexer.AssetName)
 	for i, point := range points {
 		canonical, err := chains.bitcoinOutput(point)
 		if err != nil || !bytes.Equal(canonical.PkScript, channel.GetChannelPkScript()) {
@@ -311,13 +320,13 @@ func (p *Manager) prepareIndexedClosedWithdrawal(channel *Channel, parent *wire.
 		if first {
 			snapshot.Inputs = append(snapshot.Inputs, fact)
 		} else if !reflect.DeepEqual(fact, snapshot.Inputs[i]) {
-			return nil, fmt.Errorf("indexed withdrawal native protocol or identity changed")
+			return nil, fmt.Errorf("indexed withdrawal ARC20 protocol or identity changed")
 		}
 		if fact.Identity != "" {
-			if name, exists := nativeIDs[fact.Identity]; exists && name != fact.Assets[0].Name {
-				return nil, fmt.Errorf("indexed withdrawal has conflicting native identities")
+			if name, exists := atomicalIDs[fact.Identity]; exists && name != fact.Assets[0].Name {
+				return nil, fmt.Errorf("indexed withdrawal has conflicting ARC20 identities")
 			}
-			nativeIDs[fact.Identity] = fact.Assets[0].Name
+			atomicalIDs[fact.Identity] = fact.Assets[0].Name
 		}
 		pointID, _ := wire.NewOutPointFromString(point)
 		if len(output.Assets) != 0 {
@@ -336,13 +345,13 @@ func (p *Manager) prepareIndexedClosedWithdrawal(channel *Channel, parent *wire.
 			if first || consumers[point] == "" || spent.SpendingTx != "" && spent.SpendingTx != consumers[point] {
 				return nil, fmt.Errorf("indexed withdrawal frontier was spent without this verified package")
 			}
-		} else if err := view.Manager.validateIndexedWithdrawalCurrent(chains, output); err != nil {
+		} else if err := view.validateIndexedWithdrawalCurrent(chains, output); err != nil {
 			return nil, err
 		}
 		available[point] = output.Clone()
 	}
 	if len(expectedBurn) == 0 {
-		return nil, fmt.Errorf("indexed withdrawal has no independently current native client allocation")
+		return nil, fmt.Errorf("indexed withdrawal has no independently current ARC20 client allocation")
 	}
 	deanchor, err := p.validateIndexedWithdrawalRelease(chains, channel, parent.TxID(), expectedBurn)
 	if err != nil {
@@ -415,7 +424,7 @@ func (p *Manager) prepareIndexedClosedWithdrawal(channel *Channel, parent *wire.
 			}
 		}
 		if !reflect.DeepEqual(inAmounts, outAmounts) {
-			return nil, fmt.Errorf("indexed recovery burns or changes a native allocation")
+			return nil, fmt.Errorf("indexed recovery burns or changes a ARC20 allocation")
 		}
 	}
 	if complete && !allConfirmed {
@@ -437,7 +446,7 @@ func (p *Manager) prepareIndexedClosedWithdrawal(channel *Channel, parent *wire.
 			if complete && allConfirmed && consumers[point] == "" && bytes.Equal(output.OutValue.PkScript, walletScript) {
 				spender := spent.SpendingTx
 				if spender == "" {
-					spender, err = view.Manager.indexedSelfSpend(chains, captured.GetAddress(), output)
+					spender, err = view.indexedSelfSpend(chains, captured.GetAddress(), output)
 					if err != nil {
 						return nil, err
 					}
@@ -451,7 +460,7 @@ func (p *Manager) prepareIndexedClosedWithdrawal(channel *Channel, parent *wire.
 				return nil, fmt.Errorf("indexed recovery output was consumed outside its authorized package")
 			}
 		} else if len(output.Assets) != 0 {
-			if err := view.Manager.validateIndexedWithdrawalCurrent(chains, output); err != nil {
+			if err := view.validateIndexedWithdrawalCurrent(chains, output); err != nil {
 				return nil, err
 			}
 		}
@@ -491,7 +500,7 @@ func (p *Manager) prepareIndexedClosedWithdrawal(channel *Channel, parent *wire.
 
 // Core has no locator for a confirmed spend. A current same-asset output
 // at the captured address can identify a direct wallet self-spend.
-func (p *Manager) indexedSelfSpend(chains *nativeSettlementChains, address string, terminal *TxOutput) (string, error) {
+func (p *Manager) indexedSelfSpend(chains *settlementChains, address string, terminal *TxOutput) (string, error) {
 	if len(terminal.Assets) != 1 || terminal.Assets[0].Name.Protocol != indexer.PROTOCOL_NAME_ATOM {
 		return "", fmt.Errorf("indexed terminal has no known spender")
 	}
@@ -527,7 +536,7 @@ func (p *Manager) indexedSelfSpend(chains *nativeSettlementChains, address strin
 
 // This is historical receipt validation, never permission for another spend.
 // A locator alone cannot turn an externally consumed terminal into completion.
-func verifyIndexedTerminalSpend(chains *nativeSettlementChains, point, txID string, requireConfirmed bool) error {
+func verifyIndexedTerminalSpend(chains *settlementChains, point, txID string, requireConfirmed bool) error {
 	status, err := chains.bitcoin.GetTxStatus(txID)
 	if err != nil || status == nil || status.TxID != txID || status.Confirmed && status.InMempool || !status.Confirmed && (!status.InMempool || requireConfirmed) {
 		return fmt.Errorf("indexed terminal spender is not observed with an exact transaction identity: %v", err)
@@ -553,7 +562,7 @@ func verifyIndexedTerminalSpend(chains *nativeSettlementChains, point, txID stri
 	return nil
 }
 
-func (p *Manager) validateIndexedWithdrawalRelease(chains *nativeSettlementChains, channel *Channel, parentID string,
+func (p *Manager) validateIndexedWithdrawalRelease(chains *settlementChains, channel *Channel, parentID string,
 	expected map[indexer.AssetName]int64) (*swire.MsgTx, error) {
 	// Normal exchange constructs the sidecar before advancing CommitHeight.
 	// Preserve its exact marker, rather than rebuilding a different generation
@@ -590,7 +599,7 @@ func (p *Manager) validateIndexedWithdrawalRelease(chains *nativeSettlementChain
 		for _, asset := range assets {
 			amount, err := atomicalsAmount(&asset.Amount)
 			if err != nil || asset.Name.Protocol != indexer.PROTOCOL_NAME_ATOM || asset.BindingSat != 1 || expected[asset.Name] <= 0 || seen[asset.Name] {
-				return fmt.Errorf("indexed release contains an invalid or unknown native allocation")
+				return fmt.Errorf("indexed release contains an invalid or unknown ARC20 allocation")
 			}
 			seen[asset.Name] = true
 			totals[asset.Name], err = atomicalsAdd(totals[asset.Name], amount)
@@ -635,7 +644,7 @@ func (p *Manager) validateIndexedWithdrawalRelease(chains *nativeSettlementChain
 				return nil, err
 			}
 		} else if len(output.Assets) != 0 {
-			return nil, fmt.Errorf("indexed close retained or redirected a native client allocation")
+			return nil, fmt.Errorf("indexed close retained or redirected a ARC20 client allocation")
 		}
 		if parseErr == nil && kind == sindexer.CONTENT_TYPE_CHANNELID {
 			if string(data) != storedMarker {

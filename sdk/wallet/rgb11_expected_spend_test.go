@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -26,6 +27,10 @@ type expectedSpendEvidence struct {
 	statusErr error
 	raw       []byte
 	rawErr    error
+}
+
+func (expectedSpendEvidence) GetGenesisHash() (string, error) {
+	return "", errors.New("expected-spend-only test evidence has no Bitcoin chain")
 }
 
 func (e expectedSpendEvidence) GetUTXO(string) (*rgb11wallet.BitcoinUTXO, error) {
@@ -330,7 +335,7 @@ func captureExpectedRawState(t *testing.T, f rgb11ExpectedRawSpendFallbackFixtur
 	locks := f.sender.utxoLockerL1.GetLockedUtxoList()
 	for _, input := range pending.State.InputOutPoints {
 		lock := locks[input]
-		if lock == nil || lock.Reason != rgb11wallet.LockReasonPending || lock.ReservationID != pending.ReservationID {
+		if lock == nil || lock.Reason != sdkcommon.UtxoLockRGBPending || lock.ReservationID != pending.ReservationID {
 			t.Fatalf("accepted input reservation missing: input=%s lock=%+v", input, lock)
 		}
 	}
@@ -861,7 +866,7 @@ func TestRGB11ExpectedRawSpendFallbackRejectsUnverified(t *testing.T) {
 			reservationIDs := make(map[string]string, len(fixture.pending.State.InputOutPoints))
 			for _, input := range fixture.pending.State.InputOutPoints {
 				lock := locksBefore[input]
-				if lock == nil || lock.Reason != rgb11wallet.LockReasonPending {
+				if lock == nil || lock.Reason != sdkcommon.UtxoLockRGBPending {
 					t.Fatalf("prepared input lock=%+v for %s", lock, input)
 				}
 				reservationIDs[input] = lock.ReservationID
@@ -938,12 +943,12 @@ func TestRGB11ExpectedRawSpendFallbackRejectsUnverified(t *testing.T) {
 			locksAfter := fixture.sender.utxoLockerL1.GetLockedUtxoList()
 			for _, input := range fixture.pending.State.InputOutPoints {
 				lock := locksAfter[input]
-				if lock == nil || lock.Reason != rgb11wallet.LockReasonPending || lock.ReservationID != reservationIDs[input] {
+				if lock == nil || lock.Reason != sdkcommon.UtxoLockRGBPending || lock.ReservationID != reservationIDs[input] {
 					t.Fatalf("unverified spend released or replaced pending input lock: input=%s lock=%+v", input, lock)
 				}
 			}
 			if reserveErr := fixture.sender.utxoLockerL1.TryReserve(
-				[]string{fixture.source}, rgb11wallet.LockReasonPending, "unverified-spend-competitor"); !errors.Is(reserveErr, ErrUtxoReserved) {
+				[]string{fixture.source}, sdkcommon.UtxoLockRGBPending, "unverified-spend-competitor"); !errors.Is(reserveErr, ErrUtxoReserved) {
 				t.Fatalf("original RGB proof became available after unverified spend: reserve error=%v", reserveErr)
 			}
 			proofs, err := fixture.sender.rgbManager.projectionStore.ListProofs()

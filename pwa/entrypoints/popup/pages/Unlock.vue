@@ -254,7 +254,7 @@ const performBiometricUnlock = async () => {
       showToast('success', t('unlock.biometricUnlockSuccess'), t('unlock.biometricVerifySuccess'))
 
       const redirectPath = route.query.redirect as string
-      router.push(redirectPath || '/wallet')
+      router.replace(redirectPath || '/wallet')
     } else if (err) {
       const errorMessage = err instanceof Error ? err.message : String(err)
       let localizedMessage = t('unlock.unlockFailed')
@@ -295,7 +295,7 @@ const onSubmit = form.handleSubmit(async (values) => {
 
   if (!err && result) {
     const redirectPath = route.query.redirect as string
-    router.push(redirectPath || '/wallet')
+    router.replace(redirectPath || '/wallet')
   } else if (err) {
     // 使用本地化的错误消息
     const errorMessage = err instanceof Error ? err.message : String(err)

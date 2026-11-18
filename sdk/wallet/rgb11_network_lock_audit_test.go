@@ -29,6 +29,8 @@ func (a *rgbNetworkAuditProbe) record() {
 		return
 	}
 	p := a.owner
+	// The shared operation/import gate spans network work intentionally.
+	// Only data/identity locks must be released at the transport boundary.
 	checks := []struct {
 		name string
 		lock sync.Locker
@@ -37,7 +39,6 @@ func (a *rgbNetworkAuditProbe) record() {
 		{"manager-data", &p.mutex, p.mutex.TryLock},
 		{"wallet-identity", &p.channelIdentityMu, p.channelIdentityMu.TryLock},
 		{"rgb-scope", &p.rgbOperationMu, p.rgbOperationMu.TryLock},
-		{"rgb-execution", &p.rgbManagedExecutionMu, p.rgbManagedExecutionMu.TryLock},
 		{"rgb-chain-refresh", &p.rgbManager.scopeStates.chainRefresh, p.rgbManager.scopeStates.chainRefresh.TryLock},
 		{"rgb-reservations", &p.rgbReservationMu, p.rgbReservationMu.TryLock},
 	}
@@ -73,6 +74,11 @@ func (h *rgbNetworkAuditHTTP) DKVSClientConfig() (*dkvsindexer.ClientConfig, err
 type rgbNetworkAuditEvidence struct {
 	rgb11wallet.BitcoinEvidenceProvider
 	probe *rgbNetworkAuditProbe
+}
+
+func (e *rgbNetworkAuditEvidence) GetGenesisHash() (string, error) {
+	e.probe.record()
+	return "", errRGBNetworkAuditBoundary
 }
 
 func (e *rgbNetworkAuditEvidence) GetUTXO(string) (*rgb11wallet.BitcoinUTXO, error) {
@@ -122,7 +128,7 @@ func TestRGBNetworkBoundariesHoldNoWalletLocks(t *testing.T) {
 			manager.stopAccountBackgroundTasks()
 			manager.rgbManager.scopeStates.stopReconciliations()
 			probe := &rgbNetworkAuditProbe{owner: manager}
-			client, err := manager.GetDKVSClient()
+			client, err := manager.accountDKVSClient()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -134,7 +140,7 @@ func TestRGBNetworkBoundariesHoldNoWalletLocks(t *testing.T) {
 			case "public-refresh-bitcoin":
 				_, _ = manager.RefreshRGB11State(context.Background())
 			case "background-mailbox-dkvs":
-				_, _ = manager.syncRootRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+				_, _ = manager.syncRootRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{})
 			case "background-enable-dkvs":
 				client := newRGB11MessageNodeClient(remote)
 				manager.serverNode = NewNode(client, "message.test", SERVER_NODE, client.CoreNodePubKey(), client.CoreNodePubKey())

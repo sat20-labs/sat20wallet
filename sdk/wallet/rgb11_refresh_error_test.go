@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	"reflect"
 	"strings"
 	"testing"
@@ -71,6 +72,21 @@ func (e *historicalErrorEvidence) GetRawTx(txid string) ([]byte, error) {
 func (e *historicalErrorEvidence) Broadcast(raw []byte) (string, error) {
 	e.broadcasts++
 	return e.BitcoinEvidenceProvider.Broadcast(raw)
+}
+
+// The monitor and its history resolver must observe the same fork tip.
+type rgbHistForkEvidence struct {
+	*historicalErrorEvidence
+	chain *rgb11L1MonitorIndexer
+}
+
+func (e rgbHistForkEvidence) GetTip() (*rgb11wallet.BitcoinTip, error) {
+	height := e.chain.GetSyncHeight()
+	hash, err := e.chain.GetBlockHash(height)
+	if err != nil {
+		return nil, err
+	}
+	return &rgb11wallet.BitcoinTip{Height: int64(height), BlockHash: hash}, nil
 }
 
 // Substitute only the read view of one proof; do not persist invalid fixture
@@ -275,10 +291,10 @@ func rgb11HistAssertLocks(t *testing.T, before, after map[string]*LockedUtxo,
 				t.Fatal("quarantined history carrier lacks a new bounded lock timestamp")
 			}
 			lock = &LockedUtxo{LockedTime: observed.LockedTime}
-		} else if lock.Reason != rgb11wallet.LockReasonRGB {
+		} else if lock.Reason != sdkcommon.UtxoLockRGB {
 			t.Fatal("healthy history fixture carrier was already reserved")
 		}
-		lock.Reason = rgb11wallet.LockReasonPending
+		lock.Reason = sdkcommon.UtxoLockRGBPending
 		want[point] = lock
 	}
 	// Includes all unrelated locks and every owner/value/asset/reservation field.
@@ -398,7 +414,7 @@ func testRGB11RefreshHistoricalErrors(t *testing.T, manager *Manager, evidence r
 					t.Logf("history proof order index=%d target=%t first_input=%t second_output=%t", index, proof.OutPoint == spentChange,
 						containsString(first.State.InputOutPoints, proof.OutPoint), containsString(second.State.OutputOutPoints, proof.OutPoint))
 				}
-				validator := rgb11wallet.NewNativeConsensusValidatorWithReveals(second.ChangeSeals...)
+				validator := rgb11wallet.NewRGB11ValidatorWithReveals(second.ChangeSeals...)
 				if err := validator.ValidateHistoricalConsignment(context.Background(), second.LocalConsignment, evidence); err != nil {
 					t.Fatalf("healthy successor history control: %v", err)
 				}
@@ -520,7 +536,7 @@ func testRGB11RefreshHistoricalErrors(t *testing.T, manager *Manager, evidence r
 				t.Fatalf("consistency=%s", candidateConsistency)
 			}
 			state, stateErr := manager.GetRGB11State()
-			if stateErr != nil || state == nil || state.ConsistencyStatus != "broken" || len(state.AvailableAssets) != 0 || refreshRuntime.rgb11ProjectionAvailable() || refreshRuntime.rgb11ProjectionStableConfirmed() {
+			if stateErr != nil || state == nil || state.ConsistencyStatus != "broken" || len(state.AvailableAssets) != 0 {
 				t.Fatalf("quarantined history remained usable: state_present=%t err=%v", state != nil, stateErr)
 			}
 			// Partial diagnostics are distinct from committed lifecycle changes.
@@ -565,7 +581,7 @@ func testRGB11RefreshHistoricalErrors(t *testing.T, manager *Manager, evidence r
 				t.Fatal("same-runtime retry did not clear the real error")
 			}
 			recovered, err := manager.GetRGB11State()
-			if err != nil || recovered == nil || recovered.ConsistencyStatus != "ok" || len(recovered.AvailableAssets) == 0 || !refreshRuntime.rgb11ProjectionAvailable() || !refreshRuntime.rgb11ProjectionStableConfirmed() {
+			if err != nil || recovered == nil || recovered.ConsistencyStatus != "ok" || len(recovered.AvailableAssets) == 0 {
 				t.Fatalf("healthy retry did not restore usable ownership: state_present=%t err=%v", recovered != nil, err)
 			}
 			rgb11HistAssertData(t, refreshRuntime, beforeSnapshot, balance, &first.State.Asset.Name)
@@ -603,7 +619,7 @@ func testRGB11RefreshHistoricalErrors(t *testing.T, manager *Manager, evidence r
 		runtime.evidence = fault
 		for attempt := 0; attempt < 2; attempt++ {
 			result, err := runtime.RefreshRGB11State(context.Background())
-			if err != nil || result == nil || result.Settled != 0 || result.Pending != 0 || result.Reorged != 0 || result.Conflicted != 0 || result.Unresolved != 0 || len(result.Inconsistent) != 0 || fault.hits != 1 || runtime.consistencyStatus != "ok" || !runtime.rgb11ProjectionAvailable() || !runtime.rgb11ProjectionStableConfirmed() || len(runtime.rgb11ScopeState().ProofFaults) != 0 {
+			if err != nil || result == nil || result.Settled != 0 || result.Pending != 0 || result.Reorged != 0 || result.Conflicted != 0 || result.Unresolved != 0 || len(result.Inconsistent) != 0 || fault.hits != 1 || runtime.consistencyStatus != "ok" || len(runtime.rgb11ScopeState().ProofFaults) != 0 {
 				t.Fatalf("single observation did not recover safely: attempt=%d hits=%d err=%v", attempt, fault.hits, err)
 			}
 			rgb11HistAssertData(t, runtime, before, balance, &imported.AssetName)
@@ -612,8 +628,8 @@ func testRGB11RefreshHistoricalErrors(t *testing.T, manager *Manager, evidence r
 			}
 		}
 	})
-	// The worker must publish a sustained evidence fault and recover through a
-	// later real iteration on the same runtime, without resetting its registry.
+	// A shallow reorg makes the L1 monitor revisit settled history; an ordinary
+	// healthy tip does not. A failed fork is retried on the same device.
 	t.Run("background_error_visible", func(t *testing.T) {
 		manager, imported, evidence, first, second, spentChange := newRGB11HistoryErrorFixture(t)
 		before, err := rgb11HistReadSnapshot(manager.rgbManager)
@@ -626,55 +642,34 @@ func testRGB11RefreshHistoricalErrors(t *testing.T, manager *Manager, evidence r
 			t.Fatal(err)
 		}
 		targets := rgb11HistLockTargets(t, before, first, second, spentChange)
-		// The fixture stopped its original registry. Retain this one fresh runtime
-		// for both the faulted and recovered worker, over the original real DB.
-		backgroundManager, err := newRGB11Manager(manager, manager.db, manager.utxoLockerL1, evidence)
-		if err != nil {
-			t.Fatal(err)
-		}
-		manager.rgbManager = backgroundManager
-		if err := backgroundManager.selectRGB11Scope(); err != nil {
-			t.Fatal(err)
-		}
+		backgroundManager := manager.rgbManager
+		registry := backgroundManager.scopeStates
+		chain := &rgb11L1MonitorIndexer{IndexerRPCClient: manager.l1IndexerClient.getActiveIndexer(),
+			height: 10, hashes: rgb11MonitorHashes("history-", 10)}
+		monitor := NewIndexerRPCClientMgr()
+		monitor.Set(chain)
+		manager.l1IndexerClient = monitor
 		fault := &historicalErrorEvidence{BitcoinEvidenceProvider: evidence, outpoint: spentChange,
 			failure: errors.New("background historical evidence unavailable"), persistent: true, keepStatus: true}
-		backgroundManager.evidence = fault
-		scope := backgroundManager.rgb11ScopeKey()
-		registry := backgroundManager.scopeStates
-		registry.mu.Lock()
-		registry.retryDelay = time.Hour
-		registry.mu.Unlock()
-		var workerDone []<-chan struct{}
-		t.Cleanup(func() {
-			registry.stopReconciliations()
-			// The registry joins the worker body; also join each wrapper's final
-			// close(done) before fixture cleanup can close its DB or inspect data.
-			for _, done := range workerDone {
-				<-done
-			}
-		})
-		runWorker := func() <-chan struct{} {
-			worker, started := registry.startReconciliation(scope)
-			if !started {
-				t.Fatal("worker already running or registry stopped")
-			}
-			done := make(chan struct{})
-			workerDone = append(workerDone, done)
-			go func() { defer close(done); backgroundManager.runRGB11ChainReconciliation(scope, worker) }()
-			return done
+		backgroundManager.evidence = rgbHistForkEvidence{fault, chain}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := manager.handleRGB11L1MonitorTick(ctx); err != nil || fault.hits != 0 {
+			t.Fatalf("healthy monitor visited settled history: hits=%d err=%v", fault.hits, err)
 		}
-		waitWorker := func(done <-chan struct{}) {
-			select {
-			case <-done:
-			case <-time.After(5 * time.Second):
-				t.Fatal("bounded history worker did not finish")
-			}
+		baseline, err := backgroundManager.loadRGB11L1MonitorCheckpoint()
+		if err != nil || baseline.Tip.Hash != chain.hashes[chain.height] {
+			t.Fatalf("missing healthy monitor checkpoint: %v", err)
 		}
+		chain.hashes[chain.height] = "history-fork"
 		started := time.Now().Unix()
-		done := runWorker()
-		// The localized persistent fault returns ErrInconsistent, which ends this
-		// iteration naturally. Join before inspecting counters or removing faults.
-		waitWorker(done)
+		if err := manager.handleRGB11L1MonitorTick(ctx); !errors.Is(err, fault.failure) || !errors.Is(err, ErrRGB11Inconsistent) {
+			t.Fatalf("fork monitor did not report the localized evidence failure: %v", err)
+		}
+		checkpoint, err := backgroundManager.loadRGB11L1MonitorCheckpoint()
+		if err != nil || !reflect.DeepEqual(checkpoint, baseline) {
+			t.Fatalf("failed fork changed its checkpoint: %v", err)
+		}
 		state, err := backgroundManager.GetRGB11State()
 		if err != nil || state == nil || state.SyncStatus != "error" || state.ConsistencyStatus != "broken" || len(state.AvailableAssets) != 0 || fault.hits == 0 {
 			t.Fatalf("background fault was not observable: state_present=%t hits=%d err=%v", state != nil, fault.hits, err)
@@ -685,9 +680,15 @@ func testRGB11RefreshHistoricalErrors(t *testing.T, manager *Manager, evidence r
 			t.Fatal("background fault broadcast a transaction")
 		}
 		fault.disabled = true
-		waitWorker(runWorker())
+		if err := manager.handleRGB11L1MonitorTick(ctx); err != nil {
+			t.Fatalf("same fork did not recover: %v", err)
+		}
+		checkpoint, err = backgroundManager.loadRGB11L1MonitorCheckpoint()
+		if err != nil || checkpoint.Tip.Height != baseline.Tip.Height || checkpoint.Tip.Hash != chain.hashes[chain.height] {
+			t.Fatalf("recovered fork checkpoint=%v err=%v", checkpoint, err)
+		}
 		state, err = backgroundManager.GetRGB11State()
-		if err != nil || state == nil || state.SyncStatus != "idle" || state.ConsistencyStatus != "ok" || len(state.AvailableAssets) == 0 || !backgroundManager.rgb11ProjectionAvailable() || !backgroundManager.rgb11ProjectionStableConfirmed() || len(backgroundManager.rgb11ScopeState().ProofFaults) != 0 {
+		if err != nil || state == nil || state.SyncStatus != "idle" || state.ConsistencyStatus != "ok" || len(state.AvailableAssets) == 0 || len(backgroundManager.rgb11ScopeState().ProofFaults) != 0 {
 			t.Fatalf("same-runtime background retry did not recover: state_present=%t err=%v", state != nil, err)
 		}
 		rgb11HistAssertData(t, backgroundManager, before, balance, &imported.AssetName)

@@ -1165,13 +1165,13 @@ func UpsertLocalPrepared(r []SnapshotRecord, id, req string) ([]SnapshotRecord, 
 }
 
 // LocalRecoveryBound returns numbers only. It reserves every original byte and
-// every known native-validated preview record, with no invalid recovery pack.
+// every known RGB11-validated preview record, with no invalid recovery pack.
 // Valid recovery canonicalization only removes fields or changes fixed-width
 // hashes/timestamps; it cannot exceed this union of the original and preview.
 func LocalRecoveryBound(full, preview *RGB11WalletSnapshot) (int, int, error) {
 	if full == nil || preview == nil || full.Version != WalletSnapshotVersion || full.WalletID == "" ||
 		full.WalletID != preview.WalletID || full.AccountIndex != preview.AccountIndex ||
-		full.EngineBuildID != NativeEngineBuildID || preview.EngineBuildID != full.EngineBuildID ||
+		full.EngineBuildID != RGB11EngineBuildID || preview.EngineBuildID != full.EngineBuildID ||
 		len(full.WalletID) > 128 || len(full.EngineBuildID) > 1024 {
 		return 0, 0, ErrRGB11Inconsistent
 	}

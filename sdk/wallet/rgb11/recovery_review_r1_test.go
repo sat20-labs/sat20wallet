@@ -48,7 +48,7 @@ func TestR1SelectedExpiredBlindCleanupGuards(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := &RGB11WalletSnapshot{Version: WalletSnapshotVersion, WalletID: "r1-expiry-wallet", EngineBuildID: NativeEngineBuildID, ProjectionRecords: records, EngineRecords: engineRecords}
+	base := &RGB11WalletSnapshot{Version: WalletSnapshotVersion, WalletID: "r1-expiry-wallet", EngineBuildID: RGB11EngineBuildID, ProjectionRecords: records, EngineRecords: engineRecords}
 	pkg, err := RecoveryPackageFromSnapshot(base, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -143,7 +143,7 @@ func TestR1SelectedReceiptExtensionGuards(t *testing.T) {
 	second.OperationID = "op-b"
 	second.OutPoint = "2222222222222222222222222222222222222222222222222222222222222222:1"
 	second.SealDisclosure = []byte{2}
-	base := &ValidationReceipt{Version: 1, EngineBuildID: NativeEngineBuildID, ConsignmentHash: "raw", ContractID: "contract", SchemaID: "schema", TransferID: "canonical", Status: "valid", ValidatedAt: 1, Allocations: []ValidatedAllocation{first}}
+	base := &ValidationReceipt{Version: 1, EngineBuildID: RGB11EngineBuildID, ConsignmentHash: "raw", ContractID: "contract", SchemaID: "schema", TransferID: "canonical", Status: "valid", ValidatedAt: 1, Allocations: []ValidatedAllocation{first}}
 	record := func(receipt *ValidationReceipt) SnapshotRecord {
 		t.Helper()
 		receipt.StateHash, _ = hashAllocations(receipt.ContractID, receipt.SchemaID, receipt.Allocations)

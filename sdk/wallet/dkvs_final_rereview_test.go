@@ -31,7 +31,7 @@ func TestDKVSFinalReReview(t *testing.T) {
 		manager := newRGB11MultiDeviceManager(t, privateKey, 908)
 		transport := newSatoshiNetDKVSTestTransport()
 		configureRGB11DKVSTestManager(manager, transport)
-		client, err := manager.GetDKVSClient()
+		client, err := manager.accountDKVSClient()
 		require.NoError(t, err)
 		return manager, client, transport
 	}

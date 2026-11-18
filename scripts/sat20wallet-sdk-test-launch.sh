@@ -1,5 +1,7 @@
 #!/bin/zsh
 set -euo pipefail
+# Keep background test processes at the inherited scheduling priority.
+unsetopt BG_NICE
 
 
 variant="${1:-}"
@@ -13,6 +15,7 @@ workdir="/Users/yingfeng/github/sat20wallet/sdk"
 root="/Users/yingfeng/github/sat20wallet/.cache/script-logs/test-runs/$suite"
 supervisor="/Users/yingfeng/mcp/local_access/scripts/commands/test-run-supervisor.sh"
 timeout_ms="6000000"
+if [[ "$variant" == "all" ]]; then timeout_ms=10800000; fi
 started_epoch="$(/bin/date '+%s')"
 started_at="$(/bin/date '+%Y-%m-%dT%H:%M:%S%z')"
 stamp="$(/bin/date '+%Y%m%dT%H%M%S')"

@@ -66,10 +66,9 @@ func snapshotPrimaryAssetFromGenesis(raw []byte, receipt *ValidationReceipt) (in
 	if err != nil {
 		return indexer.AssetName{}, err
 	}
-	schema, schemaOK := container.Value.Field("schema")
-	types, typesOK := container.Value.Field("types")
+	schema, types := container.SchemaValues()
 	genesis, genesisOK := container.Value.Field("genesis")
-	if !schemaOK || !typesOK || !genesisOK {
+	if !genesisOK {
 		return indexer.AssetName{}, ErrValidationReceipt
 	}
 	_, err = schemas.ExtractGenesisAssetMetadata(schema, types, genesis)

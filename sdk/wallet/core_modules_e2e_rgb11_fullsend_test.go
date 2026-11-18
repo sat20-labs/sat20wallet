@@ -419,7 +419,7 @@ func coreDeliverRGB11OfflineACK(t *testing.T, chain *coreE2EChain,
 		chain.broadcastCount() == beforeBroadcast,
 		"offline-ACK delivery lost its original unsigned, unacknowledged intent")
 	delivery, err := source.DeliverAndBroadcastConfiguredRGB11AddressTransfer(
-		prepared.State.TransferID, RGB11AddressDeliveryOptions{})
+		prepared.State.TransferID)
 	coreRequire(t, "deliver consignment while receiver is offline", err)
 	coreAssert(t, delivery != nil && delivery.TransferID == prepared.State.TransferID &&
 		delivery.AwaitingACK && !delivery.Broadcast && chain.broadcastCount() == beforeBroadcast,
@@ -499,7 +499,7 @@ func coreWaitRGB11MailboxACK(t *testing.T, chain *coreE2EChain, receiver *Manage
 	deadline := time.Now().Add(45 * time.Second)
 	for {
 		result, err := receiver.SyncConfiguredRGB11AddressMailbox(context.Background(),
-			dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+			dkvsindexer.RecordVerificationOptions{})
 		coreRequire(t, "receive target consignment and publish ACK", err)
 		coreAssertRGB11MailboxErrors(t, receiver, map[string]bool{prepared.State.TransferID: true}, result)
 		coreAssert(t, chain.broadcastCount() == beforeBroadcast,
@@ -530,7 +530,7 @@ func coreWaitRGB11MailboxBroadcast(t *testing.T, chain *coreE2EChain, sender *Ma
 	deadline := time.Now().Add(45 * time.Second)
 	for {
 		result, err := sender.SyncConfiguredRGB11AddressMailbox(context.Background(),
-			dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+			dkvsindexer.RecordVerificationOptions{})
 		coreRequire(t, "consume target ACK and broadcast", err)
 		coreAssertRGB11MailboxErrors(t, sender, map[string]bool{prepared.State.TransferID: true}, result)
 		state, err := sender.GetRGB11State()
@@ -858,7 +858,7 @@ func coreAssertRGB11ACKRecoveryPublished(t *testing.T, receiver *Manager,
 			t.Fatal("receiver exposed a current consumer proof before sender broadcast")
 		}
 	}
-	payloads, err := receiver.currentAccountManagedProviderPayloads(rgb11AccountManagedProviderID)
+	payloads, err := accountTestPayloads(receiver, rgb11AccountManagedProviderID)
 	coreRequire(t, "read receiver stable RGB11 package after ACK", err)
 	packagesChecked := 0
 	relevantPackages := 0
@@ -1104,7 +1104,7 @@ func coreAssertRGB11SettledRecoveryPublished(t *testing.T, receiver *Manager,
 	if proofKey == "" {
 		return
 	}
-	payloads, err := receiver.currentAccountManagedProviderPayloads(rgb11AccountManagedProviderID)
+	payloads, err := accountTestPayloads(receiver, rgb11AccountManagedProviderID)
 	coreRequire(t, "read settled receiver stable RGB11 package", err)
 	payload, ok := payloads[scopeID]
 	coreAssert(t, ok && payload.Scope == scopeID,

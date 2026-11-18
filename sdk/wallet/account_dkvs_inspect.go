@@ -126,7 +126,17 @@ func (p *Manager) InspectCurrentAccountDKVS(options AccountDKVSInspectOptions) (
 	secret := append([]byte(nil), p.accountSecret...)
 	address := rootWallet.GetAddress()
 	network := _chain
-	dirty, pending := p.accountProfile.ManagedDataDirty, len(p.accountProfile.Pending)
+	pending := len(p.accountProfile.Pending)
+	dirty := pending != 0
+	values, err := p.listAccountLocal(accountID)
+	if err != nil {
+		p.mutex.RUnlock()
+		zeroBytes(secret)
+		return nil, err
+	}
+	for _, value := range values {
+		dirty = dirty || value.Generation > value.Confirmed
+	}
 	p.mutex.RUnlock()
 	defer func() {
 		for i := range secret {

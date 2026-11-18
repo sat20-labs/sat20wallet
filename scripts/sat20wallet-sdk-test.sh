@@ -1,5 +1,7 @@
 #!/bin/zsh
 set -euo pipefail
+# Keep background test processes at the inherited scheduling priority.
+unsetopt BG_NICE
 
 GO_BIN="/usr/local/go/bin/go"
 cd "/Users/yingfeng/github/sat20wallet/sdk"
@@ -9,6 +11,7 @@ source "/Users/yingfeng/mcp/local_access/scripts/commands/test-run-log.sh"
 
 variant="${1:-}"
 timeout_ms="${2:-600000}"
+if [[ "$variant" == "all" && "$#" == 1 ]]; then timeout_ms=10800000; fi
 timeout_pattern='^[1-9][0-9]*$'
 if [[ "$#" -lt 1 || "$#" -gt 2 ]]; then
   print -u2 "usage: sat20wallet-sdk-test.sh <all|e2e|live> [timeoutMs]"

@@ -1,9 +1,11 @@
 package wallet
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -12,82 +14,6 @@ import (
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 )
-
-func TestRGB11ProjectionReadinessRequiresFreshAndStableCurrentProofs(t *testing.T) {
-	manager := newRGB11ProjectionReadinessTestManager(t)
-	if manager.rgbManager.rgb11ProjectionAvailable() {
-		t.Fatal("new manager treated restored state as freshly verified")
-	}
-	if manager.rgbManager.rgb11ProjectionStableConfirmed() {
-		t.Fatal("unverified projection was eligible for stable publication")
-	}
-
-	// A freshly checked empty scope is stable; issuance or invoice work in a
-	// scope with no ownership proof must not be blocked by the confirmation gate.
-	manager.rgbManager.markRGB11ProjectionVerified()
-	if !manager.rgbManager.rgb11ProjectionAvailable() || !manager.rgbManager.rgb11ProjectionStableConfirmed() {
-		t.Fatal("fresh empty scope was not available for stable publication")
-	}
-
-	outpoint, assetName, _ := seedRGB11DurableAccountRecoveryState(t, manager.rgbManager)
-	transfers, err := manager.rgbManager.projectionStore.ListTransfers()
-	if err != nil || len(transfers) != 0 {
-		t.Fatalf("test proof unexpectedly has a local transfer journal: count=%d err=%v", len(transfers), err)
-	}
-	proof, err := manager.rgbManager.projectionStore.LoadProof(outpoint, assetName)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, confirmations := range []int64{0} {
-		proof.Confirmations = confirmations
-		if err := manager.rgbManager.projectionStore.SaveProofState(proof); err != nil {
-			t.Fatal(err)
-		}
-		if manager.rgbManager.rgb11ProjectionStableConfirmed() {
-			t.Fatalf("current proof with %d confirmations was spend-ready without meeting the existing minimum", confirmations)
-		}
-	}
-	proof.Confirmations = 1
-	if err := manager.rgbManager.projectionStore.SaveProofState(proof); err != nil {
-		t.Fatal(err)
-	}
-	if !manager.rgbManager.rgb11ProjectionStableConfirmed() {
-		t.Fatal("current proof meeting the default one-confirmation requirement was rejected")
-	}
-
-	for _, status := range []string{"spending", "inconsistent", "orphaned"} {
-		proof.Status = status
-		proof.Confirmations = 0
-		if err := manager.rgbManager.projectionStore.SaveProofState(proof); err != nil {
-			t.Fatal(err)
-		}
-		if !manager.rgbManager.rgb11ProjectionStableConfirmed() {
-			t.Fatalf("non-current proof status %q blocked the stable frontier", status)
-		}
-	}
-
-	manager.rgbManager.markRGB11ProjectionUnavailable()
-	if manager.rgbManager.rgb11ProjectionAvailable() || manager.rgbManager.rgb11ProjectionStableConfirmed() {
-		t.Fatal("unavailable projection remained available for use or stable publication")
-	}
-}
-
-func TestRGB11ProjectionReadinessFailedRefreshRemainsUnavailable(t *testing.T) {
-	manager := newRGB11ProjectionReadinessTestManager(t)
-	outpoint, _, _ := seedRGB11DurableAccountRecoveryState(t, manager.rgbManager)
-	manager.rgbManager.evidence = &rgb11ProjectionReadinessFailureEvidence{
-		BitcoinEvidenceProvider: rgb11ManagedRecoveryEvidence{},
-		outpoint:                outpoint,
-	}
-	manager.rgbManager.markRGB11ProjectionVerified()
-
-	if _, err := manager.RefreshRGB11State(context.Background()); err == nil {
-		t.Fatal("refresh with unavailable proof evidence unexpectedly succeeded")
-	}
-	if manager.rgbManager.rgb11ProjectionAvailable() {
-		t.Fatal("failed refresh left cached ownership marked verified")
-	}
-}
 
 type rgb11ProjectionReadinessFailureEvidence struct {
 	rgb11wallet.BitcoinEvidenceProvider
@@ -101,7 +27,7 @@ func (e *rgb11ProjectionReadinessFailureEvidence) GetOutspend(outpoint string) (
 	return e.BitcoinEvidenceProvider.GetOutspend(outpoint)
 }
 
-func TestRGB11ProjectionReadinessRemoteConsumerUsesExistingMinConfirmations(t *testing.T) {
+func TestRGBRecoveredConfirmations(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
 	t.Cleanup(func() { _chain = oldChain })
@@ -151,8 +77,9 @@ func TestRGB11ProjectionReadinessRemoteConsumerUsesExistingMinConfirmations(t *t
 	if owner.wallet.GetAddress() != ownerWallet.GetAddress() || receiver.wallet.GetAddress() != receiverWallet.GetAddress() {
 		t.Fatal("activated readiness fixture changed original wallet identities")
 	}
-	pauseRGB11ProjectionReadinessReconciliation(owner)
-	pauseRGB11ProjectionReadinessReconciliation(receiver)
+	// The first-import assertion must not be satisfied by a background refresh.
+	owner.rgbManager.scopeStates.stopReconciliations()
+	receiver.rgbManager.scopeStates.stopReconciliations()
 	issued, err := owner.IssueRGB11Asset(ctx, RGB11IssueRequest{
 		Schema: "NIA", Ticker: "RRG", Name: "Projection Readiness Test",
 		Precision: 2, Amounts: []uint64{100},
@@ -160,6 +87,7 @@ func TestRGB11ProjectionReadinessRemoteConsumerUsesExistingMinConfirmations(t *t
 	if err != nil {
 		t.Fatalf("issue asset: %v", err)
 	}
+	installRGB11PublicContractFixture(t, owner, remote, issued.ContractID)
 	if _, err := owner.RefreshRGB11State(ctx); err != nil {
 		t.Fatalf("initial refresh: %v", err)
 	}
@@ -187,21 +115,17 @@ func TestRGB11ProjectionReadinessRemoteConsumerUsesExistingMinConfirmations(t *t
 		t.Fatalf("refresh after initial transfer: %v", err)
 	}
 
-	peerRemote := newRGB11MemoryDKVSHTTP()
-	peer := newRGB11ActivatedFlowAccount(t, ownerMnemonic, peerRemote, newRGB11MessageNodeClient(peerRemote), evidence, rpc)
-	if peer.wallet.GetAddress() != ownerWallet.GetAddress() {
-		t.Fatal("activated peer changed original owner identity")
+	// The second scope exercises a later failure in the same provider Import.
+	if err := owner.EnsureAccount(owner.GetAccountManagementStatus().RootWalletID, 1, "rollback scope", ""); err != nil {
+		t.Fatal(err)
 	}
-	pauseRGB11ProjectionReadinessReconciliation(peer)
-	if err := importRGB11ProjectionSnapshot(t, peer, exportRGB11RecoveryForTest(t, owner)); err != nil {
-		t.Fatalf("peer recovery import: %v", err)
+	peer := r1ManagedPeer(t, owner, evidence, rpc)
+	if peer.wallet.GetAddress() != ownerWallet.GetAddress() {
+		t.Fatal("recovered peer changed original owner identity")
 	}
 	peerTransfers, err := peer.rgbManager.projectionStore.ListTransfers()
 	if err != nil || len(peerTransfers) != 1 || peerTransfers[0].TransferID != firstPrepared.State.TransferID {
 		t.Fatalf("recovered peer lost the complete baseline journal: count=%d err=%v", len(peerTransfers), err)
-	}
-	if !peer.rgbManager.rgb11ProjectionAvailable() || !peer.rgbManager.rgb11ProjectionStableConfirmed() {
-		t.Fatal("confirmed recovery import did not establish a fresh stable frontier")
 	}
 
 	remoteInvoice, err := receiver.CreateRGB11Invoice(RGB11InvoiceRequest{
@@ -228,50 +152,65 @@ func TestRGB11ProjectionReadinessRemoteConsumerUsesExistingMinConfirmations(t *t
 	}
 	remoteChange := fmt.Sprintf("%s:%d", remoteTxID, remotePending.ChangeSeals[0].Vout)
 
-	// A zero-confirmation output is pending and unavailable for spending on both
-	// devices, including the stale device that has no new peer transfer journal.
+	// The peer knows its own transfer, so the unconfirmed change is pending.
 	setRGB11ProjectionTestTxConfirmations(t, evidence, remoteTxID, 0)
-	_, peerRefreshErr := peer.RefreshRGB11State(ctx)
-	if peerRefreshErr != nil {
-		if peer.rgbManager.rgb11ProjectionAvailable() || peer.rgbManager.rgb11ProjectionStableConfirmed() {
-			t.Fatalf("failed zero-confirmation peer refresh left a publishable projection: %v", peerRefreshErr)
-		}
-	} else {
-		if !peer.rgbManager.rgb11ProjectionAvailable() {
-			t.Fatal("successful zero-confirmation peer refresh did not mark its current frontier fresh")
-		}
-		peerState, stateErr := peer.GetRGB11State()
-		if stateErr != nil || rgb11AssetAmount(peerState.AvailableAssets, issued.AssetName) != 0 ||
-			rgb11AssetAmount(peerState.PendingAssets, issued.AssetName) == 0 {
-			t.Fatalf("zero-confirmation peer did not expose only pending ownership: state=%v err=%v", peerState, stateErr)
-		}
-		if peer.rgbManager.rgb11ProjectionStableConfirmed() {
-			t.Fatal("zero-confirmation peer projection passed the stable publication gate")
-		}
+	if _, err := peer.RefreshRGB11State(ctx); err != nil {
+		t.Fatal(err)
 	}
-	_, ownerRefreshErr := owner.RefreshRGB11State(ctx)
-	if ownerRefreshErr != nil {
-		if owner.rgbManager.rgb11ProjectionAvailable() || owner.rgbManager.rgb11ProjectionStableConfirmed() {
-			t.Fatalf("failed zero-confirmation refresh without the peer journal remained publishable: %v", ownerRefreshErr)
-		}
-	} else if !owner.rgbManager.rgb11ProjectionAvailable() {
-		t.Fatal("successful zero-confirmation refresh did not mark its complete frontier fresh")
+	pendingView, err := peer.GetRGB11State()
+	if err != nil || rgb11AssetAmount(pendingView.AvailableAssets, issued.AssetName) != 0 ||
+		rgb11AssetAmount(pendingView.PendingAssets, issued.AssetName) == 0 {
+		t.Fatalf("zero-confirmation output must stay pending: state=%v err=%v", pendingView, err)
 	}
-	if owner.rgbManager.rgb11ProjectionStableConfirmed() {
-		t.Fatal("zero-confirmation remote spend without a local journal passed the stable publication gate")
+	// The owner only sees its earlier change spent in the mempool, not the
+	// peer's RGB consumer. Quarantine that exact carrier without inventing a send.
+	if len(firstPending.ChangeSeals) != 1 {
+		t.Fatalf("first transfer change seals=%d, want 1", len(firstPending.ChangeSeals))
+	}
+	ownerCarrier := fmt.Sprintf("%s:%d", firstPending.State.WitnessTxID, firstPending.ChangeSeals[0].Vout)
+	if !containsString(remotePending.State.InputOutPoints, ownerCarrier) {
+		t.Fatalf("peer transfer did not consume the owner's change %s", ownerCarrier)
+	}
+	before, err := owner.rgbManager.projectionStore.ListTransfers()
+	if err != nil || len(before) != 1 || before[0].TransferID != firstPrepared.State.TransferID {
+		t.Fatalf("unexpected original journal before quarantine: transfers=%d err=%v", len(before), err)
+	}
+	evidenceBase.mu.Lock()
+	broadcasts := evidenceBase.broadcastCount
+	evidenceBase.mu.Unlock()
+	result, refreshErr := owner.RefreshRGB11State(ctx)
+	var fault rgb11wallet.ProofFault
+	wantCause := fmt.Sprintf("RGB11 allocation %s has an unvalidated mempool spender", ownerCarrier)
+	if !errors.Is(refreshErr, ErrRGB11Inconsistent) || !errors.As(refreshErr, &fault) ||
+		fault.OutPoint != ownerCarrier || fault.AssetName != issued.AssetName || fault.Cause == nil || fault.Cause.Error() != wantCause ||
+		result == nil || len(result.Inconsistent) != 1 || result.Inconsistent[0] != ownerCarrier {
+		t.Fatalf("expected only the owner's unvalidated RGB carrier %s to be quarantined: result=%+v err=%v", ownerCarrier, result, refreshErr)
+	}
+	staleView, err := owner.GetRGB11State()
+	if err != nil || staleView == nil || rgb11AssetAmount(staleView.AvailableAssets, issued.AssetName) != 0 {
+		t.Fatalf("stale owner must not make the unvalidated asset spendable: err=%v", err)
+	}
+	after, err := owner.rgbManager.projectionStore.ListTransfers()
+	if err != nil || !reflect.DeepEqual(before, after) {
+		t.Fatalf("unvalidated mempool spend changed the owner's persisted journal: transfers=%d err=%v", len(after), err)
 	}
 
-	// The invoice requested one confirmation, so both devices may use this
+	walletID, err := owner.RGB11WalletID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := owner.rgbManager.exportRGB11WalletSnapshot(walletID); !errors.Is(err, ErrRGB11Inconsistent) {
+		t.Fatalf("outbound backup ignored the unresolved owner proof: %v", err)
+	}
+
+	// The send requested one confirmation, so both devices may use this
 	// proof once the same core/history and current-chain checks pass.
 	setRGB11ProjectionTestTxConfirmations(t, evidence, remoteTxID, 1)
 	if _, err := peer.RefreshRGB11State(ctx); err != nil {
 		t.Fatalf("refresh remote peer at one confirmation: %v", err)
 	}
-	if !peer.rgbManager.rgb11ProjectionAvailable() || !peer.rgbManager.rgb11ProjectionStableConfirmed() {
-		t.Fatal("one-confirmation peer frontier did not meet the existing minimum")
-	}
 	peerState, err := peer.GetRGB11State()
-	if err != nil || rgb11AssetAmount(peerState.AvailableAssets, issued.AssetName) == 0 {
+	if err != nil || rgb11AssetAmount(peerState.AvailableAssets, issued.AssetName) != 35 {
 		t.Fatalf("one-confirmation peer did not expose its locally permitted current asset: state=%v err=%v", peerState, err)
 	}
 	// Before synchronization, the original device must not invent the peer's
@@ -285,12 +224,86 @@ func TestRGB11ProjectionReadinessRemoteConsumerUsesExistingMinConfirmations(t *t
 			t.Fatal("stale device invented an unsynchronized peer journal")
 		}
 	}
-	encoded := exportRGB11RecoveryForTest(t, peer)
-	if err := importRGB11ProjectionSnapshot(t, owner, encoded); err != nil {
-		t.Fatalf("owner import remote projection at one confirmation: %v", err)
+	if err := peer.SyncAccountManagementState(ctx); err != nil {
+		t.Fatalf("publish the peer's confirmed journal: %v", err)
 	}
-	if !owner.rgbManager.rgb11ProjectionAvailable() {
-		t.Fatal("confirmed one-confirmation recovery import did not establish a fresh frontier")
+	published := rgb11LocalModuleForTest(t, peer)
+	if published.Baseline == nil || published.Confirmed != published.Generation || published.Restoring {
+		t.Fatal("peer did not publish a confirmed account payload")
+	}
+	catalog, err := owner.accountManagedDataCatalog()
+	if err != nil || len(catalog.Scopes) != 2 || catalog.Scopes[0].AccountIndex != 0 || catalog.Scopes[1].AccountIndex != 1 {
+		t.Fatalf("missing ordered provider scopes: %v %v", catalog.Scopes, err)
+	}
+	// A failure after scope 0 really flushed must undo all its effects
+	// (including new Q/fee rows) without removing an unrelated reservation.
+	const untouched = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee:0"
+	if err := owner.utxoLockerL1.TryReserve([]string{untouched}, "test-reserved", "unrelated"); err != nil {
+		t.Fatal(err)
+	}
+	base, err := owner.rgbManager.readRGB11SelectedBase(walletID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeLocks := owner.utxoLockerL1.GetLockedUtxoList()
+	payloads, err := accountTestPayloads(peer, rgb11AccountManagedProviderID)
+	if err != nil || len(payloads) != 2 {
+		t.Fatalf("read authenticated peer scopes: count=%d err=%v", len(payloads), err)
+	}
+	failed := &failNthFlushDB{KVDB: owner.db, failAt: 2}
+	func() {
+		owner.db = failed
+		defer func() { owner.db = failed.KVDB }()
+		provider := &rgb11AccountManagedDataProvider{owner: owner}
+		err = provider.Import(catalog, []AccountManagedDataPayload{payloads[catalog.Scopes[0].ID()], payloads[catalog.Scopes[1].ID()]})
+	}()
+	if err == nil || failed.count != 3 || failed.hits != 1 {
+		t.Fatalf("expected apply, failed second flush, and rollback: flushes=%d hit=%d err=%v", failed.count, failed.hits, err)
+	}
+	restored, err := owner.rgbManager.readRGB11SelectedBase(walletID)
+	if err != nil || rgb11SnapshotChanged(base.snapshot, restored.snapshot) || !base.matches(restored.faults) ||
+		!reflect.DeepEqual(beforeLocks, owner.utxoLockerL1.GetLockedUtxoList()) || owner.GetRGB11ConsistencyStatus() != "broken" {
+		t.Fatalf("later scope failure lost the previous records, quarantine or carrier locks: %v", err)
+	}
+
+	// The peer already published the one-confirmation closure, but the owner
+	// still sees its witness in the mempool. Account sync must freeze this
+	// exact authenticated body, not replace it with another or clear its fault.
+	setRGB11ProjectionTestTxConfirmations(t, evidence, remoteTxID, 0)
+	if err := owner.SyncAccountManagementState(ctx); err == nil || !accountModuleOnly(err) {
+		t.Fatalf("owner accepted the confirmed journal against its unconfirmed chain view: %v", err)
+	}
+	frozen := rgb11LocalModuleForTest(t, owner)
+	if !frozen.Restoring || !bytes.Equal(frozen.Value, published.Baseline.Value) {
+		t.Fatal("failed account import did not preserve the verified remote body and restore marker")
+	}
+	setRGB11ProjectionTestTxConfirmations(t, evidence, remoteTxID, 1)
+	if err := owner.SyncAccountManagementState(ctx); err != nil {
+		t.Fatalf("first import at one confirmation, without owner refresh: %v", err)
+	}
+	done := rgb11LocalModuleForTest(t, owner)
+	if done.Restoring || !bytes.Equal(done.Value, frozen.Value) || done.Confirmed != done.Generation {
+		t.Fatal("account sync did not finish the same frozen import")
+	}
+	state, err := owner.GetRGB11State()
+	if err != nil || state == nil || state.ConsistencyStatus != "ok" ||
+		rgb11AssetAmount(state.AvailableAssets, issued.AssetName) != 35 ||
+		rgb11AssetAmount(state.PendingAssets, issued.AssetName) != 0 {
+		t.Fatalf("first confirmed import did not expose exactly the verified change: state=%v err=%v", state, err)
+	}
+	old, err := owner.rgbManager.projectionStore.LoadProof(ownerCarrier, issued.AssetName)
+	if err != nil || old == nil || old.Status != "spending" {
+		t.Fatalf("spent original carrier missing from history: proof=%v err=%v", old, err)
+	}
+	inputs, _, _, _, _, total, err := owner.rgbManager.selectRGB11AllocationsOnce(issued.ContractID, 35, 1, nil)
+	if err != nil || len(inputs) != 1 || inputs[0].proof.OutPoint != remoteChange || total != 35 {
+		t.Fatalf("first confirmed import selected something other than the new change: inputs=%d total=%d err=%v", len(inputs), total, err)
+	}
+	evidenceBase.mu.Lock()
+	afterBroadcast := evidenceBase.broadcastCount
+	evidenceBase.mu.Unlock()
+	if afterBroadcast != broadcasts {
+		t.Fatalf("recovery changed broadcasts: before=%d after=%d", broadcasts, afterBroadcast)
 	}
 	proof, err := owner.rgbManager.projectionStore.LoadProof(remoteChange, issued.AssetName)
 	if err != nil || proof.Confirmations != 1 {
@@ -311,9 +324,6 @@ func TestRGB11ProjectionReadinessRemoteConsumerUsesExistingMinConfirmations(t *t
 	}
 	if !remoteJournalRestored {
 		t.Fatal("complete recovery dropped the peer send journal")
-	}
-	if !owner.rgbManager.rgb11ProjectionStableConfirmed() {
-		t.Fatal("one-confirmation remote consumer projection did not meet the existing minimum after complete peer journal recovery")
 	}
 }
 

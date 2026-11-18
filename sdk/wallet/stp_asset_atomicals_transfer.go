@@ -159,7 +159,7 @@ func (protocol atomicalsSTPProtocol) BuildTransfer(p *Manager, req STPAssetTrans
 		return nil, err
 	}
 	// A plain-sats listing is not sufficient evidence: re-read every selected
-	// fee UTXO before allowing it to enter the native transaction verifier.
+	// fee UTXO before allowing it to enter the ARC20 transaction verifier.
 	for _, input := range tx.TxIn[assetInputCount:] {
 		fact, err := p.l1IndexerClient.GetTxOutput(input.PreviousOutPoint.String())
 		if err != nil {

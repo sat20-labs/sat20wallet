@@ -47,6 +47,13 @@ func activateRGB11AccountScopeRecovery(t *testing.T, manager *Manager, mnemonic 
 	if err := manager.ActivateAccountManagement(secret, "password", *auth, pkg.Envelope.Locator, ""); err != nil {
 		t.Fatal(err)
 	}
+	if !manager.GetAccountManagementStatus().RecoveryConfigured {
+		t.Fatal("account recovery activation did not commit")
+	}
+	if err := manager.StartDKVSSync(); err != nil {
+		t.Fatal(err)
+	}
+	coreWaitPrivateBackup(t, manager)
 	return pkg, auth, secret
 }
 
@@ -285,7 +292,7 @@ func TestRGB11AccountRecoveryTwoAssetScopesAndScopeBinding(t *testing.T) {
 					}
 					chain.confirm(txid)
 					if _, err := peer.AcceptRGB11Consignment(ctx, invoice.RequestID, []byte(prepared.RecipientConsignment)); err != nil {
-						t.Fatalf("native validation of restored scope %d history: %v", index, err)
+						t.Fatalf("RGB11 validation of restored scope %d history: %v", index, err)
 					}
 					for _, manager := range []*Manager{target, peer} {
 						if _, err := manager.RefreshRGB11State(ctx); err != nil {

@@ -15,7 +15,7 @@ import (
 func TestSTPRGBSplicingProvenanceRejectsWrongParentAndContext(t *testing.T) {
 	for _, mode := range []string{"parent", "context"} {
 		t.Run(mode, func(t *testing.T) {
-			facts, sources, main, proof := rgbReservationNativeEvidenceFixture(t)
+			facts, sources, main, proof := rgb11ResvEvidenceFixture(t)
 			pkg, err := rgb11wallet.DecodeChannelPackage(proof)
 			if err != nil {
 				t.Fatal(err)

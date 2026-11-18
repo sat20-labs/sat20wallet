@@ -19,6 +19,7 @@ import (
 	coreissuance "github.com/sat20-labs/rgb11/issuance"
 	"github.com/sat20-labs/rgb11/seals"
 	corewallet "github.com/sat20-labs/rgb11/wallet"
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	"math/big"
 	"testing"
@@ -44,10 +45,28 @@ func TestRGB11AtomicAmountKeepsDisplayPrecision(t *testing.T) {
 
 type rgb11EvidenceRPCStub struct {
 	*TestIndexerClient
-	calls map[string]int
+	calls       map[string]int
+	genesisHash string
+	rawTx       string
+	tipHash     string
+	readErr     error
 }
 
 func (s *rgb11EvidenceRPCStub) mark(name string) { s.calls[name]++ }
+
+func (s *rgb11EvidenceRPCStub) GetBlockHash(height int) (string, error) {
+	if height != 0 {
+		return "", fmt.Errorf("unexpected fixture block height %d", height)
+	}
+	s.mark("genesis")
+	if s.readErr != nil {
+		return "", s.readErr
+	}
+	if s.genesisHash != "" {
+		return s.genesisHash, nil
+	}
+	return chaincfg.TestNet4Params.GenesisHash.String(), nil
+}
 
 func (s *rgb11EvidenceRPCStub) GetBitcoinUTXOStatus(outpoint string) (*indexerwire.BitcoinUTXOStatus, error) {
 	s.mark("utxo")
@@ -59,7 +78,14 @@ func (s *rgb11EvidenceRPCStub) GetBitcoinUTXOStatus(outpoint string) (*indexerwi
 
 func (s *rgb11EvidenceRPCStub) GetBitcoinRawTx(txid string) (*indexerwire.BitcoinRawTx, error) {
 	s.mark("rawtx")
-	return &indexerwire.BitcoinRawTx{TxID: txid, RawTx: "0001"}, nil
+	if s.readErr != nil {
+		return nil, s.readErr
+	}
+	raw := s.rawTx
+	if raw == "" {
+		raw = "0001"
+	}
+	return &indexerwire.BitcoinRawTx{TxID: txid, RawTx: raw}, nil
 }
 
 func (s *rgb11EvidenceRPCStub) GetBitcoinTxStatus(txid string) (*indexerwire.BitcoinTxStatus, error) {
@@ -74,7 +100,14 @@ func (s *rgb11EvidenceRPCStub) GetBitcoinOutspend(outpoint string) (*indexerwire
 
 func (s *rgb11EvidenceRPCStub) GetBitcoinTip() (*indexerwire.BitcoinTip, error) {
 	s.mark("tip")
-	return &indexerwire.BitcoinTip{Height: 20, BlockHash: "tip"}, nil
+	if s.readErr != nil {
+		return nil, s.readErr
+	}
+	hash := s.tipHash
+	if hash == "" {
+		hash = "tip"
+	}
+	return &indexerwire.BitcoinTip{Height: 20, BlockHash: hash}, nil
 }
 
 func (s *rgb11EvidenceRPCStub) BroadcastBitcoinTx(rawTx []byte) (string, error) {
@@ -88,6 +121,10 @@ func (s *rgb11EvidenceRPCStub) BroadcastBitcoinTx(rawTx []byte) (string, error) 
 func TestRGB11EvidenceUsesBitcoinFactsV3Adapter(t *testing.T) {
 	client := &rgb11EvidenceRPCStub{TestIndexerClient: &TestIndexerClient{}, calls: make(map[string]int)}
 	provider := newIndexerBitcoinEvidenceProvider(client)
+	genesisHash, err := provider.GetGenesisHash()
+	if err != nil || genesisHash != chaincfg.TestNet4Params.GenesisHash.String() {
+		t.Fatalf("genesis=%q err=%v", genesisHash, err)
+	}
 	outpoint := "0000000000000000000000000000000000000000000000000000000000000001:0"
 	utxo, err := provider.GetUTXO(outpoint)
 	if err != nil || utxo.Value != 900 || utxo.Confirmations != 2 || len(utxo.PkScript) != 34 {
@@ -112,11 +149,63 @@ func TestRGB11EvidenceUsesBitcoinFactsV3Adapter(t *testing.T) {
 	if txid, err := provider.Broadcast([]byte{2, 3}); err != nil || txid != "broadcast-txid" {
 		t.Fatalf("broadcast txid=%q err=%v", txid, err)
 	}
-	for _, name := range []string{"utxo", "rawtx", "txstatus", "outspend", "tip", "broadcast"} {
+	for _, name := range []string{"genesis", "utxo", "rawtx", "txstatus", "outspend", "tip", "broadcast"} {
 		if client.calls[name] != 1 {
 			t.Fatalf("%s calls=%d", name, client.calls[name])
 		}
 	}
+
+	t.Run("scope_keeps_one_endpoint_across_switch_and_error", func(t *testing.T) {
+		a := &rgb11EvidenceRPCStub{TestIndexerClient: &TestIndexerClient{}, calls: make(map[string]int),
+			genesisHash: chaincfg.TestNet4Params.GenesisHash.String(), rawTx: "000a", tipHash: "tip-a"}
+		b := &rgb11EvidenceRPCStub{TestIndexerClient: &TestIndexerClient{}, calls: make(map[string]int),
+			genesisHash: chaincfg.RegressionNetParams.GenesisHash.String(), rawTx: "000b", tipHash: "tip-b"}
+		manager := &IndexerRPCClientMgr{active: a, indexers: []IndexerRPCClient{a, b}}
+		provider := newIndexerBitcoinEvidenceProvider(manager)
+		oldScope := rgb11wallet.ScopedBitcoinEvidence(provider)
+		manager.mutex.Lock()
+		manager.active = b
+		manager.mutex.Unlock()
+		newScope := rgb11wallet.ScopedBitcoinEvidence(provider)
+		for _, test := range []struct {
+			name     string
+			provider rgb11wallet.BitcoinEvidenceProvider
+			source   *rgb11EvidenceRPCStub
+		}{{"old scope", oldScope, a}, {"new scope", newScope, b}} {
+			genesis, err := test.provider.GetGenesisHash()
+			if err != nil || genesis != test.source.genesisHash {
+				t.Fatalf("%s mixed genesis source: %q err=%v", test.name, genesis, err)
+			}
+			raw, err := test.provider.GetRawTx("tx")
+			if err != nil || hex.EncodeToString(raw) != test.source.rawTx {
+				t.Fatalf("%s mixed transaction source: %x err=%v", test.name, raw, err)
+			}
+			tip, err := test.provider.GetTip()
+			if err != nil || tip == nil || tip.BlockHash != test.source.tipHash {
+				t.Fatalf("%s mixed tip source: %+v err=%v", test.name, tip, err)
+			}
+		}
+		// This error would trigger the manager's ordinary failover policy.
+		// An in-flight scope must instead return the captured source's error.
+		a.readErr = errors.New("connection refused by captured endpoint A")
+		if _, err := oldScope.GetGenesisHash(); !errors.Is(err, a.readErr) {
+			t.Fatalf("genesis error switched endpoint: %v", err)
+		}
+		if _, err := oldScope.GetRawTx("tx"); !errors.Is(err, a.readErr) {
+			t.Fatalf("transaction error switched endpoint: %v", err)
+		}
+		if _, err := oldScope.GetTip(); !errors.Is(err, a.readErr) {
+			t.Fatalf("tip error switched endpoint: %v", err)
+		}
+		for _, name := range []string{"genesis", "rawtx", "tip"} {
+			if a.calls[name] != 2 || b.calls[name] != 1 {
+				t.Fatalf("%s escaped its captured source: A=%d B=%d", name, a.calls[name], b.calls[name])
+			}
+		}
+		if manager.getActiveIndexer() != b {
+			t.Fatal("captured endpoint error changed the manager's active endpoint")
+		}
+	})
 }
 
 func TestRGB11OfficialNetworkMappings(t *testing.T) {
@@ -494,7 +583,7 @@ func runRGBProxyInvoice(t *testing.T, manager *Manager, receiveOutpoint string) 
 		t.Fatalf("unexpected receive reservations: %+v", reservations)
 	}
 	if lock := manager.utxoLockerL1.GetLockedUtxoList()[receiveOutpoint]; lock == nil ||
-		lock.Reason != rgb11wallet.LockReasonPending {
+		lock.Reason != sdkcommon.UtxoLockRGBPending {
 		t.Fatalf("standard blind receive UTXO was not reserved: %+v", lock)
 	}
 	reservations[0].Expiry = time.Now().Add(-time.Second).Unix()
@@ -567,7 +656,7 @@ func TestRGB11PlainSelectionExcludesPendingChangeOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	lock := manager.utxoLockerL1.GetLockedUtxoList()[pendingOutpoint]
-	if lock == nil || lock.Reason != rgb11wallet.LockReasonPending {
+	if lock == nil || lock.Reason != sdkcommon.UtxoLockRGBPending {
 		t.Fatalf("pending RGB11 change output was not restored: %+v", lock)
 	}
 }

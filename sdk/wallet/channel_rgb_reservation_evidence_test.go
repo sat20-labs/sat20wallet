@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/rgb11/issuance"
@@ -16,8 +17,8 @@ import (
 )
 
 // Actual issuance and transition validators are used here. This fixture tests
-// native evidence boundaries, not Bitcoin signature/broadcast authorization.
-func rgbReservationNativeEvidenceFixture(t *testing.T) (*STPRGBReservationEvidence, []rgb11wallet.ChannelFunding, *wire.MsgTx, []byte) {
+// RGB11 evidence boundaries, not Bitcoin signature/broadcast authorization.
+func rgb11ResvEvidenceFixture(t *testing.T) (*STPRGBReservationEvidence, []rgb11wallet.ChannelFunding, *wire.MsgTx, []byte) {
 	t.Helper()
 	genesis := wire.NewMsgTx(2)
 	genesis.AddTxIn(wire.NewTxIn(&wire.OutPoint{Index: 42}, nil, nil))
@@ -42,6 +43,7 @@ func rgbReservationNativeEvidenceFixture(t *testing.T) (*STPRGBReservationEviden
 	sources := []rgb11wallet.ChannelFunding{{OutPoint: point.String(), Value: 1000, PkScript: script,
 		AssetName: asset, Amount: *indexer.NewDecimalWithScale(7000, 2), Consignment: []byte(issued.Armor)}}
 	facts := newSTPRGBReservationEvidence()
+	facts.genesisHash = chaincfg.RegressionNetParams.GenesisHash.String()
 	facts.channelID, facts.network, facts.height, facts.entropy = "rgb-resv-evidence", "regtest", 8, [32]byte{1, 2, 3}
 	var raw bytes.Buffer
 	if err := genesis.Serialize(&raw); err != nil {
@@ -64,7 +66,7 @@ func rgbReservationNativeEvidenceFixture(t *testing.T) (*STPRGBReservationEviden
 			ChannelID: facts.channelID, Operation: "commit", Branch: "server", Height: facts.height,
 			Entropy: facts.entropy, BitcoinNetwork: facts.network}, view)
 	if err != nil || view.complete() != nil {
-		t.Fatalf("actual native source evidence could not construct its main transition: %v, complete=%v", err, view.complete())
+		t.Fatalf("actual RGB11 source evidence could not construct its main transition: %v, complete=%v", err, view.complete())
 	}
 	proof, err := rgb11wallet.EncodeChannelPackage(&rgb11wallet.ChannelPackage{Version: 1, Funding: sources, Steps: []rgb11wallet.ChannelStep{*step}})
 	if err != nil {
@@ -74,7 +76,7 @@ func rgbReservationNativeEvidenceFixture(t *testing.T) (*STPRGBReservationEviden
 }
 
 func TestSTPRGBReservationEvidenceDetectsCorePreparedFallback(t *testing.T) {
-	facts, _, main, proof := rgbReservationNativeEvidenceFixture(t)
+	facts, _, main, proof := rgb11ResvEvidenceFixture(t)
 	pkg, err := rgb11wallet.DecodeChannelPackage(proof)
 	if err != nil {
 		t.Fatal(err)
@@ -94,7 +96,7 @@ func TestSTPRGBReservationEvidenceDetectsCorePreparedFallback(t *testing.T) {
 }
 
 func TestSTPRGBReservationPreparedRequiresExactLocalProofContext(t *testing.T) {
-	facts, _, main, proof := rgbReservationNativeEvidenceFixture(t)
+	facts, _, main, proof := rgb11ResvEvidenceFixture(t)
 	view := facts.newView()
 	if err := view.addLocallyConstructed(main, proof); err != nil {
 		t.Fatal(err)
@@ -119,7 +121,7 @@ func TestSTPRGBReservationPreparedRequiresExactLocalProofContext(t *testing.T) {
 }
 
 func TestSTPRGBReservationEvidenceReturnsIndependentFactBytes(t *testing.T) {
-	facts, sources, _, _ := rgbReservationNativeEvidenceFixture(t)
+	facts, sources, _, _ := rgb11ResvEvidenceFixture(t)
 	point, err := wire.NewOutPointFromString(sources[0].OutPoint)
 	if err != nil {
 		t.Fatal(err)

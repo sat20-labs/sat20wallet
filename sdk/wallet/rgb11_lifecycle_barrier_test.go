@@ -74,7 +74,7 @@ func TestRGB11AccountManagedSyncPublishesActiveRecoveryClosure(t *testing.T) {
 	if err := manager.SyncAccountManagementState(context.Background()); err != nil {
 		t.Fatalf("stable account sync must be able to publish active RGB recovery material: %v", err)
 	}
-	payloads, err := manager.currentAccountManagedProviderPayloads(rgb11AccountManagedProviderID)
+	payloads, err := accountTestPayloads(manager, rgb11AccountManagedProviderID)
 	if err != nil {
 		t.Fatal(err)
 	}

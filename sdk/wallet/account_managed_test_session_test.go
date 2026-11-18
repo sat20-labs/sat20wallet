@@ -37,9 +37,6 @@ func establishAccountManagedTestWriteSession(t *testing.T, manager *Manager, rem
 	if err := manager.SetAccountServiceNode(node); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.StartDKVSSync(); err != nil {
-		t.Fatal(err)
-	}
 	t.Cleanup(manager.StopDKVSSync)
 	if err := manager.BindAccountToCurrentCoreNode(); err != nil {
 		t.Fatal(err)
@@ -54,6 +51,12 @@ func establishAccountManagedTestWriteSession(t *testing.T, manager *Manager, rem
 			pkg.Envelope.Locator, "account://"+pkg.Envelope.Locator.PackageID); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if !manager.GetAccountManagementStatus().RecoveryConfigured {
+		t.Fatal("managed account test activation did not commit")
+	}
+	if err := manager.StartDKVSSync(); err != nil {
+		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

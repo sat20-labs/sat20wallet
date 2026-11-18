@@ -13,10 +13,15 @@ import (
 // Each handle closes once, including when a business assertion fails.
 func openSPLocalDevice(t *testing.T, path, network string, remote *rgb11MemoryDKVSHTTP) (*Manager, func()) {
 	t.Helper()
+	return openSPDeviceMode(t, path, network, CLIENT_NODE, remote)
+}
+
+func openSPDeviceMode(t *testing.T, path, network, mode string, remote *rgb11MemoryDKVSHTTP) (*Manager, func()) {
+	t.Helper()
 	oldEnv, oldChain, oldMode, oldIndexerChain := _env, _chain, _mode, indexer.CHAIN
 	t.Cleanup(func() { _env, _chain, _mode, indexer.CHAIN = oldEnv, oldChain, oldMode, oldIndexerChain })
 	indexer.CHAIN = network
-	cfg := &common.Config{Env: "test", Chain: network, Mode: "client",
+	cfg := &common.Config{Env: "test", Chain: network, Mode: mode,
 		Peers:     []string{"b@" + indexer.GetBootstrapPubKey() + "@http://127.0.0.1:1/" + network},
 		IndexerL1: &common.Indexer{Scheme: "http", Host: "127.0.0.1:1", Proxy: network},
 		IndexerL2: &common.Indexer{Scheme: "http", Host: "dkvs.test", Proxy: network}}
@@ -57,11 +62,11 @@ func assertSPLocalNoUploads(t *testing.T, remote *rgb11MemoryDKVSHTTP) {
 
 // Build the original two mnemonic identities through public wallet/catalog
 // APIs. Do not invent IDs or copy live Manager/profile/secret fields.
-func newSPWalletPairGroup(t *testing.T, secondNames []string) (*Manager, *InternalWallet, *InternalWallet) {
+func newSPWalletPairGroup(t *testing.T, mode string, secondNames []string) (*Manager, *InternalWallet, *InternalWallet) {
 	t.Helper()
 	remote := newRGB11MemoryDKVSHTTP()
 	assertSPLocalNoUploads(t, remote)
-	manager, _ := openSPLocalDevice(t, t.TempDir(), "testnet", remote)
+	manager, _ := openSPDeviceMode(t, t.TempDir(), "testnet", mode, remote)
 	firstID, err := manager.ImportWallet(silentPayE2EMnemonic, "password")
 	require.NoError(t, err)
 	discoverInactiveAccount(t, manager)

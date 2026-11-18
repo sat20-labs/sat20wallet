@@ -71,7 +71,14 @@ func (p *Manager) GetAllRegisteredReferrerName(address, serverPubKey string) ([]
 }
 
 // 绑定推荐人地址: 发送一个特殊的交易，由索引器识别 （L2交易，索引器从交易确认高度开始跟踪被推荐人的交易记录）
-func (p *Manager) BindReferrerForServer(referrerName string, serverPubKey string) (string, error) {
+func (p *Manager) BindReferrerForServer(referrerName string, serverPubKey string) (opValue0 string, opErr error) {
+	if gateErr := p.CheckAccountWrite("wallets", AccountManagedDataGlobalScope); gateErr != nil {
+		return "", gateErr
+	}
+
+	opLogID := p.beginWalletLog("referrer", "bind_referrer", "Bind referrer")
+	defer func() { p.finishWalletLog(opLogID, opErr, opValue0) }()
+
 	if p.wallet == nil {
 		return "", fmt.Errorf("wallet is not created/unlocked")
 	}
@@ -94,7 +101,10 @@ func (p *Manager) BindReferrerForServer(referrerName string, serverPubKey string
 }
 
 // 将某个name注册为推荐人（L1交易）
-func (p *Manager) RegisterAsReferrer(name string, feeRate int64) (string, error) {
+func (p *Manager) RegisterAsReferrer(name string, feeRate int64) (opValue0 string, opErr error) {
+	opLogID := p.beginWalletLog("referrer", "register_referrer", "Register referrer")
+	defer func() { p.finishWalletLog(opLogID, opErr, opValue0) }()
+
 	if p.wallet == nil {
 		return "", fmt.Errorf("wallet is not created/unlocked")
 	}
@@ -119,8 +129,8 @@ func (p *Manager) RegisterAsReferrer(name string, feeRate int64) (string, error)
 
 	localPubKey := p.wallet.GetPubKey().SerializeCompressed()
 	moredata := wwire.RemoteSignMoreData_Msg{
-		Action:      "register_referrer",
-		MoreData:    	[]byte(name),
+		Action:   "register_referrer",
+		MoreData: []byte(name),
 	}
 	md, err := json.Marshal(moredata)
 	if err != nil {

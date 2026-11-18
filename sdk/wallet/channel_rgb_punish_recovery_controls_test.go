@@ -41,7 +41,7 @@ func TestSTPRGBPunishRecoveryChecksEachOldBinding(t *testing.T) {
 			case "missing-signature":
 				child.TxIn[0].Witness[1] = nil
 			case "foreign-proof":
-				old.RGBClientRecovery.AssetProofs["rgb11"] = []byte("foreign native package")
+				old.RGBClientRecovery.AssetProofs["rgb11"] = []byte("foreign RGB11 package")
 			}
 			before, err := EncodeToBytes(old.RGBClientRecovery)
 			if err != nil {

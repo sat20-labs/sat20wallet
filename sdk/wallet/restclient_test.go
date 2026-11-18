@@ -2694,6 +2694,11 @@ func (p *TestNodeClient) SendLockReq(info *PaymentReservation) error {
 }
 
 func (p *TestNodeClient) SendLockCommitSigAndRevokeReq(info *PaymentReservation) error {
+	rev, revErr := info.Channel.Manager().RevokeCurrentCommitment(&info.RevocationInfo)
+	if revErr != nil {
+		return revErr
+	}
+	info.LocalRev = rev
 	_, err := p.SendChannelLockCommitSigAndRevokeReq(&wwire.LockCommitSigAndRevokeReq{})
 	return err
 }

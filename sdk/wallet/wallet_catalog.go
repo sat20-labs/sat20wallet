@@ -211,7 +211,7 @@ func (p *Manager) walletCatalogLocked() []WalletCatalogEntry {
 
 // Validate the candidate without mutating the live catalog or its database.
 func (p *Manager) validateWalletCatalogChangeLocked(candidate *WalletInfo) error {
-	if err := p.checkAccountManagedDataImport(); err != nil {
+	if err := p.requireAccountManagedWriteLocked(); err != nil {
 		return err
 	}
 	infos := p.canonicalWalletInfosLocked()
@@ -259,17 +259,22 @@ func (p *Manager) validateWalletCatalogChangeLocked(candidate *WalletInfo) error
 				state.Wallets[index].Secret = nil
 			}
 		}()
-		// Admission must include the published data reference and retained
-		// tombstones, rather than the smaller first-wallet bootstrap encoding.
-		base, err := account.OpenManagedState(p.accountSecret, p.accountProfile.AccountID, p.accountProfile.StateEnvelope)
+		// Retain confirmed tombstones from the wallet module's durable value.
+		value, err := p.readAccountLocal(p.accountProfile.AccountID, "wallets", AccountManagedDataGlobalScope)
 		if err != nil {
 			return err
 		}
-		for _, previous := range base.Wallets {
-			if findManagedWallet(&state, previous.Fingerprint) == nil {
-				state.Wallets = append(state.Wallets, account.ManagedWallet{
-					Fingerprint: previous.Fingerprint, Deleted: true,
-				})
+		if value != nil && len(value.Value) != 0 {
+			base, err := account.OpenManagedState(p.accountSecret, p.accountProfile.AccountID, value.Value)
+			if err != nil {
+				return err
+			}
+			for _, previous := range base.Wallets {
+				if findManagedWallet(&state, previous.Fingerprint) == nil {
+					state.Wallets = append(state.Wallets, account.ManagedWallet{
+						Fingerprint: previous.Fingerprint, Deleted: true,
+					})
+				}
 			}
 		}
 		return account.ValidateManagedState(state)
@@ -277,7 +282,10 @@ func (p *Manager) validateWalletCatalogChangeLocked(candidate *WalletInfo) error
 	return nil
 }
 
-func (p *Manager) UpdateWalletName(id int64, name string) error {
+func (p *Manager) UpdateWalletName(id int64, name string) (opErr error) {
+	opLogID := p.beginWalletLog("wallet", "rename_wallet", "Rename wallet", map[string]string{"name": name})
+	defer func() { p.finishWalletLog(opLogID, opErr, nil) }()
+
 	name = strings.Join(strings.Fields(name), " ")
 	if name == "" {
 		return fmt.Errorf("wallet name is required")
@@ -304,7 +312,10 @@ func (p *Manager) UpdateWalletName(id int64, name string) error {
 	})
 }
 
-func (p *Manager) EnsureAccount(id int64, index uint32, name, did string) error {
+func (p *Manager) EnsureAccount(id int64, index uint32, name, did string) (opErr error) {
+	opLogID := p.beginWalletLog("account", "create_account", "Create wallet account")
+	defer func() { p.finishWalletLog(opLogID, opErr, nil) }()
+
 	if index >= account.MaxManagedStateItems {
 		return fmt.Errorf("account index exceeds recovery limit")
 	}
@@ -344,7 +355,10 @@ func (p *Manager) EnsureAccount(id int64, index uint32, name, did string) error 
 	})
 }
 
-func (p *Manager) UpdateAccountMetadata(id int64, index uint32, name, did string) error {
+func (p *Manager) UpdateAccountMetadata(id int64, index uint32, name, did string) (opErr error) {
+	opLogID := p.beginWalletLog("account", "update_account", "Update wallet account")
+	defer func() { p.finishWalletLog(opLogID, opErr, nil) }()
+
 	p.channelIdentityMu.Lock()
 	defer p.channelIdentityMu.Unlock()
 	p.mutex.Lock()
@@ -384,9 +398,53 @@ func (p *Manager) UpdateAccountMetadata(id int64, index uint32, name, did string
 // no live catalog, selection or generation changes until Flush succeeds.
 func (p *Manager) commitWalletCatalogMutationLocked(candidate *WalletInfo, status *Status,
 	mutation accountManagementMutation) error {
+	live := p.walletInfoMap[candidate.Id]
+	firstNew := 0
+	if live != nil {
+		firstNew = max(live.Accounts, 1)
+	}
+	if mutation.Type == accountMutationEnsureAccount && candidate.Accounts <= firstNew {
+		mutation.Type = accountMutationMetadata
+	}
+	if mutation.Type == accountMutationAddWallet {
+		id, err := randomAccountMutationID()
+		if err != nil {
+			return err
+		}
+		mutation.ID = id
+	}
 	profile, err := p.prepareAccountMutationLocked(mutation)
 	if err != nil {
 		return err
+	}
+	if profile != nil && mutation.Type == accountMutationAddWallet {
+		// This is a new instance, including when its key matches a deleted
+		// wallet. Retain its new ID, never an older add/rename/delete overlay.
+		pending := profile.Pending[:0]
+		for _, previous := range profile.Pending {
+			if previous.Fingerprint != mutation.Fingerprint {
+				pending = append(pending, previous)
+			}
+		}
+		profile.Pending = append(pending, mutation)
+	}
+	// EnsureAccount can create several consecutive accounts. Persist only the
+	// actual new indices as creation intents; editing an existing index is metadata.
+	if profile != nil && mutation.Type == accountMutationEnsureAccount {
+		for index := firstNew; index < candidate.Accounts; index++ {
+			if uint32(index) == mutation.Account {
+				continue
+			}
+			id, err := randomAccountMutationID()
+			if err != nil {
+				return err
+			}
+			profile.Pending = append(profile.Pending, accountManagementMutation{
+				ID: id, Type: accountMutationEnsureAccount, Fingerprint: mutation.Fingerprint,
+				WalletID: candidate.Id, Account: uint32(index),
+				Name: candidate.AccountNames[uint32(index)], DID: candidate.AccountDIDs[uint32(index)],
+			})
+		}
 	}
 	encoded, err := EncodeToBytes(&candidate.WalletInDB)
 	if err != nil {
@@ -418,7 +476,6 @@ func (p *Manager) commitWalletCatalogMutationLocked(candidate *WalletInfo, statu
 			return err
 		}
 	}
-	live := p.walletInfoMap[candidate.Id]
 	walletChanged := live == nil || live.Name != candidate.Name || live.Accounts != candidate.Accounts ||
 		!reflect.DeepEqual(live.AccountNames, candidate.AccountNames) || !reflect.DeepEqual(live.AccountDIDs, candidate.AccountDIDs)
 	if walletChanged {
@@ -435,6 +492,9 @@ func (p *Manager) commitWalletCatalogMutationLocked(candidate *WalletInfo, statu
 			return err
 		}
 	}
+	if err := p.stageNewWalletScopes(batch, candidate, firstNew); err != nil {
+		return err
+	}
 	if err := batch.Flush(); err != nil {
 		return err
 	}
@@ -445,8 +505,8 @@ func (p *Manager) commitWalletCatalogMutationLocked(candidate *WalletInfo, statu
 	}
 	p.accountProfile = profile
 	if profile != nil {
-		Log.Debugf("account generation advanced: source=catalog_batch activation_pending=%t data_generation=%d",
-			profile.ManagedEntered && !profile.RecoveryConfigured, profile.ManagedDataGeneration)
+		Log.Debugf("account catalog committed: activation_pending=%t",
+			profile.ManagedEntered && !profile.RecoveryConfigured)
 	}
 	if status != nil {
 		applyStatusSnapshot(p.status, status)
@@ -471,12 +531,21 @@ func (p *Manager) firstWalletLocked() *WalletInfo {
 	return selected
 }
 
-func (p *Manager) DeleteWallet(id int64) error {
+func (p *Manager) DeleteWallet(id int64) (opErr error) {
+	opLogID := p.beginWalletLog("wallet", "delete_wallet", "Delete wallet")
+	defer func() { p.finishWalletLog(opLogID, opErr, nil) }()
+
+	p.rgbManagedExecutionMu.Lock()
+	defer p.rgbManagedExecutionMu.Unlock()
 	p.channelIdentityMu.Lock()
 	defer p.channelIdentityMu.Unlock()
+	releaseRGB := p.beginRGB11ScopeChange()
+	defer releaseRGB()
+	p.rgbReservationMu.Lock()
+	defer p.rgbReservationMu.Unlock()
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
-	if err := p.checkAccountManagedDataImport(); err != nil {
+	if err := p.checkAccountRestore("wallets", AccountManagedDataGlobalScope); err != nil {
 		return err
 	}
 	if len(p.walletInfoMap) <= 1 {
@@ -485,14 +554,6 @@ func (p *Manager) DeleteWallet(id int64) error {
 	info := p.walletInfoMap[id]
 	if info == nil {
 		return fmt.Errorf("can't find wallet %d", id)
-	}
-	// An SP address stays valid after publication. Deleting its mnemonic
-	// wallet would discard the scan key and future payment recovery metadata.
-	// Do not allow a regular catalog deletion to strand SP BTC.
-	for _, enabled := range info.SPEnabled {
-		if enabled {
-			return fmt.Errorf("wallet with active Silent Payments cannot be deleted")
-		}
 	}
 	if p.isAccountManagementRootLocked(info) {
 		return fmt.Errorf("the account management wallet cannot be deleted")
@@ -517,9 +578,9 @@ func (p *Manager) DeleteWallet(id int64) error {
 		status.CurrentWallet, status.CurrentAccount = next.Id, 0
 	}
 	status.TotalWallet = len(p.walletInfoMap) - 1
-	batch := p.db.NewWriteBatch()
-	if batch == nil {
-		return fmt.Errorf("create wallet deletion batch")
+	batch, err := NewAtomicWriteBatch(p.db)
+	if err != nil {
+		return err
 	}
 	defer batch.Close()
 	if profile != nil {
@@ -547,9 +608,20 @@ func (p *Manager) DeleteWallet(id int64) error {
 	if err := p.stageAccountWalletDelete(batch, walletFingerprint(info.Wallet)); err != nil {
 		return err
 	}
+	finish, err := p.stageWalletRemoval(batch, []*WalletInfo{info})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if finish != nil {
+			finish(false)
+		}
+	}()
 	if err := batch.Flush(); err != nil {
 		return err
 	}
+	finish(true)
+	finish = nil
 	if p.btcLuckyMiner != nil && p.accountProfile == nil && p.firstWalletLocked() == info {
 		p.clearLuckyMiner()
 	}

@@ -171,6 +171,10 @@ func (v rgb11ManagedRecoveryValidator) ValidateConsignment(context.Context, []by
 
 type rgb11ManagedRecoveryEvidence struct{}
 
+func (rgb11ManagedRecoveryEvidence) GetGenesisHash() (string, error) {
+	return "", errors.New("managed-recovery-only test evidence has no Bitcoin chain")
+}
+
 func (rgb11ManagedRecoveryEvidence) GetUTXO(string) (*rgb11wallet.BitcoinUTXO, error) {
 	return nil, nil
 }
@@ -204,7 +208,7 @@ func seedRGB11DurableAccountRecoveryState(t *testing.T, manager *rgb11Manager) (
 	const contractID = "managed-recovery-contract"
 	receipt, err := manager.rgbManager.projectionStore.ValidateAndStoreConsignment(
 		context.Background(), rgb11ManagedRecoveryValidator{receipt: &rgb11wallet.ValidationReceipt{
-			Version: 1, EngineBuildID: rgb11wallet.NativeEngineBuildID,
+			Version: 1, EngineBuildID: rgb11wallet.RGB11EngineBuildID,
 			ConsignmentHash: consignmentHash, ContractID: contractID, SchemaID: "managed-recovery-schema",
 			StateHash: [32]byte{1}, Status: "valid",
 			Allocations: []rgb11wallet.ValidatedAllocation{allocation},
@@ -359,12 +363,5 @@ func TestRGB11AccountManagedProviderRejectsUnverifiableRecoveryClosure(t *testin
 	}
 	if proof, err := targetScoped.rgbManager.projectionStore.LoadProof(outpoint, assetName); err == nil && proof != nil {
 		t.Fatal("unverifiable recovery imported proof despite failing validation")
-	}
-}
-
-func TestRGB11AccountManagedProviderIsStableOnly(t *testing.T) {
-	provider := any(&rgb11AccountManagedDataProvider{})
-	if _, ok := provider.(AccountManagedActiveDataProvider); ok {
-		t.Fatal("RGB11 complete stable recovery should not register a second active mailbox authority")
 	}
 }

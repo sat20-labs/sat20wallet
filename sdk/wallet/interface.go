@@ -165,11 +165,10 @@ func (p *Manager) Start() {
 	p.startStatusBootstrap()
 	p.startActionMonitor()
 	p.startChannelHeartbeat()
-	manager := p.ensureDKVSManager()
 	if err := p.refreshDKVSRegistrations(); err != nil {
 		Log.Warningf("register DKVS paths at startup failed: %v", err)
 	}
-	manager.start()
+	p.startAccountRuntime(true)
 }
 
 func (p *Manager) IsReady() bool {
@@ -210,11 +209,16 @@ func (p *Manager) Stop() {
 
 func (p *Manager) Close() {
 	p.Stop()
+	p.clearRGBDirectPreviews()
+	p.clearRecoverySessions()
 	p.bInited = false
 }
 
 // 使用内部钱包
-func (p *Manager) CreateWallet(password string) (int64, string, error) {
+func (p *Manager) CreateWallet(password string) (opValue0 int64, opValue1 string, opErr error) {
+	opLogID := p.beginWalletLog("wallet", "create_wallet", "Create wallet")
+	defer func() { p.finishWalletLog(opLogID, opErr, nil) }()
+
 	p.channelIdentityMu.Lock()
 	defer p.channelIdentityMu.Unlock()
 	releaseRGB11Scope := p.beginRGB11ScopeChange()
@@ -227,7 +231,7 @@ func (p *Manager) CreateWallet(password string) (int64, string, error) {
 	// 	return "", fmt.Errorf("wallet has been created, please unlock it first")
 	// }
 	p.mutex.Lock()
-	if err := p.checkAccountManagedDataImport(); err != nil {
+	if err := p.checkAccountRestore("wallets", AccountManagedDataGlobalScope); err != nil {
 		p.mutex.Unlock()
 		return -1, "", err
 	}
@@ -296,7 +300,10 @@ func (p *Manager) CreateMonitorWallet(address string) (int64, error) {
 	return id, nil
 }
 
-func (p *Manager) ImportWallet(mnemonic string, password string) (int64, error) {
+func (p *Manager) ImportWallet(mnemonic string, password string) (opValue0 int64, opErr error) {
+	opLogID := p.beginWalletLog("wallet", "import_wallet", "Import wallet")
+	defer func() { p.finishWalletLog(opLogID, opErr, nil) }()
+
 	p.channelIdentityMu.Lock()
 	defer p.channelIdentityMu.Unlock()
 	releaseRGB11Scope := p.beginRGB11ScopeChange()
@@ -316,7 +323,7 @@ func (p *Manager) ImportWallet(mnemonic string, password string) (int64, error) 
 	}
 
 	p.mutex.Lock()
-	if err := p.checkAccountManagedDataImport(); err != nil {
+	if err := p.checkAccountRestore("wallets", AccountManagedDataGlobalScope); err != nil {
 		p.mutex.Unlock()
 		return -1, err
 	}
@@ -440,7 +447,10 @@ func (p *Manager) activateFirstMnemonicWalletLocked(wallet common.Wallet, mnemon
 	return nil
 }
 
-func (p *Manager) ImportWalletWithPrivateKey(privKey string, password string) (int64, error) {
+func (p *Manager) ImportWalletWithPrivateKey(privKey string, password string) (opValue0 int64, opErr error) {
+	opLogID := p.beginWalletLog("wallet", "import_wallet_private_key", "Import wallet")
+	defer func() { p.finishWalletLog(opLogID, opErr, nil) }()
+
 	p.channelIdentityMu.Lock()
 	defer p.channelIdentityMu.Unlock()
 	releaseRGB11Scope := p.beginRGB11ScopeChange()
@@ -500,7 +510,10 @@ func (p *Manager) ImportWalletWithPrivateKey(privKey string, password string) (i
 	return id, nil
 }
 
-func (p *Manager) ChangePassword(oldPS, newPS string) error {
+func (p *Manager) ChangePassword(oldPS, newPS string) (opErr error) {
+	opLogID := p.beginWalletLog("security", "change_password", "Change wallet password")
+	defer func() { p.finishWalletLog(opLogID, opErr, nil) }()
+
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 	if err := p.prepareAccountWriteLocked(); err != nil {
@@ -593,7 +606,18 @@ func (p *Manager) ChangePassword(oldPS, newPS string) error {
 	return nil
 }
 
-func (p *Manager) UnlockWallet(password string) (int64, error) {
+func (p *Manager) UnlockWallet(password string) (opValue0 int64, opErr error) {
+	opLogID := p.beginWalletLog("security", "unlock_wallet", "Unlock wallet")
+	defer func() { p.finishWalletLog(opLogID, opErr, nil) }()
+	coldStartup := false
+	// Registered before identity/scope defers, so startup runs after their
+	// release. A same-page reauthentication must not repeat root discovery.
+	defer func() {
+		if coldStartup && opErr == nil {
+			p.startAccountRuntime(true)
+		}
+	}()
+
 	// Reauthentication changes no wallet scope. Serialize it with local data,
 	// while only cold initialization takes the identity lifecycle gate.
 	p.mutex.Lock()
@@ -602,15 +626,6 @@ func (p *Manager) UnlockWallet(password string) (int64, error) {
 		p.channelIdentityMu.Lock()
 		defer p.channelIdentityMu.Unlock()
 		p.mutex.Lock()
-	}
-	marker, err := p.readAccountManagedDataImportMarker()
-	if err != nil {
-		p.mutex.Unlock()
-		return -1, err
-	}
-	if marker != nil && marker.Origin != accountManagedImportOriginRemoteApply {
-		p.mutex.Unlock()
-		return -1, ErrAccountManagedDataImportIncomplete
 	}
 	// UI locking does not stop the runtime wallet. Re-authenticate without
 	// replacing keys, rebuilding reservations or disturbing background workers.
@@ -635,14 +650,14 @@ func (p *Manager) UnlockWallet(password string) (int64, error) {
 			p.mutex.Unlock()
 			return -1, err
 		}
-		pendingAccountSync := p.accountProfile != nil && (!p.accountProfile.RecoveryConfigured ||
-			p.accountProfile.Activation != nil || p.accountProfile.ManagedDataDirty || len(p.accountProfile.Pending) != 0)
+		pendingAccountSync := p.accountProfile != nil
 		p.mutex.Unlock()
-		if pendingAccountSync || marker != nil {
+		if pendingAccountSync {
 			p.scheduleAccountManagedStateSync()
-		}
-		if marker != nil {
-			return id, ErrAccountManagedDataImportIncomplete
+			// Stop/Start on this Manager preserves the wallet object, so a
+			// successful re-authentication must resume configured sync here.
+			// Do not rediscover an inactive root on the re-authentication path.
+			p.startAccountRuntime(false)
 		}
 		return id, nil
 	}
@@ -651,6 +666,7 @@ func (p *Manager) UnlockWallet(password string) (int64, error) {
 	defer releaseRGB11Scope()
 	p.mutex.Lock()
 	id, err := p.unlockWallet(password)
+	coldStartup = err == nil
 	pendingAccountSync := err == nil && p.accountProfile != nil
 	p.mutex.Unlock()
 	if err == nil {
@@ -675,20 +691,22 @@ func (p *Manager) UnlockWallet(password string) (int64, error) {
 		if refreshErr := p.refreshDKVSRegistrations(); refreshErr != nil {
 			Log.Warningf("refresh DKVS registrations after unlock failed: %v", refreshErr)
 		}
-		p.rgbManager.scheduleRGB11ChainReconciliation()
+		// Cold unlock checks saved carriers once for every local RGB account.
+		// Reuse the existing worker so this never blocks authentication on L1.
+		for _, account := range p.localRGB11Accounts() {
+			rgb, openErr := p.newScopedRGB11Manager(account)
+			if openErr != nil {
+				Log.Warningf("open RGB startup scope failed: %v", openErr)
+				continue
+			}
+			rgb.scheduleRGB11ChainReconciliation(true)
+		}
 		p.wakeChannelHeartbeat()
 	}
-	if err == nil && (pendingAccountSync || marker != nil) {
+	if err == nil && pendingAccountSync {
 		// Runtime jobs and write qualification disappear on a PWA reload.
 		// Even a clean account needs real synchronization after authentication.
 		p.scheduleAccountManagedStateSync()
-	}
-	if err == nil && marker != nil {
-		// Cold authentication must also restore the device's persisted channel
-		// runtime: the next UI unlock only verifies the already installed keys.
-		// Account/provider operations remain guarded by the durable marker, and
-		// the PWA stays locked until the existing remote-apply retry finishes.
-		return id, ErrAccountManagedDataImportIncomplete
 	}
 	return id, err
 }
@@ -812,7 +830,10 @@ func (p *Manager) GetAllWallets() map[int64]int {
 }
 
 // 不再需要密码
-func (p *Manager) SwitchWallet(id int64, password string) error {
+func (p *Manager) SwitchWallet(id int64, password string) (opErr error) {
+	opLogID := p.beginWalletLog("wallet", "switch_wallet", "Switch wallet")
+	defer func() { p.finishWalletLog(opLogID, opErr, nil) }()
+
 	p.channelIdentityMu.Lock()
 	defer p.channelIdentityMu.Unlock()
 	releaseRGB11Scope := p.beginRGB11ScopeChange()
@@ -836,7 +857,7 @@ func (p *Manager) SwitchWallet(id int64, password string) error {
 		//}
 	}
 
-	if err := p.checkAccountManagedDataImport(); err != nil {
+	if err := p.checkAccountRestore("wallets", AccountManagedDataGlobalScope); err != nil {
 		p.mutex.Unlock()
 		return err
 	}
@@ -858,7 +879,7 @@ func (p *Manager) SwitchWallet(id int64, password string) error {
 	if err := p.refreshDKVSRegistrations(); err != nil {
 		Log.Warningf("refresh DKVS registrations after wallet switch failed: %v", err)
 	}
-	p.rgbManager.scheduleRGB11ChainReconciliation()
+	p.rgbManager.scheduleRGB11ChainReconciliation(false)
 	p.wakeChannelHeartbeat()
 	return nil
 }
@@ -964,7 +985,10 @@ func (p *Manager) FindWalletByPubKeyWithDepth(pubKey []byte, depth uint32) commo
 	return nil
 }
 
-func (p *Manager) SwitchAccount(id uint32) error {
+func (p *Manager) SwitchAccount(id uint32) (opErr error) {
+	opLogID := p.beginWalletLog("wallet", "switch_account", "Switch account")
+	defer func() { p.finishWalletLog(opLogID, opErr, nil) }()
+
 	if id >= account.MaxManagedStateItems {
 		return fmt.Errorf("account index exceeds recovery limit")
 	}
@@ -974,7 +998,7 @@ func (p *Manager) SwitchAccount(id uint32) error {
 	defer releaseRGB11Scope()
 	p.mutex.Lock()
 
-	if err := p.checkAccountManagedDataImport(); err != nil {
+	if err := p.checkAccountRestore("wallets", AccountManagedDataGlobalScope); err != nil {
 		p.mutex.Unlock()
 		return err
 	}
@@ -1033,7 +1057,7 @@ func (p *Manager) SwitchAccount(id uint32) error {
 	if err := p.refreshDKVSRegistrations(); err != nil {
 		Log.Warningf("refresh DKVS registrations after account switch failed: %v", err)
 	}
-	p.rgbManager.scheduleRGB11ChainReconciliation()
+	p.rgbManager.scheduleRGB11ChainReconciliation(false)
 	p.wakeChannelHeartbeat()
 	return nil
 }
@@ -1042,7 +1066,10 @@ func (p *Manager) SwitchAccount(id uint32) error {
 //
 // Deprecated: call Stop/Close (or WASM release) and construct a new Manager
 // with the complete target-network Config.
-func (p *Manager) SwitchChain(chain, password string) error {
+func (p *Manager) SwitchChain(chain, password string) (opErr error) {
+	opLogID := p.beginWalletLog("wallet", "switch_chain", "Switch network")
+	defer func() { p.finishWalletLog(opLogID, opErr, nil) }()
+
 	_ = chain
 	_ = password
 	return ErrInPlaceChainSwitchDisabled
@@ -1141,7 +1168,10 @@ func (p *Manager) GetPaymentPubKey() []byte {
 	return pubkey.SerializeCompressed()
 }
 
-func (p *Manager) SignMessage(msg []byte) ([]byte, error) {
+func (p *Manager) SignMessage(msg []byte) (opValue0 []byte, opErr error) {
+	opLogID := p.beginWalletLog("security", "sign_data", "Sign data")
+	defer func() { p.finishWalletLog(opLogID, opErr, nil) }()
+
 	wallet, err := p.captureWalletIdentity()
 	if err != nil {
 		return nil, err
@@ -1149,7 +1179,10 @@ func (p *Manager) SignMessage(msg []byte) ([]byte, error) {
 	return wallet.SignMessage(msg)
 }
 
-func (p *Manager) SignWalletMessage(msg string) ([]byte, error) {
+func (p *Manager) SignWalletMessage(msg string) (opValue0 []byte, opErr error) {
+	opLogID := p.beginWalletLog("security", "sign_message", "Sign message")
+	defer func() { p.finishWalletLog(opLogID, opErr, nil) }()
+
 	wallet, err := p.captureWalletIdentity()
 	if err != nil {
 		return nil, err
@@ -1157,11 +1190,20 @@ func (p *Manager) SignWalletMessage(msg string) ([]byte, error) {
 	return wallet.SignWalletMessage(msg)
 }
 
-func (p *Manager) SignPsbts(psbtsHex []string, bExtract bool) ([]string, error) {
+func (p *Manager) SignPsbts(psbtsHex []string, bExtract bool) (opValue0 []string, opErr error) {
+	opLogID := p.beginWalletLog("security", "sign_psbts_l1", "Sign Bitcoin transactions")
+	defer func() { p.finishWalletLog(opLogID, opErr, nil) }()
+
 	wallet, err := p.captureWalletIdentity()
 	if err != nil {
 		return nil, err
 	}
+	release, gateErr := p.beginAccountWrite(rgb11AccountManagedProviderID, wallet)
+	if gateErr != nil {
+		return nil, gateErr
+	}
+	defer release()
+
 	result := make([]string, 0, len(psbtsHex))
 	for i, psbt := range psbtsHex {
 		signed, err := signPsbtWithWallet(wallet, psbt, bExtract)
@@ -1174,11 +1216,20 @@ func (p *Manager) SignPsbts(psbtsHex []string, bExtract bool) ([]string, error) 
 	return result, nil
 }
 
-func (p *Manager) SignPsbt(psbtHex string, bExtract bool) (string, error) {
+func (p *Manager) SignPsbt(psbtHex string, bExtract bool) (opValue0 string, opErr error) {
+	opLogID := p.beginWalletLog("security", "sign_psbt_l1", "Sign Bitcoin transaction")
+	defer func() { p.finishWalletLog(opLogID, opErr, nil) }()
+
 	wallet, err := p.captureWalletIdentity()
 	if err != nil {
 		return "", err
 	}
+	release, gateErr := p.beginAccountWrite(rgb11AccountManagedProviderID, wallet)
+	if gateErr != nil {
+		return "", gateErr
+	}
+	defer release()
+
 	return signPsbtWithWallet(wallet, psbtHex, bExtract)
 }
 
@@ -1239,6 +1290,12 @@ func (p *Manager) SignPsbts_SatsNet(psbtsHex []string, bExtract bool) ([]string,
 	if err != nil {
 		return nil, err
 	}
+	release, gateErr := p.beginAccountWrite("wallets", wallet)
+	if gateErr != nil {
+		return nil, gateErr
+	}
+	defer release()
+
 	result := make([]string, 0, len(psbtsHex))
 	for i, psbt := range psbtsHex {
 		signed, err := signPsbtSatsNetWithWallet(wallet, psbt, bExtract)
@@ -1251,11 +1308,20 @@ func (p *Manager) SignPsbts_SatsNet(psbtsHex []string, bExtract bool) ([]string,
 	return result, nil
 }
 
-func (p *Manager) SignPsbt_SatsNet(psbtHex string, bExtract bool) (string, error) {
+func (p *Manager) SignPsbt_SatsNet(psbtHex string, bExtract bool) (opValue0 string, opErr error) {
+	opLogID := p.beginWalletLog("security", "sign_psbt_l2", "Sign SatoshiNet transaction")
+	defer func() { p.finishWalletLog(opLogID, opErr, nil) }()
+
 	wallet, err := p.captureWalletIdentity()
 	if err != nil {
 		return "", err
 	}
+	release, gateErr := p.beginAccountWrite("wallets", wallet)
+	if gateErr != nil {
+		return "", gateErr
+	}
+	defer release()
+
 	return signPsbtSatsNetWithWallet(wallet, psbtHex, bExtract)
 }
 

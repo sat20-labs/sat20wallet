@@ -29,13 +29,13 @@
 
 | 历史状态 → 新版操作 | 当前证据 | 证据缺口 |
 | --- | --- | --- |
-| 旧版 plain/ORDX gob 通道 → 新版打开/列举 | `wallet/testdata/legacy_pre_native` 的旧程序生成合成样本；`TestLegacyGobChannelReadsPreserveOldFieldsAndAvoidNativeRecovery` 比较旧导出字段及数据库不变 | 样本非真实签名链上交易或真实生产库 |
+| 旧版 plain/ORDX gob 通道 → 新版打开/列举 | `wallet/testdata/legacy_channel` 的旧程序生成合成样本；`TestLegacyChannelState` 比较旧导出字段及数据库不变 | 样本非真实签名链上交易或真实生产库 |
 | 旧承诺/余额 → 新版更新、保存、重启 | `TestLegacyGobChannelLedgerContinuesAcrossPhysicalDatabaseRestart` 验证余额、承诺交易字节和重启后字段语义 | 真实旧版本双方签名、继续支付、强关和链上结算尚未证明 |
 | 旧 close/splice reservation → 新版加载/监控状态保存 | `TestLegacyGobPendingReservationsPreservePackagesAcrossRestart` 验证原交易包字节与重启 | 广播、确认、失败恢复、watchtower 惩罚材料未由该样本证明 |
 | 旧 STP 通道、reservation、watchtower、status → 新版加载 | `transcend/stp/old_data_compat_test.go` 有四项入口 | 均依赖 `STP_OLD_DATA_DB` 指向**隔离复制的**历史 LevelDB；未提供该输入时 skip，不是通过；不能设置删除旧失败记录的环境开关 |
 | 旧通道合约运行状态 → 新版加载、继续操作、安全退出 | `transcend/stp/db.go` 有运行状态加载入口；`TestContractStateMigrationSeparatesCompletedReservation` 用当前编码器**模拟** 0.1.4 仅保存 deploy reservation 的布局，并检查重启后的独立状态与查询；新建态 `TestAll` 不代表历史升级 | 仍缺由可验证旧版本实际生成的合约状态 fixture，以及旧资产承诺比较、继续业务或安全退出回归；该迁移测试不在本次 `TestAll` 选择器内 |
 
-旧版样本说明见 `wallet/testdata/legacy_pre_native/README.md`；它明确不证明链/对端 E2E，也不包含旧 punish 和合约加载。其 manifest 指向旧 commit `1a9aa9d67d741ba66556982fa53b1b81f4d41559`，本轮独立核对其中 7 个源码哈希均与该 Git 对象一致，4 个 fixture 的运行时哈希仍由现有测试校验。另在 transcend Git 历史中核到迁移前 commit `9c86df0cfb71dfe9b084a6373ae88b6af1e37d18`：该版 `DB_VERSION=0.1.4`，完成的合约通过 `saveReservation` 以旧 `ContractDeployDataInDB` 编码写入 `resv-` 命名空间，尚无独立 `contract-state-` 记录；下一提交 `4c2fcbcf` 才引入 0.1.5 独立运行状态。旧源码对象可读，但其 `go.mod` 使用本地 SDK/Indexer/SatoshiNet/RGB11 replace，本轮未固定当时对应的依赖提交、未执行旧版生成器，也没有旧版生成的合约 fixture；现有迁移测试仍是当前编码器模拟布局，不能称作真实旧字节升级已通过。发布前应使用可验证历史版本及固定依赖生成不含用户秘密的合约 fixture，或经批准的隔离数据库副本补齐缺口。不得在真实钱包数据库上试迁移。升级前的完整备份、版本/数据库哈希及恢复演练是回退边界；升级写入后是否可直接运行旧二进制尚未证明，不能承诺直接降级。任何必要生产兼容修复先按根目录 `AGENTS.md` 提出最小方案审核。
+旧版样本说明见 `wallet/testdata/legacy_channel/README.md`；它明确不证明链/对端 E2E，也不包含旧 punish 和合约加载。其 manifest 指向旧 commit `1a9aa9d67d741ba66556982fa53b1b81f4d41559`，本轮独立核对其中 7 个源码哈希均与该 Git 对象一致，4 个 fixture 的运行时哈希仍由现有测试校验。另在 transcend Git 历史中核到迁移前 commit `9c86df0cfb71dfe9b084a6373ae88b6af1e37d18`：该版 `DB_VERSION=0.1.4`，完成的合约通过 `saveReservation` 以旧 `ContractDeployDataInDB` 编码写入 `resv-` 命名空间，尚无独立 `contract-state-` 记录；下一提交 `4c2fcbcf` 才引入 0.1.5 独立运行状态。旧源码对象可读，但其 `go.mod` 使用本地 SDK/Indexer/SatoshiNet/RGB11 replace，本轮未固定当时对应的依赖提交、未执行旧版生成器，也没有旧版生成的合约 fixture；现有迁移测试仍是当前编码器模拟布局，不能称作真实旧字节升级已通过。发布前应使用可验证历史版本及固定依赖生成不含用户秘密的合约 fixture，或经批准的隔离数据库副本补齐缺口。不得在真实钱包数据库上试迁移。升级前的完整备份、版本/数据库哈希及恢复演练是回退边界；升级写入后是否可直接运行旧二进制尚未证明，不能承诺直接降级。任何必要生产兼容修复先按根目录 `AGENTS.md` 提出最小方案审核。
 
 ## 发布结论的记录格式
 

@@ -137,7 +137,9 @@ func TestAccountManagementIgnoresDuplicateWalletFingerprints(t *testing.T) {
 	const mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
 	const password = "test-password"
 
-	database := newMemoryKVDB()
+	oldChain := _chain
+	_chain = "testnet"
+	t.Cleanup(func() { _chain = oldChain })
 	first := NewInternalWalletWithMnemonic(mnemonic, "", &chaincfg.TestNet4Params)
 	duplicate := NewInternalWalletWithMnemonic(mnemonic, "", &chaincfg.TestNet4Params)
 	if first == nil || duplicate == nil {
@@ -145,10 +147,11 @@ func TestAccountManagementIgnoresDuplicateWalletFingerprints(t *testing.T) {
 	}
 	first.id = 1
 	duplicate.id = 2
-	manager := &Manager{db: database, walletInfoMap: make(map[int64]*WalletInfo)}
+	manager := newAccountManagementAutoTestManager(t)
 	if err := manager.saveMnemonic(mnemonic, password, duplicate); err != nil {
 		t.Fatal(err)
 	}
+	discoverInactiveAccount(t, manager)
 	if err := manager.saveMnemonic(mnemonic, password, first); err != nil {
 		t.Fatal(err)
 	}

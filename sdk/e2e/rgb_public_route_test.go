@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -59,7 +58,7 @@ func runRGBPublicRouteE2E(t *testing.T, network *realSatoshiNet) {
 		require.NotZero(t, result.Code)
 	})
 	t.Run("success", func(t *testing.T) {
-		// This is a native-generated public technical contract. Spendability
+		// This is a RGB11-generated public technical contract. Spendability
 		// and carrier ownership remain covered by the original NIA workflow.
 		seed := sha256.Sum256([]byte(t.Name()))
 		seal, err := seals.NewGraphBlindSeal(seed[:], 0, 7)
@@ -85,12 +84,8 @@ func runRGBPublicRouteE2E(t *testing.T, network *realSatoshiNet) {
 		registered, err := core.RegisterPublicRGB11(public)
 		require.NoError(t, err)
 		require.Equal(t, *expected, *registered)
-		raw, err := network.Core.IndexerURL("testnet")
-		require.NoError(t, err)
-		indexer, err := url.Parse(raw)
-		require.NoError(t, err)
-		readbackClient := wallet.NewSatsNetDKVSClient(indexer.Scheme, indexer.Host, strings.Trim(indexer.Path, "/"), wallet.NewHTTPClient())
-		readback, err := readbackClient.GetRGB11Registration(expected.ContractID)
+		readbackManager, _ := newWalletManagerForNode(t, network.Core, "")
+		readback, err := readbackManager.GetRGB11Registration(expected.ContractID)
 		require.NoError(t, err)
 		require.Equal(t, *expected, *readback)
 		record, err := reader.GetRecordDirect(registryKey)

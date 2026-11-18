@@ -7,7 +7,6 @@ import (
 	"fmt"
 
 	indexer "github.com/sat20-labs/indexer/common"
-	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 )
 
 const (
@@ -231,7 +230,14 @@ func (p *Manager) handleRGB11L1MonitorTick(ctx context.Context) error {
 			continue
 		}
 		scoped.evidence = evidence
-		if err := scoped.handleL1MonitorTick(ctx); err != nil {
+		_, err = runRGB11ManagedOperationWithManager(p, ctx, rgb11ManagedOperationRefresh,
+			func() (*rgb11Manager, error) { return scoped, nil },
+			func(manager *rgb11Manager) (struct{}, error) {
+				chainErr := manager.handleL1MonitorTick(ctx)
+				proxyErr := manager.followRGB11Proxy(ctx)
+				return struct{}{}, errors.Join(chainErr, proxyErr)
+			})
+		if err != nil {
 			monitorErr = errors.Join(monitorErr, fmt.Errorf("monitor RGB11 scope %d/%d: %w",
 				account.WalletID, account.AccountIndex, err))
 		}
@@ -312,44 +318,25 @@ func (p *rgb11Manager) handleL1MonitorTick(ctx context.Context) error {
 	return p.saveRGB11L1MonitorCheckpoint(checkpoint)
 }
 
-// refreshRGB11OnHealthyTip reconciles locally held RGB11 operation/proof
-// material on startup, ordinary block extensions, and same-tip monitor ticks.
-// Bitcoin mempool visibility and outspends may change without a block-tip
-// change, so a matching checkpoint alone is not evidence that a projection is
-// still current. Empty scopes need no chain queries.
+// Ordinary monitoring handles pending transactions only. Cold unlock checks
+// saved carriers once; reorgs retain handleL1Reorg.
 func (p *rgb11Manager) refreshRGB11OnHealthyTip(ctx context.Context) error {
 	if p == nil || p.Manager == nil || p.projectionStore == nil {
 		return nil
 	}
-	walletID, err := p.RGB11WalletID()
-	if err != nil {
-		return err
-	}
 	if err := p.checkRGB11Account(rgb11ManagedOperationRefresh); err != nil {
 		return err
 	}
-	// A cached proof fault blocks backup export, not fresh chain validation.
-	// Preserve the full local material and let the candidate commit own any
-	// resulting change to proof status, locks and readiness.
-	snapshot, err := p.readRGB11Local(walletID)
+	pending, err := p.hasPendingRGB11ChainReconciliation()
 	if err != nil {
 		return err
 	}
-	proofs, err := rgb11wallet.ProofsFromProjectionSnapshot(snapshot.ProjectionRecords)
-	if err != nil {
-		return err
-	}
-	transfers, err := rgb11wallet.TransfersFromProjectionSnapshot(snapshot.ProjectionRecords)
-	if err != nil {
-		return err
-	}
-	if len(proofs) == 0 && len(transfers) == 0 {
-		return nil
-	}
-	if _, err := p.RefreshRGB11State(ctx); err != nil {
-		p.setRGB11ReconciliationState("error")
-		p.notifyRGB11ChainUpdate()
-		return err
+	if pending {
+		if _, err := p.RefreshRGB11State(ctx); err != nil {
+			p.setRGB11ReconciliationState("error")
+			p.notifyRGB11ChainUpdate()
+			return err
+		}
 	}
 	p.setRGB11ReconciliationState("idle")
 	p.notifyRGB11ChainUpdate()

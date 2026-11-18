@@ -97,7 +97,7 @@ type SplicingDataInDB struct {
 	AssetFunding      map[string][]byte
 	AssetProofs       map[string][]byte
 	AssetEntropy      [32]byte
-	NativeAnchorProof []byte
+	RGB11AnchorProof []byte
 	AnchorTx          *swire.MsgTx // or deanchorTx
 	PreTxs            []*wire.MsgTx
 

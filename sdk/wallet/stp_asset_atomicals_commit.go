@@ -37,7 +37,7 @@ func (protocol atomicalsSTPProtocol) BuildCommitment(p *Manager, req STPAssetCom
 		}
 		ids[*group.AssetName] = id
 	}
-	// Choose the same native order before and after FIFO activation. Each
+	// Choose the same ARC20 order before and after FIFO activation. Each
 	// asset's inputs are appended together, and no human ticker orders colors.
 	sort.Slice(groups, func(i, j int) bool {
 		return coloring.CompareAtomicalIDs(ids[*groups[i].AssetName], ids[*groups[j].AssetName]) < 0
@@ -134,7 +134,7 @@ func (protocol atomicalsSTPProtocol) BuildCommitment(p *Manager, req STPAssetCom
 		if inputValue < outputValue {
 			return nil, fmt.Errorf("ARC20 commitment lacks plain padding for a dust-safe final output")
 		}
-		// Keep the native input segment's complete Bitcoin value in its output
+		// Keep the ARC20 input segment's complete Bitcoin value in its output
 		// segment. Following ORDX inputs consequently retain ordinal alignment.
 		payments[len(payments)-1].value += inputValue - outputValue
 		if evidence.height < evidence.heights.CustomColoring && payments[len(payments)-1].value != payments[len(payments)-1].amount {

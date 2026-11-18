@@ -27,14 +27,14 @@ func (p *Manager) LoadClosedChannelForReopen(channelID string) (*ChannelInDB, er
 	if stored.Status > CS_CLOSED {
 		return nil, fmt.Errorf("channel %s is not closed; resume its pending lifecycle", channelID)
 	}
-	if recovered, err := p.loadSTPNativeRevocationRecovery(stored); err != nil {
+	if recovered, err := p.loadSTPRevocationRecovery(stored); err != nil {
 		return nil, err
 	} else if recovered != nil {
 		return nil, fmt.Errorf("channel %s has an unresolved revoked commitment; recover it before reopening", channelID)
 	}
 	// The normal prepared-recovery loader skips closed channels. Reopening must
 	// still check the verified next-height obligation before replacing that state.
-	if prepared, err := p.readSTPNativePreparedRecovery(&Channel{ChannelInDB: *stored}); err != nil {
+	if prepared, err := p.readSTPPreparedRecovery(&Channel{ChannelInDB: *stored}); err != nil {
 		return nil, err
 	} else if prepared != nil {
 		return nil, fmt.Errorf("channel %s has an unresolved prepared commitment; recover it before reopening", channelID)

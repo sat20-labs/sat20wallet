@@ -264,18 +264,18 @@ export async function runPwaToolsCases(t, fixture) {
     let receipt
     await expect.poll(async () => {
       const oldIDs = new Set(before.map(log => log.id))
-      const added = (await logs()).filter(log => !oldIDs.has(log.id) && log.action === 'send_asset_l2')
+      const added = (await logs()).filter(log => !oldIDs.has(log.id) && log.kind === 'send_asset_l2')
       assert.ok(added.length <= 1)
       receipt = added[0]
       if (receipt?.status === 'failed') throw new Error(JSON.stringify(receipt))
       return receipt?.status === 'succeeded'
     }, poll).toBe(true)
-    return confirmedWork(receipt.txid)
+    return confirmedWork(receipt.tx_ids[0])
   }
   const logs = async () => {
     const response = await page.evaluate(() => window.sat20wallet_operation_log.getOperationLogs())
     assert.equal(response.code, 0, response.msg)
-    return JSON.parse(response.data.logs)
+    return response.data
   }
   const ensureExchange = async (fresh = false) => {
     if (!page) page = await importWallet(actor)
@@ -446,7 +446,7 @@ export async function runPwaToolsCases(t, fixture) {
       await expect(page.getByRole('dialog')).toHaveCount(0)
       assert.equal(await amount(page, actor.address, gas), beforeGas)
       const previous = new Set(beforeLogs.map(log => log.id))
-      const deployments = (await logs()).filter(log => !previous.has(log.id) && /deploy.*contract|contract.*deploy/.test(log.action))
+      const deployments = (await logs()).filter(log => !previous.has(log.id) && /deploy.*contract|contract.*deploy/.test(log.kind))
       assert.deepEqual(deployments, [], 'invalid source reached a signing/broadcast operation')
       const after = await control('snapshot')
       assert.deepEqual(after.l1.broadcast_count, snapshot.l1.broadcast_count)

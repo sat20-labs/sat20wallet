@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	"reflect"
 	"testing"
 	"time"
@@ -80,7 +81,7 @@ func TestRGB11StaleOwnerPlan(t *testing.T) {
 		},
 		protectedOutput: protectedOutput,
 		protectedLock: &LockedUtxo{
-			LockedTime: 123, Reason: rgb11wallet.LockReasonRGB,
+			LockedTime: 123, Reason: sdkcommon.UtxoLockRGB,
 		},
 		protectedAmount: indexer.NewDefaultDecimal(1),
 		getOutspend: func(outpoint string) (*rgb11wallet.BitcoinOutspend, error) {
@@ -120,7 +121,7 @@ func TestRGB11ClearStaleOwner(t *testing.T) {
 	fixture.manager.accountProfile = &accountManagementProfile{
 		Version: accountManagementProfileVersion, RootFingerprint: walletFingerprint(fixture.manager.wallet),
 		AccountID: accountID, DeviceID: make([]byte, accountManagementDeviceIDSize),
-		RecoveryConfigured: true, ManagedDataGeneration: 1,
+		RecoveryConfigured: true,
 	}
 	err = fixture.manager.saveAccountManagementProfileLocked()
 	fixture.manager.mutex.Unlock()
@@ -258,7 +259,7 @@ func testRGB11RecoveryRejectsSettledJournalAfterReorg(t *testing.T, clearOwner b
 	}
 	evidence.mu.Unlock()
 	evidence.setStatus(tx.TxHash().String(), rgb11wallet.BitcoinTxStatus{TxID: tx.TxHash().String()})
-	if err := fixture.manager.utxoLockerL1.LockUtxo(fixture.input, rgb11wallet.LockReasonRGB); err != nil {
+	if err := fixture.manager.utxoLockerL1.LockUtxo(fixture.input, sdkcommon.UtxoLockRGB); err != nil {
 		t.Fatal(err)
 	}
 	walletID, err := manager.RGB11WalletID()
@@ -312,7 +313,7 @@ func testRGB11RecoveryRejectsSettledJournalAfterReorg(t *testing.T, clearOwner b
 	if err != nil || !reflect.DeepEqual(before, after) {
 		t.Fatalf("rejected recovery changed durable RGB records: %v", err)
 	}
-	if lock := fixture.manager.utxoLockerL1.GetLockedUtxoList()[fixture.input]; lock == nil || lock.Reason != rgb11wallet.LockReasonRGB || lock.ReservationID != "" {
+	if lock := fixture.manager.utxoLockerL1.GetLockedUtxoList()[fixture.input]; lock == nil || lock.Reason != sdkcommon.UtxoLockRGB || lock.ReservationID != "" {
 		t.Fatal("rejected recovery changed the restored RGB protection lock")
 	}
 }
@@ -332,7 +333,7 @@ func TestRGB11OwnerClearRejects(t *testing.T) {
 		t.Fatalf("rejected clear changed journal: pending=%+v err=%v", stored, err)
 	}
 	if lock := fixture.manager.utxoLockerL1.GetLockedUtxoList()[fixture.input]; lock != nil &&
-		lock.Reason == rgb11wallet.LockReasonRGB {
+		lock.Reason == sdkcommon.UtxoLockRGB {
 		t.Fatalf("rejected clear changed lock: %+v", lock)
 	}
 }

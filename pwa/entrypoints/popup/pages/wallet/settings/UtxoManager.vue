@@ -5,6 +5,7 @@
         <TabsList class="border border-zinc-700 rounded-lg">
           <TabsTrigger value="btc" class="bg-zinc-800 data-[state=active]:bg-purple-700 data-[state=active]:text-zinc-200">BTC</TabsTrigger>
           <TabsTrigger value="satsnet" class="bg-zinc-800 data-[state=active]:bg-purple-700 data-[state=active]:text-zinc-200">SatoshiNet</TabsTrigger>
+          <TabsTrigger value="rgb" class="bg-zinc-800 data-[state=active]:bg-purple-700 data-[state=active]:text-zinc-200">RGB</TabsTrigger>
           <TabsTrigger value="ordinals" class="bg-zinc-800 data-[state=active]:bg-purple-700 data-[state=active]:text-zinc-200">Ordinals</TabsTrigger>
         </TabsList>
       </Tabs>
@@ -12,7 +13,7 @@
 
       <!-- Manual UTXO Lock Section (for BTC and SatoshiNet) -->
       <ManualLockSection
-        v-if="tab !== 'ordinals'"
+        v-if="tab === 'btc' || tab === 'satsnet'"
         @lock-utxo="handleLockUtxo"
       />
 
@@ -24,11 +25,15 @@
         @unlock-selected="unlockSelectedOrdinals"
       />
 
+      <p v-if="tab !== 'ordinals'" class="text-sm text-zinc-300 mb-3">{{ t('utxoManager.networkScope', { network: lockNetwork }) }}</p>
+      <p v-if="tab === 'rgb'" class="text-sm text-zinc-300 mb-3">{{ t('utxoManager.rgbReadOnly') }}</p>
+      <p v-if="loadError" role="alert" class="text-sm text-red-400 break-all">{{ loadError }}</p>
       <!-- UTXO Table -->
-      <UtxoTable
+      <UtxoTable v-if="!loadError"
         :locked-utxos="lockedUtxos"
         :loading="loading"
         :show-checkbox="tab === 'ordinals'"
+        :read-only="tab === 'rgb'"
         :selected-utxos="selectedOrdinals"
         :unlocking-idx="unlockingIdx"
         :network="network"
@@ -42,24 +47,27 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted, computed } from 'vue'
+import { ref, computed } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useI18n } from 'vue-i18n'
 import { useWalletStore } from '@/store/wallet'
 import LayoutSecond from '@/components/layout/LayoutSecond.vue'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Chain } from '@/types'
-import { useUtxoManager } from './composables/useUtxoManager'
+import { useUtxoManager, type UtxoTab } from './composables/useUtxoManager'
 import { ManualLockSection, OrdinalsSection, UtxoTable } from './components'
 
 const { t } = useI18n()
 const walletStore = useWalletStore()
-const { network } = walletStore
+const { network } = storeToRefs(walletStore)
 
-const tab = ref<'btc' | 'satsnet' | 'ordinals'>('btc')
+const tab = ref<UtxoTab>('btc')
 
 // Use the composable for UTXO management logic
 const {
   lockedUtxos,
+  loadError,
+  lockNetwork,
   loading,
   lockLoading,
   unlockingIdx,
@@ -71,7 +79,7 @@ const {
   toggleSelectUtxo,
   toggleSelectAll,
   unlockSelectedOrdinals
-} = useUtxoManager()
+} = useUtxoManager(tab)
 
 // Computed properties
 const currentChain = computed(() =>
@@ -80,15 +88,12 @@ const currentChain = computed(() =>
 
 // Event handlers
 const handleLockUtxo = async (utxoInput: string) => {
-  await lockUtxo(utxoInput, tab.value as 'btc' | 'satsnet')
+  if (tab.value === 'btc' || tab.value === 'satsnet') await lockUtxo(utxoInput, tab.value)
 }
 
 const handleUnlockUtxo = async (utxo: any) => {
   const idx = lockedUtxos.value.findIndex(u => u.utxo === utxo.utxo)
-  await unlockUtxo(idx, utxo, tab.value as 'btc' | 'satsnet')
+  if (tab.value === 'btc' || tab.value === 'satsnet') await unlockUtxo(idx, utxo, tab.value)
 }
 
-// Watchers and lifecycle
-watch(tab, () => fetchLockedUtxos(tab.value), { immediate: true })
-onMounted(() => fetchLockedUtxos(tab.value))
 </script>

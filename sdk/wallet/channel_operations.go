@@ -25,6 +25,12 @@ const (
 )
 
 func (p *Manager) OpenChannel(feeRate int64, amt int64, utxos []string, memo string) (string, error) {
+	release, gateErr := p.beginAccountWrite(rgb11AccountManagedProviderID, nil)
+	if gateErr != nil {
+		return "", gateErr
+	}
+	defer release()
+
 	start := time.Now()
 	Log.Infof("OpenChannel %d", amt)
 	if p.wallet == nil {
@@ -68,6 +74,10 @@ func (p *Manager) OpenChannel(feeRate int64, amt int64, utxos []string, memo str
 }
 
 func (p *Manager) CloseChannel(channelId string, feeRate int64, force bool) (string, string, error) {
+	if gateErr := p.CheckAccountWrite("wallets", AccountManagedDataGlobalScope); gateErr != nil {
+		return "", "", gateErr
+	}
+
 	start := time.Now()
 	Log.Infof("CloseChannel %s", channelId)
 	if p.wallet == nil {
@@ -112,6 +122,10 @@ func (p *Manager) BatchUnlockFromChannel(channelId string, destAddr []string, as
 
 func (p *Manager) BatchUnlockFromChannelV2(channelId string, destAddr []string, assetName string, amtVect []string,
 	feeUtxos []string, memo []byte, reason string, moreData []byte) (string, int64, error) {
+	if gateErr := p.CheckAccountWrite("wallets", AccountManagedDataGlobalScope); gateErr != nil {
+		return "", 0, gateErr
+	}
+
 	start := time.Now()
 	Log.Infof("BatchUnlockFromChannelV2 %s", assetName)
 	if p.wallet == nil {
@@ -246,6 +260,10 @@ func (p *Manager) BatchUnlockFromChannelV2(channelId string, destAddr []string, 
 
 func (p *Manager) LockToChannel(channelId string, assetName string, amt string,
 	utxos, fees []string, memo []byte) (string, int64, error) {
+	if gateErr := p.CheckAccountWrite("wallets", AccountManagedDataGlobalScope); gateErr != nil {
+		return "", 0, gateErr
+	}
+
 	start := time.Now()
 	Log.Infof("LockToChannel %s %s", assetName, amt)
 	if p.wallet == nil {
@@ -402,6 +420,12 @@ func (p *Manager) SplicingOut(channelId string, destAddr string,
 	assetName string, amt string,
 	fees []string, preTxInputs []string, revealKey []byte,
 	feeRate int64, reason string, moreData []byte) (string, int64, error) {
+	release, gateErr := p.beginAccountWrite(rgb11AccountManagedProviderID, nil)
+	if gateErr != nil {
+		return "", 0, gateErr
+	}
+	defer release()
+
 	start := time.Now()
 	Log.Infof("SplicingOut %s %s", assetName, amt)
 	if p.wallet == nil {
@@ -516,6 +540,12 @@ func (p *Manager) SplicingOut(channelId string, destAddr string,
 
 func (p *Manager) SplicingIn(channelId string, assetName string, amt string,
 	utxos, fees, preTxInputs []string, revealKey []byte, feeRate int64, reason string) (string, int64, error) {
+	release, gateErr := p.beginAccountWrite(rgb11AccountManagedProviderID, nil)
+	if gateErr != nil {
+		return "", 0, gateErr
+	}
+	defer release()
+
 	start := time.Now()
 	Log.Infof("SplicingIn %s %s", assetName, amt)
 	if p.wallet == nil {
@@ -536,7 +566,7 @@ func (p *Manager) SplicingIn(channelId string, assetName string, amt string,
 		return "", 0, fmt.Errorf("peer is offline")
 	}
 
-	// RGB native validation must observe the chain before the original
+	// RGB11 validation must observe the chain before the original
 	// synchronous operation takes its channel lock. Existing lock/RPC order
 	// below is unchanged, including both signature exchanges.
 	var rgbEvidence *STPRGBReservationEvidence
@@ -708,6 +738,12 @@ func (p *Manager) SplicingIn(channelId string, assetName string, amt string,
 }
 
 func (p *Manager) ExpandChannel(channelId string, assetName string, utxo string, reason string, memo []byte) (string, string, int64, error) {
+	release, gateErr := p.beginAccountWrite(rgb11AccountManagedProviderID, nil)
+	if gateErr != nil {
+		return "", "", 0, gateErr
+	}
+	release()
+
 	start := time.Now()
 	Log.Infof("ExpandChannel")
 	if p.wallet == nil {
@@ -782,6 +818,10 @@ func (p *Manager) ExpandChannel_SatsNet(channelId string, assetName string, utxo
 }
 
 func (p *Manager) expandChannelSatsNet(channelId string, assetName string, utxos []string) (*Decimal, error) {
+	if gateErr := p.CheckAccountWrite("wallets", AccountManagedDataGlobalScope); gateErr != nil {
+		return nil, gateErr
+	}
+
 	start := time.Now()
 	Log.Infof("ExpandChannel_SatsNet")
 	if p.wallet == nil {
@@ -842,6 +882,10 @@ func (p *Manager) expandChannelSatsNet(channelId string, assetName string, utxos
 }
 
 func (p *Manager) ExpandAll_SatsNet(channelId string, assetName string) (string, error) {
+	if gateErr := p.CheckAccountWrite("wallets", AccountManagedDataGlobalScope); gateErr != nil {
+		return "", gateErr
+	}
+
 	start := time.Now()
 	Log.Infof("ExpandAll_SatsNet")
 	if p.wallet == nil {
@@ -899,6 +943,12 @@ func (p *Manager) ExpandAll_SatsNet(channelId string, assetName string) (string,
 }
 
 func (p *Manager) ExpandAsset(channelId string, assetName string) ([]string, string, error) {
+	release, gateErr := p.beginAccountWrite(rgb11AccountManagedProviderID, nil)
+	if gateErr != nil {
+		return nil, "", gateErr
+	}
+	release()
+
 	if p.wallet == nil {
 		return nil, "", fmt.Errorf("wallet is not created/unlocked")
 	}
@@ -995,6 +1045,12 @@ func (p *Manager) expandAssetForWallet(w common.Wallet, channelId string, assetN
 }
 
 func (p *Manager) ReopenChannel(expandAll bool) (string, error) {
+	release, gateErr := p.beginAccountWrite(rgb11AccountManagedProviderID, nil)
+	if gateErr != nil {
+		return "", gateErr
+	}
+	release()
+
 	w, client, err := p.closedRecoveryWalletSnapshot()
 	if err != nil {
 		return "", err
@@ -1203,6 +1259,12 @@ func (p *Manager) RebuildChannel() (string, error) {
 }
 
 func (p *Manager) RebuildChannelWithUtxo(fundingUtxo string) (string, error) {
+	release, gateErr := p.beginAccountWrite(rgb11AccountManagedProviderID, nil)
+	if gateErr != nil {
+		return "", gateErr
+	}
+	defer release()
+
 	start := time.Now()
 	Log.Infof("RebuildChannel")
 	if p.wallet == nil {
@@ -1294,6 +1356,10 @@ func (p *Manager) RebuildChannelWithUtxo(fundingUtxo string) (string, error) {
 }
 
 func (p *Manager) RestoreChannel(channelId string) (*Channel, error) {
+	if gateErr := p.CheckAccountWrite("wallets", AccountManagedDataGlobalScope); gateErr != nil {
+		return nil, gateErr
+	}
+
 	Log.Infof("RestoreChannel")
 	if err := p.rejectUnfinishedChannelLifecycle(channelId); err != nil {
 		return nil, err

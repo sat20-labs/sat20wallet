@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/url"
 	"os"
@@ -104,22 +105,32 @@ func coreNewE2EManagerWithDB(t *testing.T, cfg coreE2EConfig, chain *coreE2EChai
 			manager.Close()
 		}
 	}()
-	// Run the real account discovery/backup worker. RGB settlement timing stays
-	// explicit in this fixture, independently of private backup completion.
+	// RGB settlement timing stays explicit. Empty and locked devices do not
+	// start an account backup worker before real activation or recovery.
 	manager.SetIndexerHttpClient(&coreE2EL1Indexer{chain: chain})
 	if manager.rgbManager.scopeStates != nil {
 		manager.rgbManager.scopeStates.stopReconciliations()
 	}
 	rgb, err := newRGB11Manager(manager, db, manager.utxoLockerL1, chain)
-	coreRequire(t, "construct native RGB module", err)
+	coreRequire(t, "construct RGB11 module", err)
 	rgb.scopeStates.stopReconciliations()
 	manager.rgbManager = rgb
 	if mnemonic != "" {
 		_, err := manager.ImportWallet(mnemonic, coreE2EPassword)
 		coreRequire(t, "import isolated mnemonic", err)
-	}
-	coreRequire(t, "start real account backup worker", manager.StartDKVSSync())
-	if mnemonic != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		_, err = manager.RecoverAccountManagementFromCurrentWallet(ctx, coreE2EPassword)
+		cancel()
+		if errors.Is(err, ErrRootAccountNotFound) {
+			status := manager.GetAccountManagementStatus()
+			coreAssert(t, status.DiscoveryStatus == "inactive" && status.LocalOnly && !status.RecoveryConfigured,
+				"initial entry did not establish authenticated absence")
+		} else {
+			coreRequire(t, "check root recovery at the initial entry", err)
+		}
+		if manager.GetAccountManagementStatus().RecoveryConfigured {
+			coreRequire(t, "start restored account backup worker", manager.StartDKVSSync())
+		}
 		coreWaitAccountOnline(t, manager)
 	}
 	constructed = true
@@ -210,6 +221,7 @@ func coreActivateE2E(t *testing.T, manager *Manager, mode account.RecoveryMode, 
 	})
 	coreRequire(t, "publish/rehearse/activate paid account", err)
 	coreAssert(t, manager.GetAccountManagementStatus().RecoveryConfigured, "recovery activation did not commit")
+	coreRequire(t, "start activated account backup worker", manager.StartDKVSSync())
 	coreWaitPrivateBackup(t, manager)
 	return material
 }
@@ -248,6 +260,10 @@ func coreRestoreE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain, materi
 	_, err = target.RestoreAccountManagementState(*state, secret, coreE2EPassword, material.locator,
 		AccountManagementRestoreOptions{Location: material.auth.Location, StorageMode: AccountStoragePaid, AutopayContract: material.auth.Autopay.PoolContract})
 	coreRequire(t, "restore independent SDK instance", err)
+	if len(autoSync) == 0 || autoSync[0] {
+		coreAssert(t, target.GetAccountManagementStatus().RecoveryConfigured, "restored account is not activated")
+		coreRequire(t, "start restored account backup worker", target.StartDKVSSync())
+	}
 	return target
 }
 

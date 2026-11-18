@@ -19,6 +19,10 @@ type rgb11ScopeWaitEvidence struct {
 }
 
 func (e *rgb11ScopeWaitEvidence) wait() { e.once.Do(func() { close(e.started); <-e.release }) }
+func (e *rgb11ScopeWaitEvidence) GetGenesisHash() (string, error) {
+	e.wait()
+	return e.BitcoinEvidenceProvider.GetGenesisHash()
+}
 func (e *rgb11ScopeWaitEvidence) GetUTXO(s string) (*rgb11wallet.BitcoinUTXO, error) {
 	e.wait()
 	return e.BitcoinEvidenceProvider.GetUTXO(s)

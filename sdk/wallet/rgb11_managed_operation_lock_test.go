@@ -19,7 +19,7 @@ func TestRGB11BackupNetworkWaitDoesNotBlockRGBState(t *testing.T) {
 		started:             make(chan struct{}), release: make(chan struct{}),
 	}
 	manager.http = remote
-	client, err := manager.GetDKVSClient()
+	client, err := manager.accountDKVSClient()
 	if err != nil {
 		t.Fatal(err)
 	}

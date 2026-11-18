@@ -1,3 +1,5 @@
+//go:build pwa
+
 package e2e
 
 import (
@@ -35,8 +37,7 @@ func runPWAReleaseE2E(t *testing.T, regtest bool) {
 		ctx, deadlineCancel = context.WithDeadline(ctx, deadline.Add(-30*time.Second))
 		defer deadlineCancel()
 	}
-	wasm, runtimeJS := buildPWAWalletRuntime(t, ctx, sdk)
-	args := []string{"scripts/verify/pwa-release-e2e.mjs", wasm, runtimeJS, testCaseDirectory(t)}
+	args := []string{"scripts/verify/pwa-release-e2e.mjs", testCaseDirectory(t)}
 	if regtest {
 		args = append(args, "--regtest")
 		switch os.Getenv("SAT20_PWA_RELEASE_CONTINUE") {

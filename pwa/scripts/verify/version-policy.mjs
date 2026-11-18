@@ -27,37 +27,42 @@ let singleton=await shared();singleton.acceptVersionPolicy({...release,minVersio
 assert.equal((await shared(undefined,undefined,'reload')).versionPolicy.blocked,true)
 assert.equal((await shared('20260909T030000Z')).versionPolicy.blocked,false)
 assert.equal((await shared(undefined,'development')).versionPolicy.blocked,false)
-// Real facade modules, mocked WASM/logging only. Boundary guards remain real.
+// Real facade modules; only WASM and browser diagnostics are replaced.
 globalThis.fixturePolicy=singleton
-let pauseLog=null,finishLog=null,calls=0
+let calls=0
 const helpers=`const {beginVersionDispatch}=globalThis.fixturePolicy;
 const tryit=fn=>async(...args)=>{try{return [undefined,await fn(...args)]}catch(e){return [e,undefined]}};
 const walletRequestSessionGuard=()=>()=>{};
 const beginWalletAwaitTrace=()=>()=>{};
-const noteWasmOperation=()=>{};
-const beginPwaWalletOperation=async()=>{if(globalThis.pauseLog)await globalThis.pauseLog;return {}};
-const beginAccountManagementOperation=beginPwaWalletOperation;
-const finishPwaOperation=async()=>{if(globalThis.finishLog)await globalThis.finishLog};\n`
+const noteWasmOperation=()=>{};\n`
 const facades=[]
-for(const name of ['sat20','stp','rgb11Address','accountManagement']){
+for(const name of ['sat20','stp','accountManagement']){
  let text=transpile(await readFile(new URL(`../../utils/${name}.ts`,import.meta.url),'utf8'))
  text=text.replace(/^import \{([^}]+)\} from '@\/utils\/wasmError';?$/gm,'const {$1} = globalThis.fixtureWasmError')
  text=text.replace(/^import .*?;\n/gm,'')
  facades.push((await import(url(helpers+text))).default)
 }
-const mutations=[()=>facades[0].sendAssets('a','::','330',1),()=>facades[1].openChannel('a','1','1'),()=>facades[2].prepareTransfer({}),()=>facades[3].fundAutopay()]
-let resolveWasm;globalThis.sat20wallet_wasm=new Proxy({}, {get:()=>async()=>{calls++;return {code:0,data:{ok:true}}}});globalThis.sat20account_wasm=globalThis.sat20wallet_wasm
-for(const mutate of mutations){const before=calls;try{const result=await mutate();assert.ok(result[0] instanceof Error)}catch(e){assert.match(e.message,/update required/)}assert.equal(calls,before)}
-await facades[0].getVersion();await facades[3].status();assert.equal(calls,2)
-// Policy arrives while async operation logging is pending: no dispatch.
-singleton.acceptVersionPolicy(release);let resumeLog;globalThis.pauseLog=new Promise(r=>resumeLog=r);const racing=mutations[0]();singleton.acceptVersionPolicy({...release,minVersion:'2.0.0'});resumeLog();await racing;assert.equal(calls,2);globalThis.pauseLog=null
-// Policy after dispatch cannot discard result. Update also waits for result log.
-singleton.acceptVersionPolicy(release);globalThis.sat20wallet_wasm.sendAssets=undefined
-// Replace Proxy with a controllable real method.
+const mutations=[()=>facades[0].sendAssets('a','::','330',1),()=>facades[1].openChannel('a','1','1'),
+ ()=>facades[0].prepareRGB11Transfer({}),()=>facades[2].fundAutopay({})]
+globalThis.sat20wallet_wasm=new Proxy({}, {get:()=>async()=>{calls++;return {code:0,data:{ok:true}}}})
+globalThis.sat20account_wasm=globalThis.sat20wallet_wasm
+globalThis.sat20stp_wasm=globalThis.sat20wallet_wasm
+for(const mutate of mutations){
+ const before=calls
+ try{const result=await mutate();assert.ok(result[0] instanceof Error)}
+ catch(e){assert.match(e.message,/update required/)}
+ assert.equal(calls,before)
+}
+await facades[0].getVersion();await facades[2].getAccountView();assert.equal(calls,2)
+// Once dispatched, an update waits for the original result and preserves it.
+singleton.acceptVersionPolicy(release)
+let resolveWasm
 globalThis.sat20wallet_wasm={sendAssets:async()=>{calls++;return new Promise(r=>resolveWasm=r)}}
-const inFlight=mutations[0]();await new Promise(r=>setTimeout(r,0));singleton.acceptVersionPolicy({...release,minVersion:'2.0.0'})
-let releaseLog;globalThis.finishLog=new Promise(r=>releaseLog=r)
+const inFlight=mutations[0]();await new Promise(r=>setTimeout(r,0))
+singleton.acceptVersionPolicy({...release,minVersion:'2.0.0'})
 let drained=false;const drain=singleton.versionPolicy.waitForUpdate().then(()=>drained=true)
-resolveWasm({code:0,data:{txId:'preserved'}});await new Promise(r=>setTimeout(r,0));assert.equal(drained,false)
-releaseLog();const [error,result]=await inFlight;await drain;assert.equal(error,undefined);assert.equal(result.txId,'preserved');assert.equal(drained,true)
-console.log('Version policy, cache and four facade boundary checks passed')
+assert.equal(drained,false)
+resolveWasm({code:0,data:{txId:'preserved'}})
+const [error,result]=await inFlight;await drain
+assert.equal(error,undefined);assert.equal(result.txId,'preserved');assert.equal(drained,true)
+console.log('Version policy, cache and current facade boundary checks passed')

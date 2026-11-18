@@ -167,10 +167,10 @@ func (p *Manager) createRGBClientRecoveryWithView(channel *Channel, parent *wire
 	if err != nil {
 		return nil, err
 	}
-	if plan == nil || plan.NoNativeAssets || plan.Tx == nil || len(plan.NativeProofs["rgb11"]) == 0 {
+	if plan == nil || plan.NoRGB11Assets || plan.Tx == nil || len(plan.AssetProofs["rgb11"]) == 0 {
 		return nil, fmt.Errorf("incomplete RGB client recovery")
 	}
-	return &CommitmentTx{CommitTx: plan.Tx, AssetProofs: cloneSTPAssetProofs(plan.NativeProofs)}, nil
+	return &CommitmentTx{CommitTx: plan.Tx, AssetProofs: cloneSTPAssetProofs(plan.AssetProofs)}, nil
 }
 
 // This A1 package is deliberately one RGB transition. Reject an expanded

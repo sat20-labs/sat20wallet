@@ -314,6 +314,16 @@ func TestPrivateImportFlushFailure(t *testing.T) {
 	defer zeroBytes(scalar)
 	unchanged := privateImportUnchanged(t, manager)
 	db := manager.db
+	accountID := manager.GetAccountManagementStatus().AccountID
+	walletGen := func() uint64 {
+		row, err := manager.readAccountLocal(accountID, "wallets", AccountManagedDataGlobalScope)
+		if err != nil || row == nil {
+			t.Fatal("cannot read the durable wallet catalog generation")
+		}
+		return row.Generation
+	}
+	before := accountPersistenceReviewCatalog(t, db)
+	generation := walletGen()
 	// Existing fixture preserves the backend's actual AtomicWriteBatch and
 	// fails its Flush, ensuring the transaction boundary is really reached.
 	manager.db = &dkvsAtomicFlushFaultDB{KVDB: db}
@@ -323,10 +333,17 @@ func TestPrivateImportFlushFailure(t *testing.T) {
 		t.Fatal("private import did not reach the injected atomic flush failure")
 	}
 	unchanged()
-	if _, err := manager.ImportWalletWithPrivateKey(hex.EncodeToString(scalar), "password"); err != nil {
+	id, err := manager.ImportWalletWithPrivateKey(hex.EncodeToString(scalar), "password")
+	if err != nil {
 		t.Fatal("healthy retry of private import failed")
 	}
-	if manager.GetAccountManagementStatus().PendingChanges != 1 {
-		t.Fatal("healthy retry did not queue exactly one import")
+	after := accountPersistenceReviewCatalog(t, db)
+	added, ok := after[id]
+	delete(after, id)
+	if !ok || added.Type != WALLET_TYPE_PRIVKEY || !reflect.DeepEqual(before, after) {
+		t.Fatal("healthy retry did not add exactly the returned private wallet to the durable catalog")
+	}
+	if walletGen() != generation+1 {
+		t.Fatal("one successful import must advance the wallet catalog generation exactly once")
 	}
 }

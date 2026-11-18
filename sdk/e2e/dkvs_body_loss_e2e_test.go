@@ -91,7 +91,8 @@ func TestSDKHTTPBodyLoss(t *testing.T) {
 	armed.Store(true)
 	require.NoError(t, f.manager.UpdateWalletName(f.manager.GetAccountManagementStatus().RootWalletID,
 		"Rename across interrupted response"))
-	require.Eventually(t, lost.Load, 10*time.Second, 20*time.Millisecond, "the real HTTP response must be truncated")
+	// The ordinary rename waits for a 10-second quiet interval before sending its HTTP request.
+	require.Eventually(t, lost.Load, 30*time.Second, 20*time.Millisecond, "the real HTTP response must be truncated")
 	if !waitBackupRecovery(t, f.manager) {
 		return
 	}

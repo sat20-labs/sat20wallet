@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import test from 'node:test'
+import { join, isAbsolute } from 'node:path'
 import { chromium } from '@playwright/test'
 
 const tools = readFileSync(new URL('../../entrypoints/popup/pages/wallet/Tools.vue', import.meta.url), 'utf8')
@@ -8,11 +9,15 @@ const dialog = readFileSync(new URL('../../components/ui/dialog/DialogContent.vu
 const confirmClass = tools.match(/<DialogContent class="([^"]+)"[^>]*>\s*<DialogHeader>/)?.[1]
 const baseClass = dialog.match(/'(fixed left-1\/2 top-1\/2[^']+)'/)?.[1]
 assert.ok(confirmClass && baseClass, 'Tools confirmation or shared DialogContent class missing')
-const builtCSS = readdirSync(new URL('../../dist/assets/', import.meta.url)).find((name) => /^index-.*\.css$/.test(name))
-assert.ok(builtCSS, 'PWA built CSS missing; build the current candidate before viewport testing')
-const css = readFileSync(new URL(`../../dist/assets/${builtCSS}`, import.meta.url), 'utf8')
+const dist = process.env.SAT20_PWA_VIEWPORT_DIST
 
-test('Tools confirmation keeps Confirm reachable at a 375×564 viewport', async () => {
+test('Tools confirmation keeps Confirm reachable at a 375×564 viewport', {
+  skip: !dist && 'Requires current release artifact: run TestPWAProductionReleaseE2E (SAT20_PWA_VIEWPORT_DIST)',
+}, async () => {
+  assert.ok(isAbsolute(dist), 'current release dist must be absolute')
+  const builtCSS = readdirSync(join(dist, 'assets')).find(name => /^index-.*\.css$/.test(name))
+  assert.ok(builtCSS, 'current release CSS missing')
+  const css = readFileSync(join(dist, 'assets', builtCSS), 'utf8')
   let browser
   try {
     browser = await chromium.launch({ headless: true })

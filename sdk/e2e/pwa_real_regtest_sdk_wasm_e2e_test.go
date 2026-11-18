@@ -20,10 +20,6 @@ import (
 const sdkPWARegtestWASMAsset = "brc20:f:swze"
 const sdkPWARegtestWASMAmount int64 = 50_000_000
 
-func TestSDKPWARealRegtestSDKWASMInterfacesBrowser(t *testing.T) {
-	runSDKPWARealRegtestBrowser(t, "sdk-wasm")
-}
-
 func sdkPWARegtestSyntheticIdentity(t *testing.T, label string) map[string]string {
 	t.Helper()
 	entropy := sha256.Sum256([]byte("sat20wallet-pwa-e2e:" + label))
@@ -165,6 +161,16 @@ func prepareSDKPWARegtestSDKWASMFixture(t *testing.T, network *realSatoshiNet,
 	map[string]string, map[string]any) {
 	t.Helper()
 	require.Equal(t, "regtest", config.Chain)
+	return prepareNativeIfaceAsset(t, network, ordinary1, ordinary2, mine,
+		func(manager *wallet.Manager, txid string) {
+			confirmSDKPWARegtestL1SDKTransaction(t, manager, txid, mine)
+		})
+}
+
+func prepareNativeIfaceAsset(t *testing.T, network *realSatoshiNet,
+	ordinary1, ordinary2 *wallet.Manager, mine func(string, int),
+	confirmL1 func(*wallet.Manager, string)) (map[string]string, map[string]string, map[string]any) {
+	t.Helper()
 	owner := sdkPWARegtestSyntheticIdentity(t, "sdk-wasm-owner")
 	buyer := sdkPWARegtestSyntheticIdentity(t, "sdk-wasm-buyer")
 
@@ -172,10 +178,10 @@ func prepareSDKPWARegtestSDKWASMFixture(t *testing.T, network *realSatoshiNet,
 	// outputs. These are real plain UTXOs used by the existing L1 send cases.
 	ownerFunding, _, err := ordinary1.BatchSendPlainSats(owner["address"], 5_000_000, 2, 2, nil)
 	require.NoError(t, err)
-	confirmSDKPWARegtestL1SDKTransaction(t, ordinary1, ownerFunding, mine)
+	confirmL1(ordinary1, ownerFunding)
 	buyerFunding, _, err := ordinary1.BatchSendPlainSats(buyer["address"], 1_000_000, 1, 2, nil)
 	require.NoError(t, err)
-	confirmSDKPWARegtestL1SDKTransaction(t, ordinary1, buyerFunding, mine)
+	confirmL1(ordinary1, buyerFunding)
 	for _, actor := range []map[string]string{owner, buyer} {
 		outputs := ordinary1.GetIndexerClient().GetUtxoListWithTicker(actor["address"], &indexercommon.ASSET_PLAIN_SAT)
 		require.NotEmpty(t, outputs, "synthetic actor must have actual indexed L1 plain outputs")
@@ -192,7 +198,7 @@ func prepareSDKPWARegtestSDKWASMFixture(t *testing.T, network *realSatoshiNet,
 	// records, channel balances, or transaction prevouts are seeded by tests.
 	channelID, state := prepareSDKPWARegtestChannelPrerequisites(t, "l2-channel-open", ordinary1, ordinary2, mine)
 	require.Equal(t, sdkPWARegtestChannelReadyReused, state,
-		"SDK WASM assets require the channel opened by the preceding real browser case")
+		"SDK asset preparation requires the already confirmed READY channel")
 	channel := ordinary2.GetChannel(channelID)
 	require.NotNil(t, channel)
 	require.Equal(t, wallet.CS_READY, channel.Status)
@@ -207,7 +213,7 @@ func prepareSDKPWARegtestSDKWASMFixture(t *testing.T, network *realSatoshiNet,
 		require.NotNil(t, deployed)
 		require.NotNil(t, deployed.CommitTx)
 		require.NotNil(t, deployed.RevealTx)
-		confirmSDKPWARegtestL1SDKTransaction(t, ordinary2, deployed.CommitTx.TxID(), mine)
+		confirmL1(ordinary2, deployed.CommitTx.TxID())
 	}
 	ticker := ordinary2.GetTickerInfoV2(sdkPWARegtestWASMAsset)
 	require.NotNil(t, ticker, "real L1 indexer must discover the SDK-deployed four-letter ticker")
@@ -221,7 +227,7 @@ func prepareSDKPWARegtestSDKWASMFixture(t *testing.T, network *realSatoshiNet,
 		require.NoError(t, mintErr)
 		require.NotNil(t, result)
 		require.NotNil(t, result.CommitTx)
-		confirmSDKPWARegtestL1SDKTransaction(t, ordinary2, result.CommitTx.TxID(), mine)
+		confirmL1(ordinary2, result.CommitTx.TxID())
 	}
 	minted = ordinary2.GetAssetBalance("", asset)
 	require.NotNil(t, minted)
@@ -234,7 +240,7 @@ func prepareSDKPWARegtestSDKWASMFixture(t *testing.T, network *realSatoshiNet,
 		require.NoError(t, transferErr)
 		require.NotNil(t, transfer)
 		require.NotNil(t, transfer.CommitTx)
-		confirmSDKPWARegtestL1SDKTransaction(t, ordinary2, transfer.CommitTx.TxID(), mine)
+		confirmL1(ordinary2, transfer.CommitTx.TxID())
 		transferOutputs = ordinary2.GetIndexerClient().GetUtxoListWithTicker(ordinary2.GetWallet().GetAddress(), asset)
 	}
 	require.Len(t, transferOutputs, 1, "one actual confirmed transfer inscription must fund the splice")
@@ -254,7 +260,7 @@ func prepareSDKPWARegtestSDKWASMFixture(t *testing.T, network *realSatoshiNet,
 	anchorTxID := spliceReservation.AnchorTxId()
 	require.NotEmpty(t, anchorTxID, "the SDK reservation must identify this splice's real anchor transaction")
 	anchorOutpoint := anchorTxID + ":0"
-	confirmSDKPWARegtestL1SDKTransaction(t, ordinary2, spliceTxID, mine)
+	confirmL1(ordinary2, spliceTxID)
 	require.Eventually(t, func() bool {
 		current := ordinary2.GetChannel(channelID)
 		return current != nil && current.Status == wallet.CS_READY
@@ -280,7 +286,7 @@ func prepareSDKPWARegtestSDKWASMFixture(t *testing.T, network *realSatoshiNet,
 	require.NotNil(t, btcReservation)
 	btcAnchorTxID := btcReservation.AnchorTxId()
 	require.NotEmpty(t, btcAnchorTxID)
-	confirmSDKPWARegtestL1SDKTransaction(t, ordinary2, btcSpliceTxID, mine)
+	confirmL1(ordinary2, btcSpliceTxID)
 	require.Eventually(t, func() bool {
 		current := ordinary2.GetChannel(channelID)
 		return current != nil && current.Status == wallet.CS_READY

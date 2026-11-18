@@ -18,7 +18,10 @@ type BTCLuckyMiningConfig struct {
 	LowPrioritySleep string `json:"lowPrioritySleep"`
 }
 
-func (p *Manager) StartBTCLuckyMining(req BTCLuckyMiningConfig) (*btclucky.MinerStatus, error) {
+func (p *Manager) StartBTCLuckyMining(req BTCLuckyMiningConfig) (opValue0 *btclucky.MinerStatus, opErr error) {
+	opLogID := p.beginWalletLog("mining", "start_lucky_mining", "Start BTC lucky mining")
+	defer func() { p.finishWalletLog(opLogID, opErr, nil) }()
+
 	if p == nil {
 		return nil, fmt.Errorf("wallet is not initialized")
 	}
@@ -86,7 +89,10 @@ func (p *Manager) StartBTCLuckyMining(req BTCLuckyMiningConfig) (*btclucky.Miner
 	return &st, nil
 }
 
-func (p *Manager) StopBTCLuckyMining() *btclucky.MinerStatus {
+func (p *Manager) StopBTCLuckyMining() (opValue0 *btclucky.MinerStatus) {
+	opLogID := p.beginWalletLog("mining", "stop_lucky_mining", "Stop BTC lucky mining")
+	defer func() { p.finishWalletLog(opLogID, nil, nil) }()
+
 	if p == nil {
 		return &btclucky.MinerStatus{}
 	}

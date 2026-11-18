@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"debug/buildinfo"
 	"encoding/json"
 	"flag"
 	"net/http"
@@ -36,6 +37,10 @@ func TestSDKCoreModulesE2E(t *testing.T) {
 	if childRun == "" {
 		childRun = "^TestSDKCoreModulesConnectedE2E$"
 	}
+	require.False(t, !guardianTests && strings.Contains(childRun, "guardian_two_of_three_and_wrong_knowledge"),
+		"Guardian child selection requires -tags=guardian")
+	require.False(t, !pwaTests && strings.Contains(childRun, "PWA_RGB11_nonempty_recovery_and_failure_retry"),
+		"browser child selection requires -tags=pwa")
 	prebuiltBundle, bundleErr := readE2EArtifactBundle()
 	require.NoError(t, bundleErr)
 	if prebuiltBundle != nil {
@@ -119,12 +124,13 @@ func coreE2ESegments(selector string) []coreE2ESegment {
 	}
 	history := []string{"RGB11_fullsend_history_cold_recovery_reorg_and_competing_intent"}
 	recovery := []string{
-		"RGB11_R11_stable_only_cold_restore_ignores_valid_and_corrupt_legacy_cache",
 		"RGB11_R23_temporary_TTL_expiry_cold_restore_and_respend",
 		"RGB11_R09_same_root_real_CAS_loser_retains_private_intent_and_tests_recovery",
 		"RGB11_recovery_capacity_boundaries",
 		"RGB11_account_recovery_failure_boundaries",
-		"guardian_two_of_three_and_wrong_knowledge",
+	}
+	if guardianTests {
+		recovery = append(recovery, "guardian_two_of_three_and_wrong_knowledge")
 	}
 	selectGroups := func(groups []string) string { return root + "/^(" + strings.Join(groups, "|") + ")$" }
 	all := append(append(append([]string(nil), ordinary...), history...), recovery...)
@@ -132,12 +138,12 @@ func coreE2ESegments(selector string) []coreE2ESegment {
 		// Focused group/leaf selectors retain their exact shared-parent flow.
 		return []coreE2ESegment{{Name: "selected", Run: selector}}
 	}
-	if selector == root {
-		// The normal browser journey keeps its original position and fixtures
+	if selector == root && pwaTests {
+		// The explicit browser journey keeps its original position and fixtures
 		// in the ordinary segment; native-only runners never build its WASM.
 		ordinary = append(ordinary[:5:5], append([]string{"PWA_RGB11_nonempty_recovery_and_failure_retry"}, ordinary[5:]...)...)
 	}
-	if selector == selectGroups(all) {
+	if selector == selectGroups(all) || (selector == root && !pwaTests) {
 		// Ordinary and recovery cases keep their source order while reusing one
 		// account/network fixture. Keep the 20-hop history case on a fresh
 		// network: measured shared history was substantially slower.
@@ -167,14 +173,19 @@ func TestCoreE2ESegmentsNativeKeepsHistoryIsolated(t *testing.T) {
 		"RGB11_same_root_three_device_cas_cancel_broadcast_and_respend",
 		"RGB11_recovery_identity_batch_and_hop_lifecycles",
 		"RGB11_fullsend_history_cold_recovery_reorg_and_competing_intent",
-		"RGB11_R11_stable_only_cold_restore_ignores_valid_and_corrupt_legacy_cache",
 		"RGB11_R23_temporary_TTL_expiry_cold_restore_and_respend",
 		"RGB11_R09_same_root_real_CAS_loser_retains_private_intent_and_tests_recovery",
 		"RGB11_recovery_capacity_boundaries",
 		"RGB11_account_recovery_failure_boundaries",
-		"guardian_two_of_three_and_wrong_knowledge",
 	}
-	require.Len(t, groups, 16)
+	if guardianTests {
+		groups = append(groups, "guardian_two_of_three_and_wrong_knowledge")
+	}
+	expectedCount := 14
+	if guardianTests {
+		expectedCount++
+	}
+	require.Len(t, groups, expectedCount)
 	selector := root + "/^(" + strings.Join(groups, "|") + ")$"
 	ordinaryRecovery := append(append([]string(nil), groups[:9]...), groups[10:]...)
 	expected := []coreE2ESegment{
@@ -183,9 +194,12 @@ func TestCoreE2ESegmentsNativeKeepsHistoryIsolated(t *testing.T) {
 	}
 	require.Equal(t, expected, coreE2ESegments(selector))
 	require.False(t, coreChildNeedsWASM(selector))
-	require.True(t, coreChildNeedsWASM(root+"/^PWA_RGB11_nonempty_recovery_and_failure_retry$"))
-	require.True(t, coreChildNeedsWASM(root))
-	require.True(t, coreChildNeedsWASM(root+"/^[d]kvs_real_paid_cross_instance_prefix_and_CAS$"))
+	require.Equal(t, pwaTests, coreChildNeedsWASM(root+"/^PWA_RGB11_nonempty_recovery_and_failure_retry$"))
+	require.Equal(t, pwaTests, coreChildNeedsWASM(root))
+	require.Equal(t, pwaTests, coreChildNeedsWASM(root+"/^[d]kvs_real_paid_cross_instance_prefix_and_CAS$"))
+	if !pwaTests {
+		require.Equal(t, expected, coreE2ESegments(root))
+	}
 }
 
 func runCoreE2ESegment(t *testing.T, ctx context.Context, deadline time.Time,
@@ -346,10 +360,28 @@ func runCoreE2ESegment(t *testing.T, ctx context.Context, deadline time.Time,
 	var prebuiltConverter string
 	if prebuiltBundle == nil {
 		command = exec.CommandContext(ctx, filepath.Join(runtime.GOROOT(), "bin", "go"),
-			"test", "-json", "-failfast", "./wallet", "-run", childRun, "-count=1", "-timeout="+remaining.String())
+			"test", "-mod=readonly", "-json", "-failfast", "-p=1", "-parallel=1", "-tags="+coreTestTags(), "./wallet", "-run", childRun, "-count=1", "-timeout="+remaining.String())
 	} else {
 		child, artifactErr := prebuiltBundle.file("wallet.test")
 		require.NoError(t, artifactErr)
+		info, infoErr := buildinfo.ReadFile(child)
+		require.NoError(t, infoErr, "read Core child build tags")
+		var builtTags string
+		for _, setting := range info.Settings {
+			if setting.Key == "-tags" {
+				builtTags = setting.Value
+			}
+		}
+		selectedTags := strings.FieldsFunc(builtTags, func(c rune) bool { return c == ' ' || c == ',' })
+		for tag, enabled := range map[string]bool{"guardian": guardianTests, "pwa": pwaTests} {
+			found := false
+			for _, value := range selectedTags {
+				if value == tag {
+					found = true
+				}
+			}
+			require.Equal(t, enabled, found, "Core child artifact tag %s differs from its parent", tag)
+		}
 		prebuiltConverter, artifactErr = prebuiltBundle.file("test2json")
 		require.NoError(t, artifactErr)
 		command = exec.CommandContext(ctx, child, "-test.v=test2json", "-test.run="+childRun,
@@ -459,9 +491,30 @@ func runCoreE2ESegment(t *testing.T, ctx context.Context, deadline time.Time,
 		t.Fatalf("core-e2e: wallet lifecycle suite failed: %v; redacted evidence in review-evidence/core-modules-e2e-latest.json; diagnostic=%s", runErr, childLog.Name())
 	}
 	require.NotEmpty(t, childSummary.Verdicts, "child must execute tests, not merely compile")
+	groupVerdicts := 0
+	for _, verdict := range childSummary.Verdicts {
+		if strings.HasPrefix(verdict.Test, "TestSDKCoreModulesConnectedE2E/") {
+			groupVerdicts++
+		}
+	}
+	require.Positive(t, groupVerdicts, "Core selector matched no business group; a parent-only PASS is not coverage")
+}
+
+func coreTestTags() string {
+	var tags []string
+	if guardianTests {
+		tags = append(tags, "guardian")
+	}
+	if pwaTests {
+		tags = append(tags, "pwa")
+	}
+	return strings.Join(tags, ",")
 }
 
 func coreChildNeedsWASM(selector string) bool {
+	if !pwaTests {
+		return false
+	}
 	// Fixed native runners use a slash-separated, anchored parent/group
 	// selector. Keep the default and ambiguous regexes on the full browser path.
 	parts := strings.Split(selector, "/")

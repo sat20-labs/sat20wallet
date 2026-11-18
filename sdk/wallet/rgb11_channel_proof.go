@@ -41,7 +41,7 @@ func (p *Manager) rebuildRGB11TxOutput(tx *wire.MsgTx, proof *wwire.RGB11Signing
 	if p.rgbManager != nil && p.rgbManager.evidence != nil {
 		provider = p.rgbManager.evidence
 	}
-	validator := rgb11wallet.NewNativeConsensusValidatorWithReveals(reveals...)
+	validator := rgb11wallet.NewRGB11ValidatorWithReveals(reveals...)
 	prepared, err := validator.ValidatePreparedConsignment(context.Background(), proof.Consignment, provider)
 	if err != nil {
 		return nil, nil, err
@@ -59,27 +59,27 @@ func (p *Manager) rebuildRGB11TxOutput(tx *wire.MsgTx, proof *wwire.RGB11Signing
 	consumed := make(map[string]bool)
 	for _, edge := range history.Consumers {
 		if edge.WitnessTxID == tx.TxID() {
-			consumed[nativeAllocationID(edge.InputOperationID, edge.AssignmentType, edge.AssignmentIndex)] = true
+			consumed[rgb11AllocationID(edge.InputOperationID, edge.AssignmentType, edge.AssignmentIndex)] = true
 		}
 	}
-	nativeInputs := make(map[string]indexer.TxAssets)
+	rgb11Inputs := make(map[string]indexer.TxAssets)
 	for _, historical := range history.HistoricalAllocations {
 		allocation := historical.Allocation
-		id := nativeAllocationID(allocation.OperationID, allocation.AssignmentType, allocation.AssignmentIndex)
+		id := rgb11AllocationID(allocation.OperationID, allocation.AssignmentType, allocation.AssignmentIndex)
 		if !consumed[id] {
 			continue
 		}
 		if allocation.AssetName.Protocol != rgb11wallet.Protocol || allocation.AssetName.Type != indexer.ASSET_TYPE_FT || allocation.Amount.Sign() <= 0 {
 			return nil, nil, ErrRGB11AssetPreservation
 		}
-		assets := nativeInputs[allocation.OutPoint]
+		assets := rgb11Inputs[allocation.OutPoint]
 		if err := assets.Add(&indexer.AssetInfo{Name: allocation.AssetName, Amount: *allocation.Amount.Clone(), BindingSat: 0}); err != nil {
 			return nil, nil, err
 		}
-		nativeInputs[allocation.OutPoint] = assets
+		rgb11Inputs[allocation.OutPoint] = assets
 		delete(consumed, id)
 	}
-	if len(consumed) != 0 || len(nativeInputs) == 0 {
+	if len(consumed) != 0 || len(rgb11Inputs) == 0 {
 		return nil, nil, fmt.Errorf("RGB11 signing proof has incomplete consumed allocation evidence")
 	}
 	inputs := make([]*TxOutput, 0, len(tx.TxIn))
@@ -93,7 +93,7 @@ func (p *Manager) rebuildRGB11TxOutput(tx *wire.MsgTx, proof *wwire.RGB11Signing
 		}
 		for _, asset := range output.Assets {
 			if !indexer.IsPlainAsset(&asset.Name) &&
-				(!mixedSweep || len(nativeInputs[input.PreviousOutPoint.String()]) != 0 || asset.Name.Protocol == rgb11wallet.Protocol) {
+				(!mixedSweep || len(rgb11Inputs[input.PreviousOutPoint.String()]) != 0 || asset.Name.Protocol == rgb11wallet.Protocol) {
 				return nil, nil, ErrRGB11AssetPreservation
 			}
 		}
@@ -122,14 +122,14 @@ func (p *Manager) rebuildRGB11TxOutput(tx *wire.MsgTx, proof *wwire.RGB11Signing
 			return nil, nil, fmt.Errorf("RGB11 signing input carrier is not the current exact Bitcoin output: %w", err)
 		}
 		resolved := output.Clone()
-		resolved.Assets = nativeInputs[input.PreviousOutPoint.String()]
+		resolved.Assets = rgb11Inputs[input.PreviousOutPoint.String()]
 		for _, asset := range resolved.Assets {
 			inputTotals[asset.Name] = inputTotals[asset.Name].Add(&asset.Amount)
 		}
-		delete(nativeInputs, input.PreviousOutPoint.String())
+		delete(rgb11Inputs, input.PreviousOutPoint.String())
 		inputs = append(inputs, resolved)
 	}
-	if len(nativeInputs) != 0 {
+	if len(rgb11Inputs) != 0 {
 		return nil, nil, fmt.Errorf("RGB11 consumer graph does not match Bitcoin inputs")
 	}
 	outputs := make([]*TxOutput, len(tx.TxOut))

@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"errors"
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	"strings"
 	"testing"
 
@@ -14,7 +15,7 @@ func TestRGB11OwnerlessReceiveReservationFailsClosed(t *testing.T) {
 	defer database.Close()
 	locker := NewUtxoLocker(database, nil, L1_NETWORK_BITCOIN)
 	outpoint := strings.Repeat("ab", 32) + ":0"
-	if err := locker.TryReserve([]string{outpoint}, rgb11wallet.LockReasonPending, "active-owner"); err != nil {
+	if err := locker.TryReserve([]string{outpoint}, sdkcommon.UtxoLockRGBPending, "active-owner"); err != nil {
 		t.Fatal(err)
 	}
 	deleted := false
@@ -32,7 +33,7 @@ func TestRGB11OwnerlessReceiveReservationFailsClosed(t *testing.T) {
 	}
 	lock := locker.GetLockedUtxoList()[outpoint]
 	if lock == nil || lock.ReservationID != "active-owner" ||
-		lock.Reason != rgb11wallet.LockReasonPending {
+		lock.Reason != sdkcommon.UtxoLockRGBPending {
 		t.Fatalf("ownerless reservation changed UTXO lock: %+v", lock)
 	}
 }
@@ -43,7 +44,7 @@ func TestRGB11OwnedReceiveReservationReleasesBeforeDelete(t *testing.T) {
 	locker := NewUtxoLocker(database, nil, L1_NETWORK_BITCOIN)
 	outpoint := strings.Repeat("cd", 32) + ":1"
 	const owner = "receive-owner"
-	if err := locker.TryReserve([]string{outpoint}, rgb11wallet.LockReasonPending, owner); err != nil {
+	if err := locker.TryReserve([]string{outpoint}, sdkcommon.UtxoLockRGBPending, owner); err != nil {
 		t.Fatal(err)
 	}
 	deleted := false

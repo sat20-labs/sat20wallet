@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -598,11 +599,12 @@ func TestDKVSThreeFixRestartPendingReadDoesNotGrantWrites(t *testing.T) {
 	require.NoError(t, m.dkvs.requireWritePaths(s.client, keys))
 }
 
-func TestDKVSThreeFixOfflineRecoveryBlocksLocalEdits(t *testing.T) {
+func TestAccountOfflineReadOnly(t *testing.T) {
 	old := _chain
 	_chain = "testnet"
 	defer func() { _chain = old }()
 	m, r, s, keys := accountTTLNoopFixture(t)
+	require.True(t, m.GetAccountManagementStatus().RecoveryConfigured)
 	key := accountTestKey(t, m, "pending-recovery/value")
 	r.mu.Lock()
 	r.postCommitErr = &net.OpError{Op: "read", Net: "tcp", Err: errors.New("lost ACK")}
@@ -619,19 +621,21 @@ func TestDKVSThreeFixOfflineRecoveryBlocksLocalEdits(t *testing.T) {
 	_, _, receiveErr := m.syncDKVSOnceResult()
 	require.ErrorIs(t, receiveErr, offline, "the actual receiver must observe the outage")
 	require.ErrorIs(t, m.dkvs.requireOnlinePaths(s.client, keys), ErrDKVSPathNotSynced)
-	before, err := m.db.Read(accountManagementProfileKey())
-	require.NoError(t, err)
 	id := m.GetCurrentWalletId()
-	name := m.walletInfoMap[id].Name
-	t.Run("rename", func(t *testing.T) { require.Error(t, m.UpdateWalletName(id, "blocked")) })
-	t.Run("password", func(t *testing.T) { require.Error(t, m.ChangePassword("password", "must-not-change")) })
-	after, err := m.db.Read(accountManagementProfileKey())
+	before := m.GetWalletCatalog()
+	durable := accountPersistenceReviewCatalog(t, m.db)
+	profile, err := m.db.Read(accountManagementProfileKey())
 	require.NoError(t, err)
-	require.Equal(t, string(before), string(after))
-	require.Equal(t, name, m.walletInfoMap[id].Name)
-
-	// Restore the same endpoint and reconcile the original signed request;
-	// a normal successful account sync must permit local edits again.
+	require.ErrorIs(t, m.UpdateWalletName(id, "offline rejected"), ErrDKVSPathNotSynced)
+	require.ErrorIs(t, m.ChangePassword("password", "offline-password"), ErrDKVSPathNotSynced)
+	require.Equal(t, before, m.GetWalletCatalog(), "offline cached catalog must remain readable and unchanged")
+	require.True(t, reflect.DeepEqual(durable, accountPersistenceReviewCatalog(t, m.db)),
+		"rejected offline writes changed durable wallet records")
+	afterProfile, err := m.db.Read(accountManagementProfileKey())
+	require.NoError(t, err)
+	require.True(t, bytes.Equal(profile, afterProfile), "rejected password change altered the durable account profile")
+	// The active account stays read-only during a real outage. Reconnection
+	// resolves the original signed request and restores new-write eligibility.
 	s.client.Http = r
 	_, err = m.syncDKVSOnce()
 	require.NoError(t, err)
@@ -641,6 +645,7 @@ func TestDKVSThreeFixOfflineRecoveryBlocksLocalEdits(t *testing.T) {
 	require.NoError(t, m.dkvs.requireOnlinePaths(s.client, keys))
 	require.NoError(t, m.UpdateWalletName(id, "recovered"))
 	require.Equal(t, "recovered", m.walletInfoMap[id].Name)
+	require.NoError(t, m.ChangePassword("password", "online-password"))
 }
 
 func TestDKVSThreeFixMappingWriteVisibility(t *testing.T) {
@@ -663,7 +668,7 @@ func TestDKVSThreeFixMappingWriteVisibility(t *testing.T) {
 			require.NoError(t, m.SubscribeDKVSPrefix(prefix))
 			_, err = m.syncDKVSOnce()
 			require.NoError(t, err)
-			c, err := m.GetDKVSClient()
+			c, err := m.accountDKVSClient()
 			require.NoError(t, err)
 			failInstall := mode == "install_failure"
 			sends := 0

@@ -2,6 +2,7 @@ package rgb11wallet
 
 import (
 	"github.com/sat20-labs/rgb11/consignment"
+	"github.com/sat20-labs/rgb11/operations"
 	"github.com/sat20-labs/rgb11/seals"
 	"github.com/sat20-labs/rgb11/strict_types"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
@@ -27,7 +28,7 @@ func PublicRGB11Contract(content []byte) ([]byte, error) {
 			if err := concealPublicGenesis(&f.Value); err != nil {
 				return nil, err
 			}
-		case "version", "transfer", "schema", "types", "scripts":
+		case "version", "transfer":
 		default:
 			return nil, dkvsindexer.ErrInvalidRecord
 		}
@@ -82,18 +83,21 @@ func concealPublicGenesis(genesis *strict_types.Value) error {
 		}
 		for j := range list.Items {
 			a := publicUnwrap(&list.Items[j])
-			if a.Kind != strict_types.ValueUnion || a.Inner == nil {
+			if a == nil || a.Kind != strict_types.ValueStruct {
 				return dkvsindexer.ErrInvalidRecord
 			}
-			if a.Name == "confidentialSeal" {
+			kind, sealValue, state, err := operations.AssignmentParts(*a)
+			if err != nil {
+				return dkvsindexer.ErrInvalidRecord
+			}
+			if kind == "confidentialSeal" {
 				continue
 			}
-			if a.Name != "revealed" {
+			if kind != "revealed" {
 				return dkvsindexer.ErrInvalidRecord
 			}
-			seal, state := publicField(a.Inner, "seal"), publicField(a.Inner, "state")
-			txid, vout, blinding := publicField(seal, "txid"), publicField(seal, "vout"), publicField(seal, "blinding")
-			if txid == nil || vout == nil || blinding == nil || state == nil {
+			txid, vout, blinding := publicField(&sealValue, "txid"), publicField(&sealValue, "vout"), publicField(&sealValue, "blinding")
+			if txid == nil || vout == nil || blinding == nil {
 				return dkvsindexer.ErrInvalidRecord
 			}
 			raw, ok := txid.Bytes()
@@ -110,11 +114,11 @@ func concealPublicGenesis(genesis *strict_types.Value) error {
 			if err != nil {
 				return err
 			}
-			inner := strict_types.Value{Kind: strict_types.ValueStruct, Fields: []strict_types.Field{
-				{Name: "seal", Value: strict_types.Value{Kind: strict_types.ValueBytes, Raw: append([]byte(nil), secret[:]...)}},
+			concealed := strict_types.Value{Kind: strict_types.ValueBytes, Raw: append([]byte(nil), secret[:]...)}
+			*a = strict_types.Value{Kind: strict_types.ValueStruct, Fields: []strict_types.Field{
+				{Name: "seal", Value: strict_types.Value{Kind: strict_types.ValueUnion, Name: "concealed", Tag: 1, Inner: &concealed}},
 				{Name: "state", Value: state.Clone()},
 			}}
-			*a = strict_types.Value{Kind: strict_types.ValueUnion, Name: "confidentialSeal", Tag: 1, Inner: &inner}
 		}
 	}
 	return nil

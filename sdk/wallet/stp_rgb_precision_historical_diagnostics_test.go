@@ -23,58 +23,58 @@ func diagnoseUnsupportedHistoricalRGBMetadataRestore(t *testing.T) {
 			p := precisionSeparationRuntime(t)
 			output := precisionSeparationValidatedSource(t, precision)
 			p.AssetName = output.Assets[0].Name
-			if err := p.initializeNativePublicMetadata(output); err != nil {
+			if err := p.initializeRGB11PublicMetadata(output); err != nil {
 				t.Fatal(err)
 			}
-			raw, err := p.db.Read(p.nativePublicMetadataKey())
+			raw, err := p.db.Read(p.rgb11PublicMetadataKey())
 			if err != nil {
 				t.Fatal(err)
 			}
 			// Reconstruct the old on-disk runtime interpretation without changing
 			// the metadata record. Loading must preserve its authenticated root.
 			p.N, p.Divisibility = precision, precision
-			p.nativeMetadataInitialized = false
+			p.rgb11MetadataInitialized = false
 			oldRoot := CalcContractRuntimeBaseMerkleRoot(&p.ContractRuntimeBase)
-			if err := p.restoreNativePublicMetadata(); err != nil {
+			if err := p.restoreRGB11PublicMetadata(); err != nil {
 				t.Fatal(err)
 			}
-			if p.N != 0 || p.Divisibility != precision || !p.nativeMetadataInitialized || p.GetAssetNameV2().N != 0 {
-				t.Errorf("restored RGB binding/precision/known state is wrong: N=%d precision=%d known=%t", p.N, p.Divisibility, p.nativeMetadataInitialized)
+			if p.N != 0 || p.Divisibility != precision || !p.rgb11MetadataInitialized || p.GetAssetNameV2().N != 0 {
+				t.Errorf("restored RGB binding/precision/known state is wrong: N=%d precision=%d known=%t", p.N, p.Divisibility, p.rgb11MetadataInitialized)
 			}
 			if !bytes.Equal(oldRoot, CalcContractRuntimeBaseMerkleRoot(&p.ContractRuntimeBase)) {
 				t.Error("reading historical RGB metadata changed the authenticated runtime root")
 			}
-			after, err := p.db.Read(p.nativePublicMetadataKey())
+			after, err := p.db.Read(p.rgb11PublicMetadataKey())
 			if err != nil || !bytes.Equal(raw, after) {
 				t.Fatalf("metadata read rewrote the persisted record: %v", err)
 			}
-			if err := p.applyNativePublicMetadata(&nativePublicMetadata{Precision: precision + 1}); err == nil {
+			if err := p.applyRGB11PublicMetadata(&rgb11PublicMetadata{Precision: precision + 1}); err == nil {
 				t.Error("known precision, including true zero, was treated as unknown")
 			}
 		})
 	}
 	t.Run("unknown-stays-unknown", func(t *testing.T) {
 		p := precisionSeparationRuntime(t)
-		if err := p.restoreNativePublicMetadata(); err != nil {
+		if err := p.restoreRGB11PublicMetadata(); err != nil {
 			t.Fatal(err)
 		}
-		if p.nativeMetadataInitialized {
+		if p.rgb11MetadataInitialized {
 			t.Fatal("missing metadata was invented as known zero precision")
 		}
 	})
-	t.Run("legacy-does-not-read-native-record", func(t *testing.T) {
+	t.Run("legacy-does-not-read-RGB11-record", func(t *testing.T) {
 		p := precisionSeparationRuntime(t)
 		p.AssetName = indexer.AssetName{Protocol: "ordx", Type: "f", Ticker: "token"}
 		p.N, p.Divisibility = 100, 0
-		if err := p.db.Write(p.nativePublicMetadataKey(), []byte("not a native record")); err != nil {
+		if err := p.db.Write(p.rgb11PublicMetadataKey(), []byte("not a RGB11 record")); err != nil {
 			t.Fatal(err)
 		}
 		before := CalcContractRuntimeBaseMerkleRoot(&p.ContractRuntimeBase)
-		if err := p.restoreNativePublicMetadata(); err != nil {
-			t.Fatalf("legacy protocol read native metadata: %v", err)
+		if err := p.restoreRGB11PublicMetadata(); err != nil {
+			t.Fatalf("legacy protocol read RGB11 metadata: %v", err)
 		}
 		if p.N != 100 || p.Divisibility != 0 || !bytes.Equal(before, CalcContractRuntimeBaseMerkleRoot(&p.ContractRuntimeBase)) {
-			t.Fatal("native metadata handling changed legacy runtime state or hash")
+			t.Fatal("RGB11 metadata handling changed legacy runtime state or hash")
 		}
 	})
 }

@@ -27,7 +27,7 @@ type rgb11SnapshotConsumerInput struct {
 // contribute no consumer edges; if an outpoint is positively reported spent
 // by one of them, the caller will fail closed because no validated edge binds
 // that spender to the exact input Opout.
-func rgb11SnapshotConsignmentConsumers(ctx context.Context, validator *rgb11wallet.NativeConsensusValidator,
+func rgb11SnapshotConsignmentConsumers(ctx context.Context, validator *rgb11wallet.RGB11ConsensusValidator,
 	evidence rgb11wallet.BitcoinEvidenceProvider, objects map[string][]byte) (
 	[]rgb11SnapshotConsumerInput, map[string]*rgb11wallet.HistoricalValidation, error) {
 	if validator == nil || evidence == nil {

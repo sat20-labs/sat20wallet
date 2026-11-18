@@ -40,15 +40,15 @@ type ChannelInDB struct {
 	// 如果一个output没有utxoId，说明还没有确认，不能使用该output，一层和二层都一样
 	ChanPoint    *TxOutput                 // 白聪，跟随splicing更新，至少包含 MIN_SERVER_RESERVE_SATS
 	FundingUtxos map[AssetName][]*TxOutput // 不包括ChanPoint
-	// Native asset proofs are kept with the custody state, never synthesized
+	// Asset proofs are kept with the custody state, never synthesized
 	// from an indexer's Bitcoin-only output view.
 	AssetFunding       map[string][]byte
 	AssetEntropy       [32]byte
 	ClosingAssetProofs map[string][]byte
 	// Exact signed, possibly unbroadcast funding ancestors are required to
 	// use a commitment after revocation even if the main reservation is lost.
-	NativeParents  []*wire.MsgTx
-	NativePrevouts map[string]*wire.TxOut
+	FundingParents  []*wire.MsgTx
+	FundingPrevouts map[string]*wire.TxOut
 	PendingUtxos   map[string]*TxOutput      // key: txId, 还没有广播 (暂时无用)
 	StubUtxos      map[AssetName][]*TxOutput // 某些资产需要预先提供一个stub的utxo，方便做资产的分配。必须是330聪
 	// 如果自身通道没有stub utxo，可以由服务节点提供，但需要支付一定的费用
@@ -118,8 +118,8 @@ func (c *ChannelInDB) Clone() *ChannelInDB {
 		AssetFunding:       cloneSTPAssetProofs(c.AssetFunding),
 		AssetEntropy:       c.AssetEntropy,
 		ClosingAssetProofs: cloneSTPAssetProofs(c.ClosingAssetProofs),
-		NativeParents:      cloneSTPBitcoinChain(c.NativeParents),
-		NativePrevouts:     cloneSTPPrevouts(c.NativePrevouts),
+		FundingParents:      cloneSTPBitcoinChain(c.FundingParents),
+		FundingPrevouts:     cloneSTPPrevouts(c.FundingPrevouts),
 		PendingUtxos:       make(map[string]*TxOutput),
 		UtxosL2:            make(map[string]*TxOutput_SatsNet),
 		PendingUtxosL2:     make(map[string]*TxOutput_SatsNet),

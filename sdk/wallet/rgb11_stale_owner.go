@@ -156,15 +156,15 @@ func (p *rgb11Manager) clearRGB11StaleOwner(transferID, ownerHash string) error 
 	if err := p.rgbManager.projectionStore.CompareAndSavePendingTransferStates([]*rgb11wallet.PendingTransfer{baseline}, []*rgb11wallet.PendingTransfer{pending}); err != nil {
 		return err
 	}
-	backupErr := p.rgbManager.autoBackupRGB11AfterMutation()
+	p.NotifyAccountChanged()
 	readback, err := p.rgbManager.projectionStore.LoadPendingTransfer(transferID)
 	if err != nil {
-		return errors.Join(err, backupErr)
+		return err
 	}
 	if readback.ReservationID != "" {
-		return errors.Join(errors.New("target reservation owner clearing was not persisted"), backupErr)
+		return errors.New("target reservation owner clearing was not persisted")
 	}
-	return backupErr
+	return nil
 }
 
 func (p *Manager) rgb11OwnerSource(target RGB11StaleLockTarget) (rgb11OwnerSource, error) {
@@ -365,7 +365,7 @@ func validateRGB11Protected(source rgb11OwnerSource) error {
 	}
 	if source.protectedProof.OutPoint != rgb11OwnerKeepPoint || source.protectedProof.AssetName != *asset ||
 		source.protectedProof.Status != "settled" || source.protectedAmount.String() != "1" ||
-		source.protectedLock.Reason != rgb11wallet.LockReasonRGB || source.protectedLock.ReservationID != "" ||
+		source.protectedLock.Reason != common.UtxoLockRGB || source.protectedLock.ReservationID != "" ||
 		source.protectedLock.ReservationPreviousReason != "" || source.protectedLock.Value != 0 ||
 		len(source.protectedLock.Assets) != 0 || source.protectedLock.Owner != nil {
 		return errors.New("protected c57 RGB11 state mismatch")

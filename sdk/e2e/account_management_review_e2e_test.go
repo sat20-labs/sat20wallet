@@ -96,12 +96,16 @@ func prepareAccountReviewWithMnemonic(t *testing.T, network *realSatoshiNet, mne
 		mnemonic = createdMnemonic
 	}
 	require.NoError(t, manager.InitializeAccountManagement(accountReviewPassword))
-	require.NoError(t, manager.StartDKVSSync())
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	_, discoveryErr := manager.RecoverAccountManagementFromCurrentWallet(ctx, accountReviewPassword)
+	cancel()
+	require.ErrorIs(t, discoveryErr, wallet.ErrRootAccountNotFound)
 	t.Cleanup(manager.StopDKVSSync)
-	require.Eventually(t, func() bool {
-		status := manager.GetAccountManagementStatus()
-		return status.LocalOnly || status.RecoveryConfigured && status.DKVSWriteAllowed
-	}, 20*time.Second, 20*time.Millisecond, "establish authenticated account discovery before fixture edits")
+	status := manager.GetAccountManagementStatus()
+	require.Equal(t, "inactive", status.DiscoveryStatus)
+	require.True(t, status.LocalOnly)
+	require.False(t, status.RecoveryConfigured)
+	require.False(t, status.ActivationPending)
 	root := manager.GetWalletCatalog()[0]
 	require.NoError(t, manager.UpdateWalletName(root.ID, "Review Root"))
 	require.NoError(t, manager.EnsureAccount(root.ID, 2, "Savings", "did:review:2"))
@@ -154,6 +158,8 @@ func (f *accountReviewFixture) activate(t *testing.T) {
 			status.ActivationPending, status.DKVSWriteAllowed, status.ManagedDataDirty, status.PendingChanges)
 	}
 	require.NoError(t, err, "recovery workflow phase=%s", phase)
+	require.True(t, f.manager.GetAccountManagementStatus().RecoveryConfigured)
+	require.NoError(t, f.manager.StartDKVSSync())
 	if f.trace != nil {
 		f.trace.checkpoint("before-wait", nil)
 	}
@@ -323,14 +329,7 @@ func TestSDKAccountNoPluginRecoverySharedNetworkGroup(t *testing.T) {
 			mnemonic := accountSyncMnemonic(t, 219)
 			runAccountReviewCaseWithBindingDelta(t, network, mnemonic, runSDKAccountBackupKeyRecreatedFromRoot)
 		}},
-		{name: "GuardianIdentitySurvivesAccountRecovery", run: func(t *testing.T) {
-			guardianMnemonic := accountSyncMnemonic(t, 217)
-			userMnemonic := accountSyncMnemonic(t, 218)
-			runAccountReviewCaseWithBindingDelta(t, network, guardianMnemonic, func(t *testing.T,
-				network *realSatoshiNet, _ string) {
-				runSDKAccountGuardianIdentitySurvivesAccountRecovery(t, network, guardianMnemonic, userMnemonic)
-			})
-		}},
+		{name: "GuardianIdentitySurvivesAccountRecovery", run: func(t *testing.T) { runGuardianRecoveryCase(t, network) }},
 		{name: "DKVSReplicaAndLocalRecovery", run: func(t *testing.T) {
 			runSDKDKVSNoPluginSharedNetworkGroup(t, fixture)
 		}},
@@ -339,6 +338,9 @@ func TestSDKAccountNoPluginRecoverySharedNetworkGroup(t *testing.T) {
 		}},
 	}
 	for _, testCase := range cases {
+		if testCase.name == "GuardianIdentitySurvivesAccountRecovery" && !guardianTests {
+			continue
+		}
 		testCase := testCase
 		if !t.Run(testCase.name, testCase.run) {
 			onlySelector := sharedE2ERerunSelector(t, testCase.name)

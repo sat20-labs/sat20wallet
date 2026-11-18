@@ -147,7 +147,7 @@ func BuildChannelStep(ctx context.Context, sources []ChannelFunding, tx *wire.Ms
 	var contractID consensus.ContractID
 	for i, source := range ordered {
 		if !seenInputs[source.OutPoint] || (i > 0 && ordered[i-1].OutPoint == source.OutPoint) {
-			return nil, fmt.Errorf("native source is absent or duplicated in Bitcoin inputs")
+			return nil, fmt.Errorf("RGB11 source is absent or duplicated in Bitcoin inputs")
 		}
 		validated, err := ValidateChannelFunding(ctx, source, evidence, nativeproof.Prepared, channel.BitcoinNetwork)
 		if err != nil {
@@ -350,7 +350,7 @@ func ValidateChannelPackage(ctx context.Context, pkg *ChannelPackage, tx *wire.M
 		}
 		reveals = append(reveals, seal)
 	}
-	validator := NewNativeConsensusValidatorWithReveals(reveals...)
+	validator := NewRGB11ValidatorWithReveals(reveals...)
 	history, err := validator.ValidatePreparedHistoryConsignmentReport(ctx, last.Consignment, evidence)
 	if err != nil {
 		return nil, err
@@ -398,7 +398,7 @@ func ChannelFundingFromStep(step ChannelStep, outputIndex uint32, amount indexer
 		}
 	}
 	if !found {
-		return ChannelFunding{}, fmt.Errorf("RGB11 output has no matching native allocation")
+		return ChannelFunding{}, fmt.Errorf("RGB11 output has no matching RGB11 allocation")
 	}
 	output := tx.TxOut[outputIndex]
 	return ChannelFunding{OutPoint: fmt.Sprintf("%s:%d", tx.TxID(), outputIndex), Value: output.Value, PkScript: append([]byte(nil), output.PkScript...),

@@ -79,7 +79,7 @@ func mergeAccountWallet(base, local, remote *account.ManagedWallet) (*account.Ma
 	return &result, nil
 }
 
-func mergeAccountWalletPayload(base, local, remote []byte) ([]byte, error) {
+func mergeAccountWalletPayload(base, local, remote []byte, newWallets map[string]bool) ([]byte, error) {
 	l, err := account.DecodeManagedState(local)
 	if err != nil {
 		return nil, err
@@ -103,6 +103,12 @@ func mergeAccountWalletPayload(base, local, remote []byte) ([]byte, error) {
 	}
 	result := account.ManagedState{Version: account.ManagedStateVersion, RootFingerprint: l.RootFingerprint}
 	for key := range keys {
+		if newWallets[key] {
+			if wallet := findManagedWallet(&l, key); wallet != nil {
+				result.Wallets = append(result.Wallets, cloneManagedWallet(*wallet))
+			}
+			continue
+		}
 		wallet, err := mergeAccountWallet(findManagedWallet(&b, key), findManagedWallet(&l, key), findManagedWallet(&r, key))
 		if err != nil {
 			return nil, err

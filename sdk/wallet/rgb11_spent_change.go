@@ -112,7 +112,7 @@ func (p *rgb11Manager) validateRGB11SpentChangeHistory(ctx context.Context,
 		if status == nil || !status.Confirmed || status.Confirmations < max(int64(state.MinConfirmations), 1) {
 			return fmt.Errorf("RGB11 spent change successor is not confirmed")
 		}
-		validator := rgb11wallet.NewNativeConsensusValidatorWithReveals(successor.ChangeSeals...)
+		validator := rgb11wallet.NewRGB11ValidatorWithReveals(successor.ChangeSeals...)
 		// The successor may itself have become history. Revalidate its entire
 		// operation ancestry and witnesses, not its former spendable projection.
 		if err := validator.ValidateHistoricalConsignment(ctx, successor.LocalConsignment, p.rgbManager.evidence); err != nil {

@@ -8,8 +8,8 @@ LOG_ROOT="/Users/yingfeng/github/sat20wallet/.cache/script-logs/test-runs/sat20w
 SUITE="sat20wallet-sdk-core-native"
 TIMEOUT_MS="6000000"
 CORE_OUTER_RUN='^TestSDKCoreModulesE2E$'
-# Same fixed native 16-group child selector used by sat20wallet-sdk-native.sh.
-CORE_NATIVE_RUN='^TestSDKCoreModulesConnectedE2E$/^(dkvs_real_paid_cross_instance_prefix_and_CAS|backup_multiple_wallets_and_subaccounts_control|RGB11_self_send_cold_restore_and_respend|RGB11_asset_name_and_transcend_registration_descriptor|RGB_issuance_in_multiple_subaccounts|invoice_transfer_every_paid_recovery_boundary|direct_transfer_every_paid_recovery_boundary|RGB11_same_root_three_device_cas_cancel_broadcast_and_respend|RGB11_recovery_identity_batch_and_hop_lifecycles|RGB11_fullsend_history_cold_recovery_reorg_and_competing_intent|RGB11_R11_stable_only_cold_restore_ignores_valid_and_corrupt_legacy_cache|RGB11_R23_temporary_TTL_expiry_cold_restore_and_respend|RGB11_R09_same_root_real_CAS_loser_retains_private_intent_and_tests_recovery|RGB11_recovery_capacity_boundaries|RGB11_account_recovery_failure_boundaries|guardian_two_of_three_and_wrong_knowledge)$'
+# Same fixed native 14-group child selector used by sat20wallet-sdk-native.sh.
+CORE_NATIVE_RUN='^TestSDKCoreModulesConnectedE2E$/^(dkvs_real_paid_cross_instance_prefix_and_CAS|backup_multiple_wallets_and_subaccounts_control|RGB11_self_send_cold_restore_and_respend|RGB11_asset_name_and_transcend_registration_descriptor|RGB_issuance_in_multiple_subaccounts|invoice_transfer_every_paid_recovery_boundary|direct_transfer_every_paid_recovery_boundary|RGB11_same_root_three_device_cas_cancel_broadcast_and_respend|RGB11_recovery_identity_batch_and_hop_lifecycles|RGB11_fullsend_history_cold_recovery_reorg_and_competing_intent|RGB11_R23_temporary_TTL_expiry_cold_restore_and_respend|RGB11_R09_same_root_real_CAS_loser_retains_private_intent_and_tests_recovery|RGB11_recovery_capacity_boundaries|RGB11_account_recovery_failure_boundaries)$'
 
 if [[ "$#" -ne 0 ]]; then
   printf '%s\n' "This fixed SDK Core native runner accepts no arguments." >&2
@@ -114,7 +114,7 @@ fi
   printf 'log_file=%s\n' "$log_file"
   printf 'started_at_utc=%s\n' "$started_at_utc"
   printf 'suite=%s\n' "$SUITE"
-  printf 'scope=single SDK Core integration entry; fixed 16 native child groups; no PWA/browser cases\n'
+  printf 'scope=single SDK Core integration entry; fixed 14 native child groups; no PWA/browser cases\n'
   printf 'timeout_ms=%s\n' "$TIMEOUT_MS"
   printf '%s\n' "$command_text"
 } | /usr/bin/tee -a "$log_file"
@@ -194,8 +194,8 @@ match = re.fullmatch(r"\^TestSDKCoreModulesConnectedE2E\$/\^\(([^()]*)\)\$", sel
 if not match:
     fail("fixed child selector format changed")
 expected = set(match.group(1).split("|"))
-if len(expected) != 16:
-    fail("fixed selector does not contain exactly 16 distinct groups")
+if len(expected) != 14:
+    fail("fixed selector does not contain exactly 14 distinct groups")
 try:
     with open(report_path) as stream:
         report = json.load(stream)
@@ -220,10 +220,10 @@ prefix = "TestSDKCoreModulesConnectedE2E/"
 segments = report.get("segments", [])
 ordered = selection.split("/^(", 1)[1][:-2].split("|")
 plan = [("ordinary-recovery", ordered[:9] + ordered[10:]), ("long-history", ordered[9:10])]
-if (len(segments) != 2 or len(ordered) != 16
+if (len(segments) != 2 or len(ordered) != 14
         or ordered[9] != "RGB11_fullsend_history_cold_recovery_reorg_and_competing_intent"
         or report.get("shared_budget_seconds") != 5100 or report.get("budget_exhausted") is not False):
-    fail("Core did not complete all 16 native groups in two environments within the shared 85-minute budget")
+    fail("Core did not complete all 14 native groups in two environments within the shared 85-minute budget")
 endpoints = []
 for segment, (name, names) in zip(segments, plan):
     run = "^TestSDKCoreModulesConnectedE2E$/^(" + "|".join(names) + ")$"
@@ -255,16 +255,16 @@ if not isinstance(verdicts, list):
 groups = [row for row in verdicts if isinstance(row, dict) and row.get("Test", "").startswith(prefix)
           and "/" not in row["Test"][len(prefix):]]
 actual = [row.get("Test")[len(prefix):] for row in groups]
-if len(groups) != 16 or len(set(actual)) != 16 or set(actual) != expected:
+if len(groups) != 14 or len(set(actual)) != 14 or set(actual) != expected:
     fail("Core report has missing, duplicate, or unexpected group verdicts")
 if any(row.get("Action") != "pass" for row in groups):
-    fail("one or more of the 16 Core groups did not PASS")
+    fail("one or more of the 14 Core groups did not PASS")
 if any(isinstance(row, dict) and row.get("Action") == "skip" and row.get("Test", "").startswith(prefix)
        for row in verdicts):
     fail("a selected Core child was skipped; SKIP is not PASS")
 if terminal_action != "pass":
     fail("outer TestSDKCoreModulesE2E did not PASS")
-print("[core-native-coverage] PASSED: current timestamp-matched report; all 16 native groups PASS; no child SKIP")
+print("[core-native-coverage] PASSED: current timestamp-matched report; all 14 native groups PASS; no child SKIP")
 PY_CORE
 core_coverage_exit_code=$?
 

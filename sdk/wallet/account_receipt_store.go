@@ -7,8 +7,8 @@ import (
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 )
 
-// The module row owns confirmation. The legacy status projection is updated in
-// the same local batch; neither write changes the wallet or provider database.
+// The module row owns confirmation. First-backup completion and pending catalog
+// edits are finalized in the same local batch.
 // Caller holds the Manager mutex.
 func (p *Manager) saveAccountReceipt(value *accountLocalKV) error {
 	if err := p.accountDBFailure(); err != nil {
@@ -32,6 +32,7 @@ func (p *Manager) saveAccountReceipt(value *accountLocalKV) error {
 	}
 	var entries map[string]account.ManagedEntry
 	var stored *accountLocalKV
+	var walletReceipt, indexReceipt bool
 	for i, item := range values {
 		if item.Provider == value.Provider && item.Scope == value.Scope {
 			stored = item
@@ -44,13 +45,16 @@ func (p *Manager) saveAccountReceipt(value *accountLocalKV) error {
 				return err
 			}
 			entries = accountEntryMap(index)
+			indexReceipt = item.Generation != 0 && item.Generation == item.Confirmed && accountStorageConfirmed(item, &profile)
+		}
+		if item.Provider == "wallets" && item.Baseline != nil {
+			walletReceipt = item.Generation != 0 && item.Generation == item.Confirmed && accountStorageConfirmed(item, &profile)
 		}
 	}
 	// Receipt and first-backup completion use the same confirmed deletion fact
 	// as Wait/status. A blob awaiting reclamation does not make its deletion dirty.
 	complete := profile.RecoveryConfigured && profile.Activation == nil && len(controls) == 3
 	seenControls, seenModules := make(map[string]bool), make(map[string]bool)
-	profile.ManagedDataDirty = false
 	for _, item := range values {
 		if item.Provider == "account" && !controls[item.Key] {
 			continue
@@ -58,10 +62,10 @@ func (p *Manager) saveAccountReceipt(value *accountLocalKV) error {
 		if accountDeleteConfirmed(item, entries) {
 			continue
 		}
-		profile.ManagedDataDirty = profile.ManagedDataDirty || item.Generation > item.Confirmed
 		confirmed := item.Generation != 0 && item.Generation == item.Confirmed &&
 			!item.Restoring && !item.Conflict && item.LastError == "" && item.Baseline != nil &&
-			item.Baseline.Key == item.Key && item.Baseline.Seq != 0 && bytes.Equal(item.Value, item.Baseline.Value)
+			item.Baseline.Key == item.Key && item.Baseline.Seq != 0 && bytes.Equal(item.Value, item.Baseline.Value) &&
+			accountStorageConfirmed(item, &profile)
 		complete = complete && confirmed
 		if item.Provider == "account" {
 			seenControls[item.Key] = confirmed
@@ -88,13 +92,25 @@ func (p *Manager) saveAccountReceipt(value *accountLocalKV) error {
 		profile.InitialBackupPending = false
 		profile.InitWrapperHash = ""
 	}
-	if value.Provider == "wallets" && value.Baseline != nil {
-		profile.StateSeq = value.Baseline.Seq
-		profile.StateHash = accountStateDigest(value.Baseline.Value)
-		profile.StateEnvelope = bytes.Clone(value.Baseline.Value)
-		if value.Generation == value.Confirmed {
-			profile.Pending = nil
+	if walletReceipt {
+		var pending []accountManagementMutation
+		for _, mutation := range profile.Pending {
+			if mutation.Type != accountMutationAddWallet && mutation.Type != accountMutationEnsureAccount {
+				continue
+			}
+			info := p.walletInfoByFingerprintLocked(mutation.Fingerprint)
+			for _, item := range values {
+				if item.Provider == "account" || item.Deleted || !accountWalletHasScope(info, p.cfg.Chain, item.Scope) {
+					continue
+				}
+				entry, registered := entries[item.Provider+"\x00"+item.Scope]
+				if !indexReceipt || !registered || entry.Deleted {
+					pending = append(pending, mutation)
+					break
+				}
+			}
 		}
+		profile.Pending = pending
 	}
 	valueChanged := !reflect.DeepEqual(stored, value)
 	profileChanged := !reflect.DeepEqual(p.accountProfile, &profile)

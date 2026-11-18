@@ -462,13 +462,13 @@ func (p *Manager) InvokeContractV2(contractURL string, jsonInvokeParam string,
 	if name := ParseAssetString(assetName); name != nil && name.Protocol == "rgb11" {
 		var invoke InvokeParam
 		if json.Unmarshal([]byte(jsonInvokeParam), &invoke) != nil || invoke.Action != INVOKE_API_DEPOSIT {
-			return "", fmt.Errorf("native L1 contract funding requires an authenticated deposit intent")
+			return "", fmt.Errorf("RGB11 L1 contract funding requires an authenticated deposit intent")
 		}
-		prepared, err := p.PrepareNativeContractDeposit(context.Background(), contractURL, p.GetWallet().GetAddress(), assetName, amt, feeRate)
+		prepared, err := p.PrepareRGB11ContractDeposit(context.Background(), contractURL, p.GetWallet().GetAddress(), assetName, amt, feeRate)
 		if err != nil {
 			return "", err
 		}
-		return p.ResumeNativeContractDeposit(context.Background(), prepared.TransferID)
+		return p.ResumeRGB11ContractDeposit(context.Background(), prepared.TransferID)
 	}
 
 	var nullDataScript []byte
@@ -639,11 +639,11 @@ func (p *Manager) DepositWithContract(destAddr string, assetName string, amt str
 		return "", fmt.Errorf("contract not active")
 	}
 	if name := ParseAssetString(assetName); name != nil && name.Protocol == "rgb11" {
-		prepared, err := p.PrepareNativeContractDeposit(context.Background(), url, destAddr, assetName, amt, feeRate)
+		prepared, err := p.PrepareRGB11ContractDeposit(context.Background(), url, destAddr, assetName, amt, feeRate)
 		if err != nil {
 			return "", err
 		}
-		return p.ResumeNativeContractDeposit(context.Background(), prepared.TransferID)
+		return p.ResumeRGB11ContractDeposit(context.Background(), prepared.TransferID)
 	}
 
 	depositPara := DepositInvokeParam{
@@ -735,7 +735,7 @@ func (p *Manager) withdrawWithContract(destAddr string, assetName string, amt st
 	}
 	var total *Decimal
 	if name.Protocol == "rgb11" {
-		// The user pays the L2 withdrawal from its L2 balance. Public native
+		// The user pays the L2 withdrawal from its L2 balance. Public RGB11
 		// pool solvency comes from revalidated proof inventory at settlement.
 		total = p.GetAssetBalance_SatsNet("", name)
 	} else {

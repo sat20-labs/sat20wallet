@@ -26,14 +26,14 @@ func (rgb11STPProtocol) PrepareOtherSweep(_ *Manager, req STPAssetOtherSweepRequ
 
 // BuildChannelRecovery spends real terminal states of an authenticated
 // commitment. Other protocols keep their input/output sat order; RGB adds only
-// a zero-value DBC and its native transition. Fee inputs are consumed once.
+// a zero-value DBC and its RGB11 transition. Fee inputs are consumed once.
 func (protocol rgb11STPProtocol) BuildChannelRecovery(p *Manager, req STPAssetRecoveryRequest) (*STPAssetRecoveryPlan, error) {
 	if req.Commitment == nil || req.Commitment.CommitTx == nil || len(req.RecipientScript) == 0 || req.FeeRate <= 0 {
 		return nil, fmt.Errorf("incomplete RGB11 recovery request")
 	}
 	raw := req.Commitment.AssetProofs[rgb11wallet.Protocol]
 	if len(raw) == 0 {
-		return nil, fmt.Errorf("RGB11 recovery is missing its native commitment proof")
+		return nil, fmt.Errorf("RGB11 recovery is missing its RGB11 commitment proof")
 	}
 	pkg, err := rgb11wallet.DecodeChannelPackage(raw)
 	if err != nil {
@@ -57,7 +57,7 @@ func (protocol rgb11STPProtocol) BuildChannelRecovery(p *Manager, req STPAssetRe
 	if req.Inputs == nil {
 		indexes, err := sortedSTPRGB11Indexes(req.OutputIndexes)
 		if err != nil || len(indexes) == 0 {
-			return nil, fmt.Errorf("invalid native recovery selection")
+			return nil, fmt.Errorf("invalid RGB11 recovery selection")
 		}
 		recovery, err := stpRecoveryInputs(req.Commitment, req.Commitment.LocalBalance, req.Operation)
 		if err != nil {
@@ -69,12 +69,12 @@ func (protocol rgb11STPProtocol) BuildChannelRecovery(p *Manager, req STPAssetRe
 		}
 		for _, index := range indexes {
 			if index >= len(views) || txscript.IsUnspendable(views[index].OutValue.PkScript) {
-				return nil, fmt.Errorf("invalid native recovery output")
+				return nil, fmt.Errorf("invalid RGB11 recovery output")
 			}
 			input := views[index]
-			_, native := byPoint[input.OutPointStr]
+			_, rgb11Data := byPoint[input.OutPointStr]
 			if feeIndexes[index] {
-				if native {
+				if rgb11Data {
 					return nil, fmt.Errorf("RGB11 allocation is marked as a recovery fee reserve")
 				}
 				fees = append(fees, input)
@@ -87,14 +87,14 @@ func (protocol rgb11STPProtocol) BuildChannelRecovery(p *Manager, req STPAssetRe
 	var sources []rgb11wallet.ChannelFunding
 	for _, input := range inputs {
 		if input == nil {
-			return nil, fmt.Errorf("nil native recovery input")
+			return nil, fmt.Errorf("nil RGB11 recovery input")
 		}
 		if source, exists := byPoint[input.OutPointStr]; exists {
 			sources = append(sources, source)
 		}
 	}
 	if len(sources) == 0 {
-		return &STPAssetRecoveryPlan{NoNativeAssets: true}, nil
+		return &STPAssetRecoveryPlan{NoRGB11Assets: true}, nil
 	}
 	tx := wire.NewMsgTx(2)
 	tx.LockTime = req.Height
@@ -108,7 +108,7 @@ func (protocol rgb11STPProtocol) BuildChannelRecovery(p *Manager, req STPAssetRe
 	used := make(map[string]bool)
 	addInput := func(output *TxOutput) error {
 		if output == nil || used[output.OutPointStr] {
-			return fmt.Errorf("duplicate native recovery input")
+			return fmt.Errorf("duplicate RGB11 recovery input")
 		}
 		point, err := wire.NewOutPointFromString(output.OutPointStr)
 		if err != nil {
@@ -136,7 +136,7 @@ func (protocol rgb11STPProtocol) BuildChannelRecovery(p *Manager, req STPAssetRe
 		output := wire.NewTxOut(input.Value(), append([]byte(nil), req.RecipientScript...))
 		if source, exists := byPoint[input.OutPointStr]; exists {
 			if source.Value != input.Value() {
-				return nil, fmt.Errorf("RGB11 recovery changed a native carrier")
+				return nil, fmt.Errorf("RGB11 recovery changed a RGB11 carrier")
 			}
 			assignments = append(assignments, rgb11wallet.ChannelAssignment{OutputIndex: uint32(len(tx.TxOut)), Amount: *source.Amount.Clone()})
 		}
@@ -146,10 +146,10 @@ func (protocol rgb11STPProtocol) BuildChannelRecovery(p *Manager, req STPAssetRe
 	var feeValue int64
 	for _, input := range fees {
 		if input == nil || input.HasAsset() {
-			return nil, fmt.Errorf("native recovery fee input carries assets")
+			return nil, fmt.Errorf("RGB11 recovery fee input carries assets")
 		}
 		if _, exists := byPoint[input.OutPointStr]; exists {
-			return nil, fmt.Errorf("RGB11 carrier cannot pay native recovery fees")
+			return nil, fmt.Errorf("RGB11 carrier cannot pay RGB11 recovery fees")
 		}
 		if err := addInput(input); err != nil {
 			return nil, err
@@ -188,5 +188,5 @@ func (protocol rgb11STPProtocol) BuildChannelRecovery(p *Manager, req STPAssetRe
 	if err != nil {
 		return nil, err
 	}
-	return &STPAssetRecoveryPlan{Tx: tx, PrevFetcher: fetcher, Fee: fee, NativeProofs: map[string][]byte{rgb11wallet.Protocol: proof}}, nil
+	return &STPAssetRecoveryPlan{Tx: tx, PrevFetcher: fetcher, Fee: fee, AssetProofs: map[string][]byte{rgb11wallet.Protocol: proof}}, nil
 }

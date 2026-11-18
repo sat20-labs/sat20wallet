@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 
 	indexer "github.com/sat20-labs/indexer/common"
 	coreconsignment "github.com/sat20-labs/rgb11/consignment"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
-	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
 func rgb11SnapshotHasState(snapshot *RGB11WalletSnapshot) bool {
@@ -66,7 +66,6 @@ func (p *rgb11Manager) importRGB11WalletSnapshotLocal(snapshot *RGB11WalletSnaps
 			return err
 		}
 	}
-	p.markRGB11ProjectionUnverified()
 	return p.restoreRGB11AccountSnapshotLocal(snapshot)
 }
 
@@ -92,68 +91,76 @@ func (p *rgb11Manager) restoreRGB11AccountSnapshotLocal(snapshot *RGB11WalletSna
 }
 
 func (p *rgb11Manager) restoreRGB11AccountSnapshotIfCurrent(snapshot, expected *RGB11WalletSnapshot) error {
-	return p.restoreRGB11AccountSnapshotIfCurrentMode(snapshot, expected, true)
+	return p.restoreRGB11AccountSnapshotIfCurrentMode(snapshot, expected, true, nil)
 }
 
-func (p *rgb11Manager) restoreRGB11AccountSnapshotIfCurrentMode(snapshot, expected *RGB11WalletSnapshot, localMutation bool) error {
+func (p *rgb11Manager) restoreRGB11AccountSnapshotIfCurrentMode(snapshot, expected *RGB11WalletSnapshot,
+	localMutation bool, swap *rgb11ImportSwap) error {
 	if p == nil || snapshot == nil || p.rgbManager == nil ||
 		p.rgbManager.engineStore == nil || p.rgbManager.projectionStore == nil {
 		return ErrRGB11Inconsistent
 	}
-	p.markRGB11ProjectionUnverified()
 	if len(snapshot.ProjectionRecords) != 0 || len(snapshot.EngineRecords) != 0 {
 		if err := rgb11wallet.ValidateWalletSnapshot(snapshot); err != nil {
-			p.markRGB11ProjectionUnavailable()
 			return err
 		}
 	}
 	walletID, err := p.RGB11WalletID()
 	if err != nil {
-		p.markRGB11ProjectionUnavailable()
 		return err
 	}
-	current, _, err := p.exportRGB11WalletSnapshot(walletID)
-	if err != nil {
-		p.markRGB11ProjectionUnavailable()
-		return err
-	}
-	if expected != nil && rgb11SnapshotChanged(expected, current) {
-		return errAccountSnapshotChanged
+	current := expected
+	if swap == nil {
+		current, _, err = p.exportRGB11WalletSnapshot(walletID)
+		if err != nil {
+			return err
+		}
+		if expected != nil && rgb11SnapshotChanged(expected, current) {
+			return errAccountSnapshotChanged
+		}
+	} else if current == nil || current.WalletID != walletID || current != swap.from.snapshot || snapshot != swap.to.snapshot {
+		return ErrRGB11Inconsistent
 	}
 	tickerInfos, err := p.tickerInfosFromRGB11Snapshot(snapshot)
 	if err != nil {
-		p.markRGB11ProjectionUnavailable()
 		return err
 	}
 	for index, info := range tickerInfos {
 		var ext rgb11wallet.TickerExt
 		if err := json.Unmarshal(info.Content, &ext); err != nil {
-			p.markRGB11ProjectionUnavailable()
 			return err
 		}
 		info, err = p.withRGB11NamingOriginFromRaw(info, rgb11SnapshotObject(snapshot.ProjectionRecords, ext.ContractHash))
 		if err != nil {
-			p.markRGB11ProjectionUnavailable()
 			return err
 		}
 		tickerInfos[index] = info
 	}
-	lockReasons, err := rgb11SnapshotCarrierLockReasons(snapshot.ProjectionRecords)
+	reasons, err := rgb11SnapshotCarrierLockReasons(snapshot.ProjectionRecords)
 	if err != nil {
-		p.markRGB11ProjectionUnavailable()
 		return err
 	}
-	lockPlan, err := p.rgb11SnapshotLockPlan(current, snapshot, lockReasons)
+	lockPlan, err := p.rgb11SnapshotLockPlan(current, snapshot, reasons)
 	if err != nil {
-		p.markRGB11ProjectionUnavailable()
 		return err
 	}
-	if err := p.importRGB11ReservationSnapshotWithMutation(context.Background(), snapshot, tickerInfos, lockReasons, &lockPlan, nil, current, localMutation); err != nil {
-		p.markRGB11ProjectionUnavailable()
+	status := "ok"
+	if swap != nil {
+		inconsistent, err := rgb11SnapshotInconsistentOutpoints(snapshot)
+		if err != nil {
+			return err
+		}
+		if len(inconsistent) != 0 || len(swap.to.faults) != 0 {
+			status = "broken"
+		}
+	}
+	if err := p.importRGB11ReservationSnapshotWithMutation(context.Background(), snapshot, tickerInfos, nil, &lockPlan, nil, current, localMutation, nil, swap); err != nil {
 		return err
 	}
-	p.markRGB11ProjectionUnavailable()
-	p.rgbManager.consistencyStatus = "ok"
+	p.rgbManager.consistencyStatus = status
+	if swap != nil {
+		p.publishRGB11ConsistencyStatus()
+	}
 	return nil
 }
 
@@ -182,37 +189,43 @@ func (p *rgb11Manager) importRGB11AccountRecoverySnapshotResolved(snapshot *RGB1
 
 func (p *rgb11Manager) importRGB11AccountRecoverySnapshotResult(snapshot *RGB11WalletSnapshot,
 	selected bool) (*RGB11WalletSnapshot, error) {
-	return p.importRGB11AccountRecoverySnapshotResultMode(snapshot, selected, true)
-}
-
-func (p *rgb11Manager) importRGB11AccountRecoverySnapshotResultMode(snapshot *RGB11WalletSnapshot,
-	selected, localMutation bool) (*RGB11WalletSnapshot, error) {
 	if p == nil || snapshot == nil {
 		return nil, ErrRGB11Inconsistent
 	}
-	p.markRGB11ProjectionUnverified()
 	walletID, err := p.RGB11WalletID()
 	if err != nil {
-		p.markRGB11ProjectionUnavailable()
 		return nil, err
+	}
+	if selected {
+		base, err := p.readRGB11SelectedBase(walletID)
+		if err != nil {
+			return nil, err
+		}
+		return p.applyRGB11Recovery(base.snapshot, snapshot, true, &rgb11ImportSwap{from: base, to: &rgb11ImportState{}})
 	}
 	current, _, err := p.exportRGB11WalletSnapshot(walletID)
 	if err != nil {
-		p.markRGB11ProjectionUnavailable()
 		return nil, err
 	}
+	return p.applyRGB11Recovery(current, snapshot, true, nil)
+}
+
+func (p *rgb11Manager) applyRGB11Recovery(current, snapshot *RGB11WalletSnapshot,
+	localMutation bool, swap *rgb11ImportSwap) (*RGB11WalletSnapshot, error) {
 	var merged *RGB11WalletSnapshot
-	if selected {
+	var faults []rgb11wallet.ProofFault
+	var err error
+	if swap != nil {
+		faults = swap.from.faults
 		merged, err = rgb11wallet.MergeSelectedRecoverySnapshot(current, snapshot)
 	} else {
 		merged, err = rgb11wallet.MergeRecoverySnapshot(current, snapshot)
 	}
 	if err != nil {
-		p.markRGB11ProjectionUnavailable()
 		return nil, err
 	}
 	var expandedReceipts []string
-	if selected {
+	if swap != nil {
 		local, loadErr := rgb11wallet.ValidationReceiptsFromProjectionSnapshot(current.ProjectionRecords)
 		if loadErr != nil {
 			return nil, loadErr
@@ -227,33 +240,30 @@ func (p *rgb11Manager) importRGB11AccountRecoverySnapshotResultMode(snapshot *RG
 			}
 		}
 	}
-	resolved, err := p.resolveRGB11RecoveryProjection(context.Background(), merged, expandedReceipts...)
+	resolved, err := p.resolveRGB11Recovery(context.Background(), merged, expandedReceipts, faults)
 	if err != nil {
-		p.markRGB11ProjectionUnavailable()
 		return nil, err
 	}
 	lockPlan, err := p.rgb11SnapshotLockPlan(current, resolved.snapshot, resolved.lockReasons)
 	if err != nil {
-		p.markRGB11ProjectionUnavailable()
-		return nil, err
-	}
-	if err := p.importRGB11ReservationSnapshotWithMutation(context.Background(), resolved.snapshot,
-		resolved.tickerInfos, resolved.lockReasons, &lockPlan, resolved.checkEvidence, current, localMutation); err != nil {
-		p.markRGB11ProjectionUnavailable()
 		return nil, err
 	}
 	inconsistent, err := rgb11SnapshotInconsistentOutpoints(resolved.snapshot)
 	if err != nil {
 		return nil, err
 	}
+	// No fallible work after publication: the account provider must retain
+	// the exact before/after pair for every scope it actually committed.
+	if err := p.importRGB11ReservationSnapshotWithMutation(context.Background(), resolved.snapshot,
+		resolved.tickerInfos, resolved.lockReasons, &lockPlan, resolved.checkEvidence, current, localMutation, nil, swap); err != nil {
+		return nil, err
+	}
 	p.rgbManager.consistencyStatus = "ok"
 	if len(inconsistent) != 0 {
 		p.rgbManager.consistencyStatus = "broken"
 	}
-	if resolved.complete {
-		p.markRGB11ProjectionVerified()
-	} else {
-		p.markRGB11ProjectionUnavailable()
+	if swap != nil {
+		p.publishRGB11ConsistencyStatus()
 	}
 	return resolved.snapshot, nil
 }
@@ -274,10 +284,10 @@ func (p *rgb11Manager) applyRGB11CandidateSnapshot(ctx context.Context,
 		return nil, ErrRGB11Inconsistent
 	}
 	resolved, err := p.resolveRGB11Local(ctx, candidate)
+	if errors.Is(err, errRGB11TipAdvanced) {
+		return nil, err
+	}
 	if err != nil {
-		if !p.revokeRGB11At(current) {
-			return nil, errRGB11StaleLocal
-		}
 		return nil, fmt.Errorf("resolve RGB11 candidate projection: %w", err)
 	}
 	return p.publishRGB11CandidateSnapshot(ctx, current, resolved)
@@ -294,18 +304,10 @@ func (p *rgb11Manager) publishRGB11CandidateSnapshot(ctx context.Context,
 	}
 	lockPlan, err := p.rgb11SnapshotLockPlan(current, resolved.snapshot, resolved.lockReasons, resolved.faults...)
 	if err != nil {
-		if !p.revokeRGB11At(current) {
-			return nil, errRGB11StaleLocal
-		}
 		return nil, fmt.Errorf("plan RGB11 candidate locks: %w", err)
 	}
 	if err := p.importRGB11ReservationSnapshotWithMutation(ctx, resolved.snapshot,
-		resolved.tickerInfos, resolved.lockReasons, &lockPlan, resolved.checkEvidence, current, true, resolved); err != nil {
-		if !errors.Is(err, errRGB11StaleLocal) {
-			if !p.revokeRGB11At(current) {
-				return nil, errRGB11StaleLocal
-			}
-		}
+		resolved.tickerInfos, resolved.lockReasons, &lockPlan, resolved.checkEvidence, current, true, resolved, nil); err != nil {
 		return nil, fmt.Errorf("publish RGB11 candidate projection: %w", err)
 	}
 	inconsistent, err := rgb11SnapshotInconsistentOutpoints(resolved.snapshot)
@@ -318,25 +320,6 @@ func (p *rgb11Manager) publishRGB11CandidateSnapshot(ctx context.Context,
 	}
 
 	return resolved.snapshot, nil
-}
-
-func (p *rgb11Manager) importRGB11ActiveRecoverySnapshot(snapshot *RGB11WalletSnapshot) error {
-	if p == nil || snapshot == nil {
-		return ErrRGB11Inconsistent
-	}
-	walletID, err := p.RGB11WalletID()
-	if err != nil {
-		return err
-	}
-	current, _, err := p.exportRGB11WalletSnapshot(walletID)
-	if err != nil {
-		return err
-	}
-	merged, err := rgb11wallet.MergeActiveRecoverySnapshot(current, snapshot)
-	if err != nil {
-		return err
-	}
-	return p.importRGB11WalletSnapshot(merged)
 }
 
 func rgb11SnapshotObject(records []rgb11wallet.SnapshotRecord, hash string) []byte {
@@ -359,12 +342,12 @@ func rgb11SnapshotCarrierLockReasons(records []rgb11wallet.SnapshotRecord) (map[
 	}
 	reasons := make(map[string]string, len(proofs))
 	for _, proof := range proofs {
-		if previous := reasons[proof.OutPoint]; previous != "" && previous != rgb11wallet.LockReasonPending {
+		if previous := reasons[proof.OutPoint]; previous != "" && previous != sdkcommon.UtxoLockRGBPending {
 			return nil, ErrRGB11Inconsistent
 		}
 		// Keep every known carrier unavailable to ordinary BTC selection until
 		// a fresh chain frontier classifies its proof and confirmation depth.
-		reasons[proof.OutPoint] = rgb11wallet.LockReasonPending
+		reasons[proof.OutPoint] = sdkcommon.UtxoLockRGBPending
 	}
 	return reasons, nil
 }
@@ -407,38 +390,6 @@ func (p *rgb11Manager) tickerInfosFromRGB11Snapshot(snapshot *RGB11WalletSnapsho
 	return infos, nil
 }
 
-func (p *Manager) registerDKVSDomainObservers() {
-	if p == nil || p.dkvs == nil {
-		return
-	}
-	p.dkvs.addObserver(func(paths []string) {
-		p.scheduleMailboxRefreshForChanges(paths)
-		accountID := p.rootDKVSAccountID()
-		relevant := false
-		for _, path := range paths {
-			parsed, err := dkvsindexer.ParsePrefix(path)
-			if err != nil || len(parsed.Segments) < 2 || parsed.Segments[0] != accountID {
-				continue
-			}
-			// Control records share the account collection; provider modules are
-			// account-owned blobs. Mailbox and unrelated public subscriptions do
-			// not require replaying the private account synchronization path.
-			if parsed.Namespace == "blob" || parsed.Namespace == "personal" && parsed.Segments[1] == "account" {
-				relevant = true
-				break
-			}
-		}
-		if !relevant {
-			return
-		}
-		if err := p.SyncAccountManagementState(nil); err != nil &&
-			!errors.Is(err, ErrDKVSPathNotSynced) &&
-			!errors.Is(err, ErrDKVSRecordNotFound) {
-			Log.Warningf("apply account management replica failed: %v", err)
-		}
-	})
-}
-
 // resolveRGB11Local validates current ownership independently of frozen local
 // faults. The complete candidate and every damaged byte survive the work view.
 func (p *rgb11Manager) resolveRGB11Local(ctx context.Context, full *RGB11WalletSnapshot) (*rgb11ResolvedRecoveryProjection, error) {
@@ -461,14 +412,6 @@ func (p *rgb11Manager) resolveRGB11Local(ctx context.Context, full *RGB11WalletS
 			faults = append(faults, fault.fault)
 			continue
 		}
-		proofs, err := rgb11wallet.ProofsFromProjectionSnapshot(resolved.snapshot.ProjectionRecords)
-		if err != nil {
-			return nil, err
-		}
-		resolved.ready = make(map[string]bool)
-		for _, proof := range proofs {
-			resolved.ready[proof.OutPoint] = true
-		}
 		resolved.snapshot.ProjectionRecords, err = view.Merge(resolved.snapshot.ProjectionRecords)
 		if err != nil {
 			return nil, err
@@ -482,23 +425,10 @@ func (p *rgb11Manager) resolveRGB11Local(ctx context.Context, full *RGB11WalletS
 			// Freeze an entire operation without claiming foreign recipient
 			// outputs as new local carriers. Existing fee/change owners survive.
 			if owned[point] != nil || locks[point] != nil {
-				resolved.lockReasons[point] = rgb11wallet.LockReasonPending
+				resolved.lockReasons[point] = sdkcommon.UtxoLockRGBPending
 			}
 		}
 		resolved.faults = view.Faults
-		resolved.complete = resolved.complete && len(view.Faults) == 0
 		return resolved, nil
 	}
-}
-
-// A late failed attempt cannot revoke a newer successfully committed frontier.
-func (p *rgb11Manager) revokeRGB11At(expected *RGB11WalletSnapshot) bool {
-	release := p.beginRGB11ReservationRead()
-	defer release()
-	actual, err := p.readRGB11LocalLocked(expected.WalletID)
-	if err == nil && rgb11SnapshotChanged(expected, actual) {
-		return false
-	}
-	p.markRGB11ProjectionUnavailable()
-	return true
 }

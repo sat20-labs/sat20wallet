@@ -257,12 +257,12 @@ func (p *Manager) channelL2DrainEvidence(channel string) (string, map[string]boo
 	if stored == nil || stored.ChannelId != channel || stored.Status > CS_CLOSED {
 		return "", nil, fmt.Errorf("closed channel evidence unavailable for %s", channel)
 	}
-	if recovered, err := p.loadSTPNativeRevocationRecovery(stored); err != nil {
+	if recovered, err := p.loadSTPRevocationRecovery(stored); err != nil {
 		return "", nil, err
 	} else if recovered != nil {
 		return "", nil, fmt.Errorf("unresolved revoked commitment")
 	}
-	if prepared, err := p.readSTPNativePreparedRecovery(&Channel{ChannelInDB: *stored}); err != nil {
+	if prepared, err := p.readSTPPreparedRecovery(&Channel{ChannelInDB: *stored}); err != nil {
 		return "", nil, err
 	} else if prepared != nil {
 		return "", nil, fmt.Errorf("unresolved prepared commitment")

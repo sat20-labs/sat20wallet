@@ -9,8 +9,8 @@ import (
 )
 
 // This fixture isolates exact Bitcoin authorization and journal atomicity.
-// Its RGB sidecar is opaque; native RGB consensus remains a separate mandatory
-// integration test. No native verifier is relaxed or replaced in production.
+// Its RGB sidecar is opaque; RGB11 consensus remains a separate mandatory
+// integration test. No RGB11 verifier is relaxed or replaced in production.
 func rgbRecoveryExchangeFixture(t *testing.T) (*otherJournalFixture, []string) {
 	t.Helper()
 	f := newOtherJournalFixture(t, false)
@@ -72,7 +72,7 @@ func TestSTPRGBRecoveryAcceptanceIsAtomicAndDormant(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.db.failFlush = true
-	if err := f.manager.acceptSTPRecoveryTransactionsWithJournal(f.channel, nil, encoded, nil); !errors.Is(err, errNativeSettlementWrite) {
+	if err := f.manager.acceptSTPRecoveryTransactionsWithJournal(f.channel, nil, encoded, nil); !errors.Is(err, errRGB11SettlementWrite) {
 		t.Fatalf("failed atomic publication was not reported: %v", err)
 	}
 	after, _ := f.read(t, "remote")
@@ -143,6 +143,9 @@ func TestSTPRGBRecoverySlotNeverJoinsDefaultForceClose(t *testing.T) {
 	child := f.spend(t, wire.OutPoint{Hash: parent.TxHash(), Index: 1}, parent.TxOut[1], 40_000)
 	f.channel.LocalCommitment.RGBClientRecovery = &CommitmentTx{CommitTx: child,
 		AssetProofs: map[string][]byte{"rgb11": []byte("opaque dormant package proof")}}
+	if err := f.manager.SaveChannelToDB(f.channel); err != nil {
+		t.Fatal(err)
+	}
 	original, err := EncodeToBytes(f.channel.LocalCommitment.RGBClientRecovery)
 	if err != nil {
 		t.Fatal(err)

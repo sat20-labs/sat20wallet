@@ -149,7 +149,7 @@ func (p *WatchTower) addCommitTxWithRGBView(channel *Channel, commitTx *wire.Msg
 	}
 
 	txId := commitTx.TxID()
-	proofs, err := p.nativePunishProofsWithRGBView(channel, commitTx, signedPunishTx, view)
+	proofs, err := p.rgb11PunishProofsWithRGBView(channel, commitTx, signedPunishTx, view)
 	if err != nil {
 		return err
 	}
@@ -157,7 +157,7 @@ func (p *WatchTower) addCommitTxWithRGBView(channel *Channel, commitTx *wire.Msg
 		return err
 	}
 	if len(proofs) != 0 {
-		err = saveNativePunishRecord(p.manager.db, &nativePunishRecord{Version: 1, ChannelID: channel.ChannelId,
+		err = saveRGB11PunishRecord(p.manager.db, &rgb11PunishRecord{Version: 1, ChannelID: channel.ChannelId,
 			CommitTxID: txId, Transactions: cloneSTPBitcoinChain(signedPunishTx), Proofs: proofs})
 	} else {
 		err = savePunishTx(p.manager.db, channel, txId, signedPunishTx)

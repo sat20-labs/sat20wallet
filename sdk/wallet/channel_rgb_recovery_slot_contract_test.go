@@ -94,7 +94,7 @@ func TestSTPRGBClientRecoverySlotNilForRealLegacyGob(t *testing.T) {
 }
 
 // Opaque sidecar bytes are intentional here: this is a serialization isolation
-// test, not a native proof or broadcast authorization test. Real 2-of-2 Bitcoin
+// test, not a RGB11 proof or broadcast authorization test. Real 2-of-2 Bitcoin
 // bytes come from the independently checked ordinary diagnostic fixture.
 func TestSTPRGBRecoverySlotRoundTripPreservesIndependentPackages(t *testing.T) {
 	f := newReservedOthersFixture(t)

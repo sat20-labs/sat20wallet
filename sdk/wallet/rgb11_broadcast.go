@@ -2,7 +2,7 @@ package wallet
 
 import (
 	"bytes"
-	"context"
+
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -40,9 +40,9 @@ func (p *rgb11Manager) traceRGB11Broadcast(phase, txID string, err error) {
 	case err != nil:
 		errorKind = "other"
 	}
-	Log.Debugf("RGB broadcast diagnostic: manager=%d scope=%x tx=%x phase=%s verified=%t ready=%d faults=%d error=%s",
+	Log.Debugf("RGB broadcast diagnostic: manager=%d scope=%x tx=%x phase=%s faults=%d error=%s",
 		p.rgb11ReservationOwner().debugID, scopeHash[:8], txHash[:8], phase,
-		state.ProjectionVerified, len(state.ReadyCarriers), len(state.ProofFaults), errorKind)
+		len(state.ProofFaults), errorKind)
 }
 
 // Inspect only the already-read rejected pair. No raw transaction or private
@@ -355,14 +355,12 @@ func (p *rgb11Manager) broadcastRGB11PendingBatch(
 			// sufficient and the caller may safely retry after repairing storage.
 			return "", err
 		}
-		if err := p.autoBackupRGB11AfterMutation(); err != nil {
-			return "", err
-		}
+		p.accountManagementOwner().NotifyAccountChanged()
 	}
 	// The prepared transaction and every transition dependency must be accepted
 	// by the account's CoreNode before the first irreversible backend call.
 	if owner := p.accountManagementOwner(); owner != nil {
-		if err := p.syncRGB11OperationRecovery(context.Background()); err != nil {
+		if err := p.checkRGB11Write(); err != nil {
 			return "", err
 		}
 	}
@@ -413,7 +411,7 @@ func (p *rgb11Manager) broadcastRGB11PendingBatch(
 			// intent barrier. Persist that exact signed witness under the same
 			// account CAS before making the local backend broadcast attempt.
 			if owner := p.accountManagementOwner(); owner != nil {
-				broadcastErr = p.syncRGB11OperationRecovery(context.Background())
+				broadcastErr = p.checkRGB11Write()
 			}
 			if broadcastErr == nil {
 				var allCompleteAfterSign bool
@@ -449,12 +447,20 @@ func (p *rgb11Manager) broadcastRGB11PendingBatch(
 		// transaction. Resolve immediately when evidence already sees it;
 		// otherwise retain the durable ambiguous state for reconciliation.
 		if _, visible = p.expectedRGB11TransactionStatus(first); !visible {
-			backupErr := p.autoBackupRGB11AfterMutation()
-			p.scheduleRGB11ChainReconciliation()
+			p.accountManagementOwner().NotifyAccountChanged()
+			p.scheduleRGB11ChainReconciliation(false)
 			return expectedTxID, &RGB11BroadcastResultUnknownError{
-				TxID: expectedTxID, Err: errors.Join(broadcastErr, backupErr),
+				TxID: expectedTxID, Err: broadcastErr,
 			}
 		}
+	}
+	if first.State.AddressMode {
+		// A direct preview has no command log. Record a successfully accepted
+		// (or already visible) witness here, including background ACK delivery.
+		// Use the captured wallet identity, not whichever account the UI shows.
+		p.Manager.finishRGBLog(first.State.TransferID, nil, &RGBTransferView{
+			ID: first.State.TransferID, TxID: expectedTxID, Status: "pending_chain",
+		})
 	}
 	if !rgb11PendingHasWitness(first) {
 		if err := p.recoverRGB11BroadcastWitness(pendingList); err != nil {
@@ -504,15 +510,12 @@ func (p *rgb11Manager) broadcastRGB11PendingBatch(
 				}
 			}
 		}
-		backupErr := p.autoBackupRGB11AfterMutation()
-		p.scheduleRGB11ChainReconciliation()
-		return expectedTxID, &RGB11BroadcastPersistenceError{TxID: expectedTxID, Err: errors.Join(err, backupErr)}
+		p.accountManagementOwner().NotifyAccountChanged()
+		p.scheduleRGB11ChainReconciliation(false)
+		return expectedTxID, &RGB11BroadcastPersistenceError{TxID: expectedTxID, Err: err}
 	}
-	backupErr := p.autoBackupRGB11AfterMutation()
-	p.scheduleRGB11ChainReconciliation()
-	if backupErr != nil {
-		return expectedTxID, &RGB11BroadcastPersistenceError{TxID: expectedTxID, Err: backupErr}
-	}
+	p.accountManagementOwner().NotifyAccountChanged()
+	p.scheduleRGB11ChainReconciliation(false)
 	return expectedTxID, nil
 }
 
@@ -570,12 +573,6 @@ func (p *rgb11Manager) signRGB11OrdinaryBatch(batch []*rgb11wallet.PendingTransf
 		if blocked[point] {
 			p.traceRGB11Broadcast("sign-blocked-carrier", first.State.WitnessTxID, ErrRGB11Inconsistent)
 			return ErrRGB11Inconsistent
-		}
-		for _, proof := range proofs {
-			if proof.OutPoint == point && !p.rgb11CarrierAvailable(point) {
-				p.traceRGB11Broadcast("sign-carrier-not-ready", first.State.WitnessTxID, ErrRGB11Inconsistent)
-				return ErrRGB11Inconsistent
-			}
 		}
 		utxo := packet.Inputs[i].WitnessUtxo
 		if utxo == nil || len(input.SignatureScript) != 0 {

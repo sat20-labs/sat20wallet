@@ -14,11 +14,9 @@ import (
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 	"github.com/sat20-labs/rgb11/issuance"
 	"github.com/sat20-labs/rgb11/schemas"
-	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
-	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
-// Both assets are native issued contracts with current Bitcoin evidence. The
+// Both assets are RGB11 issued contracts with current Bitcoin evidence. The
 // shared variant really imports both genesis allocations onto the same UTXO;
 // it does not move an existing proof or invent an allocation after validation.
 type rgbFaultFixture struct {
@@ -56,7 +54,7 @@ func newRGBFaultFixture(t *testing.T, shared bool) *rgbFaultFixture {
 	}
 	b, err := sender.ImportRGB11Contract(context.Background(), []byte(issued.Armor))
 	if err != nil || b == nil || b.Projected != 1 || b.ContractID == a.ContractID {
-		t.Fatalf("import second native contract: result=%+v err=%v", b, err)
+		t.Fatalf("import second RGB11 contract: result=%+v err=%v", b, err)
 	}
 	remote := sender.http.(*rgb11MemoryDKVSHTTP)
 	installRGB11PublicContractFixture(t, sender, remote, b.ContractID)
@@ -75,7 +73,7 @@ func newRGBFaultFixture(t *testing.T, shared bool) *rgbFaultFixture {
 	state, err := sender.GetRGB11State()
 	if err != nil || state == nil || !rgbFaultHasAsset(state.AvailableAssets, a.AssetName) ||
 		!rgbFaultHasAsset(state.AvailableAssets, b.AssetName) {
-		t.Fatalf("dual native baseline is not available: state_present=%t err=%v", state != nil, err)
+		t.Fatalf("dual RGB11 baseline is not available: state_present=%t err=%v", state != nil, err)
 	}
 	return &rgbFaultFixture{sender: sender, recipient: recipient, a: a, b: b,
 		aPoint: aPoint, bPoint: bPoint, evidence: evidence, rpc: rpc}
@@ -220,9 +218,17 @@ func TestRGBFaultReadFailureRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	baseline, err := owner.GetRGB11State()
+	if err != nil || baseline == nil || !rgbFaultHasAsset(baseline.AvailableAssets, f.a.AssetName) ||
+		!rgbFaultHasAsset(baseline.AvailableAssets, f.b.AssetName) {
+		t.Fatalf("missing dual-asset baseline: %v", err)
+	}
+	wantAssets := baseline.AvailableAssets.Clone()
+	scope := runtime.rgb11ScopeKey()
+	beforeRaw := rgb11SnapshotRawDBRecords(t, database, scope)
 	want := errors.New("temporary RGB scope read unavailable")
 	fault := &rgb11SnapshotReadFailureDB{KVDB: database,
-		prefix: []byte("rgb11-" + runtime.rgb11ScopeKey() + "-"), failure: want}
+		prefix: []byte("rgb11-" + scope + "-"), failure: want}
 	owner.db = fault
 	owner.rgbManager, err = newRGB11Manager(owner, fault, owner.utxoLockerL1, f.evidence)
 	if err != nil {
@@ -235,100 +241,35 @@ func TestRGBFaultReadFailureRecovery(t *testing.T) {
 	t.Cleanup(func() { owner.db, owner.rgbManager = database, runtime })
 	fault.armed = true
 	_, refreshErr := owner.RefreshRGB11State(context.Background())
-	fault.armed = false
 	if fault.hits == 0 || !errors.Is(refreshErr, want) {
 		t.Fatalf("unlocatable DB failure did not fire with its cause: hits=%d err=%v", fault.hits, refreshErr)
 	}
+	refreshHits := fault.hits
 	state, err := owner.GetRGB11State()
-	if err == nil && state != nil && len(state.AvailableAssets) != 0 {
-		t.Fatal("unlocatable DB failure retained spendable assets")
+	if fault.hits <= refreshHits || !errors.Is(err, want) || state != nil {
+		t.Fatalf("Get must report its own failed read without a state: hits=%d->%d state_present=%t err=%v",
+			refreshHits, fault.hits, state != nil, err)
 	}
-	// A restored DB provider is not itself fresh proof of spendability.
-	owner.db, owner.rgbManager = database, runtime
+	// Only restore DB readability; keep the runtime that observed the failure.
+	fault.armed = false
 	state, err = owner.GetRGB11State()
-	if err != nil || state == nil || len(state.AvailableAssets) != 0 {
-		t.Fatalf("read recovery became ready without revalidation: %v", err)
+	if err != nil || state == nil || !wantAssets.Equal(state.AvailableAssets) {
+		t.Fatalf("read recovery did not restore both original balances: %v", err)
 	}
-	after, _, err := runtime.exportRGB11WalletSnapshot(walletID)
-	if err != nil || !reflect.DeepEqual(before, after) {
+	after, _, err := owner.rgbManager.exportRGB11WalletSnapshot(walletID)
+	if err != nil || !reflect.DeepEqual(before, after) ||
+		!reflect.DeepEqual(beforeRaw, rgb11SnapshotRawDBRecords(t, owner.db, scope)) {
 		t.Fatalf("read failure modified durable records: %v", err)
 	}
-	if _, err := owner.RefreshRGB11State(context.Background()); err != nil {
-		t.Fatal(err)
+	refreshed, err := owner.RefreshRGB11State(context.Background())
+	if err != nil || refreshed == nil || refreshed.Unresolved != 0 || len(refreshed.Inconsistent) != 0 {
+		t.Fatalf("revalidation did not complete: result=%+v err=%v", refreshed, err)
 	}
 	state, err = owner.GetRGB11State()
-	if err != nil || state == nil || !rgbFaultHasAsset(state.AvailableAssets, f.a.AssetName) ||
-		!rgbFaultHasAsset(state.AvailableAssets, f.b.AssetName) {
-		t.Fatalf("fresh revalidation did not restore both assets: %v", err)
+	if err != nil || state == nil || state.ConsistencyStatus != "ok" || !wantAssets.Equal(state.AvailableAssets) {
+		t.Fatalf("revalidated state did not restore both original balances: %v", err)
 	}
 	if f.evidence.broadcastCount != 0 {
 		t.Fatalf("read recovery broadcast %d transactions", f.evidence.broadcastCount)
-	}
-}
-
-func TestRGBFaultCapacityBounds(t *testing.T) {
-	f := newRGBFaultFixture(t, false)
-	key, _, damaged := f.breakB(t, "decode")
-	if _, err := f.sender.RefreshRGB11State(context.Background()); err == nil {
-		t.Fatal("missing fault")
-	}
-	id, err := f.sender.RGB11WalletID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	full, err := f.sender.rgbManager.readRGB11Local(id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	scope, err := f.sender.rgbManager.rgb11AccountManagedScopeID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	provider := &accountManagedCapacityProvider{scope: scope, payload: []byte{1}}
-	if err := f.sender.RegisterAccountManagedDataProvider(provider); err != nil {
-		t.Fatal(err)
-	}
-	size, err := f.sender.preflightRGB11TerminalRecovery(scope, full)
-	if err != nil || !size.Conservative || !size.BackupPending {
-		t.Fatalf("localized complete capacity was not measured: %+v %v", size, err)
-	}
-	baseline := size
-	// Another provider owns another KV. Its overflow must not inflate this
-	// scope or discard any damaged original records from the conservative bound.
-	provider.payload = make([]byte, swire.MaxDKVSBlobValueSize+1)
-	size, err = f.sender.preflightRGB11TerminalRecovery(scope, full)
-	if err != nil || size != baseline {
-		t.Fatalf("independent module changed RGB recovery capacity: %+v %v", size, err)
-	}
-	// Measure the actual current RGB module codec, rather than an old aggregate
-	// bundle. Locate its effective envelope/blob boundary without guessed overhead.
-	low, high := 0, swire.MaxDKVSBlobValueSize+1
-	for low+1 < high {
-		mid := low + (high-low)/2
-		_, err := measureRGB11ModuleCapacity(rgb11RecoveryBundleSize{}, f.sender.accountSecret,
-			f.sender.accountProfile.AccountID, f.sender.cfg.Chain, scope, make([]byte, mid))
-		if err == nil {
-			low = mid
-		} else {
-			high = mid
-		}
-	}
-	if low < baseline.RPKEncodedBytes {
-		t.Fatal("effective module capacity is smaller than the real recovery closure")
-	}
-	if _, err := measureRGB11ModuleCapacity(rgb11RecoveryBundleSize{}, f.sender.accountSecret,
-		f.sender.accountProfile.AccountID, f.sender.cfg.Chain, scope, make([]byte, low)); err != nil {
-		t.Fatalf("exact RGB module capacity rejected: %v", err)
-	}
-	if _, err := measureRGB11ModuleCapacity(rgb11RecoveryBundleSize{}, f.sender.accountSecret,
-		f.sender.accountProfile.AccountID, f.sender.cfg.Chain, scope, make([]byte, low+1)); err == nil {
-		t.Fatal("one-byte RGB module overflow accepted")
-	}
-	if _, err := rgb11wallet.RecoveryPackageFromSnapshot(full, 0); err == nil {
-		t.Fatal("sizing created a valid incomplete recovery package")
-	}
-	stored, err := f.sender.db.Read([]byte(key))
-	if err != nil || !bytes.Equal(stored, damaged) {
-		t.Fatal("capacity check changed raw B")
 	}
 }

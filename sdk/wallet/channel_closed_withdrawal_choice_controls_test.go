@@ -70,9 +70,9 @@ func TestClosedWithdrawalAtomicFailurePrecedesBroadcastAndCanRetry(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	failed := &nativeSettlementFaultDB{KVDB: manager.db, failFlush: true}
+	failed := &rgb11SettlementFaultDB{KVDB: manager.db, failFlush: true}
 	manager.db = failed
-	if _, err := manager.WithdrawClosedChannel(current.ChannelId); !errors.Is(err, errNativeSettlementWrite) {
+	if _, err := manager.WithdrawClosedChannel(current.ChannelId); !errors.Is(err, errRGB11SettlementWrite) {
 		t.Fatalf("atomic flush failure not propagated: %v", err)
 	}
 	after, err := manager.db.Read([]byte(GetChannelKey(current.ChannelId)))

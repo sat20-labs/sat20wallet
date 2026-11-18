@@ -13,7 +13,7 @@ import (
 	indexer "github.com/sat20-labs/indexer/common"
 )
 
-// STPAssetChannelProtocol is the optional evidence boundary for native assets.
+// STPAssetChannelProtocol is the optional evidence boundary for channel assets.
 // Ordinary UTXO protocols need no sidecar. Proof verification returns a
 // transaction-local output view only, never imports ordinary wallet balances.
 // Bitcoin script authorization remains the responsibility of STP's signers.
@@ -37,7 +37,7 @@ type STPAssetExpansionFunding interface {
 	BuildExpansionAnchorProof(*Manager, *Channel, *AssetName, *TxOutput) ([]byte, error)
 }
 
-// Native metadata is derived from authenticated genesis material. An indexer's
+// channel metadata is derived from authenticated genesis material. An indexer's
 // absence of a client-validated asset must not be filled with guessed metadata.
 type STPAssetFundingMetadata interface {
 	TickerFromFunding(*Manager, *indexer.AssetName, []byte) (*indexer.TickerInfo, error)
@@ -51,13 +51,13 @@ func (p *Manager) GetSTPFundingTickerInfo(asset *indexer.AssetName, funding map[
 	if err != nil {
 		return nil, err
 	}
-	if native, ok := protocol.(STPAssetFundingMetadata); ok && len(funding[asset.Protocol]) != 0 {
-		info, err := native.TickerFromFunding(p, asset, funding[asset.Protocol])
+	if proofAdapter, ok := protocol.(STPAssetFundingMetadata); ok && len(funding[asset.Protocol]) != 0 {
+		info, err := proofAdapter.TickerFromFunding(p, asset, funding[asset.Protocol])
 		if err != nil {
 			return nil, err
 		}
 		if info == nil || info.AssetName != *asset {
-			return nil, fmt.Errorf("native funding metadata identity mismatch")
+			return nil, fmt.Errorf("channel funding metadata identity mismatch")
 		}
 		return info, nil
 	}
@@ -69,13 +69,13 @@ func (p *Manager) GetSTPFundingTickerInfo(asset *indexer.AssetName, funding map[
 }
 
 // STPAssetHiddenInputVerifier lets client-validated protocols reject a locally
-// known native carrier mislabelled as a Bitcoin-only input. Public indexers do
-// not establish the absence of an undisclosed native allocation.
+// known channel carrier mislabelled as a Bitcoin-only input. Public indexers do
+// not establish the absence of an undisclosed channel allocation.
 type STPAssetHiddenInputVerifier interface {
 	VerifyUndisclosedChannelInputs(*Manager, *wire.MsgTx) error
 }
 
-// STPAssetJournalProtocol verifies a native lifecycle obligation even when a
+// STPAssetJournalProtocol verifies a channel lifecycle obligation even when a
 // full asset exit leaves the next commitment with Bitcoin-only outputs.
 type STPAssetJournalProtocol interface {
 	VerifyChannelJournalContext(*Manager, *Channel) error
@@ -115,14 +115,14 @@ type STPAssetRecoveryRequest struct {
 }
 
 type STPAssetRecoveryPlan struct {
-	Tx           *wire.MsgTx
-	PrevFetcher  txscript.PrevOutputFetcher
-	Fee          int64
-	NativeProofs map[string][]byte
-	// NoNativeAssets is returned only after validating that none of the
+	Tx          *wire.MsgTx
+	PrevFetcher txscript.PrevOutputFetcher
+	Fee         int64
+	AssetProofs map[string][]byte
+	// NoRGB11Assets is returned only after validating that none of the
 	// selected inputs carries this protocol's state. STP may then use its
 	// ordinary Bitcoin recovery constructor for those inputs.
-	NoNativeAssets bool
+	NoRGB11Assets bool
 }
 
 func (p *Manager) buildSTPChannelRecovery(req STPAssetRecoveryRequest) (*STPAssetRecoveryPlan, error) {
@@ -136,8 +136,8 @@ func (p *Manager) buildSTPChannelRecoveryWithRGBView(req STPAssetRecoveryRequest
 	var result *STPAssetRecoveryPlan
 	for _, registered := range stpAssetProtocols.ordered {
 		protocol := stpProtocolWithRGBView(registered, view)
-		builder, native := protocol.(STPAssetChannelProtocol)
-		if !native {
+		builder, proofAdapter := protocol.(STPAssetChannelProtocol)
+		if !proofAdapter {
 			continue
 		}
 		proof := req.Commitment.AssetProofs[protocol.Protocol()]
@@ -145,7 +145,7 @@ func (p *Manager) buildSTPChannelRecoveryWithRGBView(req STPAssetRecoveryRequest
 			for _, balances := range []map[AssetName]*Decimal{req.Commitment.LocalBalance, req.Commitment.RemoteBalance} {
 				for asset, amount := range balances {
 					if asset.Protocol == protocol.Protocol() && amount.Sign() != 0 {
-						return nil, fmt.Errorf("native recovery proof is missing")
+						return nil, fmt.Errorf("channel recovery proof is missing")
 					}
 				}
 			}
@@ -156,16 +156,16 @@ func (p *Manager) buildSTPChannelRecoveryWithRGBView(req STPAssetRecoveryRequest
 			return nil, err
 		}
 		if plan == nil {
-			return nil, fmt.Errorf("missing native recovery plan")
+			return nil, fmt.Errorf("missing channel recovery plan")
 		}
-		if plan.NoNativeAssets {
+		if plan.NoRGB11Assets {
 			continue
 		}
 		if result != nil {
-			return nil, fmt.Errorf("multiple native recovery plans require a combined transaction")
+			return nil, fmt.Errorf("multiple channel recovery plans require a combined transaction")
 		}
-		if plan.Tx == nil || plan.PrevFetcher == nil || len(plan.NativeProofs[protocol.Protocol()]) == 0 {
-			return nil, fmt.Errorf("incomplete native recovery plan")
+		if plan.Tx == nil || plan.PrevFetcher == nil || len(plan.AssetProofs[protocol.Protocol()]) == 0 {
+			return nil, fmt.Errorf("incomplete channel recovery plan")
 		}
 		result = plan
 	}
@@ -173,16 +173,16 @@ func (p *Manager) buildSTPChannelRecoveryWithRGBView(req STPAssetRecoveryRequest
 		return nil, err
 	}
 	if result != nil {
-		req.Commitment.RecoveryProofs = cloneSTPAssetProofs(result.NativeProofs)
+		req.Commitment.RecoveryProofs = cloneSTPAssetProofs(result.AssetProofs)
 	}
 	return result, nil
 }
 
 // A reservation's legacy DataInDB does not contain its complete transient
-// RevocationInfo. Native assets therefore retain the complete signed candidate
+// RevocationInfo. channel assets therefore retain the complete signed candidate
 // and private funding context in one independent durable value before a
 // signature leaves this node or an older commitment secret is disclosed.
-type stpNativeCommitmentRecord struct {
+type stpCommitmentRecord struct {
 	Version         uint32
 	ChannelID       string
 	Height          uint64
@@ -194,43 +194,43 @@ type stpNativeCommitmentRecord struct {
 	RevokedPrevious bool
 }
 
-func stpNativeCommitmentKey(channel *Channel, role string) []byte {
-	return []byte(fmt.Sprintf("%sstp-native-commitment-%s-%d-%s", GetDBKeyPrefix(), channel.ChannelId, channel.CommitHeight+1, role))
+func stpCommitmentKey(channel *Channel, role string) []byte {
+	return []byte(fmt.Sprintf("%sstp-commitment-%s-%d-%d-%s", GetDBKeyPrefix(), channel.ChannelId, channel.FundingTime, channel.CommitHeight+1, role))
 }
 
-func needsSTPNativeCommitmentJournal(channel *Channel, commitment *ChannelCommitment) bool {
+func needsProofJournal(channel *Channel, commitment *ChannelCommitment) bool {
 	return (channel != nil && len(channel.AssetFunding) != 0) || (commitment != nil && len(commitment.AssetProofs) != 0)
 }
 
-func (p *Manager) verifySTPNativeJournalContext(channel *Channel, commitment *ChannelCommitment) error {
-	return p.verifySTPNativeJournalContextWithRGBView(channel, commitment, nil)
+func (p *Manager) verifySTPJournalContext(channel *Channel, commitment *ChannelCommitment) error {
+	return p.verifyJournalContextWithView(channel, commitment, nil)
 }
 
-func (p *Manager) verifySTPNativeJournalContextWithRGBView(channel *Channel, commitment *ChannelCommitment, view *stpRGBEvidenceView) error {
+func (p *Manager) verifyJournalContextWithView(channel *Channel, commitment *ChannelCommitment, view *stpRGBEvidenceView) error {
 	if channel == nil || commitment == nil {
-		return fmt.Errorf("missing native journal context")
+		return fmt.Errorf("missing channel journal context")
 	}
 	for protocol, inventory := range channel.AssetFunding {
 		if len(inventory) == 0 {
-			return fmt.Errorf("missing %s native channel inventory", protocol)
+			return fmt.Errorf("missing %s channel inventory", protocol)
 		}
 		if verifier, ok := stpProtocolWithRGBView(stpAssetProtocols.byName[protocol], view).(STPAssetJournalProtocol); ok {
 			if err := verifier.VerifyChannelJournalContext(p, channel); err != nil {
 				return err
 			}
 		} else if len(commitment.AssetProofs[protocol]) == 0 {
-			return fmt.Errorf("missing %s native lifecycle verifier", protocol)
+			return fmt.Errorf("missing %s channel lifecycle verifier", protocol)
 		}
 	}
 	return completeSTPRGBView(view)
 }
 
-func (p *Manager) persistSTPNativeCommitment(channel *Channel, commitment *ChannelCommitment, role string) error {
-	return p.persistSTPNativeCommitmentWithRGBView(channel, commitment, role, nil)
+func (p *Manager) persistSTPCommitment(channel *Channel, commitment *ChannelCommitment, role string) error {
+	return p.persistCommitmentWithView(channel, commitment, role, nil)
 }
 
-func (p *Manager) persistSTPNativeCommitmentWithRGBView(channel *Channel, commitment *ChannelCommitment, role string, view *stpRGBEvidenceView) error {
-	key, value, err := p.prepareSTPNativeCommitmentWriteWithRGBView(channel, commitment, role, view)
+func (p *Manager) persistCommitmentWithView(channel *Channel, commitment *ChannelCommitment, role string, view *stpRGBEvidenceView) error {
+	key, value, err := p.prepareCommitWriteWithView(channel, commitment, role, view)
 	if err != nil || len(key) == 0 {
 		return err
 	}
@@ -243,39 +243,39 @@ func (p *Manager) persistSTPNativeCommitmentWithRGBView(channel *Channel, commit
 // Prepare a journal value without publishing it. Callers updating more than
 // one recovery snapshot can preserve the same validation and revocation rules
 // while committing all of their values in a single database transaction.
-func (p *Manager) prepareSTPNativeCommitmentWrite(channel *Channel, commitment *ChannelCommitment, role string) ([]byte, []byte, error) {
-	return p.prepareSTPNativeCommitmentWriteWithRGBView(channel, commitment, role, nil)
+func (p *Manager) prepareSTPCommitmentWrite(channel *Channel, commitment *ChannelCommitment, role string) ([]byte, []byte, error) {
+	return p.prepareCommitWriteWithView(channel, commitment, role, nil)
 }
 
-func (p *Manager) prepareSTPNativeCommitmentWriteWithRGBView(channel *Channel, commitment *ChannelCommitment, role string, view *stpRGBEvidenceView) ([]byte, []byte, error) {
+func (p *Manager) prepareCommitWriteWithView(channel *Channel, commitment *ChannelCommitment, role string, view *stpRGBEvidenceView) ([]byte, []byte, error) {
 	if err := completeSTPRGBView(view); err != nil {
 		return nil, nil, err
 	}
-	if !needsSTPNativeCommitmentJournal(channel, commitment) {
+	if role != "local" && !needsProofJournal(channel, commitment) {
 		return nil, nil, nil
 	}
 	if p.db == nil || channel == nil || channel.CommitHeight < 0 || commitment == nil || commitment.CommitTx == nil ||
 		commitment.DeAnchorTx == nil || (role != "local" && role != "remote") {
-		return nil, nil, fmt.Errorf("native channel commitment has no complete durable signing context")
+		return nil, nil, fmt.Errorf("channel commitment has no complete durable signing context")
 	}
-	if err := p.verifySTPNativeJournalContextWithRGBView(channel, commitment, view); err != nil {
+	if err := p.verifyJournalContextWithView(channel, commitment, view); err != nil {
 		return nil, nil, err
 	}
-	record := stpNativeCommitmentRecord{Version: 1, ChannelID: channel.ChannelId,
+	record := stpCommitmentRecord{Version: 1, ChannelID: channel.ChannelId,
 		Height: uint64(channel.CommitHeight) + 1, Role: role, AssetFunding: cloneSTPAssetProofs(channel.AssetFunding),
 		AssetEntropy: channel.AssetEntropy, Commitment: commitment, Channel: &channel.ChannelInDB}
-	previous, err := p.db.Read(stpNativeCommitmentKey(channel, role))
+	previous, err := p.db.Read(stpCommitmentKey(channel, role))
 	if err == nil {
-		var stored stpNativeCommitmentRecord
+		var stored stpCommitmentRecord
 		if err := DecodeFromBytes(previous, &stored); err != nil {
 			return nil, nil, err
 		}
 		if stored.RevokedPrevious {
 			if role != "local" {
-				return nil, nil, fmt.Errorf("invalid native revocation journal role")
+				return nil, nil, fmt.Errorf("invalid channel revocation journal role")
 			}
-			if err := p.verifySTPNativeCommitmentPersisted(channel, commitment); err != nil {
-				return nil, nil, fmt.Errorf("cannot replace a native commitment after revocation: %w", err)
+			if err := p.verifyStoredCommitment(channel, commitment); err != nil {
+				return nil, nil, fmt.Errorf("cannot replace a channel commitment after revocation: %w", err)
 			}
 			record.RevokedPrevious = true
 		}
@@ -289,29 +289,29 @@ func (p *Manager) prepareSTPNativeCommitmentWriteWithRGBView(channel *Channel, c
 	if err != nil {
 		return nil, nil, err
 	}
-	return stpNativeCommitmentKey(channel, role), raw, nil
+	return stpCommitmentKey(channel, role), raw, nil
 }
 
-func (p *Manager) verifySTPNativeCommitmentPersisted(channel *Channel, commitment *ChannelCommitment) error {
+func (p *Manager) verifyStoredCommitment(channel *Channel, commitment *ChannelCommitment) error {
 	if p.db == nil || channel == nil || commitment == nil || commitment.CommitTx == nil || commitment.DeAnchorTx == nil {
-		return fmt.Errorf("native commitment must be durable before revocation")
+		return fmt.Errorf("channel commitment must be durable before revocation")
 	}
-	raw, err := p.db.Read(stpNativeCommitmentKey(channel, "local"))
+	raw, err := p.db.Read(stpCommitmentKey(channel, "local"))
 	if err != nil {
-		return fmt.Errorf("native commitment journal is unavailable: %w", err)
+		return fmt.Errorf("channel commitment journal is unavailable: %w", err)
 	}
-	var record stpNativeCommitmentRecord
+	var record stpCommitmentRecord
 	if err := DecodeFromBytes(raw, &record); err != nil {
 		return err
 	}
 	if record.Version != 1 || record.ChannelID != channel.ChannelId || record.Height != uint64(channel.CommitHeight)+1 ||
 		record.Role != "local" || record.AssetEntropy != channel.AssetEntropy ||
 		!equalSTPAssetProofs(record.AssetFunding, channel.AssetFunding) || record.Commitment == nil ||
-		record.Channel == nil || !equalSTPBitcoinChain(record.Channel.NativeParents, channel.NativeParents) ||
-		!reflect.DeepEqual(record.Channel.NativePrevouts, channel.NativePrevouts) ||
+		record.Channel == nil || !equalSTPBitcoinChain(record.Channel.FundingParents, channel.FundingParents) ||
+		!reflect.DeepEqual(record.Channel.FundingPrevouts, channel.FundingPrevouts) ||
 		record.Commitment.CommitTx == nil || record.Commitment.DeAnchorTx == nil ||
 		!equalSTPAssetProofs(record.Commitment.AssetProofs, commitment.AssetProofs) {
-		return fmt.Errorf("native commitment journal differs from the verified candidate")
+		return fmt.Errorf("channel commitment journal differs from the verified candidate")
 	}
 	storedTx, err := EncodeMsgTx(record.Commitment.CommitTx)
 	if err != nil {
@@ -319,7 +319,7 @@ func (p *Manager) verifySTPNativeCommitmentPersisted(channel *Channel, commitmen
 	}
 	currentTx, err := EncodeMsgTx(commitment.CommitTx)
 	if err != nil || storedTx != currentTx {
-		return fmt.Errorf("native commitment signatures are not durable")
+		return fmt.Errorf("channel commitment signatures are not durable")
 	}
 	storedDeanchor, err := EncodeMsgTx_SatsNet(record.Commitment.DeAnchorTx)
 	if err != nil {
@@ -327,32 +327,32 @@ func (p *Manager) verifySTPNativeCommitmentPersisted(channel *Channel, commitmen
 	}
 	currentDeanchor, err := EncodeMsgTx_SatsNet(commitment.DeAnchorTx)
 	if err != nil || storedDeanchor != currentDeanchor {
-		return fmt.Errorf("native commitment deanchor signatures are not durable")
+		return fmt.Errorf("channel commitment deanchor signatures are not durable")
 	}
 	// The whole recovery package is a signing obligation. Comparing only the
 	// main transaction would permit a changed or missing signed other-sweep,
 	// next transaction, or proof chain after the old secret was released.
 	if !equalSTPCommitmentPackage(record.Commitment, commitment) {
-		return fmt.Errorf("native commitment recovery package is not durable")
+		return fmt.Errorf("channel commitment recovery package is not durable")
 	}
 	return nil
 }
 
-func (p *Manager) markSTPNativeRevocationReady(channel *Channel) error {
-	if err := p.verifySTPNativeCommitmentPersisted(channel, channel.LocalCommitment); err != nil {
+func (p *Manager) markSTPRevocationReady(channel *Channel) error {
+	if err := p.verifyStoredCommitment(channel, channel.LocalCommitment); err != nil {
 		return err
 	}
-	key := stpNativeCommitmentKey(channel, "local")
+	key := stpCommitmentKey(channel, "local")
 	raw, err := p.db.Read(key)
 	if err != nil {
 		return err
 	}
-	var record stpNativeCommitmentRecord
+	var record stpCommitmentRecord
 	if err := DecodeFromBytes(raw, &record); err != nil {
 		return err
 	}
 	if record.Channel == nil {
-		return fmt.Errorf("native revocation journal has no recoverable funding snapshot")
+		return fmt.Errorf("channel revocation journal has no recoverable funding snapshot")
 	}
 	record.RevokedPrevious = true
 	raw, err = EncodeToBytes(&record)
@@ -362,62 +362,65 @@ func (p *Manager) markSTPNativeRevocationReady(channel *Channel) error {
 	return p.db.Write(key, raw)
 }
 
-// LoadSTPNativeRevocationRecovery returns a fully authorized newer local candidate
+// LoadSTPRevocationRecovery returns a fully authorized newer local candidate
 // when this process may already have disclosed the previous commitment secret
 // but the main channel record still has the old height. The caller must not
 // resume signing with the old channel or mark this recovered snapshot READY;
 // its pending reservation must reconcile, or this candidate can be force-closed.
 // A normal fully persisted channel has no pending record at height + 1.
-func (p *Manager) loadSTPNativeRevocationRecovery(stored *ChannelInDB) (*ChannelInDB, error) {
+func (p *Manager) loadSTPRevocationRecovery(stored *ChannelInDB) (*ChannelInDB, error) {
 	if stored == nil || p.db == nil || stored.CommitHeight < 0 {
-		return nil, fmt.Errorf("missing native revocation recovery context")
+		return nil, fmt.Errorf("missing channel revocation recovery context")
+	}
+	if preparedRecoveryTerminal(stored.Status) {
+		return nil, nil
 	}
 	channel := &Channel{ChannelInDB: *stored}
-	raw, err := p.db.Read(stpNativeCommitmentKey(channel, "local"))
+	raw, err := p.db.Read(stpCommitmentKey(channel, "local"))
 	if errors.Is(err, indexer.ErrKeyNotFound) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	var record stpNativeCommitmentRecord
+	var record stpCommitmentRecord
 	if err := DecodeFromBytes(raw, &record); err != nil {
 		return nil, err
 	}
 	if record.Version != 1 || record.ChannelID != stored.ChannelId || record.Height != uint64(stored.CommitHeight)+1 || record.Role != "local" {
-		return nil, fmt.Errorf("native revocation recovery journal has inconsistent context")
+		return nil, fmt.Errorf("channel revocation recovery journal has inconsistent context")
 	}
 	if !record.RevokedPrevious {
 		return nil, nil
 	}
-	if record.Channel == nil || record.Channel.ChannelId != stored.ChannelId || record.Channel.CommitHeight != stored.CommitHeight ||
+	if record.Channel == nil || record.Channel.ChannelId != stored.ChannelId || record.Channel.FundingTime != stored.FundingTime || record.Channel.CommitHeight != stored.CommitHeight ||
 		record.Commitment == nil || record.Commitment.CommitTx == nil || record.Commitment.DeAnchorTx == nil ||
-		!needsSTPNativeCommitmentJournal(&Channel{ChannelInDB: *record.Channel}, record.Commitment) || record.Channel.AssetEntropy != record.AssetEntropy ||
+		record.Channel.AssetEntropy != record.AssetEntropy ||
 		!equalSTPAssetProofs(record.Channel.AssetFunding, record.AssetFunding) {
-		return nil, fmt.Errorf("native revocation recovery journal is incomplete")
+		return nil, fmt.Errorf("channel revocation recovery journal is incomplete")
 	}
 	candidate := &Channel{ChannelInDB: *record.Channel}
 	candidate.LocalCommitment = record.Commitment
-	if err := verifySTPNativeParents(candidate); err != nil {
+	if err := verifySTPParents(candidate); err != nil {
 		return nil, err
 	}
 	if stored.AssetEntropy != ([32]byte{}) && stored.AssetEntropy != candidate.AssetEntropy {
-		return nil, fmt.Errorf("native recovery changed the channel entropy")
+		return nil, fmt.Errorf("channel recovery changed the channel entropy")
 	}
-	if err := p.verifySTPNativeJournalContext(candidate, candidate.LocalCommitment); err != nil {
+	if err := p.verifySTPJournalContext(candidate, candidate.LocalCommitment); err != nil {
 		return nil, err
 	}
-	if err := p.verifySTPNativeCommitmentPersisted(candidate, candidate.LocalCommitment); err != nil {
+	if err := p.verifyStoredCommitment(candidate, candidate.LocalCommitment); err != nil {
 		return nil, err
 	}
 	if err := p.verifySTPChannelProofs(candidate, candidate.LocalCommitment.CommitTx, candidate.LocalCommitment.AssetProofs, STPOpForceClose); err != nil {
 		return nil, err
 	}
-	if err := verifySTPNativeRecoveryAuthorization(candidate); err != nil {
-		return nil, fmt.Errorf("native recovery candidate Bitcoin authorization: %w", err)
+	if err := verifyRecoveryAuth(candidate); err != nil {
+		return nil, fmt.Errorf("channel recovery candidate Bitcoin authorization: %w", err)
 	}
 	candidate.CommitHeight++
-	candidate.Status = CS_NATIVE_RECOVERY
+	candidate.Status = CS_COMMIT_RECOVERY
 	return &candidate.ChannelInDB, nil
 }
 
@@ -425,35 +428,35 @@ func (p *Manager) loadSTPNativeRevocationRecovery(stored *ChannelInDB) (*Channel
 // Verify their complete authorization on a copy, after checking the immutable
 // journal. Neither the persisted package nor the returned exportable instance
 // is changed, and recovery never needs a wallet key or a newly made signature.
-func verifySTPNativeRecoveryAuthorization(channel *Channel) error {
+func verifyRecoveryAuth(channel *Channel) error {
 	commitment := channel.LocalCommitment
 	if commitment == nil || commitment.CommitTx == nil || channel.ChanPoint == nil {
-		return fmt.Errorf("missing native recovery signing context")
+		return fmt.Errorf("missing channel recovery signing context")
 	}
 	fetcher := channel.GetCommitmentPrefetchor()
 	for _, previous := range commitment.PrevTxs {
 		if previous == nil {
-			return fmt.Errorf("missing native commitment predecessor")
+			return fmt.Errorf("missing channel commitment predecessor")
 		}
 		for _, input := range previous.TxIn {
 			if input == nil || fetcher.FetchPrevOutput(input.PreviousOutPoint) == nil {
-				return fmt.Errorf("native commitment predecessor is missing a verified prevout")
+				return fmt.Errorf("channel commitment predecessor is missing a verified prevout")
 			}
 		}
 		if err := VerifySignedTx(previous, fetcher); err != nil {
-			return fmt.Errorf("native commitment predecessor authorization: %w", err)
+			return fmt.Errorf("channel commitment predecessor authorization: %w", err)
 		}
 		AddTxOutputsToPrevFetcher(fetcher, previous)
 	}
 	for _, input := range commitment.CommitTx.TxIn {
 		if input == nil || fetcher.FetchPrevOutput(input.PreviousOutPoint) == nil {
-			return fmt.Errorf("native recovery is missing a verified prevout")
+			return fmt.Errorf("channel recovery is missing a verified prevout")
 		}
 	}
 	tx := commitment.CommitTx.Copy()
 	if len(commitment.CommitSig) != 0 {
 		if len(commitment.CommitSig) != len(tx.TxIn) || channel.GetLocalPubKey() == nil || channel.GetRemotePubKey() == nil {
-			return fmt.Errorf("native recovery has incomplete persisted peer signatures")
+			return fmt.Errorf("channel recovery has incomplete persisted peer signatures")
 		}
 		local, peer := channel.GetLocalPubKey().SerializeCompressed(), channel.GetRemotePubKey().SerializeCompressed()
 		_, script, err := GetP2WSHscript(local, peer)
@@ -463,10 +466,10 @@ func verifySTPNativeRecoveryAuthorization(channel *Channel) error {
 		for _, input := range tx.TxIn {
 			previous := fetcher.FetchPrevOutput(input.PreviousOutPoint)
 			if previous == nil {
-				return fmt.Errorf("native recovery is missing prevout %s", input.PreviousOutPoint)
+				return fmt.Errorf("channel recovery is missing prevout %s", input.PreviousOutPoint)
 			}
 			if bytes.Equal(previous.PkScript, script) && len(input.Witness) != 0 && len(input.Witness) != 4 {
-				return fmt.Errorf("native recovery has a malformed local witness")
+				return fmt.Errorf("channel recovery has a malformed local witness")
 			}
 		}
 		if err := FinalTxWithPeerSig(channel.RedeemScript, local, peer, tx, fetcher, commitment.CommitSig); err != nil {
@@ -557,64 +560,64 @@ func cloneSTPPrevouts(outputs map[string]*wire.TxOut) map[string]*wire.TxOut {
 	return result
 }
 
-func retainSTPNativeParent(channel *Channel, tx *wire.MsgTx, fetcher txscript.PrevOutputFetcher) error {
-	if len(channel.AssetFunding) == 0 {
+func retainSTPParent(channel *Channel, tx *wire.MsgTx, fetcher txscript.PrevOutputFetcher, required bool) error {
+	if !required && !indexedChannel(channel) && len(channel.AssetFunding) == 0 {
 		return nil
 	}
-	if channel.NativePrevouts == nil {
-		channel.NativePrevouts = make(map[string]*wire.TxOut)
+	if channel.FundingPrevouts == nil {
+		channel.FundingPrevouts = make(map[string]*wire.TxOut)
 	}
 	for _, input := range tx.TxIn {
 		output := fetcher.FetchPrevOutput(input.PreviousOutPoint)
 		if output == nil {
-			return fmt.Errorf("missing native funding parent input %s", input.PreviousOutPoint)
+			return fmt.Errorf("missing channel funding parent input %s", input.PreviousOutPoint)
 		}
-		channel.NativePrevouts[input.PreviousOutPoint.String()] = wire.NewTxOut(output.Value, append([]byte(nil), output.PkScript...))
+		channel.FundingPrevouts[input.PreviousOutPoint.String()] = wire.NewTxOut(output.Value, append([]byte(nil), output.PkScript...))
 	}
-	for _, parent := range channel.NativeParents {
+	for _, parent := range channel.FundingParents {
 		if parent.TxHash() == tx.TxHash() {
 			return nil
 		}
 	}
-	channel.NativeParents = append(channel.NativeParents, tx.Copy())
+	channel.FundingParents = append(channel.FundingParents, tx.Copy())
 	return nil
 }
 
-func acceptSTPSignedNativeParents(channel *Channel, signed []*wire.MsgTx) error {
+func acceptSTPSignedParents(channel *Channel, signed []*wire.MsgTx) error {
 	if channel == nil {
-		return fmt.Errorf("missing channel for native parents")
+		return fmt.Errorf("missing channel for channel parents")
 	}
-	if len(channel.NativeParents) == 0 {
+	if len(channel.FundingParents) == 0 {
 		return nil
 	}
 	for _, tx := range signed {
 		// Legacy expansion includes a nil placeholder when no additional
-		// inscription transaction is needed. Required native parents are
+		// inscription transaction is needed. Required channel parents are
 		// checked independently below, including every input signature.
 		if tx == nil {
 			continue
 		}
-		for i, candidate := range channel.NativeParents {
+		for i, candidate := range channel.FundingParents {
 			if candidate.TxHash() == tx.TxHash() {
-				channel.NativeParents[i] = tx.Copy()
+				channel.FundingParents[i] = tx.Copy()
 			}
 		}
 	}
-	return verifySTPNativeParents(channel)
+	return verifySTPParents(channel)
 }
 
-func verifySTPNativeParents(channel *Channel) error {
+func verifySTPParents(channel *Channel) error {
 	fetcher := txscript.NewMultiPrevOutFetcher(nil)
-	for _, tx := range channel.NativeParents {
+	for _, tx := range channel.FundingParents {
 		for _, input := range tx.TxIn {
-			out := channel.NativePrevouts[input.PreviousOutPoint.String()]
+			out := channel.FundingPrevouts[input.PreviousOutPoint.String()]
 			if out == nil {
-				return fmt.Errorf("native parent missing previous output %s", input.PreviousOutPoint)
+				return fmt.Errorf("channel parent missing previous output %s", input.PreviousOutPoint)
 			}
 			fetcher.AddPrevOut(input.PreviousOutPoint, out)
 		}
 		if err := VerifySignedTx(tx, fetcher); err != nil {
-			return fmt.Errorf("native funding parent signatures: %w", err)
+			return fmt.Errorf("channel funding parent signatures: %w", err)
 		}
 		for i := range tx.TxOut {
 			output := indexer.GenerateTxOutput(tx, i)
@@ -671,7 +674,7 @@ func equalSTPCommitmentPackage(a, b *ChannelCommitment) bool {
 	return true
 }
 
-// PrepareSTPChannelFunding proves selected native carriers before any signed
+// PrepareSTPChannelFunding proves selected channel carriers before any signed
 // request is sent. Inputs receive only the asset view established by that proof.
 func (p *Manager) PrepareSTPChannelFunding(channel *Channel, asset *AssetName, inputs []*TxOutput) (map[string][]byte, error) {
 	return p.prepareSTPChannelFundingWithRGBView(channel, asset, inputs, nil)
@@ -689,11 +692,11 @@ func (p *Manager) prepareSTPChannelFundingWithRGBView(channel *Channel, asset *A
 		return nil, err
 	}
 	protocol = stpProtocolWithRGBView(protocol, view)
-	funder, native := protocol.(STPAssetFundingProtocol)
-	if !native {
+	funder, proofAdapter := protocol.(STPAssetFundingProtocol)
+	if !proofAdapter {
 		return nil, nil
 	}
-	if err := p.requireSTPNativePersistence(); err != nil {
+	if err := p.requireSTPPersistence(); err != nil {
 		return nil, err
 	}
 	candidate, candidateInputs := stpFundingValidationContext(channel, inputs)
@@ -780,18 +783,18 @@ func (p *Manager) acceptSTPChannelFundingWithRGBView(channel *Channel, asset *As
 		return err
 	}
 	protocol = stpProtocolWithRGBView(protocol, view)
-	funder, native := protocol.(STPAssetFundingProtocol)
-	if !native {
+	funder, proofAdapter := protocol.(STPAssetFundingProtocol)
+	if !proofAdapter {
 		if len(proofs) != 0 {
-			return fmt.Errorf("unexpected native funding evidence")
+			return fmt.Errorf("unexpected channel funding evidence")
 		}
 		return nil
 	}
-	if err := p.requireSTPNativePersistence(); err != nil {
+	if err := p.requireSTPPersistence(); err != nil {
 		return err
 	}
 	if entropy == ([32]byte{}) || (channel.AssetEntropy != ([32]byte{}) && channel.AssetEntropy != entropy) {
-		return fmt.Errorf("invalid native channel entropy")
+		return fmt.Errorf("invalid channel entropy")
 	}
 	for name, value := range proofs {
 		if name != protocol.Protocol() && !bytes.Equal(channel.AssetFunding[name], value) {
@@ -818,7 +821,7 @@ func (p *Manager) acceptSTPChannelFundingWithRGBView(channel *Channel, asset *As
 			return err
 		}
 		if info == nil || info.AssetName != asset.AssetName {
-			return fmt.Errorf("native funding metadata identity mismatch")
+			return fmt.Errorf("channel funding metadata identity mismatch")
 		}
 		if err := completeSTPRGBView(view); err != nil {
 			return err
@@ -856,8 +859,8 @@ func (p *Manager) verifySTPChannelProofsWithRGBView(channel *Channel, tx *wire.M
 	for _, registered := range stpAssetProtocols.ordered {
 		protocol := stpProtocolWithRGBView(registered, view)
 		proof := proofs[protocol.Protocol()]
-		verifier, native := protocol.(STPAssetChannelProtocol)
-		if !native {
+		verifier, proofAdapter := protocol.(STPAssetChannelProtocol)
+		if !proofAdapter {
 			if len(proof) != 0 {
 				return fmt.Errorf("unexpected %s channel proof", protocol.Protocol())
 			}
@@ -875,7 +878,7 @@ func (p *Manager) verifySTPChannelProofsWithRGBView(channel *Channel, tx *wire.M
 			// a Bitcoin-only successor commitment.
 			journal, ok := protocol.(STPAssetJournalProtocol)
 			if !ok {
-				return fmt.Errorf("missing %s native lifecycle verifier", protocol.Protocol())
+				return fmt.Errorf("missing %s channel lifecycle verifier", protocol.Protocol())
 			}
 			if err := journal.VerifyChannelJournalContext(p, channel); err != nil {
 				return err
@@ -919,7 +922,7 @@ func (p *Manager) ImportSTPChannelSettlement(tx *wire.MsgTx, proofs map[string][
 	return nil
 }
 
-func (p *Manager) isSTPNativeInputProtected(outpoint string) bool {
+func (p *Manager) isSTPInputProtected(outpoint string) bool {
 	if p == nil || p.db == nil {
 		return false
 	}
@@ -929,7 +932,7 @@ func (p *Manager) isSTPNativeInputProtected(outpoint string) bool {
 			return
 		}
 		for name, outputs := range channel.FundingUtxos {
-			if _, native := stpAssetProtocols.byName[name.Protocol].(STPAssetChannelProtocol); !native {
+			if _, proofAdapter := stpAssetProtocols.byName[name.Protocol].(STPAssetChannelProtocol); !proofAdapter {
 				continue
 			}
 			for _, output := range outputs {
@@ -938,7 +941,7 @@ func (p *Manager) isSTPNativeInputProtected(outpoint string) bool {
 				}
 			}
 		}
-		for _, parent := range channel.NativeParents {
+		for _, parent := range channel.FundingParents {
 			if parent == nil {
 				continue
 			}
@@ -967,8 +970,8 @@ func (p *Manager) isSTPNativeInputProtected(outpoint string) bool {
 	}
 	// A peer may already hold a signature even though the main channel record
 	// has not advanced. Its durable candidate protects the same carriers.
-	if err := p.db.BatchRead([]byte(GetDBKeyPrefix()+"stp-native-commitment-"), false, func(_, raw []byte) error {
-		var record stpNativeCommitmentRecord
+	if err := p.db.BatchRead([]byte(GetDBKeyPrefix()+"stp-commitment-"), false, func(_, raw []byte) error {
+		var record stpCommitmentRecord
 		if err := DecodeFromBytes(raw, &record); err != nil {
 			return err
 		}

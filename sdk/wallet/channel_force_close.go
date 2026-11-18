@@ -15,6 +15,35 @@ func (p *Manager) ForcelyCloseChannel(channel *Channel, feeRate int64) (string, 
 	channel.Mutex.Lock()
 	defer channel.Mutex.Unlock()
 
+	// A lost response may leave the installed channel at the previous height.
+	// Recheck the durable local obligation under the channel lock before signing
+	// or publishing anything, even when called directly with an old snapshot.
+	stored, err := p.LoadChannelInDB(channel.ChannelId)
+	if err != nil {
+		return "", "", err
+	}
+	if stored.FundingTime != channel.FundingTime || stored.CommitHeight > channel.CommitHeight || preparedRecoveryTerminal(stored.Status) {
+		return "", "", fmt.Errorf("stale or closed channel commitment")
+	}
+	recovered, err := p.loadSTPRevocationRecovery(stored)
+	if err != nil {
+		return "", "", err
+	}
+	if recovered == nil && (channel.CommitHeight != stored.CommitHeight || stored.LocalCommitment == nil || stored.LocalCommitment.CommitTx == nil || channel.LocalCommitment == nil || channel.LocalCommitment.CommitTx == nil || channel.LocalCommitment.CommitTx.TxHash() != stored.LocalCommitment.CommitTx.TxHash()) {
+		return "", "", fmt.Errorf("local exit differs from durable channel commitment")
+	}
+	if recovered != nil {
+		previous := channel.ChannelInDB
+		channel.ChannelInDB = *recovered
+		defer func() {
+			if channel.Status == CS_COMMIT_RECOVERY {
+				channel.ChannelInDB = previous
+			}
+		}()
+	}
+	if err := p.SaveBackupChannelToDB(&channel.ChannelInDB); err != nil {
+		return "", "", err
+	}
 	commitTx := channel.LocalCommitment.CommitTx
 	if commitTx == nil {
 		return "", "", fmt.Errorf("can't find lastest commitment TX")
@@ -25,10 +54,10 @@ func (p *Manager) ForcelyCloseChannel(channel *Channel, feeRate int64) (string, 
 
 	prevFetcher := channel.GetCommitmentPrefetchor()
 	var txs []*wire.MsgTx
-	if err := verifySTPNativeParents(channel); err != nil {
+	if err := verifySTPParents(channel); err != nil {
 		return "", "", err
 	}
-	txs = append(txs, cloneSTPBitcoinChain(channel.NativeParents)...)
+	txs = append(txs, cloneSTPBitcoinChain(channel.FundingParents)...)
 	if len(channel.LocalCommitment.PrevTxs) != 0 {
 		for _, tx := range channel.LocalCommitment.PrevTxs {
 			output := indexer.GenerateTxOutput(tx, 0)
@@ -81,7 +110,7 @@ func (p *Manager) ForcelyCloseChannel(channel *Channel, feeRate int64) (string, 
 		},
 	})
 	p.bindOperationLogReservationBestEffort(logID, RESV_TYPE_CLOSE, resv.Id)
-	if nativeForceClose(resv) {
+	if usesRecoveryClose(resv) {
 		// A locally initiated close publishes only this main commitment and
 		// its required Prev/Next chain. Others remain pre-signed client
 		// recovery packages: the client uses them after observing the exact
@@ -91,7 +120,7 @@ func (p *Manager) ForcelyCloseChannel(channel *Channel, feeRate int64) (string, 
 		// Both transactions and the proof are durable before either chain can
 		// observe a spend. A lost broadcast response leaves this exact package
 		// pending for the same monitor that restores it after a restart.
-		err := p.startNativeForceCloseLocked(resv)
+		err := p.startForceCloseLocked(resv)
 		if channel.Status != CS_CLOSE_FORCELY_BROADCASTED {
 			return "", "", err
 		}
@@ -185,12 +214,8 @@ func (p *Manager) CloserForcelyClose(channelID string, feeRate int64) (string, s
 	if channel == nil {
 		return "", "", fmt.Errorf("can't find channel %s", channelID)
 	}
-	if channel.Status < CS_READY && channel.Status != CS_NATIVE_RECOVERY {
+	if channel.Status < CS_READY && channel.Status != CS_COMMIT_RECOVERY {
 		return "", "", fmt.Errorf("channel %s invalid status %d", channelID, channel.Status)
-	}
-
-	if err := p.SaveBackupChannelToDB(&channel.ChannelInDB); err != nil {
-		return "", "", err
 	}
 
 	return p.ForcelyCloseChannel(channel, feeRate)
@@ -241,12 +266,12 @@ func (p *Manager) HandleChannelForceCloseConfirmed(resv *ClosingReservation) err
 	if resv == nil || resv.Channel == nil || resv.Channel.ClosingTx == nil {
 		return fmt.Errorf("invalid force close reservation")
 	}
-	if nativeForceClose(resv) {
+	if usesRecoveryClose(resv) {
 		resv.Lock()
 		defer resv.Unlock()
 		resv.Channel.Mutex.Lock()
 		defer resv.Channel.Mutex.Unlock()
-		return p.nativeForceCloseConfirmedLocked(resv)
+		return p.forceCloseConfirmedLocked(resv)
 	}
 	if err := p.ImportSTPChannelSettlement(resv.Channel.ClosingTx, resv.AssetProofs); err != nil {
 		return err
@@ -282,8 +307,8 @@ func (p *Manager) HandleChannelForceCloseWaitToSweep(resv *ClosingReservation, h
 	if resv == nil || resv.Channel == nil {
 		return fmt.Errorf("invalid force close reservation")
 	}
-	if nativeForceClose(resv) {
-		_, err := p.RetryNativeForceClose(resv)
+	if usesRecoveryClose(resv) {
+		_, err := p.RetryForceClose(resv)
 		return err
 	}
 	if height-resv.CloseHeight <= int(resv.Channel.CsvDelay) {
@@ -319,7 +344,7 @@ func (p *Manager) HandleChannelForceCloseWaitToSweep(resv *ClosingReservation, h
 	}
 
 	resv.Channel.ClosingTx = sweepTxPackage.SweepTx
-	resv.AssetProofs = cloneSTPAssetProofs(sweepTxPackage.NativeProofs)
+	resv.AssetProofs = cloneSTPAssetProofs(sweepTxPackage.AssetProofs)
 	resv.Channel.Status = CS_CLOSE_FORCELY_SWEEP_BROADCASTED
 	resv.Status = ResvStatus(resv.Channel.Status)
 	p.updateOperationLogByReservationBestEffort(RESV_TYPE_CLOSE, resv.Id, OperationLogUpdate{
@@ -338,12 +363,12 @@ func (p *Manager) HandleChannelForceCloseSweepConfirmed(resv *ClosingReservation
 	if resv == nil || resv.Channel == nil || resv.Channel.ClosingTx == nil {
 		return fmt.Errorf("invalid force close reservation")
 	}
-	if nativeForceClose(resv) {
+	if usesRecoveryClose(resv) {
 		resv.Lock()
 		defer resv.Unlock()
 		resv.Channel.Mutex.Lock()
 		defer resv.Channel.Mutex.Unlock()
-		return p.nativeForceCloseCompletedLocked(resv)
+		return p.forceCloseCompletedLocked(resv)
 	}
 	if err := p.ImportSTPChannelSettlement(resv.Channel.ClosingTx, resv.AssetProofs); err != nil {
 		return err

@@ -314,7 +314,7 @@ func (p *Manager) createServerCommitmentOtherSweeps(channel *Channel, commitTx *
 		return nil, nil
 	}
 
-	// Native recovery is bound only after account-based protocols have
+	// channel recovery is bound only after account-based protocols have
 	// materialized their transfers. The combined builder receives the same
 	// asset order and one shared set of fee inputs as the legacy sweep.
 	proofs, err := collectSTPAssetProofs(assetPlans)
@@ -322,14 +322,14 @@ func (p *Manager) createServerCommitmentOtherSweeps(channel *Channel, commitTx *
 		return nil, err
 	}
 	for _, item := range assetPlans {
-		native, ok := item.protocol.(STPAssetChannelProtocol)
+		builder, ok := item.protocol.(STPAssetChannelProtocol)
 		if !ok || len(proofs[item.protocol.Protocol()]) == 0 {
 			continue
 		}
 		candidate := NewChannelCommitment()
 		candidate.CommitTx, candidate.AssetProofs = commitTx, proofs
 		inputs := append(append([]*TxOutput{}, directAssetOutputs...), transferOutputs...)
-		plan, err := native.BuildChannelRecovery(p, STPAssetRecoveryRequest{
+		plan, err := builder.BuildChannelRecovery(p, STPAssetRecoveryRequest{
 			Channel: channel, Commitment: candidate, Operation: STPOpForceClose,
 			Branch: "other-sweep", RecipientScript: recvPkScript,
 			CommitmentScript: channel.RedeemScript, ScriptType: SCRIPT_TYPE_CHANNEL,
@@ -339,15 +339,15 @@ func (p *Manager) createServerCommitmentOtherSweeps(channel *Channel, commitTx *
 			return nil, err
 		}
 		if plan == nil {
-			return nil, fmt.Errorf("native other-sweep returned no recovery plan")
+			return nil, fmt.Errorf("channel other-sweep returned no recovery plan")
 		}
-		if plan.NoNativeAssets {
+		if plan.NoRGB11Assets {
 			continue
 		}
-		if plan.Tx == nil || len(plan.NativeProofs[item.protocol.Protocol()]) == 0 {
-			return nil, fmt.Errorf("native other-sweep lost its proof")
+		if plan.Tx == nil || len(plan.AssetProofs[item.protocol.Protocol()]) == 0 {
+			return nil, fmt.Errorf("channel other-sweep lost its proof")
 		}
-		return []*CommitmentTx{{CommitTx: plan.Tx, PrevTxs: prevTxs, AssetProofs: plan.NativeProofs}}, nil
+		return []*CommitmentTx{{CommitTx: plan.Tx, PrevTxs: prevTxs, AssetProofs: plan.AssetProofs}}, nil
 	}
 
 	sweepTx, err := createOtherSweepTx(commitTx, prevTxs, directAssetOutputs, transferOutputs, feeOutputs, recvPkScript, feeRate)
@@ -480,7 +480,7 @@ func (p *Manager) handleOutputsRunesAfterPrefix(commitTx *wire.MsgTx, outputs []
 	_ map[AssetName][]*TxOutput, localPkScript, remotePkScript []byte,
 	weightEstimate *utils.TxWeightEstimator, channelId string, prefixInputs, prefixOutputs int) (int64, error) {
 	if prefixInputs < 0 || prefixInputs > len(commitTx.TxIn) || prefixOutputs < 0 || prefixOutputs > len(commitTx.TxOut) {
-		return 0, fmt.Errorf("invalid native asset prefix")
+		return 0, fmt.Errorf("invalid channel asset prefix")
 	}
 
 	// Runes uses edicts, so the first runes input/output pair is inserted at
@@ -568,7 +568,7 @@ func (p *Manager) handleOutputsRunesAfterPrefix(commitTx *wire.MsgTx, outputs []
 			commitTx.AddTxOut(txOut)
 			weightEstimate.AddTxOutput(txOut)
 		} else if prefixOutputs != 0 {
-			// The implicit Runes remainder destination is output zero. A native
+			// The implicit Runes remainder destination is output zero. A channel
 			// prefix may occupy that output, so bind the actual Runes carrier.
 			pointer := uint32(prefixOutputs)
 			payload, err := EncipherRunePayloadWithPointer(nil, &pointer)

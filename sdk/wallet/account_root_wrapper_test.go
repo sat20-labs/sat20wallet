@@ -11,6 +11,7 @@ import (
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
+	"github.com/stretchr/testify/require"
 )
 
 const accountRootWrapperTestMnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
@@ -510,45 +511,6 @@ func TestAccountRootDiscoveryMnemonicIgnoresCurrentWalletSelection(t *testing.T)
 	}
 }
 
-func TestAccountGuardianIdentityIsRootBoundNotSelectionBound(t *testing.T) {
-	oldChain := _chain
-	_chain = "testnet"
-	defer func() { _chain = oldChain }()
-
-	manager, _, _, _, _ := newLocalActivationFixture(t)
-	rootID := manager.GetCurrentWalletId()
-	childID, err := manager.ImportWallet(
-		"legal winner thank year wave sausage worth useful legal winner thank yellow",
-		"password",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := manager.SwitchWallet(rootID, "password"); err != nil {
-		t.Fatal(err)
-	}
-	rootIdentity, err := manager.GetOrCreateAccountGuardianIdentity("password")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if err := manager.SwitchWallet(childID, "password"); err != nil {
-		t.Fatal(err)
-	}
-	childSelectedIdentity, err := manager.GetOrCreateAccountGuardianIdentity("password")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if childSelectedIdentity.MailboxID != rootIdentity.MailboxID ||
-		childSelectedIdentity.PublicKey != rootIdentity.PublicKey {
-		t.Fatalf("guardian identity followed current wallet: root=%+v selected=%+v",
-			rootIdentity, childSelectedIdentity)
-	}
-	if manager.status.CurrentWallet != childID {
-		t.Fatal("guardian identity lookup changed current wallet selection")
-	}
-}
-
 // Ordinary synchronization adopts confirmed configuration; only activation
 // is allowed to replace current, including within the same storage mode.
 func TestSameModeReconfigurationDoesNotRollBackRootWrapper(t *testing.T) {
@@ -653,5 +615,72 @@ func assertPendingImportReadOnly(t *testing.T, manager *Manager, walletID int64)
 	after, err := manager.db.Read(accountManagementProfileKey())
 	if err != nil || !bytes.Equal(before, after) || !reflect.DeepEqual(beforeCatalog, manager.GetWalletCatalog()) {
 		t.Fatal("rejected pending-discovery business changed local recovery data")
+	}
+}
+
+func TestRootPackageMissingIsPending(t *testing.T) {
+	oldChain := _chain
+	_chain = "testnet"
+	t.Cleanup(func() { _chain = oldChain })
+	source, published, secret := buildRootWrapperSource(t)
+	defer zeroBytes(secret)
+	source.StopDKVSSync()
+	root, err := source.accountManagementRootWallet()
+	require.NoError(t, err)
+	wrapperKey, err := accountRootWrapperKey(root)
+	require.NoError(t, err)
+	wrapper := published.records[wrapperKey]
+	require.NotNil(t, wrapper)
+	require.NoError(t, dkvsindexer.VerifySignature(wrapper.record))
+	accountID := source.GetAccountManagementStatus().AccountID
+	payload, err := openAccountRootWrapper(root, _chain, accountID, wrapper.Value)
+	require.NoError(t, err)
+	defer zeroBytes(payload.Secret)
+	packageKey, err := dkvsindexer.AccountPersonalKey(accountID, accountPackagePath(payload.PackageID))
+	require.NoError(t, err)
+	prefix, err := dkvsindexer.CollectionPathForKey(packageKey)
+	require.NoError(t, err)
+
+	// Only the referenced package is unavailable in this endpoint's current view.
+	remote := source.http.(*rgb11MemoryDKVSHTTP)
+	remote.mu.Lock()
+	pkg := remote.records[packageKey]
+	delete(remote.records, packageKey)
+	delete(remote.changedAt, packageKey)
+	remote.generations[prefix]++
+	remote.mu.Unlock()
+	require.NotNil(t, pkg)
+	require.NoError(t, dkvsindexer.VerifySignature(pkg))
+	visible := snapshotRGB11MemoryRecords(remote)
+
+	target := newAccountManagementAutoTestManager(t)
+	configureRGB11DKVSTestManager(target, remote)
+	target.serverNode = source.serverNode
+	t.Cleanup(target.StopDKVSSync)
+	before, err := target.GetWalletCatalogSnapshot()
+	require.NoError(t, err)
+	require.Empty(t, before.Wallets)
+	results, discoveryErr := target.RecoverAccountManagementFromRootMnemonic(context.Background(), accountRootWrapperTestMnemonic, "password")
+	if !errors.Is(discoveryErr, ErrRootAccountDiscoveryPending) || errors.Is(discoveryErr, ErrRootAccountNotFound) {
+		t.Errorf("verified root with missing package must remain pending: %v", discoveryErr)
+	}
+	require.Empty(t, results)
+	t.Run("restore_copy_read", func(t *testing.T) {
+		restorePackage, err := account.DecodeRecoveryPackageStorage(pkg.Value)
+		require.NoError(t, err)
+		location, err := target.AccountIndexerLocation()
+		require.NoError(t, err)
+		copies, err := target.LoadAccountManagementStateForRecovery(location, restorePackage.Envelope.Locator,
+			secret, accountRootWrapperTestMnemonic)
+		require.ErrorIs(t, err, ErrRootAccountDiscoveryPending)
+		require.NotErrorIs(t, err, ErrRootAccountNotFound)
+		require.Nil(t, copies)
+	})
+	after, err := target.GetWalletCatalogSnapshot()
+	require.NoError(t, err)
+	require.Equal(t, before, after, "pending discovery changed the catalog or identity")
+	require.False(t, target.GetAccountManagementStatus().Active)
+	if !reflect.DeepEqual(visible, snapshotRGB11MemoryRecords(remote)) {
+		t.Fatal("pending discovery wrote remote account data")
 	}
 }

@@ -17,9 +17,16 @@ func TestRealSatoshiNetAccountManagementLifecycleAndConcurrentDevices(t *testing
 
 	primary, location := newWalletManagerForNode(t, network.Core, dkvsClientMnemonic)
 	require.NoError(t, primary.InitializeAccountManagement("123456"))
-	require.NoError(t, primary.StartDKVSSync())
 	t.Cleanup(primary.StopDKVSSync)
-	require.Eventually(t, func() bool { return primary.GetAccountManagementStatus().LocalOnly }, 30*time.Second, 50*time.Millisecond)
+	discoveryCtx, discoveryCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	_, discoveryErr := primary.RecoverAccountManagementFromCurrentWallet(discoveryCtx, "123456")
+	discoveryCancel()
+	require.ErrorIs(t, discoveryErr, wallet.ErrRootAccountNotFound)
+	discoveryStatus := primary.GetAccountManagementStatus()
+	require.Equal(t, "inactive", discoveryStatus.DiscoveryStatus)
+	require.True(t, discoveryStatus.LocalOnly)
+	require.False(t, discoveryStatus.RecoveryConfigured)
+	require.False(t, discoveryStatus.ActivationPending)
 	_, err := primary.ImportWallet(bootstrapMnemonic, "123456")
 	require.NoError(t, err)
 	catalog := primary.GetWalletCatalog()
@@ -33,7 +40,8 @@ func TestRealSatoshiNetAccountManagementLifecycleAndConcurrentDevices(t *testing
 		"the local catalog has not published a wallet-state record")
 	require.Equal(t, 1, preActivationStatus.PendingChanges,
 		"before activation the second wallet import retains one local catalog intent")
-	require.True(t, preActivationStatus.ManagedDataDirty)
+	require.False(t, preActivationStatus.ManagedDataDirty)
+	require.True(t, preActivationStatus.WriteAllowed)
 	// ImportWallet selects the newly imported wallet. Account management is
 	// rooted in the first canonical wallet, so explicitly restore that context
 	// before generating the locator and repository.
@@ -72,6 +80,8 @@ func TestRealSatoshiNetAccountManagementLifecycleAndConcurrentDevices(t *testing
 
 	require.NoError(t, primary.ActivateAccountManagement(secret, "123456", *authorization,
 		pkg.Envelope.Locator, "account://"+pkg.Envelope.Locator.PackageID))
+	require.True(t, primary.GetAccountManagementStatus().RecoveryConfigured)
+	require.NoError(t, primary.StartDKVSSync())
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	require.NoError(t, primary.WaitAccountManagedDataReady(ctx))

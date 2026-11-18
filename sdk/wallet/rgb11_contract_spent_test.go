@@ -109,7 +109,7 @@ func TestRGB11ContractAfterSpend(t *testing.T) {
 		t.Fatal("canonical contract changed after spending its genesis allocation")
 	}
 	t.Run("spent_genesis_ticker_from_exact_genesis", func(t *testing.T) {
-		receipt, e := rgb11wallet.ValidateWith(ctx, rgb11wallet.NewNativeConsensusValidator(), raw, evidence)
+		receipt, e := rgb11wallet.ValidateWith(ctx, rgb11wallet.NewRGB11ConsensusValidator(), raw, evidence)
 		if e != nil || len(receipt.Allocations) != 0 {
 			t.Fatalf("validate spent genesis metadata: allocations=%d err=%v", len(receipt.Allocations), e)
 		}
@@ -156,7 +156,7 @@ func TestRGB11ContractAfterSpend(t *testing.T) {
 		fresh.rgbManager.scopeStates.stopReconciliations()
 		result, e := fresh.ImportRGB11ContractFile(ctx, raw)
 		if e != nil {
-			_, coreErr := rgb11wallet.ValidateWith(ctx, rgb11wallet.NewNativeConsensusValidator(), raw, evidence)
+			_, coreErr := rgb11wallet.ValidateWith(ctx, rgb11wallet.NewRGB11ConsensusValidator(), raw, evidence)
 			t.Fatalf("valid contract metadata rejected after real prepared input was confirmed spent: import=%v core_validate=%v",
 				e, coreErr)
 		}

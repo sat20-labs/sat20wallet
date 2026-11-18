@@ -1,7 +1,6 @@
 import { beginVersionDispatch } from '@/utils/pwaVersionPolicy'
 import { tryit } from 'radash'
 import { walletRequestSessionGuard } from '@/lib/walletSession'
-import { beginPwaWalletOperation, finishPwaOperation } from '@/utils/pwaOperationLog'
 import { wasmResponseError } from '@/utils/wasmError'
 
 // Define the expected response structure from WASM functions
@@ -115,7 +114,6 @@ interface StpWasmModule {
   getChannel: (...args: any[]) => Promise<WasmResponse>;
   getChannelStatus: (...args: any[]) => Promise<WasmResponse>;
   reservationStatus: (...args: any[]) => Promise<WasmResponse>;
-  allReservations: (...args: any[]) => Promise<WasmResponse>;
   resumeLockWithExpandFromL1Tx: (...args: any[]) => Promise<WasmResponse>;
   safetySnapshot: (...args: any[]) => Promise<WasmResponse>;
   commitmentExport: (...args: any[]) => Promise<WasmResponse>;
@@ -158,7 +156,7 @@ class SatsnetStp {
       if (!module || typeof module[methodName] !== 'function') {
         throw new Error(`sat20wallet_wasm or method "${methodName}" not found on globalThis.`)
       }
-      const operation = await beginPwaWalletOperation(methodName, args)
+
       let finishVersion: (() => void) | undefined
       try {
         checkSession()
@@ -169,13 +167,13 @@ class SatsnetStp {
         if (response && typeof response.code === 'number' && response.code !== 0) {
           throw wasmResponseError(response.msg || `sat20wallet channel ${methodName} failed with code ${response.code}`, response.error_code)
         }
-        await finishPwaOperation(operation, null, response?.data)
+
         checkSession()
         return response?.data
       } catch (error) {
         console.error(`sat20wallet channel ${methodName} failed`)
         const failure = error instanceof Error ? error : new Error(String(error))
-        await finishPwaOperation(operation, failure)
+
         throw failure
       } finally { finishVersion?.() }
     })()
@@ -349,10 +347,6 @@ class SatsnetStp {
     id: string | number
   ): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest('reservationStatus', String(id))
-  }
-
-  async allReservations(): Promise<[Error | undefined, any | undefined]> {
-    return this._handleRequest('allReservations')
   }
 
   async resumeLockWithExpandFromL1Tx(

@@ -14,6 +14,7 @@ import (
 
 	indexercommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/account"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
@@ -153,7 +154,7 @@ func TestAccountManagedPutAckPreservesChangesDuringNetworkWait(t *testing.T) {
 		t.Fatalf("wallet creation did not queue one mutation: %+v", manager.accountProfile)
 	}
 	oldMutationID := manager.accountProfile.Pending[0].ID
-	oldDataGeneration := manager.accountProfile.ManagedDataGeneration
+	oldDataGeneration := walletTestRow(t, manager).Generation
 	fingerprint := walletFingerprint(manager.walletInfoMap[walletID].Wallet)
 	gate := make(chan struct{})
 	remote.mu.Lock()
@@ -208,7 +209,7 @@ func TestAccountManagedPutAckPreservesChangesDuringNetworkWait(t *testing.T) {
 		t.Fatal("local wallet mutation blocked behind remote PUT")
 	}
 	if len(manager.accountProfile.Pending) != 1 || manager.accountProfile.Pending[0].ID == oldMutationID ||
-		manager.accountProfile.ManagedDataGeneration <= oldDataGeneration {
+		walletTestRow(t, manager).Generation <= oldDataGeneration {
 		t.Fatal("concurrent edit did not version the pending add and dirty generation")
 	}
 	selectionDone := make(chan error, 1)
@@ -234,8 +235,7 @@ func TestAccountManagedPutAckPreservesChangesDuringNetworkWait(t *testing.T) {
 		<-done
 		t.Fatal("wallet/account selection blocked behind remote PUT")
 	}
-	manager.markAccountManagedDataDirtyDeferred(rgb11AccountManagedProviderID)
-	newDataGeneration := manager.accountProfile.ManagedDataGeneration
+	newDataGeneration := walletTestRow(t, manager).Generation
 	close(gate)
 	if err := <-done; err != nil {
 		t.Fatal(err)
@@ -244,11 +244,11 @@ func TestAccountManagedPutAckPreservesChangesDuringNetworkWait(t *testing.T) {
 		manager.walletInfoMap[walletID].AccountNames[1] != "Savings" {
 		t.Fatalf("PUT ACK overwrote the concurrent wallet mutation: %+v", manager.walletInfoMap[walletID])
 	}
-	if len(manager.accountProfile.Pending) != 1 || !manager.accountProfile.ManagedDataDirty {
+	if len(manager.accountProfile.Pending) != 1 || !manager.GetAccountManagementStatus().ManagedDataDirty {
 		t.Fatalf("PUT ACK cleared the concurrent overlay: %+v", manager.accountProfile)
 	}
 	if manager.status.CurrentWallet != walletID || manager.status.CurrentAccount != 1 ||
-		manager.accountProfile.ManagedDataGeneration != newDataGeneration {
+		walletTestRow(t, manager).Generation != newDataGeneration {
 		t.Fatal("PUT ACK overwrote current selection or provider generation")
 	}
 	var stored accountManagementProfile
@@ -259,12 +259,11 @@ func TestAccountManagedPutAckPreservesChangesDuringNetworkWait(t *testing.T) {
 	if err := DecodeFromBytes(raw, &stored); err != nil {
 		t.Fatal(err)
 	}
-	if len(stored.Pending) != 1 || stored.Pending[0].ID != manager.accountProfile.Pending[0].ID ||
-		!stored.ManagedDataDirty || stored.ManagedDataGeneration != newDataGeneration {
+	if len(stored.Pending) != 1 || stored.Pending[0].ID != manager.accountProfile.Pending[0].ID {
 		t.Fatal("ACK persisted a different pending overlay or data generation")
 	}
-	if _, err := manager.db.Read(accountManagedDataImportKey()); err == nil {
-		t.Fatal("own PUT ACK created an import marker")
+	if walletTestRow(t, manager).Restoring {
+		t.Fatal("own PUT ACK marked the wallet module as restoring")
 	}
 	firstACKs := audit.checks.Load()
 	require.Positive(t, firstACKs, "the real first ACK completion window must be observed")
@@ -272,7 +271,7 @@ func TestAccountManagedPutAckPreservesChangesDuringNetworkWait(t *testing.T) {
 	if err := manager.SyncAccountManagementState(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(manager.accountProfile.Pending) != 0 || manager.accountProfile.ManagedDataDirty {
+	if len(manager.accountProfile.Pending) != 0 || manager.GetAccountManagementStatus().ManagedDataDirty {
 		t.Fatalf("second serialized PUT did not clear pending: %+v", manager.accountProfile)
 	}
 	walletModule, err := accountEntry(manager.accountProfile.AccountID, "wallets", AccountManagedDataGlobalScope)
@@ -403,7 +402,7 @@ func TestCommitAccountManagedStateKeepsStatusPointerStable(t *testing.T) {
 		BlockHashMapL1: map[int]string{1: "l1"}, BlockHashMapL2: map[int]string{2: "l2"},
 	}
 	profile := &accountManagementProfile{
-		AccountID: "test-account", RootFingerprint: fingerprint, ManagedDataGeneration: 1,
+		AccountID: "test-account", RootFingerprint: fingerprint,
 	}
 	manager := &Manager{
 		db: newMemoryKVDB(), status: originalStatus, wallet: walletValue,
@@ -455,6 +454,7 @@ func TestCommitAccountManagedStateSelectsRootWhenCurrentWalletIsDeleted(t *testi
 	database := newMemoryKVDB()
 	manager := &Manager{
 		db: database, wallet: childWallet,
+		cfg:          &common.Config{Chain: _chain},
 		status:       &Status{CurrentWallet: childID, CurrentAccount: 0},
 		utxoLockerL1: NewUtxoLocker(database, nil, L1_NETWORK_BITCOIN),
 		walletInfoMap: map[int64]*WalletInfo{
@@ -845,7 +845,7 @@ func TestAccountNoopProfileFailureCanRetry(t *testing.T) {
 	require.ErrorIs(t, firstErr, errAccountPersistenceReview)
 	require.Equal(t, int32(1), fault.hits.Load())
 	require.NotEmpty(t, manager.accountProfile.Pending)
-	require.True(t, manager.accountProfile.ManagedDataDirty)
+	require.True(t, manager.GetAccountManagementStatus().ManagedDataDirty)
 	after, err := fault.KVDB.Read(accountManagementProfileKey())
 	require.NoError(t, err)
 	require.Equal(t, before, after)
@@ -872,7 +872,7 @@ func TestAccountNoopProfileFailureCanRetry(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, manager.SyncAccountManagementState(context.Background()))
 	require.Empty(t, manager.accountProfile.Pending)
-	require.False(t, manager.accountProfile.ManagedDataDirty)
+	require.False(t, manager.GetAccountManagementStatus().ManagedDataDirty)
 	remote, err := store.GetAuthoritative(moduleKey)
 	require.NoError(t, err)
 	require.Equal(t, baseline.Seq, remote.Seq, "no-op retry must not republish unchanged module content")

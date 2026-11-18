@@ -36,7 +36,6 @@ interface StpWasmModule {
   getChannel: (...args: any[]) => Promise<WasmResponse>;
   getChannelStatus: (...args: any[]) => Promise<WasmResponse>;
   reservationStatus: (...args: any[]) => Promise<WasmResponse>;
-  allReservations: (...args: any[]) => Promise<WasmResponse>;
   safetySnapshot: (...args: any[]) => Promise<WasmResponse>;
   commitmentExport: (...args: any[]) => Promise<WasmResponse>;
   punishStatus: (...args: any[]) => Promise<WasmResponse>;
@@ -249,10 +248,6 @@ class SatsnetStp {
     id: string | number
   ): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest('reservationStatus', String(id))
-  }
-
-  async allReservations(): Promise<[Error | undefined, any | undefined]> {
-    return this._handleRequest('allReservations')
   }
 
   async safetySnapshot(

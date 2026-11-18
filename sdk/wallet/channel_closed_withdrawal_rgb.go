@@ -14,7 +14,7 @@ import (
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
-// Missing native material must fail in the native branch, not fall through to
+// Missing channel material must fail in the channel branch, not fall through to
 // an unrelated legacy Other package. This predicate grants no authorization.
 func closedWithdrawalHasRGB(channel *ChannelInDB) bool {
 	if channel == nil {
@@ -136,11 +136,11 @@ func (p *Manager) prepareRGBClosedWithdrawal(channel *Channel, parent *wire.MsgT
 	}
 	ctx := context.Background()
 	w := channel.LocalWallet()
-	witness, _, err := p.nativeChannelWitness(w, channel.ChannelId)
+	witness, _, err := p.channelOwnerWitness(w, channel.ChannelId)
 	if err != nil || !bytes.Equal(witness, channel.RedeemScript) {
 		return nil, nil, 0, fmt.Errorf("RGB withdrawal changed the fixed channel owner pair")
 	}
-	chains, err := p.newNativeSettlementChains(ctx, w)
+	chains, err := p.newSettlementChains(ctx, w)
 	if err != nil {
 		return nil, nil, 0, err
 	}
@@ -253,15 +253,15 @@ func (p *Manager) prepareRGBClosedWithdrawal(channel *Channel, parent *wire.MsgT
 			return nil, nil, 0, fmt.Errorf("RGB withdrawal omitted a fixed-client allocation")
 		}
 		inputAssets[source.OutPoint] = source.AssetName
-		proof, err := source.NativeProof()
+		proof, err := source.RGB11Proof()
 		if err != nil {
 			return nil, nil, 0, err
 		}
 		output := indexer.NewTxOutput(source.Value)
 		output.OutPointStr, output.OutValue.PkScript = source.OutPoint, append([]byte(nil), source.PkScript...)
 		output.Assets = indexer.TxAssets{{Name: source.AssetName, Amount: *source.Amount.Clone(), BindingSat: 0}}
-		validated, err := p.validateNativeSourceSpend(ctx, w, channel.ChannelId,
-			&NativeChannelSource{Version: 1, ChannelID: channel.ChannelId, Output: output, PublicProof: proof}, nativeproof.Historical, confirmedChild)
+		validated, err := p.validateRGB11SourceSpend(ctx, w, channel.ChannelId,
+			&RGB11ChannelSource{Version: 1, ChannelID: channel.ChannelId, Output: output, PublicProof: proof}, nativeproof.Historical, confirmedChild)
 		if err != nil {
 			return nil, nil, 0, err
 		}
@@ -321,17 +321,17 @@ func (p *Manager) prepareRGBClosedWithdrawal(channel *Channel, parent *wire.MsgT
 // Historical evidence alone is never a spendable source. This private graph
 // is used only with the exact parent/child/current-outspend gate above, never
 // exposed as a public-pool receipt or registered as funding inventory.
-func (p *Manager) validateRGBWithdrawalPrivateRelease(chains *nativeSettlementChains, validated *nativeproof.Result,
+func (p *Manager) validateRGBWithdrawalPrivateRelease(chains *settlementChains, validated *nativeproof.Result,
 	point string, script []byte, producer, deanchorID string, descends []string) error {
 	bootstrap := p.GetBootstrapNodePaymentPubKey()
 	if bootstrap == nil || chains == nil || validated == nil || validated.Mode != nativeproof.Historical ||
-		validated.Outpoint != point || !bytes.Equal(validated.PkScript, script) || len(script) == 0 || !canonicalNativeTxID(producer) {
+		validated.Outpoint != point || !bytes.Equal(validated.PkScript, script) || len(script) == 0 || !canonicalSettlementTxID(producer) {
 		return fmt.Errorf("RGB withdrawal has no exact historical private release context")
 	}
-	graph := &nativeReceiptGraph{manager: p, chains: chains, asset: validated.Asset,
-		bootstrap: bootstrap.SerializeCompressed(), states: make(map[schemas.InputRef]*nativeReceiptAllocation),
-		steps: make(map[string]*nativeReceiptStep), points: make(map[string][]*nativeReceiptAllocation),
-		anchorChecked: make(map[string]bool), descends: make(map[string]*nativeReceiptDescend),
+	graph := &rgb11ReceiptGraph{manager: p, chains: chains, asset: validated.Asset,
+		bootstrap: bootstrap.SerializeCompressed(), states: make(map[schemas.InputRef]*rgb11ReceiptAllocation),
+		steps: make(map[string]*rgb11ReceiptStep), points: make(map[string][]*rgb11ReceiptAllocation),
+		anchorChecked: make(map[string]bool), descends: make(map[string]*rgb11ReceiptDescend),
 		usedDescends: make(map[string]bool), delayedPools: make(map[string]bool), requiredPrivate: string(script),
 		closedPrivateProducer: producer}
 	if err := graph.walkValidatedHistory(validated, descends); err != nil {
@@ -343,14 +343,14 @@ func (p *Manager) validateRGBWithdrawalPrivateRelease(chains *nativeSettlementCh
 	return graph.validateClosedPrivateTerminal(point, script, producer)
 }
 
-// Only native completion lives here; common C2 owns persistence and retries.
+// Only channel completion lives here; common C2 owns persistence and retries.
 func (p *Manager) completeRGBClosedWithdrawal(resv *ClosingReservation) error {
 	if resv == nil || resv.Channel == nil || resv.Channel.LocalWallet() == nil || len(resv.PreTxs) != 2 || resv.PreTxs[1] == nil {
 		return fmt.Errorf("missing RGB withdrawal completion material")
 	}
 	w := resv.Channel.LocalWallet()
 	child := resv.PreTxs[1]
-	chains, err := p.newNativeSettlementChains(context.Background(), w)
+	chains, err := p.newSettlementChains(context.Background(), w)
 	if err != nil {
 		return err
 	}

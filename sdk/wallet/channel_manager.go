@@ -18,7 +18,7 @@ func (p *Manager) EnableChannel(channel *Channel) error {
 		return fmt.Errorf("channel is nil")
 	}
 	if p.db != nil && channel.Status == CS_READY {
-		if recovered, err := p.LoadSTPNativeRevocationRecovery(&channel.ChannelInDB); err != nil {
+		if recovered, err := p.LoadSTPRevocationRecovery(&channel.ChannelInDB); err != nil {
 			return err
 		} else if recovered != nil {
 			channel.ChannelInDB = *recovered
@@ -541,7 +541,7 @@ func (p *Manager) LoadChannel(channelId string) (*Channel, error) {
 	if err != nil {
 		return nil, err
 	}
-	if recovered, err := p.LoadSTPNativeRevocationRecovery(newChannel); err != nil {
+	if recovered, err := p.LoadSTPRevocationRecovery(newChannel); err != nil {
 		return nil, err
 	} else if recovered != nil {
 		newChannel = recovered
@@ -560,7 +560,7 @@ func (p *Manager) LoadAllChannelsFromDB() (map[string]*Channel, error) {
 		return nil, err
 	}
 	for channelId, c := range channels {
-		if recovered, err := p.LoadSTPNativeRevocationRecovery(c); err != nil {
+		if recovered, err := p.LoadSTPRevocationRecovery(c); err != nil {
 			return nil, err
 		} else if recovered != nil {
 			c = recovered

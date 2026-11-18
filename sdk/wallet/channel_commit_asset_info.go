@@ -117,8 +117,8 @@ func (p *Manager) GetCommitTxAssetInfo(channelId string) (*TxAssetInfo, error) {
 		for _, asset := range fundingOutput.Assets {
 			protocol := stpAssetProtocols.byName[asset.Name.Protocol]
 			_, classified := protocol.(STPAssetOutputClassifier)
-			_, native := protocol.(STPAssetChannelProtocol)
-			if classified || native {
+			_, proofAdapter := protocol.(STPAssetChannelProtocol)
+			if classified || proofAdapter {
 				filtered := ordinal.Assets[:0]
 				for _, candidate := range ordinal.Assets {
 					if candidate.Name != asset.Name {
@@ -158,26 +158,26 @@ func (p *Manager) GetCommitTxAssetInfo(channelId string) (*TxAssetInfo, error) {
 				return nil, err
 			}
 		}
-		if native, ok := protocol.(STPAssetChannelProtocol); ok {
+		if proofAdapter, ok := protocol.(STPAssetChannelProtocol); ok {
 			proof := channel.LocalCommitment.AssetProofs[protocol.Protocol()]
 			if len(proof) == 0 {
 				if channel.HasProtocolAsset(protocol.Protocol()) {
-					return nil, fmt.Errorf("missing native output proof")
+					return nil, fmt.Errorf("missing channel output proof")
 				}
 				continue
 			}
-			verified, err := native.VerifyChannelProof(p, channel, tx, proof, STPOpCommit)
+			verified, err := proofAdapter.VerifyChannelProof(p, channel, tx, proof, STPOpCommit)
 			if err != nil {
 				return nil, err
 			}
 			for _, view := range verified {
 				index := int(view.OutPoint().Index)
 				if index >= len(classifiedOutputs) || view.OutPoint().Hash != tx.TxHash() {
-					return nil, fmt.Errorf("native output identity mismatch")
+					return nil, fmt.Errorf("channel output identity mismatch")
 				}
 				for _, asset := range view.Assets {
 					if asset.Name.Protocol != protocol.Protocol() {
-						return nil, fmt.Errorf("native output contains another protocol")
+						return nil, fmt.Errorf("channel output contains another protocol")
 					}
 					classifiedOutputs[index].Assets = append(classifiedOutputs[index].Assets, asset)
 				}

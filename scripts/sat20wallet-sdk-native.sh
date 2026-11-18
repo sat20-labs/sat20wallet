@@ -2,304 +2,142 @@
 set -uo pipefail
 umask 077
 
-GO_BIN="/usr/local/go/bin/go"
-WORKDIR="/Users/yingfeng/github/sat20wallet/sdk"
-WORKSPACE="/Users/yingfeng/github"
-LOG_ROOT="/Users/yingfeng/github/sat20wallet/.cache/script-logs/test-runs/sat20wallet-sdk-native"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+WORKDIR="$(cd "$SCRIPT_DIR/../sdk" && pwd -P)"
+WORKSPACE="$(cd "$WORKDIR/../.." && pwd -P)"
+GO_BIN="$(command -v go)"
+LOG_ROOT="$WORKDIR/../.cache/script-logs/test-runs/sat20wallet-sdk-native"
 SUITE="sat20wallet-sdk-native"
 TIMEOUT_MS="10800000"
-# Default execution is limited to reviewed public-interface and E2E roots.
-# Internal module tests remain separately runnable; see sdk/docs/testing-scope.md.
-FUNCTIONAL_MANIFEST="$WORKSPACE/sat20wallet/scripts/sdk-functional-roots.tsv"
-# Browser roots run in staged plan Stage 3; focused wrappers use full registries.
-# Persistent real-regtest automation remains NOTRUN, not PASS.
-# Direct Core harness wrappers are excluded here; the parent runs 16 native groups.
-BROWSER_SKIP='^(TestSDKAccountPWAConnectedBrowser|TestPWAAccountRecovery|TestPWAAccountSwitch|TestPWAAccountRemoteDelete|TestPWAPasswordTxRollback|TestPWATabAccountSwitch|TestPWATabWalletSwitch|TestPWASingleManager|TestPWATabPasswordHandoff|TestPWAGuardianPaidQuote|TestPWAGuardianRecovery|TestPWABackupStatus|TestPWAStatusReadRetry|TestSDKWalletPWAConnectedBrowser|TestSDKWalletPWAAssetContextStability|TestSDKWASMInterfacesE2E|TestSDKWalletPWAForceCloseCSV|TestSDKAccountGuardianPaidPWABatchReview|TestPWAProductionReleaseE2E|TestPWARegtestReleaseE2E|TestSPSilentPayBrowserE2E|TestPWACancellationReapsOwnedChromium|TestPWACancellationForceFallbackReapsOwnedChromium|TestPWAOwnedLateRegistration|TestPWAOwnedUnregisteredCancellation)$'
-REAL_REGTEST_SKIP='^(TestSDKPWARealRegtest.*|TestSDKPWARegtestExistingRecoveryMaterialReadback)$'
-CORE_NATIVE_RUN='^TestSDKCoreModulesConnectedE2E$/^(dkvs_real_paid_cross_instance_prefix_and_CAS|backup_multiple_wallets_and_subaccounts_control|RGB11_self_send_cold_restore_and_respend|RGB11_asset_name_and_transcend_registration_descriptor|RGB_issuance_in_multiple_subaccounts|invoice_transfer_every_paid_recovery_boundary|direct_transfer_every_paid_recovery_boundary|RGB11_same_root_three_device_cas_cancel_broadcast_and_respend|RGB11_recovery_identity_batch_and_hop_lifecycles|RGB11_fullsend_history_cold_recovery_reorg_and_competing_intent|RGB11_R11_stable_only_cold_restore_ignores_valid_and_corrupt_legacy_cache|RGB11_R23_temporary_TTL_expiry_cold_restore_and_respend|RGB11_R09_same_root_real_CAS_loser_retains_private_intent_and_tests_recovery|RGB11_recovery_capacity_boundaries|RGB11_account_recovery_failure_boundaries|guardian_two_of_three_and_wrong_knowledge)$'
-SKIP_PATTERN="${BROWSER_SKIP}|${REAL_REGTEST_SKIP}|^TestSDKCoreModulesConnectedE2E$|^TestSDKCoreModulesValidation$"
-
-if [[ "$#" -ne 0 ]]; then
-  printf '%s\n' "This fixed SDK native runner accepts no arguments." >&2
+TAGS=""
+if [[ "$#" == 1 && "$1" == "-tags=guardian" ]]; then
+  TAGS="guardian"
+elif [[ "$#" != 0 ]]; then
+  printf '%s\n' "usage: sat20wallet-sdk-native.sh [-tags=guardian]" >&2
   exit 2
 fi
-if [[ ! -x /usr/bin/python3 ]]; then
-  printf '%s\n' "Python 3 is required to verify the existing Core child summary." >&2
+if [[ -z "$GO_BIN" || ! -x "$GO_BIN" ]]; then
+  printf '%s\n' "Go executable is required on PATH." >&2
   exit 127
 fi
-if [[ ! -x "$GO_BIN" ]]; then
-  printf '%s\n' "Go executable not found: $GO_BIN" >&2
-  exit 127
-fi
+command -v python3 >/dev/null || { printf '%s\n' "Python 3 is required for result validation." >&2; exit 127; }
 for dependency in satoshinet indexer rgb11 transcend; do
-  if [[ ! -d "$WORKSPACE/$dependency" ]]; then
-    printf '%s\n' "missing dependency required by SDK E2E: $WORKSPACE/$dependency" >&2
-    exit 2
-  fi
+  [[ -d "$WORKSPACE/$dependency" ]] || { printf 'missing SDK E2E dependency: %s\n' "$WORKSPACE/$dependency" >&2; exit 2; }
 done
-selection="$(/usr/bin/python3 - "$WORKDIR" "$FUNCTIONAL_MANIFEST" <<'PY_SELECTION'
-import pathlib
-import re
-import sys
-
-workdir, manifest = map(pathlib.Path, sys.argv[1:])
-roots = {"wallet": [], "e2e": []}
-for raw in manifest.read_text().splitlines():
-    if not raw or raw.startswith("#"):
-        continue
-    package, name, kind, source = raw.split("\t")
-    if package not in roots or kind not in {"interface", "e2e"} or not re.fullmatch(r"Test[A-Za-z0-9_]+", name):
-        raise SystemExit("invalid functional manifest entry")
-    if name in roots[package] or source.split("/", 1)[0] != package:
-        raise SystemExit("duplicate root or mismatched source in functional manifest")
-    if not re.search(r"^func " + name + r"\(t \*testing.T\)", (workdir / source).read_text(), re.M):
-        raise SystemExit("functional root missing from source: " + name)
-    roots[package].append(name)
-for package in ("wallet", "e2e"):
-    if not roots[package]:
-        raise SystemExit("empty functional selection: " + package)
-    print("^(" + "|".join(roots[package]) + ")$")
-PY_SELECTION
-)" || exit 2
-NATIVE_RUN="${selection%%$'\n'*}"
-E2E_RUN="${selection#*$'\n'}"
-if ! /bin/mkdir -p "$LOG_ROOT"; then
-  printf '%s\n' "cannot create run log directory: $LOG_ROOT" >&2
-  exit 2
+CORE_NATIVE_RUN='^TestSDKCoreModulesConnectedE2E$/^(dkvs_real_paid_cross_instance_prefix_and_CAS|backup_multiple_wallets_and_subaccounts_control|RGB11_self_send_cold_restore_and_respend|RGB11_asset_name_and_transcend_registration_descriptor|RGB_issuance_in_multiple_subaccounts|invoice_transfer_every_paid_recovery_boundary|direct_transfer_every_paid_recovery_boundary|RGB11_same_root_three_device_cas_cancel_broadcast_and_respend|RGB11_recovery_identity_batch_and_hop_lifecycles|RGB11_fullsend_history_cold_recovery_reorg_and_competing_intent|RGB11_R23_temporary_TTL_expiry_cold_restore_and_respend|RGB11_R09_same_root_real_CAS_loser_retains_private_intent_and_tests_recovery|RGB11_recovery_capacity_boundaries|RGB11_account_recovery_failure_boundaries)$'
+if [[ "$TAGS" == guardian ]]; then
+  CORE_NATIVE_RUN="${CORE_NATIVE_RUN%')$'}|guardian_two_of_three_and_wrong_knowledge)$"
 fi
-
-started_epoch="$(/bin/date '+%s')"
-started_at_utc="$(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')"
-started_at_local="$(/bin/date '+%Y-%m-%dT%H:%M:%S%z')"
-stamp="$(/bin/date -u '+%Y%m%dT%H%M%SZ')"
-run_id="${stamp}-$$"
+# Only the Core child harness and its explicit convenience wrapper are omitted.
+# All other default-build tests in every package run, including internal packages.
+SKIP_PATTERN='^(TestSDKCoreModulesConnectedE2E|TestSDKCoreModulesValidation)$'
+# Never inherit permission to use live or retained acceptance networks. Native
+# real-chain fixtures allocate their own directories/ports inside their group.
+safe_env=(env
+  -u SAT20WALLET_RUN_LIVE_NETWORK_TESTS -u SAT20WALLET_LEGACY_INTEGRATION -u SAT20WALLET_CONTRACT_TESTNET
+  -u SAT20_LIVE_CHANNEL_HEARTBEAT -u SAT20WALLET_CORE_E2E_CONFIG -u SAT20WALLET_CORE_E2E_CHILD_RUN
+  -u SAT20WALLET_E2E_ARTIFACTS -u SAT20_REAL_L1_INDEXER -u SAT20_REAL_ESPLORA
+  -u SAT20_REAL_SATOSHINET_ATTACH -u SAT20_REAL_SATOSHINET_PORT_BASE -u SAT20_REAL_REGTEST_RUNTIME
+  -u SAT20_REAL_SDK_WALLET_DIR -u SAT20_REAL_TEST_WALLETS -u SAT20_REAL_RECOVERY_FIXTURES
+  -u SAT20_REAL_BITCOIN_CLI -u SAT20_REAL_BITCOIN_DATADIR -u SAT20_REAL_BITCOIN_RPC_PORT
+  -u SAT20_REAL_RGB_CROSS_LAYER -u SAT20_E2E_LOCAL_REAL -u SAT20_ACCOUNT_UI_CONFIG
+  -u SAT20_ACCOUNT_UI_FIXTURE -u GOFLAGS -u GOOS
+  -u GOARCH -u RGB11_HISTORY_ORACLE_DIR -u RGB11_REGTEST_BITCOIN_CLI
+  -u RGB11_REGTEST_COMPOSE_DIR -u RGB11_REGTEST_EVIDENCE_DIR -u RGB11_REGTEST_SCHEMA
+  -u SAT20WALLET_CONTRACT_TESTNET_DB -u SAT20WALLET_CONTRACT_TESTNET_MNEMONIC -u SAT20WALLET_AUTOPAY_DEPLOY_LIVE
+  -u SAT20WALLET_AUTOPAY_DEPLOY_OPERATOR_ONLY -u SAT20WALLET_AUTOPAY_GAS_FUNDING -u SAT20WALLET_AUTOPAY_GAS_FUND_LIVE
+  -u SAT20WALLET_EVM_CLOSE_LIVE -u SAT20WALLET_FAUCET_DEPLOY_LIVE -u SAT20WALLET_FAUCET_URL
+  -u SAT20_TEST_MNEMONIC -u SAT20_REMOTE_RECOVERY_READONLY -u SAT20_ACCOUNT_DIAG_SNAPSHOT
+  -u SAT20_ACCOUNT_DIAG_ACCOUNT_ID -u SAT20_RGB_DIAGNOSTIC_DIR -u SAT20_PWA_ISOLATION_SHARED_FIXTURE
+  -u SAT20_PWA_SKIP_GUARD_CHILD -u SAT20_PWA_DKVS_AB_CHILD -u SAT20_PWA_DKVS_AB_SHARED
+  -u SAT20_PWA_COMPLETE_POS_GROUP -u SAT20_PWA_DIAGNOSTIC -u SAT20_PWA_E2E_CASES
+  -u SAT20_PWA_E2E_PORT -u SAT20_PWA_E2E_WASM -u SAT20_PWA_E2E_WASM_RUNTIME
+  -u SAT20_PWA_RELEASE_CONTINUE -u SAT20_PWA_RGB_CASE -u SAT20_PWA_AUTOPAY_REVIEW
+  -u SAT20_BROWSER_EXECUTABLE -u SAT20_TEST_IGNORE_INTERRUPT -u SAT20_TEST_LATE_OWNER
+  -u SAT20_SP_EVIDENCE_DIR -u SAT20_REAL_PWA_EXISTING_URL -u SAT20_REAL_PWA_SDK_CASES
+  -u SAT20_REAL_PWA_USAGE_CASE -u SATOSHINET_POS_CHECKING_INTERVAL -u SATOSHINET_POS_MINER_INTERVAL
+  -u SATOSHINET_POS_PREWARNING_INTERVAL -u SATOSHINET_RPCTEST_POS_V2_HEIGHT)
+mkdir -p "$LOG_ROOT" || exit 2
+started_epoch="$(date '+%s')"
+started_at_utc="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+run_id="$(date -u '+%Y%m%dT%H%M%SZ')-$$"
 log_file="$LOG_ROOT/$run_id.log"
+events_file="$LOG_ROOT/$run_id.events.jsonl"
+packages_file="$LOG_ROOT/$run_id.packages"
 status_file="$LOG_ROOT/$run_id.status"
-status_tmp="$status_file.tmp"
-native_log="$LOG_ROOT/$run_id.native.log"
-e2e_log="$LOG_ROOT/$run_id.e2e.log"
-MODULE="github.com/sat20-labs/sat20wallet/sdk"
-packages=("$MODULE" "$MODULE/account" "$MODULE/account/fuzzy" "$MODULE/account/internal/shamir"
-  "$MODULE/common" "$MODULE/config" "$MODULE/e2e" "$MODULE/e2e/cmd/solidity-compile"
-  "$MODULE/plugin" "$MODULE/testutil/fakeindexer" "$MODULE/wallet" "$MODULE/wallet/dkvs"
-  "$MODULE/wallet/lightnode" "$MODULE/wallet/rgb11" "$MODULE/wallet/supernode"
-  "$MODULE/wallet/utils" "$MODULE/wasm" "$MODULE/wire")
-native_packages=("$MODULE/wallet")
-# Wallet globals are process-local. Its normal HTTP fixtures use ephemeral ports.
-# Disable all live/legacy entry gates, including the fixture that removes ../db.
-# The native lane cannot inherit a Core configuration or launch either wrapper.
-safe_env=(/usr/bin/env -u SAT20WALLET_RUN_LIVE_NETWORK_TESTS
-  -u SAT20WALLET_LEGACY_INTEGRATION -u SAT20WALLET_CONTRACT_TESTNET
-  -u SAT20_LIVE_CHANNEL_HEARTBEAT -u SAT20WALLET_CORE_E2E_CONFIG
-  -u SAT20WALLET_CORE_E2E_CHILD_RUN)
-test_args=("$GO_BIN" test -mod=readonly -json -p=1 -parallel=1 -count=1
-  -timeout=150m -skip "$SKIP_PATTERN")
-native_cmd=("${safe_env[@]}" "${test_args[@]}" -run "$NATIVE_RUN" "${native_packages[@]}")
-e2e_cmd=("${safe_env[@]}" "SAT20WALLET_CORE_E2E_CHILD_RUN=$CORE_NATIVE_RUN"
-  "${test_args[@]}" -run "$E2E_RUN" "$MODULE/e2e")
-printf -v command_args '%q ' "${native_cmd[@]}"
-native_command="+ ${command_args% }"
-printf -v command_args '%q ' "${e2e_cmd[@]}"
-e2e_command="+ ${command_args% }"
-command_text="two independent Go processes; selected wallet interfaces and E2E; 18-package source inventory and production build; internal tests NOTRUN"
-native_pid=""
-e2e_pid=""
-native_state="PENDING"
-e2e_state="PENDING"
-native_exit=""
-e2e_exit=""
-package_coverage_exit=""
-core_coverage_exit=""
-build_exit=""
-
+cmd=("${safe_env[@]}" "SAT20WALLET_CORE_E2E_CHILD_RUN=$CORE_NATIVE_RUN" SAT20_E2E_REQUIRE_BITCOIND=1
+  "$GO_BIN" test -mod=readonly -json -p=1 -parallel=1 -count=1 -timeout=150m
+  "-tags=$TAGS" -skip "$SKIP_PATTERN" ./...)
+printf -v command_text '%q ' "${cmd[@]}"
 write_status() {
-  local state="$1"
-  local exit_code="$2"
-  local ended_at_utc="$3"
-  local ended_at_local="$4"
-  local ended_epoch_value="$5"
-  local duration="$6"
-
+  local state="$1" code="$2"
   {
-    printf 'state=%s\n' "$state"
-    printf 'suite=%s\n' "$SUITE"
-    printf 'run_id=%s\n' "$run_id"
-    printf 'working_directory=%s\n' "$WORKDIR"
-    printf 'timeout_ms=%s\n' "$TIMEOUT_MS"
-    printf 'started_at_utc=%s\n' "$started_at_utc"
-    printf 'started_at_local=%s\n' "$started_at_local"
-    printf 'started_epoch=%s\n' "$started_epoch"
-    printf 'ended_at_utc=%s\n' "$ended_at_utc"
-    printf 'ended_at_local=%s\n' "$ended_at_local"
-    printf 'ended_epoch=%s\n' "$ended_epoch_value"
-    printf 'duration_seconds=%s\n' "$duration"
-    printf 'exit_code=%s\n' "$exit_code"
-    printf 'command=%s\n' "$command_text"
-    printf 'native_command=%s\n' "$native_command"
-    printf 'e2e_command=%s\n' "$e2e_command"
-    printf 'native_pid=%s\n' "$native_pid"
-    printf 'e2e_pid=%s\n' "$e2e_pid"
-    printf 'native_state=%s\n' "$native_state"
-    printf 'e2e_state=%s\n' "$e2e_state"
-    printf 'native_exit_code=%s\n' "$native_exit"
-    printf 'e2e_exit_code=%s\n' "$e2e_exit"
-    printf 'package_coverage_exit_code=%s\n' "$package_coverage_exit"
-    printf 'core_coverage_exit_code=%s\n' "$core_coverage_exit"
-    printf 'production_build_exit_code=%s\nfunctional_manifest=%s\n' "$build_exit" "$FUNCTIONAL_MANIFEST"
-    printf 'native_log_file=%s\n' "$native_log"
-    printf 'e2e_log_file=%s\n' "$e2e_log"
-    printf 'log_file=%s\n' "$log_file"
-    printf 'status_file=%s\n' "$status_file"
-  } > "$status_tmp" || return 1
-  /bin/mv -f "$status_tmp" "$status_file"
+    printf 'state=%s\nsuite=%s\nrun_id=%s\n' "$state" "$SUITE" "$run_id"
+    printf 'working_directory=%s\ntimeout_ms=%s\nstarted_at_utc=%s\nstarted_epoch=%s\n' "$WORKDIR" "$TIMEOUT_MS" "$started_at_utc" "$started_epoch"
+    printf 'command=%s\nlog_file=%s\nevents_file=%s\nstatus_file=%s\n' "$command_text" "$log_file" "$events_file" "$status_file"
+    printf 'exit_code=%s\n' "$code"
+    if [[ "$state" != RUNNING ]]; then
+      printf 'ended_at_utc=%s\nduration_seconds=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$(( $(date '+%s') - started_epoch ))"
+    fi
+  } > "$status_file.tmp" && mv "$status_file.tmp" "$status_file"
 }
-
-if ! write_status "RUNNING" "" "" "" "" ""; then
-  printf '%s\n' "cannot write run status: $status_file" >&2
-  exit 125
-fi
-
-{
-  printf 'run_id=%s\n' "$run_id"
-  printf 'status_file=%s\n' "$status_file"
-  printf 'log_file=%s\n' "$log_file"
-  printf 'started_at_utc=%s\n' "$started_at_utc"
-  printf '%s\n' "$command_text"
-  printf 'native_log_file=%s\ne2e_log_file=%s\n' "$native_log" "$e2e_log"
-  printf '%s\n%s\n' "$native_command" "$e2e_command"
-} | /usr/bin/tee -a "$log_file"
-header_exit=$?
-if (( header_exit != 0 )); then
-  ended_epoch="$(/bin/date '+%s')"
-  ended_at_utc="$(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')"
-  ended_at_local="$(/bin/date '+%Y-%m-%dT%H:%M:%S%z')"
-  duration_seconds=$(( ended_epoch - started_epoch ))
-  write_status "FAILED" "125" "$ended_at_utc" "$ended_at_local" "$ended_epoch" "$duration_seconds"
-  exit 125
-fi
-
+write_status RUNNING "" || exit 125
+printf 'run_id=%s\nstatus_file=%s\nlog_file=%s\nevents_file=%s\n+ %s\n' "$run_id" "$status_file" "$log_file" "$events_file" "$command_text" | tee "$log_file"
 test_exit=0
-status_error=0
-# Discover once, then require the known package inventory before selecting tests.
-# A new or missing package must be reviewed rather than silently omitted.
-package_list="$(cd "$WORKDIR" && "${safe_env[@]}" "$GO_BIN" list -mod=readonly ./... 2>> "$log_file")"
-list_exit=$?
-expected_list="$(printf '%s\n' "${packages[@]}" | /usr/bin/sort)"
-actual_list="$(printf '%s\n' "$package_list" | /usr/bin/sort)"
-if (( list_exit == 0 )) && [[ "$actual_list" == "$expected_list" ]]; then
-  (cd "$WORKDIR" && "${safe_env[@]}" "$GO_BIN" build -mod=readonly ./...) >> "$log_file" 2>&1
-  build_exit=$?
-fi
-if (( list_exit != 0 )) || [[ "$actual_list" != "$expected_list" || "$build_exit" != 0 ]]; then
-  printf '[package-inventory] FAILED: expected 18 source packages and a successful production build; go_list_exit=%s build_exit=%s\n' "$list_exit" "$build_exit" | /usr/bin/tee -a "$log_file"
-  test_exit=125
-else
-  # Exactly two lanes; package tests within each lane remain serial (-p=1).
-  # exec makes the recorded lane PID the Go process, not an extra shell wrapper.
-  (cd "$WORKDIR" && exec "${native_cmd[@]}") > "$native_log" 2>&1 &
-  native_pid=$!
-  native_state="RUNNING"
-  (cd "$WORKDIR" && exec "${e2e_cmd[@]}") > "$e2e_log" 2>&1 &
-  e2e_pid=$!
-  e2e_state="RUNNING"
-  write_status "RUNNING" "" "" "" "" "" || status_error=1
-
-  wait "$native_pid"
-  native_exit=$?
-  if (( native_exit == 0 )); then native_state="PASSED"; else native_state="FAILED"; fi
-  write_status "RUNNING" "" "" "" "" "" || status_error=1
-  wait "$e2e_pid"
-  e2e_exit=$?
-  if (( e2e_exit == 0 )); then e2e_state="PASSED"; else e2e_state="FAILED"; fi
-  printf '[lane] name=native state=%s exit_code=%s log_file=%s\n[lane] name=e2e state=%s exit_code=%s log_file=%s\n' \
-    "$native_state" "$native_exit" "$native_log" "$e2e_state" "$e2e_exit" "$e2e_log" | /usr/bin/tee -a "$log_file"
-  if (( native_exit != 0 || e2e_exit != 0 )); then test_exit=1; fi
-
-  /usr/bin/python3 - "$native_log" "$e2e_log" "$FUNCTIONAL_MANIFEST" "${packages[@]}" <<'PY_PACKAGES' | /usr/bin/tee -a "$log_file"
+(cd "$WORKDIR" && "${safe_env[@]}" "$GO_BIN" list -mod=readonly "-tags=$TAGS" ./...) > "$packages_file" 2>> "$log_file" || test_exit=125
+if (( test_exit == 0 )); then
+  (cd "$WORKDIR" && exec "${cmd[@]}") > "$events_file" 2>&1 || test_exit=1
+  python3 - "$events_file" "$packages_file" <<'PY_PACKAGES' | tee -a "$log_file"
 import collections
 import json
 import pathlib
 import sys
 
-
 def check(condition, message):
     if not condition:
-        print("[functional-coverage] FAILED: " + message)
-        raise SystemExit(1)
+        raise SystemExit("[package-coverage] FAILED: " + message)
 
-
-native_log, e2e_log, manifest, *inventory = sys.argv[1:]
-module = "github.com/sat20-labs/sat20wallet/sdk"
-selected = collections.defaultdict(set)
-for raw in pathlib.Path(manifest).read_text().splitlines():
-    if raw and not raw.startswith("#"):
-        package, name, kind, source = raw.split("\t")
-        selected[module + "/" + package].add(name)
-check(len(inventory) == len(set(inventory)) == 18, "expected exactly 18 source packages")
-check(set(selected) == {module + "/wallet", module + "/e2e"}, "unexpected selected package")
-optional_l1 = {"TestSPBitcoinCoreRegtestIndexerE2E", "TestSPManagerBitcoinCoreSendReceiveE2E"}
-root_results = collections.Counter()
-skipped = []
-failed = []
-test_names = set()
-test_verdicts = {}
-for path, expected_package in [(native_log, module + "/wallet"), (e2e_log, module + "/e2e")]:
-    runs = collections.Counter()
-    roots = collections.defaultdict(list)
-    packages = []
-    missing_bitcoind = set()
-    with open(path) as stream:
-        for line in stream:
-            try:
-                event = json.loads(line)
-            except ValueError:
-                continue
-            name, action = event.get("Test"), event.get("Action")
-            check(event.get("Package") == expected_package, "unexpected package in lane")
-            if name and action == "run":
-                test_names.add((expected_package, name))
-            if name and action in {"pass", "fail", "skip"}:
-                test_verdicts[(expected_package, name)] = action
-            if name and action == "run" and "/" not in name:
-                runs[name] += 1
-            if name and "/" not in name and "bitcoind unavailable" in event.get("Output", ""):
-                missing_bitcoind.add(name)
-            if name and action == "fail":
-                failed.append(name)
-            if name and action == "skip":
-                skipped.append(name)
-            if name and "/" not in name and action in {"pass", "fail", "skip"}:
-                roots[name].append(action)
-                root_results[action] += 1
-            if not name and action in {"pass", "fail", "skip"}:
-                packages.append(action)
-    check(set(runs) == selected[expected_package] and all(n == 1 for n in runs.values()),
-          "missing, duplicated or extra functional root in " + expected_package)
-    check(set(roots) == selected[expected_package] and all(len(v) == 1 for v in roots.values()),
-          "missing or duplicate root verdict in " + expected_package)
-    for name, actions in roots.items():
-        check(actions == ["pass"] or (
-            actions == ["skip"] and name in optional_l1 and name in missing_bitcoind),
-            "root did not pass: " + name + " verdicts=" + str(actions))
-    check(packages == ["pass"], "selected package did not pass: " + expected_package)
-print("[functional-coverage] roots=" + json.dumps(dict(root_results), sort_keys=True)
-      + " selected=" + str(sum(map(len, selected.values()))) + " tested_packages=2 source_packages=18")
-parents = {(package, name.rsplit("/", 1)[0]) for package, name in test_names if "/" in name}
-leaves = collections.Counter(action for name, action in test_verdicts.items() if name not in parents)
-print("[functional-coverage] leaves=" + json.dumps(dict(leaves), sort_keys=True))
-print("[functional-coverage] SKIP=" + json.dumps(skipped))
-print("[functional-coverage] NOTRUN=module internal roots outside the manifest; browser/persistent-regtest separate")
-check(not failed, "failed test: " + ", ".join(failed))
-print("[functional-coverage] PASSED: exact functional roots once; optional L1 SKIP is reported, never counted PASS")
+log, inventory = sys.argv[1:]
+expected = pathlib.Path(inventory).read_text().splitlines()
+check(expected and len(expected) == len(set(expected)), "empty or duplicate package inventory")
+packages = collections.defaultdict(list)
+runs = collections.Counter()
+verdicts = collections.defaultdict(list)
+for line in pathlib.Path(log).read_text().splitlines():
+    try:
+        event = json.loads(line)
+    except ValueError:
+        continue
+    package, name, action = event.get("Package"), event.get("Test"), event.get("Action")
+    if not package:
+        continue
+    check(package in expected, "unexpected package: " + package)
+    if name and action == "run":
+        runs[(package, name)] += 1
+    if name and action in {"pass", "fail", "skip"}:
+        verdicts[(package, name)].append(action)
+    if not name and action in {"pass", "fail", "skip"}:
+        packages[package].append(action)
+parents = {(p, n.rsplit("/", 1)[0]) for p, n in runs if "/" in n}
+roots = collections.Counter(v[0] for (p,n),v in verdicts.items() if "/" not in n)
+leaves = collections.Counter(v[0] for key,v in verdicts.items() if key not in parents)
+skipped = [p + "/" + n for (p,n),v in verdicts.items() if v == ["skip"]]
+print("[package-coverage] packages=" + str(len(expected)) + " results=" + json.dumps(dict(collections.Counter(v[0] for v in packages.values()))))
+print("[package-coverage] roots=" + json.dumps(dict(roots)) + " leaves=" + json.dumps(dict(leaves)))
+print("[package-coverage] SKIP=" + json.dumps(skipped))
+print("[package-coverage] NOTRUN=Guardian business scenarios unless -tags=guardian; PWA UI/WASM bridge unless -tags=pwa; explicit live/retained-network cases remain gated")
+print("[package-coverage] FAIL=" + json.dumps([p + "/" + n for (p,n),v in verdicts.items() if v == ["fail"]]))
+print("[package-coverage] UNFINISHED=" + json.dumps([p + "/" + n for p,n in runs if (p,n) not in verdicts]))
+check(set(packages) == set(expected), "missing package terminal results")
+check(all(len(v) == 1 and v[0] in {"pass", "skip"} for v in packages.values()), "failed or duplicate package results")
+check(runs and all(v == 1 for v in runs.values()), "no tests or duplicate executions")
+check(set(runs) == set(verdicts), "test panic/unfinished execution or missing terminal verdict")
+check(all(len(v) == 1 for v in verdicts.values()), "duplicate test verdicts")
+check(not any(v == ["fail"] for v in verdicts.values()), "a test failed")
+print("[package-coverage] PASSED: every discovered Go package completed; SKIP is never PASS")
 PY_PACKAGES
-  package_coverage_exit=$?
-  if (( package_coverage_exit != 0 )); then test_exit=1; fi
-fi
-
-# A successful Go exit alone cannot prove that the selected Core groups ran.
-# Reuse the parent harness's existing redacted report; never accept an old report.
-if [[ "$e2e_exit" == "0" ]]; then
-  /usr/bin/python3 - "$e2e_log" "$WORKDIR/review-evidence/core-modules-e2e-latest.json" "$CORE_NATIVE_RUN" <<'PY_CORE' | /usr/bin/tee -a "$log_file"
+  (( $? == 0 )) || test_exit=1
+  python3 - "$events_file" "$WORKDIR/review-evidence/core-modules-e2e-latest.json" "$CORE_NATIVE_RUN" <<'PY_CORE' | tee -a "$log_file"
 import datetime
 import decimal
 import json
@@ -347,10 +185,10 @@ prefix = "TestSDKCoreModulesConnectedE2E/"
 segments = report.get("segments", [])
 ordered = selection.split("/^(", 1)[1][:-2].split("|")
 plan = [("ordinary-recovery", ordered[:9] + ordered[10:]), ("long-history", ordered[9:10])]
-if (len(segments) != 2 or len(ordered) != 16
+if (len(segments) != 2 or len(ordered) not in (14, 15)
         or ordered[9] != "RGB11_fullsend_history_cold_recovery_reorg_and_competing_intent"
         or report.get("shared_budget_seconds") != 5100 or report.get("budget_exhausted") is not False):
-    check(False, "Core did not complete all 16 native groups in two environments within the shared 85-minute budget")
+    check(False, "Core did not complete all selected native groups in two environments within the shared 85-minute budget")
 endpoints = []
 for segment, (name, names) in zip(segments, plan):
     run = "^TestSDKCoreModulesConnectedE2E$/^(" + "|".join(names) + ")$"
@@ -379,38 +217,14 @@ for field in ("verdicts", "child_events"):
 verdicts = report.get("verdicts", [])
 groups = [row for row in verdicts if row.get("Test", "").startswith(prefix) and "/" not in row["Test"][len(prefix):]]
 actual = {row["Test"][len(prefix):]: row["Action"] for row in groups}
-check(len(expected) == 16 and len(groups) == 16 and set(actual) == expected, "Core native groups are missing, duplicated or unexpected")
+check(len(expected) == len(ordered) and len(groups) == len(ordered) and set(actual) == expected, "Core native groups are missing, duplicated or unexpected")
 check(all(action == "pass" for action in actual.values()), "a selected Core native group failed or skipped")
 check(not any(row.get("Action") == "skip" and row.get("Test", "").startswith(prefix) for row in verdicts), "a selected Core child was skipped; SKIP is not PASS")
-print("[core-native-coverage] PASSED: all 16 native groups executed; no child skips")
+print("[core-native-coverage] PASSED: all selected native groups executed; no child skips")
 PY_CORE
-  core_coverage_exit=$?
-  if (( core_coverage_exit != 0 )); then
-    test_exit=1
-  fi
+  (( $? == 0 )) || test_exit=1
 fi
-if (( status_error != 0 )); then test_exit=125; fi
-
-ended_epoch="$(/bin/date '+%s')"
-ended_at_utc="$(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')"
-ended_at_local="$(/bin/date '+%Y-%m-%dT%H:%M:%S%z')"
-duration_seconds=$(( ended_epoch - started_epoch ))
-if (( test_exit == 0 )); then
-  final_state="PASSED"
-else
-  final_state="FAILED"
-fi
-
-if ! write_status "$final_state" "$test_exit" "$ended_at_utc" "$ended_at_local" "$ended_epoch" "$duration_seconds"; then
-  printf '%s\n' "could not persist final status: $status_file" >&2
-  if (( test_exit == 0 )); then
-    exit 125
-  fi
-fi
-
-if ! printf '[test-run] state=%s exit_code=%s ended_at_utc=%s run_id=%s status_file=%s log_file=%s\n' "$final_state" "$test_exit" "$ended_at_utc" "$run_id" "$status_file" "$log_file" | /usr/bin/tee -a "$log_file"; then
-  if (( test_exit == 0 )); then
-    exit 125
-  fi
-fi
+if (( test_exit == 0 )); then final_state=PASSED; else final_state=FAILED; fi
+write_status "$final_state" "$test_exit" || exit 125
+printf '[test-run] state=%s exit_code=%s run_id=%s status_file=%s log_file=%s\n' "$final_state" "$test_exit" "$run_id" "$status_file" "$log_file" | tee -a "$log_file"
 exit "$test_exit"

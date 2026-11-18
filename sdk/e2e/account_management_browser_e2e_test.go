@@ -1,3 +1,5 @@
+//go:build pwa
+
 package e2e
 
 import (
@@ -21,35 +23,27 @@ func TestSDKAccountPWAConnectedBrowser(t *testing.T) {
 	runAccountPWABrowser(t)
 }
 
-func TestPWAAccountFollowups(t *testing.T) {
+func TestPWADKVSActivationWatch(t *testing.T) {
 	runAccountPWABrowser(t,
-		"WebAuthn PWA: real PRF credential creation persists an encrypted wallet binding",
-		"WebAuthn PWA: an actual authenticator assertion unlocks the same SDK wallet after reload",
-		"WebAuthn PWA: password change clears the old binding and permits enrollment with the new password",
-		"WebAuthn PWA: deleting the biometric binding persists and restores password-only unlock",
-		"usage: remote deletion rejects offline edits and adopts the confirmed remote state",
+		"usage: SDK creation page delivers mnemonic without redundant PWA persistence",
+	)
+}
+
+func TestPWAImportDiscoveryPending(t *testing.T) {
+	runAccountPWABrowser(t,
 		"usage: import page and cold selection use SDK without redundant PWA persistence",
-		"usage: account page refreshes background backup failure and success without navigation",
-		"usage: verified setup recovers automatically from a status read failure without replay",
-		"usage: configured recovery status has an explicit read retry without replaying rehearsal",
-		"usage: real 2of3 settings and independent Guardian pages complete setup and rehearsal",
 	)
 }
 
-// TestPWAAccountColdPreparation retries the two cold account preparation cases.
-func TestPWAAccountColdPreparation(t *testing.T) {
+func TestPWAImportDiscoveryFound(t *testing.T) {
 	runAccountPWABrowser(t,
-		"usage: maintenance rehearsal obeys the one minute inactivity lock and discards its session",
-		"usage: offline catalog is read-only and resumes synchronization after reconnect",
+		"PWA root mnemonic import discovers latest account without recovery shares",
 	)
 }
 
-// TestPWAAccountRecovery selects the existing recovery usage cases.
-func TestPWAAccountRecovery(t *testing.T) {
+func TestPWAUnlockNavigation(t *testing.T) {
 	runAccountPWABrowser(t,
-		"usage: independent address DID entry persists changes and clearing through recovery",
-		"usage: remote deletion rejects offline edits and adopts the confirmed remote state",
-		"usage: offline catalog is read-only and resumes synchronization after reconnect",
+		"usage: maintenance rehearsal locks after inactivity and discards its session",
 	)
 }
 
@@ -59,9 +53,9 @@ func TestPWAAccountSwitch(t *testing.T) {
 	)
 }
 
-func TestPWAAccountRemoteDelete(t *testing.T) {
+func TestPWAAccountOfflineWrite(t *testing.T) {
 	runAccountPWABrowser(t,
-		"usage: remote deletion rejects offline edits and adopts the confirmed remote state",
+		"usage: background backup failure and recovery remain visible on the account page",
 	)
 }
 
@@ -94,31 +88,6 @@ func TestPWASingleManager(t *testing.T) {
 func TestPWATabPasswordHandoff(t *testing.T) {
 	runAccountPWABrowser(t,
 		"usage: password changes apply on single Manager handoff",
-	)
-}
-
-func TestPWAGuardianPaidQuote(t *testing.T) {
-	runAccountPWABrowser(t,
-		"usage: Guardian paid confirmation uses 100 records and root identity after a 200 record child-wallet quote",
-	)
-}
-
-func TestPWAGuardianRecovery(t *testing.T) {
-	runAccountPWABrowser(t,
-		"usage: real 2of3 settings and independent Guardian pages complete setup and rehearsal",
-	)
-}
-
-func TestPWABackupStatus(t *testing.T) {
-	runAccountPWABrowser(t,
-		"usage: account page refreshes background backup failure and success without navigation",
-	)
-}
-
-func TestPWAStatusReadRetry(t *testing.T) {
-	runAccountPWABrowser(t,
-		"usage: verified setup recovers automatically from a status read failure without replay",
-		"usage: configured recovery status has an explicit read retry without replaying rehearsal",
 	)
 }
 

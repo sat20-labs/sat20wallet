@@ -10,6 +10,7 @@ import (
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/stretchr/testify/require"
 )
 
@@ -99,6 +100,7 @@ func TestL1SmallOrdxSendGeneratesStubsWithoutReenteringSendLock(t *testing.T) {
 	for _, amount := range []int64{100, 1} {
 		t.Run(fmt.Sprint(amount), func(t *testing.T) {
 			manager := safetyTestManager(t, &Channel{ChannelInDB: *NewChannelInDB()})
+			manager.cfg = &common.Config{Chain: "testnet"}
 			manager.db = newMemoryKVDB()
 			address := manager.wallet.GetAddress()
 			script, err := GetPkScriptFromAddress(address)
@@ -251,6 +253,7 @@ func TestL1WalletSendSerializesConcurrentInscriptionSelection(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			manager := safetyTestManager(t, &Channel{ChannelInDB: *NewChannelInDB()})
+			manager.cfg = &common.Config{Chain: "testnet"}
 			manager.db = newMemoryKVDB()
 			manager.inscibeMap = make(map[int64]*InscribeResv)
 			manager.resvMap = make(map[int64]Reservation)

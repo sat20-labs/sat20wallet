@@ -129,7 +129,7 @@
 <script lang="ts" setup>
 import { ref, onBeforeUnmount, reactive, computed, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { useRoute, useRouter } from 'vue-router';
+import { useRouter } from 'vue-router';
 import { storeToRefs } from 'pinia';
 import { useWalletStore, useGlobalStore } from '@/store';
 import { useL1Assets } from '@/composables/hooks/useL1Assets';
@@ -145,15 +145,15 @@ import { toTypedSchema } from '@vee-validate/zod';
 import * as z from 'zod';
 
 // Reactive State
-const isOpen = ref(true);
-const route = useRoute();
 const router = useRouter();
 const props = defineProps({
   assetName: {
     type: String,
     required: true,
   },
+  embedded: { type: Boolean, default: false },
 });
+const emit = defineEmits<{ completed: [] }>();
 const assetName = computed(() => props.assetName);
 const loading = ref(false);
 const errorMessage = ref<string | null>(null);
@@ -302,24 +302,27 @@ const confirmSplit = async () => {
       throw new Error(detail);
     }
 
-    toast({
-      title: t('common.success'),
-      description: t('pwaUi.split.submitted', { asset: snapshot.assetName, amount: snapshot.amt, count: snapshot.n }),
-      variant: 'success'
-    });
-    review.value = null;
+    if (!disposed) {
+      toast({
+        title: t('common.success'),
+        description: t('pwaUi.split.submitted', { asset: snapshot.assetName, amount: snapshot.amt, count: snapshot.n }),
+        variant: 'success'
+      });
+      review.value = null;
+    }
     await refreshL1Assets();
-
+    if (disposed) return;
     form.resetForm();
-    isOpen.value = false;
-    setTimeout(() => router.back(), 300);
+    if (props.embedded) emit('completed');
+    else router.back();
   } catch (error: any) {
     console.error('L1 Split Error:', error);
+    if (disposed) return;
     const description = error.message || t('pwaUi.split.unknownError');
     toast({ title: t('common.error'), description, variant: 'destructive' });
     errorMessage.value = description;
   } finally {
-    loading.value = false;
+    if (!disposed) loading.value = false;
   }
 };
 

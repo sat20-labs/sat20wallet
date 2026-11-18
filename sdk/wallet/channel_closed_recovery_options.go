@@ -95,10 +95,18 @@ func (p *Manager) PreviewClosedChannelRecovery(channelID string) (string, error)
 		options.WithdrawReason = "The channel is still active; an offline peer alone does not permit withdrawal."
 		return result()
 	}
+	// The terminal DB write precedes publication to the live reservation map.
+	// Offer a new choice only when the same lifecycle gate used at execution permits it.
+	if !options.WithdrawPending {
+		if err := p.rejectUnfinishedChannelLifecycleForWallet(channelID, w); err != nil {
+			options.WithdrawReason = err.Error()
+			return result()
+		}
+	}
 	options.HasLocalClosedState = true
 	rgb := closedWithdrawalHasRGB(stored)
-	if !rgb && !closedWithdrawalUsesInputFacts(stored) && nativeForceClose(&ClosingReservation{Channel: &Channel{ChannelInDB: *stored}}) {
-		options.WithdrawReason = "This native or mixed-protocol withdrawal package is not supported by this action."
+	if !rgb && !closedWithdrawalUsesInputFacts(stored) && needsWithdrawalFacts(&Channel{ChannelInDB: *stored}) {
+		options.WithdrawReason = "This unsupported or mixed-protocol withdrawal package is not supported by this action."
 		return result()
 	}
 	p.mutex.RLock()

@@ -55,6 +55,22 @@ func (p *Manager) accountModuleFailure(entry account.ManagedEntry, cause error, 
 
 func (p *Manager) importAccountValue(entry account.ManagedEntry, catalog AccountManagedDataCatalog,
 	value *accountLocalKV, remote *dkvsValue, encoded, payload []byte, pending bool) error {
+	// Wait for existing RGB actions before applying account data. A waiting
+	// import also prevents new actions from entering the module.
+	applied := false
+	if entry.Provider == rgb11AccountManagedProviderID || entry.Provider == "wallets" {
+		p.rgbManagedExecutionMu.Lock()
+		defer func() {
+			p.rgbManagedExecutionMu.Unlock()
+			if applied && p.rgbManager != nil {
+				for _, scope := range catalog.Scopes {
+					if entry.Provider == "wallets" || scope.ID() == entry.Scope {
+						p.rgbManager.scopeStates.wakeReconciliation(rgb11StorageScope(scope.WalletID, scope.AccountIndex))
+					}
+				}
+			}
+		}()
+	}
 	if err := p.validateAccountPayload(entry, catalog, payload); err != nil {
 		return err
 	}
@@ -105,7 +121,9 @@ func (p *Manager) importAccountValue(entry account.ManagedEntry, catalog Account
 	if !pending {
 		current.Confirmed = current.Generation
 	}
-	return p.saveAccountReceipt(current)
+	err = p.saveAccountReceipt(current)
+	applied = err == nil
+	return err
 }
 
 func (p *Manager) syncAccountModule(store *dkvsStore, snapshot *accountManagementSyncSnapshot,
@@ -159,8 +177,26 @@ func (p *Manager) syncAccountModuleOnce(store *dkvsStore, snapshot *accountManag
 	if err != nil {
 		return err
 	}
+	// A tombstone has no module payload, but its verified record still owns
+	// the CAS baseline when an explicitly reimported wallet republishes data.
+	observed := remote
+	if remote != nil && dkvsindexer.IsTombstone(remote.Flags) {
+		remote = nil
+	}
 	p.mutex.RLock()
 	value, err := p.readAccountLocal(snapshot.profile.AccountID, entry.Provider, entry.Scope)
+	fresh := entry.Provider == rgb11AccountManagedProviderID && p.pendingAccountScopeAdd(entry.Scope)
+	newWallets := make(map[string]bool)
+	if entry.Provider == "wallets" && p.accountProfile != nil {
+		for _, mutation := range p.accountProfile.Pending {
+			if mutation.Type == accountMutationAddWallet {
+				info := p.walletInfoByFingerprintLocked(mutation.Fingerprint)
+				if info != nil && info.Id == mutation.WalletID {
+					newWallets[mutation.Fingerprint] = true
+				}
+			}
+		}
+	}
 	p.mutex.RUnlock()
 	if err != nil {
 		return err
@@ -169,7 +205,7 @@ func (p *Manager) syncAccountModuleOnce(store *dkvsStore, snapshot *accountManag
 		return nil
 	}
 	var remotePayload []byte
-	if remote != nil {
+	if remote != nil && !fresh {
 		remotePayload, err = openAccountPayload(snapshot.secret, snapshot.profile.AccountID, snapshot.network, entry, remote.Value)
 		if err != nil {
 			return p.accountModuleFailure(entry, err, remote)
@@ -210,7 +246,7 @@ func (p *Manager) syncAccountModuleOnce(store *dkvsStore, snapshot *accountManag
 			payload = bytes.Clone(remotePayload)
 		}
 		defer zeroBytes(payload)
-		if err := p.importAccountValue(entry, catalog, value, remote, encoded, payload, value.Confirmed < value.Generation); err != nil {
+		if err := p.importAccountValue(entry, catalog, value, observed, encoded, payload, value.Confirmed < value.Generation); err != nil {
 			return p.accountModuleFailure(entry, err, remote)
 		}
 		p.mutex.RLock()
@@ -222,9 +258,9 @@ func (p *Manager) syncAccountModuleOnce(store *dkvsStore, snapshot *accountManag
 	}
 	// A clean local module needs no Export. Only that changed remote module is
 	// imported; other scopes are not included in its provider catalog.
-	if value.Generation == value.Confirmed && len(value.Value) != 0 {
+	if !fresh && value.Generation == value.Confirmed && len(value.Value) != 0 {
 		if remote == nil {
-			value, err = p.setAccountBaseline(value, nil)
+			value, err = p.setAccountBaseline(value, observed)
 			if err != nil {
 				return err
 			}
@@ -240,7 +276,7 @@ func (p *Manager) syncAccountModuleOnce(store *dkvsStore, snapshot *accountManag
 			if err != nil {
 				return err
 			}
-			return p.recordAccountEffect(value, remote)
+			return p.confirmAccountValue(store, snapshot, value, remote)
 		}
 		if err := p.importAccountValue(entry, catalog, value, remote, remote.Value, remotePayload, false); err != nil {
 			return p.accountModuleFailure(entry, err, remote)
@@ -253,7 +289,7 @@ func (p *Manager) syncAccountModuleOnce(store *dkvsStore, snapshot *accountManag
 	}
 	defer zeroBytes(localPayload)
 	var basePayload []byte
-	if value.Baseline != nil {
+	if !fresh && value.Baseline != nil && !dkvsindexer.IsTombstone(value.Baseline.Flags) {
 		basePayload, err = openAccountPayload(snapshot.secret, value.AccountID, snapshot.network, entry, value.Baseline.Value)
 		if err != nil {
 			return p.accountModuleFailure(entry, err, remote)
@@ -265,10 +301,10 @@ func (p *Manager) syncAccountModuleOnce(store *dkvsStore, snapshot *accountManag
 		if err != nil {
 			return err
 		}
-		return p.recordAccountEffect(captured, remote)
+		return p.confirmAccountValue(store, snapshot, captured, remote)
 	}
-	if remote != nil && !bytes.Equal(remotePayload, basePayload) {
-		if bytes.Equal(localPayload, basePayload) {
+	if !fresh && remote != nil && !bytes.Equal(remotePayload, basePayload) {
+		if len(newWallets) == 0 && bytes.Equal(localPayload, basePayload) {
 			if err := p.importAccountValue(entry, catalog, value, remote, remote.Value, remotePayload, false); err != nil {
 				return p.accountModuleFailure(entry, err, remote)
 			}
@@ -276,7 +312,7 @@ func (p *Manager) syncAccountModuleOnce(store *dkvsStore, snapshot *accountManag
 		}
 		var merged []byte
 		if entry.Provider == "wallets" {
-			merged, err = mergeAccountWalletPayload(basePayload, localPayload, remotePayload)
+			merged, err = mergeAccountWalletPayload(basePayload, localPayload, remotePayload, newWallets)
 		} else if merger, ok := p.accountProvider(entry.Provider).(AccountDataMerger); ok {
 			selected, catalogErr := accountScopeCatalog(catalog, entry.Scope)
 			if catalogErr != nil {
@@ -327,7 +363,7 @@ func (p *Manager) syncAccountModuleOnce(store *dkvsStore, snapshot *accountManag
 	if err != nil {
 		return err
 	}
-	value, err = p.setAccountBaseline(value, remote)
+	value, err = p.setAccountBaseline(value, observed)
 	if err != nil {
 		return err
 	}

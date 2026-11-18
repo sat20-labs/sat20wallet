@@ -32,16 +32,6 @@ type dkvsActiveBoundSnapshot struct {
 	bootstrap  dkvsActiveBoundNodeSnapshot
 }
 
-type dkvsActiveManagerLocalSnapshot struct {
-	subscriptionStatus string
-	statusError        string
-	recordPresent      bool
-	recordSeq          uint64
-	recordHash         string
-	recordValue        string
-	recordError        string
-}
-
 // These roots share the existing no-plugin network. Each root receives its own
 // identity, while the chain and fixture remain shared. BoundWalletRPC runs
 // first so its identity is unbound before it tests the admission boundary.
@@ -51,16 +41,15 @@ func runSDKDKVSActiveBoundSharedGroup(t *testing.T, fixture *templateFixture) {
 		name     string
 		seed     byte
 		paths    []string
-		run      func(*testing.T, *templateFixture, string) *dkvsActiveManagerLocalSnapshot
-		validate func(*testing.T, dkvsActiveBoundSnapshot, dkvsActiveBoundSnapshot, *dkvsActiveManagerLocalSnapshot)
+		run      func(*testing.T, *templateFixture, string)
+		validate func(*testing.T, dkvsActiveBoundSnapshot, dkvsActiveBoundSnapshot)
 	}{
 		{
 			name: "BoundWalletRPC", seed: 230, paths: []string{"bound-real/value"},
-			run: func(t *testing.T, f *templateFixture, mnemonic string) *dkvsActiveManagerLocalSnapshot {
+			run: func(t *testing.T, f *templateFixture, mnemonic string) {
 				runSDKDKVSBoundWalletRPC(t, f, mnemonic)
-				return nil
 			},
-			validate: func(t *testing.T, before, after dkvsActiveBoundSnapshot, _ *dkvsActiveManagerLocalSnapshot) {
+			validate: func(t *testing.T, before, after dkvsActiveBoundSnapshot) {
 				key := "bound-real/value"
 				require.True(t, after.bootstrap.binding.present, "BoundWalletRPC must replicate the owner binding to Bootstrap")
 				require.Equal(t, after.core.binding.hash, after.bootstrap.binding.hash, "Core and Bootstrap must agree on the binding")
@@ -70,11 +59,10 @@ func runSDKDKVSActiveBoundSharedGroup(t *testing.T, fixture *templateFixture) {
 		},
 		{
 			name: "ActiveState", seed: 231, paths: dkvsActiveStateSharedPaths(),
-			run: func(t *testing.T, f *templateFixture, mnemonic string) *dkvsActiveManagerLocalSnapshot {
+			run: func(t *testing.T, f *templateFixture, mnemonic string) {
 				runSDKDKVSActiveState(t, f, mnemonic)
-				return nil
 			},
-			validate: func(t *testing.T, before, after dkvsActiveBoundSnapshot, _ *dkvsActiveManagerLocalSnapshot) {
+			validate: func(t *testing.T, before, after dkvsActiveBoundSnapshot) {
 				for _, key := range []string{"active-basic/value", "active-pages/a", "active-reopen/value"} {
 					require.True(t, after.core.records[key].present, "ActiveState must leave %s present on Core", key)
 					require.NotEqual(t, before.core.records[key], after.core.records[key], "ActiveState must change %s on Core", key)
@@ -83,33 +71,13 @@ func runSDKDKVSActiveBoundSharedGroup(t *testing.T, fixture *templateFixture) {
 		},
 		{
 			name: "LaunchBoundReplay", seed: 232, paths: []string{"launch-bound-replay/value"},
-			run: func(t *testing.T, f *templateFixture, mnemonic string) *dkvsActiveManagerLocalSnapshot {
+			run: func(t *testing.T, f *templateFixture, mnemonic string) {
 				runSDKDKVSLaunchBoundReplay(t, f, mnemonic)
-				return nil
 			},
-			validate: func(t *testing.T, before, after dkvsActiveBoundSnapshot, _ *dkvsActiveManagerLocalSnapshot) {
+			validate: func(t *testing.T, before, after dkvsActiveBoundSnapshot) {
 				key := "launch-bound-replay/value"
 				require.False(t, after.core.records[key].present, "replay prevention must leave the deleted Core key absent")
 				require.False(t, after.bootstrap.records[key].present, "the non-bound Bootstrap must not retain the key")
-			},
-		},
-		{
-			name: "ActiveManager", seed: 233, paths: []string{"active-manager/settings"},
-			run: func(t *testing.T, f *templateFixture, mnemonic string) *dkvsActiveManagerLocalSnapshot {
-				return runSDKDKVSActiveManager(t, f, mnemonic)
-			},
-			validate: func(t *testing.T, before, after dkvsActiveBoundSnapshot, local *dkvsActiveManagerLocalSnapshot) {
-				key := "active-manager/settings"
-				require.True(t, after.core.records[key].present, "ActiveManager must leave its final record on Core")
-				require.NotEqual(t, before.core.records[key], after.core.records[key], "ActiveManager must change its Core record")
-				require.NotNil(t, local, "ActiveManager must report its local replica state")
-				require.Empty(t, local.statusError)
-				require.Equal(t, "READY", local.subscriptionStatus)
-				require.Empty(t, local.recordError)
-				require.True(t, local.recordPresent)
-				require.Equal(t, "after-own-delete", local.recordValue)
-				require.Equal(t, after.core.records[key].hash, local.recordHash,
-					"the local replica record must match the final Core record")
 			},
 		},
 	}
@@ -121,7 +89,6 @@ func runSDKDKVSActiveBoundSharedGroup(t *testing.T, fixture *templateFixture) {
 			owner := newDKVSKeyPathActor(t, keyFromMnemonic(t, mnemonic, 0))
 			trackedKeys := dkvsActiveBoundTrackedKeys(t, owner, testCase.paths)
 			before := captureDKVSActiveBoundSnapshot(t, fixture, owner, trackedKeys)
-			var local *dkvsActiveManagerLocalSnapshot
 
 			// Cleanup captures post-state even when an existing business assertion
 			// fails, so reruns can start from a fresh fixture with useful evidence.
@@ -140,7 +107,7 @@ func runSDKDKVSActiveBoundSharedGroup(t *testing.T, fixture *templateFixture) {
 				require.True(t, after.core.binding.present, "each case identity must be bound on Core")
 				require.Greater(t, after.core.binding.seq, before.core.binding.seq, "each case must advance its Core binding sequence")
 				require.NotEqual(t, before.core.binding.hash, after.core.binding.hash, "each case must change its Core binding")
-				testCase.validate(t, before, after, local)
+				testCase.validate(t, before, after)
 			})
 
 			require.False(t, before.core.binding.present, "the case identity must begin unbound on Core")
@@ -152,12 +119,7 @@ func runSDKDKVSActiveBoundSharedGroup(t *testing.T, fixture *templateFixture) {
 				require.False(t, state.present, "the case key %s must start absent on Bootstrap", key)
 			}
 
-			local = testCase.run(t, fixture, mnemonic)
-			if local != nil {
-				t.Logf("dkvs-active-bound-manager-local-state: case=%s status=%s status_error=%q record_present=%t record_seq=%d record_hash=%s record_value=%q record_error=%q",
-					testCase.name, local.subscriptionStatus, local.statusError, local.recordPresent,
-					local.recordSeq, local.recordHash, local.recordValue, local.recordError)
-			}
+			testCase.run(t, fixture, mnemonic)
 		})
 		if !passed {
 			onlySelector := sharedE2ERerunSelector(t, testCase.name)

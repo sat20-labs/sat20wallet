@@ -82,7 +82,7 @@ func TestSTPServerSweepRejectsUnknownProoflessCommitmentsBeforeIO(t *testing.T) 
 		// No indexer/database is installed. Unknown commitments must fail
 		// before reconstruction could treat invisible assets as plain sats.
 		_, err := new(Manager).ValidateSTPServerSweep(tx, destination, nil, nil)
-		require.ErrorContains(t, err, "unrecognized commitment without a native proof")
+		require.ErrorContains(t, err, "unrecognized commitment without a channel proof")
 	}
 	runes, err := GetRunesEstimatePayload(nil, 0)
 	require.NoError(t, err)
@@ -137,8 +137,8 @@ func TestSTPServerSweepHistoricalBRC20View(t *testing.T) {
 		name  string
 		asset indexer.AssetName
 	}{
-		{"native-true-is-not-history", indexer.AssetName{Protocol: "rgb11", Type: indexer.ASSET_TYPE_FT, Ticker: strings.Repeat("a", 64)}},
-		{"unknown-true-is-not-history", indexer.AssetName{Protocol: "unknown-native", Type: indexer.ASSET_TYPE_FT, Ticker: "token"}},
+		{"rgb11-flag-is-not-history", indexer.AssetName{Protocol: "rgb11", Type: indexer.ASSET_TYPE_FT, Ticker: strings.Repeat("a", 64)}},
+		{"unknown-true-is-not-history", indexer.AssetName{Protocol: "unknown-protocol", Type: indexer.ASSET_TYPE_FT, Ticker: "token"}},
 	} {
 		t.Run(marker.name, func(t *testing.T) {
 			manager, tx, script, facts, _ := stpSweepHistoricalBRC20Fixture(t, false)

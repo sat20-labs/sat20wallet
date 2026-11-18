@@ -171,7 +171,7 @@ func (p *rgb11Manager) fixedRGB11ScopeAccount() (localRGB11Account, error) {
 	}, nil
 }
 
-func (p *rgb11Manager) scheduleRGB11ChainReconciliation() {
+func (p *rgb11Manager) scheduleRGB11ChainReconciliation(checkLocal bool) {
 	if p == nil || p.scopeStates == nil {
 		return
 	}
@@ -181,7 +181,7 @@ func (p *rgb11Manager) scheduleRGB11ChainReconciliation() {
 		Log.Warningf("inspect RGB11 chain reconciliation failed: %v", err)
 		return
 	}
-	if !pending {
+	if !pending && !checkLocal {
 		p.setRGB11ReconciliationState("idle")
 		return
 	}
@@ -207,16 +207,27 @@ func (p *rgb11Manager) scheduleRGB11ChainReconciliation() {
 	// This keeps standard RGB and SAT20 transport paths on one chain view.
 	scoped.evidence = p.evidence
 	scoped.setRGB11ReconciliationState("syncing")
-	go scoped.runRGB11ChainReconciliation(scope, worker)
+	go scoped.runRGB11ChainReconciliation(scope, worker, checkLocal)
 }
 
-func (p *rgb11Manager) runRGB11ChainReconciliation(scope string, worker *rgb11ScopeReconciliation) {
+func (p *rgb11Manager) runRGB11ChainReconciliation(scope string, worker *rgb11ScopeReconciliation, checkLocal bool) {
 	defer p.scopeStates.finishReconciliation(scope, worker)
 	for {
 		p.scopeStates.mu.Lock()
 		worker.attempts++
 		p.scopeStates.mu.Unlock()
-		_, refreshErr := p.RefreshRGB11State(context.Background())
+		_, refreshErr := runRGB11ManagedOperationWithManager(p.accountManagementOwner(),
+			context.Background(), rgb11ManagedOperationRefresh,
+			func() (*rgb11Manager, error) { return p, nil },
+			func(manager *rgb11Manager) (*RGB11RefreshResult, error) {
+				if checkLocal {
+					if err := manager.refreshRGB11UTXOs(context.Background()); err != nil {
+						return nil, err
+					}
+					checkLocal = false
+				}
+				return nil, manager.refreshRGB11OnHealthyTip(context.Background())
+			})
 
 		pending, inspectErr := p.hasPendingRGB11ChainReconciliation()
 		if inspectErr != nil {
@@ -262,8 +273,8 @@ func (p *rgb11Manager) runRGB11ChainReconciliation(scope string, worker *rgb11Sc
 }
 
 func (p *rgb11Manager) notifyRGB11ChainUpdate() {
-	if p != nil && p.dkvs != nil {
-		p.dkvs.notifyCallback()
+	if p != nil {
+		p.accountManagementOwner().notifyAccountData()
 	}
 }
 

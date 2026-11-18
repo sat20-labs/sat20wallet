@@ -1,3 +1,5 @@
+//go:build guardian
+
 package wallet
 
 import (

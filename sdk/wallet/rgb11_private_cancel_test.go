@@ -23,7 +23,7 @@ func TestRGB11PrivateCancelRequiresExactUnpublishedRecoveryDelta(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	payloads, err := sender.currentAccountManagedProviderPayloads(rgb11AccountManagedProviderID)
+	payloads, err := accountTestPayloads(sender, rgb11AccountManagedProviderID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,9 +37,7 @@ func TestRGB11PrivateCancelRequiresExactUnpublishedRecoveryDelta(t *testing.T) {
 	}
 	// Prepare locally without publishing its background backup. The exact
 	// unpublished delta may be canceled only while no submission is uncertain.
-	scope.Manager.beginRGB11ManagedOperationState()
 	prepared, err := scope.PrepareRGB11Transfer(context.Background(), RGB11SendRequest{Invoice: invoice.Invoice, FeeRate: 2, MinConfirmations: 1})
-	scope.Manager.endRGB11ManagedOperationState()
 	if err != nil {
 		t.Fatal(err)
 	}

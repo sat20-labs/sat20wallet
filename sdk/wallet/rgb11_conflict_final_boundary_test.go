@@ -110,7 +110,7 @@ func TestRGB11ConflictCandidateInterruptedBeforeDirtyReload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = f.sender.verifyCurrentRGB11RecoveryClosure(); err == nil {
+	if !rgb11LocalModulePendingForTest(t, f.sender) {
 		t.Fatal("interrupted dirty write falsely reported synchronized")
 	}
 	if f.journal(t).State.Status != "conflicted" {
@@ -119,7 +119,7 @@ func TestRGB11ConflictCandidateInterruptedBeforeDirtyReload(t *testing.T) {
 	if err = f.sender.SyncAccountManagementState(context.Background()); err != nil {
 		t.Fatalf("existing restart barrier cannot reconcile local closure: %v", err)
 	}
-	if err = f.sender.verifyCurrentRGB11RecoveryClosure(); err != nil {
+	if err = f.sender.WaitAccountBackup(context.Background(), rgb11AccountManagedProviderID, coreSelectedRGBScope(f.sender)); err != nil {
 		t.Fatalf("reconciled closure remains unverified: %v", err)
 	}
 	proof, err := f.sender.rgbManager.projectionStore.LoadProof(f.carrier, f.asset)

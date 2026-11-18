@@ -3,54 +3,17 @@ import { useQuery } from '@tanstack/vue-query'
 import { storeToRefs } from 'pinia'
 import walletManager from '@/utils/sat20'
 import { useGlobalStore, useRGB11Store, useWalletStore } from '@/store'
-import type { RGB11StateDTO } from '@/store/rgb11'
+import type { RGBView, RGBAssetView } from '@/utils/walletViews'
 
 interface UseAssetQueryOptions {
   enabled?: boolean | { value: boolean }
 }
 
-const assetNameOf = (value: any) => value?.Name || value?.name || value?.AssetName || {}
-
-const tickerInfoFor = (state: RGB11StateDTO, name: any) => (
-  (state.ticker_infos || []).find((info: any) => {
-    const infoName = assetNameOf(info)
-    return infoName?.Protocol === name?.Protocol &&
-      infoName?.Type === name?.Type &&
-      infoName?.Ticker === name?.Ticker
-  })
-)
-
-export const decorateRGB11AssetItems = (items: any[], state: RGB11StateDTO) => items.map((item: any) => {
-  const name = {
-    Protocol: item.protocol,
-    Type: item.type,
-    Ticker: item.ticker,
-  }
-  const tickerInfo = tickerInfoFor(state, name)
-  // Keep the SDK balance key separate from editable and registered labels.
-  const assetKey = `${name.Protocol || 'rgb11'}:${name.Type || 'f'}:${name.Ticker || ''}`
-  const canonicalName = String(tickerInfo?.canonical_name || tickerInfo?.CanonicalName || '')
-  const contractId = String(tickerInfo?.contract_id || tickerInfo?.ContractID || '')
-  const displayName = String(tickerInfo?.displayname || tickerInfo?.DisplayName || '').trim()
-  const symbol = String(tickerInfo?.ticker || tickerInfo?.Ticker || '').trim()
-  const rawContractID = contractId.replace(/^rgb:/, '')
-  const readableSymbol = symbol && symbol !== contractId && symbol !== rawContractID ? symbol : ''
-  const verified = canonicalName !== '' && Boolean(tickerInfo?.verified ?? tickerInfo?.Verified ?? false)
-  return {
-    ...item,
-    id: assetKey,
-    key: assetKey,
-    label: readableSymbol || canonicalName || displayName || symbol || contractId || assetKey,
-    symbol,
-    asset_key: assetKey,
-    canonical_name: canonicalName,
-    contract_id: contractId,
-    display_name: displayName,
-    genesis_address: String(tickerInfo?.genesis_address || ''),
-    naming_status: String(tickerInfo?.naming_status || 'origin-unavailable'),
-    verified,
-    precision: Number(item.precision ?? tickerInfo?.divisibility ?? 0),
-  }
+export const decorateRGB11AssetItems = (items: RGBAssetView[]) => items.map(item => {
+  const [protocol, type, ticker] = item.asset.split(':')
+  return { ...item, protocol, type, ticker, id: item.asset, key: item.asset, asset_key: item.asset,
+    label: item.ticker || item.name || item.asset, symbol: item.ticker, display_name: item.name,
+    amount: item.available, balance: item.available, utxos: [], available_amount: item.available, pending_amount: item.pending }
 })
 
 export const useRgb11Assets = (options: UseAssetQueryOptions = {}) => {
@@ -68,11 +31,11 @@ export const useRgb11Assets = (options: UseAssetQueryOptions = {}) => {
 
   const stateQuery = useQuery({
     queryKey: ['rgb11-state', walletId, accountIndex, network, address, env],
-    queryFn: async (): Promise<RGB11StateDTO> => {
-      const [err, result] = await walletManager.getRGB11State()
+    queryFn: async (): Promise<RGBView> => {
+      const [err, result] = await walletManager.getRGB11View()
       if (err) throw err
-      if (!result?.state) throw new Error('RGB wallet state is unavailable')
-      return JSON.parse(result.state) as RGB11StateDTO
+      if (!result) throw new Error('RGB wallet state is unavailable')
+      return result
     },
     enabled: computed(() => queryEnabled.value && !!walletId.value && !!address.value),
   })

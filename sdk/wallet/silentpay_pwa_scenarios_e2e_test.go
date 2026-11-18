@@ -211,7 +211,7 @@ func spPWAFindBalance(t *testing.T, values []SPAccountBalance,
 
 func TestSilentPayPWAMultiWalletIsolationRepeatRefreshAndLateActivationE2E(t *testing.T) {
 	spPWAChain(t)
-	manager, first, second := newSPWalletPairGroup(t, []string{"Payments", "Unpublished"})
+	manager, first, second := newSPWalletPairGroup(t, CLIENT_NODE, []string{"Payments", "Unpublished"})
 	for _, item := range []struct {
 		wallet *InternalWallet
 		index  uint32

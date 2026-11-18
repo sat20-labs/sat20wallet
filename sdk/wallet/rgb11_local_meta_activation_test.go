@@ -196,7 +196,7 @@ func TestRGBMetaDuringBackup(t *testing.T) {
 			require.Equal(t, after.Generation, final.Generation)
 			require.Equal(t, final.Generation, final.Confirmed)
 			require.Equal(t, finalRecord.Value, final.Value)
-			state, err := account.OpenManagedState(secret, row.AccountID, manager.accountProfile.StateEnvelope)
+			state, err := account.OpenManagedState(secret, row.AccountID, walletTestRow(t, manager).Value)
 			require.NoError(t, err)
 			require.Len(t, state.Wallets, 1)
 			require.Equal(t, "Export in progress", state.Wallets[0].Name)

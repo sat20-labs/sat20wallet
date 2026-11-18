@@ -33,29 +33,6 @@ func TestRGB11AddressMessageIDIsBoundedAndDomainSeparated(t *testing.T) {
 	}
 }
 
-func TestConfiguredRGB11AddressTransportRetentionUsesServiceNodePolicy(t *testing.T) {
-	remote := newRGB11MemoryDKVSHTTP()
-	remote.freeLocal.MaxTTL = 777
-	client := NewSatsNetDKVSClient("http", "dkvs.test", "testnet", remote)
-	store := &dkvsStore{client: client}
-	manager := &Manager{}
-	manager.rgbManager = &rgb11Manager{Manager: manager}
-
-	transient := dkvsindexer.RecordOptions{}
-	if err := manager.rgbManager.configureRGB11AddressTransientRetention(store, &transient); err != nil {
-		t.Fatal(err)
-	}
-	if transient.TTL != remote.freeLocal.MaxTTL {
-		t.Fatalf("RGB transport retention=%d want=%d", transient.TTL, remote.freeLocal.MaxTTL)
-	}
-
-	remote.freeLocal.Enabled = false
-	if err := manager.rgbManager.configureRGB11AddressTransientRetention(store,
-		&dkvsindexer.RecordOptions{}); !errors.Is(err, dkvsindexer.ErrFreeLocalDisabled) {
-		t.Fatalf("disabled FREE_LOCAL err=%v", err)
-	}
-}
-
 func TestConfiguredRGB11AddressTransferRejectsChildAccount(t *testing.T) {
 	manager, _, _, _, _ := newRGB11GenericSendFixture(t)
 	if err := manager.EnsureAccount(manager.status.CurrentWallet, 1, "child", ""); err != nil {
@@ -108,7 +85,7 @@ func TestRGB11DirectScopeRejectsNonRootWalletByPublicKey(t *testing.T) {
 		t.Fatalf("enable Direct receive err=%v", err)
 	}
 	if _, err := manager.rgbManager.SyncConfiguredRGB11AddressMailbox(context.Background(),
-		dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{}); !errors.Is(err, ErrRGB11DirectRootRequired) {
+		dkvsindexer.RecordVerificationOptions{}); !errors.Is(err, ErrRGB11DirectRootRequired) {
 		t.Fatalf("sync Direct mailbox err=%v", err)
 	}
 }
@@ -161,7 +138,7 @@ func TestRGB11MailboxConsumerUsesGenerationBeforeReplicaRead(t *testing.T) {
 	// earlier recovery synchronization. Count only this mailbox scope; the
 	// same client also synchronizes unrelated subscribed account scopes.
 	result, err := consumer.SyncConfiguredRGB11AddressMailbox(context.Background(),
-		dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+		dkvsindexer.RecordVerificationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +167,7 @@ func TestRGB11MailboxConsumerUsesGenerationBeforeReplicaRead(t *testing.T) {
 	}
 
 	if _, err := consumer.SyncConfiguredRGB11AddressMailbox(context.Background(),
-		dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{}); err != nil {
+		dkvsindexer.RecordVerificationOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	remote.mu.Lock()
@@ -203,7 +180,7 @@ func TestRGB11MailboxConsumerUsesGenerationBeforeReplicaRead(t *testing.T) {
 func TestRGB11DirectRejectsInvalid(t *testing.T) {
 	sender, recipient, _, _, _ := newRGB11GenericSendFixture(t)
 	endpoint, err := recipient.EnableConfiguredRGB11AddressReceive(
-		RGB11ReceiveCapabilityOptions{RecordOptions: dkvsindexer.RecordOptions{TTL: testRGB11FreeLocalTTL}},
+		RGB11ReceiveCapabilityOptions{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -224,24 +201,24 @@ func TestRGB11DirectRejectsInvalid(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := recipient.SyncConfiguredRGB11AddressMailbox(context.Background(),
-		dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+		dkvsindexer.RecordVerificationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.Invalid != 1 {
 		t.Fatalf("invalid Direct result=%+v", result)
 	}
-	messages, err := sender.freshDirectMessages(sender.wallet)
+	messages, err := sender.readAccountMessages(sender.wallet, dkvsindexer.RecordVerificationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, message := range messages {
-		if message == nil || message.Payload == nil ||
-			message.Payload.Kind != AccountMessageKindRGB11ACK ||
-			message.Payload.ApplicationID != applicationID {
+		if message == nil ||
+			message.Kind != AccountMessageKindRGB11ACK ||
+			message.ID != applicationID {
 			continue
 		}
-		ack, err := rgb11wallet.DecodeAddressACK(message.Payload.Body)
+		ack, err := rgb11wallet.DecodeAddressACK(message.Body)
 		if err != nil || ack.Status != RGB11AddressACKRejected {
 			t.Fatalf("invalid Direct ACK=%+v err=%v", ack, err)
 		}

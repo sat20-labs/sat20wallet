@@ -36,24 +36,24 @@ type ChannelInventory struct {
 	Sources []ChannelFunding `json:"sources"`
 	// LastPackage retains the last private lifecycle obligation even after a
 	// full exit leaves no current funding. Public receipts export a single
-	// ChannelFunding.NativeProof, never this private journal.
+	// ChannelFunding.RGB11Proof, never this private journal.
 	LastPackage []byte `json:"last_package,omitempty"`
 }
 
-func (f ChannelFunding) NativeProof() ([]byte, error) {
+func (f ChannelFunding) RGB11Proof() ([]byte, error) {
 	return nativeproof.BuildRGB11(f.Consignment, f.Reveals)
 }
 
 func ValidateChannelFunding(ctx context.Context, source ChannelFunding, evidence BitcoinEvidenceProvider,
 	mode nativeproof.Mode, network string) (*nativeproof.Result, error) {
-	proof, err := source.NativeProof()
+	proof, err := source.RGB11Proof()
 	if err != nil {
 		return nil, err
 	}
 	return nativeproof.Validate(proof, nativeproof.Source{Outpoint: source.OutPoint,
 		Value: source.Value, PkScript: source.PkScript, BitcoinNetwork: network,
 		Assets: indexer.TxAssets{{Name: source.AssetName, Amount: source.Amount, BindingSat: 0}}},
-		NativeBitcoinResolver(ctx, evidence), mode)
+		RGB11BitcoinResolver(ctx, evidence), mode)
 }
 
 // EncodeChannelInventory provides stable ordering for peer comparison and
@@ -144,7 +144,7 @@ func canonicalChannelConsignment(container *consignment.Container) ([]byte, erro
 // PublicChannelConsignment retains disclosed public channel seals in the
 // standard RGB object itself. A wallet may project only its own allocation;
 // that must not discard the peer's already disclosed returned allocation from
-// the material needed to audit a later native mapping or pool settlement.
+// the material needed to audit a later RGB11 mapping or pool settlement.
 // This operation grants no validity or ownership: callers must revalidate the
 // resulting bytes with core before recording a receipt for their new hash.
 func PublicChannelConsignment(raw []byte, disclosures [][]byte) ([]byte, error) {

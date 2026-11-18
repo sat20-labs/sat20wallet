@@ -36,7 +36,7 @@ type STPAssetRules interface {
 	Policy(*AssetName) STPAssetPolicy
 }
 
-// STPAssetBindingRules separates native quantity precision from sat binding.
+// STPAssetBindingRules separates asset quantity precision from sat binding.
 // Legacy asset metadata continues to use N as its sat binding ratio.
 type STPAssetBindingRules interface {
 	BindingSat(*AssetName) uint32
@@ -67,15 +67,12 @@ type STPAssetPolicy struct {
 	FixedOutputIndexes bool
 	SpliceFeeReserve   int64
 	SplicePayloadSize  int
-	// AlwaysSplicePayload reserves a native commitment even for an exact
+	// AlwaysSplicePayload reserves a protocol commitment even for an exact
 	// amount splice without asset change (for example an RGB DBC output).
 	AlwaysSplicePayload bool
 	// Some protocols use stubs as fee/carrier reserves, without assigning
 	// ordinal offsets. They must not prepend an ordinal input stub.
 	NoOrdinalInputStub bool
-	// ExchangeRecoveryPackages requires complete peer recovery transactions
-	// in the normal revocation exchange, before a channel update is accepted.
-	ExchangeRecoveryPackages bool
 }
 
 type btcSTPRules struct{}

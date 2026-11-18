@@ -301,9 +301,9 @@ func (p *Manager) HandleChannelReservationStatus(sendTxInL1 bool) {
 				}
 				continue
 			}
-			if handled, err := p.RetryNativeForceClose(resv); handled {
+			if handled, err := p.RetryForceClose(resv); handled {
 				if err != nil {
-					Log.Warnf("native force close retry %s: %v", resv.Channel.ChannelId, err)
+					Log.Warnf("channel force close retry %s: %v", resv.Channel.ChannelId, err)
 				}
 				continue
 			}

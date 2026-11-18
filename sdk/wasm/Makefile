@@ -1,30 +1,14 @@
-.PHONY: all clean
+.PHONY: all wallet-wasm clean
 
-all:
-# ifeq ($(shell uname), Darwin)
-# 	if ! brew ls --versions tinygo > /dev/null; then \
-# 		brew tap tinygo-org/tools && brew install tinygo; \
-# 	fi
-# else ifeq ($(shell uname), Linux)
-# 	if ! command -v tinygo > /dev/null; then \
-# 		sudo add-apt-repository ppa:tinygo-team/ppa; \
-# 		sudo apt update; \
-# 		sudo apt install tinygo; \
-# 	fi
-# 	if ! command -v wasm-opt > /dev/null; then \
-# 		sudo apt install binaryen; \
-# 	fi
-# else
-# 	echo "Unsupported operating system"
-# endif
-	GOOS=js GOARCH=wasm go build -o html/wasm/sat20wallet.wasm -ldflags="-s -w" .
-	if command -v wasm-opt > /dev/null; then wasm-opt -Oz html/wasm/sat20wallet.wasm -o html/wasm/sat20wallet.wasm --enable-bulk-memory; fi
-	cp html/wasm/sat20wallet.wasm ~/github/sat20wallet/client/public/wasm/sat20wallet.wasm
-	cp html/wasm/sat20wallet.wasm ~/github/sat20wallet/pwa/public/wasm/sat20wallet.wasm
-# wasm-opt -Oz html/wasm/sat20wallet.wasm -o html/wasm/sat20wallet.wasm --enable-bulk-memory 
-# tinygo build -o out.wasm -target wasm -no-debug main.go
+WASM_DIR ?= html/wasm
+export WASM_DIR
 
-# rm out.wasm
+all: wallet-wasm
+	cp "$$WASM_DIR/sat20wallet.wasm" ../../client/public/wasm/sat20wallet.wasm
+	cp "$$WASM_DIR/sat20wallet.wasm" ../../pwa/public/wasm/sat20wallet.wasm
 
-# clean:
-# 	rm -f out.wasm html/wasm/sat20wallet.wasm
+wallet-wasm:
+	mkdir -p "$$WASM_DIR"
+	GOOS=js GOARCH=wasm go build -ldflags="-s -w" -o "$$WASM_DIR/sat20wallet.wasm" .
+	if command -v wasm-opt >/dev/null; then wasm-opt -Oz "$$WASM_DIR/sat20wallet.wasm" -o "$$WASM_DIR/sat20wallet.wasm" --enable-bulk-memory; fi
+	cp "$$(go env GOROOT)/lib/wasm/wasm_exec.js" "$$WASM_DIR/wasm_exec.js"

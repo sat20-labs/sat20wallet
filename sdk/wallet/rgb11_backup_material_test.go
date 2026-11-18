@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	"strings"
 	"testing"
 	"time"
@@ -489,7 +490,7 @@ func TestRGB11BackupMaterialsColdRestoreRefreshAfterConfirmationLoss(t *testing.
 			locks := restored.utxoLockerL1.GetLockedUtxoList()
 			for _, outpoint := range changes {
 				lock := locks[outpoint]
-				if lock == nil || lock.ReservationID != completed.ReservationID || lock.Reason != rgb11wallet.LockReasonPending {
+				if lock == nil || lock.ReservationID != completed.ReservationID || lock.Reason != sdkcommon.UtxoLockRGBPending {
 					t.Fatalf("reopened change carrier lacks its pending owner: outpoint=%s lock=%+v", outpoint, lock)
 				}
 			}

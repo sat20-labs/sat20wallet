@@ -368,9 +368,11 @@ func corePendingCheckpoint(t *testing.T, name string, source *Manager, cfg coreE
 
 	t.Helper()
 	enterBroadcasts := chain.broadcastCount()
-	// Close the old device's automatic receiver before taking either source
-	// snapshot. Stop joins already-running mailbox/ACK/broadcast work too.
-	source.StopDKVSSync()
+	// Join the automatic receiver and verify the stopped source's real online
+	// session before public reconciliation. A canceled in-flight request may
+	// have revoked its write qualification even though the endpoint is healthy.
+	// This finishes existing backup work without restarting the RGB mailbox.
+	coreSuspendRGBDevice(t, source)
 	beforeBroadcasts := chain.broadcastCount()
 	t.Logf("core checkpoint handoff phase=%s broadcasts_enter=%d broadcasts_joined=%d", name, enterBroadcasts, beforeBroadcasts)
 	_, err := source.RefreshRGB11State(context.Background())
@@ -399,8 +401,8 @@ func corePendingCheckpoint(t *testing.T, name string, source *Manager, cfg coreE
 	}
 	coreAssert(t, coreDigest(before) == coreDigest(after),
 		"local RGB reopen and fresh reconciliation changed ownership, readiness, invoice, task, proof or spending restriction")
-	// Revalidate the stopped session and finish its final backup without
-	// resuming the automatic RGB mailbox worker.
+	// Reconciliation may commit another generation. Finish that final backup
+	// without resuming the automatic RGB mailbox worker.
 	coreSuspendRGBDevice(t, source)
 	localAfter := coreLocalRGBPayloads(t, source)
 	defer coreZeroRGBPayloads(localAfter)

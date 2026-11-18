@@ -20,7 +20,7 @@ func recoveryFeeSelectionFixture() (*ChannelCommitment, []*TxOutput, []int) {
 		views[i] = indexer.GenerateTxOutput(commit.CommitTx, i)
 	}
 	views[1].Assets = indexer.TxAssets{{
-		Name:   indexer.AssetName{Protocol: "rgb11", Type: indexer.ASSET_TYPE_FT, Ticker: "native-recovery-test"},
+		Name:   indexer.AssetName{Protocol: "rgb11", Type: indexer.ASSET_TYPE_FT, Ticker: "rgb11-recovery-test"},
 		Amount: *indexer.NewDecimal(1250, 2),
 	}}
 	views[2].Assets = indexer.TxAssets{{
@@ -63,7 +63,7 @@ func TestCommitmentRecoveryFeeSelectionRejectsAssetAndConflictingReserves(t *tes
 		{"consumed_brc_reserve", func(c *ChannelCommitment, _ []*TxOutput, _ *[]int) { c.RecoveryFeeIndexes = []uint32{4} }},
 		{"op_return", func(c *ChannelCommitment, _ []*TxOutput, _ *[]int) { c.RecoveryFeeIndexes = []uint32{0} }},
 		{"missing_output", func(c *ChannelCommitment, _ []*TxOutput, _ *[]int) { c.RecoveryFeeIndexes = []uint32{99} }},
-		{"missing_native_markers", func(c *ChannelCommitment, _ []*TxOutput, _ *[]int) { c.RecoveryFeeIndexes = nil }},
+		{"missing_rgb11_markers", func(c *ChannelCommitment, _ []*TxOutput, _ *[]int) { c.RecoveryFeeIndexes = nil }},
 		{"changed_verified_value", func(_ *ChannelCommitment, v []*TxOutput, _ *[]int) { v[3].OutValue.Value++ }},
 		{"changed_verified_script", func(_ *ChannelCommitment, v []*TxOutput, _ *[]int) {
 			v[3].OutValue.PkScript = []byte{txscript.OP_FALSE}

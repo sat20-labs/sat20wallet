@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"testing"
@@ -19,8 +20,10 @@ func TestSDKAccountReviewAuthorization(t *testing.T) {
 		t.Helper()
 		manager, _ := accountReviewDevice(t, network, dkvsClientMnemonic)
 		require.NoError(t, manager.InitializeAccountManagement(accountReviewPassword))
-		require.NoError(t, manager.StartDKVSSync())
-		t.Cleanup(manager.StopDKVSSync)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		_, err := manager.RecoverAccountManagementFromCurrentWallet(ctx, accountReviewPassword)
+		cancel()
+		require.ErrorIs(t, err, wallet.ErrRootAccountNotFound)
 		require.Eventually(t, func() bool {
 			status := manager.GetAccountManagementStatus()
 			return status.DiscoveryStatus == "inactive" && status.LocalOnly &&

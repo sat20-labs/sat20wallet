@@ -17,15 +17,16 @@ var errSTPRGBEvidenceMissing = errors.New("RGB reservation evidence is missing o
 // consumers never retain a network provider or persist these observations.
 // A later protocol message must refresh mutable chain observations.
 type STPRGBReservationEvidence struct {
-	channelID string
-	network   string
-	height    uint64
-	entropy   [32]byte
-	rawTxs    map[string]stpRGBRawFact
-	statuses  map[string]stpRGBStatusFact
-	outspends map[string]stpRGBOutspendFact
-	utxos     map[string]stpRGBUTXOFact
-	tip       *rgb11wallet.BitcoinTip
+	channelID   string
+	network     string
+	height      uint64
+	entropy     [32]byte
+	rawTxs      map[string]stpRGBRawFact
+	statuses    map[string]stpRGBStatusFact
+	outspends   map[string]stpRGBOutspendFact
+	utxos       map[string]stpRGBUTXOFact
+	tip         *rgb11wallet.BitcoinTip
+	genesisHash string
 
 	// One synchronous operation owns these local construction observations.
 	// They are not shared with another reservation or persisted on restart.
@@ -202,6 +203,13 @@ func (v *stpRGBEvidenceView) GetUTXO(point string) (*rgb11wallet.BitcoinUTXO, er
 		}
 	}
 	return nil, v.unavailable("UTXO", point)
+}
+
+func (v *stpRGBEvidenceView) GetGenesisHash() (string, error) {
+	if v != nil && v.facts != nil && v.facts.genesisHash != "" {
+		return v.facts.genesisHash, nil
+	}
+	return "", v.unavailable("chain genesis", "")
 }
 
 func (v *stpRGBEvidenceView) GetTip() (*rgb11wallet.BitcoinTip, error) {

@@ -31,9 +31,10 @@
       <TableBody>
         <UtxoRow
           v-for="(utxo, idx) in lockedUtxos"
-          :key="utxo.utxo"
+          :key="`${utxo.chain || chain}:${utxo.utxo}`"
           :utxo="utxo"
           :show-checkbox="showCheckbox"
+          :read-only="readOnly"
           :is-selected="selectedUtxos.includes(utxo.utxo)"
           :is-unlocking="unlockingIdx === idx"
           :network="network"
@@ -60,6 +61,7 @@ interface Props {
   lockedUtxos: LockedUtxoInfo[]
   loading: boolean
   showCheckbox: boolean
+  readOnly: boolean
   selectedUtxos: string[]
   unlockingIdx: number
   network: string

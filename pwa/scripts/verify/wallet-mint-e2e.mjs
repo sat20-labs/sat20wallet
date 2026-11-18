@@ -160,10 +160,8 @@ export async function runPwaMintCases(t, fixture) {
     // This direct SDK refresh writes local projection state. A local-only
     // account may write; an activated account needs its verified baseline.
     await expect.poll(async () => {
-      const state = await accountCall(page, 'status')
-      if (!state.activation_pending &&
-        (state.local_only || (state.recovery_configured && state.dkvs_write_allowed))) return 'ready'
-      return `${state.dkvs_status || 'unknown'}:${state.last_dkvs_sync_error || 'pending'}`
+      const view = await accountCall(page, 'getAccountView')
+      return view.state === 'local' || view.state === 'ready' ? 'ready' : view.state
     }, { timeout: 90000 }).toBe('ready')
     await walletCall(page, 'refreshRGB11State')
     await visit(page, '/wallet/tools')
@@ -172,9 +170,8 @@ export async function runPwaMintCases(t, fixture) {
     await expect(tab).toHaveAttribute('aria-selected', 'true')
   }
   const logs = page => page.evaluate(async () => {
-    const [error, records] = await (await import('/utils/operationLog.ts')).getOperationLogs()
-    if (error) throw error
-    return records.map(record => ({ id: record.id, action: record.action, status: record.status }))
+    const records = await (await import('/utils/operationLog.ts')).getOperationLogs()
+    return records.map(record => ({ id: record.id, kind: record.kind, status: record.status }))
       .sort((a, b) => a.id.localeCompare(b.id))
   })
   const evidence = async page => ({
@@ -674,9 +671,58 @@ export async function runPwaMintCases(t, fixture) {
         didTx = (await page.evaluate(() => window.__PWA_MINT_E2E_CALLS__?.inscribeName))?.result
         await assertSignedCommitReveal(didTx)
         await expect(did.getByText(/^txid: [0-9a-f]{64}$/)).toHaveText(`txid: ${didTx.revealTxId}`)
+        // Clearing display history must not forget an already-broadcast DID.
+        // Exercise the actual page and confirmation before any block is mined.
+        await visit(page, '/wallet/setting/operation-logs')
+        await expect(page.getByRole('heading', { name: 'Operation logs', exact: true })).toBeVisible()
+        const clearButton = page.getByRole('button', { name: 'Delete all', exact: true })
+        await expect(clearButton).toBeEnabled()
+        const confirmationPending = page.waitForEvent('dialog')
+        const clearing = clearButton.click()
+        const confirmation = await confirmationPending
+        assert.equal(confirmation.type(), 'confirm')
+        assert.equal(confirmation.message(), 'Delete all operation logs? This does not delete wallet, channel, contract, or transaction data.')
+        await confirmation.accept()
+        await clearing
+        await expect(clearButton).toBeEnabled()
+        const afterClear = await evidence(page)
+        assert.deepEqual(afterClear.l1.pending_txids.slice().sort(), [didTx.commitTxId, didTx.revealTxId].sort())
+        // The existing observer still forwards to the real SDK; clear only its
+        // captured result so any second inscription invocation is detectable.
+        await page.evaluate(() => { delete window.__PWA_MINT_E2E_CALLS__.inscribeName })
+        await visit(page, '/wallet/tools')
+        const pendingMintTab = page.getByRole('tab', { name: 'Mint', exact: true })
+        await pendingMintTab.click()
+        await expect(pendingMintTab).toHaveAttribute('aria-selected', 'true')
+        const pendingDid = card(page, 'Mint DID')
+        await pendingDid.getByPlaceholder('Enter name', { exact: true }).fill(nameValue)
+        await pendingDid.getByRole('button', { name: 'Check', exact: true }).click()
+        const pendingName = await walletCall(page, 'checkDIDName', nameValue)
+        assert.equal(pendingName.status, 'submitted', JSON.stringify({
+          status: pendingName.status,
+          mint_disabled: await pendingDid.getByRole('button', { name: 'Mint DID', exact: true }).isDisabled(),
+          did_text: await pendingDid.innerText(),
+          logs_after_clear: afterClear.logs,
+          pending_transactions: afterClear.l1.pending_txids,
+        }))
+        await expect(page.getByText('This name was already submitted and is waiting for a confirmed result', { exact: true })).toBeVisible()
+        await expect(pendingDid.getByRole('button', { name: 'Mint DID', exact: true })).toBeDisabled()
+        assert.ok(afterClear.logs.some(record => record.kind === 'inscribe_name' && record.status === 'pending'),
+          'the unconfirmed DID submission guard must survive clearing history')
+        assert.equal(await page.evaluate(() => window.__PWA_MINT_E2E_CALLS__?.inscribeName), undefined,
+          'clearing history must not dispatch a second DID inscription')
+        await unchanged(page, afterClear)
         const confirmed = await confirmPendingL1([didTx.commitTxId, didTx.revealTxId])
         assert.ok(confirmed.l1.confirmed_txids.includes(didTx.revealTxId))
-
+        await visit(page, '/wallet/setting/operation-logs')
+        await expect(clearButton).toBeEnabled()
+        const confirmedClear = page.waitForEvent('dialog')
+        const clearingConfirmed = clearButton.click()
+        await (await confirmedClear).accept()
+        await clearingConfirmed
+        await expect(clearButton).toBeEnabled()
+        assert.equal((await logs(page)).some(record => record.kind === 'inscribe_name'), false,
+          'a confirmed DID operation must remain removable')
       }
       await expect.poll(async () => {
         const response = await indexerJSON(namePath)

@@ -70,8 +70,8 @@ func TestSTPClosedRecoveryChoicesPreviewIsReadOnlyAndLocalOnly(t *testing.T) {
 		t.Fatal("read-only withdrawal capability used server signing, funds, choice or locks")
 	}
 }
-func TestSTPClosedRecoveryChoicesRejectsUnavailableOrNativePackage(t *testing.T) {
-	for _, mode := range []string{"missing", "unconfirmed", "rgb-incomplete", "unsupported-native"} {
+func TestClosedRecoveryUnavailable(t *testing.T) {
+	for _, mode := range []string{"missing", "unconfirmed", "rgb-incomplete", "unsupported-channel"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newSingleUTXOExecutionFixture(t)
 			if mode != "missing" {
@@ -80,12 +80,12 @@ func TestSTPClosedRecoveryChoicesRejectsUnavailableOrNativePackage(t *testing.T)
 			if mode == "unconfirmed" {
 				f.rpc.parentConfirmed = false
 			}
-			if mode == "rgb-incomplete" || mode == "unsupported-native" {
+			if mode == "rgb-incomplete" || mode == "unsupported-channel" {
 				protocol := "rgb11"
-				if mode == "unsupported-native" {
-					protocol = "fixture-unsupported-native"
+				if mode == "unsupported-channel" {
+					protocol = "fixture-unsupported-channel"
 				}
-				f.stored.AssetFunding = map[string][]byte{protocol: []byte("fixture native classification")}
+				f.stored.AssetFunding = map[string][]byte{protocol: []byte("fixture channel classification")}
 				raw, _ := EncodeToBytes(f.stored)
 				if err := f.manager.db.Write([]byte(GetChannelKey(f.channelID)), raw); err != nil {
 					t.Fatal(err)
@@ -113,8 +113,8 @@ func TestSTPClosedRecoveryChoicesRejectsUnavailableOrNativePackage(t *testing.T)
 			if mode == "rgb-incomplete" && (!strings.Contains(reason, "rgb") || !strings.Contains(reason, "incomplete")) {
 				t.Fatalf("supported RGB without its complete recovery package was misclassified: %s", raw)
 			}
-			if mode == "unsupported-native" && !strings.Contains(reason, "native") {
-				t.Fatalf("unknown native limitation not disclosed: %s", raw)
+			if mode == "unsupported-channel" && (!strings.Contains(reason, "unsupported") || !strings.Contains(reason, "protocol")) {
+				t.Fatalf("unsupported protocol limitation not disclosed: %s", raw)
 			}
 			if options.WithdrawFeeSats != 0 || options.WithdrawTxCount != 0 || options.WithdrawPending || options.WithdrawComplete {
 				t.Fatalf("rejected capability created a fee, transaction or completed/pending choice: %s", raw)

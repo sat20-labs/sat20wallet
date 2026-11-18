@@ -19,36 +19,13 @@
         </Button>
       </section>
 
-      <section v-else-if="step === 2" class="space-y-4">
-        <h2 class="font-medium">{{ t('accountManagement.ui.answerQuestions') }}</h2>
-        <div v-for="(question, index) in loaded.questions" :key="question.id" class="space-y-1">
-          <label class="text-sm">{{ question.prompt }}</label>
-          <Input v-model="answers[index]" type="password" autocomplete="off" />
-        </div>
-        <Button class="w-full" :disabled="busy" @click="recoverKnowledge">
-          {{ t('accountManagement.ui.recoverShare') }}
-        </Button>
-        <Button v-if="loaded.locator.recovery_mode === '2of3' && loaded.has_guardian_location"
-          variant="outline" class="w-full" :disabled="busy" @click="step = 3">
-          {{ t('accountManagement.ui.shareAndGuardian') }}
-        </Button>
-      </section>
-
-      <section v-else-if="step === 3" class="space-y-4">
+      <section v-else-if="step === 2 && loaded" class="space-y-4">
         <h2 class="font-medium">{{ t('accountManagement.ui.provideFactors') }}</h2>
-        <p class="text-sm text-muted-foreground">{{ knowledgeReady ? t('accountManagement.ui.chooseCompanion') : t('accountManagement.ui.requireCompanions') }}</p>
-        <Textarea v-model="userShare" rows="5" :placeholder="t('accountManagement.ui.pasteOptionalShare')" />
-        <Button variant="outline" class="w-full" :disabled="busy || !userShare" @click="acceptUserShare">{{ t('accountManagement.ui.useShare') }}</Button>
-
-        <div v-if="loaded.guardian && loaded.has_guardian_location" class="rounded-lg border p-3 space-y-2">
-          <Button variant="outline" class="w-full" :disabled="busy" @click="createGuardianRequest">{{ t('accountManagement.ui.createGuardianRequest') }}</Button>
-          <Textarea v-if="guardianRequest" :model-value="guardianRequest" readonly rows="6" />
-          <Button v-if="guardianRequest" variant="ghost" class="w-full" @click="copyText(guardianRequest)">{{ t('accountManagement.ui.copyRequest') }}</Button>
-          <Textarea v-model="guardianResponse" rows="6" :placeholder="t('accountManagement.ui.pasteGuardianResponse')" />
-          <Button variant="outline" class="w-full" :disabled="busy || !guardianResponse" @click="acceptGuardianResponse">{{ t('accountManagement.ui.useGuardianResponse') }}</Button>
+        <div v-for="(question,index) in loaded.questions" :key="question.id" class="space-y-1">
+          <label class="text-sm">{{ question.prompt }}</label><Input v-model="answers[index]" type="password" autocomplete="off" />
         </div>
-
-        <Button class="w-full" :disabled="busy || !companionReady" @click="previewRecovery">{{ t('accountManagement.ui.previewRecovery') }}</Button>
+        <Textarea v-model="userShare" rows="5" :placeholder="t('accountManagement.ui.pasteUserShare')" />
+        <Button class="w-full" :disabled="busy" @click="previewRecovery">{{ t('accountManagement.ui.previewRecovery') }}</Button>
       </section>
 
       <section v-else-if="step === 4 && preview" class="space-y-4">
@@ -86,6 +63,13 @@
         <p class="text-sm text-muted-foreground">{{ t('accountManagement.ui.reloading') }}</p>
       </section>
 
+      <section v-else-if="step === 7" class="space-y-3" data-testid="partial-recovery">
+        <h2 class="font-medium">{{ t('accountManagement.ui.restorePartial') }}</h2>
+        <p class="text-sm text-muted-foreground">{{ t('accountManagement.ui.restorePartialHint') }}</p>
+        <ul><li v-for="module in failedModules" :key="module.name">{{ module.name }}</li></ul>
+        <Button class="w-full" :disabled="busy" @click="reloadWallet">{{ t('accountManagement.ui.reloadWallet') }}</Button>
+      </section>
+
       <section v-else-if="step === 6" class="space-y-3">
         <h2 class="font-medium">{{ t('accountManagement.ui.uiReconcileFailed') }}</h2>
         <p class="text-sm text-muted-foreground">{{ t('accountManagement.ui.savedReloadHint') }}</p>
@@ -108,7 +92,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import accountSDK, { accountDisplayMessage, type AccountRecoverySummary } from '@/utils/accountManagement'
+import accountSDK, { accountDisplayMessage } from '@/utils/accountManagement'
+import type { RecoveryView, RecoverySummary, ModuleView } from '@/utils/walletViews'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -117,18 +102,13 @@ const rehearsalOnly = route.query.mode === 'rehearsal'
 const expectedAccountId = ref('')
 const busy = ref(false)
 const error = ref('')
+const failedModules = ref<ModuleView[]>([])
 const step = ref(1)
 const locator = ref('')
-const loaded = ref<any>(null)
+const loaded = ref<RecoveryView | null>(null)
 const answers = ref<string[]>([])
 const userShare = ref('')
-const guardianRequest = ref('')
-const guardianResponse = ref('')
-const knowledgeReady = ref(false)
-const userShareReady = ref(false)
-const guardianReady = ref(false)
-const companionReady = computed(() => Number(knowledgeReady.value) + Number(userShareReady.value) + Number(guardianReady.value) >= 2)
-const preview = ref<AccountRecoverySummary | null>(null)
+const preview = ref<RecoverySummary | null>(null)
 const password = ref('')
 const confirmPassword = ref('')
 
@@ -141,23 +121,24 @@ const clearRecovery = () => {
   loaded.value = null
   preview.value = null
   answers.value = []
-  userShare.value = guardianRequest.value = guardianResponse.value = password.value = confirmPassword.value = ''
-  knowledgeReady.value = userShareReady.value = guardianReady.value = false
-  if (id) return accountSDK.abortSession(id).catch(() => undefined)
+  userShare.value = password.value = confirmPassword.value = ''
+  if (id) return accountSDK.abortRecovery(id).catch(() => undefined)
 }
 const cancelRecovery = async () => {
   disposed = true
   await clearRecovery()
-  await router.push(rehearsalOnly ? '/wallet/setting/account-management' : '/')
+  const returnPath = rehearsalOnly ? '/wallet/setting/account-management' : '/'
+  if (window.history.state?.back === returnPath) router.back()
+  else await router.replace(returnPath)
 }
 onBeforeUnmount(() => { disposed = true; void clearRecovery() })
 onMounted(async () => {
   if (!rehearsalOnly) return
   try {
-    const status = await accountSDK.status()
+    const status = await accountSDK.getAccountView()
     if (disposed) return
     expectedAccountId.value = status.account_id || ''
-    locator.value = status.public_locator || ''
+    locator.value = status.locator || ''
     if (!expectedAccountId.value || !locator.value) error.value = t('accountManagement.ui.recoveryNotConfigured')
   } catch (e: any) { if (!disposed) error.value = accountDisplayMessage(t, e?.message) || t('accountManagement.ui.readRecoveryFailed') }
 })
@@ -176,9 +157,9 @@ const run = async (task: () => Promise<void>) => {
 }
 
 const loadRecovery = () => run(async () => {
-  const result = await accountSDK.loadRecovery(locator.value.trim())
+  const result = await accountSDK.loadRecovery(locator.value.trim(), rehearsalOnly)
   if (disposed) {
-    await accountSDK.abortSession(result.session_id)
+    await accountSDK.abortRecovery(result.session_id)
     return
   }
   loaded.value = result
@@ -186,47 +167,35 @@ const loadRecovery = () => run(async () => {
   step.value = 2
 })
 
-const recoverKnowledge = () => run(async () => {
-  const attempts = answers.value.map((answer, index) => ({ question_id: loaded.value.questions[index].id, answer })).filter(item => item.answer)
-  if (attempts.length < 2) throw new Error(t('accountManagement.ui.answerAtLeastTwo'))
-  await accountSDK.recoverKnowledge(sessionId.value, attempts)
-  knowledgeReady.value = true
-  step.value = 3
-})
-
-const acceptUserShare = () => run(async () => {
-  await accountSDK.setUserShare(sessionId.value, userShare.value.trim())
-  userShareReady.value = true
-})
-
-const createGuardianRequest = () => run(async () => {
-  guardianRequest.value = (await accountSDK.createGuardianRequest(sessionId.value)).request
-})
-
-const acceptGuardianResponse = () => run(async () => {
-  await accountSDK.consumeGuardianResponse(sessionId.value, guardianResponse.value.trim())
-  guardianReady.value = true
-})
-
 const previewRecovery = () => run(async () => {
-  const summary = (await accountSDK.previewRecovery(sessionId.value)).summary
-  if (rehearsalOnly && (!expectedAccountId.value || summary.account_id !== expectedAccountId.value)) {
-    throw new Error(t('accountManagement.ui.wrongAccount'))
-  }
-  preview.value = summary
-  step.value = 4
+  if (!loaded.value) return
+  const value = await accountSDK.previewRecovery(sessionId.value, {
+    answers: loaded.value.questions.map((question,index) => ({question_id: question.id, text: answers.value[index] || ''})).filter(item => item.text),
+    user_share: userShare.value, guardian_response: '',
+  })
+  if (!value.summary) throw new Error(t('accountManagement.ui.recoveryFailed'))
+  loaded.value = value; preview.value = value.summary; step.value = 4
 })
 
 const commitRecovery = () => run(async () => {
-  if (rehearsalOnly) throw new Error(t('accountManagement.ui.readOnlyCannotCommit'))
+  if (!loaded.value?.can_commit) throw new Error(t('accountManagement.ui.readOnlyCannotCommit'))
   if (password.value.length < 6 || password.value !== confirmPassword.value) throw new Error(t('accountManagement.ui.passwordMismatch'))
-	await accountSDK.commitRecovery(sessionId.value, password.value)
+  const result = await accountSDK.commitRecovery(sessionId.value, password.value)
   // The SDK has consumed the session and committed the authoritative database.
   // Every subsequent failure is UI reconciliation; never offer commit again.
   step.value = 6
   loaded.value = null
   answers.value = []
-  userShare.value = guardianResponse.value = password.value = confirmPassword.value = ''
+  userShare.value = password.value = confirmPassword.value = ''
+  if (!result.complete) {
+    if (!result.failed_modules.length) {
+      reloadWallet()
+      return
+    }
+    failedModules.value = result.failed_modules
+    step.value = 7
+    return
+  }
   // The next unlock reads catalog and persisted selection from the SDK.
   step.value = 5
   setTimeout(reloadWallet, 500)
@@ -237,7 +206,4 @@ const reloadWallet = () => {
   window.location.reload()
 }
 
-const copyText = async (value: string) => {
-  if (value) await navigator.clipboard.writeText(value)
-}
 </script>

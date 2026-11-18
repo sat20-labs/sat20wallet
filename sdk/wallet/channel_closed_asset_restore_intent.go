@@ -258,7 +258,7 @@ func (p *Manager) completeClosedChannelAssetRestore(owner *LocalActionPerformDat
 }
 
 // The captured driver must first make a fresh inventory observation containing
-// no unmanaged assets, including unsupported/native leftovers. This only marks
+// no unmanaged assets, including unsupported/channel leftovers. This only marks
 // the one restoration terminal; it never authorizes later deposits to expand.
 func (p *Manager) completeClosedChannelAssets(owner *LocalActionPerformData) error {
 	owner.RLock()

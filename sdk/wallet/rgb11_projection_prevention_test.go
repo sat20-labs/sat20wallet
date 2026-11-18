@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	"reflect"
 	"sort"
 	"sync"
@@ -66,11 +67,11 @@ func TestRGB11LockPlanMovesAndRetiresOnlySelectedReservationOwners(t *testing.T)
 	database := newMemoryKVDB()
 	locker := NewUtxoLocker(database, nil, L1_NETWORK_BITCOIN)
 	const outpoint = "00000000000000000000000000000000000000000000000000000000000012d0:0"
-	if err := locker.LockUtxo(outpoint, rgb11wallet.LockReasonRGB); err != nil {
+	if err := locker.LockUtxo(outpoint, sdkcommon.UtxoLockRGB); err != nil {
 		t.Fatal(err)
 	}
-	if err := locker.TryReserve([]string{outpoint}, rgb11wallet.LockReasonPending, "old-owner",
-		rgb11wallet.LockReasonRGB); err != nil {
+	if err := locker.TryReserve([]string{outpoint}, sdkcommon.UtxoLockRGBPending, "old-owner",
+		sdkcommon.UtxoLockRGB); err != nil {
 		t.Fatal(err)
 	}
 
@@ -100,26 +101,26 @@ func TestRGB11LockPlanMovesAndRetiresOnlySelectedReservationOwners(t *testing.T)
 	if err := apply(rgb11LockPlan{
 		ReplacedOwners: map[string]struct{}{"old-owner": {}},
 		DesiredOwners: map[string]rgb11ReservationLockTarget{
-			outpoint: {ReservationID: "new-owner", PreviousReason: rgb11wallet.LockReasonRGB},
+			outpoint: {ReservationID: "new-owner", PreviousReason: sdkcommon.UtxoLockRGB},
 		},
 	}); err != nil {
 		t.Fatalf("replace old reservation owner in staged commit: %v", err)
 	}
 	lock := locker.GetLockedUtxoList()[outpoint]
 	if lock == nil || lock.ReservationID != "new-owner" ||
-		lock.Reason != rgb11wallet.LockReasonPending ||
-		lock.ReservationPreviousReason != rgb11wallet.LockReasonRGB {
+		lock.Reason != sdkcommon.UtxoLockRGBPending ||
+		lock.ReservationPreviousReason != sdkcommon.UtxoLockRGB {
 		t.Fatalf("replacement lock=%+v", lock)
 	}
 
 	if err := apply(rgb11LockPlan{
 		ReplacedOwners: map[string]struct{}{"new-owner": {}},
-		Reasons:        map[string]string{outpoint: rgb11wallet.LockReasonRGB},
+		Reasons:        map[string]string{outpoint: sdkcommon.UtxoLockRGB},
 	}); err != nil {
 		t.Fatalf("retire cancelled reservation owner: %v", err)
 	}
 	lock = locker.GetLockedUtxoList()[outpoint]
-	if lock == nil || lock.ReservationID != "" || lock.Reason != rgb11wallet.LockReasonRGB ||
+	if lock == nil || lock.ReservationID != "" || lock.Reason != sdkcommon.UtxoLockRGB ||
 		lock.ReservationPreviousReason != "" {
 		t.Fatalf("retired lock=%+v", lock)
 	}
@@ -153,7 +154,7 @@ func TestRGB11LockPlanPreservesAndRejectsUnrelatedCarrierLocks(t *testing.T) {
 			name:  "RGB change claim cannot replace external owner",
 			claim: true,
 			seed: func(locker *UtxoLocker) error {
-				return locker.TryReserve([]string{outpoint}, rgb11wallet.LockReasonPending, "outside-owner")
+				return locker.TryReserve([]string{outpoint}, sdkcommon.UtxoLockRGBPending, "outside-owner")
 			},
 			wantError: ErrUtxoReservationOwner,
 		},
@@ -161,14 +162,14 @@ func TestRGB11LockPlanPreservesAndRejectsUnrelatedCarrierLocks(t *testing.T) {
 			name:     "consumed carrier with external owner",
 			consumed: true,
 			seed: func(locker *UtxoLocker) error {
-				return locker.TryReserve([]string{outpoint}, rgb11wallet.LockReasonRGB, "outside-owner")
+				return locker.TryReserve([]string{outpoint}, sdkcommon.UtxoLockRGB, "outside-owner")
 			},
 			wantError: ErrUtxoReservationOwner,
 		},
 		{
 			name: "external reservation owner",
 			seed: func(locker *UtxoLocker) error {
-				return locker.TryReserve([]string{outpoint}, rgb11wallet.LockReasonPending, "outside-owner")
+				return locker.TryReserve([]string{outpoint}, sdkcommon.UtxoLockRGBPending, "outside-owner")
 			},
 			wantError: ErrUtxoReservationOwner,
 		},
@@ -196,14 +197,14 @@ func TestRGB11LockPlanPreservesAndRejectsUnrelatedCarrierLocks(t *testing.T) {
 			desired := make(map[string]rgb11ReservationLockTarget)
 			if tc.claim {
 				desired[outpoint] = rgb11ReservationLockTarget{
-					ReservationID: "rgb-operation", PreviousReason: rgb11wallet.LockReasonRGB,
+					ReservationID: "rgb-operation", PreviousReason: sdkcommon.UtxoLockRGB,
 				}
 			}
 			_, stageErr := locker.stageRGB11LockPlan(batch, rgb11LockPlan{
 				ReplacedOwners: map[string]struct{}{},
 				DesiredOwners:  desired,
 				Consumed:       consumed,
-				Reasons:        map[string]string{outpoint: rgb11wallet.LockReasonRGB},
+				Reasons:        map[string]string{outpoint: sdkcommon.UtxoLockRGB},
 			})
 			batch.Close()
 			if !errors.Is(stageErr, tc.wantError) {
@@ -233,10 +234,10 @@ func TestRGB11CarrierAvailabilityRequiresUnreservedRGBLock(t *testing.T) {
 		want bool
 	}{
 		{name: "unlocked", lock: nil, want: true},
-		{name: "ordinary RGB carrier", lock: &LockedUtxo{Reason: rgb11wallet.LockReasonRGB}, want: true},
-		{name: "pending RGB reservation", lock: &LockedUtxo{Reason: rgb11wallet.LockReasonPending, ReservationID: "operation"}},
+		{name: "ordinary RGB carrier", lock: &LockedUtxo{Reason: sdkcommon.UtxoLockRGB}, want: true},
+		{name: "pending RGB reservation", lock: &LockedUtxo{Reason: sdkcommon.UtxoLockRGBPending, ReservationID: "operation"}},
 		{name: "manual lock", lock: &LockedUtxo{Reason: "user-manual"}},
-		{name: "foreign owner even with RGB reason", lock: &LockedUtxo{Reason: rgb11wallet.LockReasonRGB, ReservationID: "outside-owner"}},
+		{name: "foreign owner even with RGB reason", lock: &LockedUtxo{Reason: sdkcommon.UtxoLockRGB, ReservationID: "outside-owner"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := rgb11CarrierLockAllowsSpend(tc.lock); got != tc.want {
@@ -435,6 +436,10 @@ func runRGB11RecoveryProjectionPeerSpend(t *testing.T, scenario rgb11ProjectionS
 	if err != nil {
 		t.Fatal(err)
 	}
+	if scenario.statusRPCError {
+		assertRGB11InputRejected(t, owner, evidenceBase, issued.ContractID, issued.AssetName,
+			pOutpoint, secondInvoice.Invoice, "unspent_carrier_rpc_error", "rpc_error", true)
+	}
 	secondPrepared, err := peer.rgbManager.PrepareRGB11Transfer(ctx, RGB11SendRequest{
 		Invoice: secondInvoice.Invoice, FeeRate: 2, MinConfirmations: 1,
 	})
@@ -601,9 +606,8 @@ func runRGB11RecoveryProjectionPeerSpend(t *testing.T, scenario rgb11ProjectionS
 		}
 		owner.db = nil // prevent the fixture cleanup from closing this handle twice.
 		reopened := newRGB11FlowManagerAt(t, ownerWallet.Clone(), rpc, evidence, 480, ownerDBPath, accountGroupUnprepared)
-		// The fixture helper normally marks new test managers verified. A
-		// restart after a failed remote projection commit must instead start
-		// unverified until its chain evidence is reconciled.
+		// A fresh runtime has no in-memory diagnosis. Its persisted holdings
+		// must still match the last complete local commit after this failure.
 		reopened.rgbManager.consistencyStatus = ""
 		reopened.utxoLockerL1.Init()
 		reopenedState, stateErr := reopened.GetRGB11State()
@@ -616,7 +620,7 @@ func runRGB11RecoveryProjectionPeerSpend(t *testing.T, scenario rgb11ProjectionS
 			t.Fatalf("reopened projection balance=%d, want old 60: stateErr=%v balanceErr=%v",
 				got, stateErr, balanceErr)
 		}
-		assertRGB11ProjectionCachedState(t, reopenedState, issued.AssetName, priorState.Assets, 60)
+		assertRGB11ProjectionCachedState(t, reopenedState, issued.AssetName, priorState, 60)
 		if !reflect.DeepEqual(priorPersistedRecords, snapshotRGB11ProjectionDB(t, reopened.db)) {
 			t.Fatal("reopened DB contains a partial recovery projection or changed durable records")
 		}
@@ -662,6 +666,12 @@ func runRGB11RecoveryProjectionPeerSpend(t *testing.T, scenario rgb11ProjectionS
 			priorLocks, priorPersistedRecords, priorRecoverySnapshot)
 		if importErr == nil && refreshErr == nil {
 			t.Fatal("recovery projection accepted an incomplete or changing evidence view")
+		}
+		if scenario.statusRPCError {
+			assertRGB11InputRejected(t, owner, evidenceBase, issued.ContractID, issued.AssetName,
+				pOutpoint, secondInvoice.Invoice, "spent_carrier_fixture_error", "delegate", false)
+			assertRGB11InputRejected(t, owner, evidenceBase, issued.ContractID, issued.AssetName,
+				pOutpoint, secondInvoice.Invoice, "spent_carrier_nil_utxo", "missing", false)
 		}
 		return
 	}
@@ -931,9 +941,9 @@ func makeRGB11ProjectionReceiptAmountMismatchSnapshot(t *testing.T, source, targ
 		t.Fatal("real S1 consignment does not match its persisted proof hash")
 	}
 	currentReceipt, err := rgb11wallet.ValidateWith(context.Background(),
-		rgb11wallet.NewNativeConsensusValidatorWithReveals(reveals...), raw, evidence)
+		rgb11wallet.NewRGB11ValidatorWithReveals(reveals...), raw, evidence)
 	if err != nil {
-		t.Fatalf("validate real S1 consignment with native consensus: %v", err)
+		t.Fatalf("validate real S1 consignment with RGB11 consensus: %v", err)
 	}
 	allocationIndex := -1
 	for i := range currentReceipt.Allocations {
@@ -944,12 +954,12 @@ func makeRGB11ProjectionReceiptAmountMismatchSnapshot(t *testing.T, source, targ
 		}
 	}
 	if allocationIndex < 0 || currentReceipt.Allocations[allocationIndex].Amount.Cmp(asset) != 0 {
-		t.Fatal("native S1 allocation and persisted output do not agree")
+		t.Fatal("RGB11 S1 allocation and persisted output do not agree")
 	}
 
 	// Keep every receipt field bound to the real raw consignment except for
 	// the current allocation amount. Public storage APIs accept this
-	// self-consistent cache; they must not treat it as native validation.
+	// self-consistent cache; they must not treat it as RGB11 validation.
 	forgedReceipt := *currentReceipt
 	forgedReceipt.Allocations = append([]rgb11wallet.ValidatedAllocation(nil), currentReceipt.Allocations...)
 	forgedAmount := indexer.NewDecimalWithScale(
@@ -1251,18 +1261,20 @@ func assertRGB11ProjectionBalance(t *testing.T, manager *Manager, name indexer.A
 }
 
 func assertRGB11ProjectionCachedState(t *testing.T, after *RGB11State, name indexer.AssetName,
-	beforeAssets indexer.TxAssets, wantBalance uint64) {
+	before *RGB11State, wantBalance uint64) {
 	t.Helper()
-	if after == nil {
+	if before == nil || after == nil {
 		t.Fatal("RGB11 state is unavailable after rejected evidence")
 	}
-	if !reflect.DeepEqual(beforeAssets, after.Assets) || rgb11AssetAmount(after.Assets, name) != wantBalance {
+	if !reflect.DeepEqual(before.Assets, after.Assets) || rgb11AssetAmount(after.Assets, name) != wantBalance {
 		t.Fatalf("cached RGB11 assets changed after rejected evidence: asset balance=%d want=%d",
 			rgb11AssetAmount(after.Assets, name), wantBalance)
 	}
-	if rgb11AssetAmount(after.AvailableAssets, name) != 0 {
-		t.Fatalf("unverified cached RGB11 balance remains spendable: available=%d",
-			rgb11AssetAmount(after.AvailableAssets, name))
+	// A rejected candidate cannot change the last committed local view. Actual
+	// input availability is checked again when preparing a send.
+	if !reflect.DeepEqual(before.AvailableAssets, after.AvailableAssets) ||
+		!reflect.DeepEqual(before.PendingAssets, after.PendingAssets) {
+		t.Fatal("cached RGB11 available or pending assets changed after rejected evidence")
 	}
 }
 
@@ -1274,7 +1286,7 @@ func assertRGB11ProjectionUnchanged(t *testing.T, manager *Manager, name indexer
 	if err != nil {
 		t.Fatalf("read projection after rejected evidence: %v", err)
 	}
-	assertRGB11ProjectionCachedState(t, after, name, before.Assets, beforeBalance)
+	assertRGB11ProjectionCachedState(t, after, name, before, beforeBalance)
 	assertRGB11ProjectionBalance(t, manager, name, beforeBalance)
 	if !reflect.DeepEqual(beforePersistedRecords, snapshotRGB11ProjectionDB(t, manager.db)) {
 		t.Fatal("durable projection, engine, ticker, reservation, or lock records changed after incomplete evidence")
@@ -1386,4 +1398,105 @@ func (e *rgb11ProjectionFinalTipChangeEvidence) callCount() int {
 // Preserve the real atomic backend while retaining this fixture's fault hook.
 func (db *rgb11ProjectionFailOnceDB) NewAtomicWriteBatch() indexer.WriteBatch {
 	return &rgb11ProjectionFailOnceBatch{WriteBatch: db.KVDB.(indexer.AtomicWriteBatchDB).NewAtomicWriteBatch(), owner: db}
+}
+
+type rgb11ProjectionInputFailureEvidence struct {
+	rgb11wallet.BitcoinEvidenceProvider
+	target         string
+	mode           string
+	mu             sync.Mutex
+	targetCalls    int
+	broadcastCalls int
+}
+
+var errRGB11ProjectionInputUnavailable = errors.New("synthetic Bitcoin UTXO read failure")
+
+func (e *rgb11ProjectionInputFailureEvidence) GetUTXO(outpoint string) (*rgb11wallet.BitcoinUTXO, error) {
+	if outpoint != e.target {
+		return e.BitcoinEvidenceProvider.GetUTXO(outpoint)
+	}
+	e.mu.Lock()
+	e.targetCalls++
+	e.mu.Unlock()
+	switch e.mode {
+	case "rpc_error":
+		return nil, errRGB11ProjectionInputUnavailable
+	case "missing":
+		return nil, nil
+	default:
+		return e.BitcoinEvidenceProvider.GetUTXO(outpoint)
+	}
+}
+
+func (e *rgb11ProjectionInputFailureEvidence) Broadcast([]byte) (string, error) {
+	e.mu.Lock()
+	e.broadcastCalls++
+	e.mu.Unlock()
+	return "", errors.New("unexpected broadcast while preparing unavailable input")
+}
+
+func assertRGB11InputRejected(t *testing.T, owner *Manager, base *rgb11FlowEvidence,
+	contractID string, asset indexer.AssetName, target, invoice, label, mode string, present bool) {
+	t.Helper()
+	if !t.Run(label, func(t *testing.T) {
+		beforeEvidence := owner.rgbManager.evidence
+		observation, observationErr := beforeEvidence.GetUTXO(target)
+		if present && (observationErr != nil || observation == nil) {
+			t.Fatalf("fixture carrier must exist before RPC fault: utxo=%+v err=%v", observation, observationErr)
+		}
+		if !present && observation != nil {
+			t.Fatal("fixture peer-spent carrier unexpectedly exists")
+		}
+		beforeState, err := owner.GetRGB11State()
+		if err != nil {
+			t.Fatal(err)
+		}
+		beforeDB := snapshotRGB11ProjectionDB(t, owner.db)
+		beforeLocks := owner.utxoLockerL1.GetLockedUtxoList()
+		beforeRecovery := decodeRGB11ProjectionRecoverySnapshot(t, exportRGB11RecoveryForTest(t, owner))
+		base.mu.Lock()
+		beforeBroadcasts := base.broadcastCount
+		base.mu.Unlock()
+		probe := &rgb11ProjectionInputFailureEvidence{
+			BitcoinEvidenceProvider: beforeEvidence, target: target, mode: mode,
+		}
+		owner.rgbManager.evidence = probe
+		defer func() { owner.rgbManager.evidence = beforeEvidence }()
+
+		selected, _, _, _, _, total, selectionErr := owner.rgbManager.selectRGB11Allocations(contractID, 25, 1)
+		if !errors.Is(selectionErr, ErrRGB11InsufficientBalance) || len(selected) != 0 || total != 0 {
+			t.Fatalf("real input selection escaped failure: count=%d total=%d err=%v", len(selected), total, selectionErr)
+		}
+		probe.mu.Lock()
+		selectionCalls := probe.targetCalls
+		probe.mu.Unlock()
+		if selectionCalls == 0 {
+			t.Fatal("input selector did not query the unavailable carrier")
+		}
+		prepared, prepareErr := owner.PrepareRGB11Transfer(context.Background(), RGB11SendRequest{
+			Invoice: invoice, FeeRate: 2, MinConfirmations: 1,
+		})
+		if !errors.Is(prepareErr, ErrRGB11InsufficientBalance) || prepared != nil {
+			t.Fatalf("public prepare did not refuse unavailable carrier: prepared=%+v err=%v", prepared, prepareErr)
+		}
+		probe.mu.Lock()
+		calls, broadcastCalls := probe.targetCalls, probe.broadcastCalls
+		probe.mu.Unlock()
+		if calls <= selectionCalls || broadcastCalls != 0 {
+			t.Fatalf("actual selector/public prepare check mismatch: GetUTXO=%d Broadcast=%d", calls, broadcastCalls)
+		}
+		assertRGB11ProjectionUnchanged(t, owner, asset, beforeState,
+			rgb11AssetAmount(beforeState.Assets, asset), beforeLocks, beforeDB, beforeRecovery)
+
+		base.mu.Lock()
+		afterBroadcasts := base.broadcastCount
+		base.mu.Unlock()
+		if afterBroadcasts != beforeBroadcasts {
+			t.Fatalf("failed prepare reached fixture broadcast: before=%d after=%d", beforeBroadcasts, afterBroadcasts)
+		}
+		t.Logf("ACTUAL_SELECTION mode=%s carrier_present_before_fault=%t selection=%q prepare=%q target_calls=%d raw_available_after=%d db_unchanged=true locks_unchanged=true recovery_unchanged=true new_broadcasts=0",
+			mode, present, selectionErr, prepareErr, calls, rgb11AssetAmount(beforeState.AvailableAssets, asset))
+	}) {
+		t.FailNow()
+	}
 }

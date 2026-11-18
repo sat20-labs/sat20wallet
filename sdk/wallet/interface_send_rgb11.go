@@ -31,25 +31,18 @@ func (p *Manager) isL1SendInputProtected(outpoint string) bool {
 // a channel sweep), but may never be used to inscribe over RGB state.
 func (p *Manager) isL1RGBInputProtected(outpoint string) bool {
 	if p.db != nil {
-		if protected, err := p.NativeContractInputProtected(outpoint); err != nil || protected {
+		if protected, err := p.RGB11ContractInputProtected(outpoint); err != nil || protected {
 			return true
 		}
 	}
-	// Private native funding remains protected even before derived wallet
+	// Private RGB11 funding remains protected even before derived wallet
 	// locks have been restored from the channel's durable proof inventory.
-	if p.isSTPNativeInputProtected(outpoint) {
+	if p.isSTPInputProtected(outpoint) {
 		return true
-	}
-	// Until every provider is restored, absence of a projection is not evidence
-	// that an input is plain BTC. Protect all inputs, including explicit ones.
-	if p.db != nil {
-		if err := p.checkAccountManagedDataImport(); err != nil {
-			return true
-		}
 	}
 	if p.utxoLockerL1.IsLocked(outpoint) {
 		lock := p.utxoLockerL1.GetLockedUtxoList()[outpoint]
-		if lock != nil && (lock.Reason == rgb11wallet.LockReasonRGB || lock.Reason == rgb11wallet.LockReasonPending) {
+		if lock != nil && (lock.Reason == common.UtxoLockRGB || lock.Reason == common.UtxoLockRGBPending) {
 			return true
 		}
 	}
@@ -240,19 +233,22 @@ func (p *Manager) resumeRGB11Send(ctx context.Context, transferID string) (*wire
 				result.done = true
 				return result, nil
 			}
-			store, err := manager.configuredRGB11Store()
-			if err != nil {
-				return result, err
-			}
+			needsWalletACK := false
 			for _, item := range batch {
-				if item.State.Status == "prepared" {
-					if _, err := manager.deliverRGB11AddressTransferStore(store, item.State.TransferID, RGB11AddressDeliveryOptions{}); err != nil {
+				needsWalletACK = needsWalletACK || !isRGBPublicPayout(item)
+				if item.State.Status == "prepared" || needsRGBRedelivery(item) {
+					if _, err := manager.deliverRGBAddress(item.State.TransferID); err != nil {
+						if errors.Is(err, errRGBMailboxPending) {
+							return result, nil
+						}
 						return result, err
 					}
 				}
 			}
-			if _, err := manager.SyncConfiguredRGB11AddressMailbox(ctx, dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{}); err != nil {
-				return result, err
+			if needsWalletACK {
+				if _, err := manager.SyncConfiguredRGB11AddressMailbox(ctx, dkvsindexer.RecordVerificationOptions{}); err != nil {
+					return result, err
+				}
 			}
 			_, err = manager.BroadcastRGB11AddressTransfer(transferID)
 			if errors.Is(err, ErrRGB11AddressDeliveryRequired) {

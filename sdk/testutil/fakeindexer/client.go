@@ -378,11 +378,11 @@ func CreateGenesisTx_SatsNet(n *Network) (*swire.MsgTx, error) {
 type Client struct {
 	*wallet.RESTClient
 	Network *Network
-	// Native anchors must run the complete production proof, signature and
+	// RGB11 anchors must run the complete production proof, signature and
 	// output verifier before this fixture publishes any simulated chain state.
-	// Leaving the hook unset rejects native anchors instead of inventing RGB
+	// Leaving the hook unset rejects RGB11 anchors instead of inventing RGB
 	// balances through the legacy script-only fixture.
-	NativeAnchorValidator func(*swire.MsgTx) (*wallet.AnchorData, error)
+	RGB11AnchorValidator func(*swire.MsgTx) (*wallet.AnchorData, error)
 }
 
 func NewClient(n *Network) *Client {
@@ -1099,7 +1099,7 @@ func (p *Client) BroadCastTx(tx *wire.MsgTx) (string, error) {
 	}
 	atomicalsOutputs, err := p.atomicalsAllocationsLocked(tx)
 	if err != nil {
-		return "", fmt.Errorf("ARC20 native allocation: %w", err)
+		return "", fmt.Errorf("ARC20 RGB11 allocation: %w", err)
 	}
 	p.Network.TxBroadcasted[tx.TxID()] = txHex
 
@@ -1805,22 +1805,22 @@ func (p *Client) BroadCastTxs(txs []*wire.MsgTx) error {
 }
 
 func (p *Client) BroadCastTx_SatsNet(tx *swire.MsgTx) (string, error) {
-	var nativeAnchor *wallet.AnchorData
-	_, hasNative, nativeErr := sindexer.NativeAssetProof(tx)
-	if nativeErr != nil {
-		return "", nativeErr
+	var rgb11Anchor *wallet.AnchorData
+	_, hasRGB11Proof, assetErr := sindexer.NativeAssetProof(tx)
+	if assetErr != nil {
+		return "", assetErr
 	}
-	if hasNative {
-		if p.NativeAnchorValidator == nil {
-			return "", fmt.Errorf("native anchor requires the complete production verifier")
+	if hasRGB11Proof {
+		if p.RGB11AnchorValidator == nil {
+			return "", fmt.Errorf("RGB11 anchor requires the complete production verifier")
 		}
 		var err error
-		nativeAnchor, err = p.NativeAnchorValidator(tx)
+		rgb11Anchor, err = p.RGB11AnchorValidator(tx)
 		if err != nil {
 			return "", err
 		}
-		if nativeAnchor == nil {
-			return "", fmt.Errorf("native anchor verifier returned no authenticated source")
+		if rgb11Anchor == nil {
+			return "", fmt.Errorf("RGB11 anchor verifier returned no authenticated source")
 		}
 	} else {
 		for _, input := range tx.TxIn {
@@ -1833,7 +1833,7 @@ func (p *Client) BroadCastTx_SatsNet(tx *swire.MsgTx) (string, error) {
 			}
 			for _, asset := range parsed.Assets {
 				if asset.Name.Protocol == "rgb11" {
-					return "", fmt.Errorf("native RGB anchor is missing its authenticated proof")
+					return "", fmt.Errorf("RGB11 anchor is missing its authenticated proof")
 				}
 			}
 		}
@@ -1853,9 +1853,9 @@ func (p *Client) BroadCastTx_SatsNet(tx *swire.MsgTx) (string, error) {
 	if ok {
 		return tx.TxID(), nil
 	}
-	if nativeAnchor != nil {
-		if previous := p.Network.AscendMap[nativeAnchor.Utxo]; previous != "" && previous != tx.TxID() {
-			return "", fmt.Errorf("native source already ascended in %s", previous)
+	if rgb11Anchor != nil {
+		if previous := p.Network.AscendMap[rgb11Anchor.Utxo]; previous != "" && previous != tx.TxID() {
+			return "", fmt.Errorf("RGB11 source already ascended in %s", previous)
 		}
 	}
 	p.Network.TxBroadcasted[tx.TxID()] = txHex
@@ -1894,8 +1894,8 @@ func (p *Client) BroadCastTx_SatsNet(tx *swire.MsgTx) (string, error) {
 	for _, txIn := range tx.TxIn {
 		utxo := txIn.PreviousOutPoint.String()
 		if txIn.PreviousOutPoint.Index == swire.AnchorTxOutIndex {
-			if nativeAnchor != nil {
-				anchorData, err = nativeAnchor, nil
+			if rgb11Anchor != nil {
+				anchorData, err = rgb11Anchor, nil
 			} else {
 				anchorData, _, err = wallet.CheckAnchorPkScript(tx.TxIn[0].SignatureScript, tx.TxOut, false)
 			}
@@ -2531,7 +2531,7 @@ func (p *Client) GetNameInfo(name string) (*indexerwire.OrdinalsName, error) {
 	if ok {
 		return info, nil
 	}
-	return nil, fmt.Errorf("not found")
+	return nil, fmt.Errorf("can't find name %s", name)
 }
 
 func (p *Client) GetNamesWithKey(address, key string) (

@@ -1,10 +1,12 @@
 package wallet
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	dkvscore "github.com/sat20-labs/sat20wallet/sdk/wallet/dkvs"
@@ -285,16 +287,32 @@ func (p *SatsNetDKVSClient) putRecordBatchCASRaw(mutations []dkvsindexer.CASMuta
 	return p.submitDKVSBatch(mutations, endpointID, requestID, authorization, nil)
 }
 
+type freeCASUnavailable struct{ cause error }
+
+func (e *freeCASUnavailable) Error() string { return e.cause.Error() }
+func (e *freeCASUnavailable) Unwrap() error { return e.cause }
+
 func (p *SatsNetDKVSClient) sendDKVSBatch(mutations []dkvsindexer.CASMutation, endpointID, requestID string,
-	authorization *dkvsindexer.WalletWriteAuthorization) (*dkvsindexer.WriteResult, error) {
+	authorization *dkvsindexer.WalletWriteAuthorization, initial bool) (*dkvsindexer.WriteResult, error) {
 	req, err := dkvscore.BuildBatchCASRequest(mutations, endpointID, requestID)
 	if err != nil {
 		return nil, err
 	}
 	req.Authorization = dkvsindexer.CloneWalletWriteAuthorization(authorization)
 	var resp dkvsWriteResultData
-	if err := p.postDKVSApplication("/v3/dkvs/records/batch-cas", req, &resp); err != nil {
-		return nil, fmt.Errorf("submit DKVS batch: %w", err)
+	ctx := p.requestContext()
+	if err := p.postDKVSApplicationContext(ctx, "/v3/dkvs/records/batch-cas", req, &resp); err != nil {
+		cause := fmt.Errorf("submit DKVS batch: %w", err)
+		if reply, ok := err.(*HTTPResponseError); ok && reply != nil && reply.directPost &&
+			reply.StatusCode == http.StatusServiceUnavailable && ctx.Err() == nil && initial &&
+			authorization != nil && len(authorization.Signature) != 0 && len(mutations) == 1 &&
+			dkvsWalletRecordIsFreeLocal(mutations[0].Record) {
+			body := bytes.TrimSpace(reply.Body)
+			if len(body) != 0 && body[0] != '{' && body[0] != '[' && !json.Valid(body) {
+				return nil, &freeCASUnavailable{cause: cause}
+			}
+		}
+		return nil, cause
 	}
 	if err := dkvscore.VerifyWriteResult(mutations, requestID, resp.Data); err != nil {
 		return nil, &DKVSRequestPendingError{RequestID: requestID, Cause: fmt.Errorf("verify DKVS batch response: %w", err)}

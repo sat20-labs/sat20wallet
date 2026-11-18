@@ -1,20 +1,31 @@
 <template>
-  <TableRow>
-    <TableCell v-if="showCheckbox">
+  <TableRow :data-outpoint="utxo.utxo">
+    <TableCell v-if="showCheckbox && !readOnly">
       <Checkbox :checked="isSelected" @update:checked="() => handleToggleSelect()" />
     </TableCell>
     <TableCell class="truncate">
-      <a v-if="explorerUrl" :href="explorerUrl" target="_blank" class="text-blue-400 underline">
+      <a v-if="explorerUrl && !readOnly" :href="explorerUrl" target="_blank" class="text-blue-400 underline">
         {{ displayUtxo }}
       </a>
-      <span v-else>{{ displayUtxo }}</span>
+      <span v-else class="break-all whitespace-normal">{{ readOnly ? utxo.utxo : displayUtxo }}</span>
+      <div v-if="readOnly" class="text-xs text-zinc-400 whitespace-normal mt-1">
+        {{ utxo.chain === 'btc' ? 'BTC' : 'SatoshiNet' }} · {{ t(utxo.scope === 'current' ? 'utxoManager.currentScope' : 'utxoManager.unknownScope') }}
+        <div v-if="utxo.value !== undefined">{{ utxo.value }} sats</div>
+        <div v-for="asset in utxo.assets || []" :key="asset.asset" class="break-all">{{ asset.amount }} {{ asset.asset }}</div>
+      </div>
     </TableCell>
     <TableCell class="truncate">{{ utxo.reason === 'manual' ? t('settingsUi.manualLock') : utxo.reason || '-' }}</TableCell>
     <TableCell class="truncate">{{ formattedLockedTime }}</TableCell>
     <TableCell>
-      <Button v-if="!showCheckbox" size="sm" variant="default" :loading="isUnlocking" @click="handleUnlock">
+      <Button v-if="!showCheckbox && !readOnly" size="sm" variant="default" :loading="isUnlocking" @click="handleUnlock">
         {{ t('utxoManager.unlockBtn') }}
       </Button>
+      <div v-else-if="readOnly" class="text-xs text-zinc-400 break-all">
+        {{ t('utxoManager.readOnly') }}
+        <RouterLink v-for="id in utxo.transferIDs || []" :key="id" to="/wallet?tab=l1" class="block text-blue-400 underline">
+          {{ t('utxoManager.relatedTransfer') }}: {{ id }}
+        </RouterLink>
+      </div>
       <span v-else class="text-sm text-zinc-400">{{ t('utxoManager.selectToUnlock') }}</span>
     </TableCell>
   </TableRow>
@@ -38,6 +49,7 @@ const { env } = storeToRefs(globalStore)
 interface Props {
   utxo: LockedUtxoInfo
   showCheckbox: boolean
+  readOnly: boolean
   isSelected: boolean
   isUnlocking: boolean
   network: string

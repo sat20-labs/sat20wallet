@@ -21,7 +21,7 @@ import (
 
 func TestDKVSReviewKnownEndpointSwitchCannotReadPreviousReplica(t *testing.T) {
 	manager, remote := finalDKVSTestManager(t)
-	client, err := manager.GetDKVSClient()
+	client, err := manager.accountDKVSClient()
 	require.NoError(t, err)
 	key := accountTestKey(t, manager, "sixth-source/value")
 	prefix, err := dkvs.CollectionPathForKey(key)
@@ -39,7 +39,7 @@ func TestDKVSReviewKnownEndpointSwitchCannotReadPreviousReplica(t *testing.T) {
 	remote.mu.Lock()
 	remote.endpointID = "replacement-endpoint"
 	remote.mu.Unlock()
-	replacement, err := manager.GetDKVSClient()
+	replacement, err := manager.accountDKVSClient()
 	require.NoError(t, err)
 	require.NotSame(t, client, replacement)
 	config, err := replacement.GetDKVSClientConfig()
@@ -73,7 +73,7 @@ func TestDKVSReviewKnownEndpointSwitchCannotReadPreviousReplica(t *testing.T) {
 	assert.Equal(t, before, after, "rejecting a different source must preserve the original replica")
 	releaseDKVSManagerRuntime(manager.dkvs)
 	manager.dkvs = nil
-	replacement, err = manager.GetDKVSClient()
+	replacement, err = manager.accountDKVSClient()
 	require.NoError(t, err)
 	_, err = replacement.GetDKVSClientConfig()
 	require.NoError(t, err)
@@ -88,7 +88,7 @@ func TestDKVSReviewConfirmedReplicaReadBoundaries(t *testing.T) {
 			manager, remote := finalDKVSTestManager(t)
 			http := &reviewAcceptanceHTTP{rgb11MemoryDKVSHTTP: remote}
 			configureRGB11DKVSTestManager(manager, http)
-			client, err := manager.GetDKVSClient()
+			client, err := manager.accountDKVSClient()
 			require.NoError(t, err)
 			key := accountTestKey(t, manager, "sixth-boundaries/value")
 			prefix, err := dkvs.CollectionPathForKey(key)
@@ -133,7 +133,7 @@ func TestDKVSReviewConfirmedReplicaReadBoundaries(t *testing.T) {
 			switch scenario {
 			case "same-source-url-alias":
 				manager.cfg.IndexerL2.Host = "same-source-alias.dkvs.test"
-				alias, err := manager.GetDKVSClient()
+				alias, err := manager.accountDKVSClient()
 				require.NoError(t, err)
 				require.NotSame(t, client, alias)
 				client = alias
@@ -143,7 +143,7 @@ func TestDKVSReviewConfirmedReplicaReadBoundaries(t *testing.T) {
 			case "unknown-source-offline", "confirmed-zero-height":
 				releaseDKVSManagerRuntime(manager.dkvs)
 				manager.dkvs = nil
-				client, err = manager.GetDKVSClient()
+				client, err = manager.accountDKVSClient()
 				require.NoError(t, err)
 				require.Empty(t, client.endpointID)
 			case "known-height-wins":
@@ -208,7 +208,7 @@ func TestDKVSReviewConfirmedReplicaReadBoundaries(t *testing.T) {
 
 func TestDKVSReviewRememberedPrefixCannotUsePreviousReadinessOrHeight(t *testing.T) {
 	manager, remote := finalDKVSTestManager(t)
-	client, err := manager.GetDKVSClient()
+	client, err := manager.accountDKVSClient()
 	require.NoError(t, err)
 	key := accountTestKey(t, manager, "sixth-ready/value")
 	prefix, err := dkvs.CollectionPathForKey(key)
@@ -219,7 +219,7 @@ func TestDKVSReviewRememberedPrefixCannotUsePreviousReadinessOrHeight(t *testing
 	require.NoError(t, manager.dkvs.forceCurrentPrefixes(client, []string{prefix}))
 	releaseDKVSManagerRuntime(manager.dkvs)
 	manager.dkvs = nil
-	client, err = manager.GetDKVSClient()
+	client, err = manager.accountDKVSClient()
 	require.NoError(t, err)
 	newKey := accountTestKey(t, manager, "sixth-new-prefix/value")
 	manager.dkvs.rememberPaths([]string{newKey})
@@ -405,7 +405,7 @@ func TestDKVSReviewAnotherExistingRootCannotBeReportedAsAbsent(t *testing.T) {
 	_, err = target.ImportWallet("legal winner thank year wave sausage worth useful legal winner thank yellow", "password")
 	require.NoError(t, err)
 	require.NoError(t, target.InitializeAccountManagement("password"))
-	client, err := target.GetDKVSClient()
+	client, err := target.accountDKVSClient()
 	require.NoError(t, err)
 	sourceStatus := source.GetAccountManagementStatus()
 	packageKey, err := dkvs.AccountPersonalKey(sourceStatus.AccountID, accountPackagePath(sourceStatus.PackageID))
@@ -460,7 +460,7 @@ func TestDKVSReviewAccountReadyWaitCancelsDuringInitialSync(t *testing.T) {
 	t.Cleanup(func() { _chain = oldChain })
 	manager, _, secret := buildRootWrapperSource(t)
 	defer zeroBytes(secret)
-	require.False(t, manager.accountProfile.ManagedDataDirty)
+	require.False(t, manager.GetAccountManagementStatus().ManagedDataDirty)
 	localKeys, _ := accountDKVSReviewKeys(t, manager)
 	for _, key := range localKeys {
 		value, keyErr := manager.accountLocalForKey(manager.accountProfile.AccountID, key)
@@ -557,7 +557,7 @@ func TestDKVSReviewConfirmedOfflineReplicaReadableAfterManagerRestart(t *testing
 	manager, remote := finalDKVSTestManager(t)
 	http := &reviewAcceptanceHTTP{rgb11MemoryDKVSHTTP: remote}
 	configureRGB11DKVSTestManager(manager, http)
-	client, err := manager.GetDKVSClient()
+	client, err := manager.accountDKVSClient()
 	require.NoError(t, err)
 	key := accountTestKey(t, manager, "sixth-restart/value")
 	prefix, err := dkvs.CollectionPathForKey(key)
@@ -591,7 +591,7 @@ func TestDKVSReviewConfirmedOfflineReplicaReadableAfterManagerRestart(t *testing
 	// height observations, clients, or transient readiness survive this restart.
 	releaseDKVSManagerRuntime(manager.dkvs)
 	manager.dkvs = nil
-	restarted, err := manager.GetDKVSClient()
+	restarted, err := manager.accountDKVSClient()
 	require.NoError(t, err)
 	_, _, syncErr := manager.syncDKVSOnceResult()
 	require.Error(t, syncErr, "startup reconciliation encounters the offline transport")

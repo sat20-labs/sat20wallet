@@ -52,6 +52,7 @@ func closedWithdrawalBoundsFixture(t *testing.T, missingCommit bool) (*Manager, 
 	}
 	manager.db = disk
 	t.Cleanup(func() { manager.db.Close() })
+	prepareLocalAccountGroup(t, manager)
 	server := NewInternalWalletWithMnemonic("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about", "", GetChainParam())
 	parent := current.RemoteCommitment.CommitTx.Copy()
 	fullSign := func(tx *wire.MsgTx, fetcher txscript.PrevOutputFetcher) {

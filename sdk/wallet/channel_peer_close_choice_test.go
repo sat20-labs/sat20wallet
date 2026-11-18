@@ -10,9 +10,9 @@ import (
 )
 
 // These normal signed-package controls exercise the policy/journal boundary,
-// not ARC/RGB consensus. The real native fakechain case remains unchanged.
+// not ARC/RGB consensus. The real channel fakechain case remains unchanged.
 type peerChoiceRPC struct {
-	*nativeRecoveryRPC
+	*recoveryRPC
 	spent map[string]string
 }
 
@@ -94,7 +94,7 @@ func newPeerChoiceFixture(t *testing.T) *peerChoiceFixture {
 	if err := manager.SaveChannelToDB(channel); err != nil {
 		t.Fatal(err)
 	}
-	rpc := &peerChoiceRPC{nativeRecoveryRPC: &nativeRecoveryRPC{raw: map[string]string{}, confirmed: map[string]bool{}, height: 200}, spent: map[string]string{}}
+	rpc := &peerChoiceRPC{recoveryRPC: &recoveryRPC{raw: map[string]string{}, confirmed: map[string]bool{}, height: 200}, spent: map[string]string{}}
 	rpc.raw[parent.TxID()], err = EncodeMsgTx(parent)
 	if err != nil {
 		t.Fatal(err)
@@ -127,7 +127,7 @@ func (f *peerChoiceFixture) persist(t *testing.T, legacy bool) *ClosingReservati
 		AssetProofs: cloneSTPAssetProofs(f.channel.RemoteCommitment.AssetProofs),
 	}, Channel: f.channel}
 	f.channel.Mutex.Lock()
-	err := f.manager.persistNativeForceCloseLocked(resv, resv.ClosingDataInDB, CS_CLOSE_FORCELY_SWEEP_BROADCASTED)
+	err := f.manager.persistForceCloseLocked(resv, resv.ClosingDataInDB, CS_CLOSE_FORCELY_SWEEP_BROADCASTED)
 	f.channel.Mutex.Unlock()
 	if err != nil {
 		t.Fatal(err)
@@ -135,7 +135,7 @@ func (f *peerChoiceFixture) persist(t *testing.T, legacy bool) *ClosingReservati
 	return resv
 }
 
-func TestPeerNativeObservationRetainsChoiceAndProtocolSuccessor(t *testing.T) {
+func TestPeerCloseRetainsChoice(t *testing.T) {
 	f := newPeerChoiceFixture(t)
 	before, _ := EncodeToBytes(f.channel.RemoteCommitment)
 	var events []string
@@ -153,7 +153,7 @@ func TestPeerNativeObservationRetainsChoiceAndProtocolSuccessor(t *testing.T) {
 	}
 	reservedOthersAssertPackage(t, pending.PreTxs, []*wire.MsgTx{f.parent, f.next}, "observation durable package excludes unchosen recovery")
 	f.markConfirmed(t, f.next)
-	if handled, err := f.manager.RetryNativeForceClose(pending); !handled || err != nil {
+	if handled, err := f.manager.RetryForceClose(pending); !handled || err != nil {
 		t.Fatalf("confirmed protocol successors did not finish observation: handled=%v err=%v", handled, err)
 	}
 	if f.channel.Status != CS_CLOSED_FORCELY || len(f.manager.GetClosingReservations()) != 0 {
@@ -170,7 +170,7 @@ func TestPeerNativeObservationRetainsChoiceAndProtocolSuccessor(t *testing.T) {
 	}
 }
 
-func TestPeerNativeObservationUnconfirmedParentCannotAdvance(t *testing.T) {
+func TestPeerCloseRequiresConfirm(t *testing.T) {
 	f := newPeerChoiceFixture(t)
 	f.rpc.confirmed[f.parent.TxID()] = false
 	if err := f.manager.HandleUnexpectedChannelClose(f.channel, f.parent.TxID()); err == nil {
@@ -181,7 +181,7 @@ func TestPeerNativeObservationUnconfirmedParentCannotAdvance(t *testing.T) {
 	}
 }
 
-func TestPeerNativeLegacyObservationKeepsUnknownAndVisibleRecoveryPending(t *testing.T) {
+func TestPeerClosePendingRecovery(t *testing.T) {
 	for _, outcome := range []string{"unknown", "visible", "conflict"} {
 		t.Run(outcome, func(t *testing.T) {
 			f := newPeerChoiceFixture(t)
@@ -195,7 +195,7 @@ func TestPeerNativeLegacyObservationKeepsUnknownAndVisibleRecoveryPending(t *tes
 			if outcome == "conflict" {
 				f.rpc.spent[f.other.CommitTx.TxIn[0].PreviousOutPoint.String()] = strings.Repeat("a", 64)
 			}
-			handled, err := f.manager.RetryNativeForceClose(resv)
+			handled, err := f.manager.RetryForceClose(resv)
 			if !handled || err == nil || outcome == "conflict" && !strings.Contains(err.Error(), "conflicts") {
 				t.Fatalf("old outcome did not remain an explained pending/conflict: handled=%v err=%v", handled, err)
 			}
@@ -213,13 +213,13 @@ func TestPeerNativeLegacyObservationKeepsUnknownAndVisibleRecoveryPending(t *tes
 	}
 }
 
-func TestPeerNativeLegacyObservationImportsOnlyCanonicalConfirmedRecovery(t *testing.T) {
+func TestPeerCloseCanonicalRecovery(t *testing.T) {
 	f := newPeerChoiceFixture(t)
 	f.markConfirmed(t, f.next)
 	f.markConfirmed(t, f.other.CommitTx)
 	resv := f.persist(t, true)
 	before := cloneSTPBitcoinChain(resv.PreTxs)
-	if handled, err := f.manager.RetryNativeForceClose(resv); !handled || err != nil {
+	if handled, err := f.manager.RetryForceClose(resv); !handled || err != nil {
 		t.Fatalf("previously published canonical recovery did not reconcile: handled=%v err=%v", handled, err)
 	}
 	if f.channel.Status != CS_CLOSED_FORCELY || len(f.rpc.broadcasts) != 0 || !equalSTPBitcoinChain(before, resv.PreTxs) {
@@ -227,7 +227,7 @@ func TestPeerNativeLegacyObservationImportsOnlyCanonicalConfirmedRecovery(t *tes
 	}
 }
 
-func TestPeerNativeObservationRejectsUnknownIdentityOrPackage(t *testing.T) {
+func TestPeerCloseRejectsWrongPackage(t *testing.T) {
 	for _, change := range []string{"parent", "channel", "account", "unknown-package"} {
 		t.Run(change, func(t *testing.T) {
 			f := newPeerChoiceFixture(t)
@@ -242,7 +242,7 @@ func TestPeerNativeObservationRejectsUnknownIdentityOrPackage(t *testing.T) {
 			case "unknown-package":
 				resv.PreTxs = append(resv.PreTxs, minimalPersistedCommitmentTx(91))
 			}
-			if handled, err := f.manager.RetryNativeForceClose(resv); !handled || err == nil {
+			if handled, err := f.manager.RetryForceClose(resv); !handled || err == nil {
 				t.Fatalf("invalid observation was authorized: %s handled=%v err=%v", change, handled, err)
 			}
 			if len(f.rpc.broadcasts) != 0 || f.channel.Status != CS_CLOSE_FORCELY_SWEEP_BROADCASTED {
@@ -252,7 +252,7 @@ func TestPeerNativeObservationRejectsUnknownIdentityOrPackage(t *testing.T) {
 	}
 }
 
-func TestPeerNativeRetryRoutesExplicitOwnerBeforeObservationLocks(t *testing.T) {
+func TestPeerCloseWithdrawalOwner(t *testing.T) {
 	manager, channel, path, rpc := closedWithdrawalBoundsFixture(t, false)
 	other := channel.RemoteCommitment.Others[0].CommitTx
 	rpc.unconfirmed[other.TxID()] = true
@@ -289,12 +289,12 @@ func TestPeerNativeRetryRoutesExplicitOwnerBeforeObservationLocks(t *testing.T) 
 	}
 	original := cloneSTPBitcoinChain(resv.PreTxs)
 	// Promote only classification on this in-memory call, not the stored
-	// authorized package. The existing owner must take priority over native
+	// authorized package. The existing owner must take priority over channel
 	// observation identity checks and preserve its actual ordinary raw bytes.
 	resv.AssetProofs = map[string][]byte{"owner-routing-test": []byte("classification only")}
 	rpc.unconfirmed[other.TxID()] = false
-	if handled, err := manager.RetryNativeForceClose(resv); !handled || err != nil {
-		t.Fatalf("direct native entry bypassed or deadlocked its explicit owner: handled=%v err=%v", handled, err)
+	if handled, err := manager.RetryForceClose(resv); !handled || err != nil {
+		t.Fatalf("direct channel entry bypassed or deadlocked its explicit owner: handled=%v err=%v", handled, err)
 	}
 	raw, err := manager.db.Read([]byte(GetResvKey(RESV_TYPE_CLOSE, id)))
 	if err != nil {

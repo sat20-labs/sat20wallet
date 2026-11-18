@@ -270,8 +270,7 @@ func TestRGB11BroadcastPersistenceFailureRecoversFromBitcoinEvidence(t *testing.
 	// the armed post-broadcast flush is not consumed by background activity.
 	runtime.scopeStates.stopReconciliations()
 	sourceProof, err := runtime.projectionStore.LoadProof(sourceOutpoint, imported.AssetName)
-	if err != nil || sourceProof == nil || sourceProof.OutPoint != sourceOutpoint ||
-		!runtime.rgb11CarrierAvailable(sourceOutpoint) {
+	if err != nil || sourceProof == nil || sourceProof.OutPoint != sourceOutpoint {
 		t.Fatalf("prepared original source is not verified: proof_present=%t err=%v", sourceProof != nil, err)
 	}
 	failingDB := &failNthFlushDB{KVDB: sender.db}

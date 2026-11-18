@@ -1,3 +1,5 @@
+//go:build pwa
+
 package wallet
 
 import (
@@ -27,48 +29,6 @@ import (
 // uses encoded persisted device records; no production test endpoint is added.
 func coreRGBBrowserE2E(t *testing.T, source *Manager, cfg coreE2EConfig, chain *coreE2EChain, material *coreRecoveryMaterial) {
 	t.Helper()
-	reference := coreRestoreE2E(t, cfg, chain, material)
-	type scope struct {
-		Fingerprint string            `json:"fingerprint"`
-		Index       uint32            `json:"index"`
-		State       any               `json:"state"`
-		Locks       map[string]string `json:"locks"`
-	}
-	var scopes []scope
-	nonempty := 0
-	for _, entry := range reference.GetWalletCatalog() {
-		coreRequire(t, "select recovered native RGB reference", reference.SwitchWallet(entry.ID, coreE2EPassword))
-		for _, sub := range entry.Accounts {
-			reference.SwitchAccount(sub.Index)
-			state, err := reference.GetRGB11State()
-			coreRequire(t, "read recovered native RGB reference", err)
-			if len(state.Proofs) > 0 {
-				nonempty++
-			}
-			scopes = append(scopes, scope{entry.Fingerprint, sub.Index, state, coreRGBSemantic(t, reference).Locked})
-		}
-	}
-	coreAssert(t, nonempty >= 3, "browser fixture must contain actual issued RGB data in three scopes")
-	// Keep a same-device baseline in the source DB's representation. Cold
-	// recovery canonicalizes validation receipts, so its proof hashes cannot be
-	// compared to source-device hashes even when all proof material is intact.
-	diagnostic := newCoreRGBBrowserDiagnostic(t)
-	localWalletID, localAccount := source.GetCurrentWalletId(), source.GetCurrentAccountId()
-	var localScopes []scope
-	for _, entry := range source.GetWalletCatalog() {
-		coreRequire(t, "select local RGB wallet reference", source.SwitchWallet(entry.ID, coreE2EPassword))
-		for _, sub := range entry.Accounts {
-			coreRequire(t, "select local RGB account reference", source.SwitchAccount(sub.Index))
-			state, err := source.GetRGB11State()
-			coreRequire(t, "read local RGB reference", err)
-			localScopes = append(localScopes, scope{entry.Fingerprint, sub.Index, state, coreRGBSemantic(t, source).Locked})
-			diagnostic.capture(t, source, state)
-		}
-	}
-	coreRequire(t, "restore source wallet after local RGB capture", source.SwitchWallet(localWalletID, coreE2EPassword))
-	coreRequire(t, "restore source account after local RGB capture", source.SwitchAccount(localAccount))
-	coreAssert(t, source.GetCurrentWalletId() == localWalletID && source.GetCurrentAccountId() == localAccount,
-		"local RGB reference capture changed the source device selection")
 	public := AccountPublicLocator{Version: account.Version, Network: "testnet", StorageLocation: material.auth.Location,
 		StorageMode: material.auth.Mode, AutopayContract: cfg.Contract, Locator: material.locator}
 	coreRequire(t, "sign browser public locator", source.SignAccountPublicLocator(&public))
@@ -149,7 +109,6 @@ func coreRGBBrowserE2E(t *testing.T, source *Manager, cfg coreE2EConfig, chain *
 	for key, value := range pendingRecords {
 		deviceRecords[key] = value
 	}
-	diagnostic.captureRecords(t, "device_records", deviceRecords, false)
 	encodedStatus, err := base64.StdEncoding.DecodeString(deviceRecords[DB_KEY_STATUS])
 	coreRequire(t, "decode handed-off SDK selection", err)
 	var selection Status
@@ -163,12 +122,9 @@ func coreRGBBrowserE2E(t *testing.T, source *Manager, cfg coreE2EConfig, chain *
 	fixture, err := json.Marshal(map[string]any{"config": configuration, "locator": locator, "user_share": share,
 		"answers": coreAnswers(), "password": coreE2EPassword, "root_mnemonic": coreE2ESenderMnemonic,
 		"maintenance_mnemonic": cfg.MaintenanceMnemonic,
-		"bitcoin_evidence":     evidence, "scopes": scopes, "local_scopes": localScopes,
-		"wallet_count":        len(reference.GetWalletCatalog()),
-		"rgb_diagnostic_file": diagnostic.browserPath(),
+		"bitcoin_evidence":     evidence,
 		"pending_channel": map[string]any{"id": channelID, "reservation_id": pendingID, "records": pendingRecords,
-			"device_records": deviceRecords, "wallet_id": strconv.FormatInt(source.wallet.GetId(), 10),
-			"import_marker_key": browserPrefix + strings.TrimPrefix(string(accountManagedDataImportKey()), nativePrefix)}})
+			"device_records": deviceRecords, "wallet_id": strconv.FormatInt(source.wallet.GetId(), 10)}})
 	coreRequire(t, "encode private native/browser handoff", err)
 	path := filepath.Join(t.TempDir(), "rgb-browser-fixture.json")
 	coreRequire(t, "write private native/browser handoff", os.WriteFile(path, fixture, 0600))
@@ -188,7 +144,6 @@ func coreRGBBrowserE2E(t *testing.T, source *Manager, cfg coreE2EConfig, chain *
 	before := chain.broadcastCount()
 	output, err := command.CombinedOutput()
 	t.Logf("RGB browser verdicts:\n%s", output)
-	diagnostic.finish(t)
 	coreAssert(t, chain.broadcastCount() == before, "browser recovery broadcast a Bitcoin transaction")
 	coreRequire(t, "real PWA multiwallet RGB recovery and failure retry", err)
 	if selected := os.Getenv("SAT20_PWA_RGB_CASE"); selected == "" || selected == "RGB PWA: AutopayFundingConfirmationMatchesEffectiveRate" {

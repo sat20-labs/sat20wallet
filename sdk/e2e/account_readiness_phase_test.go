@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -11,10 +12,12 @@ import (
 
 // Discovery is an identity/lifecycle preparation phase, not an activation.
 // Never overwrite profile flags or re-encrypt credentials after a cold unlock.
-func requireE2EInactive(t *testing.T, manager *wallet.Manager) {
+func requireE2EInactive(t *testing.T, manager *wallet.Manager, password string) {
 	t.Helper()
-	require.NoError(t, manager.StartDKVSSync())
-	t.Cleanup(manager.StopDKVSSync)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	_, err := manager.RecoverAccountManagementFromCurrentWallet(ctx, password)
+	cancel()
+	require.ErrorIs(t, err, wallet.ErrRootAccountNotFound)
 	require.EventuallyWithT(t, func(c *assert.CollectT) {
 		status := manager.GetAccountManagementStatus()
 		assert.Equal(c, "inactive", status.DiscoveryStatus)

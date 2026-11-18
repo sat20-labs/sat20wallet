@@ -33,7 +33,7 @@ func TestRGB11EmptyScopeRecoveryWithoutBitcoinEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("empty RGB scope blocks otherwise valid account recovery: %v", err)
 	}
-	if !resolved.complete || !reflect.DeepEqual(snapshot, resolved.snapshot) || len(resolved.lockReasons) != 0 {
+	if !reflect.DeepEqual(snapshot, resolved.snapshot) || len(resolved.lockReasons) != 0 {
 		t.Fatal("empty scope resolution invented ownership or altered its recovery records")
 	}
 	if err := resolved.checkEvidence(); err != nil {

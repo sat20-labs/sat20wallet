@@ -11,7 +11,6 @@ import (
 	corewallet "github.com/sat20-labs/rgb11/wallet"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
-	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
 type RGB11PublicContractExportResult struct {
@@ -89,11 +88,11 @@ type (
 // beginRGB11Operation protects a local capture only. Release it before any
 // network access; remote RGB work uses a fixed manager view instead.
 func (p *Manager) beginRGB11Operation() func() {
-	p.rgbManagedExecutionMu.Lock()
+	p.rgbManagedExecutionMu.RLock()
 	p.rgbOperationMu.RLock()
 	return func() {
 		p.rgbOperationMu.RUnlock()
-		p.rgbManagedExecutionMu.Unlock()
+		p.rgbManagedExecutionMu.RUnlock()
 	}
 }
 
@@ -111,15 +110,13 @@ func (p *Manager) beginExclusiveRGB11Operation() func() {
 
 func (p *Manager) beginRGB11ScopeChange() func() {
 	p.rgbOperationMu.Lock()
+	p.clearRGBDirectPreviews()
 	return p.rgbOperationMu.Unlock
 }
 
 func (p *Manager) synchronizedRGB11Manager() (*rgb11Manager, error) {
 	if p == nil || p.rgbManager == nil {
 		return nil, ErrRGB11Inconsistent
-	}
-	if err := p.checkAccountManagedDataImport(); err != nil {
-		return nil, err
 	}
 	return p.rgbManager, nil
 }
@@ -174,14 +171,6 @@ func (p *rgb11Manager) publishRGB11ConsistencyStatus() {
 		owner.status.CurrentWallet == p.status.CurrentWallet && owner.status.CurrentAccount == p.status.CurrentAccount {
 		owner.rgbManager.consistencyStatus = p.consistencyStatus
 	}
-}
-
-func (p *Manager) AcceptRGB11AddressACK(record *swire.DKVSRecord,
-	verify dkvsindexer.RecordVerificationOptions) (*RGB11AddressACK, error) {
-	return runRootRGB11ManagedOperation(p, context.Background(), rgb11ManagedOperationContinue,
-		func(manager *rgb11Manager) (*RGB11AddressACK, error) {
-			return manager.AcceptRGB11AddressACK(record, verify)
-		})
 }
 
 func (p *Manager) AcceptRGB11Consignment(ctx context.Context, requestID string, raw []byte) (*rgb11wallet.ValidationReceipt, error) {
@@ -250,11 +239,10 @@ func (p *Manager) CreateRGB11Invoice(request RGB11InvoiceRequest) (*corewallet.R
 		})
 }
 
-func (p *Manager) DeliverAndBroadcastConfiguredRGB11AddressTransfer(transferID string,
-	options RGB11AddressDeliveryOptions) (*RGB11AddressDeliveryResult, error) {
+func (p *Manager) DeliverAndBroadcastConfiguredRGB11AddressTransfer(transferID string) (*RGB11AddressDeliveryResult, error) {
 	return runRootRGB11ManagedOperation(p, context.Background(), rgb11ManagedOperationContinue,
 		func(manager *rgb11Manager) (*RGB11AddressDeliveryResult, error) {
-			return manager.DeliverAndBroadcastConfiguredRGB11AddressTransfer(transferID, options)
+			return manager.DeliverAndBroadcastConfiguredRGB11AddressTransfer(transferID)
 		})
 }
 
@@ -292,9 +280,6 @@ func (p *Manager) GetRGB11AssetBalance(name *indexer.AssetName) (*Decimal, error
 func (p *Manager) GetRGB11ConsistencyStatus() string {
 	releaseRGB11Observation := p.beginRGB11ReadObservation()
 	defer releaseRGB11Observation()
-	if err := p.checkAccountManagedDataImport(); err != nil {
-		return "warning"
-	}
 	return p.rgbManager.GetRGB11ConsistencyStatus()
 }
 
@@ -485,14 +470,6 @@ func (p *Manager) RebuildRGB11Locks() error {
 	return err
 }
 
-func (p *Manager) RefreshRGB11AddressACK(record *swire.DKVSRecord,
-	verify dkvsindexer.RecordVerificationOptions) (*RGB11AddressACK, error) {
-	return runRootRGB11ManagedOperation(p, context.Background(), rgb11ManagedOperationContinue,
-		func(manager *rgb11Manager) (*RGB11AddressACK, error) {
-			return manager.RefreshRGB11AddressACK(record, verify)
-		})
-}
-
 func (p *Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResult, error) {
 	return runRGB11ManagedOperation(p, ctx, rgb11ManagedOperationRefresh,
 		func(manager *rgb11Manager) (*RGB11RefreshResult, error) {
@@ -528,20 +505,18 @@ func (p *Manager) ResolveConfiguredRGB11AddressEndpoint(address string,
 }
 
 func (p *Manager) SyncConfiguredRGB11AddressMailbox(ctx context.Context,
-	verify dkvsindexer.RecordVerificationOptions,
-	ackOptions RGB11AddressDeliveryOptions) (*RGB11AddressMailboxSyncResult, error) {
+	verify dkvsindexer.RecordVerificationOptions) (*RGB11AddressMailboxSyncResult, error) {
 	return runRootRGB11ManagedOperation(p, ctx, rgb11ManagedOperationContinue,
 		func(manager *rgb11Manager) (*RGB11AddressMailboxSyncResult, error) {
 			if !p.rgb11ManagerIsRoot(manager) {
 				return nil, ErrRGB11DirectRootRequired
 			}
-			return manager.SyncConfiguredRGB11AddressMailbox(ctx, verify, ackOptions)
+			return manager.SyncConfiguredRGB11AddressMailbox(ctx, verify)
 		})
 }
 
 func (p *Manager) syncRootRGB11AddressMailbox(ctx context.Context,
-	verify dkvsindexer.RecordVerificationOptions,
-	ackOptions RGB11AddressDeliveryOptions) (*RGB11AddressMailboxSyncResult, error) {
+	verify dkvsindexer.RecordVerificationOptions) (*RGB11AddressMailboxSyncResult, error) {
 	if p == nil {
 		return nil, ErrRGB11Inconsistent
 	}
@@ -559,7 +534,7 @@ func (p *Manager) syncRootRGB11AddressMailbox(ctx context.Context,
 	}
 	return runRootRGB11ManagedOperation(p, ctx, rgb11ManagedOperationContinue,
 		func(manager *rgb11Manager) (*RGB11AddressMailboxSyncResult, error) {
-			return manager.SyncConfiguredRGB11AddressMailbox(ctx, verify, ackOptions)
+			return manager.SyncConfiguredRGB11AddressMailbox(ctx, verify)
 		})
 }
 

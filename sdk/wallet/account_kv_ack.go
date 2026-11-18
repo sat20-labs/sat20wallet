@@ -63,7 +63,10 @@ func (p *Manager) finishAccountKVACKLocked(client *SatsNetDKVSClient, entry *DKV
 		return fmt.Errorf("account ACK has no captured local version")
 	}
 	deleted := dkvsindexer.IsTombstone(record.Flags)
-	if deleted != value.Deleted || !deleted && value.Captured == entry.OriginGeneration && !bytes.Equal(value.Value, record.Value) {
+	// A reimport can supersede an already frozen delete. Its older ACK still
+	// advances that receipt, but cannot change the live deletion bit or value.
+	if value.Generation == entry.OriginGeneration && deleted != value.Deleted ||
+		!deleted && value.Captured == entry.OriginGeneration && !bytes.Equal(value.Value, record.Value) {
 		Log.Warningf("account ACK diagnostic: manager=%d branch=captured-value key_tag=%s request_tag=%s origin_count=%d generation=%d captured=%d confirmed=%d frozen_seq=%d local_deleted=%t record_deleted=%t captured_value_equal=%t local_bytes=%d frozen_bytes=%d",
 			p.debugID, accountTraceScope(entry.OriginKey), accountTraceScope(entry.RequestID),
 			entry.OriginGeneration, value.Generation, value.Captured, value.Confirmed, record.Seq,

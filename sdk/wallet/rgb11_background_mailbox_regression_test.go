@@ -24,12 +24,12 @@ func TestRGB11BackgroundMailboxWithoutRecoveryPreservesPublicGate(t *testing.T) 
 		t.Fatal(err)
 	}
 	result, err := manager.syncRootRGB11AddressMailbox(context.Background(),
-		dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+		dkvsindexer.RecordVerificationOptions{})
 	if err != nil || !reflect.DeepEqual(result, &RGB11AddressMailboxSyncResult{}) {
 		t.Fatalf("unconfigured background RGB polling obstructed ordinary mailbox sync: %v", err)
 	}
 	public, err := manager.SyncConfiguredRGB11AddressMailbox(context.Background(),
-		dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+		dkvsindexer.RecordVerificationOptions{})
 	if err != nil || !reflect.DeepEqual(public, &RGB11AddressMailboxSyncResult{}) {
 		t.Fatalf("local-only RGB mailbox changed or failed: result=%+v err=%v", public, err)
 	}
@@ -40,7 +40,7 @@ func TestRGB11BackgroundMailboxWithoutRecoveryPreservesPublicGate(t *testing.T) 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := manager.syncRootRGB11AddressMailbox(ctx,
-		dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{}); !errors.Is(err, context.Canceled) {
+		dkvsindexer.RecordVerificationOptions{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled background polling accepted: %v", err)
 	}
 }

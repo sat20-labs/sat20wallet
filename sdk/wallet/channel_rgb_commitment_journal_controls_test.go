@@ -12,7 +12,7 @@ import (
 // uses actual issuance/transition builders, but these controls do not claim
 // to replace the caller's full VerifyChannelProof or the 0332 SDK lifecycle.
 func TestSTPRGBCommitmentJournalExactCurrentServerAndRoots(t *testing.T) {
-	facts, sources, main, raw := rgbReservationNativeEvidenceFixture(t)
+	facts, sources, main, raw := rgb11ResvEvidenceFixture(t)
 	pkg, err := rgb11wallet.DecodeChannelPackage(raw)
 	if err != nil {
 		t.Fatal(err)

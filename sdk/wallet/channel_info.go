@@ -3,6 +3,8 @@ package wallet
 import (
 	"encoding/hex"
 
+	"github.com/sat20-labs/sat20wallet/sdk/common"
+
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -13,23 +15,24 @@ type DisplayAsset struct {
 }
 
 type ChannelInfo struct {
-	Version        int      `json:"version"`
-	ChannelId      string   `json:"channelId"`
-	ShortChannelId uint64   `json:"shortChannelId"`
-	RedeemScript   string   `json:"redeemScript"`
-	ChannelType    int      `json:"type"`
-	Contract       string   `json:"contract"`
-	ChanPoint      string   `json:"chanPoint"`
-	IsInitiator    bool     `json:"initiator"`
-	FundingTime    int64    `json:"fundingTime"`
-	FundingUtxos   []string `json:"fundingUtxos"`
-	StubUtxos      []string `json:"stubUtxos"`
-	PendingUtxos   []string `json:"pendingUtxos"`
-	Address        string   `json:"address"`
-	Status         int      `json:"status"`
-	CsvDelay       int      `json:"csvDelay"`
-	Peer           string   `json:"peer"`
-	Capacity       int64    `json:"capacity"`
+	PendingSplicing string   `json:"pendingSplicing,omitempty"`
+	Version         int      `json:"version"`
+	ChannelId       string   `json:"channelId"`
+	ShortChannelId  uint64   `json:"shortChannelId"`
+	RedeemScript    string   `json:"redeemScript"`
+	ChannelType     int      `json:"type"`
+	Contract        string   `json:"contract"`
+	ChanPoint       string   `json:"chanPoint"`
+	IsInitiator     bool     `json:"initiator"`
+	FundingTime     int64    `json:"fundingTime"`
+	FundingUtxos    []string `json:"fundingUtxos"`
+	StubUtxos       []string `json:"stubUtxos"`
+	PendingUtxos    []string `json:"pendingUtxos"`
+	Address         string   `json:"address"`
+	Status          int      `json:"status"`
+	CsvDelay        int      `json:"csvDelay"`
+	Peer            string   `json:"peer"`
+	Capacity        int64    `json:"capacity"`
 
 	CommitHeight    int                 `json:"commitHeight"`
 	LastPaymentTxId string              `json:"lastPaymentId"`
@@ -136,5 +139,36 @@ func ConvertChannel(channel *Channel) *ChannelInfo {
 
 	info.UtxoL2 = channel.GetValidOutput_SatsNet()
 	info.PendingUtxoL2 = channel.GetPendingOutput_SatsNet()
+	return info
+}
+
+// GetChannelInfo projects current-channel progress without exposing reservations.
+func (p *Manager) GetChannelInfo(channel *Channel) *ChannelInfo {
+	info := ConvertChannel(channel)
+	if info == nil {
+		return nil
+	}
+
+	channel.Mutex.RLock()
+	walletID := common.WalletId{Id: channel.LocalWalletId, SubAccountId: channel.LocalChanCfg.WalletId}
+	channel.Mutex.RUnlock()
+
+	// Do not hold a channel lock while acquiring the Manager lock.
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	for _, resv := range p.splicingChannelMap {
+		if resv == nil || !reservationMatchesChannelContext(resv, info.ChannelId, walletID) {
+			continue
+		}
+		switch {
+		case resv.Status >= RS_SPLICINGIN_STARTED && resv.Status <= RS_SPLICINGIN_ANCHOR_BROADCASTED:
+			info.PendingSplicing = "in"
+		case resv.Status >= RS_SPLICINGOUT_STARTED && resv.Status <= RS_SPLICINGOUT_BROADCASTED:
+			info.PendingSplicing = "out"
+		}
+		if info.PendingSplicing != "" {
+			break
+		}
+	}
 	return info
 }

@@ -50,7 +50,7 @@ func CreateSplicingInAnchorTx(resv *SplicingReservation, toDAOPkScript []byte,
 		localValue = 0
 	}
 	invoiceSig := resv.InvoiceSig
-	if len(resv.NativeAnchorProof) != 0 {
+	if len(resv.RGB11AnchorProof) != 0 {
 		invoiceSig = nil
 		bindOutputs = true
 	}
@@ -95,9 +95,9 @@ func CreateSplicingInAnchorTx(resv *SplicingReservation, toDAOPkScript []byte,
 		tx.AddTxOut(swire.NewTxOut(0, nil, memo))
 	}
 
-	if len(resv.NativeAnchorProof) != 0 {
-		if err := sindexer.SetNativeAssetProof(tx, resv.NativeAnchorProof); err != nil {
-			Log.Errorf("set native anchor proof: %v", err)
+	if len(resv.RGB11AnchorProof) != 0 {
+		if err := sindexer.SetNativeAssetProof(tx, resv.RGB11AnchorProof); err != nil {
+			Log.Errorf("set RGB11 anchor proof: %v", err)
 			return nil
 		}
 		anchorScript, err = sindexer.StandardAnchorScriptWithSig(splicingOutput.OutPointStr, redeemScript, value, splicingOutput.Assets, resv.InvoiceSig)
@@ -350,7 +350,7 @@ func (p *Manager) CreateSplicingInTx(resv *SplicingReservation) (*wire.MsgTx, tx
 		resv.Channel.SetStubUtxoForAsset(stubs, resv.AssetName)
 	}
 
-	if err := retainSTPNativeParent(resv.Channel, splicingTx, prevFetcher); err != nil {
+	if err := retainSTPParent(resv.Channel, splicingTx, prevFetcher, resv.AssetName != nil && !IsPlainAsset(resv.AssetName)); err != nil {
 		return nil, nil, err
 	}
 	PrintJsonTx(splicingTx, "splicing-in")
@@ -484,7 +484,7 @@ func (p *Manager) CreateSplicingOutTx(resv *SplicingReservation) (*wire.MsgTx, t
 	}
 	resv.NewChanPoint = indexer.GenerateTxOutput(splicingTx, chanPointIndex)
 
-	if err := retainSTPNativeParent(resv.Channel, splicingTx, prevFetcher); err != nil {
+	if err := retainSTPParent(resv.Channel, splicingTx, prevFetcher, resv.AssetName != nil && !IsPlainAsset(resv.AssetName)); err != nil {
 		return nil, nil, err
 	}
 	PrintJsonTx(splicingTx, "splicing-out")

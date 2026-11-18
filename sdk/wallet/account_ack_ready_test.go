@@ -132,9 +132,11 @@ func TestAccountNoACKFailureBlocks(t *testing.T) {
 		return scope, onlineErr
 	}()
 	t.Logf("after failed no-op sync: online_group_ready=%t account_ready=%t", onlineErr == nil, manager.dkvs.scopeReady(scope))
-	require.False(t, manager.dkvs.scopeReady(scope))
+	require.ErrorIs(t, manager.prepareAccountWrite(), ErrDKVSPathNotSynced,
+		"a retained initial baseline is not current online write permission")
 	require.ErrorIs(t, manager.UpdateWalletName(before[0].ID, "must remain rejected"), ErrDKVSPathNotSynced)
-	require.False(t, manager.dkvs.scopeReady(scope), "empty ACK preparation restored failed qualification")
+	require.ErrorIs(t, manager.prepareAccountWrite(), ErrDKVSPathNotSynced,
+		"empty ACK preparation restored failed qualification")
 	after := manager.GetWalletCatalog()
 	require.True(t, len(before) == len(after) && before[0].Name == after[0].Name)
 	actual, err := manager.db.Read(accountManagementProfileKey())
@@ -147,6 +149,9 @@ func TestAccountNoACKFailureBlocks(t *testing.T) {
 	require.Empty(t, entries)
 	fail.Store(false)
 	require.NoError(t, manager.SyncAccountManagementState(context.Background()))
+	require.Eventually(t, func() bool {
+		return manager.GetAccountManagementStatus().DKVSWriteAllowed
+	}, 15*time.Second, 100*time.Millisecond, "wait for the receiving worker to requalify the online group")
 	require.NoError(t, manager.UpdateWalletName(before[0].ID, "after real recovery"))
 	// A normal queued backup does not revoke the successful qualification.
 	require.NoError(t, manager.UpdateWalletName(before[0].ID, "normal pending update"))
@@ -171,7 +176,7 @@ func TestAccountSyncScopePinned(t *testing.T) {
 			manager := newAccountACKGuard(t, remote, transport)
 			late := manager.accountSyncResult()
 			require.NoError(t, manager.SyncAccountManagementState(context.Background()))
-			oldClient, err := manager.GetDKVSClient()
+			oldClient, err := manager.accountDKVSClient()
 			require.NoError(t, err)
 			manager.mutex.RLock()
 			oldScope := manager.accountWriteScopeLocked()
@@ -195,7 +200,7 @@ func TestAccountSyncScopePinned(t *testing.T) {
 				manager.StopDKVSSync()
 				require.NoError(t, manager.StartDKVSSync())
 			}
-			current, err := manager.GetDKVSClient()
+			current, err := manager.accountDKVSClient()
 			require.NoError(t, err)
 			_, err = current.GetDKVSClientConfig()
 			require.NoError(t, err)
@@ -214,9 +219,10 @@ func TestAccountSyncScopePinned(t *testing.T) {
 			if mode == "transport-generation" {
 				require.True(t, oldClient != current)
 			}
-			require.False(t, manager.dkvs.scopeReady(currentScope))
+			require.ErrorIs(t, manager.prepareAccountWrite(), ErrDKVSPathNotSynced)
 			late(nil)
-			require.False(t, manager.dkvs.scopeReady(currentScope), "old completion authorized the replacement scope/lifecycle")
+			require.ErrorIs(t, manager.prepareAccountWrite(), ErrDKVSPathNotSynced,
+				"old completion authorized the replacement scope/lifecycle")
 			before := manager.GetWalletCatalog()
 			require.NotEmpty(t, before)
 			require.Error(t, manager.UpdateWalletName(before[0].ID, "stale completion must not authorize"))

@@ -350,6 +350,17 @@ func TestIndexedDBPrefixScanBoundsCursorRows(t *testing.T) {
 	if cursorRows > len(wantKeys)+1 {
 		t.Fatalf("prefix scan visited %d non-empty cursor rows for %d matches (limit %d)", cursorRows, len(wantKeys), len(wantKeys)+1)
 	}
+	keys = nil
+	err := database.Scan(common.ScanOptions{Prefix: prefix, KeysOnly: true}, func(key, value []byte) error {
+		if value != nil {
+			t.Fatal("key-only scan returned a value")
+		}
+		keys = append(keys, string(key))
+		return nil
+	})
+	if err != nil || !reflect.DeepEqual(keys, wantKeys) || js.Global().Get("storageReviewCursorRows").Int() != cursorRows {
+		t.Fatalf("key-only scan must return the matching keys without opening a value cursor: keys=%v err=%v", keys, err)
+	}
 }
 
 func TestIndexedDBPrefixScanUTF8Boundaries(t *testing.T) {

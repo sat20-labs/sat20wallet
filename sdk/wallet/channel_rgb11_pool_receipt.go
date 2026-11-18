@@ -18,23 +18,23 @@ import (
 
 // collectRGB11PrivateSettlementDescends supplies public transaction locators,
 // not authorization. The receiving core must independently fetch and validate
-// these signed transactions, their canonical confirmations, and native amount
+// these signed transactions, their canonical confirmations, and RGB11 amount
 // conservation. No private package, shared entropy or revocable branch crosses
 // this boundary. Completed reservations are intentionally included.
 func (p *Manager) collectRGB11PrivateSettlementDescends(owner common.Wallet,
 	privateID string, pkg *rgb11wallet.ChannelPackage) ([]string, error) {
 	if p == nil || p.db == nil || owner == nil || privateID == "" || pkg == nil || len(pkg.Steps) == 0 {
-		return nil, fmt.Errorf("missing native private settlement lookup context")
+		return nil, fmt.Errorf("missing RGB11 private settlement lookup context")
 	}
 	l1IDs := make(map[string]bool, len(pkg.Steps))
 	for _, step := range pkg.Steps {
 		if step.Context.ChannelID != privateID {
-			return nil, fmt.Errorf("native settlement package changed private channel")
+			return nil, fmt.Errorf("RGB11 settlement package changed private channel")
 		}
 		tx := wire.NewMsgTx(2)
 		reader := bytes.NewReader(step.Tx)
 		if err := tx.Deserialize(reader); err != nil || reader.Len() != 0 {
-			return nil, fmt.Errorf("invalid native settlement transaction locator")
+			return nil, fmt.Errorf("invalid RGB11 settlement transaction locator")
 		}
 		l1IDs[tx.TxID()] = true
 	}
@@ -55,9 +55,9 @@ func (p *Manager) collectRGB11PrivateSettlementDescends(owner common.Wallet,
 		}
 		reveals = append(reveals, seal)
 	}
-	history, err := rgb11wallet.NewNativeConsensusValidatorWithReveals(reveals...).ValidateHistoricalConsignmentReport(context.Background(), last.Consignment, evidence)
+	history, err := rgb11wallet.NewRGB11ValidatorWithReveals(reveals...).ValidateHistoricalConsignmentReport(context.Background(), last.Consignment, evidence)
 	if err != nil || history == nil {
-		return nil, fmt.Errorf("native settlement ancestor history: %w", errRGB11ProjectionEvidence(err))
+		return nil, fmt.Errorf("RGB11 settlement ancestor history: %w", errRGB11ProjectionEvidence(err))
 	}
 	for _, consumer := range history.Consumers {
 		l1IDs[consumer.WitnessTxID] = true
@@ -82,7 +82,7 @@ func (p *Manager) collectRGB11PrivateSettlementDescends(owner common.Wallet,
 		var matched bool
 		for _, output := range tx.TxOut {
 			if output == nil {
-				return fmt.Errorf("invalid persisted native descending transaction")
+				return fmt.Errorf("invalid persisted RGB11 descending transaction")
 			}
 			kind, data, err := sindexer.ReadDataFromNullDataScript(output.PkScript)
 			if err != nil || kind != sindexer.CONTENT_TYPE_DESCENDING {
@@ -97,7 +97,7 @@ func (p *Manager) collectRGB11PrivateSettlementDescends(owner common.Wallet,
 			}
 			if matched || payload.Version != 2 || (payload.Operation != sindexer.DESCEND_OP_CLOSE &&
 				payload.Operation != sindexer.DESCEND_OP_SPLICING_OUT && payload.Operation != sindexer.DESCEND_OP_FORCE_CLOSE) {
-				return fmt.Errorf("invalid native descending locator for the settlement")
+				return fmt.Errorf("invalid RGB11 descending locator for the settlement")
 			}
 			matched = true
 		}
@@ -115,13 +115,13 @@ func (p *Manager) collectRGB11PrivateSettlementDescends(owner common.Wallet,
 			if typ == RESV_TYPE_SPLICING {
 				var record SplicingDataInDB
 				if err := DecodeFromBytes(raw, &record); err != nil {
-					return fmt.Errorf("decode native settlement splice locator: %w", err)
+					return fmt.Errorf("decode RGB11 settlement splice locator: %w", err)
 				}
 				base, channel, tx = &record.ReservationBase, record.ChannelId, record.AnchorTx
 			} else {
 				var record ClosingDataInDB
 				if err := DecodeFromBytes(raw, &record); err != nil {
-					return fmt.Errorf("decode native settlement close locator: %w", err)
+					return fmt.Errorf("decode RGB11 settlement close locator: %w", err)
 				}
 				base, channel, tx = &record.ReservationBase, record.ChannelId, record.DeAnchorTx
 			}
@@ -129,7 +129,7 @@ func (p *Manager) collectRGB11PrivateSettlementDescends(owner common.Wallet,
 				return nil
 			}
 			if string(key) != GetResvKey(typ, base.Id) {
-				return fmt.Errorf("native settlement reservation key mismatch")
+				return fmt.Errorf("RGB11 settlement reservation key mismatch")
 			}
 			return collect(tx)
 		}); err != nil {
@@ -145,7 +145,7 @@ func (p *Manager) collectRGB11PrivateSettlementDescends(owner common.Wallet,
 		}
 		if stored.ChannelId != privateID || stored.LocalWalletId != owner.GetWalletId().Id ||
 			stored.LocalChanCfg.PaymentKey == nil || !stored.LocalChanCfg.PaymentKey.IsEqual(owner.GetPaymentPubKey()) {
-			return nil, fmt.Errorf("native settlement channel locator belongs to another owner")
+			return nil, fmt.Errorf("RGB11 settlement channel locator belongs to another owner")
 		}
 		if err := collect(stored.DeAnchorTx); err != nil {
 			return nil, err

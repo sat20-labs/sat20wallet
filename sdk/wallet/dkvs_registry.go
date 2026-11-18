@@ -90,7 +90,6 @@ func (p *Manager) refreshDKVSRegistrations() error {
 		}
 	}
 	if !configured {
-		p.scheduleAccountManagedStateSync()
 		return nil
 	}
 	if accountID != "" {

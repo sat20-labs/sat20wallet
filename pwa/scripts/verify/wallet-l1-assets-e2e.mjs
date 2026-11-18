@@ -79,7 +79,7 @@ export async function runPwaL1ProtocolCases(t, fixture) {
   const logs = page => page.evaluate(async () => {
     const result = await window.sat20wallet_operation_log.getOperationLogs()
     if (result.code !== 0) throw new Error(result.msg)
-    return JSON.parse(result.data.logs)
+    return result.data
   })
   const importActor = async (page, actor) => {
     if (fixture.realBitcoinControl) page.context().on('request', request => {
@@ -254,23 +254,28 @@ export async function runPwaL1ProtocolCases(t, fixture) {
         await dialog.getByRole('button', { name: 'Confirm', exact: true }).click()
         let receipt
         await expect.poll(async () => {
-          const added = (await logs(page)).filter(log => !oldLogs.has(log.id) && log.action === 'send_asset_l1')
+          const added = (await logs(page)).filter(log => !oldLogs.has(log.id) && log.kind === 'send_asset_l1')
           assert.ok(added.length <= 1)
           receipt = added[0]
           if (receipt?.status === 'failed') throw new Error(JSON.stringify(receipt))
           return receipt?.status === 'succeeded'
         }, poll).toBe(true)
-        assert.match(receipt.txid, /^[0-9a-f]{64}$/)
+        assert.match(receipt.tx_ids[0], /^[0-9a-f]{64}$/)
         const submitted = (await control('snapshot')).l1
         const ids = Object.keys(submitted.broadcast_count).filter(txid => !Object.hasOwn(before.broadcast_count, txid))
         assert.equal(ids.length, id === 'brc_balance' ? 3 : 1, 'one confirmation created an unexpected transaction count')
-        assert.ok(ids.includes(receipt.txid))
+        assert.ok(ids.includes(receipt.tx_ids[0]))
         const transactions = await Promise.all(ids.map(async txid => Transaction.fromHex(await api(`/btc/rawtx/${txid}`))))
         for (const tx of transactions) {
           assert.equal(submitted.broadcast_count[tx.getId()], 1)
           assert.ok(tx.ins.every(input => input.witness.length > 0))
         }
-        const payment = transactions.find(tx => tx.getId() === receipt.txid)
+        const paymentLogs = (await logs(page)).filter(log =>
+          !oldLogs.has(log.id) && log.tx_ids?.includes(receipt.tx_ids[0]))
+        assert.deepEqual(paymentLogs.map(log => ({ kind: log.kind, status: log.status })),
+          [{ kind: 'send_asset_l1', status: 'succeeded' }],
+          'one asset send must create one payment log, not an additional split command')
+        const payment = transactions.find(tx => tx.getId() === receipt.tx_ids[0])
         const paid = payment.outs.filter(out => out.script.toString('hex') === recipient.pk_script)
         assert.equal(paid.length, 1)
         if (id === 'brc_transfer') {
@@ -356,7 +361,7 @@ export async function runPwaL1ProtocolCases(t, fixture) {
             await expect(visible.locator('div.text-sm.font-semibold').first()).toHaveText(display)
           }
         }
-        console.log(JSON.stringify({ runeOrBrcPayment: receipt.txid, asset, amount: spec.amount, sender: sender.address, recipient: recipient.address }))
+        console.log(JSON.stringify({ runeOrBrcPayment: receipt.tx_ids[0], asset, amount: spec.amount, sender: sender.address, recipient: recipient.address }))
       })
     } catch (error) {
       failures.push(error)

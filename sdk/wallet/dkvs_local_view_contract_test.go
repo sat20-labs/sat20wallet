@@ -251,33 +251,6 @@ func TestDKVSLocalViewContract(t *testing.T) {
 	})
 }
 
-func TestDKVSOfflineBusinessMutationsPreserveProfile(t *testing.T) {
-	old := _chain
-	_chain = "testnet"
-	defer func() { _chain = old }()
-	m, remote, store, _ := accountTTLNoopFixture(t)
-	h := &reviewAcceptanceHTTP{rgb11MemoryDKVSHTTP: remote}
-	h.post = func(ctx context.Context, path string, body []byte) ([]byte, error) {
-		if path == "/v3/dkvs/active/sync" {
-			return nil, &net.DNSError{Err: "offline", IsTimeout: true}
-		}
-		return remote.SendDKVSPostContext(ctx, path, body)
-	}
-	store.client.Http = h
-	_, err := m.syncDKVSOnce()
-	require.Error(t, err)
-	before, err := m.db.Read(accountManagementProfileKey())
-	require.NoError(t, err)
-	id := m.GetCurrentWalletId()
-	previousName := m.walletInfoMap[id].Name
-	err = m.UpdateWalletName(id, "offline must reject this")
-	require.Error(t, err, "offline wallet metadata mutation must fail before local side effects")
-	after, err := m.db.Read(accountManagementProfileKey())
-	require.NoError(t, err)
-	require.True(t, string(before) == string(after), "offline mutation changed persisted profile")
-	require.True(t, previousName == m.walletInfoMap[id].Name, "offline mutation changed live catalog")
-}
-
 // This wrapper retains the backend's actual atomic batch, failing only Flush.
 type dkvsAtomicFlushFaultDB struct{ indexer.KVDB }
 type dkvsAtomicFlushFaultBatch struct{ indexer.WriteBatch }
@@ -417,55 +390,4 @@ func TestDKVSRestartOnlineReadWaitsForSessionSync(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("synchronized read did not finish")
 	}
-}
-
-func TestDKVSOfflineUnconfiguredProfileRejectsMetadata(t *testing.T) {
-	old := _chain
-	_chain = "testnet"
-	defer func() { _chain = old }()
-	m := newAccountManagementAutoTestManager(t)
-	remote := m.http.(*rgb11MemoryDKVSHTTP)
-	_, err := m.ImportWallet(accountRootWrapperTestMnemonic, "password")
-	require.NoError(t, err)
-	require.NoError(t, m.InitializeAccountManagement("password"))
-	beforeRemote := snapshotRGB11MemoryRecords(remote)
-	before := m.GetWalletCatalog()
-	require.ErrorIs(t, m.UpdateWalletName(m.GetCurrentWalletId(), "unknown edit"), ErrDKVSPathNotSynced)
-	require.Equal(t, before, m.GetWalletCatalog())
-	require.Equal(t, "unknown", m.GetAccountManagementStatus().DiscoveryStatus)
-	require.NoError(t, m.refreshDKVSRegistrations())
-	_, err = m.syncDKVSOnce()
-	require.NoError(t, err)
-	require.True(t, m.GetAccountManagementStatus().LocalOnly)
-	require.NoError(t, m.UpdateWalletName(m.GetCurrentWalletId(), "verified inactive local edit"))
-	require.True(t, m.accountProfile.ManagedDataDirty)
-	require.False(t, m.accountProfile.ManagedEntered)
-	require.NoError(t, m.refreshAccountService())
-	require.Equal(t, beforeRemote, snapshotRGB11MemoryRecords(remote), "inactive discovery/edit must not publish")
-	h := &reviewAcceptanceHTTP{rgb11MemoryDKVSHTTP: remote}
-	h.post = func(ctx context.Context, path string, body []byte) ([]byte, error) {
-		if path == "/v3/dkvs/active/sync" {
-			return nil, &net.DNSError{Err: "offline", IsTimeout: true}
-		}
-		return remote.SendDKVSPostContext(ctx, path, body)
-	}
-	m.SetDKVSHttpClient(h)
-	_, err = m.syncDKVSOnce()
-	require.Error(t, err)
-	saved, err := m.db.Read(accountManagementProfileKey())
-	require.NoError(t, err)
-	require.ErrorIs(t, m.UpdateWalletName(m.GetCurrentWalletId(), "offline edit"), ErrDKVSPathNotSynced)
-	unchanged, err := m.db.Read(accountManagementProfileKey())
-	require.NoError(t, err)
-	require.Equal(t, saved, unchanged)
-	reopened := newAccountManagementAutoTestManager(t)
-	reopened.db = m.db
-	require.NoError(t, reopened.initDB())
-	_, err = reopened.UnlockWallet("password")
-	require.NoError(t, err)
-	require.Equal(t, "verified inactive local edit", reopened.GetWalletCatalog()[0].Name)
-	require.False(t, reopened.GetAccountManagementStatus().LocalOnly, "restart must not reuse cached absence as online permission")
-	require.ErrorIs(t, reopened.UpdateWalletName(reopened.GetCurrentWalletId(), "cached absence edit"), ErrDKVSPathNotSynced)
-	require.True(t, reopened.accountProfile.ManagedDataDirty)
-	require.Equal(t, beforeRemote, snapshotRGB11MemoryRecords(remote))
 }

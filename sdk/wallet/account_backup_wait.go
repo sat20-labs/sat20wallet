@@ -63,7 +63,7 @@ func (p *Manager) accountBackupDone(targets map[string]uint64) (bool, error) {
 		if value.LastError != "" {
 			return false, p.accountModuleWriteError(value)
 		}
-		if value.Confirmed < target {
+		if value.Confirmed < target || !accountStorageConfirmed(value, p.accountProfile) {
 			return false, nil
 		}
 		if value.Provider != "account" {

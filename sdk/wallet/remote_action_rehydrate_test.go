@@ -206,7 +206,7 @@ func prepareRemoteActionAccountSelection(t *testing.T, manager *Manager) {
 	pkg, auth, secret := rereviewRecoveryPackage(t, manager)
 	defer zeroBytes(secret)
 	require.NoError(t, manager.ActivateAccountManagement(secret, "password", *auth, pkg.Envelope.Locator, "account://"+pkg.Envelope.Locator.PackageID))
-	client, err := manager.GetDKVSClient()
+	client, err := manager.accountDKVSClient()
 	require.NoError(t, err)
 	require.NoError(t, manager.dkvs.ensureCurrentSubscription(client))
 	require.NoError(t, manager.SyncAccountManagementState(nil))

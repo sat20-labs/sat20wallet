@@ -498,7 +498,7 @@ func makeAtomicReadReplacement(t *testing.T, store *ProjectionStore, contract st
 	asset := &indexer.AssetInfo{Name: name, Amount: *amount.Clone(), BindingSat: 0}
 	digest := sha256.Sum256(raw)
 	receipt, err := store.ValidateAndStoreConsignment(context.Background(), testValidator{receipt: &ValidationReceipt{
-		Version: 1, EngineBuildID: "test-engine", ConsignmentHash: hex.EncodeToString(digest[:]),
+		Version: 1, EngineBuildID: RGB11EngineBuildID, ConsignmentHash: hex.EncodeToString(digest[:]),
 		ContractID: contract, SchemaID: "schema", StateHash: [32]byte{state}, Status: "valid",
 		Allocations: []ValidatedAllocation{{
 			OutPoint: outpoint, AssetName: name, Amount: *amount.Clone(), OperationID: operationID,

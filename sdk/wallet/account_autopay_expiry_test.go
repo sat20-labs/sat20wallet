@@ -46,7 +46,9 @@ func TestFundReadyAccountAutopayRejectsChangedPrincipalBeforeCreatingOperation(t
 	logs := manager.operationLogManager()
 	before, err := logs.List()
 	require.NoError(t, err)
-	require.Empty(t, before)
+	for _, record := range before {
+		require.NotEqual(t, "account_autopay_fund", record.Action)
+	}
 
 	confirmed := *status
 	confirmed.RecommendedFundingAmount = "tampered-principal"
@@ -268,6 +270,8 @@ func TestAccountAutopayTipFailurePreventsReadinessAndFunding(t *testing.T) {
 	if status != nil {
 		assert.False(t, status.Ready, "a failed height query cannot make AUTOPAY ready")
 	}
+	before, err := manager.operationLogManager().List()
+	require.NoError(t, err)
 
 	_, fundErr := manager.FundAccountAutopay(AccountAutopayFundingStatus{
 		Payer: payer, ContractAddress: defaults.AutopayContract, FeeAsset: defaults.AutopayFeeAssetName,
@@ -277,6 +281,6 @@ func TestAccountAutopayTipFailurePreventsReadinessAndFunding(t *testing.T) {
 	assert.ErrorContains(t, fundErr, "height", "funding must stop on the unavailable tip")
 	logs, err := manager.operationLogManager().List()
 	require.NoError(t, err)
-	assert.Empty(t, logs, "a failed tip query must not create a funding operation")
+	assert.Equal(t, before, logs, "a failed tip query must not create or change any operation")
 	assert.Zero(t, http.postCalls.Load(), "a failed tip query must not submit a payment")
 }

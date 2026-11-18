@@ -336,10 +336,11 @@ export async function runPwaWalletBasicCases(t, fixture) {
       // manual lock must restore the complete original lock set exactly.
       assert.deepEqual(await walletCall(page, 'getAllLockedUtxo', actor.address), before,
         'manual unlock changed another UTXO protection lock')
-      if (Object.keys(before).length === 0) {
+      const genericCount = Object.values(before).filter(raw => JSON.parse(raw).category !== 'rgb').length
+      if (genericCount === 0) {
         await expect(page.getByText('No locked UTXOs', { exact: true })).toBeVisible()
       } else {
-        await expect(page.locator('tbody tr')).toHaveCount(Object.keys(before).length)
+        await expect(page.locator('tbody tr')).toHaveCount(genericCount)
         await expect(page.getByText('No locked UTXOs', { exact: true })).toBeHidden()
       }
     })
@@ -388,28 +389,44 @@ export async function runPwaWalletBasicCases(t, fixture) {
       await visit(page, '/wallet/setting/operation-logs')
       await expect(page.getByRole('heading', { name: 'Operation logs', exact: true })).toBeVisible()
       const logs = await page.evaluate(async () => {
-        const [error, result] = await (await import('/utils/operationLog.ts')).getOperationLogs()
-        if (error) throw error
-        return result
+        return (await import('/utils/operationLog.ts')).getOperationLogs()
       })
       assert.ok(logs.length, 'wallet UI actions produced no durable operation logs')
       assert.ok(!JSON.stringify(logs).includes(actor.password), 'operation log leaked the wallet password')
       assert.ok(!JSON.stringify(logs).includes(actor.mnemonic), 'operation log leaked the recovery phrase')
-      const log = logs.find(record => record.action === 'sign_data' && record.status === 'succeeded')
+      const log = logs.find(record => record.kind === 'sign_data' && record.status === 'succeeded')
       assert.ok(log, 'the real verified signature did not survive reload in operation logs')
       assert.ok(log.history.some(event => event.status === 'succeeded'))
-      await page.getByRole('button').filter({ hasText: log.title }).last().click()
-      await expect(page.getByRole('heading', { name: log.title, exact: true })).toBeVisible()
-      await expect(page.getByRole('heading', { name: 'History', exact: true })).toBeVisible()
+      const detail = page.locator('details').filter({ has: page.locator('summary', { hasText: log.kind }) })
+      await expect(detail).toHaveCount(1)
+      await detail.locator('summary').click()
+      await expect(detail).toHaveAttribute('open', '')
+      await expect(detail.locator('ol > li')).toHaveCount(log.history.length)
+      await expect(detail.locator('summary')).toContainText('Succeeded')
+      await expect(detail.locator('ol')).toContainText('Succeeded')
+      await settings(page)
+      await page.getByRole('button', { name: /Environment Options/ }).click()
+      await page.getByRole('heading', { name: 'Environment Options', exact: true }).locator('../..').locator('..')
+        .getByRole('combobox').nth(1).click()
+      await page.getByRole('option', { name: '中文', exact: true }).click()
+      await expect(page.getByRole('heading', { name: '环境选项', exact: true })).toBeVisible()
+      await visit(page, '/wallet/setting/operation-logs')
+      await expect(page.getByRole('heading', { name: '操作日志', exact: true })).toBeVisible()
+      await detail.locator('summary').click()
+      await expect(detail.locator('summary')).toContainText('已成功')
+      await expect(detail.locator('ol')).toContainText('已成功')
+      await visit(page, '/wallet/setting')
+      await page.getByRole('button', { name: /环境选项/ }).click()
+      await page.getByRole('combobox').filter({ hasText: '中文' }).click()
+      await page.getByRole('option', { name: 'English', exact: true }).click()
+      await expect(page.getByRole('heading', { name: 'Environment Options', exact: true })).toBeVisible()
       await visit(page, '/wallet')
       await visit(page, '/wallet/setting/operation-logs')
       page.once('dialog', dialog => dialog.accept())
       await page.getByRole('button', { name: 'Delete all', exact: true }).click()
       await expect(page.getByText('No operation logs yet.', { exact: true })).toBeVisible()
       const cleared = await page.evaluate(async () => {
-        const [error, result] = await (await import('/utils/operationLog.ts')).getOperationLogs()
-        if (error) throw error
-        return result
+        return (await import('/utils/operationLog.ts')).getOperationLogs()
       })
       assert.deepEqual(cleared, [], 'operation log deletion only cleared the page')
       assert.deepEqual(await identity(page), originalIdentity)
@@ -550,9 +567,7 @@ async function runAssetContextStability(t, fixture, fresh, visit, identity, wall
   }
   const refresh = () => page.getByRole('button', { name: 'ORDX', exact: true }).locator('../..').getByRole('button').last().click()
   const logs = () => page.evaluate(async () => {
-    const [error, result] = await (await import('/utils/operationLog.ts')).getOperationLogs()
-    if (error) throw error
-    return result
+    return (await import('/utils/operationLog.ts')).getOperationLogs()
   })
   let outcome = 'fail'
   try {
@@ -583,10 +598,8 @@ async function runAssetContextStability(t, fixture, fresh, visit, identity, wall
     // This case calls the store directly. A local-only account can write before
     // activation; an activated account needs its verified online baseline.
     await expect.poll(async () => {
-      const state = await accountCall(page, 'status')
-      if (!state.activation_pending &&
-        (state.local_only || (state.recovery_configured && state.dkvs_write_allowed))) return 'ready'
-      return `${state.dkvs_status || 'unknown'}:${state.last_dkvs_sync_error || 'pending'}`
+      const view = await accountCall(page, 'getAccountView')
+      return view.state === 'local' || view.state === 'ready' ? 'ready' : view.state
     }, { timeout: 90000 }).toBe('ready')
     await page.evaluate(async () => { await window.__SAT20_PWA_VERIFY__.useWalletStore().addAccount('Asset context B', 1) })
     const b = await identity(page)

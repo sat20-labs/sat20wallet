@@ -404,7 +404,7 @@ func PrepareSingleKeyRepair(ctx context.Context, value RepairExport, target Sing
 			return nil, err
 		}
 		hydrate(&next)
-		validator := NewNativeConsensusValidatorWithReveals(next.ChangeSeals...)
+		validator := NewRGB11ValidatorWithReveals(next.ChangeSeals...)
 		if _, err := ValidateWith(ctx, validator, next.LocalConsignment, evidence); err != nil {
 			return nil, err
 		}

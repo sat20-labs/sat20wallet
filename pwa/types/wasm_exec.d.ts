@@ -224,7 +224,7 @@ declare interface WalletManager {
     utxos: string[],
     address: string,
     network: string
-  ): Promise<SatsnetResponse<{ orderId: string }>>
+  ): Promise<SatsnetResponse<{ psbt: string }>>
 
   // Split a batch signed PSBT
   splitBatchSignedPsbt(

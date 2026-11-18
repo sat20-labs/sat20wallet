@@ -76,7 +76,7 @@ func buildRGB11TwoTransitionBundle(
 		encoded.Write(inflationCommit.OperationID[:])
 		encoded.Write(inflation.Encoded)
 	}
-	registry, err := strict_types.RC11Registry()
+	registry, err := strict_types.RC1Registry()
 	if err != nil {
 		return strict_types.Value{}, operations.BundleCommitment{}, err
 	}

@@ -5,12 +5,9 @@ export type PendingBackupRisk = 'unconfirmed' | 'notConfigured' | 'unknown' | nu
 // This checks only the current device. Another device's local changes are not observable here.
 export const pendingBackupRisk = async (deletingWallet = false): Promise<PendingBackupRisk> => {
   try {
-    const status = await accountManagementSDK.status()
-    if (status.managed_data_dirty || Number(status.pending_changes || 0) > 0) {
-      return 'unconfirmed'
-    }
-    if (deletingWallet && (!status.active || !status.recovery_configured)) return 'notConfigured'
-    return null
+    const { backup_risk } = await accountManagementSDK.getAccountView()
+    if (backup_risk === 'notConfigured' && !deletingWallet) return null
+    return backup_risk || null
   } catch {
     return 'unknown'
   }

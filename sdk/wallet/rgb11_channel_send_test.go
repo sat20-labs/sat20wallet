@@ -306,7 +306,7 @@ func newRGB11ChannelSendCase(t *testing.T) *rgb11ChannelSendCase {
 	}
 
 	endpoint, err := recipient.EnableConfiguredRGB11AddressReceive(
-		RGB11ReceiveCapabilityOptions{RecordOptions: dkvsindexer.RecordOptions{TTL: testRGB11FreeLocalTTL}},
+		RGB11ReceiveCapabilityOptions{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -433,13 +433,13 @@ func acknowledgeRGB11ChannelSend(t *testing.T, c *rgb11ChannelSendCase) error {
 	peer.mu.Unlock()
 
 	for i, state := range prepared.States {
-		if _, err := sender.rgbManager.deliverRGB11AddressTransferStore(
-			mustRGB11ConfiguredStore(t, sender), state.TransferID, RGB11AddressDeliveryOptions{},
+		if _, err := sender.rgbManager.deliverRGBAddress(
+			state.TransferID,
 		); err != nil {
 			t.Fatal(err)
 		}
 		syncResult, err := recipient.SyncConfiguredRGB11AddressMailbox(
-			context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{},
+			context.Background(), dkvsindexer.RecordVerificationOptions{},
 		)
 		if err != nil || syncResult.Received != 1 || syncResult.Invalid != 0 {
 			transfers, transferErr := recipient.rgbManager.projectionStore.ListTransfers()
@@ -449,7 +449,7 @@ func acknowledgeRGB11ChannelSend(t *testing.T, c *rgb11ChannelSendCase) error {
 				i, syncResult, err, transfers, transferErr, reservations, reservationErr, engineRecords, engineErr, prepared.States)
 		}
 		if _, err := sender.SyncConfiguredRGB11AddressMailbox(
-			context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{},
+			context.Background(), dkvsindexer.RecordVerificationOptions{},
 		); err != nil {
 			return err
 		}

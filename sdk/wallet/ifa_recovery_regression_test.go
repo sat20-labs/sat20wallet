@@ -17,7 +17,7 @@ func TestIFARecoveryPreservesControlAssignments(t *testing.T) {
 	chain.fund(t, signingWallet.GetAddress(), 4)
 	indexer := &coreE2EL1Indexer{chain: chain}
 	source := newRGB11FlowManager(t, signingWallet, indexer, chain, 900)
-	// This fixture has no account recovery configuration. Exercise native
+	// This fixture has no account recovery configuration. Exercise RGB11
 	// issuance here; the public synchronization barrier has its own cases.
 	issued, err := source.rgbManager.IssueRGB11Asset(context.Background(), RGB11IssueRequest{
 		Schema: "IFA", Ticker: "IFAR", Name: "IFA restore control", Amounts: []uint64{1000}, InflationAmounts: []uint64{9000},

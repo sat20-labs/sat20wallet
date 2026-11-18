@@ -139,9 +139,9 @@ func logRGB11BroadcastState(t testing.TB, phase string, manager *Manager,
 	}
 	packet, packetErr := psbt.NewFromRawBytes(bytes.NewReader(pending.SignedPSBT), false)
 	tx, txErr := decodeRGB11BroadcastTx(pending.SignedTx)
-	t.Logf("rgb-broadcast-diag phase=%s txid=%s status=%s ack=%s verified=%t ready_carriers=%d faults=%d psbt_ok=%t tx_ok=%t",
+	t.Logf("rgb-broadcast-diag phase=%s txid=%s status=%s ack=%s faults=%d psbt_ok=%t tx_ok=%t",
 		phase, pending.State.WitnessTxID, pending.State.Status, pending.State.AckStatus,
-		state.ProjectionVerified, len(state.ReadyCarriers), len(state.ProofFaults), packetErr == nil, txErr == nil)
+		len(state.ProofFaults), packetErr == nil, txErr == nil)
 	if packetErr != nil || txErr != nil {
 		return
 	}
@@ -167,14 +167,11 @@ func logRGB11BroadcastState(t testing.TB, phase string, manager *Manager,
 			bindingOK = bytes.Equal(binding.ActualPkScript, utxo.PkScript) && runtime.ownsRGB11Carrier(binding, walletScript)
 			rootOK = binding.CommitmentMethod != "tapret1st" || len(binding.TapretRoot) == 32
 		}
-		ready := state.ProjectionVerified || state.ReadyCarriers[point]
 		walletMatch := scriptErr == nil && utxo != nil && bytes.Equal(utxo.PkScript, walletScript)
 		first := "remaining-signing-checks"
 		switch {
 		case view.Points[point]:
 			first = "blocked-carrier"
-		case hasProof && !ready:
-			first = "carrier-not-ready"
 		case utxo == nil || len(input.SignatureScript) != 0:
 			first = "unsigned-input-shape"
 		case !walletMatch && !bindingOK:
@@ -197,8 +194,8 @@ func logRGB11BroadcastState(t testing.TB, phase string, manager *Manager,
 		status := base.txStatuses[input.PreviousOutPoint.Hash.String()]
 		producerSeen := status != nil && (status.Confirmed || status.InMempool)
 		base.mu.Unlock()
-		t.Logf("rgb-broadcast-diag phase=%s input=%d outpoint=%s first_readonly_check=%s blocked=%t proof=%t ready=%t witness_utxo=%t script_sig_empty=%t wallet_script=%t binding=%t root=%t producer_raw_valid=%t producer_output_match=%t producer_status=%t source_utxo_match=%t spent=%t",
-			phase, i, point, first, view.Points[point], hasProof, ready, utxo != nil, len(input.SignatureScript) == 0,
+		t.Logf("rgb-broadcast-diag phase=%s input=%d outpoint=%s first_readonly_check=%s blocked=%t proof=%t witness_utxo=%t script_sig_empty=%t wallet_script=%t binding=%t root=%t producer_raw_valid=%t producer_output_match=%t producer_status=%t source_utxo_match=%t spent=%t",
+			phase, i, point, first, view.Points[point], hasProof, utxo != nil, len(input.SignatureScript) == 0,
 			walletMatch, bindingOK, rootOK, rawOK, outputOK, producerSeen, sourceOK, spent)
 	}
 }

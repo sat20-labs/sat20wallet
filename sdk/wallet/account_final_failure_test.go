@@ -397,7 +397,6 @@ func TestFinalReviewRGBDirtyWriteFailureReleasesManagerLock(t *testing.T) {
 	db := m.db
 	beforeProfile, err := db.Read(accountManagementProfileKey())
 	require.NoError(t, err)
-	beforeGeneration := m.accountProfile.ManagedDataGeneration
 	scope, err := m.rgbManager.rgb11AccountManagedScopeID()
 	require.NoError(t, err)
 	moduleKey := accountLocalKey(m.accountProfile.AccountID, rgb11AccountManagedProviderID, scope)
@@ -435,15 +434,12 @@ func TestFinalReviewRGBDirtyWriteFailureReleasesManagerLock(t *testing.T) {
 	if !acquired {
 		t.Fatal("manager mutex remains locked")
 	}
-	m.rgbManagedOperationMu.Lock()
-	active := m.rgbManagedOperationActive
-	m.rgbManagedOperationMu.Unlock()
-	if active {
-		t.Fatal("managed RGB operation remained active")
+	if !m.rgbManagedExecutionMu.TryLock() {
+		t.Fatal("failed operation retained its module execution lock")
 	}
+	m.rgbManagedExecutionMu.Unlock()
 	afterProfile, readErr := db.Read(accountManagementProfileKey())
-	if readErr != nil || !bytes.Equal(beforeProfile, afterProfile) ||
-		m.accountProfile.ManagedDataGeneration != beforeGeneration || m.accountProfile.ManagedDataDirty {
+	if readErr != nil || !bytes.Equal(beforeProfile, afterProfile) {
 		t.Fatal("failed business+dirty transaction changed the durable account profile")
 	}
 	afterModule, err := db.Read(moduleKey)
@@ -754,7 +750,11 @@ func TestFinalReviewRGBOperationPanicClearsRuntimeState(t *testing.T) {
 	if recovered == nil {
 		t.Fatal("test did not panic")
 	}
-	if m.rgbManagedOperationActive || m.accountOperationActive() {
+	if !m.rgbManagedExecutionMu.TryLock() {
+		t.Fatal("panic retained module execution lock")
+	}
+	m.rgbManagedExecutionMu.Unlock()
+	if m.accountOperationActive() {
 		t.Fatal("panic leaked operation state")
 	}
 	m.accountBackgroundWG.Wait()

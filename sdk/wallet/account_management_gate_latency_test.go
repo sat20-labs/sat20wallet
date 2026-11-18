@@ -201,61 +201,6 @@ func (h *blockedAccountConfigHTTP) DKVSClientConfig() (*dkvsindexer.ClientConfig
 	return nil, context.DeadlineExceeded
 }
 
-func TestAccountActiveMailboxReadRejectsChangedCatalog(t *testing.T) {
-	oldChain := _chain
-	_chain = "testnet"
-	defer func() { _chain = oldChain }()
-	db := &finalBoundaryReadDB{}
-	manager, _, _, _ := accountTTLNoopFixture(t, db.attach)
-	manager.accountBackgroundWG.Wait()
-	if err := manager.RegisterAccountManagedDataProvider(&accountManagedActiveDataProviderStub{
-		accountManagedDataProviderStub: accountManagedDataProviderStub{id: "latency-active"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	started, release := make(chan struct{}), make(chan struct{})
-	var gateOnce, releaseOnce sync.Once
-	unblock := func() { releaseOnce.Do(func() { close(release) }) }
-	defer unblock()
-	// Active import reads the synchronized local mailbox cache. Gate that real
-	// read after catalog capture, rather than an unrelated config HTTP request.
-	db.arm(func([]byte) error {
-		stack := make([]byte, 16<<10)
-		if strings.Contains(string(stack[:runtime.Stack(stack, false)]), ".prepareAccountManagedActiveDataImport(") {
-			gateOnce.Do(func() { close(started); <-release })
-		}
-		return nil
-	})
-	done := make(chan error, 1)
-	go func() { done <- manager.importAccountManagedActiveDataForSync(false) }()
-	select {
-	case <-started:
-	case err := <-done:
-		t.Fatalf("mailbox import ended before cache gate: %v", err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("mailbox read did not reach cache")
-	}
-	editDone := make(chan error, 1)
-	go func() { editDone <- manager.EnsureAccount(manager.status.CurrentWallet, 1, "Savings", "") }()
-	select {
-	case err := <-editDone:
-		if err != nil {
-			t.Error(err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Error("catalog edit blocked behind mailbox cache read")
-	}
-	unblock()
-	select {
-	case err := <-done:
-		if !errors.Is(err, errAccountSnapshotChanged) {
-			t.Fatalf("changed mailbox catalog: %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("mailbox import did not finish")
-	}
-}
-
 func TestAccountDiscoveryReadOnly(t *testing.T) {
 	old := _chain
 	_chain = "testnet"
@@ -269,17 +214,27 @@ func TestAccountDiscoveryReadOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := manager.GetWalletCatalog()
-	if err := manager.StartDKVSSync(); err != nil {
-		t.Fatal(err)
-	}
+	durable := accountPersistenceReviewCatalog(t, manager.db)
+	walletID := manager.GetCurrentWalletId()
 	defer manager.StopDKVSSync()
 	var once sync.Once
 	release := func() { once.Do(func() { close(remote.release) }) }
 	defer release()
+	// Unactivated wallets discover only at an explicit entry/retry. Discovery
+	// itself remains read-only; it does not grant private-backup write access.
+	if _, err := manager.RefreshAccount(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	select {
 	case <-remote.started:
 	case <-time.After(5 * time.Second):
 		t.Fatal("discovery did not reach online configuration")
+	}
+	manager.dkvs.mu.Lock()
+	done := manager.dkvs.done
+	manager.dkvs.mu.Unlock()
+	if done == nil {
+		t.Fatal("finite discovery has no active lifetime")
 	}
 	if err := accountOperationWithin(t, "wallet reauthentication", func() error {
 		_, err := manager.UnlockWallet("password")
@@ -293,30 +248,64 @@ func TestAccountDiscoveryReadOnly(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := accountOperationWithin(t, "rejected local edit", func() error {
-		return manager.UpdateWalletName(manager.GetCurrentWalletId(), "unknown must not write")
-	}); err == nil {
-		t.Fatal("unknown discovery permitted a local edit")
-	} else if !errors.Is(err, ErrDKVSPathNotSynced) {
-		t.Fatalf("unknown discovery edit error=%v", err)
-	}
 	if !reflect.DeepEqual(before, manager.GetWalletCatalog()) {
-		t.Fatal("rejected discovery edit changed local data")
+		t.Fatal("pending discovery changed the readable local catalog")
 	}
-	if status := accountStatusWithin(t, manager); status.LocalOnly || status.DKVSWriteAllowed {
-		t.Fatalf("unknown discovery was called inactive: %+v", status)
+	if err := accountOperationWithin(t, "local edit during discovery", func() error {
+		return manager.UpdateWalletName(walletID, "pending discovery")
+	}); !errors.Is(err, ErrRootAccountDiscoveryPending) {
+		t.Fatalf("edit before discovery completed: %v", err)
+	}
+	if !reflect.DeepEqual(before, manager.GetWalletCatalog()) ||
+		!reflect.DeepEqual(durable, accountPersistenceReviewCatalog(t, manager.db)) {
+		t.Fatal("rejected rename changed the catalog")
+	}
+	if status := accountStatusWithin(t, manager); status.LocalOnly || status.RecoveryConfigured ||
+		status.WriteAllowed || status.DKVSWriteAllowed || status.DiscoveryStatus != "unknown" {
+		t.Fatal("unconfirmed discovery must keep the account read-only")
 	}
 	release()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("finite failed discovery did not finish")
+	}
+	if status := accountStatusWithin(t, manager); status.LocalOnly || status.RecoveryConfigured ||
+		status.WriteAllowed || status.DKVSWriteAllowed || status.DiscoveryStatus != "unknown" {
+		t.Fatal("failed discovery changed local access or claimed a trusted remote result")
+	}
+	if !reflect.DeepEqual(before, manager.GetWalletCatalog()) ||
+		!reflect.DeepEqual(durable, accountPersistenceReviewCatalog(t, manager.db)) {
+		t.Fatal("failed discovery changed the persisted local catalog")
+	}
 	manager.StopDKVSSync()
 	manager.SetDKVSHttpClient(base)
-	if _, err := manager.syncDKVSOnce(); err != nil {
-		t.Fatal(err)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := manager.RecoverAccountManagementFromCurrentWallet(ctx, "password"); !errors.Is(err, ErrRootAccountNotFound) {
+		t.Fatalf("online discovery must establish trusted absence: %v", err)
 	}
-	if !manager.GetAccountManagementStatus().LocalOnly {
-		t.Fatal("verified absence did not establish local-only mode")
+	if status := manager.GetAccountManagementStatus(); !status.LocalOnly || status.RecoveryConfigured ||
+		status.DKVSWriteAllowed || status.DiscoveryStatus != "inactive" {
+		t.Fatal("verified absence must remain local-only without enabling recovery backup")
 	}
 	if err := manager.UpdateWalletName(manager.GetCurrentWalletId(), "verified inactive"); err != nil {
 		t.Fatal(err)
+	}
+	for i := range before {
+		if before[i].ID == walletID {
+			before[i].Name = "verified inactive"
+		}
+	}
+	stored := durable[walletID]
+	stored.Name = "verified inactive"
+	if stored.SPEnabled == nil {
+		stored.SPEnabled = make(map[uint32]bool)
+	}
+	durable[walletID] = stored
+	if !reflect.DeepEqual(before, manager.GetWalletCatalog()) ||
+		!reflect.DeepEqual(durable, accountPersistenceReviewCatalog(t, manager.db)) {
+		t.Fatal("verified local rename did not persist exactly the requested catalog change")
 	}
 	if len(snapshotRGB11MemoryRecords(base)) != 0 {
 		t.Fatal("inactive account uploaded a private backup")

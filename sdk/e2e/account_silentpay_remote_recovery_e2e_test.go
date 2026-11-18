@@ -41,8 +41,7 @@ func TestSDKAccountSilentPayRemoteBackupIndependentRecovery_NotUI(t *testing.T) 
 	require.NoError(t, err)
 	dataKey, err := account.ManagedIndexKey(accountID)
 	require.NoError(t, err)
-	client, err := f.manager.GetDKVSClient()
-	require.NoError(t, err)
+	client := dkvsClientForNode(t, network.Core)
 
 	// Read the wallet catalog, directory, module copies and local status from
 	// one stable set of remote records.
@@ -147,9 +146,9 @@ func TestSDKAccountSilentPayRemoteBackupIndependentRecovery_NotUI(t *testing.T) 
 	// recovery path receives only the root mnemonic and a new local password.
 	f.manager.Close()
 	fresh, _ := accountReviewDevice(t, network, "")
-	require.NoError(t, fresh.StartDKVSSync())
 	const recoveryPassword = "silentpay-new-device-password"
 	requireAccountPWARootRecovery(t, fresh, f.rootMnemonic, recoveryPassword)
+	require.NoError(t, fresh.StartDKVSSync())
 
 	recoveredStatus := fresh.GetAccountManagementStatus()
 	require.True(t, recoveredStatus.RecoveryConfigured)

@@ -150,6 +150,12 @@ func (p *Manager) BuildSilentPayment(address string, amount, feeRate int64) (*wi
 }
 
 func (p *Manager) SendSilentPayment(address string, amount, feeRate int64) (string, error) {
+	release, gateErr := p.beginAccountWrite(rgb11AccountManagedProviderID, nil)
+	if gateErr != nil {
+		return "", gateErr
+	}
+	defer release()
+
 	tx, prev, err := p.BuildSilentPayment(address, amount, feeRate)
 	if err != nil {
 		return "", err

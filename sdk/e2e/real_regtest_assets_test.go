@@ -244,8 +244,8 @@ func prepareSDKPWARegtestAssetsInternal(t *testing.T, existingOnly ...bool) (*wa
 		require.NotEmpty(t, seeds[role])
 		if len(manager.GetWalletCatalog()) == 0 {
 			if recoveryRoot != "" {
-				require.NoError(t, manager.StartDKVSSync())
 				requireAccountPWARootRecovery(t, manager, seeds[role], password)
+				require.NoError(t, manager.StartDKVSSync())
 				t.Logf("recovered existing %s SDK client data from DKVS; original DB preserved", role)
 			} else {
 				require.False(t, reuseExistingWallets, "existing-wallet regtest fixture requires an already-imported %s wallet", role)

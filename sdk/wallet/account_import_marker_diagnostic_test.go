@@ -123,9 +123,8 @@ func TestRemoteImportMarkerRetriesAfterPublicContractReturns(t *testing.T) {
 	// target is replayed. Its return must permit the exact same marker to
 	// finish without another private write or new state revision.
 	remote.records[registryKey] = record
-	bundle := account.ManagedDataBundle{Version: account.ManagedDataBundleVersion, Revision: 1,
-		Items: []account.ManagedDataItem{{Provider: rgb11AccountManagedProviderID,
-			Scope: AccountManagedDataGlobalScope, Payload: payload}}}
+	bundle := account.ManagedDataBundle{Items: []account.ManagedDataItem{{Provider: rgb11AccountManagedProviderID,
+		Scope: AccountManagedDataGlobalScope, Payload: payload}}}
 	if err := target.verifyRGB11PublicRecoveryReferences(bundle); err != nil {
 		t.Fatalf("valid public reference fixture is unreadable: %v", err)
 	}

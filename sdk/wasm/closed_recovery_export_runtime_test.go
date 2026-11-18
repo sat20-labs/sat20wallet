@@ -103,3 +103,21 @@ func TestClosedRecoveryWASMActualExportsErrorAndPromiseContracts(t *testing.T) {
 	}
 	t.Log("actual production exports: uniform error envelopes, count/type/empty validation, readonly empty-ID real Promise, asynchronous SDK refusal, no wallet/funding state")
 }
+
+func awaitAccountResult(t *testing.T, promise js.Value) js.Value {
+	t.Helper()
+	completed := make(chan js.Value, 1)
+	callback := js.FuncOf(func(_ js.Value, args []js.Value) any {
+		completed <- args[0]
+		return nil
+	})
+	defer callback.Release()
+	promise.Call("then", callback)
+	select {
+	case result := <-completed:
+		return result
+	case <-time.After(5 * time.Second):
+		t.Fatal("account operation did not resolve")
+		return js.Undefined()
+	}
+}

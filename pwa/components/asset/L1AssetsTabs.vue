@@ -30,107 +30,16 @@
 
     <!-- Asset Lists -->
     <div class="space-y-2">
-      <div v-if="selectedType === 'RGB11'" class="rounded-lg border border-zinc-700 bg-muted/60 p-3 text-xs text-zinc-400">
-        <div class="mb-3 flex flex-wrap items-center gap-2 text-foreground">
-          <span class="text-sm font-semibold">{{ $t('rgb11Transfer.protocolVersion') }}</span>
-          <span class="rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 font-mono text-xs font-semibold text-primary">0.11.1</span>
-        </div>
-        <div class="flex justify-between gap-3">
-          <span>{{ $t('rgb11Transfer.consistency') }}: {{ rgb11State.consistency_status }}</span>
-          <span>{{ $t('rgb11Transfer.accountManaged') }}</span>
-        </div>
-        <div v-if="rgb11State.consistency_status !== 'ok'" class="mt-1 text-amber-500">
-          {{ $t('rgb11Transfer.inconsistentWarning') }}
-        </div>
-        <div v-if="rgb11Error" class="mt-1 break-all text-red-400">
-          {{ $t('rgb11Transfer.stateError', { error: rgb11Error }) }}
-        </div>
-        <div class="mt-3 grid grid-cols-2 gap-2">
-          <Button size="sm" variant="outline" @click="emit('issue-rgb11')">
-            <Icon icon="lucide:badge-plus" class="mr-2 h-4 w-4" />
-            {{ $t('rgb11Transfer.issue') }}
-          </Button>
-          <Button size="sm" variant="outline" @click="emit('import-rgb11')">
-            <Icon icon="lucide:file-input" class="mr-2 h-4 w-4" />
-            {{ $t('rgb11Transfer.import') }}
-          </Button>
-        </div>
-        <div v-if="rgb11PendingTasks.length" class="mt-3 border-t border-zinc-700/70 pt-3">
-          <div class="mb-2 flex items-center justify-between">
-            <span class="font-medium text-amber-300">{{ $t('rgb11Transfer.pendingTasks') }}</span>
-            <span>{{ rgb11PendingTasks.length }}</span>
-          </div>
-          <div class="space-y-2">
-            <div v-for="task in rgb11PendingTasks" :key="task.key"
-              class="rounded border border-amber-800/60 bg-amber-950/20 p-2">
-              <div class="flex items-center justify-between gap-2">
-                <span>{{ rgb11DisplayLabel(task.representative.asset) }} · {{ rgb11TaskMode(task) }}</span>
-                <span :class="rgb11TransferStatusClass(task.representative.status)">
-                  {{ displayRGB11State(task.representative.status) }}
-                </span>
-              </div>
-              <div>{{ $t('rgb11Transfer.pendingTaskCount', { count: task.members.length }) }}</div>
-              <div class="break-all">TX: {{ task.representative.witness_txid || task.representative.transfer_id }}</div>
-              <div class="mt-2 grid grid-cols-2 gap-2">
-                <Button size="sm" variant="outline" :disabled="rgb11TaskBusy === task.key"
-                  @click="resumeRGB11Task(task)">
-                  {{ rgb11TaskBusy === task.key ? $t('common.processing') : rgb11TaskActionLabel(task) }}
-                </Button>
-                <Button size="sm" variant="outline" :disabled="rgb11TaskBusy === task.key"
-                  @click="refreshRGB11Task(task)">
-                  {{ $t('rgb11Transfer.refreshTask') }}
-                </Button>
-                <Button v-if="canCancelRGB11Task(task)" size="sm" variant="outline"
-                  class="col-span-2 text-red-400" :disabled="rgb11TaskBusy === task.key"
-                  @click="cancelRGB11Task(task)">
-                  {{ $t('rgb11Transfer.cancelTask') }}
-                </Button>
-              </div>
-              <div v-if="rgb11TaskMessages[task.key]" class="mt-2 break-all"
-                :class="rgb11TaskMessages[task.key].success ? 'text-emerald-400' : 'text-red-400'">
-                {{ rgb11TaskMessages[task.key].text }}
-              </div>
-            </div>
-          </div>
-        </div>
-        <div class="mt-3 border-t border-zinc-700/70 pt-3">
-          <div class="mb-2 flex items-center justify-between">
-            <span class="font-medium text-zinc-300">{{ $t('rgb11Transfer.monitor') }}</span>
-            <span>{{ rgb11Transfers.length }}</span>
-          </div>
-          <div v-if="!rgb11Transfers.length" class="text-zinc-500">
-            {{ $t('rgb11Transfer.noTransfers') }}
-          </div>
-          <div v-else class="space-y-2">
-            <div v-for="transfer in rgb11Transfers" :key="transfer.transfer_id"
-              class="rounded border border-zinc-700/60 p-2">
-              <div class="flex items-center justify-between gap-2">
-                <span class="min-w-0 flex-1 break-all">{{ displayRGB11State(transfer.direction) }} · {{ rgb11DisplayLabel(transfer.asset) }}</span>
-                <span class="shrink-0" :class="rgb11TransferStatusClass(transfer.status)">{{ displayRGB11State(transfer.status) }}</span>
-              </div>
-              <div>{{ $t('rgb11Transfer.ackStatus') }}: {{ displayRGB11State(transfer.ack_status || 'pending') }}</div>
-              <div v-if="transfer.reject_reason" class="text-red-400">
-                {{ $t('rgb11Transfer.rejectReason') }}: {{ transfer.reject_reason }}
-              </div>
-              <div>{{ $t('rgb11Transfer.durability') }}: {{ displayRGB11State(transfer.relay_durability || 'local') }}</div>
-              <div v-if="transfer.witness_txid" class="break-all">
-                TX: {{ transfer.witness_txid }}
-              </div>
-              <div v-else class="break-all">ID: {{ transfer.transfer_id }}</div>
-              <Button v-if="transfer.direction === 'send' && transfer.status === 'settled' && transfer.transport_mode === 'out-of-band'"
-                size="sm" variant="outline" class="mt-2"
-                :disabled="rgb11TransferExporting === transfer.transfer_id"
-                @click="exportRGB11SettledTransfer(transfer)">
-                {{ $t('rgb11Transfer.downloadConsignment') }}
-              </Button>
-              <div v-if="rgb11TransferExportMessages[transfer.transfer_id]" class="mt-1 break-all"
-                :class="rgb11TransferExportMessages[transfer.transfer_id].success ? 'text-emerald-400' : 'text-red-400'">
-                {{ rgb11TransferExportMessages[transfer.transfer_id].text }}
-              </div>
-            </div>
-            <Button v-if="hasMoreRGB11Transfers" size="sm" variant="outline" class="w-full"
-              @click="rgb11TransferLimit += 8">{{ $t('rgb11Transfer.loadMore') }}</Button>
-          </div>
+      <div v-if="selectedType === 'RGB11'" class="rounded-lg border border-zinc-700 p-3 text-xs space-y-3">
+        <p v-if="rgb11State.error_code || rgb11Error" class="text-red-400">{{ rgb11State.error_code || rgb11Error }}</p>
+        <Button size="sm" variant="outline" @click="emit('issue-rgb11')">{{ $t('rgb11Transfer.issue') }}</Button>
+        <Button size="sm" variant="outline" @click="emit('import-rgb11')">{{ $t('rgb11Transfer.import') }}</Button>
+        <div v-for="task in rgb11State.transfers" :key="task.id" class="space-y-2 rounded border border-zinc-700 p-2">
+          <p class="break-all font-mono">{{ task.id }}</p><p>{{ displayRGB11State(task.status) }}</p>
+          <p v-for="(recipient, index) in task.recipients" :key="index" class="break-all">{{ recipient.amount.amount }} · {{ recipient.amount.asset }}</p>
+          <p v-if="task.tx_id" class="break-all font-mono">{{ task.tx_id }}</p>
+          <p v-if="task.error_code" class="text-red-400">{{ task.error_code }}</p>
+          <Button v-if="task.can_confirm || task.can_cancel || task.can_export" size="sm" variant="outline" @click="resumeRGB11Task(task)">{{ $t('rgb11Transfer.retryTask') }}</Button>
         </div>
       </div>
       <div v-for="asset in filteredAssets" :key="asset.id"
@@ -188,7 +97,7 @@
                 {{ $t('l1AssetsTabs.send') }}
               </Button>
               <Button v-else size="sm" variant="outline"
-                :disabled="rgb11State.consistency_status !== 'ok' || !!rgb11Error || !hasAvailableRGB11(asset)"
+                :disabled="!rgb11State.can_write || !!rgb11Error || !hasAvailableRGB11(asset)"
                 @click="handleSend(asset)"
                 class="text-zinc-400 border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]">
                 <Icon icon="lucide:send" class="w-4 h-4 mr-1" />
@@ -214,7 +123,7 @@
                 {{ $t('l1AssetsTabs.send') }}
               </Button>
               <Button v-else size="sm" variant="outline"
-                :disabled="rgb11State.consistency_status !== 'ok' || !!rgb11Error || !hasAvailableRGB11(asset)"
+                :disabled="!rgb11State.can_write || !!rgb11Error || !hasAvailableRGB11(asset)"
                 @click="handleSend(asset)"
                 class="text-zinc-400 border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]">
                 <Icon icon="lucide:send" class="w-4 h-4 mr-1" />
@@ -239,7 +148,7 @@
               {{ $t('rgb11Transfer.downloadContract') }}
             </Button>
             <Button v-if="asset.protocol === 'rgb11' && asset.type === 'f' && hasIFAControl(asset)"
-              size="sm" variant="outline" :disabled="rgb11State.consistency_status !== 'ok' || !!rgb11Error"
+              size="sm" variant="outline" :disabled="!rgb11State.can_write || !!rgb11Error"
               @click="inflationAsset = asset; showInflation = true">
               {{ $t('rgb11Transfer.inflate') }}
             </Button>
@@ -249,20 +158,7 @@
             :class="rgb11ExportMessages[asset.contract_id || ''].success ? 'text-emerald-400' : 'text-red-400'">
             {{ rgb11ExportMessages[asset.contract_id || ''].text }}
           </div>
-          <div v-if="asset.protocol === 'rgb11'" class="mt-2 space-y-1 text-[11px] text-zinc-500">
-            <div v-for="proof in rgb11Proofs(asset)" :key="`${proof.outpoint}:${proof.operation_id}`"
-              class="min-w-0 rounded border border-zinc-700/60 p-2">
-              <div class="break-all">{{ $t('walletComponents.carrier') }} {{ proof.outpoint }}</div>
-              <div>{{ $t('walletComponents.method') }} {{ proof.carrier_binding?.commitment_method || $t('walletComponents.states_unknown') }}</div>
-              <div>{{ $t('walletComponents.confirmations') }} {{ proof.confirmations || 0 }}</div>
-              <div :class="proof.policy_status === 'rejected' ? 'text-red-400' : ''">
-                {{ $t('walletComponents.policy') }} {{ displayRGB11State(proof.policy_status || 'unchecked') }}
-              </div>
-              <div v-if="proof.policy_reason" class="break-all">{{ $t('walletComponents.policyReason') }} {{ proof.policy_reason }}</div>
-              <div class="break-all">{{ $t('walletComponents.consignment') }} {{ proof.consignment_hash || $t('walletComponents.states_local_only') }}</div>
-              <div>{{ $t('walletComponents.utxoLockReason') }}{{ displayRGB11State(rgb11ProofLockReason(proof)) }}</div>
-            </div>
-          </div>
+
         </div>
       </div>
       <div v-if="selectedType === 'RGB11' && !filteredAssets.length"
@@ -292,11 +188,9 @@ import { Chain } from '@/types/index'
 import { generateMempoolUrl, formatLargeNumber } from '@/utils'
 import { useGlobalStore } from '@/store/global'
 import walletManager from '@/utils/sat20'
-import rgb11Address from '@/utils/rgb11Address'
+import { saveExportFile } from '@/utils/accountManagement'
+import type { RGBTransferView } from '@/utils/walletViews'
 import { walletRequestSessionGuard } from '@/lib/walletSession'
-import { assertWalletIdentityReady, subscribeWalletIdentity } from '@/lib/identity-boundary'
-import { rgb11TaskResumeAsset } from '@/utils/rgb11Oob'
-import { downloadRGB11ContractFile } from '@/utils/rgb11ContractFile'
 import { useI18n } from 'vue-i18n'
 // 类型定义
 interface Asset {
@@ -401,456 +295,40 @@ const handleDeposit = (asset: any) => {
   emit('deposit', asset)
 }
 
-const rgb11AssetIdentity = (value: any) => {
-  const name = value?.asset_name || value?.Name || value?.name || value
-  const protocol = String(name?.Protocol || name?.protocol || '')
-  const type = String(name?.Type || name?.type || '')
-  const ticker = String(name?.Ticker || name?.ticker || '')
-  return protocol && type && ticker ? `${protocol}:${type}:${ticker}` : ''
-}
-
-const rgb11DisplayLabel = (value: any) => {
-  const key = rgb11AssetIdentity(value)
-  const asset = props.assets.find(item => item.protocol === 'rgb11' &&
-    (item.asset_key || item.key || item.id) === key)
-  if (asset?.label) return asset.label
-  const info = (rgb11State.value.ticker_infos || []).find((item: any) =>
-    rgb11AssetIdentity(item?.name || item?.Name || item?.AssetName) === key)
-  return String(info?.ticker || info?.Ticker || value?.Name?.Ticker || 'RGB')
-}
-
-const rgb11Proofs = (asset: Asset) => {
-  const expected = String(asset.asset_key || asset.key || asset.id || '')
-  if (!expected.startsWith('rgb11:')) return []
-  return (rgb11State.value.proofs || []).filter((proof: any) => (
-    rgb11AssetIdentity(proof) === expected && proof?.status !== 'spending'
-  ))
-}
-const hasIFAControl = (asset: Asset) => (rgb11State.value.proofs || []).some((proof: any) => {
-  const name = proof?.asset_name || proof?.AssetName || proof?.name || proof?.Name || {}
-  return name.Protocol === 'rgb11' && name.Type === 'control' &&
-    name.Ticker === asset.ticker && String(proof?.status || '') === 'settled'
-})
-
-type RGB11Task = {
-  key: string
-  members: any[]
-  representative: any
-}
-
-type RGB11TaskMessage = { success: boolean; text: string }
-
-const terminalRGB11Statuses = new Set(['settled', 'rejected', 'conflicted', 'failed', 'cancelled'])
-const rgb11TaskBusy = ref('')
 const showResumeTask = ref(false)
 const resumeTaskId = ref('')
-const resumeTaskAsset = ref<any>(null)
-const rgb11TaskMessages = ref<Record<string, RGB11TaskMessage>>({})
-const rgb11Exporting = ref('')
-const rgb11ExportMessages = ref<Record<string, RGB11TaskMessage>>({})
-const rgb11TransferExporting = ref('')
-const rgb11TransferExportMessages = ref<Record<string, RGB11TaskMessage>>({})
-const rgb11TransferLimit = ref(8)
+const resumeTaskAsset = ref<Asset | null>(null)
 const showInflation = ref(false)
 const inflationAsset = ref<Asset | null>(null)
-const directMailboxRetryDelays = [0, 1_000, 2_000, 4_000, 8_000, 16_000]
-let directMailboxTimer: ReturnType<typeof setTimeout> | undefined
-let directMailboxGeneration = 0
-let directMailboxSync: Promise<void> | undefined
-let directContextGeneration = 0
-let directAlive = true
-let directStateInvalid = false
-const directScope = computed(() => JSON.stringify([globalStore.env, walletStore.rootAccountId,
-  walletStore.walletId, walletStore.accountIndex, walletStore.network, walletStore.address]))
-const directAllowed = computed(() => selectedType.value === 'RGB11' && !walletStore.locked &&
-  !walletStore.isSwitchingWallet && !walletStore.isSwitchingAccount && !walletStore.isSwitchingNetwork)
-
-const guardDirectTask = () => {
-  const scope = directScope.value
-  const context = directContextGeneration
-  const identity = assertWalletIdentityReady()
-  const checkSession = walletRequestSessionGuard('deliverAndBroadcastRGB11AddressTransfer')
-  const check = () => {
-    checkSession()
-    assertWalletIdentityReady(identity)
-    if (!directAlive || !directAllowed.value || scope !== directScope.value || context !== directContextGeneration) {
-      throw new Error(t('rgb11Transfer.scopeChanged'))
-    }
-  }
-  check()
-  return check
-}
-
+const rgb11Exporting = ref('')
+const rgb11ExportMessages = ref<Record<string, {success: boolean; text: string}>>({})
+const rgbAsset = (asset: Asset) => rgb11State.value.assets.find(item => item.asset === (asset.key || asset.id))
+const hasIFAControl = (asset: Asset) => rgbAsset(asset)?.can_inflate === true
 const exportRGB11Contract = async (asset: Asset) => {
-  const contractId = String(asset.contract_id || '').trim()
-  if (!contractId || rgb11Exporting.value) return
-  rgb11Exporting.value = contractId
+  const id = asset.contract_id || ''
+  rgb11Exporting.value = id
   try {
-    const [error, response] = await walletManager.exportRGB11Contract(contractId)
-    if (error || !response?.result) throw error || new Error(t('rgb11Transfer.exportContractFailed'))
-    const exported = JSON.parse(response.result)
-    downloadRGB11ContractFile(String(exported.contract_consignment_base64 || ''), contractId)
-    rgb11ExportMessages.value = {
-      ...rgb11ExportMessages.value,
-      [contractId]: { success: true, text: t('rgb11Transfer.exportContractSucceeded') },
-    }
-  } catch (error: any) {
-    rgb11ExportMessages.value = {
-      ...rgb11ExportMessages.value,
-      [contractId]: { success: false, text: error?.message || t('rgb11Transfer.exportContractFailed') },
-    }
-  } finally {
-    rgb11Exporting.value = ''
-  }
-}
-
-const exportRGB11SettledTransfer = async (transfer: any) => {
-  const transferId = String(transfer?.transfer_id || '')
-  if (!transferId || rgb11TransferExporting.value) return
-  const scope = directScope.value
-  rgb11TransferExporting.value = transferId
-  try {
-    const identity = assertWalletIdentityReady()
-    const [error, response] = await walletManager.exportRGB11SettledConsignment(transferId)
-    if (error || !response?.transfer) throw error || new Error(t('rgb11Transfer.taskResumeFailed'))
-    if (scope !== directScope.value) throw new Error(t('rgb11Transfer.scopeChanged'))
-    assertWalletIdentityReady(identity)
-    const pkg = JSON.parse(response.transfer)
-    if (pkg?.state?.transfer_id !== transferId || pkg.state?.direction !== 'send' ||
-      pkg.state?.status !== 'settled' || pkg.state?.transport_mode !== 'out-of-band' ||
-      typeof pkg.recipient_consignment_base64 !== 'string' || !pkg.recipient_consignment_base64) {
-      throw new Error(t('rgb11Transfer.taskResumeFailed'))
-    }
-    const bytes = Uint8Array.from(atob(pkg.recipient_consignment_base64), (value) => value.charCodeAt(0))
-    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }))
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `rgb11-transfer-${transferId.slice(0, 24)}.rgbc`
-    link.click()
-    URL.revokeObjectURL(url)
-    rgb11TransferExportMessages.value = {
-      ...rgb11TransferExportMessages.value,
-      [transferId]: { success: true, text: t('rgb11Transfer.downloadConsignment') },
-    }
-  } catch (error: any) {
-    rgb11TransferExportMessages.value = {
-      ...rgb11TransferExportMessages.value,
-      [transferId]: { success: false, text: error?.message || t('rgb11Transfer.taskResumeFailed') },
-    }
-  } finally {
-    rgb11TransferExporting.value = ''
-  }
-}
-
-const rgb11PendingTasks = computed<RGB11Task[]>(() => {
-  const groups = new Map<string, any[]>()
-  for (const transfer of rgb11State.value.transfers || []) {
-    if (String(transfer?.direction || '').toLowerCase() !== 'send') continue
-    if (terminalRGB11Statuses.has(String(transfer?.status || '').toLowerCase())) continue
-    const key = String(transfer?.batch_id || transfer?.witness_txid || transfer?.transfer_id || '')
-    if (!key) continue
-    const values = groups.get(key) || []
-    values.push(transfer)
-    groups.set(key, values)
-  }
-  return [...groups.entries()].map(([key, members]) => ({
-    key,
-    members: [...members].sort((left, right) => String(left.transfer_id).localeCompare(String(right.transfer_id))),
-    representative: members[0],
-  })).reverse()
-})
-
-const rgb11Transfers = computed(() => (
-  [...(rgb11State.value.transfers || [])].reverse().slice(0, rgb11TransferLimit.value)
-))
-const hasMoreRGB11Transfers = computed(() => (rgb11State.value.transfers || []).length > rgb11TransferLimit.value)
-
-const nonTerminalDirectTransfers = computed(() => (
-  (rgb11State.value.transfers || []).filter((transfer: any) => (
-    transfer?.address_mode &&
-    !terminalRGB11Statuses.has(String(transfer?.status || '').toLowerCase())
-  ))
-))
-
-const directMailboxNeedsSync = computed(() => nonTerminalDirectTransfers.value.some((transfer: any) => {
-  const direction = String(transfer?.direction || '').toLowerCase()
-  const ack = String(transfer?.ack_status || '').toLowerCase()
-  if (direction === 'receive') return ack === 'persisted'
-  return direction === 'send' && ack !== 'accepted'
-}))
-
-const directMailboxFingerprint = computed(() => nonTerminalDirectTransfers.value.map((transfer: any) => (
-  `${transfer.transfer_id}:${transfer.direction}:${transfer.status}:${transfer.ack_status}`
-)).sort().join('|'))
-
-const rgb11TransferStatusClass = (status: string) => {
-  if (status === 'settled') return 'text-emerald-400'
-  if (status === 'conflicted' || status === 'failed') return 'text-red-400'
-  return 'text-amber-400'
-}
-
-
-const rgb11TaskTransport = (task: RGB11Task) => String(task.representative?.transport_mode || 'unknown')
-const rgb11TaskIsBroadcast = (task: RGB11Task) => task.members.every((item) => (
-  ['broadcast', 'pending', 'settled'].includes(String(item?.status || '').toLowerCase())
-))
-
-const rgb11TaskMode = (task: RGB11Task) => {
-  if (task.representative?.address_mode) return t('rgb11Transfer.addressMode')
-  const transport = rgb11TaskTransport(task)
-  if (transport === 'rgb-json-rpc') return 'RGB JSON-RPC'
-  if (transport === 'out-of-band') return 'out-of-band'
-  return t('rgb11Transfer.legacyTransportUnsupported')
-}
-
-const rgb11TaskActionLabel = (task: RGB11Task) => {
-  if (rgb11TaskIsBroadcast(task)) return t('rgb11Transfer.refreshTask')
-  if (rgb11TaskTransport(task) === 'out-of-band') return t('rgb11Transfer.matchSummary')
-  return t('rgb11Transfer.retryTask')
-}
-
-const canCancelRGB11Task = (task: RGB11Task) => (
-  rgb11TaskTransport(task) === 'out-of-band' && !rgb11TaskIsBroadcast(task)
-)
-
-const setRGB11TaskMessage = (task: RGB11Task, success: boolean, text: string) => {
-  rgb11TaskMessages.value = {
-    ...rgb11TaskMessages.value,
-    [task.key]: { success, text },
-  }
-}
-
-const reloadRGB11TaskState = async (check?: () => void) => {
-  const [stateErr, stateResult] = await walletManager.getRGB11State()
-  if (stateErr || !stateResult?.state) {
-    throw stateErr || new Error(t('rgb11Transfer.taskRefreshFailed'))
-  }
-  check?.()
-  rgb11Store.setState(JSON.parse(stateResult.state))
-  emit('refresh')
-}
-
-const applyDirectMailboxState = async (encodedResult: string | undefined, check: () => void) => {
-  let activity = 0
-  try {
-    const result = JSON.parse(encodedResult || '{}')
-    activity = Number(result.received || 0) + Number(result.acks || 0) + Number(result.invalid || 0)
-  } catch {
-    activity = 1
-  }
-  if (!activity) return
-  const [stateErr, stateResult] = await walletManager.getRGB11State()
-  if (stateErr || !stateResult?.state) throw stateErr || new Error(t('rgb11Transfer.taskRefreshFailed'))
-  check()
-  rgb11Store.setState(JSON.parse(stateResult.state))
-  emit('refresh')
-}
-
-const syncDirectMailboxOnce = async (recordOperation: boolean) => {
-  if (directMailboxSync) return directMailboxSync
-  const check = guardDirectTask()
-  directMailboxSync = (async () => {
-    const [error, result] = recordOperation
-      ? await rgb11Address.syncMailbox({})
-      : await rgb11Address.syncMailboxInBackground({})
+    const [error, files] = await walletManager.exportRGB11Contract(asset.key || asset.id)
     if (error) throw error
-    check()
-    await applyDirectMailboxState(result?.result, check)
-  })()
-  try {
-    await directMailboxSync
-  } finally {
-    directMailboxSync = undefined
-  }
+    for (const file of files || []) saveExportFile(file)
+    rgb11ExportMessages.value[id] = {success: true, text: t('rgb11Transfer.exportContractSucceeded')}
+  } catch (error) { rgb11ExportMessages.value[id] = {success: false, text: String(error)} }
+  finally { rgb11Exporting.value = '' }
 }
-
-const stopDirectMailboxRetry = () => {
-  directMailboxGeneration++
-  if (directMailboxTimer) clearTimeout(directMailboxTimer)
-  directMailboxTimer = undefined
+const resumeRGB11Task = (task: RGBTransferView) => {
+  resumeTaskId.value = task.id
+  resumeTaskAsset.value = props.assets.find(asset => (asset.key || asset.id) === task.recipients[0]?.amount.asset) || null
+  showResumeTask.value = true
 }
-
-const startDirectMailboxRetry = (discoveryWindow = false) => {
-  stopDirectMailboxRetry()
-  if (!directAlive || !directAllowed.value) return
-  let check: () => void
-  try { check = guardDirectTask() } catch { return }
-  const generation = directMailboxGeneration
-  const run = async (attempt: number) => {
-    if (generation !== directMailboxGeneration || selectedType.value !== 'RGB11') return
-    try {
-      check()
-      await syncDirectMailboxOnce(false)
-      check()
-      if (generation !== directMailboxGeneration) return
-      // SDK mailbox sync owns Direct ACK -> broadcast progression using the
-      // durable reservation state. The page only refreshes presentation state.
-      if (directStateInvalid) {
-        await reloadRGB11TaskState(check)
-        directStateInvalid = false
-      }
-    } catch {
-      // The exact Direct outbox remains durable. Retry only inside this bounded window.
-    }
-    if (generation !== directMailboxGeneration || selectedType.value !== 'RGB11') return
-    if (attempt + 1 >= directMailboxRetryDelays.length) return
-    if (!discoveryWindow && !directMailboxNeedsSync.value) return
-    directMailboxTimer = setTimeout(() => void run(attempt + 1), directMailboxRetryDelays[attempt + 1])
-  }
-  directMailboxTimer = setTimeout(() => void run(0), directMailboxRetryDelays[0])
+const refreshRGB11TaskState = async () => {
+  const [error, value] = await walletManager.refreshRGB11State()
+  if (error || !value) throw error || new Error(t('rgb11Transfer.taskRefreshFailed'))
+  rgb11Store.setState(value); emit('refresh')
 }
-
-const refreshRGB11TaskState = async (check?: () => void) => {
-  const [refreshErr] = await walletManager.refreshRGB11State()
-  if (refreshErr) throw refreshErr
-  check?.()
-  await reloadRGB11TaskState(check)
-}
-
-const completeRGB11TaskBroadcast = async (task: RGB11Task, txid: string, check?: () => void) => {
-  try {
-    await refreshRGB11TaskState(check)
-    setRGB11TaskMessage(task, true, t('rgb11Transfer.taskBroadcasted', { txid }))
-  } catch (error: any) {
-    check?.()
-    setRGB11TaskMessage(task, true, t('rgb11Transfer.taskBroadcastedRefreshFailed', {
-      txid,
-      error: error?.message || t('rgb11Transfer.taskRefreshFailed'),
-    }))
-  }
-}
-
-const resumeRGB11Task = async (task: RGB11Task) => {
-  if (rgb11TaskBusy.value) return
-  rgb11TaskBusy.value = task.key
-  setRGB11TaskMessage(task, true, '')
-  let check: (() => void) | undefined
-  try {
-    if (task.representative?.address_mode) check = guardDirectTask()
-    if (rgb11TaskIsBroadcast(task)) {
-      await refreshRGB11TaskState(check)
-      setRGB11TaskMessage(task, true, t('rgb11Transfer.taskRefreshed'))
-      return
-    }
-    const ids = task.members.map((item) => String(item.transfer_id || '')).filter(Boolean)
-    if (!ids.length) throw new Error(t('rgb11Transfer.taskResumeFailed'))
-    if (task.representative?.address_mode) {
-      await syncDirectMailboxOnce(true)
-      check!()
-      const [err, result] = await rgb11Address.deliverAndBroadcast({ transfer_id: ids[0] })
-      check!()
-	  if (err || !result) throw err || new Error(t('rgb11Transfer.broadcastFailed'))
-	  if (result.awaiting_ack) {
-		setRGB11TaskMessage(task, true, t('rgb11Transfer.addressAckPending'))
-		return
-	  }
-	  if (!result.broadcast || !result.txid) throw new Error(t('rgb11Transfer.broadcastFailed'))
-      await completeRGB11TaskBroadcast(task, result.txid, check)
-      return
-    }
-    const transport = rgb11TaskTransport(task)
-    if (transport === 'rgb-json-rpc') {
-      const [err, result] = await walletManager.deliverAndBroadcastRGB11ProxyTransfer(ids)
-	  if (err || !result) throw err || new Error(t('rgb11Transfer.broadcastFailed'))
-	  if (result.rejected) {
-		setRGB11TaskMessage(task, false, t('rgb11Transfer.proxyRejected'))
-		await refreshRGB11TaskState()
-		return
-	  }
-	  if (result.awaiting_ack) {
-		setRGB11TaskMessage(task, true, t('rgb11Transfer.proxyAckPending'))
-		return
-	  }
-	  if (!result.broadcast || !result.txid) throw new Error(t('rgb11Transfer.broadcastFailed'))
-      await completeRGB11TaskBroadcast(task, result.txid)
-      return
-    }
-    if (transport === 'out-of-band') {
-      const asset = rgb11TaskResumeAsset(rgb11State.value, task.representative)
-      if (!asset) throw new Error(t('rgb11Transfer.taskResumeFailed'))
-      resumeTaskAsset.value = asset
-      resumeTaskId.value = ids[0]
-      showResumeTask.value = true
-      return
-    }
-    throw new Error(t('rgb11Transfer.legacyTransportUnsupported'))
-  } catch (error: any) {
-    if (task.representative?.address_mode) {
-      if (!check) return
-      try { check() } catch { return }
-      // In particular, publish the SDK's durable broadcast-attempted state;
-      // an ambiguous result must not cause automatic blind redispatch.
-      try { await reloadRGB11TaskState(check) } catch { /* Preserve the original error. */ }
-      try { check() } catch { return }
-    }
-    setRGB11TaskMessage(task, false, error?.message || t('rgb11Transfer.taskResumeFailed'))
-  } finally {
-    rgb11TaskBusy.value = ''
-  }
-}
-
-const refreshRGB11Task = async (task: RGB11Task) => {
-  if (rgb11TaskBusy.value) return
-  rgb11TaskBusy.value = task.key
-  try {
-    await refreshRGB11TaskState()
-    setRGB11TaskMessage(task, true, t('rgb11Transfer.taskRefreshed'))
-  } catch (error: any) {
-    setRGB11TaskMessage(task, false, error?.message || t('rgb11Transfer.taskRefreshFailed'))
-  } finally {
-    rgb11TaskBusy.value = ''
-  }
-}
-
-const cancelRGB11Task = async (task: RGB11Task) => {
-  if (rgb11TaskBusy.value || !canCancelRGB11Task(task)) return
-  if (!window.confirm(t('rgb11Transfer.taskCancelConfirm'))) return
-  rgb11TaskBusy.value = task.key
-  try {
-    const [err] = await walletManager.cancelRGB11OutOfBandTransfer(String(task.representative.transfer_id || ''))
-    if (err) throw err
-    await reloadRGB11TaskState()
-    setRGB11TaskMessage(task, true, t('rgb11Transfer.taskCancelled'))
-  } catch (error: any) {
-    setRGB11TaskMessage(task, false, error?.message || t('rgb11Transfer.taskCancelFailed'))
-  } finally {
-    rgb11TaskBusy.value = ''
-  }
-}
-
-// 监听资产类型变化
-watch(selectedType, (newType) => {
-  // console.log('L1AssetsTabs - Selected Type Changed:', newType)
-  emit('update:modelValue', newType)
-  directContextGeneration++
-  if (newType === 'RGB11') startDirectMailboxRetry(true)
-  else stopDirectMailboxRetry()
-}, { immediate: true })
-
-watch(directMailboxFingerprint, () => {
-  if (directAllowed.value && directMailboxNeedsSync.value) startDirectMailboxRetry(false)
-})
-
-watch([directScope, directAllowed], () => {
-  directContextGeneration++
-  rgb11TransferLimit.value = 8
-  showInflation.value = false
-  inflationAsset.value = null
-  directStateInvalid = true
-  stopDirectMailboxRetry()
-  if (directAllowed.value) startDirectMailboxRetry(true)
-}, { flush: 'sync' })
-const stopDirectIdentity = subscribeWalletIdentity((state) => {
-  directContextGeneration++
-  directStateInvalid = true
-  stopDirectMailboxRetry()
-  if (state.phase === 'READY' && directAllowed.value) startDirectMailboxRetry(true)
-})
-onUnmounted(() => {
-  directAlive = false
-  directContextGeneration++
-  stopDirectMailboxRetry()
-  stopDirectIdentity()
+watch(selectedType, value => emit('update:modelValue', value), {immediate: true})
+watch(() => [walletStore.walletId, walletStore.accountIndex, walletStore.network], () => {
+  showResumeTask.value = false; resumeTaskAsset.value = null
+  showInflation.value = false; inflationAsset.value = null
 })
 
 // 格式化金额显示
@@ -868,14 +346,9 @@ const isPositiveAmount = (amount: number | string | undefined) => {
   return value !== '' && !/^0*(?:\.0*)?$/.test(value)
 }
 
-const hasAvailableRGB11 = (asset: Asset) => isPositiveAmount(asset.available_amount)
+const hasAvailableRGB11 = (asset: Asset) => rgbAsset(asset)?.can_send === true
 const isFungibleRGB11 = (asset: Asset) => asset.type === 'f' && /^[0-9a-f]{64}$/.test(asset.ticker)
-const canMoveRGB11 = (asset: Asset) => isFungibleRGB11(asset) &&
-  rgb11State.value.consistency_status === 'ok' && !rgb11Error.value && hasAvailableRGB11(asset)
-
-const rgb11ProofLockReason = (proof: any) => (
-  proof?.status === 'settled' && Number(proof?.confirmations || 0) > 0 ? 'rgb' : 'pending-rgb'
-)
+const canMoveRGB11 = (asset: Asset) => isFungibleRGB11(asset) && rgb11State.value.can_write && hasAvailableRGB11(asset)
 
 const formatAmount = (asset: Asset) => {
   if (hideBalance.value) {
@@ -891,27 +364,10 @@ const formatAmount = (asset: Asset) => {
 }
 
 const handlerRefresh = async () => {
-  console.log('L1AssetsTabs - Refresh')
   if (selectedType.value === 'RGB11') {
-    let checkSession: () => void
-    try { checkSession = walletRequestSessionGuard('refreshRGB11State') } catch { return }
-    try {
-      await syncDirectMailboxOnce(true)
-    } catch {
-      // The normal asset refresh still runs; the bounded retry keeps the durable Direct task alive.
-    } finally {
-      startDirectMailboxRetry(true)
-    }
-    try {
-      checkSession()
-      await refreshRGB11TaskState(checkSession)
-    } catch (error) {
-      try { checkSession() } catch { return }
-      rgb11Store.setError(error instanceof Error ? error.message : String(error || ''))
-    }
-    return
-  }
-  emit('refresh')
+    try { await refreshRGB11TaskState() }
+    catch (error) { rgb11Store.setError(error instanceof Error ? error.message : String(error)) }
+  } else emit('refresh')
 }
 </script>
 

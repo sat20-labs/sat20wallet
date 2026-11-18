@@ -6,7 +6,7 @@ import (
 	indexer "github.com/sat20-labs/indexer/common"
 )
 
-func TestHasMultiAssetPreservesNativeAndLegacyCarriers(t *testing.T) {
+func TestMultiAssetCarriers(t *testing.T) {
 	arc := indexer.AssetName{Protocol: indexer.PROTOCOL_NAME_ATOM, Type: indexer.ASSET_TYPE_FT, Ticker: "quark"}
 	atomNFT := indexer.AssetName{Protocol: indexer.PROTOCOL_NAME_ATOM, Type: indexer.ASSET_TYPE_NFT, Ticker: "atomical"}
 	rgb := indexer.AssetName{Protocol: "rgb11", Type: indexer.ASSET_TYPE_FT, Ticker: "contract-a"}

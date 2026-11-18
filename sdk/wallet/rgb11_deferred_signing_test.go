@@ -54,11 +54,11 @@ func TestRGB11UnsignedExpiredCancelCannotResumeAndReleasesInputs(t *testing.T) {
 		t.Fatal(err)
 	}
 	coreAssertRGB11Reservation(t, sender, original.State.TransferID, false, original)
-	delivery, err := sender.DeliverAndBroadcastConfiguredRGB11AddressTransfer(original.State.TransferID, RGB11AddressDeliveryOptions{})
+	delivery, err := sender.DeliverAndBroadcastConfiguredRGB11AddressTransfer(original.State.TransferID)
 	if err != nil || delivery == nil || delivery.Broadcast || delivery.TxID != "" || delivery.RecordKey != "" || delivery.RecordHash != "" || delivery.ObjectID != "" {
 		t.Fatalf("canceled preparation performed delivery/broadcast: result=%+v err=%v", delivery, err)
 	}
-	if _, err := sender.rgbManager.deliverRGB11AddressTransferStore(mustRGB11ConfiguredStore(t, sender), original.State.TransferID, RGB11AddressDeliveryOptions{}); !errors.Is(err, ErrRGB11AddressDeliveryRequired) {
+	if _, err := sender.rgbManager.deliverRGBAddress(original.State.TransferID); !errors.Is(err, ErrRGB11AddressDeliveryRequired) {
 		t.Fatalf("canceled preparation reached direct delivery: %v", err)
 	}
 	if _, err := sender.BroadcastRGB11AddressTransfer(original.State.TransferID); !errors.Is(err, ErrRGB11AddressDeliveryRequired) {
@@ -88,7 +88,7 @@ func TestRGB11UnsignedExpiredCancelCannotResumeAndReleasesInputs(t *testing.T) {
 	if broadcasts != 0 {
 		t.Fatalf("cancel/resume/new preparation reached broadcast %d times", broadcasts)
 	}
-	mailbox, err := recipient.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+	mailbox, err := recipient.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{})
 	if err != nil || mailbox == nil || mailbox.Received != 0 || mailbox.ACKs != 0 || mailbox.Invalid != 0 {
 		t.Fatalf("canceled or unshared preparation leaked to recipient mailbox: result=%+v err=%v", mailbox, err)
 	}
@@ -142,11 +142,11 @@ func TestRGB11DirectBroadcastTimeoutCannotCancelAndResolvesWithoutRebroadcast(t 
 		t.Fatal(err)
 	}
 	original := assertRGB11UnsignedPending(t, sender.rgbManager, prepared.State.TransferID)
-	delivered, err := sender.DeliverAndBroadcastConfiguredRGB11AddressTransfer(original.State.TransferID, RGB11AddressDeliveryOptions{})
+	delivered, err := sender.DeliverAndBroadcastConfiguredRGB11AddressTransfer(original.State.TransferID)
 	if err != nil || delivered == nil || !delivered.AwaitingACK || delivered.Broadcast {
 		t.Fatalf("delivery before ACK: result=%+v err=%v", delivered, err)
 	}
-	received, err := recipient.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+	received, err := recipient.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{})
 	if err != nil || received == nil || received.Received != 1 || received.Invalid != 0 {
 		t.Fatalf("real receiver ACK: result=%+v err=%v", received, err)
 	}
@@ -156,7 +156,7 @@ func TestRGB11DirectBroadcastTimeoutCannotCancelAndResolvesWithoutRebroadcast(t 
 	// Drive reconciliation explicitly so it cannot race the deliberately hidden
 	// transaction status while this test exercises cancellation after timeout.
 	sender.rgbManager.scopeStates.stopReconciliations()
-	ack, err := sender.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+	ack, err := sender.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{})
 	broadcastCalls := evidence.calls()
 	unknownResult := errors.Is(err, ErrRGB11BroadcastResultUnknown)
 	deadlineResult := errors.Is(err, context.DeadlineExceeded)
@@ -218,7 +218,7 @@ func (w *rgb11CountingSigner) SignRGB11Psbt(packet *psbt.Packet, keys map[int]RG
 func countRGB11Signatures(t *testing.T, manager *Manager) *atomic.Int64 {
 	t.Helper()
 	counter := &atomic.Int64{}
-	// Keep the account-recovery root native. The existing RGB scope has its
+	// Keep the account-recovery root RGB11. The existing RGB scope has its
 	// own wallet clone and still delegates recovery/CAS to that original root.
 	scoped, err := manager.rootRGB11Manager()
 	if err != nil {
@@ -266,21 +266,21 @@ func TestRGB11OrdinaryBatchSignsOnlyAfterEveryACK(t *testing.T) {
 	if calls.Load() != 0 {
 		t.Fatalf("prepare made %d Bitcoin signing calls", calls.Load())
 	}
-	// Direct-message encryption intentionally requires the native wallet type.
+	// Direct-message encryption intentionally requires the RGB11 wallet type.
 	// Remove only the counter after proving zero prepare signatures; retain
 	// real transport/ACK processing and inspect actual witness bytes below.
 	sender.rgbManager.wallet = sender.rgbManager.wallet.(*rgb11CountingSigner).InternalWallet
 	original := assertRGB11UnsignedPending(t, sender.rgbManager, prepared.States[0].TransferID)
 	for i, state := range prepared.States {
-		if _, err := sender.rgbManager.deliverRGB11AddressTransferStore(mustRGB11ConfiguredStore(t, sender), state.TransferID, RGB11AddressDeliveryOptions{}); err != nil {
+		if _, err := sender.rgbManager.deliverRGBAddress(state.TransferID); err != nil {
 			t.Fatal(err)
 		}
-		result, err := recipient.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+		result, err := recipient.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{})
 		if err != nil || result == nil || result.Received != 1 || result.Invalid != 0 {
 			t.Fatalf("receive output %d: result=%+v err=%v", i, result, err)
 		}
 		assertRGB11UnsignedPending(t, sender.rgbManager, state.TransferID)
-		if _, err := sender.rgbManager.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{}); err != nil {
+		if _, err := sender.rgbManager.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}); err != nil {
 			t.Fatal(err)
 		}
 		if i == 0 {

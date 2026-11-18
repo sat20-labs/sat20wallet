@@ -135,7 +135,6 @@ try:
         streams.extend([stdout, stderr])
         readers[name] = (directory / "results.jsonl").open()
         command = ["/usr/bin/time", "-v", "-o", str(directory / "time.txt"),
-                   "/usr/bin/nice", "-n", "10", "/usr/bin/ionice", "-c2", "-n7",
                    str(bundle / "test2json"), "-t", "-p", lane["package"],
                    str(bundle / lane["binary"]), "-test.v=test2json", "-test.run=" + lane["selector"],
                    "-test.skip=" + config["skip_selector"], "-test.count=1", "-test.parallel=1",

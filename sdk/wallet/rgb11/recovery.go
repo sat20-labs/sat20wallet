@@ -32,6 +32,19 @@ type RecoveryPackage struct {
 	EngineRecords     []SnapshotRecord
 }
 
+func activeRGB11TransferStatus(status string) bool {
+	switch status {
+	case "prepared", "delivered", "relayed", "broadcast-attempted", "broadcast", "pending", "awaiting_broadcast":
+		return true
+	default:
+		return false
+	}
+}
+
+func cloneSnapshotRecord(record SnapshotRecord) SnapshotRecord {
+	return SnapshotRecord{Key: record.Key, Value: append([]byte(nil), record.Value...)}
+}
+
 func minimalRecoveryOutput(record SnapshotRecord, assets map[indexer.AssetName]struct{}) (SnapshotRecord, error) {
 	var output indexer.TxOutput
 	if decode(record.Value, &output) != nil || output.OutPointStr == "" ||
@@ -280,10 +293,10 @@ func canonicalizeRecoveryProjectionRecords(records []SnapshotRecord) ([]Snapshot
 		if decode(record.Value, &receipt) != nil || receipt.validate(hash) != nil {
 			return nil, ErrValidationReceipt
 		}
-		if receipt.EngineBuildID != NativeEngineBuildID {
+		if receipt.EngineBuildID != RGB11EngineBuildID {
 			return nil, ErrValidationReceipt
 		}
-		receipt.EngineBuildID = NativeEngineBuildID
+		receipt.EngineBuildID = RGB11EngineBuildID
 		receipt.ValidatedAt = 1
 		receiptBytes, err := encode(&receipt)
 		if err != nil {
@@ -361,7 +374,8 @@ func recoveryTransferMaterial(state TransferState) TransferState {
 // Project only terminal execution metadata. Status and business/signing
 // identity stay intact, including when projecting an older active comparison.
 func recoveryTerminalTransfer(state TransferState) TransferState {
-	state.AckStatus, state.RejectReason = "", ""
+	// RejectReason records the business outcome, not transient ACK bookkeeping.
+	state.AckStatus = ""
 	state.RelayRecordKey, state.AckRecordKey, state.RelayDurability = "", "", ""
 	state.RelayExpiry, state.NetworkBackupRef = 0, ""
 	state.ParentStateHash, state.DKVSOperationID = "", ""
@@ -405,9 +419,9 @@ func normalizeRecoveryPackage(value *RecoveryPackage) (*RecoveryPackage, error) 
 		return nil, fmt.Errorf("%w: recovery package is nil", ErrRGB11Inconsistent)
 	}
 	if value.Version != RecoveryPackageVersion || value.WalletID == "" ||
-		value.EngineBuildID != NativeEngineBuildID {
+		value.EngineBuildID != RGB11EngineBuildID {
 		return nil, fmt.Errorf("%w: header version=%d wallet=%q engine=%q want_engine=%q",
-			ErrRGB11Inconsistent, value.Version, value.WalletID, value.EngineBuildID, NativeEngineBuildID)
+			ErrRGB11Inconsistent, value.Version, value.WalletID, value.EngineBuildID, RGB11EngineBuildID)
 	}
 	result := &RecoveryPackage{
 		Version: RecoveryPackageVersion, WalletID: value.WalletID,
@@ -498,7 +512,7 @@ func ValidateRecoveryPackage(value *RecoveryPackage) error {
 		if strings.HasPrefix(record.Key, "validation-") {
 			var receipt ValidationReceipt
 			if decode(record.Value, &receipt) != nil || receipt.ValidatedAt != 1 ||
-				receipt.EngineBuildID != NativeEngineBuildID {
+				receipt.EngineBuildID != RGB11EngineBuildID {
 				return fmt.Errorf("%w: non-canonical recovery receipt %s", ErrRGB11Inconsistent, record.Key)
 			}
 		}
@@ -535,7 +549,7 @@ func (p *RecoveryPackage) WalletSnapshot() (*RGB11WalletSnapshot, error) {
 func MergeRecoverySnapshot(current, recovery *RGB11WalletSnapshot) (*RGB11WalletSnapshot, error) {
 	if current == nil || recovery == nil || current.WalletID != recovery.WalletID ||
 		current.AccountIndex != recovery.AccountIndex ||
-		current.EngineBuildID != NativeEngineBuildID || recovery.EngineBuildID != NativeEngineBuildID {
+		current.EngineBuildID != RGB11EngineBuildID || recovery.EngineBuildID != RGB11EngineBuildID {
 		return nil, ErrRGB11Inconsistent
 	}
 	if err := ValidateWalletSnapshot(current); err != nil {
@@ -600,7 +614,7 @@ func MergeRecoverySnapshot(current, recovery *RGB11WalletSnapshot) (*RGB11Wallet
 
 	merged := &RGB11WalletSnapshot{
 		Version: current.Version, WalletID: current.WalletID,
-		AccountIndex: current.AccountIndex, EngineBuildID: NativeEngineBuildID,
+		AccountIndex: current.AccountIndex, EngineBuildID: RGB11EngineBuildID,
 		EngineRecords:     make([]SnapshotRecord, 0, len(engine)),
 		ProjectionRecords: make([]SnapshotRecord, 0, len(projection)),
 	}
@@ -630,7 +644,7 @@ func MergeRecoverySnapshot(current, recovery *RGB11WalletSnapshot) (*RGB11Wallet
 func MergeSelectedRecoverySnapshot(current, selected *RGB11WalletSnapshot) (*RGB11WalletSnapshot, error) {
 	if current == nil || selected == nil || current.WalletID != selected.WalletID ||
 		current.AccountIndex != selected.AccountIndex ||
-		current.EngineBuildID != NativeEngineBuildID || selected.EngineBuildID != NativeEngineBuildID {
+		current.EngineBuildID != RGB11EngineBuildID || selected.EngineBuildID != RGB11EngineBuildID {
 		return nil, ErrRGB11Inconsistent
 	}
 	if err := ValidateWalletSnapshot(current); err != nil {
@@ -696,7 +710,7 @@ func MergeSelectedRecoverySnapshot(current, selected *RGB11WalletSnapshot) (*RGB
 				ErrRGB11Inconsistent, key)
 		}
 	}
-	selectedSnapshot.EngineBuildID = NativeEngineBuildID
+	selectedSnapshot.EngineBuildID = RGB11EngineBuildID
 	return selectedSnapshot, nil
 }
 
@@ -818,7 +832,7 @@ func compatibleSelectedRecoveryRecord(current, selected SnapshotRecord) error {
 			return ErrValidationReceipt
 		}
 		// This is an identity/subset check, not validation of new facts. The
-		// wallet importer authenticates expanded receipts against native history
+		// wallet importer authenticates expanded receipts against RGB11 history
 		// before the candidate can be committed.
 		selected, err := SelectHistoricalValidationReceipt(&HistoricalValidation{MaterialReceipt: &right},
 			&left, right.Allocations)

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	"reflect"
 	"sort"
 	"strings"
@@ -24,13 +25,12 @@ import (
 )
 
 type rgb11ResolvedRecoveryProjection struct {
+	directPoint   string // set only when publishing one confirmed Direct output
 	snapshot      *RGB11WalletSnapshot
 	lockReasons   map[string]string
 	tickerInfos   []*indexer.TickerInfo
-	complete      bool
 	checkEvidence func() error
 	faults        []rgb11wallet.ProofFault
-	ready         map[string]bool
 }
 
 var errRGB11SpenderUnknown = errors.New("unidentified spender")
@@ -65,7 +65,7 @@ type rgb11CandidateEvidence struct {
 
 func newRGB11CandidateEvidence(provider rgb11wallet.BitcoinEvidenceProvider) *rgb11CandidateEvidence {
 	return &rgb11CandidateEvidence{
-		BitcoinEvidenceProvider: provider,
+		BitcoinEvidenceProvider: rgb11wallet.ScopedBitcoinEvidence(provider),
 		utxos:                   make(map[string]*rgb11wallet.BitcoinUTXO),
 		statuses:                make(map[string]*rgb11wallet.BitcoinTxStatus),
 		outspends:               make(map[string]*rgb11wallet.BitcoinOutspend),
@@ -140,6 +140,21 @@ func (e *rgb11CandidateEvidence) GetRawTx(txid string) ([]byte, error) {
 	return raw, err
 }
 
+// Read the old height from the same Bitcoin source used by the RGB wallet.
+// Without positive ancestry evidence the original rejection still applies.
+func (p *indexerBitcoinEvidenceProvider) canonicalRGB11Tip(tip rgb11wallet.BitcoinTip) bool {
+	client := p.client
+	if mgr, ok := client.(*IndexerRPCClientMgr); ok {
+		client = mgr.getActiveIndexer()
+	}
+	header, err := (settlementBitcoinHeaders{client}).GetBitcoinBlockHeader(int(tip.Height))
+	return err == nil && header != nil && header.Height == tip.Height && header.Hash == tip.BlockHash && header.Confirmations > 0
+}
+
+// A dependency can change with the tip (for example its confirmation count).
+// RPC failures remain distinct and must never be converted to a tip retry.
+type rgb11EvidenceChange struct{ error }
+
 func (e *rgb11CandidateEvidence) verifyStable(ctx context.Context) error {
 	for _, outpoint := range sortedRGB11EvidenceKeys(e.outspends) {
 		if err := ctx.Err(); err != nil {
@@ -150,7 +165,7 @@ func (e *rgb11CandidateEvidence) verifyStable(ctx context.Context) error {
 			return err
 		}
 		if !reflect.DeepEqual(e.outspends[outpoint], value) {
-			return fmt.Errorf("Bitcoin outspend %s changed while resolving RGB11 candidate", outpoint)
+			return rgb11EvidenceChange{fmt.Errorf("Bitcoin outspend %s changed while resolving RGB11 candidate", outpoint)}
 		}
 	}
 	for _, outpoint := range sortedRGB11EvidenceKeys(e.utxos) {
@@ -162,7 +177,7 @@ func (e *rgb11CandidateEvidence) verifyStable(ctx context.Context) error {
 			return err
 		}
 		if !reflect.DeepEqual(e.utxos[outpoint], value) {
-			return fmt.Errorf("Bitcoin UTXO %s changed while resolving RGB11 candidate", outpoint)
+			return rgb11EvidenceChange{fmt.Errorf("Bitcoin UTXO %s changed while resolving RGB11 candidate", outpoint)}
 		}
 	}
 	for _, txid := range sortedRGB11EvidenceKeys(e.statuses) {
@@ -174,7 +189,7 @@ func (e *rgb11CandidateEvidence) verifyStable(ctx context.Context) error {
 			return err
 		}
 		if !reflect.DeepEqual(e.statuses[txid], value) {
-			return fmt.Errorf("Bitcoin transaction status %s changed while resolving RGB11 candidate", txid)
+			return rgb11EvidenceChange{fmt.Errorf("Bitcoin transaction status %s changed while resolving RGB11 candidate", txid)}
 		}
 	}
 	return nil
@@ -370,7 +385,7 @@ func (p *rgb11Manager) rgb11SnapshotLockPlan(current, candidate *RGB11WalletSnap
 			inputWitnesses[outpoint] = state.WitnessTxID
 			group.outpoints[outpoint] = struct{}{}
 			if _, hasProof := proofOutpoints[outpoint]; hasProof {
-				group.previousReasons[outpoint] = rgb11wallet.LockReasonRGB
+				group.previousReasons[outpoint] = sdkcommon.UtxoLockRGB
 			}
 		}
 		for _, outpoint := range rgb11PendingChangeOutpoints(pending) {
@@ -391,7 +406,7 @@ func (p *rgb11Manager) rgb11SnapshotLockPlan(current, candidate *RGB11WalletSnap
 					// Confirmation loss can reopen change already protected by
 					// its own RGB proof after recovery. Preserve that reason when
 					// assigning the operation owner; unrelated locks still conflict.
-					group.previousReasons[outpoint] = rgb11wallet.LockReasonRGB
+					group.previousReasons[outpoint] = sdkcommon.UtxoLockRGB
 				}
 			}
 		}
@@ -414,7 +429,7 @@ func (p *rgb11Manager) rgb11SnapshotLockPlan(current, candidate *RGB11WalletSnap
 			}
 			for outpoint := range group.changeOutpoints {
 				if plan.Reasons[outpoint] == "" {
-					plan.Reasons[outpoint] = rgb11wallet.LockReasonRGB
+					plan.Reasons[outpoint] = sdkcommon.UtxoLockRGB
 				}
 			}
 			continue
@@ -669,6 +684,11 @@ func rgb11ConsumerInputKey(consumer rgb11SnapshotConsumerInput) (string, error) 
 
 func (p *rgb11Manager) resolveRGB11RecoveryProjection(ctx context.Context,
 	snapshot *RGB11WalletSnapshot, expandedReceipts ...string) (*rgb11ResolvedRecoveryProjection, error) {
+	return p.resolveRGB11Recovery(ctx, snapshot, expandedReceipts, nil)
+}
+
+func (p *rgb11Manager) resolveRGB11Recovery(ctx context.Context, snapshot *RGB11WalletSnapshot,
+	expandedReceipts []string, faults []rgb11wallet.ProofFault) (*rgb11ResolvedRecoveryProjection, error) {
 	if p == nil || p.rgbManager == nil ||
 		p.rgbManager.projectionStore == nil || snapshot == nil {
 		return nil, ErrRGB11Inconsistent
@@ -695,12 +715,12 @@ func (p *rgb11Manager) resolveRGB11RecoveryProjection(ctx context.Context,
 		if err != nil {
 			return nil, err
 		}
-		if !rgb11SnapshotHasState(current) && len(reservations) == 0 &&
+		if len(faults) == 0 && !rgb11SnapshotHasState(current) && len(reservations) == 0 &&
 			snapshot.WalletID == current.WalletID && snapshot.AccountIndex == current.AccountIndex &&
 			snapshot.EngineBuildID == current.EngineBuildID {
 			resolved := *snapshot
 			return &rgb11ResolvedRecoveryProjection{snapshot: &resolved,
-				lockReasons: make(map[string]string), complete: true, checkEvidence: ctx.Err}, nil
+				lockReasons: make(map[string]string), checkEvidence: ctx.Err}, nil
 		}
 	}
 	if p.rgbManager.evidence == nil {
@@ -853,7 +873,7 @@ func (p *rgb11Manager) resolveRGB11RecoveryProjection(ctx context.Context,
 		}
 		reveals = append(reveals, seal)
 	}
-	validator := rgb11wallet.NewNativeConsensusValidatorWithReveals(reveals...)
+	validator := rgb11wallet.NewRGB11ValidatorWithReveals(reveals...)
 	consumers, validatedHistories, err := rgb11SnapshotConsignmentConsumers(ctx, validator, evidence, objects)
 	if err != nil {
 		return nil, err
@@ -1209,7 +1229,7 @@ func (p *rgb11Manager) resolveRGB11RecoveryProjection(ctx context.Context,
 				}
 				if consumerOperation == "" || len(hashes) == 0 {
 					if !spenderStatus.Confirmed {
-						return nil, fmt.Errorf("RGB11 allocation %s has an unvalidated mempool spender", proof.OutPoint)
+						return nil, &rgb11MempoolSpend{point: proof.OutPoint, spender: spenderID}
 					}
 					if _, verified := verifyRGB11ExpectedSpend(evidence, proof.OutPoint, spenderID); !verified {
 						return nil, fmt.Errorf("RGB11 allocation %s has no exact confirmed raw spender", proof.OutPoint)
@@ -1401,6 +1421,36 @@ func (p *rgb11Manager) resolveRGB11RecoveryProjection(ctx context.Context,
 		}
 	}
 
+	// Only authenticated selected import supplies faults. A cached "spending"
+	// projection, an unconfirmed edge, or a different confirmed spender cannot
+	// release a previous quarantine. Use this pass's validated full Opout,
+	// mined consumer graph and exact Bitcoin input, under the same evidence
+	// tracker that rechecks live outspends/statuses and tip before commit.
+	for _, f := range faults {
+		cause, ok := f.Cause.(*rgb11MempoolSpend)
+		state := proofStates[f.OutPoint+"|"+f.AssetName.String()]
+		if !ok || cause == nil || cause.point != f.OutPoint || state == nil || state.currentStatus != "spending" ||
+			state.outspend == nil || !state.outspend.Spent || state.outspend.SpendingTx != cause.spender {
+			return nil, rgb11BackupFaults(faults)
+		}
+		proof := state.proof
+		key := rgb11ProofIndexKey(mustRGB11ContractID(f.AssetName), proof.OperationID,
+			proof.AssignmentType, proof.AssignmentIndex)
+		mined := false
+		for _, edge := range consumersByInput[key] {
+			if edge.WitnessTxID == cause.spender && edge.WitnessState == uint8(coreconsignment.WitnessMined) {
+				mined = true
+				break
+			}
+		}
+		if !mined {
+			return nil, rgb11BackupFaults(faults)
+		}
+		if _, verified := verifyRGB11ExpectedSpend(evidence, f.OutPoint, cause.spender); !verified {
+			return nil, rgb11BackupFaults(faults)
+		}
+	}
+
 	// Reconcile only journals bound to the prepared owned successors just
 	// verified above. Missing-successor/full-send recovery retains the settled
 	// guards below; Bitcoin input absence alone cannot authorize RGB rollback.
@@ -1450,7 +1500,6 @@ func (p *rgb11Manager) resolveRGB11RecoveryProjection(ctx context.Context,
 
 	updates := make([]rgb11wallet.SnapshotProofUpdate, 0, len(proofs))
 	lockReasons := make(map[string]string, len(proofs))
-	complete := true
 	for _, proof := range proofs {
 		state := proofStates[proof.OutPoint+"|"+proof.AssetName.String()]
 		if state == nil {
@@ -1460,20 +1509,20 @@ func (p *rgb11Manager) resolveRGB11RecoveryProjection(ctx context.Context,
 			OutPoint: proof.OutPoint, AssetName: proof.AssetName,
 			Status: state.currentStatus, Confirmations: state.confirmations,
 		})
-		reason := rgb11wallet.LockReasonPending
+		reason := sdkcommon.UtxoLockRGBPending
 		current := *proof
 		current.Status = state.currentStatus
 		current.Confirmations = state.confirmations
 		if !state.activeOperation && rgb11ProofIsAvailable(&current, requirements) {
-			reason = rgb11wallet.LockReasonRGB
+			reason = sdkcommon.UtxoLockRGB
 		}
-		if previous := lockReasons[proof.OutPoint]; previous == rgb11wallet.LockReasonPending {
+		if previous := lockReasons[proof.OutPoint]; previous == sdkcommon.UtxoLockRGBPending {
 			continue
 		}
 		lockReasons[proof.OutPoint] = reason
 	}
 	for outpoint := range activeInputs {
-		lockReasons[outpoint] = rgb11wallet.LockReasonPending
+		lockReasons[outpoint] = sdkcommon.UtxoLockRGBPending
 	}
 	updatedRecords, err := rgb11wallet.UpdateProjectionSnapshotProofs(projectionRecords, updates)
 	if err != nil {
@@ -1496,13 +1545,28 @@ func (p *rgb11Manager) resolveRGB11RecoveryProjection(ctx context.Context,
 		}
 		tickerInfos[index] = info
 	}
-	after, err := evidence.GetTip()
-	if err != nil || after == nil || after.Height != expectedTip.Height || after.BlockHash != expectedTip.BlockHash {
-		return nil, fmt.Errorf("RGB11 chain tip changed while building projection: %w", errRGB11ProjectionEvidence(err))
+	checkTip := func() error {
+		tip, err := evidence.GetTip()
+		if err != nil || tip == nil {
+			return errRGB11ProjectionEvidence(err)
+		}
+		if *tip == expectedTip {
+			return nil
+		}
+		if _, refresh := ctx.(rgb11RefreshContext); refresh && tip.Height > expectedTip.Height && tip.BlockHash != "" {
+			if provider, ok := evidence.BitcoinEvidenceProvider.(*indexerBitcoinEvidenceProvider); ok && provider.canonicalRGB11Tip(expectedTip) {
+				Log.Debugf("RGB11 refresh rebuilding after canonical Bitcoin extension %d -> %d", expectedTip.Height, tip.Height)
+				return errRGB11TipAdvanced
+			}
+		}
+		return ErrRGB11Inconsistent
+	}
+	if err := checkTip(); err != nil {
+		return nil, fmt.Errorf("RGB11 chain tip changed while building projection: %w", err)
 	}
 	return &rgb11ResolvedRecoveryProjection{
 		snapshot: &resolved, lockReasons: lockReasons, tickerInfos: tickerInfos,
-		complete: complete, checkEvidence: func() error {
+		checkEvidence: func() error {
 			// A different RGB consumer can prove a carrier spent without proving
 			// this journal's fee inputs spent. Retire its owner only while its own
 			// signed witness still meets the settlement confirmation requirement.
@@ -1521,6 +1585,12 @@ func (p *rgb11Manager) resolveRGB11RecoveryProjection(ctx context.Context,
 				}
 			}
 			if err := evidence.verifyStable(ctx); err != nil {
+				if _, refresh := ctx.(rgb11RefreshContext); refresh {
+					var changed rgb11EvidenceChange
+					if errors.As(err, &changed) && errors.Is(checkTip(), errRGB11TipAdvanced) {
+						return errRGB11TipAdvanced
+					}
+				}
 				return fmt.Errorf("Bitcoin evidence changed while building RGB11 projection: %w", err)
 			}
 			// The resolver's after-tip read precedes local lock-plan calculation
@@ -1528,10 +1598,8 @@ func (p *rgb11Manager) resolveRGB11RecoveryProjection(ctx context.Context,
 			// transition during that interval cannot publish a mixed-generation
 			// projection even when the exact UTXO/outspend/status dependencies
 			// happen to remain unchanged.
-			finalTip, err := evidence.GetTip()
-			if err != nil || finalTip == nil || finalTip.Height != expectedTip.Height ||
-				finalTip.BlockHash != expectedTip.BlockHash {
-				return fmt.Errorf("RGB11 chain tip changed before projection commit: %w", errRGB11ProjectionEvidence(err))
+			if err := checkTip(); err != nil {
+				return fmt.Errorf("RGB11 chain tip changed before projection commit: %w", err)
 			}
 			return nil
 		},

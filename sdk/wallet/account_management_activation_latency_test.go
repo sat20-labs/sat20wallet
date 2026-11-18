@@ -3,10 +3,12 @@ package wallet
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -157,7 +159,7 @@ func TestAccountPaidActivationPreservesConcurrentLocalChanges(t *testing.T) {
 			secret := append([]byte(nil), manager.accountSecret...)
 			defer zeroBytes(secret)
 			_, done, release := startGatedPaidActivation(t, manager, secret, phase, endpoint)
-			oldGeneration := manager.accountProfile.ManagedDataGeneration
+			oldGeneration := walletTestRow(t, manager).Generation
 
 			if err := manager.EnsureAccount(manager.status.CurrentWallet, 1, "During activation", ""); err != nil {
 				t.Fatal(err)
@@ -169,7 +171,7 @@ func TestAccountPaidActivationPreservesConcurrentLocalChanges(t *testing.T) {
 				t.Fatal(err)
 			}
 			profile := manager.accountProfile
-			if !profile.ManagedDataDirty || profile.ManagedDataGeneration <= oldGeneration || len(profile.Pending) != 1 || profile.Pending[0].ID != mutationID {
+			if !manager.GetAccountManagementStatus().ManagedDataDirty || walletTestRow(t, manager).Generation <= oldGeneration || len(profile.Pending) != 1 || profile.Pending[0].ID != mutationID {
 				t.Fatal("activation lost a newer pending mutation or dirty generation")
 			}
 			var persisted accountManagementProfile
@@ -180,7 +182,7 @@ func TestAccountPaidActivationPreservesConcurrentLocalChanges(t *testing.T) {
 			if err := DecodeFromBytes(data, &persisted); err != nil {
 				t.Fatal(err)
 			}
-			if persisted.ManagedDataGeneration != profile.ManagedDataGeneration || !persisted.ManagedDataDirty || len(persisted.Pending) != 1 || persisted.Pending[0].ID != mutationID {
+			if len(persisted.Pending) != 1 || persisted.Pending[0].ID != mutationID {
 				t.Fatal("activation ACK is not durable with concurrent mutation")
 			}
 		})
@@ -285,18 +287,55 @@ func TestAccountActivationThenBackup(t *testing.T) {
 	if _, err := peer.ImportWallet(accountRootWrapperTestMnemonic, "password"); err != nil {
 		t.Fatal(err)
 	}
-	if err := peer.StartDKVSSync(); err != nil {
-		t.Fatal(err)
-	}
 	t.Cleanup(peer.StopDKVSSync)
-	require.Eventually(t, func() bool { return peer.GetAccountManagementStatus().DiscoveryStatus == "active-waiting-backup" }, 30*time.Second, 20*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	_, err = peer.RecoverAccountManagementFromCurrentWallet(ctx, "password")
+	cancel()
+	require.ErrorIs(t, err, ErrRootAccountDiscoveryPending)
+	require.Equal(t, "active-waiting-backup", peer.GetAccountManagementStatus().DiscoveryStatus)
+	require.False(t, peer.GetAccountManagementStatus().RecoveryConfigured)
 	before := peer.GetWalletCatalog()
+	require.False(t, peer.GetAccountManagementStatus().LocalOnly)
+	require.False(t, peer.GetAccountManagementStatus().WriteAllowed)
 	if err := peer.UpdateWalletName(peer.GetCurrentWalletId(), "forbidden replacement"); err == nil {
 		t.Fatal("new device overwrote a service whose first private backup is pending")
 	}
 	if !reflect.DeepEqual(before, peer.GetWalletCatalog()) {
 		t.Fatal("waiting discovery changed the new device catalog")
 	}
+	peer.StopDKVSSync()
+	cachedClient, err := peer.dkvs.primaryClient()
+	require.NoError(t, err)
+	peerHTTP := cachedClient.Http
+	offlineErr := errors.New("activation peer discovery transport unavailable")
+	var offlineHits atomic.Int32
+	cachedClient.Http = &reviewAcceptanceHTTP{rgb11MemoryDKVSHTTP: remote,
+		get: func(context.Context, string, map[string]string) ([]byte, error) {
+			offlineHits.Add(1)
+			return nil, offlineErr
+		},
+		post: func(context.Context, string, []byte) ([]byte, error) {
+			offlineHits.Add(1)
+			return nil, offlineErr
+		},
+	}
+	defer func() {
+		peer.StopDKVSSync()
+		cachedClient.Http = peerHTTP
+	}()
+	ctx, cancel = context.WithTimeout(context.Background(), 30*time.Second)
+	_, err = peer.RecoverAccountManagementFromCurrentWallet(ctx, "password")
+	cancel()
+	require.ErrorIs(t, err, offlineErr)
+	require.Greater(t, offlineHits.Load(), int32(0), "explicit discovery must reach the failed transport")
+	require.Equal(t, "active-waiting-backup", peer.GetAccountManagementStatus().DiscoveryStatus)
+	require.False(t, peer.GetAccountManagementStatus().RecoveryConfigured)
+	require.False(t, peer.GetAccountManagementStatus().LocalOnly)
+	require.False(t, peer.GetAccountManagementStatus().WriteAllowed)
+	require.ErrorIs(t, peer.UpdateWalletName(peer.GetCurrentWalletId(), "forbidden after restart"), ErrRootAccountDiscoveryPending)
+	require.Equal(t, before, peer.GetWalletCatalog())
+	peer.StopDKVSSync()
+	cachedClient.Http = peerHTTP
 	if err := manager.UpdateWalletName(manager.GetCurrentWalletId(), "B"); err != nil {
 		t.Fatal(err)
 	}
@@ -309,6 +348,12 @@ func TestAccountActivationThenBackup(t *testing.T) {
 	if manager.accountProfile.InitialBackupPending || manager.GetAccountManagementStatus().ManagedDataDirty {
 		t.Fatal("first backup did not finish its local initialization task")
 	}
+	ctx, cancel = context.WithTimeout(context.Background(), 30*time.Second)
+	_, err = peer.RecoverAccountManagementFromCurrentWallet(ctx, "password")
+	cancel()
+	require.NoError(t, err)
+	require.True(t, peer.GetAccountManagementStatus().RecoveryConfigured)
+	require.NoError(t, peer.StartDKVSSync())
 	require.Eventually(t, func() bool {
 		return peer.GetAccountManagementStatus().RecoveryConfigured && peer.GetWalletCatalog()[0].Name == "C"
 	}, 30*time.Second, 20*time.Millisecond, "new device must restore the completed backup without activation")

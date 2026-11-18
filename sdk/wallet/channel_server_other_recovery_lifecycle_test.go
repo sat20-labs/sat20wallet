@@ -182,7 +182,7 @@ func TestSTPClientOtherRecoveryUsesOnlyConfirmedRemoteServerParent(t *testing.T)
 		t.Fatal("observation lost its durable protocol successor")
 	}
 	f.markConfirmed(t, f.next)
-	if handled, err := f.manager.RetryNativeForceClose(pending); !handled || err != nil {
+	if handled, err := f.manager.RetryForceClose(pending); !handled || err != nil {
 		t.Fatalf("confirmed main/protocol successor/burn did not finish observation: handled=%v err=%v", handled, err)
 	}
 	if f.channel.Status != CS_CLOSED_FORCELY {

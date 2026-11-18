@@ -3,9 +3,8 @@
 package wallet
 
 import (
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	"testing"
-
-	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 )
 
 func TestRGB11LockDiagCache(t *testing.T) {
@@ -18,11 +17,11 @@ func TestRGB11LockDiagCache(t *testing.T) {
 	target := rgb11StaleLockOnlyTarget.OutPoint
 	ordinary := NewUtxoLocker(database, nil, L1_NETWORK_BITCOIN)
 	ordinary.Init()
-	if err := ordinary.LockUtxo(protected, rgb11wallet.LockReasonRGB); err != nil {
+	if err := ordinary.LockUtxo(protected, sdkcommon.UtxoLockRGB); err != nil {
 		t.Fatal(err)
 	}
 	ordinary.mutex.Lock()
-	ordinary.lockmap[target] = &LockedUtxo{LockedTime: 123, Reason: rgb11wallet.LockReasonRGB}
+	ordinary.lockmap[target] = &LockedUtxo{LockedTime: 123, Reason: sdkcommon.UtxoLockRGB}
 	ordinary.mutex.Unlock()
 	if ordinary.GetLockedUtxoList()[target] == nil {
 		t.Fatal("ordinary manager lost its cache-only lock")

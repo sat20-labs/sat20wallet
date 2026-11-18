@@ -41,7 +41,7 @@ func TestAccountReconfigureKeepsEdit(t *testing.T) {
 		t.Fatal("wrapper submission did not reach gate")
 	}
 	require.NoError(t, manager.UpdateWalletName(manager.GetCurrentWalletId(), "PWA edit during recovery setup"))
-	generation := manager.accountProfile.ManagedDataGeneration
+	generation := walletTestRow(t, manager).Generation
 	release()
 	select {
 	case err := <-done:
@@ -51,9 +51,9 @@ func TestAccountReconfigureKeepsEdit(t *testing.T) {
 	}
 	require.Equal(t, pkg.Envelope.Locator.PackageID, manager.accountProfile.PackageID)
 	require.Equal(t, "PWA edit during recovery setup", manager.GetWalletCatalog()[0].Name)
-	require.True(t, manager.accountProfile.ManagedDataDirty)
+	require.True(t, manager.GetAccountManagementStatus().ManagedDataDirty)
 	require.Positive(t, len(manager.accountProfile.Pending))
-	require.GreaterOrEqual(t, manager.accountProfile.ManagedDataGeneration, generation)
+	require.GreaterOrEqual(t, walletTestRow(t, manager).Generation, generation)
 	require.NoError(t, manager.SyncAccountManagementState(context.Background()))
 	peer := newAccountManagementAutoTestManager(t)
 	configureRGB11DKVSTestManager(peer, remote)

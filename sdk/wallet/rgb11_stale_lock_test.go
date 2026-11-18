@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	"reflect"
 	"strings"
 	"testing"
@@ -52,7 +53,7 @@ func TestRGB11LockDiscardPlan(t *testing.T) {
 	}
 	source := rgb11LockDiscardSource{
 		accountID: receiverID, wallet: recipient.wallet,
-		lock:     &LockedUtxo{LockedTime: 123, Reason: rgb11wallet.LockReasonRGB},
+		lock:     &LockedUtxo{LockedTime: 123, Reason: sdkcommon.UtxoLockRGB},
 		transfer: transfer, transfers: []*rgb11wallet.TransferState{transfer},
 		getOutspend: func(string) (*rgb11wallet.BitcoinOutspend, error) {
 			return &rgb11wallet.BitcoinOutspend{Spent: true}, nil
@@ -135,10 +136,10 @@ func TestRGB11LockDiscardStore(t *testing.T) {
 	locker.Init()
 	target := "69fa:1"
 	protected := "c57:1"
-	if err := locker.LockUtxo(target, rgb11wallet.LockReasonRGB); err != nil {
+	if err := locker.LockUtxo(target, sdkcommon.UtxoLockRGB); err != nil {
 		t.Fatal(err)
 	}
-	if err := locker.LockUtxo(protected, rgb11wallet.LockReasonRGB); err != nil {
+	if err := locker.LockUtxo(protected, sdkcommon.UtxoLockRGB); err != nil {
 		t.Fatal(err)
 	}
 	lock := locker.GetLockedUtxoList()[target]
@@ -172,7 +173,7 @@ func TestRGB11MaintReadsProdLock(t *testing.T) {
 	outpoint := rgb11StaleLockOnlyTarget.OutPoint
 	production := NewUtxoLocker(database, nil, L1_NETWORK_BITCOIN)
 	production.Init()
-	if err := production.LockUtxo(outpoint, rgb11wallet.LockReasonRGB); err != nil {
+	if err := production.LockUtxo(outpoint, sdkcommon.UtxoLockRGB); err != nil {
 		t.Fatal(err)
 	}
 	want := production.GetLockedUtxoList()[outpoint]
@@ -217,14 +218,14 @@ func TestRGB11MaintUnlockLockView(t *testing.T) {
 	if err := sender.utxoLockerL1.UnlockUtxo(input); err != nil {
 		t.Fatal(err)
 	}
-	if err := sender.utxoLockerL1.LockUtxo(input, rgb11wallet.LockReasonRGB); err != nil {
+	if err := sender.utxoLockerL1.LockUtxo(input, sdkcommon.UtxoLockRGB); err != nil {
 		t.Fatal(err)
 	}
 	if err := sender.rgbManager.rebuildRGB11Locks(); !errors.Is(err, ErrUtxoReservationOwner) {
 		t.Fatalf("rebuild err=%v", err)
 	}
 	lock := sender.utxoLockerL1.GetLockedUtxoList()[input]
-	if lock == nil || lock.Reason != rgb11wallet.LockReasonRGB || lock.ReservationID != "" {
+	if lock == nil || lock.Reason != sdkcommon.UtxoLockRGB || lock.ReservationID != "" {
 		t.Fatalf("maintenance rebuild hid production lock: %+v", lock)
 	}
 }
@@ -290,10 +291,10 @@ func TestDiscardFreshSpentView(t *testing.T) {
 		t.Fatal(err)
 	}
 	protected := "c57fb2b8b73f2ee5febb0a593eb681c90eb813c6f7d3500f04d46b711a28589d:1"
-	if err := manager.utxoLockerL1.LockUtxo(protected, rgb11wallet.LockReasonRGB); err != nil {
+	if err := manager.utxoLockerL1.LockUtxo(protected, sdkcommon.UtxoLockRGB); err != nil {
 		t.Fatal(err)
 	}
-	rawLock := &LockedUtxo{LockedTime: 1790102034, Reason: rgb11wallet.LockReasonRGB}
+	rawLock := &LockedUtxo{LockedTime: 1790102034, Reason: sdkcommon.UtxoLockRGB}
 	if err := saveLockedUtxo(manager.db, L1_NETWORK_BITCOIN, outpoint, rawLock); err != nil {
 		t.Fatal(err)
 	}

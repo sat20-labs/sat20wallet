@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -199,12 +201,15 @@ func startSDKPWARegtestBitcoinControllerInternal(t *testing.T, address string, m
 				return
 			}
 		}
+		var deadline time.Time
 		var anchorTargets []string
 		waitAnchors := false
 		if r.URL.Path == "/confirm-l1" {
 			var request struct {
-				WaitAnchors *bool `json:"wait_anchors"`
-				EmptyBlocks *int  `json:"empty_blocks"`
+				WaitAnchors *bool  `json:"wait_anchors"`
+				EmptyBlocks *int   `json:"empty_blocks"`
+				RGBContract string `json:"rgb_contract"`
+				Funding     string `json:"funding"`
 			}
 			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&request); err != nil {
 				http.Error(w, "invalid confirmation request", http.StatusBadRequest)
@@ -222,7 +227,32 @@ func startSDKPWARegtestBitcoinControllerInternal(t *testing.T, address string, m
 				waitAnchors = request.WaitAnchors == nil || *request.WaitAnchors
 				require.NoError(t, json.Unmarshal(realRegtestBitcoinCLI(t, "getrawmempool"), &anchorTargets))
 			}
+			paced := request.RGBContract != "" || request.Funding != ""
+			if paced && (os.Getenv("SAT20_E2E_LOCAL_REAL") != "1" || os.Getenv("SAT20_REAL_SATOSHINET_ATTACH") != "" ||
+				!waitAnchors || emptyBlocks != 1 || len(anchorTargets) != 1 || anchorTargets[0] != request.Funding ||
+				!localRGBPool.MatchString(request.RGBContract) || nodes[0].Core == nil || nodes[0].Bootstrap == nil) {
+				http.Error(w, "expected one pending public RGB deposit on the isolated regtest", http.StatusBadRequest)
+				return
+			}
 			mine(address, emptyBlocks)
+			if paced {
+				deadline = time.Now().Add(180 * time.Second)
+				ctx, cancel := context.WithDeadline(r.Context(), deadline)
+				defer cancel()
+				outpoint := request.Funding + ":1"
+				if err := waitRGBPeerDeposit(ctx, nodes[0], request.RGBContract, outpoint); err != nil {
+					http.Error(w, err.Error(), http.StatusGatewayTimeout)
+					return
+				}
+				// A live L1 advances after both STP peers have indexed the deposit.
+				// An explicit empty template cannot confirm any unrelated transaction.
+				var block struct {
+					Hash string `json:"hash"`
+				}
+				require.NoError(t, json.Unmarshal(realRegtestBitcoinCLI(t, "generateblock", address, "[]"), &block))
+				require.Len(t, block.Hash, 64)
+				t.Logf("RGB public deposit %s indexed by both peers; advanced one coinbase-only Bitcoin block %s", outpoint, block.Hash)
+			}
 		}
 		var tip int
 		require.NoError(t, json.Unmarshal(realRegtestBitcoinCLI(t, "getblockcount"), &tip))
@@ -262,7 +292,10 @@ func startSDKPWARegtestBitcoinControllerInternal(t *testing.T, address string, m
 			result["confirmed_tx"] = sdkWasmConfirmation
 		}
 		if len(nodes) == 1 {
-			ctx, cancel := context.WithTimeout(r.Context(), 180*time.Second)
+			if deadline.IsZero() {
+				deadline = time.Now().Add(180 * time.Second)
+			}
+			ctx, cancel := context.WithDeadline(r.Context(), deadline)
 			defer cancel()
 			for {
 				if pos != nil {
@@ -333,8 +366,45 @@ func startSDKPWARegtestBitcoinControllerInternal(t *testing.T, address string, m
 	return server.URL
 }
 
+var localRGBPool = regexp.MustCompile(`^bcrt1[0-9a-z]+_rgb11:f:[0-9a-f]{64}_transcend\.tc$`)
+
+func waitRGBPeerDeposit(ctx context.Context, network *realSatoshiNet, contract, outpoint string) error {
+	for _, node := range []*testHarness{network.Bootstrap, network.Core} {
+		for {
+			var item wallet.InvokeItem
+			raw, err := rgbContinuationContractRead(node, "/info/contract/item/inutxo/"+contract+"/"+outpoint)
+			if err == nil {
+				if err := json.Unmarshal(raw, &item); err != nil {
+					return fmt.Errorf("%s: invalid invoke item: %w", node.role, err)
+				}
+				if !item.FromL1 || item.OrderType != wallet.ORDERTYPE_DEPOSIT || item.InUtxo != outpoint ||
+					!strings.HasSuffix(contract, "_"+item.AssetName+"_transcend.tc") {
+					return fmt.Errorf("%s: unexpected deposit for %s", node.role, outpoint)
+				}
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("%s did not index RGB deposit %s: %v: %w", node.role, outpoint, err, ctx.Err())
+			case <-time.After(time.Second):
+			}
+		}
+	}
+	return nil
+}
+
 func activateSDKPWARegtestPOSV2(t *testing.T, ctx context.Context, network *realSatoshiNet,
 	ordinaryA *wallet.Manager, activationHeight int32) (map[string]any, error) {
+	t.Helper()
+	return activateNativeIfacePOS(t, ctx, network, ordinaryA, activationHeight, func() ([]string, error) {
+		var pool []string
+		err := json.Unmarshal(realRegtestBitcoinCLI(t, "getrawmempool"), &pool)
+		return pool, err
+	})
+}
+
+func activateNativeIfacePOS(t *testing.T, ctx context.Context, network *realSatoshiNet,
+	ordinaryA *wallet.Manager, activationHeight int32, readL1Pool func() ([]string, error)) (map[string]any, error) {
 	t.Helper()
 	require.NotNil(t, network)
 	require.NotNil(t, ordinaryA)
@@ -353,8 +423,8 @@ func activateSDKPWARegtestPOSV2(t *testing.T, ctx context.Context, network *real
 		require.True(t, mining, "%s transaction-gated miner must already be scheduled", node.role)
 	}
 	assertDrained := func() (int, error) {
-		var l1Pending []string
-		if err := json.Unmarshal(realRegtestBitcoinCLI(t, "getrawmempool"), &l1Pending); err != nil {
+		l1Pending, err := readL1Pool()
+		if err != nil {
 			return 0, err
 		}
 		var snetPendingCount int
@@ -521,6 +591,11 @@ func readSDKPWARegtestSatoshiNetSnapshot(network *realSatoshiNet, after int32) (
 				return nil, err
 			}
 			anchor := posPWAAnchorEvidence{TxID: tx.TxID(), Height: h, FundingOutpoint: info.Utxo, Version: tx.Version, LockTime: tx.LockTime, Sequence: tx.TxIn[0].Sequence, Outputs: []posPWAAnchorOutput{}}
+			_, present, err := sindexercommon.NativeAssetProof(tx)
+			if err != nil {
+				return nil, fmt.Errorf("Anchor %s native proof: %w", anchor.TxID, err)
+			}
+			anchor.NativeProof = present
 			for n, output := range tx.TxOut {
 				anchor.Outputs = append(anchor.Outputs, posPWAAnchorOutput{N: n, Value: output.Value, Assets: output.Assets.Clone(), PkScript: hex.EncodeToString(output.PkScript)})
 			}

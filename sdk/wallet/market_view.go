@@ -142,3 +142,47 @@ func (p *SwapContractRuntime) MarketView(detail bool) map[string]any {
 	}
 	return row
 }
+
+// Launchpool lists need no transaction history or participant records.
+func (p *LaunchPoolContractRunTime) MarketView(_ bool) map[string]any {
+	ti := p.stp.GetWalletMgr().marketTicker(p.GetAssetName())
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	displayName := ""
+	if ti != nil {
+		displayName = ti.DisplayName
+	}
+	return map[string]any{
+		"contractURL": p.URL(), "contractType": p.GetTemplateName(),
+		"assetName": *p.GetAssetName(), "displayName": displayName,
+		"status": p.Status, "enableBlock": p.EnableBlock, "deployTime": p.DeployTime,
+		"deployer": p.Deployer, "startBlock": p.StartBlock, "endBlock": p.EndBlock,
+		"assetSymbol": p.AssetSymbol, "bindingSat": p.BindingSat, "mintAmtPerSat": p.MintAmtPerSat,
+		"limit": p.Limit, "maxSupply": p.MaxSupply, "launchRation": p.LaunchRatio,
+		"reserveRation": p.ReserveRatio, "TotalMinted": p.TotalMinted.Clone(),
+	}
+}
+
+func (p *TranscendContractRuntime) MarketView(_ bool) map[string]any {
+	ti := p.stp.GetWalletMgr().marketTicker(p.GetAssetName())
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	displayName := p.GetAssetName().Ticker
+	if ti != nil {
+		displayName = ti.DisplayName
+	}
+	return map[string]any{
+		"contractURL": p.URL(), "assetName": *p.GetAssetName(),
+		"status": p.Status, "enableBlock": p.EnableBlock,
+		"deployTime": p.DeployTime, "deployer": p.Deployer, "displayName": displayName,
+	}
+}
+
+func (p *DaoContractRunTime) MarketView(_ bool) map[string]any {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	return map[string]any{
+		"contractURL": p.URL(), "assetName": *p.GetAssetName(),
+		"status": p.Status, "uidCount": len(p.uidMap),
+	}
+}

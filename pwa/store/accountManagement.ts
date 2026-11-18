@@ -1,16 +1,18 @@
 import { computed, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
-import accountSDK, { type AccountManagementStatus, type AccountModuleStatus } from '@/utils/accountManagement'
+import accountSDK from '@/utils/accountManagement'
+import type { AccountView, ModuleView } from '@/utils/walletViews'
 import { useWalletStore } from './wallet'
 
 export const useAccountManagementStore = defineStore('accountManagement', () => {
   const walletStore = useWalletStore()
-  const status = ref<AccountManagementStatus | null>(null)
+  const status = ref<AccountView | null>(null)
   const loading = ref(false)
   const statusReadFailed = ref(false)
   const retrying = ref(false)
   const retryQueued = ref(false)
   const retryFailed = ref(false)
+  const localRiskAccepted = ref(false)
   const sessionReady = computed(() => walletStore.hasWallet && !walletStore.locked &&
     !walletStore.isSwitchingWallet && !walletStore.isSwitchingAccount && !walletStore.isSwitchingNetwork)
   const identityKey = computed(() => JSON.stringify([
@@ -41,6 +43,7 @@ export const useAccountManagementStore = defineStore('accountManagement', () => 
     retrying.value = false
     retryQueued.value = false
     retryFailed.value = false
+    localRiskAccepted.value = false
   }
 
   const isCurrent = (generation: number, key: string) =>
@@ -53,7 +56,7 @@ export const useAccountManagementStore = defineStore('accountManagement', () => 
     loading.value = true
     statusReadFailed.value = false
     try {
-      const next = await accountSDK.status()
+      const next = await accountSDK.getAccountView()
       if (!isCurrent(generation, key)) return
       status.value = next
       statusReadFailed.value = false
@@ -106,12 +109,12 @@ export const useAccountManagementStore = defineStore('accountManagement', () => 
     retrying.value = true
     retryFailed.value = false
     try {
-      const result = await accountSDK.retryDKVSSync()
+      const result = await accountSDK.refreshAccount()
       if (generation !== retryGeneration || key !== identityKey.value || !sessionReady.value) return
-      retryQueued.value = Boolean(result.queued && eventGeneration === statusEventGeneration)
+      retryQueued.value = Boolean(result.state === 'syncing' && eventGeneration === statusEventGeneration)
       await refresh()
       if (generation === retryGeneration && key === identityKey.value && sessionReady.value) {
-        retryQueued.value = Boolean(result.queued && eventGeneration === statusEventGeneration)
+        retryQueued.value = Boolean(result.state === 'syncing' && eventGeneration === statusEventGeneration)
       }
     } catch {
       if (generation === retryGeneration && key === identityKey.value && sessionReady.value) retryFailed.value = true
@@ -120,56 +123,24 @@ export const useAccountManagementStore = defineStore('accountManagement', () => 
     }
   }
 
-  const currentRGB11Scope = computed(() => {
-    const fingerprint = walletStore.wallet?.fingerprint?.trim().toLowerCase()
-    const network = String(walletStore.network || '').trim().toLowerCase()
-    const accountIndex = Number(walletStore.accountIndex)
-    if (!fingerprint || !network || !Number.isInteger(accountIndex) || accountIndex < 0) return ''
-    return `${network}/${fingerprint}/${accountIndex}`
-  })
-
-  const moduleStatus = (provider: string, scope: string): AccountModuleStatus | undefined =>
-    status.value?.modules?.find(item => item.provider === provider && item.scope === scope)
-
-  const canWrite = (provider: string, scope: string) => {
-    const current = status.value
-    if (!current || !sessionReady.value || !current.write_allowed ||
-      (current.account_state !== 'local' && current.account_state !== 'ready')) return false
-    if (!scope) return false
-    const module = moduleStatus(provider, scope)
-    return module ? module.write_allowed : true
-  }
-
-  const rgb11WriteAllowed = computed(() => canWrite('rgb11', currentRGB11Scope.value))
-  const rgb11ModuleStatus = computed(() => moduleStatus('rgb11', currentRGB11Scope.value))
-  const moduleHasIssue = (module: AccountModuleStatus) =>
-    module.backup_state === 'error' || module.backup_state === 'conflict' || module.backup_state === 'restoring'
-  const moduleIssues = computed(() => status.value?.modules?.filter(moduleHasIssue) || [])
-  const hasDatabaseIssue = computed(() => status.value?.last_dkvs_sync_error_code === 'ACCOUNT_DB_WRITE_FAILED')
-  const quotaModuleIssues = computed(() => status.value?.modules?.filter(module =>
-    moduleHasIssue(module) && module.last_error_code === 'DKVS_QUOTA_EXCEEDED') || [])
-  const hasQuotaIssue = computed(() => status.value?.last_dkvs_sync_error_code === 'DKVS_QUOTA_EXCEEDED' ||
-    quotaModuleIssues.value.length > 0)
-  const quotaGuidanceKey = computed(() => {
-    const current = status.value
-    if (!current) return 'accountManagement.quota.review'
-    if (!current.recovery_configured || current.local_only) return 'accountManagement.quota.activation'
-    if (current.storage_mode === 'temporary') return 'accountManagement.quota.temporary'
-    if (current.storage_mode === 'paid') return 'accountManagement.quota.paid'
-    return 'accountManagement.quota.review'
-  })
-  const quotaNeedsActivation = computed(() => hasQuotaIssue.value &&
-    (!status.value?.recovery_configured || status.value.local_only === true))
+  const rgb11ModuleStatus = computed(() => status.value?.modules?.find(item => item.name === 'rgb11'))
+  const rgb11WriteAllowed = computed(() => sessionReady.value && rgb11ModuleStatus.value?.can_write === true)
+  const moduleIssues = computed(() => status.value?.modules?.filter(item => item.error_code) || [])
+  const hasDatabaseIssue = computed(() => status.value?.error_code === 'ACCOUNT_DB_WRITE_FAILED')
+  const quotaModuleIssues = computed(() => moduleIssues.value.filter(item => item.error_code === 'DKVS_QUOTA_EXCEEDED'))
+  const hasQuotaIssue = computed(() => status.value?.error_code === 'DKVS_QUOTA_EXCEEDED' || quotaModuleIssues.value.length > 0)
+  const quotaNeedsActivation = computed(() => hasQuotaIssue.value && status.value?.state === 'local')
+  const quotaGuidanceKey = computed(() => status.value?.state === 'local' ? 'accountManagement.quota.activation'
+    : status.value?.storage?.option.id === 'temporary' ? 'accountManagement.quota.temporary'
+    : status.value?.storage?.option.id === 'paid' ? 'accountManagement.quota.paid' : 'accountManagement.quota.review')
   const quotaNoticeKey = computed(() => hasQuotaIssue.value ? quotaGuidanceKey.value : '')
-  const quotaActionKey = computed(() => quotaNeedsActivation.value
-    ? 'accountManagement.quota.activateAction'
-    : 'accountManagement.quota.reviewAction')
-  const quotaMessageKeyForCode = (code: unknown) =>
-    code === 'DKVS_QUOTA_EXCEEDED' ? quotaGuidanceKey.value : ''
+  const quotaActionKey = computed(() => quotaNeedsActivation.value ? 'accountManagement.quota.activateAction' : 'accountManagement.quota.reviewAction')
+  const quotaMessageKeyForCode = (code: unknown) => code === 'DKVS_QUOTA_EXCEEDED' ? quotaGuidanceKey.value : ''
+
   const shouldShowBanner = computed(() => sessionReady.value && (
     loading.value && status.value === null || statusReadFailed.value || retryFailed.value ||
-    status.value?.account_state === 'local' || status.value?.account_state === 'locked' || status.value?.account_state === 'syncing' ||
-    status.value?.account_state === 'error' ||
+    status.value?.state === 'local' || status.value?.state === 'locked' || status.value?.state === 'syncing' ||
+    status.value?.state === 'error' ||
     status.value?.backup_state === 'pending' || status.value?.backup_state === 'uploading' ||
     status.value?.backup_state === 'cleanup' || moduleIssues.value.length > 0 ||
     hasQuotaIssue.value
@@ -182,6 +153,7 @@ export const useAccountManagementStore = defineStore('accountManagement', () => 
     retrying,
     retryQueued,
     retryFailed,
+    localRiskAccepted,
     sessionReady,
     shouldShowBanner,
     moduleIssues,
@@ -192,11 +164,8 @@ export const useAccountManagementStore = defineStore('accountManagement', () => 
     quotaNoticeKey,
     quotaActionKey,
     quotaMessageKeyForCode,
-    currentRGB11Scope,
     rgb11WriteAllowed,
     rgb11ModuleStatus,
-    moduleStatus,
-    canWrite,
     start,
     stop,
     refresh,

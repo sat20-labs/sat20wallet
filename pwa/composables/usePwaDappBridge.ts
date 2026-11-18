@@ -318,15 +318,13 @@ export function usePwaDappBridge(iframeWindow: () => Window | null, currentUrl: 
     }
 
     if (action === 'listRGB11Tickers') {
-      const result = unwrapTuple(await sat20Wallet.getRGB11State())
+      const result = unwrapTuple(await sat20Wallet.getRGB11View())
       assertWalletIdentityReady(identityGeneration)
-      if (!result?.state) throw new Error('RGB11 wallet state is unavailable')
-      const { ticker_infos } = JSON.parse(result.state)
-      // Only expose fungible asset IDs and public names, including zero-balance imports.
-      return (ticker_infos ?? []).flatMap((info: { name: { Protocol: string; Type: string; Ticker: string }; displayname?: string }) => {
-        const { Protocol, Type, Ticker } = info.name
-        return Protocol === 'rgb11' && Type === 'f' && /^[0-9a-f]{64}$/.test(Ticker)
-          ? [{ ticker: Ticker, displayName: info.displayname || Ticker }] : []
+      if (!result) throw new Error('RGB wallet view is unavailable')
+      return result.assets.flatMap(info => {
+        const [protocol, type, ticker] = info.asset.split(':')
+        return protocol === 'rgb11' && type === 'f' && /^[0-9a-f]{64}$/.test(ticker)
+          ? [{ ticker, displayName: info.name || ticker }] : []
       })
     }
 

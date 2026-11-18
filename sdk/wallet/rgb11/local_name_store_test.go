@@ -32,7 +32,7 @@ func TestLocalNamePersistenceDoesNotChangeValidatedAssetState(t *testing.T) {
 	raw := []byte("validated-naming-regression-fixture")
 	digest := sha256.Sum256(raw)
 	receipt, err := store.ValidateAndStoreConsignment(context.Background(), testValidator{receipt: &ValidationReceipt{
-		Version: 1, EngineBuildID: "naming-test", ConsignmentHash: hex.EncodeToString(digest[:]),
+		Version: 1, EngineBuildID: RGB11EngineBuildID, ConsignmentHash: hex.EncodeToString(digest[:]),
 		ContractID: contractID, SchemaID: "schema", StateHash: [32]byte{1}, Status: "valid",
 		Allocations: []ValidatedAllocation{{OutPoint: output.OutPointStr, AssetName: identity,
 			Amount: *amount.Clone(), OperationID: "op", AssignmentType: 4000, StateClass: "fungible", SealDisclosure: []byte{1}}},

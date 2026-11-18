@@ -1,3 +1,5 @@
+//go:build guardian
+
 package e2e
 
 import (
@@ -54,8 +56,8 @@ func runSDKAccountGuardianIdentitySurvivesAccountRecovery(t *testing.T, network 
 			require.Empty(t, fresh.GetWalletCatalog())
 			const newPassword = "guardian-new-device-password"
 			if mode == "root-mnemonic" {
-				require.NoError(t, fresh.StartDKVSSync())
 				requireAccountPWARootRecovery(t, fresh, g.rootMnemonic, newPassword)
+				require.NoError(t, fresh.StartDKVSSync())
 			} else {
 				loaded, err := fresh.LoadAccountRecoveryPackage(g.location, g.pkg.Envelope.Locator)
 				require.NoError(t, err)

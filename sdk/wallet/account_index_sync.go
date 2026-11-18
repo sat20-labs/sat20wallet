@@ -192,10 +192,16 @@ func (p *Manager) primeAccountImports(index account.ManagedIndex) (bool, error) 
 	}
 	defer batch.Close()
 	needed := false
-	for _, entry := range index.Entries {
+	for i, entry := range index.Entries {
 		value, err := p.readAccountLocal(p.accountProfile.AccountID, entry.Provider, entry.Scope)
 		if err != nil {
 			return false, err
+		}
+		if entry.Deleted && value != nil && !value.Deleted && p.pendingAccountScopeAdd(entry.Scope) {
+			// Entries is the working directory used by this sync pass. Its
+			// verified remote bytes/baseline remain unchanged for publication.
+			entry.Deleted = false
+			index.Entries[i] = entry
 		}
 		if entry.Deleted {
 			// Adopt the verified deletion locally before any physical cleanup.
@@ -276,6 +282,11 @@ func (p *Manager) publishAccountIndex(store *dkvsStore, snapshot *accountManagem
 	if err != nil {
 		return err
 	}
+	// Resolve any older frozen directory deletion before confirming equal
+	// current content or publishing the new local instance.
+	if err := p.pendingAccountSend(store, key); err != nil {
+		return err
+	}
 	p.mutex.RLock()
 	local, err := p.readAccountLocal(snapshot.profile.AccountID, "account", key)
 	p.mutex.RUnlock()
@@ -284,6 +295,13 @@ func (p *Manager) publishAccountIndex(store *dkvsStore, snapshot *accountManagem
 	}
 	base := account.ManagedIndex{Version: account.ManagedIndexVersion}
 	localIndex := index
+	remoteIndex := account.ManagedIndex{Version: account.ManagedIndexVersion}
+	if remote != nil {
+		remoteIndex, err = account.OpenManagedIndex(snapshot.secret, snapshot.profile.AccountID, snapshot.network, remote.Value)
+		if err != nil {
+			return err
+		}
+	}
 	if local != nil && len(local.Value) != 0 {
 		localIndex, err = account.OpenManagedIndex(snapshot.secret, snapshot.profile.AccountID, snapshot.network, local.Value)
 		if err != nil {
@@ -296,13 +314,21 @@ func (p *Manager) publishAccountIndex(store *dkvsStore, snapshot *accountManagem
 			}
 		}
 	}
-	index, err = mergeAccountIndex(base, localIndex, index)
+	index, err = mergeAccountIndex(base, localIndex, remoteIndex)
 	if err != nil {
 		return err
 	}
 	entries := accountEntryMap(index)
 	p.mutex.RLock()
 	values, err := p.listAccountLocal(snapshot.profile.AccountID)
+	newScopes := make(map[string]bool)
+	if err == nil {
+		for _, value := range values {
+			if !value.Deleted && p.pendingAccountScopeAdd(value.Scope) {
+				newScopes[value.Provider+"\x00"+value.Scope] = true
+			}
+		}
+	}
 	p.mutex.RUnlock()
 	if err != nil {
 		return err
@@ -312,7 +338,7 @@ func (p *Manager) publishAccountIndex(store *dkvsStore, snapshot *accountManagem
 			continue
 		}
 		id := value.Provider + "\x00" + value.Scope
-		if existing, ok := entries[id]; ok && existing.Deleted {
+		if existing, ok := entries[id]; ok && existing.Deleted && !newScopes[id] {
 			continue
 		}
 		entry := account.ManagedEntry{Provider: value.Provider, Scope: value.Scope, Key: value.Key, Codec: value.Codec, Deleted: value.Deleted}
@@ -341,7 +367,7 @@ func (p *Manager) publishAccountIndex(store *dkvsStore, snapshot *accountManagem
 			if err != nil {
 				return err
 			}
-			return p.recordAccountEffect(value, remote)
+			return p.confirmAccountValue(store, snapshot, value, remote)
 		}
 	}
 	var encoded []byte
@@ -390,5 +416,5 @@ func (p *Manager) publishAccountIndex(store *dkvsStore, snapshot *accountManagem
 	if readErr != nil {
 		return readErr
 	}
-	return p.recordAccountEffect(captured, latest)
+	return p.confirmAccountValue(store, snapshot, captured, latest)
 }

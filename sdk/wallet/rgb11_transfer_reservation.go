@@ -735,7 +735,7 @@ func (p *rgb11Manager) importRGB11ReservationSnapshotWithPlanAndCheck(snapshot *
 func (p *rgb11Manager) importRGB11ReservationSnapshotWithBaseline(ctx context.Context, snapshot *RGB11WalletSnapshot,
 	tickerInfos []*indexer.TickerInfo, lockReasons map[string]string, lockPlan *rgb11LockPlan,
 	checkEvidence func() error, expected *RGB11WalletSnapshot) error {
-	return p.importRGB11ReservationSnapshotWithMutation(ctx, snapshot, tickerInfos, lockReasons, lockPlan, checkEvidence, expected, true)
+	return p.importRGB11ReservationSnapshotWithMutation(ctx, snapshot, tickerInfos, lockReasons, lockPlan, checkEvidence, expected, true, nil, nil)
 }
 
 // The caller identifies the source of the snapshot. A selected remote account
@@ -743,13 +743,14 @@ func (p *rgb11Manager) importRGB11ReservationSnapshotWithBaseline(ctx context.Co
 // local business generation merely by installing that authenticated material.
 func (p *rgb11Manager) importRGB11ReservationSnapshotWithMutation(ctx context.Context, snapshot *RGB11WalletSnapshot,
 	tickerInfos []*indexer.TickerInfo, lockReasons map[string]string, lockPlan *rgb11LockPlan,
-	checkEvidence func() error, expected *RGB11WalletSnapshot, localMutation bool, localView ...*rgb11ResolvedRecoveryProjection) error {
+	checkEvidence func() error, expected *RGB11WalletSnapshot, localMutation bool,
+	local *rgb11ResolvedRecoveryProjection, swap *rgb11ImportSwap) error {
 	if p == nil || snapshot == nil || p.db == nil || p.engineStore == nil || p.projectionStore == nil {
 		return ErrRGB11Inconsistent
 	}
-	var local *rgb11ResolvedRecoveryProjection
-	if len(localView) != 0 {
-		local = localView[0]
+	if swap != nil && (local != nil || swap.from == nil || swap.to == nil || expected == nil ||
+		swap.from.snapshot != expected || lockPlan == nil) {
+		return ErrRGB11Inconsistent
 	}
 	if local != nil {
 		if expected == nil {
@@ -849,6 +850,9 @@ func (p *rgb11Manager) importRGB11ReservationSnapshotWithMutation(ctx context.Co
 			}
 		}
 		if expected != nil {
+			if swap != nil && !swap.from.matches(p.rgb11ScopeState().ProofFaults) {
+				return nil, errAccountSnapshotChanged
+			}
 			var actual *RGB11WalletSnapshot
 			var err error
 			if local != nil {
@@ -872,7 +876,9 @@ func (p *rgb11Manager) importRGB11ReservationSnapshotWithMutation(ctx context.Co
 		var finishLocks func(bool)
 		if lockPlan != nil {
 			var err error
-			finishLocks, err = p.utxoLockerL1.stageRGB11LockPlan(batch, *lockPlan)
+			plan := *lockPlan
+			plan.importSwap = swap
+			finishLocks, err = p.utxoLockerL1.stageRGB11LockPlan(batch, plan)
 			if err != nil {
 				return nil, err
 			}
@@ -890,8 +896,16 @@ func (p *rgb11Manager) importRGB11ReservationSnapshotWithMutation(ctx context.Co
 			if !committed {
 				return
 			}
-			if local != nil {
-				p.publishRGB11Readiness(local.complete, local.ready, local.faults)
+			if swap != nil {
+				// The reservation write gate still covers the matched generation,
+				// the successful flush, lock/owner RAM and this precise fault swap.
+				p.updateRGB11ScopeState(func(state *rgb11ScopeBackupState) {
+					state.ProofFaults = append([]rgb11wallet.ProofFault(nil), swap.to.faults...)
+				})
+			} else if local != nil && local.directPoint == "" {
+				p.updateRGB11ScopeState(func(state *rgb11ScopeBackupState) {
+					state.ProofFaults = append([]rgb11wallet.ProofFault(nil), local.faults...)
+				})
 			}
 			owner := p.rgb11ReservationOwner()
 			owner.mutex.Lock()

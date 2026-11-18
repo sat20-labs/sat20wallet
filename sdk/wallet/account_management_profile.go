@@ -19,33 +19,23 @@ const (
 	accountManagementDeviceIDSize   = 16
 )
 
-// Business rows and ManagedDataGeneration/Pending are current local state.
-// State* and ManagedData* envelope fields are the server-confirmed baseline;
-// they advance from a verified ACK independently of outbox cleanup.
+// Business rows and Pending are current local state; module rows own backup versions.
 type accountManagementProfile struct {
-	Version               uint32
-	RootFingerprint       string
-	AccountID             string
-	PackageID             string
-	RecoveryMode          account.RecoveryMode
-	StorageMode           string
-	Location              AccountIndexerLocation
-	RecordTTL             uint64
-	AutopayContract       string
-	PublicLocator         string
-	LastRehearsalAt       int64
-	SecretCipher          []byte
-	SecretSalt            []byte
-	DeviceID              []byte
-	StateSeq              uint64
-	StateHash             string
-	StateEnvelope         []byte
-	ManagedDataRevision   uint64
-	ManagedDataHash       string
-	ManagedDataEnvelope   []byte
-	ManagedDataDirty      bool
-	ManagedDataGeneration uint64
-	RecoveryConfigured    bool
+	Version            uint32
+	RootFingerprint    string
+	AccountID          string
+	PackageID          string
+	RecoveryMode       account.RecoveryMode
+	StorageMode        string
+	Location           AccountIndexerLocation
+	RecordTTL          uint64
+	AutopayContract    string
+	PublicLocator      string
+	LastRehearsalAt    int64
+	SecretCipher       []byte
+	SecretSalt         []byte
+	DeviceID           []byte
+	RecoveryConfigured bool
 	// ManagedEntered is durable before the first remote activation attempt.
 	// An interrupted attempt must not return to ordinary local-only writes.
 	ManagedEntered       bool

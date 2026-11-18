@@ -104,9 +104,6 @@ func TestReviewRGB11ExplicitSyncControlsRemoteRecoveryApplication(t *testing.T) 
 		if err := other.SyncAccountManagementState(context.Background()); err != nil {
 			t.Fatalf("publish stable recovery fixture: %v", err)
 		}
-		if active, err := local.hasAccountManagedRGB11Transition(); err != nil || active {
-			t.Fatalf("local fixture must start without active state: active=%v err=%v", active, err)
-		}
 		if err := local.SyncAccountManagementState(context.Background()); err != nil {
 			t.Fatal(err)
 		}
@@ -123,9 +120,6 @@ func TestReviewRGB11ExplicitSyncControlsRemoteRecoveryApplication(t *testing.T) 
 				}
 				return struct{}{}, nil
 			})
-		if active, inspectErr := local.hasAccountManagedRGB11Transition(); inspectErr != nil || !active {
-			t.Fatalf("baseline did not import the remote active transition: active=%v err=%v operationErr=%v", active, inspectErr, err)
-		}
 		if !called || err != nil {
 			t.Fatalf("baseline did not restore remote pending before unrelated work: called=%v err=%v", called, err)
 		}

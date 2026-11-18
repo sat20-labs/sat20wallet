@@ -10,49 +10,35 @@ const toolsPage = read('../../entrypoints/popup/pages/wallet/Tools.vue')
 const zh = JSON.parse(read('../../locales/zh.json'))
 const en = JSON.parse(read('../../locales/en.json'))
 
-test('AUTOPAY status exposes actual payment height and separate exact-expiry estimates', () => {
-  assert.match(statusType, /last_pay_height\?: number/)
-  assert.match(statusType, /remaining_payment_blocks\?: number/)
-  assert.match(statusType, /estimated_expiry_height\?: number/)
-  assert.match(statusType, /estimated_funded_expiry_height\?: number/)
+test('SDK PaymentView exposes an estimate separately from payment transaction identity', () => {
+  const views = read('../../utils/walletViews.ts')
+  assert.match(views, /interface PaymentView[\s\S]*expiry_height: number[\s\S]*quote: PaymentQuote \| null[\s\S]*tx_id: string/)
+  assert.match(statusType, /fundAutopay\(confirmed: PaymentQuote\)/)
 })
-
-test('account management shows the actual paid-through height and marks expiry as expected', () => {
-  assert.match(accountPage, /last_pay_height/)
-  assert.match(accountPage, /accountManagement\.dkvsPaidHeight/)
-  assert.match(accountPage, /estimated_expiry_height/)
-  assert.match(accountPage, /accountManagement\.dkvsExpiryEstimate/)
-  assert.match(accountPage, /estimated_funded_expiry_height/)
-  assert.equal(zh.accountManagement.dkvsPay, '支付 DKVS 存储费用')
-  assert.match(zh.accountManagement.dkvsPaidHeight, /已实际支付至聪网高度/)
-  assert.match(zh.accountManagement.dkvsExpiryEstimate, /预计.*聪网高度/)
-  assert.equal(en.accountManagement.dkvsPay, 'Pay DKVS storage fees')
-  assert.match(en.accountManagement.dkvsPaidHeight, /Actually paid through SatoshiNet height/)
-  assert.match(en.accountManagement.dkvsExpiryEstimate, /Estimated.*SatoshiNet height/)
+test('account and reminder label expiry as estimated, not actual paid-through proof', () => {
+  assert.match(accountPage, /state\.autopay\.expiry_height/)
+  assert.match(walletReminder, /autopay\?\.expiry_height/)
+  for (const source of [accountPage,walletReminder]) {
+    assert.match(source, /accountManagement\.dkvsExpiryEstimate/)
+    assert.doesNotMatch(source, /accountManagement\.dkvsPaidHeight/)
+  }
+  assert.match(zh.accountManagement.dkvsExpiryEstimate,/预计.*聪网高度/)
+  assert.match(en.accountManagement.dkvsExpiryEstimate,/Estimated.*SatoshiNet height/)
 })
-
-test('healthy paid storage offers the same confirmed DKVS renewal flow in both locales', () => {
-  const healthyAutopayBlock = accountPage.match(
-    /v-else-if="autopayStatus\?\.required && autopayStatus\.ready"([\s\S]*?)<\/div>/,
-  )?.[1]
-  assert.ok(healthyAutopayBlock, 'healthy AUTOPAY status block is missing')
-  assert.match(healthyAutopayBlock, /autopayStatus\.can_fund/)
-  assert.match(healthyAutopayBlock, /@click="fundAutopay"/)
-  assert.match(healthyAutopayBlock, /accountManagement\.dkvsRenew/)
-  assert.match(accountPage, /accountSDK\.fundAutopay\(confirmed\)/)
-  assert.equal(zh.accountManagement.dkvsRenew, '续费 DKVS 存储')
-  assert.equal(en.accountManagement.dkvsRenew, 'Renew DKVS storage')
+test('funding requires available SDK quote and explicit confirmation', () => {
+  assert.match(accountPage, /state\.autopay\.can_fund && state\.autopay\.quote/)
+  assert.match(accountPage, /@click="askFunding"/)
+  assert.match(accountPage, /@click="confirmPayment"/)
+  assert.match(accountPage, /if \(quote\) \{ payment\.value = quote; paymentAction = action \}/)
+  assert.match(accountPage, /requestPayment\(quote, async \(\) => \{ await accountSDK\.fundAutopay\(quote\)/)
+  assert.match(accountPage, /const confirmPayment = \(\) => run\(async \(\) => \{ const action = paymentAction; cancelPayment\(\); if \(action\) await action\(\)/)
+  // Actual unchanged-quote, changed-quote refusal and one-broadcast behavior
+  // remains exercised by runAutopayPageCase, not claimed by this source guard.
 })
-
-test('wallet reminder identifies DKVS storage payment and keeps its estimate distinct from payment proof', () => {
-  assert.match(walletReminder, /accountManagement\.dkvsPaymentNeedsAttention/)
-  assert.match(walletReminder, /accountManagement\.dkvsPay/)
-  assert.match(walletReminder, /autopay\?\.estimated_expiry_height/)
-  assert.match(walletReminder, /accountManagement\.dkvsExpiryEstimate/)
-  assert.match(zh.accountManagement.dkvsPaymentNeedsAttention, /DKVS/)
-  assert.match(zh.accountManagement.dkvsExpiryEstimate, /预计.*聪网高度/)
-  assert.match(en.accountManagement.dkvsPaymentNeedsAttention, /DKVS/)
-  assert.match(en.accountManagement.dkvsExpiryEstimate, /Estimated.*SatoshiNet height/)
+test('wallet reminder identifies DKVS funding without making a payment', () => {
+  assert.match(walletReminder,/accountManagement\.dkvsPaymentNeedsAttention/)
+  assert.match(walletReminder,/accountManagement\.dkvsPay/)
+  assert.doesNotMatch(walletReminder,/accountSDK\.fundAutopay/)
 })
 
 test('Tools AUTOPAY funding remains the operator GAS top-up action', () => {

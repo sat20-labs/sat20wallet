@@ -98,7 +98,7 @@ func TestStableRecoveryContainsInvoiceAndPendingOperationClosure(t *testing.T) {
 	}
 	snapshot := &RGB11WalletSnapshot{
 		Version: WalletSnapshotVersion, WalletID: "recovery-closure-wallet",
-		EngineBuildID:     NativeEngineBuildID,
+		EngineBuildID:     RGB11EngineBuildID,
 		ProjectionRecords: projectionRecords, EngineRecords: engineRecords,
 	}
 	recovery, err := RecoveryPackageFromSnapshot(snapshot, time.Now().Unix())
@@ -213,7 +213,7 @@ func TestRecoveryPreservesZeroBalanceContractAlias(t *testing.T) {
 	digest := sha256.Sum256(raw)
 	consignmentHash := hex.EncodeToString(digest[:])
 	_, err = store.ValidateAndStoreConsignment(context.Background(), testValidator{receipt: &ValidationReceipt{
-		Version: 1, EngineBuildID: NativeEngineBuildID,
+		Version: 1, EngineBuildID: RGB11EngineBuildID,
 		ConsignmentHash: consignmentHash, ContractID: contractID,
 		SchemaID: "zero-balance-schema", StateHash: [32]byte{1}, Status: "valid",
 		Allocations: []ValidatedAllocation{{
@@ -235,7 +235,7 @@ func TestRecoveryPreservesZeroBalanceContractAlias(t *testing.T) {
 	}
 	snapshot := &RGB11WalletSnapshot{
 		Version: WalletSnapshotVersion, WalletID: "zero-balance-wallet",
-		EngineBuildID: NativeEngineBuildID, ProjectionRecords: projectionRecords,
+		EngineBuildID: RGB11EngineBuildID, ProjectionRecords: projectionRecords,
 	}
 	recovery, err := RecoveryPackageFromSnapshot(snapshot, 0)
 	if err != nil {
@@ -284,7 +284,7 @@ func TestRecoveryPreservesZeroBalanceContractAlias(t *testing.T) {
 // bound by the existing contract-object reference merely because its hash sorts
 // first. An older device still owns that exact recovery responsibility.
 func TestRecoveryKeepsReferencedContractValidationWhenAnotherReceiptSortsFirst(t *testing.T) {
-	raw, err := os.ReadFile("../../../../rgb11/testvectors/rc11/nia-example.rgba")
+	raw, err := os.ReadFile("../../../../rgb11/testvectors/rc1/nia-example.rgba")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +311,7 @@ func TestRecoveryKeepsReferencedContractValidationWhenAnotherReceiptSortsFirst(t
 	if err := store.SetScope("referenced-contract-receipt"); err != nil {
 		t.Fatal(err)
 	}
-	first, err := store.ValidateAndStoreConsignment(context.Background(), NewNativeConsensusValidator(), nativeGenesisEvidence{}, older)
+	first, err := store.ValidateAndStoreConsignment(context.Background(), NewRGB11ConsensusValidator(), rgb11GenesisEvidence{}, older)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,7 +325,7 @@ func TestRecoveryKeepsReferencedContractValidationWhenAnotherReceiptSortsFirst(t
 			t.Fatal(err)
 		}
 		return &RGB11WalletSnapshot{Version: WalletSnapshotVersion, WalletID: "referenced-contract-wallet",
-			EngineBuildID: NativeEngineBuildID, ProjectionRecords: records}
+			EngineBuildID: RGB11EngineBuildID, ProjectionRecords: records}
 	}
 	current := snapshot()
 	initial, err := RecoveryPackageFromSnapshot(current, 0)
@@ -335,7 +335,7 @@ func TestRecoveryKeepsReferencedContractValidationWhenAnotherReceiptSortsFirst(t
 	if _, err := initial.WalletSnapshot(); err != nil {
 		t.Fatal(err)
 	}
-	second, err := store.ValidateAndStoreConsignment(context.Background(), NewNativeConsensusValidator(), nativeGenesisEvidence{}, newer)
+	second, err := store.ValidateAndStoreConsignment(context.Background(), NewRGB11ConsensusValidator(), rgb11GenesisEvidence{}, newer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -400,7 +400,7 @@ func TestMergeSelectedRecoveryAdoptsCleanTransferPhase(t *testing.T) {
 	}
 	base := &RGB11WalletSnapshot{
 		Version: WalletSnapshotVersion, WalletID: "selected-phase-wallet",
-		EngineBuildID: NativeEngineBuildID,
+		EngineBuildID: RGB11EngineBuildID,
 		ProjectionRecords: []SnapshotRecord{
 			{Key: "object-" + consignmentHash, Value: raw},
 			{Key: "transfer-selected-phase", Value: mustEncodeRecoveryTest(t, &baseState)},
@@ -410,7 +410,7 @@ func TestMergeSelectedRecoveryAdoptsCleanTransferPhase(t *testing.T) {
 	selectedState.Status, selectedState.AckStatus = "settled", "accepted"
 	selected := &RGB11WalletSnapshot{
 		Version: WalletSnapshotVersion, WalletID: base.WalletID,
-		EngineBuildID: NativeEngineBuildID,
+		EngineBuildID: RGB11EngineBuildID,
 		ProjectionRecords: []SnapshotRecord{
 			{Key: "object-" + consignmentHash, Value: raw},
 			{Key: "transfer-selected-phase", Value: mustEncodeRecoveryTest(t, &selectedState)},
@@ -642,7 +642,7 @@ func TestMergeSelectedRecoveryAcceptsCompactedRejectedSend(t *testing.T) {
 	}
 	currentPackage, err := RecoveryPackageFromSnapshot(&RGB11WalletSnapshot{
 		Version: WalletSnapshotVersion, WalletID: "selected-cancel-wallet",
-		EngineBuildID: NativeEngineBuildID, ProjectionRecords: currentRecords,
+		EngineBuildID: RGB11EngineBuildID, ProjectionRecords: currentRecords,
 	}, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -669,7 +669,7 @@ func TestMergeSelectedRecoveryAcceptsCompactedRejectedSend(t *testing.T) {
 	}
 	selectedPackage, err := RecoveryPackageFromSnapshot(&RGB11WalletSnapshot{
 		Version: WalletSnapshotVersion, WalletID: current.WalletID,
-		EngineBuildID: NativeEngineBuildID, ProjectionRecords: selectedRecords,
+		EngineBuildID: RGB11EngineBuildID, ProjectionRecords: selectedRecords,
 	}, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -700,7 +700,7 @@ func TestMergeSelectedRecoveryAcceptsCompactedRejectedSend(t *testing.T) {
 func TestMergeSelectedRecoveryRejectsDroppedLocalPending(t *testing.T) {
 	current := &RGB11WalletSnapshot{
 		Version: WalletSnapshotVersion, WalletID: "selected-pending-wallet",
-		EngineBuildID: NativeEngineBuildID,
+		EngineBuildID: RGB11EngineBuildID,
 		ProjectionRecords: []SnapshotRecord{{
 			Key: "pending-local-only",
 			Value: mustEncodeRecoveryTest(t, &PendingTransfer{
@@ -710,7 +710,7 @@ func TestMergeSelectedRecoveryRejectsDroppedLocalPending(t *testing.T) {
 	}
 	selected := &RGB11WalletSnapshot{
 		Version: WalletSnapshotVersion, WalletID: current.WalletID,
-		EngineBuildID: NativeEngineBuildID,
+		EngineBuildID: RGB11EngineBuildID,
 	}
 	if _, err := MergeSelectedRecoverySnapshot(current, selected); err == nil {
 		t.Fatal("selected account silently dropped a locally prepared operation")
@@ -773,7 +773,7 @@ func TestMergeSelectedRecoveryAcceptsCompletedReceiveReplacingReservation(t *tes
 	}
 	current := &RGB11WalletSnapshot{
 		Version: WalletSnapshotVersion, WalletID: "selected-receive-wallet",
-		EngineBuildID: NativeEngineBuildID, ProjectionRecords: currentProjection,
+		EngineBuildID: RGB11EngineBuildID, ProjectionRecords: currentProjection,
 		EngineRecords: currentEngine,
 	}
 
@@ -802,7 +802,7 @@ func TestMergeSelectedRecoveryAcceptsCompletedReceiveReplacingReservation(t *tes
 	}
 	selected := &RGB11WalletSnapshot{
 		Version: WalletSnapshotVersion, WalletID: current.WalletID,
-		EngineBuildID: NativeEngineBuildID, ProjectionRecords: selectedProjection,
+		EngineBuildID: RGB11EngineBuildID, ProjectionRecords: selectedProjection,
 		EngineRecords: selectedEngine,
 	}
 	merged, err := MergeSelectedRecoverySnapshot(current, selected)

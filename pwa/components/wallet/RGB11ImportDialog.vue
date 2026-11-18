@@ -104,12 +104,11 @@ const runImport = async () => {
       throw new Error(t('rgb11Transfer.importFileTooLarge', { size: '4 MiB' }))
     }
     const [err, result] = selectedFile.value
-      ? await walletManager.importRGB11ContractFile(encodeBase64(await selectedFile.value.arrayBuffer()))
-      : await walletManager.importRGB11Contract(consignment.value.trim())
-    if (err || !result?.result) throw err || new Error(t('rgb11Transfer.importFailed'))
-    const imported = JSON.parse(result.result)
+      ? await walletManager.importRGB11Contract(encodeBase64(await selectedFile.value.arrayBuffer()))
+      : await walletManager.importRGB11Contract(encodeBase64(new TextEncoder().encode(consignment.value.trim()).buffer))
+    if (err || !result) throw err || new Error(t('rgb11Transfer.importFailed'))
     success.value = true
-    message.value = t('rgb11Transfer.imported', { count: imported.projected || 0 })
+    message.value = t('rgb11Transfer.imported', { count: 1 })
     emit('completed')
   } catch (error: any) {
     message.value = displayOperationError(error, 'rgb11Transfer.importFailed')

@@ -333,7 +333,7 @@ func TestSTPSingleUTXOTopupConfirmedHookPinsExactOutput(t *testing.T) {
 	t.Fatal("original durable owner missing")
 }
 func TestSTPSingleUTXOTopupOfflineHintRequiresCompleteConfirmedLocalPackage(t *testing.T) {
-	for _, kind := range []string{"missing", "invalid", "unconfirmed", "native", "valid"} {
+	for _, kind := range []string{"missing", "invalid", "unconfirmed", "channel", "valid"} {
 		t.Run(kind, func(t *testing.T) {
 			f := newSingleUTXOExecutionFixture(t)
 			api := singleUTXOTopupAPIForTest(t, f.manager)
@@ -361,8 +361,8 @@ func TestSTPSingleUTXOTopupOfflineHintRequiresCompleteConfirmedLocalPackage(t *t
 			if kind == "unconfirmed" {
 				f.rpc.parentConfirmed = false
 			}
-			if kind == "native" {
-				f.stored.AssetFunding = map[string][]byte{"rgb11": []byte("fixture native inventory classification")}
+			if kind == "channel" {
+				f.stored.AssetFunding = map[string][]byte{"rgb11": []byte("fixture channel inventory classification")}
 				raw, _ := EncodeToBytes(f.stored)
 				if err := f.manager.db.Write([]byte(GetChannelKey(f.channelID)), raw); err != nil {
 					t.Fatal(err)

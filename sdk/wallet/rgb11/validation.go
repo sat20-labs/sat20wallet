@@ -158,7 +158,7 @@ func (r *ValidationReceipt) validate(expectedHash string) error {
 }
 
 func (r *ValidationReceipt) validateStatus(expectedHash, expectedStatus string) error {
-	if r == nil || r.Version != 1 || r.Status != expectedStatus || r.EngineBuildID == "" ||
+	if r == nil || r.Version != 1 || r.Status != expectedStatus || r.EngineBuildID != RGB11EngineBuildID ||
 		r.ConsignmentHash != expectedHash || r.ContractID == "" || r.SchemaID == "" {
 		return ErrValidationReceipt
 	}

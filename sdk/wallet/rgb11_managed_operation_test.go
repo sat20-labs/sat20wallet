@@ -85,23 +85,6 @@ func configuredRGB11ManagedOperationTestManager(t *testing.T) *Manager {
 	return manager
 }
 
-func TestRGB11ManagedOperationAggregatesMutationMarker(t *testing.T) {
-	manager := &Manager{}
-	manager.beginRGB11ManagedOperationState()
-	if inOperation, first := manager.noteRGB11ManagedOperationMutation(); !inOperation || !first {
-		t.Fatalf("first mutation state=(%v,%v)", inOperation, first)
-	}
-	if inOperation, first := manager.noteRGB11ManagedOperationMutation(); !inOperation || first {
-		t.Fatalf("second mutation state=(%v,%v)", inOperation, first)
-	}
-	if !manager.endRGB11ManagedOperationState() {
-		t.Fatal("operation did not retain its aggregated dirty marker")
-	}
-	if inOperation, first := manager.noteRGB11ManagedOperationMutation(); inOperation || first {
-		t.Fatalf("mutation leaked beyond operation=(%v,%v)", inOperation, first)
-	}
-}
-
 func TestRGB11ManagedOperationWithoutRecoveryKeepsChainLockFree(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
@@ -119,13 +102,10 @@ func TestRGB11ManagedOperationWithoutRecoveryKeepsChainLockFree(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	observedUnlocked := false
-	observedFirstMutation := false
 	_, err := runRGB11ManagedOperationWithManager[struct{}](owner, ctx,
 		rgb11ManagedOperationRefresh,
 		func() (*rgb11Manager, error) { return manager, nil },
 		func(current *rgb11Manager) (struct{}, error) {
-			inOperation, first := current.Manager.noteRGB11ManagedOperationMutation()
-			observedFirstMutation = inOperation && first
 
 			unlock, lockErr := current.lockRGB11ChainRefresh(ctx)
 			if lockErr != nil {
@@ -141,25 +121,15 @@ func TestRGB11ManagedOperationWithoutRecoveryKeepsChainLockFree(t *testing.T) {
 	if !observedUnlocked {
 		t.Fatal("operation callback could not take the short local chain-refresh lock")
 	}
-	if !observedFirstMutation {
-		t.Fatal("operation callback did not aggregate its first mutation")
+	if !owner.rgbManagedExecutionMu.TryLock() {
+		t.Fatal("module execution lock leaked")
 	}
-	owner.rgbManagedOperationMu.Lock()
-	active := owner.rgbManagedOperationActive
-	owner.rgbManagedOperationMu.Unlock()
-	if active {
-		t.Fatal("managed-operation lock ownership marker leaked after operation")
-	}
+	owner.rgbManagedExecutionMu.Unlock()
 	if !manager.scopeStates.chainRefresh.TryLock() {
 		t.Fatal("operation did not release the chain-refresh lock")
 	}
 	manager.scopeStates.chainRefresh.Unlock()
-	owner.dkvs.mu.Lock()
-	deferredSync := owner.dkvs.jobs[accountManagedStateJobID]
-	owner.dkvs.mu.Unlock()
-	if deferredSync == nil {
-		t.Fatal("dirty operation did not schedule the existing account-state sync")
-	}
+
 }
 
 func TestRGB11ManagedOperationCommitsOneGenerationBeforeBackup(t *testing.T) {
@@ -178,8 +148,8 @@ func TestRGB11ManagedOperationCommitsOneGenerationBeforeBackup(t *testing.T) {
 			// Multiple low-level mutation notifications inside one business
 			// operation must still produce one managed generation and one final
 			// account snapshot.
-			rgb.autoBackupRGB11AfterMutation()
-			rgb.autoBackupRGB11AfterMutation()
+			rgb.accountManagementOwner().NotifyAccountChanged()
+			rgb.accountManagementOwner().NotifyAccountChanged()
 			return struct{}{}, nil
 		})
 	if err != nil {
@@ -197,7 +167,7 @@ func TestRGB11ManagedOperationCommitsOneGenerationBeforeBackup(t *testing.T) {
 	if rgb11LocalModulePendingForTest(t, manager) {
 		t.Fatal("successful backup did not clear its acknowledged generation")
 	}
-	payloads, err := manager.currentAccountManagedProviderPayloads(rgb11AccountManagedProviderID)
+	payloads, err := accountTestPayloads(manager, rgb11AccountManagedProviderID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,30 +182,26 @@ func TestAccountManagedSyncPublishesActiveRGB11TransitionToStableClosure(t *test
 	defer func() { _chain = oldChain }()
 
 	manager := configuredRGB11ManagedOperationTestManager(t)
-	initialGeneration := manager.accountProfile.ManagedDataGeneration
+	initialGeneration := rgb11LocalModuleForTest(t, manager).Generation
 	saveRGB11StatusTransfer(t, manager, "active-managed-sync", "prepared")
-	if err := manager.markAccountManagedDataDirtyDeferred(rgb11AccountManagedProviderID); err != nil {
+	if err := accountTestChange(manager, rgb11AccountManagedProviderID, coreSelectedRGBScope(manager)); err != nil {
 		t.Fatal(err)
 	}
-	generation := manager.accountProfile.ManagedDataGeneration
+	generation := rgb11LocalModuleForTest(t, manager).Generation
 	if generation <= initialGeneration {
 		t.Fatalf("deferred recovery mutation did not advance generation: before=%d after=%d",
 			initialGeneration, generation)
 	}
 
-	active, err := manager.hasAccountManagedRGB11Transition()
-	if err != nil || !active {
-		t.Fatalf("pending transition active=%t error=%v", active, err)
-	}
 	if err := manager.SyncAccountManagementState(context.Background()); err != nil {
 		t.Fatalf("stable closure sync rejected recoverable pending work: %v", err)
 	}
-	if manager.accountProfile.ManagedDataDirty ||
-		manager.accountProfile.ManagedDataGeneration != generation {
+	if rgb11LocalModulePendingForTest(t, manager) ||
+		rgb11LocalModuleForTest(t, manager).Generation != generation {
 		t.Fatalf("stable sync changed marker generation or left dirty state: dirty=%t generation=%d marker=%d",
-			manager.accountProfile.ManagedDataDirty, manager.accountProfile.ManagedDataGeneration, generation)
+			rgb11LocalModulePendingForTest(t, manager), rgb11LocalModuleForTest(t, manager).Generation, generation)
 	}
-	payloads, err := manager.currentAccountManagedProviderPayloads(rgb11AccountManagedProviderID)
+	payloads, err := accountTestPayloads(manager, rgb11AccountManagedProviderID)
 	if err != nil || len(payloads) != 1 {
 		t.Fatalf("stable recovery payload count=%d err=%v", len(payloads), err)
 	}

@@ -150,7 +150,7 @@ func TestRGB11ConflictCandidateMarkerFailureIsAtomic(t *testing.T) {
 	if err := f.sender.SyncAccountManagementState(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.sender.verifyCurrentRGB11RecoveryClosure(); err != nil {
+	if err := f.sender.WaitAccountBackup(context.Background(), rgb11AccountManagedProviderID, coreSelectedRGBScope(f.sender)); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -13,7 +13,7 @@ import (
 // independently constructed by the capture site. Only the matched final tx
 // gains this specific local provenance; ancestors need their own provenance.
 func TestSTPRGBStoredObligationDoesNotGrantPreparedToAllHistory(t *testing.T) {
-	facts, sources, main, proof := rgbReservationNativeEvidenceFixture(t)
+	facts, sources, main, proof := rgb11ResvEvidenceFixture(t)
 	pkg, err := rgb11wallet.DecodeChannelPackage(proof)
 	if err != nil {
 		t.Fatal(err)
@@ -44,6 +44,7 @@ func TestSTPRGBStoredObligationDoesNotGrantPreparedToAllHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	captured := newSTPRGBReservationEvidence()
+	captured.genesisHash = facts.genesisHash
 	captured.channelID, captured.network, captured.height, captured.entropy = facts.channelID, facts.network, facts.height, facts.entropy
 	captured.prepared = make(map[string][]byte)
 	if err := captured.captureConstructedProof(child, raw, false); err != nil {

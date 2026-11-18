@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	"math/big"
 	"sort"
 	"strconv"
@@ -578,7 +579,7 @@ func (p *SwapContractRuntime) InitFromDB(stp ContractManager, resv ContractDeplo
 	// 	}
 	// }
 
-	return p.restoreNativePublicMetadata()
+	return p.restoreRGB11PublicMetadata()
 }
 
 func (p *SwapContractRuntime) IsIdle() bool {
@@ -1382,10 +1383,10 @@ func (p *SwapContractRuntime) AllowDeploy() error {
 
 	// 检查合约的资产名称是否已经存在
 	tickerInfo := p.contractAssetTicker()
-	if tickerInfo == nil && !(p.nativePublicContract() && p.runtime.GetTemplateName() == TEMPLATE_CONTRACT_TRANSCEND) {
+	if tickerInfo == nil && !(p.rgb11PublicContract() && p.runtime.GetTemplateName() == TEMPLATE_CONTRACT_TRANSCEND) {
 		return fmt.Errorf("getTickerInfo %s failed", p.resv.GetContract().GetAssetName().String())
 	}
-	// A bridge can be created for a canonical native identity before its first
+	// A bridge can be created for a canonical RGB11 identity before its first
 	// mapping exists. Its first authenticated deposit fixes immutable genesis
 	// precision; economic contracts still require validated metadata up front.
 	err := p.ContractRuntimeBase.AllowDeploy()
@@ -1540,13 +1541,13 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 		// 检查一层网络上是否有足够的资产，现在合约不保留一层资产，只需要确保二层资产有足够资产就行
 		var totalAmt *Decimal
 		checkLiquidity := true
-		if p.nativePublicContract() {
+		if p.rgb11PublicContract() {
 			// A client-side fee preview cannot query an RGB pool through the
 			// Bitcoin indexer. Actual pool owners derive liquidity from current
 			// validated consignments; signing and settlement repeat this check.
 			checkLiquidity = p.localWallet != nil
 			if checkLiquidity {
-				sources, err := p.stp.GetWalletMgr().ListNativeChannelSources(context.Background(), p.localWallet, p.ChannelAddr, p.GetAssetName())
+				sources, err := p.stp.GetWalletMgr().ListRGB11ChannelSources(context.Background(), p.localWallet, p.ChannelAddr, p.GetAssetName())
 				if err != nil {
 					return 0, err
 				}
@@ -2195,7 +2196,7 @@ func (p *SwapContractRuntime) VerifyAndAcceptInvokeItem(invokeTx *InvokeTx, heig
 
 		// 临时锁定该UTXO TODO 需要一个更好的方案，这里不一定能锁住
 		if bValid {
-			p.stp.GetWalletMgr().utxoLockerL1.LockUtxo(utxo, "contract deposit")
+			p.stp.GetWalletMgr().utxoLockerL1.LockUtxo(utxo, sdkcommon.UtxoLockContractDeposit)
 		}
 
 		// 更新合约状态
@@ -2487,7 +2488,7 @@ func (p *SwapContractRuntime) updateContract_deposit(
 		expectedAmt = inAmt.Clone()
 		remainingAmt = inAmt.Clone()
 		if assetName.Protocol == "rgb11" && fromL1 {
-			// Native anchors map the full carrier. Bitcoin value is not a fee
+			// RGB11 anchors map the full carrier. Bitcoin value is not a fee
 			// denominated in RGB tokens and belongs to the signed beneficiary.
 			remainingValue = inValue
 			serviceFee = 0
@@ -4552,8 +4553,8 @@ func (p *SwapContractRuntime) deposit() error {
 }
 
 func (p *SwapContractRuntime) genWithdrawInfo(height int) *DealInfo {
-	if p.nativePublicContract() {
-		info, err := p.genNativeWithdrawInfo(height, nil)
+	if p.rgb11PublicContract() {
+		info, err := p.genRGB11WithdrawInfo(height, nil)
 		if err != nil {
 			return &DealInfo{}
 		}
@@ -4819,8 +4820,8 @@ func (p *SwapContractRuntime) updateWithDealInfo_withdraw(dealInfo *DealInfo) {
 
 // 收到withdraw的交易，执行一层分发
 func (p *SwapContractRuntime) withdraw() error {
-	if p.nativePublicContract() {
-		return p.withdrawNativeContract()
+	if p.rgb11PublicContract() {
+		return p.withdrawRGB11Contract()
 	}
 
 	// 发送
@@ -5371,7 +5372,7 @@ func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, er
 		if !ok {
 			return nil, fmt.Errorf("not RemoteSignMoreData_Contract")
 		}
-		if err := p.registerNativeContractSigningReceipts(req); err != nil {
+		if err := p.registerRGB11SigningReceipts(req); err != nil {
 			return nil, err
 		}
 
@@ -5436,7 +5437,7 @@ func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, er
 		if dealInfo == nil {
 			return nil, fmt.Errorf("contract request has no asset transaction")
 		}
-		if err := p.verifyNativeContractWithdrawal(req, transcendTx, dealInfo); err != nil {
+		if err := p.verifyRGB11ContractWithdrawal(req, transcendTx, dealInfo); err != nil {
 			return nil, err
 		}
 		dealInfo.InvokeCount = req.InvokeCount
@@ -5483,14 +5484,14 @@ func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, er
 
 		case INVOKE_RESULT_WITHDRAW:
 			info := p.genWithdrawInfo(dealInfo.Height)
-			if p.nativePublicContract() {
+			if p.rgb11PublicContract() {
 				var err error
-				info, err = p.genNativeWithdrawInfo(dealInfo.Height, dealInfo.ItemIDs)
+				info, err = p.genRGB11WithdrawInfo(dealInfo.Height, dealInfo.ItemIDs)
 				if err != nil {
 					return nil, err
 				}
 				if len(info.SendInfo) != len(dealInfo.SendInfo) {
-					return nil, fmt.Errorf("native withdrawal must include every selected recipient")
+					return nil, fmt.Errorf("RGB11 withdrawal must include every selected recipient")
 				}
 			}
 			if info != nil {
@@ -5646,8 +5647,8 @@ func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, er
 			}
 		}
 
-		if p.nativePublicContract() && dealInfo.Reason == INVOKE_RESULT_WITHDRAW {
-			if err := p.stageNativeContractWithdrawal(dealInfo); err != nil {
+		if p.rgb11PublicContract() && dealInfo.Reason == INVOKE_RESULT_WITHDRAW {
+			if err := p.stageRGB11ContractWithdrawal(dealInfo); err != nil {
 				return nil, err
 			}
 		}
@@ -5772,9 +5773,9 @@ func (p *SwapContractRuntime) SetPeerActionResult(action string, param any) {
 			return
 		}
 
-		if p.nativePublicContract() && dealInfo.Reason == INVOKE_RESULT_WITHDRAW {
-			if err := p.stageNativeContractWithdrawal(dealInfo); err != nil {
-				Log.Errorf("stage native withdrawal: %v", err)
+		if p.rgb11PublicContract() && dealInfo.Reason == INVOKE_RESULT_WITHDRAW {
+			if err := p.stageRGB11ContractWithdrawal(dealInfo); err != nil {
+				Log.Errorf("stage RGB11 withdrawal: %v", err)
 			}
 			return
 		}
@@ -5928,8 +5929,8 @@ func (p *SwapContractRuntime) genDepositInfoFromAnchorTxs(req *wwire.RemoteSignM
 			Log.Errorf("CheckAnchorPkScript %s failed", tx.TxID())
 			return nil, err
 		}
-		if p.nativePublicContract() {
-			if err := p.stp.GetWalletMgr().ValidateNativeContractDepositAnchor(context.Background(), p.runtime, tx); err != nil {
+		if p.rgb11PublicContract() {
+			if err := p.stp.GetWalletMgr().ValidateRGB11DepositAnchor(context.Background(), p.runtime, tx); err != nil {
 				return nil, err
 			}
 		}
@@ -6001,7 +6002,7 @@ func (p *SwapContractRuntime) genDepositInfoFromAnchorTxs(req *wwire.RemoteSignM
 						return nil, fmt.Errorf("%s should be only one asset", tx.TxID())
 					}
 					value := indexer.GetBindingSatNum(item.RemainingAmt, STPAssetBindingSat(p.GetAssetNameV2()))
-					if p.nativePublicContract() {
+					if p.rgb11PublicContract() {
 						value = item.RemainingValue
 					}
 					if value != anchorData.Value {
@@ -6050,7 +6051,7 @@ func (p *SwapContractRuntime) genDepositInfoFromAnchorTxs(req *wwire.RemoteSignM
 }
 
 func (p *SwapContractRuntime) HandleInvokeResult_SatsNet(tx *swire.MsgTx, vout int, result string, more string) {
-	if p.nativePublicContract() && result == INVOKE_RESULT_WITHDRAW {
+	if p.rgb11PublicContract() && result == INVOKE_RESULT_WITHDRAW {
 		return
 	}
 	if _, ok := loadContractInvokeResult(p.stp.GetDB(), p.URL(), tx.TxID()); ok {

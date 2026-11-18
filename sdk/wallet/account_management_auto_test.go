@@ -56,7 +56,7 @@ func assertInitialAccountManagementStatus(t *testing.T, manager *Manager, wallet
 	status := manager.GetAccountManagementStatus()
 	if !status.Active || status.RecoveryConfigured || status.StorageMode != AccountStorageTemporary ||
 		status.AccountID == "" || status.RootFingerprint == "" || status.RootWalletID != walletID ||
-		status.StateSeq != 0 || status.PendingChanges != 0 || !status.ManagedDataDirty {
+		status.StateSeq != 0 || status.PendingChanges != 0 || status.ManagedDataDirty || !status.WriteAllowed {
 		t.Fatalf("initial account management status=%+v", status)
 	}
 	providers := manager.accountManagedDataProviders()
@@ -70,10 +70,9 @@ func TestImportFirstMnemonicWalletAfterAuthoritativeRootNotFoundEnablesAccountMa
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
 	manager := newAccountManagementAutoTestManager(t)
-	store := &memoryAccountRootWrapperStore{records: make(map[string]*dkvsValue)}
-	if _, err := manager.recoverAccountManagementFromRootMnemonic(context.Background(),
-		"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
-		"password", store, AccountIndexerLocation{}); !errors.Is(err, ErrRootAccountNotFound) {
+	configureRGB11DKVSTestManager(manager, newRGB11MemoryDKVSHTTP())
+	if _, err := manager.RecoverAccountManagementFromRootMnemonic(context.Background(),
+		accountRootWrapperTestMnemonic, "password"); !errors.Is(err, ErrRootAccountNotFound) {
 		t.Fatalf("root discovery error=%v", err)
 	}
 	walletID, err := manager.ImportWallet(
@@ -123,10 +122,9 @@ func TestImportFirstMnemonicWalletDoesNotReuseAnotherMnemonicAuthorization(t *te
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
 	manager := newAccountManagementAutoTestManager(t)
-	store := &memoryAccountRootWrapperStore{records: make(map[string]*dkvsValue)}
-	if _, err := manager.recoverAccountManagementFromRootMnemonic(context.Background(),
-		"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
-		"password", store, AccountIndexerLocation{}); !errors.Is(err, ErrRootAccountNotFound) {
+	configureRGB11DKVSTestManager(manager, newRGB11MemoryDKVSHTTP())
+	if _, err := manager.RecoverAccountManagementFromRootMnemonic(context.Background(),
+		accountRootWrapperTestMnemonic, "password"); !errors.Is(err, ErrRootAccountNotFound) {
 		t.Fatalf("root discovery error=%v", err)
 	}
 	if _, err := manager.ImportWallet(
@@ -135,17 +133,21 @@ func TestImportFirstMnemonicWalletDoesNotReuseAnotherMnemonicAuthorization(t *te
 	); err != nil {
 		t.Fatal(err)
 	}
-	status := manager.GetAccountManagementStatus()
-	if !status.Active || status.LocalOnly || status.DiscoveryStatus != "unknown" || status.RecoveryConfigured {
-		t.Fatal("another root reused a not-found observation as write authorization")
-	}
-	before := manager.GetWalletCatalog()
-	if err := manager.UpdateWalletName(manager.GetCurrentWalletId(), "must discover this root"); !errors.Is(err, ErrDKVSPathNotSynced) {
+	assertPendingImportReadOnly(t, manager, manager.GetCurrentWalletId())
+	if _, err := manager.syncDKVSOnce(); err != nil {
 		t.Fatal(err)
 	}
-	if manager.GetWalletCatalog()[0].Name != before[0].Name {
-		t.Fatal("unknown root edit changed catalog")
+	status := manager.GetAccountManagementStatus()
+	if !status.Active || !status.LocalOnly || status.RecoveryConfigured || status.PublicLocator != "" {
+		t.Fatal("another root reused the preceding account recovery configuration")
 	}
+	if err := manager.UpdateWalletName(manager.GetCurrentWalletId(), "local root"); err != nil {
+		t.Fatal(err)
+	}
+	if manager.GetWalletCatalog()[0].Name != "local root" {
+		t.Fatal("unconfigured root did not persist its local catalog edit")
+	}
+
 }
 
 func TestCreateFirstMnemonicWalletAutomaticallyEnablesAccountManagement(t *testing.T) {
@@ -153,12 +155,17 @@ func TestCreateFirstMnemonicWalletAutomaticallyEnablesAccountManagement(t *testi
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
 	manager := newAccountManagementAutoTestManager(t)
+	configureRGB11DKVSTestManager(manager, newRGB11MemoryDKVSHTTP())
 	walletID, mnemonic, err := manager.CreateWallet("password")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if mnemonic == "" {
 		t.Fatal("created wallet has no mnemonic")
+	}
+	assertPendingImportReadOnly(t, manager, walletID)
+	if _, err := manager.syncDKVSOnce(); err != nil {
+		t.Fatal(err)
 	}
 	assertInitialAccountManagementStatus(t, manager, walletID)
 }

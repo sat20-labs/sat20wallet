@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/sat20-labs/sat20wallet/sdk/account"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet"
 	"github.com/stretchr/testify/require"
 )
 
@@ -20,6 +21,22 @@ func TestSDKAccountBackupKeyRecreatedFromRoot(t *testing.T) {
 
 func runSDKAccountBackupKeyRecreatedFromRoot(t *testing.T, network *realSatoshiNet, mnemonic string) {
 	t.Helper()
+	t.Run("PrivateKeyCannotActivate", func(t *testing.T) {
+		manager, _ := accountReviewDevice(t, network, "")
+		_, err := manager.ImportWalletWithPrivateKey("0000000000000000000000000000000000000000000000000000000000000001", accountReviewPassword)
+		require.NoError(t, err)
+		before := manager.GetWalletCatalog()
+		require.Len(t, before, 1)
+		require.ErrorIs(t, manager.InitializeAccountManagement(accountReviewPassword), wallet.ErrAccountRootRequired)
+		require.ErrorIs(t, manager.ActivateAccountManagement(make([]byte, 32), accountReviewPassword,
+			wallet.AccountStorageAuthorization{Mode: wallet.AccountStorageTemporary}, account.Locator{}, ""), wallet.ErrAccountRootRequired)
+		view, err := manager.GetAccountView(context.Background())
+		require.NoError(t, err)
+		require.False(t, view.Active)
+		require.Empty(t, view.AccountID)
+		require.Empty(t, view.Locator)
+		require.Equal(t, before, manager.GetWalletCatalog())
+	})
 	first := prepareAccountReviewWithMnemonic(t, network, mnemonic, true)
 	second := prepareAccountReviewWithMnemonic(t, network, mnemonic, true)
 	require.Equal(t, first.pkg.Envelope.Locator.AccountID, second.pkg.Envelope.Locator.AccountID)
@@ -30,9 +47,10 @@ func runSDKAccountBackupKeyRecreatedFromRoot(t *testing.T, network *realSatoshiN
 	first.manager.Close()
 	fresh, _ := accountReviewDevice(t, network, "")
 	require.Empty(t, fresh.GetWalletCatalog())
-	require.NoError(t, fresh.StartDKVSSync())
 	const newPassword = "key-policy-new-device-password"
 	requireAccountPWARootRecovery(t, fresh, mnemonic, newPassword)
+	// This device restores the already-activated account before its worker starts.
+	require.NoError(t, fresh.StartDKVSSync())
 	backup, err := fresh.ExportAccountBackupForPWA(newPassword, nil)
 	require.NoError(t, err)
 	pkg, err := fresh.CreateAccountRecoveryPackage(account.CreateOptions{

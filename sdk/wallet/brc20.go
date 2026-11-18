@@ -111,7 +111,16 @@ func (p *Manager) inscribeV2(srcUtxoMgr *UtxoMgr, destAddr string,
 	return inscribe, err
 }
 
-func (p *Manager) DeployTicker_brc20(ticker string, max, lim int64, decimal int64, feeRate int64) (*InscribeResv, error) {
+func (p *Manager) DeployTicker_brc20(ticker string, max, lim int64, decimal int64, feeRate int64) (opValue0 *InscribeResv, opErr error) {
+	release, gateErr := p.beginAccountWrite(rgb11AccountManagedProviderID, nil)
+	if gateErr != nil {
+		return nil, gateErr
+	}
+	defer release()
+
+	opLogID := p.beginWalletLog("asset", "deploy_brc20_asset", "Deploy BRC20 asset")
+	defer func() { p.finishWalletLog(opLogID, opErr, opValue0) }()
+
 	if max%lim != 0 {
 		return nil, fmt.Errorf("invalid max %d", max)
 	}
@@ -139,7 +148,9 @@ func (p *Manager) DeployTicker_brc20(ticker string, max, lim int64, decimal int6
 
 // 需要调用方确保amt<=limit
 func (p *Manager) MintAsset_brc20(destAddr string, assetName *indexer.AssetName,
-	amt *Decimal, defaultUtxos []string, feeRate int64) (*InscribeResv, error) {
+	amt *Decimal, defaultUtxos []string, feeRate int64) (opValue0 *InscribeResv, opErr error) {
+	opLogID := p.beginWalletLog("asset", "mint_brc20_asset", "Mint BRC20 asset")
+	defer func() { p.finishWalletLog(opLogID, opErr, opValue0) }()
 
 	var outputs []*TxOutput
 	for _, utxo := range defaultUtxos {
@@ -157,6 +168,11 @@ func (p *Manager) MintAsset_brc20(destAddr string, assetName *indexer.AssetName,
 // 需要调用方确保amt<=limit
 func (p *Manager) MintAssetV2_brc20(destAddr string, assetName *indexer.AssetName,
 	amt *Decimal, defaultUtxos []*TxOutput, feeRate int64) (*InscribeResv, error) {
+	release, gateErr := p.beginAccountWrite(rgb11AccountManagedProviderID, nil)
+	if gateErr != nil {
+		return nil, gateErr
+	}
+	defer release()
 
 	p.l1SendMu.Lock()
 	defer p.l1SendMu.Unlock()

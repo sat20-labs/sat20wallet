@@ -41,7 +41,7 @@ func legacyGobReadFixture(t *testing.T, name string) ([]byte, legacyGobFixtureEn
 	previousChain, previousTesting := indexer.CHAIN, indexer.ENABLE_TESTING
 	indexer.CHAIN, indexer.ENABLE_TESTING = "mainnet", false
 	t.Cleanup(func() { indexer.CHAIN, indexer.ENABLE_TESTING = previousChain, previousTesting })
-	root := filepath.Join("testdata", "legacy_pre_native")
+	root := filepath.Join("testdata", "legacy_channel")
 	manifestRaw, err := os.ReadFile(filepath.Join(root, "manifest.json"))
 	if err != nil {
 		t.Fatalf("genuine old fixtures are required; run the documented pinned old generator first: %v", err)
@@ -74,7 +74,7 @@ func legacyGobReadFixture(t *testing.T, name string) ([]byte, legacyGobFixtureEn
 			t.Fatalf("missing genuine old type shape for %s", typ.Name())
 		}
 		for name, oldType := range fields {
-			if legacyFixtureNativeField(typ.Name(), name) {
+			if legacyFixtureRGB11Field(typ.Name(), name) {
 				t.Fatalf("supposed old schema already contains %s.%s", typ.Name(), name)
 			}
 			current, exists := typ.FieldByName(name)
@@ -84,9 +84,9 @@ func legacyGobReadFixture(t *testing.T, name string) ([]byte, legacyGobFixtureEn
 		}
 		for i := 0; i < typ.NumField(); i++ {
 			f := typ.Field(i)
-			if f.PkgPath == "" && !legacyFixtureNativeField(typ.Name(), f.Name) {
+			if f.PkgPath == "" && !legacyFixtureRGB11Field(typ.Name(), f.Name) {
 				if _, ok := fields[f.Name]; !ok {
-					t.Fatalf("unreviewed non-native field %s.%s", typ.Name(), f.Name)
+					t.Fatalf("unreviewed legacy field %s.%s", typ.Name(), f.Name)
 				}
 			}
 		}
@@ -125,7 +125,7 @@ func legacyGobSemantic(t *testing.T, value any) []byte {
 }
 func legacyGobAssertSemanticOracle(t *testing.T, value any, entry legacyGobFixtureEntry) {
 	t.Helper()
-	want, err := os.ReadFile(filepath.Join("testdata", "legacy_pre_native", entry.SemanticFile))
+	want, err := os.ReadFile(filepath.Join("testdata", "legacy_channel", entry.SemanticFile))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,13 +146,13 @@ func legacyGobOpenDB(t *testing.T, directory string) indexer.KVDB {
 	}
 	return database
 }
-func legacyGobAssertNoNativeState(t *testing.T, c *ChannelInDB) {
+func legacyGobAssertNoRGB11State(t *testing.T, c *ChannelInDB) {
 	t.Helper()
 	if err := legacyFixtureRGBRecoveryIsolation(c); err != nil {
 		t.Fatal(err)
 	}
-	if len(c.AssetFunding) != 0 || c.AssetEntropy != ([32]byte{}) || len(c.ClosingAssetProofs) != 0 || len(c.NativeParents) != 0 || len(c.NativePrevouts) != 0 {
-		t.Fatal("legacy channel acquired meaningful native custody state")
+	if len(c.AssetFunding) != 0 || c.AssetEntropy != ([32]byte{}) || len(c.ClosingAssetProofs) != 0 || len(c.FundingParents) != 0 || len(c.FundingPrevouts) != 0 {
+		t.Fatal("legacy channel acquired meaningful proof-based custody state")
 	}
 	for _, commit := range []*ChannelCommitment{c.LocalCommitment, c.RemoteCommitment} {
 		if commit == nil {
@@ -162,16 +162,16 @@ func legacyGobAssertNoNativeState(t *testing.T, c *ChannelInDB) {
 			t.Fatal("reserved old Others unexpectedly acquired a commitment group")
 		}
 		if len(commit.AssetProofs) != 0 || len(commit.RecoveryProofs) != 0 || len(commit.RecoveryFeeIndexes) != 0 {
-			t.Fatal("legacy commitment acquired meaningful native proof/recovery state")
+			t.Fatal("legacy commitment acquired meaningful asset proof/recovery state")
 		}
 		for _, other := range commit.Others {
 			if other == nil || len(other.AssetProofs) != 0 || len(other.RecoveryProofs) != 0 {
-				t.Fatal("legacy Other commitment changed or acquired native proofs")
+				t.Fatal("legacy Other commitment changed or acquired asset proofs")
 			}
 		}
 	}
-	if c.Status == CS_NATIVE_RECOVERY {
-		t.Fatal("legacy channel entered native-only recovery")
+	if c.Status == CS_COMMIT_RECOVERY {
+		t.Fatal("legacy channel entered commitment recovery")
 	}
 }
 func legacyGobDatabaseSnapshot(t *testing.T, database indexer.KVDB) map[string][]byte {
@@ -185,11 +185,11 @@ func legacyGobDatabaseSnapshot(t *testing.T, database indexer.KVDB) map[string][
 func legacyGobAssertSameDatabase(t *testing.T, database indexer.KVDB, before map[string][]byte) {
 	t.Helper()
 	if !reflect.DeepEqual(legacyGobDatabaseSnapshot(t, database), before) {
-		t.Fatal("read/legacy native no-op unexpectedly changed persistent records")
+		t.Fatal("read/legacy funding inspection unexpectedly changed persistent records")
 	}
 }
 
-func TestLegacyGobChannelReadsPreserveOldFieldsAndAvoidNativeRecovery(t *testing.T) {
+func TestLegacyChannelState(t *testing.T) {
 	for _, name := range []string{"channel_plain.gob", "channel_ordx.gob"} {
 		t.Run(name, func(t *testing.T) {
 			raw, entry := legacyGobReadFixture(t, name)
@@ -204,7 +204,7 @@ func TestLegacyGobChannelReadsPreserveOldFieldsAndAvoidNativeRecovery(t *testing
 				t.Fatal(err)
 			}
 			legacyGobAssertSemanticOracle(t, c, entry)
-			legacyGobAssertNoNativeState(t, c)
+			legacyGobAssertNoRGB11State(t, c)
 			all, err := LoadAllChannelInDBFromDB(database)
 			if err != nil {
 				t.Fatal(err)
@@ -214,11 +214,11 @@ func TestLegacyGobChannelReadsPreserveOldFieldsAndAvoidNativeRecovery(t *testing
 			}
 			legacyGobAssertSemanticOracle(t, all[entry.ChannelID], entry)
 			manager := &Manager{db: database}
-			recovered, err := manager.LoadSTPNativeRevocationRecovery(c)
+			recovered, err := manager.LoadSTPRevocationRecovery(c)
 			if err != nil || recovered != nil {
-				t.Fatalf("ordinary old database required native recovery: recovered=%v err=%v", recovered, err)
+				t.Fatalf("ordinary old database required commitment recovery: recovered=%v err=%v", recovered, err)
 			}
-			legacyGobAssertNoNativeState(t, c)
+			legacyGobAssertNoRGB11State(t, c)
 			legacyGobAssertSameDatabase(t, database, before)
 		})
 	}
@@ -261,7 +261,7 @@ func TestLegacyGobChannelLedgerContinuesAcrossPhysicalDatabaseRestart(t *testing
 			if channel.GetCommitLocalValue(&asset).Int64() != 39400 || channel.GetCommitRemoteValue(&asset).Int64() != 20600 || !channel.CheckConsistence() {
 				t.Fatal("old-protocol ledger continuation changed amount semantics or mirrored balances")
 			}
-			legacyGobAssertNoNativeState(t, &channel.ChannelInDB)
+			legacyGobAssertNoRGB11State(t, &channel.ChannelInDB)
 			if !bytes.Equal(packages, legacyGobChannelSignedPackage(t, &channel.ChannelInDB)) {
 				t.Fatal("ledger operations rewrote old pending transaction/signature bytes")
 			}
@@ -285,15 +285,15 @@ func TestLegacyGobChannelLedgerContinuesAcrossPhysicalDatabaseRestart(t *testing
 			if !bytes.Equal(packages, legacyGobChannelSignedPackage(t, after)) {
 				t.Fatal("write-back/restart changed old signed transaction package")
 			}
-			legacyGobAssertNoNativeState(t, after)
-			if got, err := (&Manager{db: reopened}).LoadSTPNativeRevocationRecovery(after); err != nil || got != nil {
-				t.Fatalf("restarted old channel unexpectedly needs native recovery: %v", err)
+			legacyGobAssertNoRGB11State(t, after)
+			if got, err := (&Manager{db: reopened}).LoadSTPRevocationRecovery(after); err != nil || got != nil {
+				t.Fatalf("restarted old channel unexpectedly needs commitment recovery: %v", err)
 			}
 		})
 	}
 }
 
-func TestLegacyGobOldProtocolsDoNotRequireOrPopulateNativeFields(t *testing.T) {
+func TestLegacyReservationFields(t *testing.T) {
 	for _, name := range []string{"channel_plain.gob", "channel_ordx.gob"} {
 		t.Run(name, func(t *testing.T) {
 			raw, entry := legacyGobReadFixture(t, name)
@@ -313,30 +313,40 @@ func TestLegacyGobOldProtocolsDoNotRequireOrPopulateNativeFields(t *testing.T) {
 			}
 			before := legacyGobSemantic(t, loaded)
 			dbBefore := legacyGobDatabaseSnapshot(t, database)
-			// A Manager without native persistence is intentional. These
+			// A Manager without proof persistence is intentional. These
 			// genuine old protocols must return before requiring that service.
 			manager := &Manager{}
 			proofs, err := manager.PrepareSTPChannelFunding(channel, &asset, channel.FundingUtxos[asset])
 			if err != nil || len(proofs) != 0 {
-				t.Fatalf("old protocol depended on native funding persistence: proofs=%v err=%v", proofs, err)
+				t.Fatalf("old protocol depended on proof-backed funding persistence: proofs=%v err=%v", proofs, err)
 			}
 			if err := manager.AcceptSTPChannelFunding(channel, &asset, channel.FundingUtxos[asset], nil, [32]byte{}); err != nil {
 				t.Fatal(err)
 			}
-			if needsSTPNativeCommitmentJournal(channel, channel.LocalCommitment) || needsSTPNativeOtherExchange(channel, channel.LocalCommitment) {
-				t.Fatal("old commitment incorrectly requires native journal/exchange")
+			if needsProofJournal(channel, channel.LocalCommitment) || needsRecoveryExchange(channel, channel.LocalCommitment) != (len(channel.LocalCommitment.Others) != 0) {
+				t.Fatal("old commitment incorrectly requires proof journal or unexpected recovery exchange")
 			}
-			if nativeForceClose(&ClosingReservation{Channel: channel}) {
-				t.Fatal("old channel incorrectly selected native force-close")
+			if needsWithdrawalFacts(channel) {
+				t.Fatal("old channel incorrectly requires extra withdrawal evidence")
 			}
-			if err := manager.persistSTPNativeCommitment(channel, channel.LocalCommitment, "local"); err != nil {
-				t.Fatalf("legacy journal no-op required native context: %v", err)
+			if err := manager.persistSTPCommitment(channel, channel.RemoteCommitment, "remote"); err != nil {
+				t.Fatalf("unexpected proof journal for an ordinary peer commitment: %v", err)
+			}
+			if err := manager.persistSTPCommitment(channel, channel.LocalCommitment, "local"); err == nil {
+				t.Fatal("accepted a local signing obligation without durable storage")
 			}
 			if !bytes.Equal(before, legacyGobSemantic(t, &channel.ChannelInDB)) {
-				t.Fatal("legacy funding/native guard changed old fields")
+				t.Fatal("funding checks changed old channel fields")
 			}
-			legacyGobAssertNoNativeState(t, &channel.ChannelInDB)
+			legacyGobAssertNoRGB11State(t, &channel.ChannelInDB)
 			legacyGobAssertSameDatabase(t, database, dbBefore)
+			manager.db = database
+			if err := manager.persistSTPCommitment(channel, channel.LocalCommitment, "local"); err != nil {
+				t.Fatal(err)
+			}
+			if err := manager.verifyStoredCommitment(channel, channel.LocalCommitment); err != nil {
+				t.Fatal(err)
+			}
 		})
 	}
 }
@@ -363,7 +373,7 @@ func TestLegacyGobPendingReservationsPreservePackagesAcrossRestart(t *testing.T)
 				t.Fatal(err)
 			}
 			legacyGobAssertSemanticOracle(t, loaded.GetStructInDB(), entry)
-			legacyGobAssertReservationNativeEmpty(t, loaded)
+			assertLegacyReservationFields(t, loaded)
 			all, err := LoadAllResvFromDB(database, nil)
 			if err != nil {
 				t.Fatal(err)
@@ -401,21 +411,21 @@ func TestLegacyGobPendingReservationsPreservePackagesAcrossRestart(t *testing.T)
 			if !bytes.Equal(packages, legacyGobReservationSignedPackage(t, after)) {
 				t.Fatal("old pending raw transaction package was rebuilt or mutated")
 			}
-			legacyGobAssertReservationNativeEmpty(t, after)
+			assertLegacyReservationFields(t, after)
 		})
 	}
 }
 
-func legacyGobAssertReservationNativeEmpty(t *testing.T, resv Reservation) {
+func assertLegacyReservationFields(t *testing.T, resv Reservation) {
 	t.Helper()
 	switch r := resv.(type) {
 	case *ClosingReservation:
 		if len(r.AssetProofs) != 0 {
-			t.Fatal("old closing reservation acquired native proofs")
+			t.Fatal("old closing reservation acquired asset proofs")
 		}
 	case *SplicingReservation:
-		if len(r.AssetFunding) != 0 || len(r.AssetProofs) != 0 || r.AssetEntropy != ([32]byte{}) || len(r.NativeAnchorProof) != 0 {
-			t.Fatal("old splicing reservation acquired native state")
+		if len(r.AssetFunding) != 0 || len(r.AssetProofs) != 0 || r.AssetEntropy != ([32]byte{}) || len(r.RGB11AnchorProof) != 0 {
+			t.Fatal("old splicing reservation acquired asset proof or funding state")
 		}
 	default:
 		t.Fatalf("unexpected old reservation type %T", resv)

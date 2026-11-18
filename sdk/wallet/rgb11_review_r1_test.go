@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	"reflect"
 	"testing"
 	"time"
@@ -49,10 +50,10 @@ func r1ManagedPeer(t *testing.T, source *Manager, evidence rgb11wallet.BitcoinEv
 		t.Fatal(err)
 	}
 	if err := peer.SyncAccountManagementState(context.Background()); err != nil {
-		client, clientErr := peer.GetDKVSClient()
+		client, clientErr := peer.accountDKVSClient()
 		peer.mutex.RLock()
 		if peer.accountProfile != nil {
-			t.Logf("restore diagnostic: managedGeneration=%d stateRevision=%d dataRevision=%d pending=%d dirty=%t secretPresent=%t", peer.accountProfile.ManagedDataGeneration, peer.accountProfile.StateSeq, peer.accountProfile.ManagedDataRevision, len(peer.accountProfile.Pending), peer.accountProfile.ManagedDataDirty, len(peer.accountSecret) != 0)
+			t.Logf("restore diagnostic: pending=%d secretPresent=%t", len(peer.accountProfile.Pending), len(peer.accountSecret) != 0)
 		}
 		peer.mutex.RUnlock()
 		if clientErr == nil {
@@ -111,7 +112,7 @@ func TestRGB11R1ExpiredBlindPeerSync(t *testing.T) {
 		t.Fatalf("peer did not import blind reservation: %d %v", len(reservations), err)
 	}
 	const otherPoint = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd:0"
-	if err := b.utxoLockerL1.TryReserve([]string{otherPoint}, rgb11wallet.LockReasonPending, "unrelated-owner"); err != nil {
+	if err := b.utxoLockerL1.TryReserve([]string{otherPoint}, sdkcommon.UtxoLockRGBPending, "unrelated-owner"); err != nil {
 		t.Fatal(err)
 	}
 	for time.Now().Unix() <= expiry {
@@ -140,7 +141,7 @@ func TestRGB11R1ExpiredBlindPeerSync(t *testing.T) {
 	if err = b.SyncAccountManagementState(context.Background()); err != nil {
 		t.Fatalf("B must import A expired unused blind cleanup: %v", err)
 	}
-	if err = b.checkAccountManagedDataImport(); err != nil {
+	if err = b.CheckAccountRestore(rgb11AccountManagedProviderID, coreSelectedRGBScope(b)); err != nil {
 		t.Fatalf("import marker remains: %v", err)
 	}
 	if _, err = b.GetRGB11State(); err != nil {
@@ -359,7 +360,7 @@ func TestRGB11R1ReceiptExpansionPeerSync(t *testing.T) {
 		if !reflect.DeepEqual(before, after) {
 			t.Fatal("failed expansion partially changed stores")
 		}
-		t.Fatalf("B must accept native historical zero-to-one receipt extension: %v", err)
+		t.Fatalf("B must accept RGB11 historical zero-to-one receipt extension: %v", err)
 	}
 	balance, err := b.GetRGB11AssetBalance(&imported.AssetName)
 	if err != nil || balance.Value.Uint64() != 50000 {
@@ -371,7 +372,7 @@ func TestRGB11R1ReceiptExpansionPeerSync(t *testing.T) {
 	r1AssertForgedReceiptExtensionRejected(t, b)
 }
 
-// Even a self-consistent, proof-free added receipt allocation needs native
+// Even a self-consistent, proof-free added receipt allocation needs RGB11
 // history. Otherwise an attacker can smuggle facts past proof-only validation.
 func r1AssertForgedReceiptExtensionRejected(t *testing.T, manager *Manager) {
 	t.Helper()
@@ -415,10 +416,10 @@ func r1AssertForgedReceiptExtensionRejected(t *testing.T, manager *Manager) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// This control must cross the structural subset gate and fail in native
+	// This control must cross the structural subset gate and fail in RGB11
 	// history authentication, including when the forged item has no proof.
 	if _, err = rgb11wallet.MergeSelectedRecoverySnapshot(before, selected); err != nil {
-		t.Fatalf("forgery fixture failed before native authentication: %v", err)
+		t.Fatalf("forgery fixture failed before RGB11 authentication: %v", err)
 	}
 	if err = manager.rgbManager.importSelectedRGB11AccountRecoverySnapshot(selected); err == nil {
 		t.Fatal("unverified extra receipt allocation accepted")

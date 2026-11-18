@@ -2,15 +2,14 @@ package wallet
 
 import (
 	"bytes"
-	"context"
 	"errors"
 
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 )
 
-// Discovery authorization is runtime-only: a reopened device must establish
-// a new online session before cached absence or a cached backup permits writes.
+// Online grants authorize service activation. A verified cached wrapper still
+// identifies an activated account whose local backup import is incomplete.
 func (p *Manager) accountDiscoveryRootLocked() (common.Wallet, error) {
 	if p.accountProfile != nil {
 		info, err := p.accountManagementRootWalletLocked()
@@ -57,20 +56,20 @@ func (p *Manager) accountServiceStateLocked() (string, error) {
 		return "unknown", err
 	}
 	keys := []string{wrapperKey, stateKey, dataKey}
-	if err := p.dkvs.requireOnlineGroup(client, keys); err != nil {
-		return "unknown", err
-	}
 	values, err := newDKVSReplicaStore(p.db).ReadSnapshot(client.replicaNamespace, keys)
 	if err != nil {
 		return "unknown", err
 	}
 	wrapper := values[wrapperKey]
 	if wrapper == nil {
+		if err := p.dkvs.requireOnlineGroup(client, keys); err != nil {
+			return "unknown", err
+		}
 		if values[stateKey] != nil || values[dataKey] != nil ||
 			p.accountProfile != nil && (p.accountProfile.RecoveryConfigured || p.accountProfile.Activation != nil) {
 			return "unknown", ErrDKVSPathNotSynced
 		}
-		return "inactive", p.checkAccountManagedDataImport()
+		return "inactive", nil
 	}
 	payload, err := openAccountRootWrapper(root, _chain, accountID, wrapper.Value)
 	if err != nil {
@@ -80,8 +79,13 @@ func (p *Manager) accountServiceStateLocked() (string, error) {
 	if payload.PackageID == "" {
 		return "unknown", ErrRootAccountWrapperInvalid
 	}
+	// A verified, bound wrapper is durable evidence of activation even when
+	// this device has not restored the backup or reopened an online session.
 	if p.accountProfile == nil || !p.accountProfile.RecoveryConfigured {
 		return "active-waiting-backup", ErrRootAccountDiscoveryPending
+	}
+	if err := p.dkvs.requireOnlineGroup(client, keys); err != nil {
+		return "unknown", err
 	}
 	if !bytes.Equal(payload.Secret, p.accountSecret) ||
 		!accountRootWrapperMetadataMatchesProfile(payload, *p.accountProfile) {
@@ -90,9 +94,9 @@ func (p *Manager) accountServiceStateLocked() (string, error) {
 	return "active", nil
 }
 
-// Discovery, activation resumption and private backup share the existing
-// replaceable account task. An inactive account never uploads a backup.
-func (p *Manager) refreshAccountService() (resultErr error) {
+// Only an explicit entry/retry discovers an inactive account. Ordinary
+// replaceable backup jobs never rediscover or resume an unactivated account.
+func (p *Manager) refreshAccountService(discover bool) (resultErr error) {
 	finish := p.accountSyncResult("service")
 	defer func() { finish(resultErr) }()
 	p.mutex.RLock()
@@ -106,14 +110,18 @@ func (p *Manager) refreshAccountService() (resultErr error) {
 	secret := bytes.Clone(p.accountSecret)
 	p.mutex.RUnlock()
 	defer zeroBytes(secret)
+	if !configured && !discover {
+		return nil
+	}
+	ctx := p.ensureDKVSManager().requestContext()
 	if pending {
-		return p.runAccountOperation(nil, func() error {
+		return p.runAccountOperation(ctx, func() error {
 			_, err := p.resumePendingActivation(secret, password)
 			return err
 		})
 	}
 	if !configured {
-		_, err := p.RecoverAccountManagementFromCurrentWallet(context.Background(), password)
+		_, err := p.RecoverAccountManagementFromCurrentWallet(ctx, password)
 		if errors.Is(err, ErrRootAccountNotFound) {
 			return nil
 		}
@@ -122,5 +130,5 @@ func (p *Manager) refreshAccountService() (resultErr error) {
 	if err := p.ensureAccountCoreBindingForSync(); err != nil {
 		return err
 	}
-	return p.SyncAccountManagementState(nil)
+	return p.SyncAccountManagementState(ctx)
 }

@@ -92,12 +92,12 @@ func (p *rgb11Manager) buildRGB11AcceptedConsignmentCandidate(ctx context.Contex
 	snapshot *RGB11WalletSnapshot, requestID string, raw []byte, expectedTxID string,
 	expectedVout *uint32) (*RGB11WalletSnapshot, *rgb11wallet.ValidationReceipt,
 	*rgb11wallet.TransferState, error) {
-	return p.buildRGB11AcceptedConsignmentCandidateWithID(ctx, snapshot, requestID, raw, expectedTxID, expectedVout, "")
+	return p.buildRGB11AcceptedConsignmentCandidateWithID(ctx, snapshot, requestID, raw, expectedTxID, expectedVout, "", nil)
 }
 
 func (p *rgb11Manager) buildRGB11AcceptedConsignmentCandidateWithID(ctx context.Context,
 	snapshot *RGB11WalletSnapshot, requestID string, raw []byte, expectedTxID string,
-	expectedVout *uint32, localTransferID string) (*RGB11WalletSnapshot, *rgb11wallet.ValidationReceipt,
+	expectedVout *uint32, localTransferID string, direct *rgb11DirectReceipt) (*RGB11WalletSnapshot, *rgb11wallet.ValidationReceipt,
 	*rgb11wallet.TransferState, error) {
 	if p == nil || snapshot == nil || p.rgbManager == nil || p.rgbManager.evidence == nil || len(raw) == 0 {
 		return nil, nil, nil, ErrRGB11Inconsistent
@@ -146,26 +146,33 @@ func (p *rgb11Manager) buildRGB11AcceptedConsignmentCandidateWithID(ctx context.
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	var validator *rgb11wallet.NativeConsensusValidator
+	var validator *rgb11wallet.RGB11ConsensusValidator
 	switch invoice.Beneficiary.Kind {
 	case invoicing.BeneficiaryBlindedSeal:
 		concealed, sealErr := request.Seal.Conceal()
 		if sealErr != nil || !bytes.Equal(invoice.Beneficiary.BlindedSeal[:], concealed[:]) {
 			return nil, nil, nil, ErrRGB11InvoiceMismatch
 		}
-		validator = rgb11wallet.NewNativeConsensusValidatorWithReveals(request.Seal)
+		validator = rgb11wallet.NewRGB11ValidatorWithReveals(request.Seal)
 	case invoicing.BeneficiaryWitnessVout:
 		witnessScript, scriptErr := invoice.Beneficiary.WitnessScript()
 		if scriptErr != nil || !bytes.Equal(request.WitnessScript, witnessScript) {
 			return nil, nil, nil, ErrRGB11InvoiceMismatch
 		}
-		validator = rgb11wallet.NewNativeConsensusValidator()
+		validator = rgb11wallet.NewRGB11ConsensusValidator()
 	default:
 		return nil, nil, nil, ErrRGB11InvoiceMismatch
 	}
-	receipt, err := rgb11wallet.ValidateWith(ctx, validator, raw, p.rgbManager.evidence)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("validate current accepted RGB11 consignment: %w", err)
+	var receipt *rgb11wallet.ValidationReceipt
+	var history *rgb11wallet.HistoricalValidation
+	var outputs map[string]*rgb11wallet.BitcoinUTXO
+	if direct != nil {
+		receipt, history, outputs = direct.prepared.Receipt, direct.history, direct.prepared.Outputs
+	} else {
+		receipt, err = rgb11wallet.ValidateWith(ctx, validator, raw, p.rgbManager.evidence)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("validate current accepted RGB11 consignment: %w", err)
+		}
 	}
 	if invoice.Contract != nil && invoice.Contract.String() != receipt.ContractID {
 		return nil, nil, nil, ErrRGB11InvoiceMismatch
@@ -180,7 +187,7 @@ func (p *rgb11Manager) buildRGB11AcceptedConsignmentCandidateWithID(ctx context.
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	matched, err := p.matchRGB11ReceiveAllocation(receipt, request, invoice, nil, expectedTxID, expectedVout)
+	matched, err := p.matchRGB11ReceiveAllocation(receipt, request, invoice, outputs, expectedTxID, expectedVout)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -195,7 +202,9 @@ func (p *rgb11Manager) buildRGB11AcceptedConsignmentCandidateWithID(ctx context.
 	if err := p.checkRGB11RejectPolicy(container, checked); err != nil {
 		return nil, nil, nil, err
 	}
-	history, err := validator.ValidateHistoricalConsignmentReport(ctx, raw, p.rgbManager.evidence)
+	if history == nil {
+		history, err = validator.ValidateHistoricalConsignmentReport(ctx, raw, p.rgbManager.evidence)
+	}
 	if err != nil || history == nil || history.MaterialReceipt == nil {
 		return nil, nil, nil, fmt.Errorf("validate accepted RGB11 material history: %w",
 			errRGB11ProjectionEvidence(err))
@@ -254,6 +263,10 @@ func (p *rgb11Manager) buildRGB11AcceptedConsignmentCandidateWithID(ctx context.
 		// older carrier producer. TransferState below retains the transition ID.
 		WitnessTxID: allocationOutpointTxID(allocation.OutPoint), Status: "valid", CarrierBinding: matched.Binding,
 	}
+	if outputs != nil {
+		proof.Status = "settled"
+		proof.Confirmations = matched.UTXO.Confirmations
+	}
 	output := indexer.NewTxOutput(matched.UTXO.Value)
 	output.OutPointStr = allocation.OutPoint
 	output.OutValue.PkScript = append([]byte(nil), matched.UTXO.PkScript...)
@@ -288,6 +301,9 @@ func (p *rgb11Manager) buildRGB11AcceptedConsignmentCandidateWithID(ctx context.
 		AckStatus: "accepted", Status: "pending", RelayRecordKey: request.RelayKey,
 		AckRecordKey: request.AckKey, RelayDurability: "LOCAL_ONLY", RelayExpiry: expiry,
 		TransportMode: transportMode,
+	}
+	if outputs != nil {
+		state.Status = "settled"
 	}
 	if previousState != nil {
 		if previousState.TransferID != state.TransferID || previousState.Direction != state.Direction ||
@@ -369,20 +385,20 @@ func (p *rgb11Manager) buildRGB11PreparedReceiveCandidate(ctx context.Context,
 	if err := invoice.Validate(time.Now().Unix()); err != nil {
 		return nil, nil, err
 	}
-	var validator *rgb11wallet.NativeConsensusValidator
+	var validator *rgb11wallet.RGB11ConsensusValidator
 	switch invoice.Beneficiary.Kind {
 	case invoicing.BeneficiaryBlindedSeal:
 		concealed, sealErr := request.Seal.Conceal()
 		if sealErr != nil || !bytes.Equal(invoice.Beneficiary.BlindedSeal[:], concealed[:]) {
 			return nil, nil, ErrRGB11InvoiceMismatch
 		}
-		validator = rgb11wallet.NewNativeConsensusValidatorWithReveals(request.Seal)
+		validator = rgb11wallet.NewRGB11ValidatorWithReveals(request.Seal)
 	case invoicing.BeneficiaryWitnessVout:
 		witnessScript, scriptErr := invoice.Beneficiary.WitnessScript()
 		if scriptErr != nil || !bytes.Equal(request.WitnessScript, witnessScript) {
 			return nil, nil, ErrRGB11InvoiceMismatch
 		}
-		validator = rgb11wallet.NewNativeConsensusValidator()
+		validator = rgb11wallet.NewRGB11ConsensusValidator()
 	default:
 		return nil, nil, ErrRGB11InvoiceMismatch
 	}
@@ -402,7 +418,7 @@ func (p *rgb11Manager) buildRGB11PreparedReceiveCandidate(ctx context.Context,
 	}
 	actualTxID := prepared.WitnessTxIDs[0]
 	if actualTxID == "" || (expectedTxID != "" && expectedTxID != actualTxID) {
-		return nil, nil, errors.New("RGB11 proxy metadata does not match the prepared consignment")
+		return nil, nil, fmt.Errorf("%w: proxy metadata does not match prepared consignment", ErrRGB11InvoiceMismatch)
 	}
 	container, err := coreconsignment.Decode(raw)
 	if err != nil {
@@ -419,7 +435,7 @@ func (p *rgb11Manager) buildRGB11PreparedReceiveCandidate(ctx context.Context,
 		return nil, nil, err
 	}
 	if invoice.Beneficiary.Kind == invoicing.BeneficiaryWitnessVout && matched.TxID != actualTxID {
-		return nil, nil, errors.New("RGB11 proxy metadata does not match the prepared consignment")
+		return nil, nil, fmt.Errorf("%w: proxy metadata does not match prepared consignment", ErrRGB11InvoiceMismatch)
 	}
 	checked, err := rgb11ReceivedPolicyOpout(matched.Allocation)
 	if err != nil {
@@ -569,7 +585,7 @@ func (p *rgb11Manager) addRGB11LocalChangeCandidate(ctx context.Context,
 	if hex.EncodeToString(digest[:]) != pending.LocalObjectHash {
 		return nil, fmt.Errorf("local RGB11 consignment hash mismatch: %w", rgb11wallet.ErrValidationReceipt)
 	}
-	validator := rgb11wallet.NewNativeConsensusValidatorWithReveals(pending.ChangeSeals...)
+	validator := rgb11wallet.NewRGB11ValidatorWithReveals(pending.ChangeSeals...)
 	history, err := validator.ValidateHistoricalConsignmentReport(
 		ctx, pending.LocalConsignment, p.rgbManager.evidence,
 	)
@@ -704,109 +720,6 @@ func (p *rgb11Manager) addRGB11LocalChangeCandidate(ctx context.Context,
 	return rgb11wallet.AddLocalConsignment(
 		projectionRecords, pending.LocalConsignment, selectedReceipt, replacements,
 	)
-}
-
-// addRGB11PreparedChangeCapacityPreview adds the core-validated terminal
-// shape only to an ephemeral sizing snapshot. This also handles a prepared
-// journal whose witness has since been observed. The snapshot is never passed
-// to projection resolution or persistence.
-func (p *rgb11Manager) addRGB11PreparedChangeCapacityPreview(ctx context.Context,
-	snapshot *RGB11WalletSnapshot, pending *rgb11wallet.PendingTransfer) (*RGB11WalletSnapshot, error) {
-	if snapshot == nil || pending == nil || len(pending.ChangeSeals) == 0 || len(pending.LocalConsignment) == 0 {
-		return snapshot, nil
-	}
-	validator := rgb11wallet.NewNativeConsensusValidatorWithReveals(pending.ChangeSeals...)
-	capacity, err := p.rgb11TerminalCapacityMaterial(ctx, validator, pending.LocalConsignment,
-		pending.State.WitnessTxID, pending.SignedTx)
-	if err != nil {
-		return nil, fmt.Errorf("validate RGB11 change for recovery capacity: %w", errRGB11ProjectionEvidence(err))
-	}
-	wantHash := sha256.Sum256(pending.LocalConsignment)
-	if hex.EncodeToString(wantHash[:]) != pending.LocalObjectHash && pending.LocalObjectHash != "" {
-		return nil, rgb11wallet.ErrValidationReceipt
-	}
-	history := capacity.History
-	allocations, err := rgb11LocalChangeAllocations(history.MaterialReceipt.Allocations, pending)
-	if err != nil {
-		return nil, fmt.Errorf("match core RGB11 change history for recovery capacity: %w", err)
-	}
-	receipts, err := rgb11wallet.ValidationReceiptsFromProjectionSnapshot(snapshot.ProjectionRecords)
-	if err != nil {
-		return nil, err
-	}
-	existingReceipt := receipts[pending.LocalObjectHash]
-	if existingReceipt != nil && !sameRGB11ValidationReceiptIdentity(existingReceipt, history.MaterialReceipt) {
-		return nil, rgb11wallet.ErrValidationReceipt
-	}
-	needed := make([]rgb11wallet.ValidatedAllocation, 0, len(allocations))
-	for _, allocation := range allocations {
-		needed = append(needed, allocation)
-	}
-	receipt, err := rgb11wallet.SelectHistoricalValidationReceipt(history, existingReceipt, needed)
-	if err != nil {
-		return nil, fmt.Errorf("select RGB11 change receipt for recovery capacity: %w", err)
-	}
-	receiptHash, err := receipt.Hash()
-	if err != nil {
-		return nil, err
-	}
-	candidate := *snapshot
-	if existingReceipt != nil {
-		oldHash, hashErr := existingReceipt.Hash()
-		if hashErr != nil {
-			return nil, hashErr
-		}
-		if oldHash != receiptHash {
-			candidate.ProjectionRecords, err = rgb11wallet.RebindLocalReceipt(
-				candidate.ProjectionRecords, existingReceipt, receipt,
-			)
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-	seenProofs := make(map[string]bool, len(allocations))
-	replacements := make([]rgb11wallet.ProjectionReplacement, 0, len(allocations))
-	for _, allocation := range allocations {
-		key := allocation.OutPoint + "|" + allocation.AssetName.String()
-		if seenProofs[key] {
-			return nil, fmt.Errorf("%w: multiple core Opouts map to one projection key %s", rgb11wallet.ErrInvalidProof, key)
-		}
-		seenProofs[key] = true
-		utxo := capacity.Outputs[allocation.OutPoint]
-		if utxo == nil {
-			return nil, fmt.Errorf("prepared RGB11 change output %s is missing", allocation.OutPoint)
-		}
-		binding, err := p.rgb11CarrierBinding(allocation, utxo)
-		if err != nil {
-			return nil, err
-		}
-		commitment := consensus.TaggedHash(consensus.SecretSealCommitmentTag, allocation.SealDisclosure)
-		proof := &rgb11wallet.AllocationProof{
-			OutPoint: allocation.OutPoint, AssetName: allocation.AssetName,
-			OperationID: allocation.OperationID, AssignmentType: allocation.AssignmentType,
-			AssignmentIndex: allocation.AssignmentIndex, StateClass: allocation.StateClass,
-			StateData:      append([]byte(nil), allocation.StateData...),
-			SealCommitment: hex.EncodeToString(commitment[:]), SealDisclosure: append([]byte(nil), allocation.SealDisclosure...),
-			ConsignmentHash: receipt.ConsignmentHash, ValidationHash: receiptHash,
-			WitnessTxID: allocationOutpointTxID(allocation.OutPoint), Status: "valid", CarrierBinding: binding,
-		}
-		output := indexer.NewTxOutput(utxo.Value)
-		output.OutPointStr = allocation.OutPoint
-		output.OutValue.PkScript = append([]byte(nil), utxo.PkScript...)
-		asset := &indexer.AssetInfo{Name: allocation.AssetName, Amount: *allocation.Amount.Clone(), BindingSat: 0}
-		replacements = append(replacements, rgb11wallet.ProjectionReplacement{Output: output, Asset: asset, Proof: proof})
-	}
-	if len(replacements) == 0 {
-		return snapshot, nil
-	}
-	candidate.ProjectionRecords, err = rgb11wallet.AddLocalConsignment(
-		candidate.ProjectionRecords, pending.LocalConsignment, receipt, replacements,
-	)
-	if err != nil {
-		return nil, err
-	}
-	return &candidate, nil
 }
 
 func (p *rgb11Manager) buildRGB11RefreshCandidate(ctx context.Context,

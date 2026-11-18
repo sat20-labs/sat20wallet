@@ -60,7 +60,7 @@ func TestSTPRGBReservationRejectsChangedRequestAndCaptureInputs(t *testing.T) {
 }
 
 func TestSTPRGBReservationStickyMissingAndDeepClone(t *testing.T) {
-	facts, _, main, proof := rgbReservationNativeEvidenceFixture(t)
+	facts, _, main, proof := rgb11ResvEvidenceFixture(t)
 	view := facts.useView()
 	if view != facts.useView() {
 		t.Fatal("one synchronous operation did not retain its exact view")
@@ -87,7 +87,7 @@ func TestSTPRGBReservationStickyMissingAndDeepClone(t *testing.T) {
 func TestSTPRGBReservationPureLegacyDoesNotQueryOrAttachFacts(t *testing.T) {
 	channel := &Channel{ChannelInDB: *NewChannelInDB()}
 	// No RGB manager/provider or wallet is configured. A legacy operation
-	// must still bypass native observation, with the runtime slot left nil.
+	// must still bypass RGB11 observation, with the runtime slot left nil.
 	facts, err := (&Manager{}).PrepareSTPRGBSplicingEvidence(channel, &ASSET_PLAIN_SAT, nil, nil, []byte("legacy"), nil)
 	if err != nil || facts != nil {
 		t.Fatalf("legacy acquired RGB facts or provider requirement: %v", err)

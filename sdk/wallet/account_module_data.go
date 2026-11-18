@@ -197,10 +197,8 @@ func validateAccountWalletState(state account.ManagedState) error {
 	return nil
 }
 
+// Called only by importAccountValue, after validation and the durable restore marker.
 func (p *Manager) importAccountPayload(entry account.ManagedEntry, catalog AccountManagedDataCatalog, payload []byte) error {
-	if err := p.validateAccountPayload(entry, catalog, payload); err != nil {
-		return err
-	}
 	if entry.Provider == "wallets" {
 		state, err := account.DecodeManagedState(payload)
 		if err != nil {

@@ -19,13 +19,12 @@ func TestSelectHistoricalValidationReceiptKeepsOnlyRequiredCoreAllocations(t *te
 	needed := allocation("2222222222222222222222222222222222222222222222222222222222222222:1", "op-b", 20, 2)
 	unneeded := allocation("3333333333333333333333333333333333333333333333333333333333333333:2", "op-c", 30, 3)
 	material := &ValidationReceipt{
-		Version: 1, EngineBuildID: "core", ConsignmentHash: "raw-hash", ContractID: "contract",
+		Version: 1, EngineBuildID: RGB11EngineBuildID, ConsignmentHash: "raw-hash", ContractID: "contract",
 		SchemaID: "schema", TransferID: "transfer", ValidatedAt: 200, Status: "valid",
 		Allocations: []ValidatedAllocation{unneeded, needed, first},
 	}
 	material.StateHash, _ = hashAllocations(material.ContractID, material.SchemaID, material.Allocations)
 	base := cloneValidationReceipt(material)
-	base.EngineBuildID = "original-engine"
 	base.ValidatedAt = 100
 	base.Allocations = []ValidatedAllocation{first}
 	base.StateHash, _ = hashAllocations(base.ContractID, base.SchemaID, base.Allocations)

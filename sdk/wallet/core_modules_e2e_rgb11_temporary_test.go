@@ -210,6 +210,7 @@ func coreRGB11TemporaryRecoveryMaterial(t *testing.T, manager *Manager) *coreRec
 	coreAssert(t, manager.GetAccountManagementStatus().RecoveryConfigured &&
 		manager.GetAccountManagementStatus().StorageMode == AccountStorageTemporary,
 		"temporary account activation did not commit")
+	coreRequire(t, "start activated temporary backup worker", manager.StartDKVSSync())
 	coreWaitPrivateBackup(t, manager)
 	return material
 }

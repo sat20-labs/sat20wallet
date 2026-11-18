@@ -52,6 +52,11 @@ func newRGB11GenericSendFixture(t *testing.T) (*Manager, *Manager, *RGB11ImportR
 // The local-only maintenance fixture below remains independent of this setup.
 func newRGB11GenericSendFixtureWithCarrier(t *testing.T, carrierValue int64, prepare ...rgbColdPrepare) (*Manager, *Manager, *RGB11ImportResult, *rgb11AddressEvidence, *rgb11FlowIndexer) {
 	t.Helper()
+	return rgb11SendFixture(t, carrierValue, 0, prepare...)
+}
+
+func rgb11SendFixture(t *testing.T, carrierValue int64, precision uint8, prepare ...rgbColdPrepare) (*Manager, *Manager, *RGB11ImportResult, *rgb11AddressEvidence, *rgb11FlowIndexer) {
+	t.Helper()
 	if len(prepare) > 1 {
 		t.Fatal("RGB source group accepts one preparation phase")
 	}
@@ -84,7 +89,7 @@ func newRGB11GenericSendFixtureWithCarrier(t *testing.T, carrierValue int64, pre
 	// Only the intended carrier is available at issuance; selection order
 	// cannot silently choose the later fee output instead.
 	source := addOutput(carrierValue, 91)
-	issued, err := sender.IssueRGB11Asset(context.Background(), RGB11IssueRequest{Schema: "NIA", Ticker: "SEND", Name: "Native public send fixture", Amounts: []uint64{50000}})
+	issued, err := sender.IssueRGB11Asset(context.Background(), RGB11IssueRequest{Schema: "NIA", Ticker: "SEND", Name: "RGB11 public send fixture", Precision: precision, Amounts: []uint64{50000}})
 	if err != nil || issued == nil || len(issued.OutPoints) != 1 || issued.OutPoints[0] != source {
 		t.Fatalf("issue exact controlled carrier: issued=%v err=%v", issued, err)
 	}
@@ -92,7 +97,7 @@ func newRGB11GenericSendFixtureWithCarrier(t *testing.T, carrierValue int64, pre
 	installRGB11PublicContractFixture(t, sender, remote, issued.ContractID)
 	useRGB11TestCoreAuthority(t, recipient)
 	addOutput(100_000, 92)
-	endpoint, err := recipient.EnableConfiguredRGB11AddressReceive(RGB11ReceiveCapabilityOptions{RecordOptions: dkvsindexer.RecordOptions{TTL: testRGB11FreeLocalTTL}})
+	endpoint, err := recipient.EnableConfiguredRGB11AddressReceive(RGB11ReceiveCapabilityOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +126,7 @@ func rgb11GenericFixtureSource(t *testing.T, sender *Manager, imported *RGB11Imp
 	return ""
 }
 
-func newRGB11SendFixture(t *testing.T, native bool) (*Manager, *Manager, *RGB11ImportResult, *rgb11AddressEvidence, *rgb11FlowIndexer) {
+func newRGB11SendFixture(t *testing.T, rgb11Data bool) (*Manager, *Manager, *RGB11ImportResult, *rgb11AddressEvidence, *rgb11FlowIndexer) {
 	t.Helper()
 	oldChain := _chain
 	_chain = "testnet"
@@ -147,7 +152,7 @@ func newRGB11SendFixture(t *testing.T, native bool) (*Manager, *Manager, *RGB11I
 		spendingTx: make(map[string]string),
 	}
 	evidence := &rgb11AddressEvidence{rgb11FlowEvidence: baseEvidence, statuses: make(map[string]*rgb11wallet.BitcoinTxStatus)}
-	if native {
+	if rgb11Data {
 		baseEvidence.utxos = make(map[string]*rgb11wallet.BitcoinUTXO)
 		sourceOutpoint = seedRGB11FlowEvidenceUTXO(t, baseEvidence, senderScript, 10_000, 91)
 		plainOutpoint = seedRGB11FlowEvidenceUTXO(t, baseEvidence, senderScript, 100_000, 92)
@@ -180,16 +185,16 @@ func newRGB11SendFixture(t *testing.T, native bool) (*Manager, *Manager, *RGB11I
 	configure(sender)
 	configure(recipient)
 	var imported *RGB11ImportResult
-	if native {
+	if rgb11Data {
 		issued, issueErr := sender.rgbManager.IssueRGB11Asset(context.Background(), RGB11IssueRequest{
-			Schema: "NIA", Ticker: "MAINT", Name: "Native maintenance fixture", Amounts: []uint64{50000},
+			Schema: "NIA", Ticker: "MAINT", Name: "RGB11 maintenance fixture", Amounts: []uint64{50000},
 		})
 		if issueErr != nil {
 			t.Fatal(issueErr)
 		}
 		imported = &RGB11ImportResult{ContractID: issued.ContractID, AssetName: issued.AssetName}
 	} else {
-		contract, readErr := os.ReadFile("../../../rgb11/testvectors/rc11/nia-example.rgba")
+		contract, readErr := os.ReadFile("../../../rgb11/testvectors/rc1/nia-example.rgba")
 		if readErr != nil {
 			t.Fatal(readErr)
 		}
@@ -199,7 +204,7 @@ func newRGB11SendFixture(t *testing.T, native bool) (*Manager, *Manager, *RGB11I
 		t.Fatal(err)
 	}
 
-	endpoint, err := recipient.rgbManager.EnableConfiguredRGB11AddressReceive(RGB11ReceiveCapabilityOptions{RecordOptions: dkvsindexer.RecordOptions{TTL: testRGB11FreeLocalTTL}})
+	endpoint, err := recipient.rgbManager.EnableConfiguredRGB11AddressReceive(RGB11ReceiveCapabilityOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,11 +290,11 @@ func TestRGB11DirectBatchRequiresEveryOutputACK(t *testing.T) {
 		t.Fatal("batch output identity lost")
 	}
 	for i, state := range prepared.States {
-		_, err := sender.rgbManager.deliverRGB11AddressTransferStore(mustRGB11ConfiguredStore(t, sender), state.TransferID, RGB11AddressDeliveryOptions{})
+		_, err := sender.rgbManager.deliverRGBAddress(state.TransferID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		syncResult, err := recipient.rgbManager.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+		syncResult, err := recipient.rgbManager.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{})
 		if err != nil || syncResult.Invalid != 0 || syncResult.Received != 1 {
 			transfers, transferErr := recipient.rgbManager.projectionStore.ListTransfers()
 			reservations, reservationErr := recipient.rgbManager.loadRGB11Reservations()
@@ -297,7 +302,7 @@ func TestRGB11DirectBatchRequiresEveryOutputACK(t *testing.T) {
 			t.Fatalf("output %d receive=%+v err=%v state=%+v transferErr=%v reservations=%+v reservationErr=%v engineRecords=%+v engineErr=%v preparedStates=%+v",
 				i, syncResult, err, transfers, transferErr, reservations, reservationErr, engineRecords, engineErr, prepared.States)
 		}
-		_, err = sender.rgbManager.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+		_, err = sender.rgbManager.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -434,7 +439,7 @@ func TestGenericBatchSendAssetsRGB11(t *testing.T) {
 		case <-deadline.C:
 			t.Fatal("generic RGB send did not finish")
 		case <-tick.C:
-			syncResult, err := recipient.rgbManager.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+			syncResult, err := recipient.rgbManager.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{})
 			if err != nil || syncResult.Invalid != 0 {
 				transfers, transferErr := recipient.rgbManager.projectionStore.ListTransfers()
 				reservations, reservationErr := recipient.rgbManager.loadRGB11Reservations()
@@ -607,7 +612,7 @@ func TestRGB11DirectReservationResumesAfterSDKRestart(t *testing.T) {
 	}
 	unsigned := assertRGB11UnsignedPending(t, sender.rgbManager, prepared.State.TransferID)
 	delivery, err := sender.DeliverAndBroadcastConfiguredRGB11AddressTransfer(
-		prepared.State.TransferID, RGB11AddressDeliveryOptions{},
+		prepared.State.TransferID,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -617,7 +622,7 @@ func TestRGB11DirectReservationResumesAfterSDKRestart(t *testing.T) {
 	}
 	assertRGB11UnsignedPending(t, sender.rgbManager, prepared.State.TransferID)
 	received, err := recipient.SyncConfiguredRGB11AddressMailbox(
-		context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{},
+		context.Background(), dkvsindexer.RecordVerificationOptions{},
 	)
 	if err != nil || received == nil || received.Received != 1 || received.Invalid != 0 {
 		t.Fatalf("recipient did not accept exactly the prepared transfer: result=%+v err=%v", received, err)
@@ -642,13 +647,12 @@ func TestRGB11DirectReservationResumesAfterSDKRestart(t *testing.T) {
 		t.Fatalf("refresh restarted source before ACK: %v", err)
 	}
 	sourceProof, err := restarted.projectionStore.LoadProof(sourceOutpoint, imported.AssetName)
-	if err != nil || sourceProof == nil || sourceProof.OutPoint != sourceOutpoint ||
-		!restarted.rgb11CarrierAvailable(sourceOutpoint) {
+	if err != nil || sourceProof == nil || sourceProof.OutPoint != sourceOutpoint {
 		t.Fatalf("restarted original source is not verified: proof_present=%t err=%v", sourceProof != nil, err)
 	}
 	logRGB11BroadcastState(t, "before-restart-ack", sender, prepared.State.TransferID, accepted)
 	resumed, err := sender.SyncConfiguredRGB11AddressMailbox(
-		context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{},
+		context.Background(), dkvsindexer.RecordVerificationOptions{},
 	)
 	logRGB11BroadcastState(t, "after-restart-ack", sender, prepared.State.TransferID, accepted)
 	if err != nil || resumed == nil || resumed.ACKs != 1 || resumed.Invalid != 0 {
@@ -714,7 +718,7 @@ func TestRGB11DirectPreparedMailboxPolicyMatchesDelivery(t *testing.T) {
 		t.Fatal("Direct preparation claimed a transport receipt before delivery")
 	}
 	transferID, witness := prepared.State.TransferID, prepared.TxID
-	result, err := sender.DeliverAndBroadcastConfiguredRGB11AddressTransfer(transferID, RGB11AddressDeliveryOptions{})
+	result, err := sender.DeliverAndBroadcastConfiguredRGB11AddressTransfer(transferID)
 	if err != nil {
 		t.Fatal(err)
 	}

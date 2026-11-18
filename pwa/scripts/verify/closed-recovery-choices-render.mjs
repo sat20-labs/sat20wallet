@@ -43,7 +43,7 @@ const Button = V.defineComponent({ inheritAttrs: false, props: { disabled: Boole
 const Dialog = V.defineComponent({ props: { open: Boolean }, setup(props, { slots }) { return () => props.open ? V.h('div', { 'data-dialog-adapter': true }, slots.default?.()) : null } })
 const AssetList = V.defineComponent({ setup() { return () => V.h('div', { 'data-testid': 'l1-assets-page' }, 'L1 assets stay selected') } })
 
-async function fixture({ offline = false, native = false, ready = false, deferQuote = false, deferChannel = false, noLocal = false, deferActions = false, nativeWithdraw = false, optionsWalletId = 11, quoteWalletId = 11, optionsAccountIndex = null, quoteAccountIndex = null } = {}) {
+async function fixture({ offline = false, assetAdapter = false, ready = false, deferQuote = false, deferChannel = false, noLocal = false, deferActions = false, adapterWithdraw = false, optionsWalletId = 11, quoteWalletId = 11, optionsAccountIndex = null, quoteAccountIndex = null } = {}) {
   const i18n = I18n.createI18n({ legacy: false, locale: 'en', messages: { en: JSON.parse(readFileSync('locales/en.json', 'utf8')), zh: JSON.parse(readFileSync('locales/zh.json', 'utf8')) } })
   const pinia = P.createPinia(); P.setActivePinia(pinia)
   const calls = [], notices = [], errors = [], callbacks = { current: null }, cache = new Map()
@@ -56,7 +56,7 @@ async function fixture({ offline = false, native = false, ready = false, deferQu
   const useGlobalStore = P.defineStore('global', () => ({ env: V.ref('prd') }))
   const useTranscendingModeStore = P.defineStore('transcending', () => ({ selectedTranscendingMode: V.ref('lightning') }))
   const wallet = useWalletStore()
-  const state = { offline, native, ready, noLocal, deferChannel, parentId: '1'.repeat(64), noticeWalletId: 11, optionsWalletId, quoteWalletId, optionsAccountIndex, quoteAccountIndex, lastQuote: null, acceptedTopups: 0, acceptedWithdrawals: 0, channelRelease: null, quoteRelease: null, actionQueue: [] }
+  const state = { offline, assetAdapter, ready, noLocal, deferChannel, parentId: '1'.repeat(64), noticeWalletId: 11, optionsWalletId, quoteWalletId, optionsAccountIndex, quoteAccountIndex, lastQuote: null, acceptedTopups: 0, acceptedWithdrawals: 0, channelRelease: null, quoteRelease: null, actionQueue: [] }
   const channelId = () => `closed-channel-${wallet.accountIndex}`
   const rawQuote = account => ` { "quoteId":"${'2'.repeat(64)}", "walletId":${JSON.stringify(state.quoteWalletId)}, "accountIndex":${state.quoteAccountIndex ?? account}, "channelId":"closed-channel-${account}", "amount":40000, "walletFee":770, "requiredInput":40770, "feeRate":${wallet.btcFeeRate}, "unsignedTx":"exact-unsigned-fixture" } `
   const record = (method, fn) => async (...args) => { calls.push({ method, args, accountAtCall: wallet.accountIndex, generationAtCall: identity.getWalletIdentityState().generation }); return fn(...args) }
@@ -80,9 +80,8 @@ async function fixture({ offline = false, native = false, ready = false, deferQu
       if (state.deferChannel) await new Promise(resolve => { state.channelRelease = resolve })
       return { code: 0, data: state.ready ? { json: JSON.stringify({ channelId: channelId(), status: 16, localbalanceL1: [], capacity: 40000 }) } : undefined }
     }),
-    allReservations: record('allReservations', () => ({ code: 0, data: { reservations: [] } })),
     switchAccount: record('switchAccount', account => { wallet.accountIndex = account; return { code: 0 } }),
-    previewClosedChannelRecovery: record('previewClosedChannelRecovery', requested => ({ code: 0, data: JSON.stringify({ walletId: state.optionsWalletId, accountIndex: state.optionsAccountIndex ?? wallet.accountIndex, channelId: requested || channelId(), oldParentId: state.noLocal ? '' : state.parentId, hasLocalClosedState: !state.noLocal && !state.ready, canWithdraw: (!state.native || nativeWithdraw) && !state.ready && !state.noLocal, withdrawReason: state.noLocal ? 'Local recovery material is unavailable; connect online to rebuild or restore the required material' : state.native && !nativeWithdraw ? 'RGB/ARC/native withdrawal is not supported by this action' : '', withdrawFeeSats: 500, withdrawTxCount: 1, withdrawTxIds: ['3'.repeat(64)], withdrawPending: false, withdrawComplete: false }) })),
+    previewClosedChannelRecovery: record('previewClosedChannelRecovery', requested => ({ code: 0, data: JSON.stringify({ walletId: state.optionsWalletId, accountIndex: state.optionsAccountIndex ?? wallet.accountIndex, channelId: requested || channelId(), oldParentId: state.noLocal ? '' : state.parentId, hasLocalClosedState: !state.noLocal && !state.ready, canWithdraw: (!state.assetAdapter || adapterWithdraw) && !state.ready && !state.noLocal, withdrawReason: state.noLocal ? 'Local recovery material is unavailable; connect online to rebuild or restore the required material' : state.assetAdapter && !adapterWithdraw ? 'mixed asset withdrawal is not supported by this action' : '', withdrawFeeSats: 500, withdrawTxCount: 1, withdrawTxIds: ['3'.repeat(64)], withdrawPending: false, withdrawComplete: false }) })),
     quoteClosedChannelSingleUTXOTopup: record('quoteClosedChannelSingleUTXOTopup', async () => {
       const account = wallet.accountIndex
       if (deferQuote) await new Promise(resolve => { state.quoteRelease = resolve })
@@ -96,7 +95,7 @@ async function fixture({ offline = false, native = false, ready = false, deferQu
       return actionResponse('confirmClosedChannelSingleUTXOTopup', [quote], { code: 0, data: JSON.stringify({ txId: '4'.repeat(64), phase: 'broadcast' }) })
     }),
     withdrawClosedChannelExact: record('withdrawClosedChannelExact', (requested, parent) => {
-      if ((state.native && !nativeWithdraw) || requested !== channelId() || parent !== state.parentId) return { code: -1, msg: 'reviewed parent/account/capability changed' }
+      if ((state.assetAdapter && !adapterWithdraw) || requested !== channelId() || parent !== state.parentId) return { code: -1, msg: 'reviewed parent/account/capability changed' }
       state.acceptedWithdrawals++
       return actionResponse('withdrawClosedChannelExact', [requested, parent], { code: 0, data: { resvId: '88' } })
     }),
@@ -301,9 +300,9 @@ assert.deepEqual(withdraw.financialCalls().map(call => call.method), ['withdrawC
 assert.deepEqual(withdraw.financialCalls()[0].args, ['closed-channel-0', '1'.repeat(64)])
 withdraw.dispose()
 
-const native = await fixture({ offline: true, native: true }); await native.emit()
-assert.equal(Boolean(native.node('withdraw-choice').props.disabled), true); assert.match(native.text(), /RGB\/ARC\/native/)
-await native.click('recovery-cancel'); assert.equal(native.financialCalls().length, 0); native.dispose()
+const adapter = await fixture({ offline: true, assetAdapter: true }); await adapter.emit()
+assert.equal(Boolean(adapter.node('withdraw-choice').props.disabled), true); assert.match(adapter.text(), /mixed asset/)
+await adapter.click('recovery-cancel'); assert.equal(adapter.financialCalls().length, 0); adapter.dispose()
 
 const routed = await fixture(); await routed.switchAccount(1); await routed.emit(0)
 assert.equal(routed.node('closed-recovery-dialog'), undefined, 'old account notification must not open a dialog')
@@ -355,7 +354,7 @@ const ready = await fixture({ ready: true }); await ready.emit()
 assert.ok(ready.node('closed-recovery-card')); assert.equal(ready.node('closed-recovery-dialog'), undefined)
 assert.equal(ready.calls.some(call => call.method === 'quoteClosedChannelSingleUTXOTopup'), false, 'READY missing-stub notice cannot offer full closed-channel funding')
 assert.equal(ready.financialCalls().length, 0); ready.dispose()
-console.log('Closed recovery original rendered interaction: PASS (L1/null visibility, actual SDK callback/store/facade, two explicit choices, offline no automatic withdrawal, unsupported native disabled, account/generation/fee/network/ABA/unmount, double confirm)')
+console.log('Closed recovery original rendered interaction: PASS (L1/null visibility, actual SDK callback/store/facade, two explicit choices, offline no automatic withdrawal, unsupported mixed assets disabled, account/generation/fee/network/ABA/unmount, double confirm)')
 
 
 // Approved F3 regression controls. These mount the same production wallet SFC,
@@ -514,8 +513,8 @@ for (const kind of actionKinds) for (const outcome of ['resolve', 'reject']) {
     assert.deepEqual(f.errors, [])
   })
 }
-await actionCase('native positive adapter capability still requires both explicit withdrawal choices', async () => {
-  const f = await fixture({ offline: true, native: true, nativeWithdraw: true })
+await actionCase('asset positive adapter capability still requires both explicit withdrawal choices', async () => {
+  const f = await fixture({ offline: true, assetAdapter: true, adapterWithdraw: true })
   try {
     await f.emit()
     assert.equal(Boolean(f.node('withdraw-choice')?.props.disabled), false)
@@ -534,7 +533,7 @@ await actionCase('native positive adapter capability still requires both explici
 // validate native transactions or claim a live browser / real-wallet E2E.
 for (const protocol of ['RGB', 'ARC']) {
   await actionCase(`${protocol} canWithdraw capability adapter requires both explicit withdrawal choices`, async () => {
-    const f = await fixture({ native: true, nativeWithdraw: true })
+    const f = await fixture({ assetAdapter: true, adapterWithdraw: true })
     try {
       const reviewedParent = (protocol === 'RGB' ? '5' : '6').repeat(64)
       f.state.parentId = reviewedParent
@@ -542,12 +541,12 @@ for (const protocol of ['RGB', 'ARC']) {
       assert.ok(f.node('closed-recovery-dialog'), 'the SDK callback must expose the current account capability review')
       assert.equal(Boolean(f.node('withdraw-choice')?.props.disabled), false, 'the UI must consume the positive SDK withdrawal capability')
       assert.match(f.text(), /Your old signed recovery package does not protect this new money/)
-      assert.equal(f.financialCalls().length, 0, 'a native capability callback and quote never authorize a financial action')
+      assert.equal(f.financialCalls().length, 0, 'a adapter capability callback and quote never authorize a financial action')
       await f.click('withdraw-choice')
       assert.ok(f.node('withdraw-review'))
       assert.match(f.text(), /complete already-signed local recovery package/)
       assert.doesNotMatch(f.text(), /ordinary-asset Others|old Others package/)
-      assert.equal(f.financialCalls().length, 0, 'the first explicit native withdrawal choice only opens its review')
+      assert.equal(f.financialCalls().length, 0, 'the first explicit asset withdrawal choice only opens its review')
       await f.click('withdraw-confirm')
       assert.equal(f.state.acceptedWithdrawals, 1)
       assert.equal(f.state.acceptedTopups, 0)
@@ -561,7 +560,7 @@ for (const protocol of ['RGB', 'ARC']) {
 assert.ok(actionResults.length > 0, 'the optional --f3-case filter must match at least one action regression')
 console.log('F3 action isolation matrix', JSON.stringify(actionResults))
 assert.deepEqual(actionFailures, [], 'all current-action account/generation/token isolation controls must pass')
-console.log('Closed recovery action isolation: PASS (real mounted Vue/callback/Pinia/facade, account+generation, late resolve/reject, cross-kind token/finally, current double-click, context/unmount, explicit native-capability adapter)')
+console.log('Closed recovery action isolation: PASS (real mounted Vue/callback/Pinia/facade, account+generation, late resolve/reject, cross-kind token/finally, current double-click, context/unmount, explicit asset-capability adapter)')
 
 // The same mounted production recovery UI must react to locale changes without
 // requesting a new quote, changing its owner, or dispatching an adapter action.

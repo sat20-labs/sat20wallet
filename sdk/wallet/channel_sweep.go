@@ -15,7 +15,7 @@ import (
 )
 
 type SignedSweepTxPackage struct {
-	NativeProofs  map[string][]byte
+	AssetProofs  map[string][]byte
 	SweepTx       *wire.MsgTx
 	Txs           []*wire.MsgTx
 	PrevFetcher   txscript.PrevOutputFetcher
@@ -46,7 +46,7 @@ func commitmentRecoveryFeeIndexes(commit *ChannelCommitment, selected []int, vie
 	indexes := append([]uint32(nil), commit.RecoveryFeeIndexes...)
 	if len(indexes) == 0 {
 		if len(commit.AssetProofs) != 0 {
-			return nil, fmt.Errorf("native commitment is missing explicit recovery fee outputs")
+			return nil, fmt.Errorf("RGB11 commitment is missing explicit recovery fee outputs")
 		}
 		for name, amount := range commit.LocalBalance {
 			if amount != nil && amount.Sign() != 0 && STPPolicyFor(&name).NoOrdinalInputStub {
@@ -144,7 +144,7 @@ func (p *Manager) createAndVerifyPunishTxWithRGBView(channel *Channel, rev []byt
 	if err != nil {
 		return nil, err
 	}
-	native, err := p.buildSTPChannelRecoveryWithRGBView(STPAssetRecoveryRequest{
+	recovery, err := p.buildSTPChannelRecoveryWithRGBView(STPAssetRecoveryRequest{
 		Channel: channel, Commitment: channel.RemoteCommitment, Operation: STPOpPunish,
 		Branch: "punish", OutputIndexes: remoteIndex, RecipientScript: recvScript,
 		CommitmentScript: toLocalScript.WitnessScriptToSign(), ScriptType: SCRIPT_TYPE_PUNISH, FeeRate: feeRate,
@@ -157,13 +157,13 @@ func (p *Manager) createAndVerifyPunishTxWithRGBView(channel *Channel, rev []byt
 	}
 	var punishTx *wire.MsgTx
 	var prevFetcher txscript.PrevOutputFetcher
-	if native != nil {
-		punishTx, prevFetcher = native.Tx, native.PrevFetcher
+	if recovery != nil {
+		punishTx, prevFetcher = recovery.Tx, recovery.PrevFetcher
 		hashes := txscript.NewTxSigHashes(punishTx, prevFetcher)
 		for i, input := range punishTx.TxIn {
 			previous := prevFetcher.FetchPrevOutput(input.PreviousOutPoint)
 			if previous == nil || !bytes.Equal(previous.PkScript, toLocalScript.PkScript()) {
-				return nil, fmt.Errorf("native punishment changed the spending branch")
+				return nil, fmt.Errorf("RGB11 punishment changed the spending branch")
 			}
 			signature, err := txscript.RawTxInWitnessSignature(punishTx, hashes, i, previous.Value,
 				toLocalScript.WitnessScriptToSign(), txscript.SigHashAll, revPrivKey)
@@ -237,7 +237,7 @@ func (p *Manager) BuildSignedSweepTxForClient(channel *Channel, height int, feeR
 	}
 
 	result := &SignedSweepTxPackage{
-		NativeProofs: cloneSTPAssetProofs(channel.LocalCommitment.RecoveryProofs),
+		AssetProofs: cloneSTPAssetProofs(channel.LocalCommitment.RecoveryProofs),
 		SweepTx:      sweepTx,
 		Txs:          []*wire.MsgTx{sweepTx},
 		PrevFetcher:  prevFetcher,
@@ -410,14 +410,14 @@ func (p *Manager) createSweepTx(commit *ChannelCommitment, outputIndex []int,
 	if feeRate <= 0 {
 		return nil, nil, 0, fmt.Errorf("invalid sweep fee rate %d", feeRate)
 	}
-	if native, err := p.buildSTPChannelRecovery(STPAssetRecoveryRequest{
+	if recovery, err := p.buildSTPChannelRecovery(STPAssetRecoveryRequest{
 		Commitment: commit, Operation: STPOpForceClose, Branch: "sweep", OutputIndexes: outputIndex,
 		RecipientScript: recvPkScript, CommitmentScript: commitmentScript, ScriptType: scriptType,
 		CSVDelay: csvDelay, Height: currHeight, FeeRate: feeRate, CoSignedSweep: coSigned,
 	}); err != nil {
 		return nil, nil, 0, err
-	} else if native != nil {
-		return native.Tx, native.PrevFetcher, native.Fee, nil
+	} else if recovery != nil {
+		return recovery.Tx, recovery.PrevFetcher, recovery.Fee, nil
 	}
 	commitTx := commit.CommitTx
 	localBalance := commit.LocalBalance

@@ -122,61 +122,13 @@ func (p *Manager) accountSyncResult(labels ...string) func(error) {
 		if err == nil {
 			outcome = "grant-success"
 			manager.markReady(currentScope)
-		} else if !errors.Is(err, errAccountSyncPending) && !errors.Is(err, errAccountSnapshotChanged) &&
-			!accountACKCleanupOnly(err) && !accountModuleOnly(err) {
-			outcome = "revoke-error"
-			p.failAccountSyncLocked(err)
 		} else {
-			outcome = "keep-normal-pending"
+			// A completed initial receive remains valid while publishing local
+			// changes. Failed/partial remote imports retain their durable marker.
+			outcome = "keep-initial-sync"
 		}
 		grantAfter = manager.scopeReady(currentScope)
 	}
-}
-
-func (p *Manager) failAccountSyncLocked(_ error) {
-	if scope := p.accountWriteScopeLocked(); scope != "" {
-		p.dkvs.markNotReady(scope)
-	}
-}
-
-// A retained exact ACK whose baseline is already persisted is cleanup work,
-// not an unresolved business submission. Never infer this from absence alone.
-func (p *Manager) accountACKCoveredLocked(entry *DKVSBatchOutboxEntry) (bool, error) {
-	if entry == nil || entry.State != DKVSOutboxAcknowledged || entry.OriginDomain != accountKVOutboxDomain ||
-		entry.OriginGeneration == 0 || p.accountProfile == nil || entry.Namespace != p.dkvsReplicaNamespace() {
-		return false, nil
-	}
-	value, err := p.accountLocalForKey(p.accountProfile.AccountID, entry.OriginKey)
-	if err != nil || value == nil {
-		return false, err
-	}
-	return value.Confirmed >= entry.OriginGeneration, nil
-}
-func (p *Manager) accountACKCovered(entry *DKVSBatchOutboxEntry) (bool, error) {
-	p.mutex.RLock()
-	defer p.mutex.RUnlock()
-	return p.accountACKCoveredLocked(entry)
-}
-func (p *Manager) requireAccountSyncLocked(client *SatsNetDKVSClient, wrapperKey, indexKey string) error {
-	entries, err := newDKVSReplicaStore(p.db).LoadOutbox(client.replicaNamespace)
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if entry.OriginDomain != accountKVOutboxDomain || (entry.OriginKey != wrapperKey && entry.OriginKey != indexKey) {
-			continue
-		}
-		if entry.State == DKVSOutboxConflict {
-			return dkvsOutboxEntryError(entry)
-		}
-		if entry.State != DKVSOutboxAcknowledged && (entry.LastError != "" || entry.LastErrorCode != "") {
-			return ErrDKVSPathNotSynced
-		}
-	}
-	if scope := p.accountWriteScopeLocked(); scope == "" || !p.dkvs.scopeReady(scope) {
-		return ErrDKVSPathNotSynced
-	}
-	return nil
 }
 
 func (p *Manager) finishLocalAccountACKs(client *SatsNetDKVSClient) error {
@@ -189,56 +141,19 @@ func accountACKCleanup(entry *DKVSBatchOutboxEntry, err error) error {
 		Cause: &dkvsACKCleanupError{cause: fmt.Errorf("remove confirmed request: %w", err)}}
 }
 
-// Actual mutation preparation may finish local ACK metadata. UI/status checks
-// continue to call requireAccountManagedWriteLocked and remain read-only.
+// Caller owns the Manager mutex. Catalog and module writes share the same
+// local qualification, including observed online readiness. This check never
+// calls the backup transport or waits for pending publications or ACK cleanup.
 func (p *Manager) prepareAccountWriteLocked() error {
-	if err := p.accountDBFailure(); err != nil {
-		return err
-	}
-	if err := p.checkAccountRestore("wallets", AccountManagedDataGlobalScope); err != nil {
-		return err
-	}
-	if p.accountProfile != nil {
-		value, err := p.readAccountLocal(p.accountProfile.AccountID, "wallets", AccountManagedDataGlobalScope)
-		if err != nil {
-			return err
-		}
-		if err := p.accountModuleWriteError(value); err != nil {
-			return err
-		}
-	}
-	return p.requireAccountManagedWriteLocked()
+	return p.checkAccountWriteLocked("wallets", AccountManagedDataGlobalScope)
 }
 
-func (p *Manager) revokeAccountOutboxWrite(entry *DKVSBatchOutboxEntry) {
-	if entry == nil || entry.OriginDomain != accountManagedOutboxDomain {
-		return
-	}
-	p.mutex.RLock()
-	defer p.mutex.RUnlock()
-	if p.accountProfile == nil || p.dkvs == nil {
-		return
-	}
-	info, err := p.accountManagementRootWalletLocked()
-	if err != nil {
-		return
-	}
-	key, err := p.accountManagedStateKey(cloneWalletAtAccountZero(info.Wallet))
-	if err != nil || key != entry.OriginKey {
-		return
-	}
-	// An old stored retry error alone is not a newly verified ACK repair.
-	p.failAccountSyncLocked(ErrDKVSPathNotSynced)
-}
-
-// Storage authorization holds only a profile read lock while reserving its
-// slot. Complete ACK metadata first, then retain its original read-only recheck.
 func (p *Manager) prepareAccountWrite() error {
 	if p == nil {
 		return ErrDKVSPathNotSynced
 	}
-	p.mutex.Lock()
-	defer p.mutex.Unlock()
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
 	return p.prepareAccountWriteLocked()
 }
 

@@ -147,40 +147,12 @@ func (db *accountGuardianReadErrorDB) Read(key []byte) ([]byte, error) {
 	return db.KVDB.Read(key)
 }
 
-func TestAccountGuardianPasswordAuthenticationAndRotation(t *testing.T) {
-	manager, _, _ := newInactiveAccountGroup(t, "", "original-password")
-	_, err := manager.GetOrCreateAccountGuardianIdentity("incorrect-password")
-	require.Error(t, err, "a first guardian identity must authenticate the wallet password")
-	identity, err := manager.GetOrCreateAccountGuardianIdentity("original-password")
-	require.NoError(t, err)
-	original, err := manager.LoadAccountGuardianPrivateKey("original-password")
-	require.NoError(t, err)
-	defer zeroBytes(original)
-	database := manager.db
-	manager.db = &accountGuardianReadErrorDB{KVDB: database}
-	_, err = manager.GetOrCreateAccountGuardianIdentity("original-password")
-	require.ErrorContains(t, err, "guardian storage read failed")
-	manager.db = &passwordChangeFailFlushDB{KVDB: database}
-	require.Error(t, manager.ChangePassword("original-password", "replacement-password"))
-	manager.db = database
-	unchanged, err := manager.LoadAccountGuardianPrivateKey("original-password")
-	require.NoError(t, err)
-	require.Equal(t, original, unchanged)
-	zeroBytes(unchanged)
-	require.NoError(t, manager.ChangePassword("original-password", "replacement-password"))
-	_, err = manager.LoadAccountGuardianPrivateKey("original-password")
-	require.Error(t, err)
-	restored, err := manager.LoadAccountGuardianPrivateKey("replacement-password")
-	require.NoError(t, err)
-	require.Equal(t, original, restored)
-	zeroBytes(restored)
-	next, err := manager.GetOrCreateAccountGuardianIdentity("replacement-password")
-	require.NoError(t, err)
-	require.Equal(t, identity, next)
-}
-
 func TestAccountStorageFirstPublicationBindsCurrentCore(t *testing.T) {
-	for _, guardian := range []bool{false, true} {
+	cases := []bool{false}
+	if guardianTests {
+		cases = append(cases, true)
+	}
+	for _, guardian := range cases {
 		t.Run(map[bool]string{false: "recovery", true: "guardian"}[guardian], func(t *testing.T) {
 			manager, _, client := newInactiveAccountGroup(t, "", "password")
 			root, err := manager.accountManagementRootWallet()

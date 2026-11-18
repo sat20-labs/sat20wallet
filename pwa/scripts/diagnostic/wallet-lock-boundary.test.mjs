@@ -51,6 +51,55 @@ function loadSource(source, dependencies = {}, globals = {}) {
   return module.exports
 }
 
+test('WASM wallet and account facades record phases without call data', async () => {
+  const diagnostics = loadModule('../../utils/wasmRuntimeDiagnostics.ts')
+  const deps = {
+    '@/utils/wasmRuntimeDiagnostics': diagnostics,
+    '@/utils/wasmError': loadModule('../../utils/wasmError.ts'),
+    '@/lib/walletSession': loadModule('../../lib/walletSession.ts', {
+      './identity-boundary': loadModule('../../lib/identity-boundary.ts'),
+    }),
+    '@/utils/pwaVersionPolicy': { beginVersionDispatch: () => () => {} },
+    '@/utils/walletAwaitTrace': { beginWalletAwaitTrace: () => () => {} },
+    radash: { tryit },
+  }
+  const input = 'DIAG_INPUT_CANARY', output = 'DIAG_RESULT_CANARY', rejection = 'DIAG_ERROR_CANARY'
+  const wallet = loadModule('../../utils/sat20.ts', deps, { sat20wallet_wasm: {
+    validateMnemonic: async (_, password) => {
+      assert.equal(password, input)
+      return { code: 0, data: { fingerprint: output } }
+    },
+  } }).default
+  const account = loadModule('../../utils/accountManagement.ts', deps, { sat20account_wasm: {
+    loadRecovery: async raw => {
+      assert.equal(JSON.parse(raw).locator, input)
+      return { code: 0, data: { session_id: 'test-session', mode: '2of2', questions: [],
+        summary: { account_id: output, wallets: [] }, can_commit: false } }
+    },
+    previewRecovery: async raw => {
+      assert.equal(JSON.parse(raw).factors.user_share, input)
+      return { code: -1, error_code: 'TEST_REFUSED', msg: rejection }
+    },
+  } }).default
+
+  const [err, value] = await wallet.validateMnemonic('test-only', input)
+  assert.ifError(err)
+  assert.equal(value.fingerprint, output)
+  const setup = await account.loadRecovery(input)
+  assert.equal(setup.summary.account_id, output)
+  await assert.rejects(account.previewRecovery(setup.session_id, { answers: [], user_share: input, guardian_response: '' }),
+    error => error.code === 'TEST_REFUSED' && error.message === rejection)
+
+  const rows = Array.from(diagnostics.snapshotWasmRuntimeDiagnostics())
+  const phases = (method, end) => rows.filter(row => row.method === method &&
+    (row.phase === 'dispatch' || row.phase === end)).map(row => row.phase)
+  assert.deepEqual(phases('validateMnemonic', 'returned'), ['dispatch', 'returned'])
+  const serialized = JSON.stringify(rows)
+  for (const canary of [input, output, rejection]) assert.ok(!serialized.includes(canary), 'diagnostics leaked call data')
+  assert.deepEqual({ success: phases('account.loadRecovery', 'returned'), refused: phases('account.previewRecovery', 'failed') },
+    { success: ['dispatch', 'returned'], refused: ['dispatch', 'failed'] })
+})
+
 function walletSessionFixture() {
   const calls = [], handlers = {}, listeners = []
   const state = { locked: false, hasWallet: true, walletId: '1', accountIndex: 0,
@@ -102,10 +151,9 @@ function walletSessionFixture() {
           : { walletId: '1', signature: 'signed', psbt: 'signed' }
     return { code: 0, data }
   } })
-  const logs = { beginPwaWalletOperation: async () => {}, finishPwaOperation: async () => {} }
   const dependencies = {
     '@/utils/wasmError': loadModule('../../utils/wasmError.ts'),
-    radash: { tryit }, '@/lib/walletSession': session, '@/utils/pwaOperationLog': logs,
+    radash: { tryit }, '@/lib/walletSession': session,
     '@/utils/pwaVersionPolicy': { beginVersionDispatch: () => () => {} },
     '@/utils/walletAwaitTrace': { beginWalletAwaitTrace: () => () => {} },
     '@/utils/wasmRuntimeDiagnostics': { noteWasmOperation: () => {} },
@@ -133,7 +181,7 @@ function walletSessionFixture() {
       status: async () => ({ active: true, account_id: 'root-account' }),
     } },
   }).useWalletStore()
-  return { store, session, identity, grants, approve, calls, handlers, logs, state, passwordPrompt,
+  return { store, session, identity, grants, approve, calls, handlers, state, passwordPrompt,
     wallet: walletManager.default, stp: stp.default }
 }
 
@@ -200,17 +248,19 @@ test('locked PWA facades refuse signing, export and channel mutation but allow e
   assert.equal(h.calls[0][0], 'release')
 })
 
-test('lock during operation logging prevents a signature from being requested', async () => {
+test('lock rejects a signature result after immediate SDK dispatch', async () => {
   const h = walletSessionFixture()
   let resume
-  h.logs.beginPwaWalletOperation = () => new Promise(resolve => { resume = resolve })
+  h.handlers.signMessage = () => new Promise(resolve => { resume = resolve })
   const pending = h.wallet.signMessage('message')
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(h.calls.filter(([name]) => name === 'signMessage').length, 1)
   await h.store.lockWallet()
-  resume()
+  resume({ code: 0, data: { signature: 'stale' } })
   const [error, result] = await pending
   assert.match(error.message, /session changed/)
   assert.equal(result, undefined)
-  assert.equal(h.calls.length, 0)
+  assert.equal(h.calls.filter(([name]) => name === 'signMessage').length, 1)
 })
 
 test('lock invalidates in-flight signatures and unlock responses even after re-unlock', async () => {

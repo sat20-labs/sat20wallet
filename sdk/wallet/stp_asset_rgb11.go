@@ -112,7 +112,7 @@ func (protocol rgb11STPProtocol) NormalizeContract(name *indexer.AssetName) erro
 
 func (rgb11STPProtocol) Policy(*AssetName) STPAssetPolicy {
 	return STPAssetPolicy{PartialTransfer: true, FixedOutputIndexes: true,
-		SplicePayloadSize: 34, AlwaysSplicePayload: true, NoOrdinalInputStub: true, ExchangeRecoveryPackages: true}
+		SplicePayloadSize: 34, AlwaysSplicePayload: true, NoOrdinalInputStub: true}
 }
 
 func (rgb11STPProtocol) EstimateSplicePayload(*AssetName, int) ([]byte, error) {
@@ -159,6 +159,35 @@ func stpRGB11Inventory(channel *Channel) (*rgb11wallet.ChannelInventory, error) 
 	return rgb11wallet.DecodeChannelInventory(raw)
 }
 
+// CheckRGB11ChannelUTXO authenticates the channel's saved allocation against
+// the controlled output. The L1 indexer supplies only Bitcoin evidence.
+func (p *Manager) CheckRGB11ChannelUTXO(channel *Channel, output *TxOutput, asset indexer.AssetInfo) error {
+	inventory, err := stpRGB11Inventory(channel)
+	if err != nil {
+		return err
+	}
+	for _, source := range inventory.Sources {
+		if source.OutPoint != output.OutPointStr {
+			continue
+		}
+		if source.Value != output.Value() || !bytes.Equal(source.PkScript, output.OutValue.PkScript) ||
+			source.AssetName != asset.Name || asset.BindingSat != 0 || asset.Amount.Validate() != nil ||
+			source.Amount.Precision != asset.Amount.Precision || source.Amount.Cmp(&asset.Amount) != 0 {
+			return fmt.Errorf("stored RGB11 funding does not match controlled output")
+		}
+		evidence := newIndexerBitcoinEvidenceProvider(p.GetIndexerClient())
+		result, err := rgb11wallet.ValidateChannelFunding(context.Background(), source, evidence, nativeproof.Current, GetChainParam().Name)
+		if err != nil {
+			return err
+		}
+		if result.Value != output.Value() {
+			return fmt.Errorf("RGB11 proof carrier value mismatch")
+		}
+		return nil
+	}
+	return fmt.Errorf("missing RGB11 channel funding proof")
+}
+
 func (protocol rgb11STPProtocol) PrepareInputs(p *Manager, req STPAssetInputRequest) (*STPAssetInputs, error) {
 	if err := protocol.ValidateAsset(req.Asset, req.Operation); err != nil {
 		return nil, err
@@ -190,7 +219,7 @@ func (protocol rgb11STPProtocol) PrepareInputs(p *Manager, req STPAssetInputRequ
 			continue
 		}
 		seen[proof.OutPoint] = true
-		if blocked[proof.OutPoint] || !manager.rgb11CarrierAvailable(proof.OutPoint) || !rgb11CarrierLockAllowsSpend(manager.utxoLockerL1.GetLockedUtxoList()[proof.OutPoint]) {
+		if blocked[proof.OutPoint] || !rgb11CarrierLockAllowsSpend(manager.utxoLockerL1.GetLockedUtxoList()[proof.OutPoint]) {
 			continue
 		}
 		output, err := manager.projectionStore.LoadOutput(proof.OutPoint)
@@ -252,14 +281,8 @@ func (p *rgb11Manager) stpRGB11Funding(output *TxOutput, asset *indexer.AssetNam
 		p.traceRGB11Broadcast("stp-funding-proof-view", "", err)
 		return rgb11wallet.ChannelFunding{}, err
 	}
-	if blocked[output.OutPointStr] || !p.rgb11CarrierAvailable(output.OutPointStr) {
+	if blocked[output.OutPointStr] {
 		p.traceRGB11Broadcast("stp-funding-readiness", "", ErrRGB11Inconsistent)
-		if owner := p.rgb11ReservationOwner(); owner != nil {
-			state := p.rgb11ScopeState()
-			Log.Debugf("RGB STP readiness rejected: manager=%d blocked=%t verified=%t target_ready=%t ready=%d faults=%d",
-				owner.debugID, blocked[output.OutPointStr], state.ProjectionVerified,
-				state.ReadyCarriers[output.OutPointStr], len(state.ReadyCarriers), len(state.ProofFaults))
-		}
 		return rgb11wallet.ChannelFunding{}, ErrRGB11Inconsistent
 	}
 	for _, proof := range proofs {
@@ -407,7 +430,7 @@ func (protocol rgb11STPProtocol) ValidateChannelFunding(p *Manager, channel *Cha
 		input := requested[source.OutPoint]
 		previous, known := oldSources[source.OutPoint]
 		if known && !sameSTPRGB11Funding(previous, source) {
-			return nil, fmt.Errorf("RGB11 funding replaced existing native material")
+			return nil, fmt.Errorf("RGB11 funding replaced existing RGB11 material")
 		}
 		if input == nil && !known {
 			return nil, fmt.Errorf("unsolicited RGB11 funding source")
@@ -440,7 +463,7 @@ func (protocol rgb11STPProtocol) ValidateChannelFunding(p *Manager, channel *Cha
 
 // A valid proof for one contract cannot authorize burning another known
 // contract carried by the same Bitcoin output. Check every local account;
-// peers' public indexers cannot establish the absence of native allocations.
+// peers' public indexers cannot establish the absence of RGB11 allocations.
 func verifySTPRGB11KnownCoassets(p *Manager, sources map[string]indexer.AssetName) error {
 	return checkRGB11Coassets(p, sources, nil)
 }
@@ -552,7 +575,7 @@ func (protocol rgb11STPProtocol) TickerFromFunding(p *Manager, name *indexer.Ass
 			}
 			reveals = append(reveals, seal)
 		}
-		history, err := rgb11wallet.NewNativeConsensusValidatorWithReveals(reveals...).ValidateHistoricalConsignmentReport(context.Background(), source.Consignment, evidence)
+		history, err := rgb11wallet.NewRGB11ValidatorWithReveals(reveals...).ValidateHistoricalConsignmentReport(context.Background(), source.Consignment, evidence)
 		if err != nil {
 			return nil, err
 		}

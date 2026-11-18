@@ -1,3 +1,4 @@
+import { setupAccount, waitAccountBackup } from './account-fixture-e2e.mjs'
 import { assertSnapshotTransactionDelta } from './l1-snapshot-assertions.mjs'
 import assert from 'node:assert/strict'
 import { randomBytes } from 'node:crypto'
@@ -74,7 +75,7 @@ const deanchorInputs = channel => Object.fromEntries(['localDeAnchorTx', 'remote
 }))
 
 export async function runPwaPosCases(t, fixture) {
-  const { check, device, ready, walletCall, accountCall, questions, answers } = t
+  const { check, device, ready, walletCall, accountCall } = t
   const rgbCrossLayer = fixture.rgbCrossLayer === true
   const continuation = fixture.resumeConfirmedRGBDeposit
   if (continuation) {
@@ -135,7 +136,7 @@ export async function runPwaPosCases(t, fixture) {
     return result
   }
   const stpRead = async (method, ...args) => {
-    assert.ok(['getCurrentChannel', 'getChannelStatus', 'previewOpenChannel', 'allReservations',
+    assert.ok(['getCurrentChannel', 'getChannelStatus', 'previewOpenChannel',
       'safetySnapshot', 'getCommitTxAssetInfo', 'commitmentExport', 'forceClosePlan', 'sweepBuild', 'punishStatus'].includes(method), 'test may only read STP state')
     const read = page.evaluate(async ({ method, args }) => {
       const stp = (await import('/utils/stp.ts')).default
@@ -337,11 +338,36 @@ export async function runPwaPosCases(t, fixture) {
     await expect(balancePanel().getByRole('heading', { level: 2 })).toHaveText(btcText(channelAmount(channel, '::')))
     return channel
   }
-  const pendingFunding = async (before, depositError) => {
+  const observeAssetCall = method => page.evaluateHandle(async method => {
+    const manager = (await import('/utils/sat20.ts')).default
+    const original = manager[method]
+    const state = { called: false, error: '', txid: null, restore: () => { manager[method] = original } }
+    const record = error => {
+      state.error = String(error?.message ?? error)
+        .replace(/\b(?:[a-z]{2,}\s+){11,23}[a-z]{2,}\b/gi, '[redacted mnemonic]')
+        .replace(/\b(mnemonic|seed|password|passphrase|private\s*key|raw\s*tx|signed\s*tx)\b\s*[:=]\s*[^,;\n]+/gi, '$1=[redacted]')
+        .replace(/\b(?:0x)?[0-9a-f]{128,}\b/gi, '[redacted hex]')
+        .slice(0, 1200)
+    }
+    manager[method] = async function (...args) {
+      state.called = true
+      try {
+        const result = await original.apply(this, args)
+        if (result?.[0]) record(result[0]); else state.txid = result?.[1]?.txId ?? null
+        return result
+      } catch (error) {
+        record(error)
+        throw error
+      }
+    }
+    return state
+  }, method)
+
+  const pendingFunding = async (before, submissionError) => {
     let snapshot
     await expect.poll(async () => {
-      const rejectedDeposit = await depositError?.()
-      if (rejectedDeposit) throw new Error(`PWA deposit rejected before pending funding: ${rejectedDeposit}`)
+      const rejected = await submissionError?.()
+      if (rejected) throw new Error(`PWA operation rejected before funding: ${rejected}`)
       const failure = await page.evaluate(() => window.__SAT20_SPLICE_DIAGNOSTIC__?.error)
       if (failure) throw new Error(`PWA splicing-in rejected before pending funding: ${failure}`)
       snapshot = await control('snapshot')
@@ -358,8 +384,8 @@ export async function runPwaPosCases(t, fixture) {
     assert.deepEqual([...snapshot.l1.pending_txids].sort(), [funding.txid], 'page recovery changed or duplicated funding')
     assert.deepEqual([...snapshot.l1.confirmed_txids].sort(), funding.confirmed)
   }
-  const confirmFunding = async (funding, expectedNodes = fixture.node_count ?? 3, v2 = fixture.pos_v2_active === true) => {
-    const snapshot = await control('confirm-l1')
+  const confirmFunding = async (funding, expectedNodes = fixture.node_count ?? 3, v2 = fixture.pos_v2_active === true, rgbContract) => {
+    const snapshot = await control('confirm-l1', rgbContract ? { rgb_contract: rgbContract, funding: funding.txid } : {})
     assertNodes(snapshot, expectedNodes)
     assert.deepEqual(snapshot.l1.pending_txids, [])
     const added = snapshot.l1.confirmed_txids.filter(txid => !funding.confirmed.includes(txid))
@@ -483,29 +509,7 @@ export async function runPwaPosCases(t, fixture) {
     // Observe the real call without changing its arguments, result, or errors.
     // A rejected deposit must fail immediately instead of waiting for funding
     // that was correctly never broadcast after a failed durable ACK.
-    const observation = await page.evaluateHandle(async () => {
-      const manager = (await import('/utils/sat20.ts')).default
-      const original = manager.deposit
-      const state = { error: '', restore: () => { manager.deposit = original } }
-      const record = error => {
-        state.error = String(error?.message ?? error)
-          .replace(/\b(?:[a-z]{2,}\s+){11,23}[a-z]{2,}\b/gi, '[redacted mnemonic]')
-          .replace(/\b(mnemonic|seed|password|passphrase|private\s*key|raw\s*tx|signed\s*tx)\b\s*[:=]\s*[^,;\n]+/gi, '$1=[redacted]')
-          .replace(/\b(?:0x)?[0-9a-f]{128,}\b/gi, '[redacted hex]')
-          .slice(0, 1200)
-      }
-      manager.deposit = async function (...args) {
-        try {
-          const result = await original.apply(this, args)
-          if (result?.[0]) record(result[0])
-          return result
-        } catch (error) {
-          record(error)
-          throw error
-        }
-      }
-      return state
-    })
+    const observation = await observeAssetCall('deposit')
     let funding
     try {
       await clickAssetOperation('Deposit', token ? amounts.deposit_asset : amounts.deposit_btc, token)
@@ -516,7 +520,9 @@ export async function runPwaPosCases(t, fixture) {
     }
     const confirmed = await confirmFunding(funding,
       rgbCrossLayer ? fixture.node_count : expectedNodes,
-      rgbCrossLayer ? fixture.pos_v2_active === true : true)
+      rgbCrossLayer ? fixture.pos_v2_active === true : true,
+      token && fixture.pacePublicRGB ? publicRGBContractURL : undefined)
+    if (rgbCrossLayer && token) assert.equal(confirmed.anchor.native_proof, true, 'confirmed public RGB Anchor must carry its committed proof')
     const outputs = confirmed.anchor.outputs.filter(output => output.pk_script.toLowerCase() === walletScript)
     assert.ok(outputs.length, 'public-channel Anchor has no output to the PWA wallet')
     const credited = token
@@ -565,18 +571,19 @@ export async function runPwaPosCases(t, fixture) {
     .filter(asset => key === '::'
       ? asset.Name.Protocol === '' && asset.Name.Type === '*' : assetKey(asset.Name) === key)
     .reduce((sum, asset) => sum + asInteger(asset.Amount), 0n)
-  const rgbState = async () => {
-    const result = await walletCall(page, 'getRGB11State')
-    assert.equal(typeof result.state, 'string')
-    return JSON.parse(result.state)
-  }
-  const rgbStateAmount = (state, key, field = 'available_assets') => (state[field] || [])
-    .filter(asset => assetKey(asset.Name) === key)
+  const rgbState = () => walletCall(page, 'getRGB11View')
+  const rgbStateAmount = (state, key) => state.assets
+    .filter(asset => asset.asset === key)
     .reduce((sum, asset) => {
-      assert.equal(asset.Amount?.Precision, 0)
-      assert.match(String(asset.Amount?.Value), /^\d+$/)
-      return sum + BigInt(asset.Amount.Value)
+      assert.equal(asset.precision, 0)
+      return sum + asInteger(asset.available)
     }, 0n)
+  const rgbCarriers = async (key, state) => {
+    const total = rgbStateAmount(state, key)
+    if (total === 0n) return []
+    const selected = await walletCall(page, 'getUtxosWithAsset', fixture.address, String(total), key)
+    return selected.utxos
+  }
   const addressAmount = async (chain, address, key) => {
     if (rgbCrossLayer && chain === 'Bitcoin' && address === fixture.address && key === fixture.asset.key) {
       return rgbStateAmount(await rgbState(), key)
@@ -602,7 +609,7 @@ export async function runPwaPosCases(t, fixture) {
   const operationLogs = async () => {
     const response = await page.evaluate(() => window.sat20wallet_operation_log.getOperationLogs())
     assert.equal(response.code, 0, response.msg)
-    const logs = JSON.parse(response.data.logs)
+    const logs = response.data
     assert.ok(Array.isArray(logs))
     return logs
   }
@@ -610,13 +617,13 @@ export async function runPwaPosCases(t, fixture) {
     const oldIDs = new Set(beforeLogs.map(log => log.id))
     let receipt
     await expect.poll(async () => {
-      const added = (await operationLogs()).filter(log => log.action === action && !oldIDs.has(log.id))
+      const added = (await operationLogs()).filter(log => log.kind === action && !oldIDs.has(log.id))
       assert.ok(added.length <= 1, 'one UI confirmation created multiple operation receipts')
       receipt = added[0]
       if (receipt?.status === 'failed') throw new Error(JSON.stringify(receipt))
-      return receipt?.status === 'succeeded' && txidPattern.test(receipt.txid || '')
+      return receipt?.status === 'succeeded' && txidPattern.test(receipt.tx_ids[0] || '')
     }, pollOptions).toBe(true)
-    return receipt.txid
+    return receipt.tx_ids[0]
   }
   const readL1Transaction = async txid => {
     const response = await page.evaluate(async ({ txid, network }) => {
@@ -662,6 +669,7 @@ export async function runPwaPosCases(t, fixture) {
   })
   const splitThroughUI = async (token, amount) => {
     const { dialog } = await openAssetOperation('Send', token)
+    const walletUrl = page.url()
     const advanced = dialog.getByRole('button', { name: 'Advanced', exact: true })
     // This is a normal availability requirement, including ORDX. A disabled
     // control is a failure; the test never enables it or bypasses the UI.
@@ -678,7 +686,26 @@ export async function runPwaPosCases(t, fixture) {
     await expect(review.getByText(token ? fixture.asset.key : 'BTC (sats)', { exact: true })).toBeVisible()
     await expect(review.locator('dd').filter({ hasText: new RegExp('^' + String(amount) + (token ? '' : ' sats') + '$') })).toHaveCount(1)
     await expect(review.locator('dd').filter({ hasText: new RegExp('^' + String(amount * 2n) + (token ? '' : ' sats') + '$') })).toHaveCount(1)
-    await review.getByRole('button', { name: 'Confirm', exact: true }).click()
+    const pageLife = await page.evaluateHandle(() => {
+      const state = { hidden: false }
+      window.addEventListener('pagehide', () => { state.hidden = true }, { once: true })
+      return state
+    })
+    try {
+      await review.getByRole('button', { name: 'Confirm', exact: true }).click()
+      await expect(dialog).toBeHidden()
+      // The old handler navigated back after 300 ms. A new document cannot
+      // reuse this handle; a round trip through the page cache records pagehide.
+      await page.waitForTimeout(600)
+      assert.ok(await page.evaluate(state => !state.hidden, pageLife), 'split left the wallet document')
+      await expect(page).toHaveURL(walletUrl)
+      await expect(dialog).toBeHidden()
+      const { dialog: reopened } = await openAssetOperation('Send', token)
+      await reopened.getByRole('button', { name: 'Close', exact: true }).click()
+      await expect(reopened).toBeHidden()
+    } finally {
+      await pageLife.dispose()
+    }
   }
   const sendL1 = async (token, split = false) => {
     const key = token ? fixture.asset.key : '::'
@@ -836,15 +863,8 @@ export async function runPwaPosCases(t, fixture) {
     await expect.poll(readL2Total, pollOptions).toBe(satsBefore - 20n)
     await assertWalletBalanceUI('SatoshiNet', token)
     if (!token && fixture.realBitcoinControl) {
-      const pendingPayments = async () => {
-        const result = await stpRead('allReservations')
-        assert.ok(Array.isArray(result.reservations), 'SDK reservations must be an array')
-        return result.reservations.filter(item => item.type === 'pay' && Number(item.status) > 0 &&
-          JSON.parse(item.json).ChannelId === channelId)
-      }
       console.log(JSON.stringify({ privateBTCBeforeReload: {
         payment: locked.lastPaymentId, commitHeight: locked.commitHeight,
-        pendingPayments: (await pendingPayments()).length,
       } }))
       await reopen(false)
       const reloaded = await readyChannelUI()
@@ -853,9 +873,8 @@ export async function runPwaPosCases(t, fixture) {
       assert.deepEqual(channelBalances(reloaded), channelBalances(locked))
       await expect.poll(readL2Total, pollOptions).toBe(satsBefore - 20n)
       await assertWalletBalanceUI('SatoshiNet')
-      // Reload before waiting for local completion: this retains the
-      // confirmed-chain / unfinished-browser-reservation recovery window.
-      await expect.poll(async () => (await pendingPayments()).length, pollOptions).toBe(0)
+      // Verify public channel and balance state survives a second reopen.
+      // Internal reservation cleanup belongs to SDK recovery tests.
       await reopen(false)
       const completed = await readyChannelUI()
       assert.equal(completed.lastPaymentId, locked.lastPaymentId)
@@ -863,10 +882,9 @@ export async function runPwaPosCases(t, fixture) {
       assert.deepEqual(channelBalances(completed), channelBalances(locked))
       await expect.poll(readL2Total, pollOptions).toBe(satsBefore - 20n)
       await assertWalletBalanceUI('SatoshiNet')
-      assert.equal((await pendingPayments()).length, 0)
       console.log(JSON.stringify({ privateBTCAfterRecovery: {
         payment: completed.lastPaymentId, commitHeight: completed.commitHeight,
-        pendingPayments: (await pendingPayments()).length, reloads: 2,
+        reloads: 2,
       } }))
     }
   }
@@ -893,24 +911,15 @@ export async function runPwaPosCases(t, fixture) {
     }
     if (token && rgbCrossLayer) {
       const state = await rgbState()
-      assert.equal(state.consistency_status, 'ok')
-      const carriers = (state.outputs || []).filter(output => output.OutPointStr.startsWith(`${funding.txid}:`) &&
-        output.Assets.some(asset => assetKey(asset.Name) === key))
-      assert.equal(carriers.length, 1, 'RGB splicing-out must credit one carrier from this exact transaction')
+      assert.equal(state.error_code, '')
+      const carriers = (await rgbCarriers(key, state)).filter(point => point.startsWith(`${funding.txid}:`))
+      assert.equal(carriers.length, 1, 'RGB splicing-out must credit one SDK-selected asset carrier from this exact transaction')
       const carrier = carriers[0]
-      const asset = carrier.Assets.filter(asset => assetKey(asset.Name) === key)
-      assert.equal(asset.length, 1)
-      assert.equal(asset[0].Amount.Precision, 0)
-      assert.equal(asInteger(asset[0].Amount.Value), amount, 'RGB carrier must hold the exact requested asset quantity')
-      assert.equal(asset[0].BindingSat, 0, 'RGB quantity is not bound to the carrier satoshi value')
-      const vout = Number(carrier.OutPointStr.split(':')[1])
+      const vout = Number(carrier.split(':')[1])
       assert.ok(Number.isSafeInteger(vout) && vout >= 0 && vout < tx.outs.length)
       assert.equal(tx.outs[vout].script.toString('hex'), walletScript)
       assert.equal(asInteger(tx.outs[vout].value), 330n, 'RGB splicing-out uses a 330-satoshi carrier')
-      assert.ok((state.proofs || []).some(proof => proof.outpoint === carrier.OutPointStr &&
-        assetKey(proof.asset_name) === key && proof.status === 'settled' && proof.confirmations >= 1),
-      'the exact RGB carrier must have a confirmed settled proof')
-      const [status] = await crossLayerEvidence('/v3/bitcoin/utxos/status', { outpoints: [carrier.OutPointStr] })
+      const [status] = await crossLayerEvidence('/v3/bitcoin/utxos/status', { outpoints: [carrier] })
       assert.ok(status.exists && status.unspent && status.confirmations >= 1,
         'the returned RGB carrier must be independently confirmed and unspent')
       assert.equal(status.pk_script, walletScript)
@@ -949,37 +958,21 @@ export async function runPwaPosCases(t, fixture) {
       assert.ok(rgbPlainBeforeWithdraw >= rgbWithdrawFee + 10n,
         'ordinary-2 must retain the complete quoted withdrawal fee plus its L2 network fee')
     }
-    await page.evaluate(async () => {
-      const manager = (await import('/utils/sat20.ts')).default
-      const original = manager.withdraw
-      const probe = window.__SAT20_WITHDRAW_DIAGNOSTIC__ = {
-        called: false, error: null, txid: null,
-        restore: () => { manager.withdraw = original },
-      }
-      manager.withdraw = async function(...args) {
-        probe.called = true
-        try {
-          const result = await original.apply(this, args)
-          probe.error = result?.[0]?.message ?? null
-          probe.txid = result?.[1]?.txId ?? null
-          return result
-        } catch (error) {
-          probe.error = error?.message ?? String(error)
-          throw error
-        }
-      }
-    })
-    await clickAssetOperation('Withdraw', amount, token, 'SatoshiNet')
-    const call = await page.evaluate(() => {
-      const probe = window.__SAT20_WITHDRAW_DIAGNOSTIC__
-      probe.restore()
-      return { called: probe.called, error: probe.error, txid: probe.txid }
-    })
-    const afterClick = await control('snapshot')
-    console.log(JSON.stringify({ withdrawSubmission: { token, call,
-      pending: afterClick.l1.pending_txids,
-      confirmedAdded: afterClick.l1.confirmed_txids.filter(txid => !before.l1.confirmed_txids.includes(txid)) } }))
-    const funding = await pendingFunding(before)
+    // Closing the confirmation dialog precedes the asynchronous contract
+    // check. Observe dispatch until funding arrives or the SDK returns an error.
+    const observation = await observeAssetCall('withdraw')
+    let funding
+    try {
+      await clickAssetOperation('Withdraw', amount, token, 'SatoshiNet')
+      funding = await pendingFunding(before, () => observation.evaluate(state => state.error))
+    } finally {
+      const call = await observation.evaluate(state => {
+        state.restore()
+        return { called: state.called, error: state.error, txid: state.txid }
+      })
+      console.log(JSON.stringify({ withdrawSubmission: { token, call } }))
+      await observation.dispose()
+    }
     const tx = await confirmL1Payment(funding)
     const paid = tx.outs.filter(output => output.script.toString('hex') === walletScript)
     assert.ok(paid.length, 'withdrawal never produced a Bitcoin payment to the wallet')
@@ -1060,21 +1053,11 @@ export async function runPwaPosCases(t, fixture) {
 
   const ensureRGBRecovery = async () => {
     assert.equal(typeof accountCall, 'function', 'RGB cross-layer fixture requires the real account-management API')
-    const current = await accountCall(page, 'status')
-    if (!current.recovery_configured) {
-      await accountCall(page, 'preflight', fixture.password, [])
-      await accountCall(page, 'confirmStorage', 'temporary')
-      const material = await accountCall(page, 'createRecovery', {
-        password: fixture.password, wallets: [], recovery_mode: '2of2', questions,
-      })
-      const rehearsal = await accountCall(page, 'rehearse', material.session_id,
-        answers, material.user_share, fixture.password)
-      assert.equal(rehearsal.verified, true)
+    const current = await accountCall(page, 'getAccountView')
+    if (!current.active) {
+      await setupAccount({ ...t, catalog: async target => (await walletCall(target, 'getWalletCatalog')).wallets }, page, fixture.password)
     }
-    await expect.poll(async () => {
-      const status = await accountCall(page, 'status')
-      return status.recovery_configured && !status.pending_changes && !status.managed_data_dirty
-    }, pollOptions).toBe(true)
+    await waitAccountBackup(page, accountCall)
   }
 
   const crossLayerEvidence = async (path, body) => {
@@ -1092,25 +1075,20 @@ export async function runPwaPosCases(t, fixture) {
 
   const assertRGBProofs = async (key, expectedAmount) => {
     const current = await rgbState()
-    assert.equal(current.consistency_status, 'ok')
+    assert.equal(current.error_code, '')
     assert.equal(rgbStateAmount(current, key), expectedAmount)
-    const proofs = (current.proofs || []).filter(proof => assetKey(proof.asset_name) === key && proof.status === 'settled')
-    assert.ok(proofs.length, 'the returned RGB balance must have a settled carrier proof')
-    let foundCurrentCarrier = false
-    for (const proof of proofs) {
-      assert.match(proof.outpoint || '', /^[0-9a-f]{64}:\d+$/)
-      const [txid, voutText] = proof.outpoint.split(':')
-      const [status] = await crossLayerEvidence('/v3/bitcoin/utxos/status', { outpoints: [proof.outpoint] })
-      if (!status.exists || !status.unspent || status.confirmations < 1) continue
-      const rawHex = await crossLayerEvidence(`/btc/rawtx/${txid}`)
-      const raw = Transaction.fromHex(rawHex)
+    const carriers = await rgbCarriers(key, current)
+    assert.ok(carriers.length, 'the SDK must select the actual RGB carriers for its full available balance')
+    for (const point of carriers) {
+      assert.match(point, /^[0-9a-f]{64}:\d+$/)
+      const [txid, voutText] = point.split(':')
+      const [status] = await crossLayerEvidence('/v3/bitcoin/utxos/status', { outpoints: [point] })
+      assert.ok(status.exists && status.unspent && status.confirmations >= 1)
+      const raw = Transaction.fromHex(await crossLayerEvidence(`/btc/rawtx/${txid}`))
       assert.equal(raw.getId(), txid)
       assert.equal(raw.outs[Number(voutText)].script.toString('hex'), status.pk_script)
-      assert.ok(proof.confirmations >= 1, 'settled RGB carrier proof must be confirmed')
-      foundCurrentCarrier = true
-      break
+      assert.equal(status.pk_script, walletScript)
     }
-    assert.equal(foundCurrentCarrier, true, 'the wallet must retain an independently verified unspent RGB carrier proof')
     return current
   }
 
@@ -1118,11 +1096,11 @@ export async function runPwaPosCases(t, fixture) {
     if (fixture.asset.key) return fixture.asset.key
     await ensureRGBRecovery()
     const before = await rgbState()
-    assert.equal(before.consistency_status, 'ok', 'RGB issue requires a consistent wallet state')
-    assert.deepEqual(before.transfers.filter(item => !['settled', 'rejected', 'failed', 'conflicted'].includes(item.status)), [],
+    assert.equal(before.error_code, '', 'RGB issue requires a consistent wallet state')
+    assert.deepEqual(before.transfers.filter(item => !['completed', 'cancelled', 'rejected', 'failed', 'conflicted'].includes(item.status)), [],
       'RGB issue must not overlap unresolved transfers')
-    assert.deepEqual(before.reservations.filter(item => !['settled', 'rejected', 'failed', 'conflicted', 'expired', 'cancelled'].includes(item.status)), [],
-      'RGB issue must not overlap active reservations')
+    assert.deepEqual(before.receives.filter(item => !['completed', 'rejected', 'failed', 'conflicted', 'expired', 'cancelled'].includes(item.status)), [],
+      'RGB issue must not overlap active receive requests')
     await showTab('Bitcoin')
     await page.getByRole('button', { name: 'RGB', exact: true }).click()
     await expect(page.getByRole('button', { name: 'Issue RGB Asset', exact: true })).toBeVisible()
@@ -1142,7 +1120,7 @@ export async function runPwaPosCases(t, fixture) {
     assert.match(contractId, /^rgb:/)
     assert.match(key, /^rgb11:f:[0-9a-f]{64}$/)
     const issued = await rgbState()
-    assert.equal(issued.consistency_status, 'ok')
+    assert.equal(issued.error_code, '')
     assert.equal(rgbStateAmount(issued, key), 1000n)
     await assertRGBProofs(key, 1000n)
     fixture.asset = { key, type: 'RGB', ticker: key.split(':').at(-1) }
@@ -1366,6 +1344,12 @@ export async function runPwaPosCases(t, fixture) {
     const funding = await pendingFunding(before)
     const signed = deanchorInputs(await readChannel())
     const { anchor } = await confirmFunding(funding, fixture.node_count, fixture.pos_v2_active === true)
+    assert.equal(anchor.native_proof, true, 'confirmed private RGB Anchor must carry its committed proof')
+    const mapped = anchor.outputs[0].assets
+    assert.equal(mapped.length, 1)
+    assert.equal(assetKey(mapped[0].Name), key)
+    assert.equal(asInteger(mapped[0].Amount.Value), amount)
+    assert.equal(mapped[0].Amount.Precision, 0)
     const afterIn = await readyChannelUI()
     assert.equal(channelAmount(afterIn, key), channelBefore + amount)
     assert.equal(await addressAmount('Bitcoin', fixture.address, key), l1Before - amount)
@@ -1648,13 +1632,7 @@ export async function runPwaPosCases(t, fixture) {
           sdkReadError = error.message
           return null
         })
-        const reservations = await stpRead('allReservations').then(result => result.reservations
-          .filter(item => item.type === 'splicing').map(item => {
-            const stored = JSON.parse(item.json)
-            return { id: item.reservation_id, status: item.status, channelId: stored.ChannelId,
-              walletId: stored.WalletId, hasSplicingTx: Boolean(stored.SplicingTx),
-              hasAnchorTx: Boolean(stored.AnchorTx) }
-          })).catch(error => ({ error: error.message }))
+        const progress = sdkChannel?.pendingSplicing
         let displayTimeout
         const displayRead = page.evaluate(async () => {
           const store = (await import('/store/channel.ts')).useChannelStore()
@@ -1678,7 +1656,7 @@ export async function runPwaPosCases(t, fixture) {
         }
         const invocation = await page.evaluate(() => window.__SAT20_SPLICE_DIAGNOSTIC__).catch(() => undefined)
         console.error(JSON.stringify({ splicingInFailure: { stage, invocation, sdkReadError,
-          sdkStatus: sdkChannel?.status, reservations, display } }))
+          sdkStatus: sdkChannel?.status, progress, display } }))
         throw error
       }
     })
@@ -1746,20 +1724,11 @@ export async function runPwaPosCases(t, fixture) {
       if (fixture.splicingInDiagnostic) {
         assert.deepEqual(before.l1.pending_txids, [], 'diagnostic preflight must not inherit pending Bitcoin transactions')
         assert.deepEqual(before.mempool_txids, [], 'diagnostic preflight must not inherit pending SatoshiNet transactions')
-        const reservationState = await stpRead('allReservations')
-        assert.ok(Array.isArray(reservationState?.reservations), 'diagnostic preflight requires the actual WASM reservation list')
-        const activeChannelReservations = reservationState.reservations.flatMap(item => {
-          assert.ok(item && typeof item.type === 'string', 'reservation entries must identify their type')
-          assert.ok(Number.isInteger(Number(item.status)), 'reservation entries must expose a numeric status')
-          if (item.type === 'rgb11') return []
-          assert.equal(typeof item.json, 'string', 'non-RGB11 reservations must expose their stored JSON')
-          const stored = JSON.parse(item.json)
-          const status = Number(item.status)
-          return stored.ChannelId === prior.channelId && status > 0 && status !== 0x10000
-            ? [{ type: item.type, status }]
-            : []
-        })
-        assert.deepEqual(activeChannelReservations, [], 'diagnostic preflight must not inherit active reservations for the READY channel')
+        assert.equal(prior.pendingSplicing, undefined, 'diagnostic preflight must not inherit a pending splice')
+        const activeOps = (await operationLogs()).filter(log =>
+          /(?:_channel$|^respond_splice_|^splice_|^lock_with_expand$)/.test(log.kind) &&
+          ['pending', 'running'].includes(log.status))
+        assert.deepEqual(activeOps, [], 'diagnostic preflight must not inherit active channel operation receipts')
         await observeSplicingIn()
       }
       await clickAssetOperation('Splicing in', amounts.splicing_asset, true)

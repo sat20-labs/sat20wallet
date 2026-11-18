@@ -64,7 +64,7 @@ func (rgb11STPProtocol) BuildCommitment(_ *Manager, req STPAssetCommitmentReques
 		for _, balances := range []map[AssetName]*Decimal{req.LocalBalance, req.RemoteBalance} {
 			for name, amount := range balances {
 				if name.Protocol == rgb11wallet.Protocol && amount.Sign() != 0 {
-					return nil, fmt.Errorf("RGB11 channel balance has no native funding")
+					return nil, fmt.Errorf("RGB11 channel balance has no RGB11 funding")
 				}
 			}
 		}
@@ -86,7 +86,7 @@ func (rgb11STPProtocol) BuildCommitment(_ *Manager, req STPAssetCommitmentReques
 		return nil, fmt.Errorf("missing RGB11 funding asset identity")
 	}
 	if len(inventory.Sources) == 0 {
-		return nil, fmt.Errorf("RGB11 funding has no native quantity metadata")
+		return nil, fmt.Errorf("RGB11 funding has no RGB11 quantity metadata")
 	}
 	precision := inventory.Sources[0].Amount.Precision
 	total := indexer.NewDecimal(0, precision)
@@ -175,7 +175,7 @@ func (protocol rgb11STPProtocol) CompleteRecovery(p *Manager, req STPAssetCommit
 	}
 	step, err := rgb11wallet.BuildChannelStep(context.Background(), state.Sources, req.Tx, uint32(dbc), assignments, state.Context, evidence)
 	if err != nil {
-		return fmt.Errorf("build native RGB11 commitment: %w", err)
+		return fmt.Errorf("build RGB11 commitment: %w", err)
 	}
 	pkg := &rgb11wallet.ChannelPackage{Version: 1, Funding: state.Sources, Steps: []rgb11wallet.ChannelStep{*step}}
 	raw, err := protocol.validateConstructedPackage(pkg, req.Tx, evidence)
@@ -183,7 +183,7 @@ func (protocol rgb11STPProtocol) CompleteRecovery(p *Manager, req STPAssetCommit
 		return err
 	}
 	state.Proof, state.Tx = raw, append([]byte(nil), step.Tx...)
-	plan.NativeProofs = map[string][]byte{rgb11wallet.Protocol: raw}
+	plan.AssetProofs = map[string][]byte{rgb11wallet.Protocol: raw}
 	// The prepass reserved this output before the normal layout snapshot.
 	plan.Layout = append(plan.Layout, STPAssetOutputConstraint{Output: state.DBC, Value: 0,
 		PkScript: append([]byte(nil), state.DBC.PkScript...), Index: dbc, FixedIndex: true})
@@ -202,8 +202,8 @@ func (rgb11STPProtocol) Verify(req STPAssetVerification) error {
 	if err := req.Tx.SerializeNoWitness(&raw); err != nil {
 		return err
 	}
-	if !bytes.Equal(raw.Bytes(), state.Tx) || len(state.Proof) == 0 || !bytes.Equal(state.Proof, req.Plan.NativeProofs[rgb11wallet.Protocol]) {
-		return fmt.Errorf("RGB11 commitment changed after native validation")
+	if !bytes.Equal(raw.Bytes(), state.Tx) || len(state.Proof) == 0 || !bytes.Equal(state.Proof, req.Plan.AssetProofs[rgb11wallet.Protocol]) {
+		return fmt.Errorf("RGB11 commitment changed after RGB11 validation")
 	}
 	return nil
 }
@@ -247,7 +247,7 @@ func (protocol rgb11STPProtocol) BindSplice(p *Manager, req STPAssetSpliceReques
 		changeAmount = resv.SplicingChangeOutput.GetAsset(&resv.AssetName.AssetName)
 		if changeAmount.Sign() > 0 {
 			if len(req.Tx.TxOut) < 2 {
-				return fmt.Errorf("RGB11 splice has no native change carrier")
+				return fmt.Errorf("RGB11 splice has no RGB11 change carrier")
 			}
 			change = req.Tx.TxOut[1]
 		}
@@ -292,7 +292,7 @@ func (protocol rgb11STPProtocol) BindSplice(p *Manager, req STPAssetSpliceReques
 			return err
 		}
 		remaining = append(remaining, funding)
-		resv.NativeAnchorProof, err = funding.NativeProof()
+		resv.RGB11AnchorProof, err = funding.RGB11Proof()
 		if err != nil {
 			return err
 		}
@@ -392,7 +392,7 @@ func (protocol rgb11STPProtocol) VerifyChannelProof(p *Manager, channel *Channel
 
 func verifySTPRGB11PackageContext(channel *Channel, pkg *rgb11wallet.ChannelPackage) error {
 	if channel == nil || pkg == nil || channel.AssetEntropy == ([32]byte{}) {
-		return fmt.Errorf("missing native channel context")
+		return fmt.Errorf("missing RGB11 channel context")
 	}
 	for _, step := range pkg.Steps {
 		if step.Context.ChannelID != channel.ChannelId || step.Context.Entropy != channel.AssetEntropy || step.Context.BitcoinNetwork != GetChainParam().Name ||
@@ -411,7 +411,7 @@ func (protocol rgb11STPProtocol) VerifyChannelJournalContext(p *Manager, channel
 	if channel.AssetEntropy == ([32]byte{}) {
 		return fmt.Errorf("missing RGB11 channel entropy")
 	}
-	// An empty current inventory does not erase the final native exit. It
+	// An empty current inventory does not erase the final RGB11 exit. It
 	// is valid only after every active carrier and both balances are empty;
 	// LastPackage below still proves the complete final transition.
 	if len(inventory.Sources) == 0 {
@@ -492,7 +492,7 @@ func (rgb11STPProtocol) VerifyUndisclosedChannelInputs(p *Manager, tx *wire.MsgT
 		}
 		for _, proof := range proofs {
 			if proof != nil && inputs[proof.OutPoint] {
-				return fmt.Errorf("known RGB11 carrier %s has no native channel proof", proof.OutPoint)
+				return fmt.Errorf("known RGB11 carrier %s has no RGB11 channel proof", proof.OutPoint)
 			}
 		}
 	}
@@ -504,7 +504,7 @@ func sortedSTPRGB11Indexes(indexes []int) ([]int, error) {
 	sort.Ints(result)
 	for i, index := range result {
 		if index < 0 || (i != 0 && index == result[i-1]) {
-			return nil, fmt.Errorf("invalid or duplicate native recovery output")
+			return nil, fmt.Errorf("invalid or duplicate RGB11 recovery output")
 		}
 	}
 	return result, nil

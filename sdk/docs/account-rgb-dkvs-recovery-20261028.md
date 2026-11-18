@@ -51,7 +51,7 @@ v2 将 `sat20wallet/sdk`、`satoshinet`、`indexer` 的安全源码、测试和�
 
 ## 10 月 28 日 RGB11 合约回归与后续源码批次
 
-其他会话的通道修改后，`transcend/stp` 的 `TestRunAll_contract/rgb11` 六个场景均在公共准备阶段报 `native channel account bind core node: DKVS managed path is not synchronized`。共同入口为 `transcend/stp/contract_rgb11_test.go:30-55` → `rgb11_channel_integration_test.go:30-41` → `sdk/wallet/message_manager.go:166-175,222-227` → `dkvs_core_binding_client.go:100-129`。绑定写前调用 `dkvs_subscription_manager.go:1576-1589`，其中读会话已有而写会话尚未建立时会返回该错误。fixture 在初始化前停止后台 DKVS worker，初始化只登记新路径，具体状态竞争尚未完成专项定位。按用户最新优先级，先完成剩余代码，六场景最后统一测试；不得用等待或绕过同步门槛掩盖失败。
+其他会话的通道修改后，`transcend/stp` 的 `TestRunAll_contract/rgb11` 六个场景均在公共准备阶段报 `rgb11Data channel account bind core node: DKVS managed path is not synchronized`。共同入口为 `transcend/stp/contract_rgb11_test.go:30-55` → `rgb11_channel_integration_test.go:30-41` → `sdk/wallet/message_manager.go:166-175,222-227` → `dkvs_core_binding_client.go:100-129`。绑定写前调用 `dkvs_subscription_manager.go:1576-1589`，其中读会话已有而写会话尚未建立时会返回该错误。fixture 在初始化前停止后台 DKVS worker，初始化只登记新路径，具体状态竞争尚未完成专项定位。按用户最新优先级，先完成剩余代码，六场景最后统一测试；不得用等待或绕过同步门槛掩盖失败。
 
 已使用当前 SDK 源码与 fake L1/L2 fixture，单独执行 `cd /Users/yingfeng/github/transcend && go test -json -count=1 -timeout=120s -run '^TestContractRGB11$/^transcend$' ./stp`。首次受默认 Go 缓存沙箱拒绝，测试体未启动，日志 `../sat20wallet/sdk/data/contract-rgb11-dkvs-20261028/single-cache-blocked.jsonl`；同一命令经正常权限复核实际运行，退出码 1，`TestContractRGB11/transcend` 在 1.57 秒复现相同绑定错误，日志 `single-red.jsonl`。该结果发生在本节下面的源码增量之前，不能代表最新树。
 

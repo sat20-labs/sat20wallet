@@ -65,7 +65,7 @@ func TestSTPChannelAssetCompatibility(t *testing.T) {
 		}}
 		channel.LocalCommitment.LocalBalance[rgb] = indexer.NewDefaultDecimal(0)
 		if err := ValidateSTPAssetForChannel(channel, &rune.AssetName, STPOpSpliceIn); err != nil {
-			t.Fatalf("full native exit must permit new funding: %v", err)
+			t.Fatalf("full RGB11 exit must permit new funding: %v", err)
 		}
 	})
 	if err := ValidateSTPAssetForChannel(nil, &rgb.AssetName, STPOpExpand); err == nil {

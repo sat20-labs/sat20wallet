@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	"reflect"
 	"testing"
 	"time"
@@ -165,7 +166,7 @@ func (f *rgb11ConflictFixture) assertProtected(t *testing.T) {
 	locks := f.sender.utxoLockerL1.GetLockedUtxoList()
 	for point := range f.originals {
 		lock := locks[point]
-		if lock == nil || lock.Reason != rgb11wallet.LockReasonPending || lock.ReservationID != f.pending.ReservationID {
+		if lock == nil || lock.Reason != sdkcommon.UtxoLockRGBPending || lock.ReservationID != f.pending.ReservationID {
 			t.Fatal("input reservation was released")
 		}
 	}

@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/sat20-labs/rgb11/invoicing"
-	corewallet "github.com/sat20-labs/rgb11/wallet"
+
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
@@ -130,7 +130,7 @@ func coreRGBRecoveryCapacityBoundaryE2E(t *testing.T, cfg coreE2EConfig,
 		coreAssert(t, foundLocalProof && foundReceipt, "unrelated failure lost receive proof or receipt")
 		coreRequire(t, "confirm selected receive recovery", receiver.WaitAccountBackup(
 			context.Background(), rgb11AccountManagedProviderID, coreSelectedRGBScope(receiver)))
-		confirmed, err := receiver.currentAccountManagedProviderPayloads(rgb11AccountManagedProviderID)
+		confirmed, err := accountTestPayloads(receiver, rgb11AccountManagedProviderID)
 		coreRequire(t, "read confirmed terminal recovery", err)
 		confirmedPackage, err := rgb11wallet.DecodeRecoveryPackage(confirmed[coreSelectedRGBScope(receiver)].Payload)
 		coreRequire(t, "decode confirmed terminal recovery", err)
@@ -179,6 +179,10 @@ func coreRGB11BlindCapacityBoundaryE2E(t *testing.T, cfg coreE2EConfig,
 	_, err = receiver.ImportRGB11ContractFile(context.Background(), contract)
 	coreRequire(t, "import blind-capacity contract", err)
 
+	// This blind receive needs its own confirmed, unallocated carrier; earlier
+	// journeys may have spent or bound the shared wallet's initial funding.
+	chain.fund(t, receiver.GetWallet().GetAddress(), 1)
+
 	invoice, err := receiver.CreateRGB11Invoice(RGB11InvoiceRequest{
 		Mode: "blind", TransportMode: RGB11ProxyTransport,
 		TransportEndpoints: []string{proxyEndpoint}, ContractID: issued.ContractID,
@@ -205,69 +209,6 @@ func coreRGB11BlindCapacityBoundaryE2E(t *testing.T, cfg coreE2EConfig,
 	coreAssert(t, delivery.AwaitingACK && !delivery.Broadcast && chain.broadcastCount() == beforeBroadcast,
 		"blind transaction broadcast before the receiver ACK")
 
-	proxy.mu.Lock()
-	raw := append([]byte(nil), proxy.consignment...)
-	remoteTxID := proxy.txID
-	remoteVout := proxy.vout
-	proxy.mu.Unlock()
-	coreAssert(t, len(raw) != 0 && remoteTxID == prepared.TxID,
-		"proxy did not retain the exact prepared blind consignment and witness identity")
-
-	catalog, err := receiver.accountManagedDataCatalog()
-	coreRequire(t, "enumerate blind receiver account scopes", err)
-	rootID := receiver.GetAccountManagementStatus().RootWalletID
-	var targetScope AccountManagedDataScope
-	for _, scope := range catalog.Scopes {
-		if scope.WalletID == rootID && scope.AccountIndex == 0 {
-			targetScope = scope
-			break
-		}
-	}
-	coreAssert(t, targetScope.ID() != "", "blind receiver root scope is not catalogued")
-	walletID, err := receiver.rgbManager.RGB11WalletID()
-	coreRequire(t, "resolve blind receiver RGB11 wallet", err)
-	snapshot, _, err := receiver.rgbManager.exportRGB11WalletSnapshot(walletID)
-	coreRequire(t, "export invoice-only blind receiver snapshot", err)
-	candidate, _, err := receiver.rgbManager.buildRGB11PreparedReceiveCandidate(
-		context.Background(), snapshot, invoice.RequestID, raw, remoteTxID, remoteVout, "")
-	coreRequire(t, "construct exact blind prepared-receive candidate for sizing", err)
-	request, err := rgb11ReceiveRequestFromSnapshot(candidate.EngineRecords, invoice.RequestID)
-	coreRequire(t, "read blinded request reveal from candidate", err)
-	coreAssert(t, request.Mode == corewallet.ReceiveBlind && request.Seal.TxID != nil,
-		"prepared candidate omitted its persisted blind receive reveal")
-	transfers, err := rgb11wallet.TransfersFromProjectionSnapshot(candidate.ProjectionRecords)
-	coreRequire(t, "read blind prepared receive lifecycle for sizing", err)
-	var receiveState *rgb11wallet.TransferState
-	for _, state := range transfers {
-		if state != nil && state.Direction == "receive" && state.ReceiveRequestID == invoice.RequestID {
-			receiveState = state
-			break
-		}
-	}
-	coreAssert(t, receiveState != nil && receiveState.WitnessTxID == prepared.TxID &&
-		len(receiveState.OutputOutPoints) == 1,
-		"prepared blind receive did not retain its transition witness and one carrier")
-	carrierTxID := strings.SplitN(receiveState.OutputOutPoints[0], ":", 2)[0]
-	coreAssert(t, carrierTxID != "" && carrierTxID != receiveState.WitnessTxID,
-		"fixture did not separate blinded carrier producer from RGB transition witness")
-	coreAssertRGB11PreparedReceiveCapacityReceiptShape(t, receiver, candidate,
-		receiveState, request, raw)
-
-	preparedBundle, err := coreManagedBundleWithRGB11Snapshot(t, receiver, catalog,
-		targetScope.ID(), candidate)
-	coreRequire(t, "build prepared-only RGB module for blind capacity", err)
-	preparedSize, err := coreMeasureManagedBundle(t, receiver, preparedBundle)
-	coreRequire(t, "measure prepared-only blind RGB module", err)
-	terminalSize, err := receiver.preflightRGB11TerminalRecovery(targetScope.ID(), candidate)
-	coreRequire(t, "measure blind terminal recovery closure", err)
-	coreAssert(t, preparedSize.DKB1Bytes < terminalSize.DKB1Bytes,
-		"blind receive terminal proof closure did not exceed its prepared-only package")
-	coreAssert(t, terminalSize.DKB1Bytes <= swire.MaxDKVSBlobValueSize,
-		"blind terminal closure does not fit without the explicit capacity fault injection")
-	coreAssert(t, preparedSize.DKB1Bytes < swire.MaxDKVSBlobValueSize,
-		"blind prepared-only bundle is already over the stable blob limit")
-	// Keep the genuine terminal closure and sizing-only receipt checks above.
-	// Noise in another provider is not part of this RGB module's wire budget.
 	cleanup := coreInstallUnrelatedCapacityFailure(t, receiver, cfg)
 	beforeAttemptBroadcasts := chain.broadcastCount()
 	received, err := receiver.ReceiveRGB11ProxyConsignment(context.Background(), invoice.RequestID)
@@ -293,7 +234,7 @@ func coreRGB11BlindCapacityBoundaryE2E(t *testing.T, cfg coreE2EConfig,
 	_, err = receiver.RefreshRGB11State(context.Background())
 	coreRequire(t, "settle blind receiver despite unrelated capacity failure", err)
 	coreRequire(t, "confirm blind terminal recovery", receiver.WaitAccountBackup(context.Background(),
-		rgb11AccountManagedProviderID, targetScope.ID()))
+		rgb11AccountManagedProviderID, coreSelectedRGBScope(receiver)))
 	coreRequire(t, "remove blind capacity fault", cleanup())
 	// A local broadcast is not a completed asynchronous backup. Finish both
 	// devices' actual recovery closures before cleanup returns to the originals.
@@ -308,149 +249,6 @@ func coreRGB11BlindCapacityBoundaryE2E(t *testing.T, cfg coreE2EConfig,
 	for _, point := range prepared.State.InputOutPoints {
 		t.Logf("core-e2e: blind capacity spent input: point_tag=%s witness_tag=%s", coreCASTag(point), coreCASTag(prepared.TxID))
 	}
-}
-
-func coreAssertRGB11PreparedReceiveCapacityReceiptShape(t *testing.T, manager *Manager,
-	snapshot *rgb11wallet.RGB11WalletSnapshot, state *rgb11wallet.TransferState,
-	request *corewallet.ReceiveRequest, raw []byte) {
-	t.Helper()
-	validator := rgb11wallet.NewNativeConsensusValidatorWithReveals(request.Seal)
-	prepared, err := rgb11wallet.ValidatePreparedWith(context.Background(), validator, raw,
-		manager.rgbManager.evidence)
-	coreRequire(t, "validate prepared blind receipt shape", err)
-	invoice, err := invoicing.Parse(request.Invoice)
-	coreRequire(t, "parse blind receipt-shape invoice", err)
-	matched, err := manager.rgbManager.matchRGB11ReceiveAllocation(prepared.Receipt, request,
-		invoice, prepared.Outputs, "", nil)
-	coreRequire(t, "match exact blind allocation for receipt shape", err)
-	material, err := manager.rgbManager.rgb11TerminalCapacityMaterial(context.Background(), validator, raw, state.WitnessTxID, nil)
-	coreRequire(t, "validate prepared blind historical receipt shape", err)
-	history := material.History
-	coreAssert(t, history != nil && history.MaterialReceipt != nil,
-		"blind history report omitted its material receipt")
-
-	// Seed a structurally valid prior receipt with one authenticated historical
-	// allocation absent from the prepared receipt. The old preview copied the
-	// prepared receipt and collided with this already-bound base; the selector
-	// must preserve the base and append the newly matched allocation.
-	baseAllocations := make([]rgb11wallet.ValidatedAllocation, 0,
-		1)
-	for _, allocation := range history.MaterialReceipt.Allocations {
-		if allocation.OperationID == matched.Allocation.OperationID &&
-			allocation.AssignmentType == matched.Allocation.AssignmentType &&
-			allocation.AssignmentIndex == matched.Allocation.AssignmentIndex {
-			continue
-		}
-		inLegacy := false
-		for _, legacyAllocation := range prepared.Receipt.Allocations {
-			if allocation.OperationID == legacyAllocation.OperationID &&
-				allocation.AssignmentType == legacyAllocation.AssignmentType &&
-				allocation.AssignmentIndex == legacyAllocation.AssignmentIndex {
-				inLegacy = true
-				break
-			}
-		}
-		if inLegacy {
-			continue
-		}
-		baseAllocations = append(baseAllocations, allocation)
-		break
-	}
-	coreAssert(t, len(baseAllocations) == 1,
-		"blind fixture lacks a historical allocation to exercise a distinct receipt shape")
-	baseReceipt, err := rgb11wallet.SelectHistoricalValidationReceipt(history, nil, baseAllocations)
-	coreRequire(t, "select prior blind receipt shape", err)
-	seededRecords, err := rgb11wallet.AddValidatedConsignmentProjectionSnapshot(
-		snapshot.ProjectionRecords, raw, baseReceipt, nil)
-	coreRequire(t, "seed prior authenticated receipt in sizing-only snapshot", err)
-	shapeSnapshot := *snapshot
-	shapeSnapshot.ProjectionRecords = seededRecords
-
-	legacyReceipt := *prepared.Receipt
-	legacyReceipt.Status = "valid"
-	legacyHash, err := legacyReceipt.Hash()
-	coreRequire(t, "hash legacy prepared receipt shape", err)
-	expectedReceipt, err := rgb11wallet.SelectHistoricalValidationReceipt(history, baseReceipt,
-		[]rgb11wallet.ValidatedAllocation{matched.Allocation})
-	coreRequire(t, "select accepted blind receipt shape", err)
-	expectedHash, err := expectedReceipt.Hash()
-	coreRequire(t, "hash accepted blind receipt shape", err)
-	coreAssert(t, legacyHash != expectedHash,
-		"fixture does not distinguish the legacy prepared receipt from the selected terminal receipt")
-	_, legacyErr := rgb11wallet.AddValidatedConsignmentProjectionSnapshot(
-		seededRecords, raw, &legacyReceipt, nil)
-	coreAssert(t, errors.Is(legacyErr, rgb11wallet.ErrValidationReceipt),
-		"legacy prepared receipt did not reproduce the existing-base shape conflict")
-
-	walletID, err := manager.rgbManager.RGB11WalletID()
-	coreRequire(t, "resolve wallet before receipt-shape preview", err)
-	before, _, err := manager.rgbManager.exportRGB11WalletSnapshot(walletID)
-	coreRequire(t, "export wallet before receipt-shape preview", err)
-	preview, err := manager.rgbManager.addRGB11PreparedReceiveCapacityPreview(
-		context.Background(), &shapeSnapshot, state, raw)
-	coreRequire(t, "build selected receipt shape for capacity preview", err)
-	actualReceipts, err := rgb11wallet.ValidationReceiptsFromProjectionSnapshot(preview.ProjectionRecords)
-	coreRequire(t, "read selected receipt shape from capacity preview", err)
-	actualReceipt := actualReceipts[state.ConsignmentHash]
-	coreAssert(t, actualReceipt != nil && len(actualReceipt.Allocations) == len(expectedReceipt.Allocations),
-		"capacity preview did not preserve the base receipt and add the exact accepted allocation")
-	actualHash, err := actualReceipt.Hash()
-	coreRequire(t, "hash capacity preview receipt shape", err)
-	coreAssert(t, actualHash == expectedHash,
-		"capacity preview receipt differs from the selected accepted receipt")
-	after, _, err := manager.rgbManager.exportRGB11WalletSnapshot(walletID)
-	coreRequire(t, "export wallet after receipt-shape preview", err)
-	beforeEncoded := mustEncodeRecoveryPackage(t, before)
-	afterEncoded := mustEncodeRecoveryPackage(t, after)
-	coreAssert(t, bytes.Equal(beforeEncoded, afterEncoded),
-		"sizing-only receipt preview persisted wallet state")
-	t.Logf("core-e2e: selected_receive_receipt_shape legacy_allocations=%d selected_allocations=%d legacy_differs=true preview_matches_selected=true sizing_only_persisted=false",
-		len(legacyReceipt.Allocations), len(expectedReceipt.Allocations))
-}
-
-func coreManagedBundleWithRGB11Snapshot(t *testing.T, manager *Manager,
-	catalog AccountManagedDataCatalog, scope string,
-	snapshot *rgb11wallet.RGB11WalletSnapshot) (account.ManagedDataBundle, error) {
-	t.Helper()
-	bundle, err := coreNextManagedBundle(manager, catalog)
-	if err != nil {
-		return account.ManagedDataBundle{}, err
-	}
-	packageValue, err := rgb11wallet.RecoveryPackageFromSnapshot(snapshot, 0)
-	if err != nil {
-		return account.ManagedDataBundle{}, err
-	}
-	encoded, _, err := rgb11wallet.EncodeRecoveryPackageWithSize(packageValue)
-	if err != nil {
-		return account.ManagedDataBundle{}, err
-	}
-	replaced := false
-	for index := range bundle.Items {
-		item := &bundle.Items[index]
-		if item.Provider != rgb11AccountManagedProviderID || item.Scope != scope {
-			continue
-		}
-		if replaced {
-			return account.ManagedDataBundle{}, errors.New("duplicate RGB11 item for blind capacity scope")
-		}
-		item.Payload = append([]byte(nil), encoded...)
-		replaced = true
-	}
-	if !replaced {
-		bundle.Items = append(bundle.Items, account.ManagedDataItem{
-			Provider: rgb11AccountManagedProviderID, Scope: scope, Payload: append([]byte(nil), encoded...),
-		})
-	}
-	return account.NormalizeManagedDataBundle(bundle)
-}
-
-func mustEncodeRecoveryPackage(t *testing.T, snapshot *rgb11wallet.RGB11WalletSnapshot) []byte {
-	t.Helper()
-	packageValue, err := rgb11wallet.RecoveryPackageFromSnapshot(snapshot, 0)
-	coreRequire(t, "build recovery package for byte measurement", err)
-	encoded, _, err := rgb11wallet.EncodeRecoveryPackageWithSize(packageValue)
-	coreRequire(t, "encode recovery package for byte measurement", err)
-	return encoded
 }
 
 type coreManagedRecordFingerprint struct {
@@ -554,11 +352,6 @@ func coreLocalRGBBundleDigests(t *testing.T, manager *Manager) map[string]string
 	return result
 }
 
-func coreNextManagedBundle(manager *Manager,
-	catalog AccountManagedDataCatalog) (account.ManagedDataBundle, error) {
-	return coreCurrentManagedBundle(manager, catalog)
-}
-
 func coreCurrentManagedBundle(manager *Manager,
 	catalog AccountManagedDataCatalog) (account.ManagedDataBundle, error) {
 	selected, err := accountScopeCatalog(catalog, coreSelectedRGBScope(manager))
@@ -569,9 +362,8 @@ func coreCurrentManagedBundle(manager *Manager,
 	if err != nil {
 		return account.ManagedDataBundle{}, err
 	}
-	// Bundle is only an in-memory provider payload container. Its codec revision
-	// is not a remote version; only the module's confirmed DKVS record has one.
-	bundle := account.ManagedDataBundle{Version: account.ManagedDataBundleVersion, Revision: 1}
+	// This container holds payloads only; each module has its own DKVS record.
+	bundle := account.ManagedDataBundle{}
 	for _, payload := range payloads {
 		bundle.Items = append(bundle.Items, account.ManagedDataItem{
 			Provider: rgb11AccountManagedProviderID, Scope: payload.Scope, Payload: payload.Payload,
@@ -602,13 +394,15 @@ func coreLogRGB11AccountPackageSize(t *testing.T, label string, manager *Manager
 		rpkRaw, rpkEncoded, size.AMDBytes, size.ADEBytes, size.DKB1Bytes)
 }
 
+type coreRGBBackupSize struct{ AMDBytes, ADEBytes, DKB1Bytes int }
+
 func coreMeasureManagedBundle(t *testing.T, manager *Manager,
-	bundle account.ManagedDataBundle) (rgb11RecoveryBundleSize, error) {
+	bundle account.ManagedDataBundle) (coreRGBBackupSize, error) {
 	t.Helper()
 	manager.mutex.RLock()
 	if manager.accountProfile == nil {
 		manager.mutex.RUnlock()
-		return rgb11RecoveryBundleSize{}, errors.New("account profile unavailable")
+		return coreRGBBackupSize{}, errors.New("account profile unavailable")
 	}
 	accountID, network := manager.accountProfile.AccountID, manager.cfg.Chain
 	secret := bytes.Clone(manager.accountSecret)
@@ -617,10 +411,17 @@ func coreMeasureManagedBundle(t *testing.T, manager *Manager,
 	scope := coreSelectedRGBScope(manager)
 	for _, item := range bundle.Items {
 		if item.Provider == rgb11AccountManagedProviderID && item.Scope == scope {
-			return measureRGB11ModuleCapacity(rgb11RecoveryBundleSize{}, secret, accountID, network, scope, item.Payload)
+			encoded, err := account.SealManagedModule(secret, accountID, network, account.ManagedModule{
+				Provider: rgb11AccountManagedProviderID, Scope: scope, Codec: "v1", Payload: item.Payload,
+			}, nil)
+			if err != nil {
+				return coreRGBBackupSize{}, err
+			}
+			blob, err := EncodeDKVSBlobValue(encoded, nil)
+			return coreRGBBackupSize{AMDBytes: len(item.Payload), ADEBytes: len(encoded), DKB1Bytes: len(blob)}, err
 		}
 	}
-	return rgb11RecoveryBundleSize{}, errors.New("selected RGB module payload unavailable")
+	return coreRGBBackupSize{}, errors.New("selected RGB module payload unavailable")
 }
 
 // This provider fails only its own module. Export honors the selected scope
@@ -657,26 +458,10 @@ func coreInstallUnrelatedCapacityFailure(t *testing.T, manager *Manager, cfg cor
 	manager.mutex.RUnlock()
 	defer zeroBytes(secret)
 	scope := coreSelectedRGBScope(manager)
-	// Verify RGB's own real AMOE + DKB1 framing still accepts exactly the wire
-	// limit and rejects one extra byte, without mutating any recovery payload.
-	sample := make([]byte, 1)
-	for {
-		size, err := measureRGB11ModuleCapacity(rgb11RecoveryBundleSize{}, secret, accountID, network, scope, sample)
-		if err != nil && !errors.Is(err, dkvsindexer.ErrRecordTooLarge) {
-			coreRequire(t, "measure RGB module capacity framing", err)
-		}
-		delta := swire.MaxDKVSBlobValueSize - size.DKB1Bytes
-		if delta == 0 {
-			coreRequire(t, "accept exact RGB wire capacity", err)
-			break
-		}
-		sample = make([]byte, len(sample)+delta)
-	}
-	_, err := measureRGB11ModuleCapacity(rgb11RecoveryBundleSize{}, secret, accountID, network, scope, append(sample, 0))
-	coreAssertCapacityRejected(t, err, "RGB module exceeds its own DKB1 limit")
+	var err error
 	// Match the same real module envelope framing for the independent provider.
 	providerID := "zz-capacity-" + coreDigest(t.Name())[:12]
-	payload := make([]byte, len(sample)-len(providerID))
+	payload := make([]byte, swire.MaxDKVSBlobValueSize/2)
 	for {
 		envelope, err := account.SealManagedModule(secret, accountID, network, account.ManagedModule{
 			Provider: providerID, Scope: scope, Codec: "v1", Payload: payload,

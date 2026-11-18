@@ -20,7 +20,7 @@ import (
 	"github.com/sat20-labs/satoshinet/anchortx/nativeproof"
 )
 
-type precisionSeparationNativeFixture struct {
+type precisionSeparationRGB11Fixture struct {
 	channel *Channel
 	manager *Manager
 	source  rgb11wallet.ChannelFunding
@@ -31,7 +31,7 @@ type precisionSeparationNativeFixture struct {
 
 // The allocation is issued by core and independently validated against a
 // synthetic Bitcoin transaction. No indexer response contains an RGB balance.
-func newPrecisionSeparationNativeFixture(t *testing.T, precision int) *precisionSeparationNativeFixture {
+func newRGB11PrecisionFixture(t *testing.T, precision int) *precisionSeparationRGB11Fixture {
 	t.Helper()
 	previous := _chain
 	_chain = "testnet4"
@@ -55,7 +55,7 @@ func newPrecisionSeparationNativeFixture(t *testing.T, precision int) *precision
 	}
 	supplyTokens := int64(400_000)
 	if precision > 10 {
-		// The native schema stores raw quantities in u64, even at 18 decimals.
+		// The RGB11 schema stores raw quantities in u64, even at 18 decimals.
 		supplyTokens = 8
 	}
 	supply := indexer.NewDecimal(supplyTokens, precision)
@@ -65,7 +65,7 @@ func newPrecisionSeparationNativeFixture(t *testing.T, precision int) *precision
 	}
 	issued, err := coreissuance.Issue(coreissuance.Spec{
 		Kind: schemas.NIA, Network: rgb11IssuanceNetwork(GetChainParam()),
-		Ticker: "NPREC", Name: "Native precision", Precision: uint8(precision), Allocations: allocations,
+		Ticker: "NPREC", Name: "RGB11 precision", Precision: uint8(precision), Allocations: allocations,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -108,14 +108,14 @@ func newPrecisionSeparationNativeFixture(t *testing.T, precision int) *precision
 	// synthetic, but the coasset consistency read still uses its actual gate.
 	manager := &Manager{}
 	manager.rgbManager = &rgb11Manager{Manager: manager, accountOwner: manager, evidence: evidence}
-	return &precisionSeparationNativeFixture{channel: channel, source: source, output: output, wallet: local, remote: remote,
+	return &precisionSeparationRGB11Fixture{channel: channel, source: source, output: output, wallet: local, remote: remote,
 		manager: manager}
 }
 
 func TestRGBPrecisionSeparationFundingCommitmentExpansion(t *testing.T) {
 	for _, precision := range []int{0, 2, 18} {
 		t.Run(fmt.Sprint(precision), func(t *testing.T) {
-			fixture := newPrecisionSeparationNativeFixture(t, precision)
+			fixture := newRGB11PrecisionFixture(t, precision)
 			name := &AssetName{AssetName: fixture.source.AssetName, N: 0}
 			protocol := rgb11STPProtocol{}
 			empty := &Channel{ChannelInDB: *NewChannelInDB()}
@@ -150,16 +150,16 @@ func TestRGBPrecisionSeparationFundingCommitmentExpansion(t *testing.T) {
 				t.Fatal("commitment changed quantity precision, binding identity or total allocation")
 			}
 			if err := protocol.CompleteRecovery(fixture.manager, req, plan); err != nil {
-				t.Fatalf("actual native commitment proof construction failed: %v", err)
+				t.Fatalf("actual RGB11 commitment proof construction failed: %v", err)
 			}
 			if err := protocol.Verify(STPAssetVerification{Operation: STPOpCommit, Tx: req.Tx, Plan: plan}); err != nil {
-				t.Fatalf("actual native commitment proof verification failed: %v", err)
+				t.Fatalf("actual RGB11 commitment proof verification failed: %v", err)
 			}
 			bad := request()
 			bad.LocalBalance[*name] = local.Clone()
 			bad.LocalBalance[*name].Precision = (precision + 1) % 19
 			if _, err := protocol.BuildCommitment(fixture.manager, bad); err == nil {
-				t.Fatal("commitment accepted a balance in a different native quantity unit")
+				t.Fatal("commitment accepted a balance in a different RGB11 quantity unit")
 			}
 			// A local shape check is not an authenticated genesis lookup. The
 			// final funding/proof and commitment boundaries must reject a valid
@@ -176,14 +176,14 @@ func TestRGBPrecisionSeparationFundingCommitmentExpansion(t *testing.T) {
 			badOutput := fixture.output.Clone()
 			badOutput.Assets[0].Amount.Precision = (precision + 1) % 19
 			if _, err := protocol.BuildExpansionAnchorProof(fixture.manager, fixture.channel, name, badOutput); err == nil {
-				t.Fatal("expansion accepted a local view with a different native quantity precision")
+				t.Fatal("expansion accepted a local view with a different RGB11 quantity precision")
 			}
 			badChannel := &Channel{ChannelInDB: fixture.channel.ChannelInDB}
 			badChannel.FundingUtxos = map[AssetName][]*TxOutput{*name: {badOutput}}
 			bad = request()
 			bad.Channel = badChannel
 			if _, err := protocol.BuildCommitment(fixture.manager, bad); err == nil {
-				t.Fatal("commitment accepted a local input view with a different native quantity precision")
+				t.Fatal("commitment accepted a local input view with a different RGB11 quantity precision")
 			}
 		})
 	}
@@ -205,14 +205,14 @@ func (m *precisionSeparationLaunchManager) GetWalletMgr() *Manager { return nil 
 func TestRGBPrecisionSeparationLaunchPoolInitAndRestore(t *testing.T) {
 	for _, precision := range []int{0, 2} {
 		t.Run(fmt.Sprint(precision), func(t *testing.T) {
-			fixture := newPrecisionSeparationNativeFixture(t, precision)
+			fixture := newRGB11PrecisionFixture(t, precision)
 			db := NewKVDB(t.TempDir())
 			if db == nil {
 				t.Fatal("NewKVDB failed")
 			}
 			t.Cleanup(func() { _ = db.Close() })
 			manager := &precisionSeparationLaunchManager{database: db, wallet: fixture.wallet}
-			static := nativeLaunchTestContent()
+			static := rgb11LaunchTestContent()
 			static.AssetName, static.BindingSat, static.RGBPrecision = fixture.source.AssetName, 0, precision
 			hash := sha256.Sum256(fixture.source.Consignment)
 			static.RGBGenesisHash, static.RGBSourcePoint = hex.EncodeToString(hash[:]), fixture.source.OutPoint
@@ -231,10 +231,10 @@ func TestRGBPrecisionSeparationLaunchPoolInitAndRestore(t *testing.T) {
 				t.Fatal(err)
 			}
 			if runtime.N != 0 || runtime.Divisibility != precision || runtime.RGBPrecision != precision || runtime.GetAssetNameV2().N != 0 ||
-				!runtime.nativeMetadataInitialized {
+				!runtime.rgb11MetadataInitialized {
 				t.Fatalf("new LaunchPool mixed binding and precision: N=%d runtime=%d static=%d", runtime.N, runtime.Divisibility, runtime.RGBPrecision)
 			}
-			if err := runtime.applyNativePublicMetadata(&nativePublicMetadata{Precision: precision + 1}); err == nil {
+			if err := runtime.applyRGB11PublicMetadata(&rgb11PublicMetadata{Precision: precision + 1}); err == nil {
 				t.Fatal("fixed LaunchPool precision, including true zero, was treated as unknown")
 			}
 			encoded, err := EncodeToBytes(&runtime.LaunchPoolContractRunTimeInDB)
@@ -250,7 +250,7 @@ func TestRGBPrecisionSeparationLaunchPoolInitAndRestore(t *testing.T) {
 			if err := restored.InitFromDB(manager, reservation); err != nil {
 				t.Fatal(err)
 			}
-			if restored.N != 0 || restored.Divisibility != precision || restored.RGBPrecision != precision || !restored.nativeMetadataInitialized ||
+			if restored.N != 0 || restored.Divisibility != precision || restored.RGBPrecision != precision || !restored.rgb11MetadataInitialized ||
 				!bytes.Equal(root, restored.CalcRuntimeMerkleRoot()) {
 				t.Fatal("new-format LaunchPool restore changed binding, precision or runtime root")
 			}
@@ -264,7 +264,7 @@ func TestRGBPrecisionSeparationLaunchPoolInitAndRestore(t *testing.T) {
 			}
 			unknown.RGBPrecision, unknown.RGBGenesisHash, unknown.RGBSourcePoint = 0, "", ""
 			reservation.contract = &unknown
-			if err := unknown.InitFromDB(manager, reservation); err == nil || unknown.nativeMetadataInitialized {
+			if err := unknown.InitFromDB(manager, reservation); err == nil || unknown.rgb11MetadataInitialized {
 				t.Fatal("missing fixed RGB identity was accepted as known zero precision")
 			}
 		})

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -29,7 +28,7 @@ import (
 )
 
 // Initial activation uses the real PWA recovery workflow. A controlled 503
-// blocks its binding, then ordinary retry/re-entry completes service activation
+// blocks its binding, then an explicit retry completes service activation
 // and the independent private backup. Import itself performs no remote CAS.
 func TestSDKAccountActivationRetry(t *testing.T) {
 	network := newDKVSNoPluginTemplateFixtureWithArgs(t, map[string]int64{}, nil, nil, dkvsMinerArgs(t)).Network
@@ -45,6 +44,28 @@ func runSDKAccountActivationRetry(t *testing.T, network *realSatoshiNet, mnemoni
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	audit := newBootstrapCASAudit()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if audit.trackReceive.Load() && r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/active/sync") {
+			body, readErr := io.ReadAll(r.Body)
+			_ = r.Body.Close()
+			if readErr != nil {
+				http.Error(w, "read receive request", http.StatusBadRequest)
+				return
+			}
+			var request dkvs.ActiveSyncRequest
+			if json.Unmarshal(body, &request) != nil {
+				http.Error(w, "decode receive request", http.StatusBadRequest)
+				return
+			}
+			audit.recordReceive(request)
+			if audit.blockReceive.Load() {
+				audit.blockedReceives.Add(1)
+				http.Error(w, "controlled transient reconnect rejection", http.StatusServiceUnavailable)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			proxy.ServeHTTP(w, r)
+			return
+		}
 		if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/records/batch-cas") {
 			proxy.ServeHTTP(w, r)
 			return
@@ -74,6 +95,11 @@ func runSDKAccountActivationRetry(t *testing.T, network *realSatoshiNet, mnemoni
 			audit.signalFirstBlockedBinding()
 			return
 		}
+		if bindingKey != "" {
+			// Only measure the reconnect receive before this binding submission,
+			// not later recovery-package or ordinary backup synchronization.
+			audit.trackReceive.Store(false)
+		}
 		r.Body = io.NopCloser(bytes.NewReader(body))
 		response := &bootstrapCASResponseRecorder{ResponseWriter: w}
 		proxy.ServeHTTP(response, r)
@@ -90,26 +116,35 @@ func runSDKAccountActivationRetry(t *testing.T, network *realSatoshiNet, mnemoni
 	manager := wallet.NewManager(config, db)
 	t.Cleanup(func() {
 		audit.blockBinding.Store(false)
+		audit.blockReceive.Store(false)
+		audit.trackReceive.Store(false)
 		manager.StopDKVSSync()
 		manager.Close()
 		db.Close()
 	})
-	require.NoError(t, manager.StartDKVSSync())
-
 	_, err = manager.RecoverAccountManagementFromRootMnemonic(context.Background(), mnemonic, accountReviewPassword)
 	require.ErrorIs(t, err, wallet.ErrRootAccountNotFound,
 		"an empty temporary node must authorize only this mnemonic's first-wallet import")
 
-	_, err = manager.ImportWallet(mnemonic, accountReviewPassword)
+	walletID, err := manager.ImportWallet(mnemonic, accountReviewPassword)
 	require.NoError(t, err)
 	require.NoError(t, manager.InitializeAccountManagement(accountReviewPassword))
-	require.Eventually(t, func() bool { return manager.GetAccountManagementStatus().LocalOnly }, 20*time.Second, 20*time.Millisecond)
+	// The successful pre-import query is the one root-existence confirmation.
+	// Observe its local result without discovering the same account again.
+	identity := manager.GetAccountManagementStatus()
+	require.NotEmpty(t, identity.AccountID)
+	require.Equal(t, walletID, identity.RootWalletID)
+	require.Equal(t, "inactive", identity.DiscoveryStatus)
+	require.True(t, identity.LocalOnly)
+	require.False(t, identity.RecoveryConfigured)
+	require.False(t, identity.ActivationPending)
 	blocked, forwarded, unexpected, _ := audit.safeCounts()
 	require.Zero(t, blocked)
 	require.Zero(t, forwarded)
 	require.Zero(t, unexpected, "inactive discovery must not publish")
-	_, err = manager.ConfirmAccountStorage(wallet.AccountStorageTemporary, 0)
+	grant, err := manager.ConfirmAccountStorage(wallet.AccountStorageTemporary, 0)
 	require.NoError(t, err)
+	require.NotNil(t, grant)
 	backup, err := manager.ExportAccountBackupForPWA(accountReviewPassword, nil)
 	require.NoError(t, err)
 	pkg, err := manager.CreateAccountRecoveryPackage(account.CreateOptions{AccountID: manager.GetAccountManagementStatus().AccountID, Backup: backup, RecoveryMode: account.RecoveryMode2Of2, Questions: e2eKnowledgeQuestions()})
@@ -171,58 +206,46 @@ func runSDKAccountActivationRetry(t *testing.T, network *realSatoshiNet, mnemoni
 		require.Equal(t, "rejected_before_backend_http_503", row.Result)
 	}
 	audit.blockBinding.Store(false)
-	// The 503 invalidated the online session before service activation began.
-	// Re-enter the real discovery path and wait for verified inactive status;
-	// only preparation is retried, never package publication or activation.
-	retryIdentity := manager.GetAccountManagementStatus()
-	retryCtx, retryCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	attempts := 0
-	retryErr := func() error {
-		ticker := time.NewTicker(100 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			if err := retryCtx.Err(); err != nil {
-				return err
-			}
-			attempts++
-			_, err := manager.RecoverAccountManagementFromCurrentWallet(retryCtx, accountReviewPassword)
-			status := manager.GetAccountManagementStatus()
-			if status.AccountID != retryIdentity.AccountID || status.RootWalletID != retryIdentity.RootWalletID {
-				return fmt.Errorf("activation preparation changed account identity")
-			}
-			if status.RecoveryConfigured || status.ActivationPending ||
-				status.DiscoveryStatus == "active" || status.DiscoveryStatus == "active-waiting-backup" {
-				return fmt.Errorf("activation preparation unexpectedly found an active or pending service")
-			}
-			if errors.Is(err, wallet.ErrRootAccountNotFound) && status.DiscoveryStatus == "inactive" && status.LocalOnly {
-				return nil
-			}
-			if !errors.Is(err, wallet.ErrRootAccountNotFound) &&
-				!errors.Is(err, wallet.ErrRootAccountDiscoveryPending) && !errors.Is(err, wallet.ErrDKVSPathNotSynced) {
-				if err == nil {
-					return fmt.Errorf("activation preparation unexpectedly completed account recovery")
-				}
-				return fmt.Errorf("activation discovery preparation: %w", err)
-			}
-			select {
-			case <-retryCtx.Done():
-				return retryCtx.Err()
-			case <-ticker.C:
-			}
-		}
-	}()
-	retryCancel()
 	retryStatus := manager.GetAccountManagementStatus()
-	t.Logf("activation retry preparation attempts=%d discovery=%s dkvs_status=%s activation_pending=%t recovery_configured=%t local_only=%t error_type=%T",
-		attempts, retryStatus.DiscoveryStatus, retryStatus.DKVSStatus, retryStatus.ActivationPending, retryStatus.RecoveryConfigured, retryStatus.LocalOnly, retryErr)
-	require.NoError(t, retryErr)
-	require.Equal(t, "inactive", retryStatus.DiscoveryStatus)
+	require.Equal(t, identity.AccountID, retryStatus.AccountID)
+	require.Equal(t, identity.RootWalletID, retryStatus.RootWalletID)
 	require.True(t, retryStatus.LocalOnly)
 	require.False(t, retryStatus.RecoveryConfigured)
 	require.False(t, retryStatus.ActivationPending)
+	require.NotEqual(t, "active", retryStatus.DiscoveryStatus)
+	require.NotEqual(t, "active-waiting-backup", retryStatus.DiscoveryStatus)
+	retryGrant, err := manager.PendingAccountStorageAuthorization()
+	require.NoError(t, err)
+	require.NotNil(t, retryGrant)
+	require.Equal(t, grant.ID, retryGrant.ID, "retry must retain the original storage authorization")
+	audit.trackReceive.Store(true)
+	audit.blockReceive.Store(true)
+	retryErr := activate()
+	var responseErr *wallet.HTTPResponseError
+	require.ErrorAs(t, retryErr, &responseErr, "retry must reach real online receiving, not reuse an offline grant")
+	require.Equal(t, http.StatusServiceUnavailable, responseErr.StatusCode)
+	require.Positive(t, audit.blockedReceives.Load())
+	blockedAfter, forwardedAfter, unexpectedAfter, _ := audit.safeCounts()
+	require.Equal(t, blocked, blockedAfter, "failed receiving must not submit another binding")
+	require.Zero(t, forwardedAfter)
+	require.Zero(t, unexpectedAfter, "failed receiving must not publish a recovery package")
+	retryStatus = manager.GetAccountManagementStatus()
+	require.Equal(t, identity.AccountID, retryStatus.AccountID)
+	require.Equal(t, identity.RootWalletID, retryStatus.RootWalletID)
+	require.False(t, retryStatus.RecoveryConfigured)
+	require.False(t, retryStatus.ActivationPending)
+	require.False(t, retryStatus.DKVSWriteAllowed)
+	retryGrant, err = manager.PendingAccountStorageAuthorization()
+	require.NoError(t, err)
+	require.Equal(t, grant.ID, retryGrant.ID)
+	require.NotEmpty(t, audit.takeReceives())
+	audit.blockReceive.Store(false)
 	// The raw binding has no outbox. Resume its unfinished explicit workflow
-	// once, after the real online discovery baseline is usable again.
+	// once after the service returns, without reconfirming a known root state
+	// or purchasing another storage authorization.
 	require.NoError(t, activate())
+	receives := audit.takeReceives()
+	require.NoError(t, manager.StartDKVSSync())
 	var committed *wire.DKVSRecord
 	committed, err = client.GetRecord(expectedKey)
 	require.NoError(t, err)
@@ -237,11 +260,27 @@ func runSDKAccountActivationRetry(t *testing.T, network *realSatoshiNet, mnemoni
 	require.NotEmpty(t, parsed.Segments)
 	require.Equal(t, parsed.Segments[0], boundNetwork)
 	require.Equal(t, root.GetAddress(), boundAddress)
-	remoteClient, err := manager.GetDKVSClient()
-	require.NoError(t, err)
+	remoteClient := dkvsClientForNode(t, network.Core)
 	remoteConfig, err := remoteClient.GetDKVSClientConfig()
 	require.NoError(t, err)
 	require.Equal(t, remoteConfig.EndpointID, descriptor.CoreNodeID)
+	accountKey, err := dkvs.AccountPersonalKey(identity.AccountID, "account/root")
+	require.NoError(t, err)
+	accountPrefix, err := dkvs.CollectionPathForKey(accountKey)
+	require.NoError(t, err)
+	bindingPrefix, err := dkvs.CollectionPathForKey(expectedKey)
+	require.NoError(t, err)
+	wanted := map[string]bool{accountPrefix: false, bindingPrefix: false}
+	for _, request := range receives {
+		require.Equal(t, remoteConfig.EndpointID, request.EndpointID, "reconnect must stay on the original node")
+		require.Contains(t, wanted, request.Scope.Prefix, "reconnect must not add unrelated subscriptions")
+		require.Empty(t, request.Scope.Keys)
+		require.False(t, request.Full, "reconnect must reuse the verified generation baseline")
+		wanted[request.Scope.Prefix] = true
+	}
+	for prefix, received := range wanted {
+		require.True(t, received, "reconnect did not verify registered prefix %s", prefix)
+	}
 	require.Equal(t, uint64(1), committed.Seq)
 	require.Zero(t, committed.TTL)
 	require.Empty(t, committed.FeeProof)
@@ -250,6 +289,13 @@ func runSDKAccountActivationRetry(t *testing.T, network *realSatoshiNet, mnemoni
 	require.NotEmpty(t, manager.GetAccountManagementStatus().PublicLocator)
 	require.Zero(t, manager.GetAccountManagementStatus().PendingChanges)
 	require.False(t, manager.GetAccountManagementStatus().ManagedDataDirty)
+	_, forwarded, _, rows = audit.safeCounts()
+	require.Equal(t, 1, forwarded, "successful binding must be submitted only once")
+	for _, row := range rows {
+		require.Equal(t, uint64(1), row.Seq)
+		require.Zero(t, row.TTL)
+		require.Equal(t, "none", row.FeeMode)
+	}
 
 }
 
@@ -297,11 +343,15 @@ func (w *bootstrapCASResponseRecorder) Unwrap() http.ResponseWriter {
 
 type bootstrapCASAudit struct {
 	blockBinding        atomic.Bool
+	blockReceive        atomic.Bool
+	trackReceive        atomic.Bool
+	blockedReceives     atomic.Int32
 	firstBlockedOnce    sync.Once
 	firstBlockedBinding chan struct{}
 	mu                  sync.Mutex
 	bindingKey          string
 	observations        []bootstrapCASObservation
+	receives            []dkvs.ActiveSyncRequest
 }
 
 func newBootstrapCASAudit() *bootstrapCASAudit {
@@ -358,6 +408,20 @@ func (a *bootstrapCASAudit) append(rows []bootstrapCASObservation, result string
 		row.Result = result
 		a.observations = append(a.observations, row)
 	}
+}
+
+func (a *bootstrapCASAudit) recordReceive(request dkvs.ActiveSyncRequest) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.receives = append(a.receives, request)
+}
+
+func (a *bootstrapCASAudit) takeReceives() []dkvs.ActiveSyncRequest {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	requests := append([]dkvs.ActiveSyncRequest(nil), a.receives...)
+	a.receives = nil
+	return requests
 }
 
 func (a *bootstrapCASAudit) setBindingKey(key string) {

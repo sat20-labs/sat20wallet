@@ -169,7 +169,10 @@ func spRealBitcoind(t *testing.T) (*spRealCoreRPC, *spRealCoreRPC, func()) {
 		t.Fatalf("Bitcoin Core regtest failed to start (log %s): %v", logFile.Name(), err)
 	}
 	var created any
-	if err := root.call("createwallet", []any{"sp-e2e"}, &created); err != nil {
+	// Bitcoin Core creates its initial descriptor keypool before replying.
+	setup := *root
+	setup.client = &http.Client{Timeout: 30 * time.Second}
+	if err := setup.call("createwallet", []any{"sp-e2e"}, &created); err != nil {
 		t.Fatal(err)
 	}
 	wallet := *root

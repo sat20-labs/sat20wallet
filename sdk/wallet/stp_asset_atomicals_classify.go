@@ -13,7 +13,7 @@ func (atomicalsSTPProtocol) ClassifyOutputs(p *Manager, tx *wire.MsgTx, inputs, 
 	return p.ClassifySTPAtomicalsOutputs(tx, inputs, outputs)
 }
 
-// ClassifySTPAtomicalsOutputs restores native ARC20 allocations after the
+// ClassifySTPAtomicalsOutputs restores ARC20 allocations after the
 // ordinal protocols have classified their outputs. The complete prevout facts
 // must be retained in transaction input order; token quantities are never
 // reconstructed from ordinal offsets or from output Bitcoin values alone.
@@ -27,7 +27,7 @@ func (p *Manager) classifySTPAtomicalsOutputsAtHeight(tx *wire.MsgTx, inputs, ou
 	hasAtomicals := false
 	for _, input := range inputs {
 		if input == nil {
-			return fmt.Errorf("missing previous output for native classification")
+			return fmt.Errorf("missing previous output for ARC20 classification")
 		}
 		for _, asset := range input.Assets {
 			if asset.Name.Protocol == indexer.PROTOCOL_NAME_ATOM {
@@ -80,7 +80,7 @@ func (p *Manager) classifySTPAtomicalsOutputsAtHeight(tx *wire.MsgTx, inputs, ou
 				return err
 			}
 			if other, exists := names[id]; exists && other != asset.Name {
-				return fmt.Errorf("ARC20 native identity maps to inconsistent tickers")
+				return fmt.Errorf("ARC20 identity maps to inconsistent tickers")
 			}
 			names[id] = asset.Name
 			facts[position].Assets = append(facts[position].Assets, coloring.Asset{AtomicalID: id, Amount: asset.Amount.Int64()})

@@ -28,9 +28,8 @@ const sessionIndependentMethods = new Set([
   'getAllWallets', 'getWalletCatalog', 'getWalletAddress', 'getWalletPubkey',
   // A new device has no unlocked wallet while recovering an account. These
   // operations use recovery material; wallet-owned writes still require unlock.
-  'account.status', 'account.loadRecovery', 'account.recoverKnowledge',
-  'account.setUserShare', 'account.createGuardianRequest', 'account.consumeGuardianResponse',
-  'account.previewRecovery', 'account.commitRecovery', 'account.abortSession',
+  'account.loadRecovery',
+  'account.previewRecovery', 'account.commitRecovery', 'account.abortRecovery',
 ])
 
 export const walletRequestSessionGuard = (method: string): (() => void) => {

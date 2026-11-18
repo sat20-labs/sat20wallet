@@ -92,11 +92,18 @@ func TestAccountAutopayRenewalWaitsForNewTransactionExecution(t *testing.T) {
 			require.False(t, status.FundingPending)
 			logs, err := manager.operationLogManager().List()
 			require.NoError(t, err)
-			require.Len(t, logs, 1)
+			var funding []*OperationLogRecord
+			for _, record := range logs {
+				if record.Action == "account_autopay_fund" {
+					funding = append(funding, record)
+				}
+			}
+			require.Len(t, funding, 1, "renewal must keep one payment intent despite wallet lifecycle logs")
+			require.Equal(t, result.TransactionID, funding[0].TxID)
 			if outcome == "success" {
-				require.Equal(t, OperationLogSucceeded, logs[0].Status)
+				require.Equal(t, OperationLogSucceeded, funding[0].Status)
 			} else {
-				require.Equal(t, OperationLogFailed, logs[0].Status)
+				require.Equal(t, OperationLogFailed, funding[0].Status)
 				require.Contains(t, status.FundingError, "revert")
 			}
 		})

@@ -3,9 +3,10 @@ import assert from 'node:assert/strict'
 import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
+import { createServer } from 'node:net'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { buildCommand, buildGroups, buildPlan, configureStages, isLoopbackPeerAddr, parseArguments, parsePort, selectStages, selectTests, shouldStopBatchAfterGroup, spawnStage, stageCatalog, summarizeGoJSON, workspaceRoot } from './workspace-e2e.mjs'
+import { buildCommand, buildGroups, buildPlan, checkSDKNodePorts, configureStages, isLoopbackPeerAddr, parseArguments, parsePort, sdkNodePorts, selectStages, selectTests, shouldStopBatchAfterGroup, spawnStage, stageCatalog, summarizeGoJSON, workspaceRoot } from './workspace-e2e.mjs'
 
 const wrapperPath = fileURLToPath(new URL('./workspace-e2e.mjs', import.meta.url))
 const makePrivateDir = () => {
@@ -250,6 +251,47 @@ test('browser port validation preserves standalone default and rejects invalid v
   assert.throws(() => parsePort('0'), /from 1 to 65535/)
   assert.throws(() => parsePort('65536'), /from 1 to 65535/)
   assert.throws(() => parsePort('51x9'), /integer/)
+})
+
+test('SDK node port preflight uses the same default and configured base as Go', () => {
+  const ports = base => [0, 1, 2, 3, 4, 10, 11, 12, 13, 14].map(offset => base + offset)
+  assert.deepEqual(sdkNodePorts(), ports(30250))
+  assert.deepEqual(sdkNodePorts({ SAT20_REAL_SATOSHINET_PORT_BASE: '' }), ports(30250))
+  for (const raw of ['30350', '+30350', '030350', '1024', '65511']) {
+    assert.deepEqual(sdkNodePorts({ SAT20_REAL_SATOSHINET_PORT_BASE: raw }), ports(Number(raw)))
+  }
+  for (const raw of [' ', ' 30350', '30350 ', '30350x', '30350.0', '1e4']) {
+    assert.throws(() => sdkNodePorts({ SAT20_REAL_SATOSHINET_PORT_BASE: raw }), /must be an integer/)
+  }
+  for (const raw of ['0', '-1024', '1023', '65512', '9007199254740992']) {
+    assert.throws(() => sdkNodePorts({ SAT20_REAL_SATOSHINET_PORT_BASE: raw }), /1024\.\.65511/)
+  }
+  assert.deepEqual(sdkNodePorts({ SAT20_REAL_SATOSHINET_ATTACH: '/unused' }), ports(30250))
+  assert.throws(() => sdkNodePorts({ SAT20_REAL_SATOSHINET_ATTACH: '/unused',
+    SAT20_REAL_SATOSHINET_PORT_BASE: '30350' }), /requires the default/)
+})
+
+test('SDK node port preflight rejects a collision at the configured port', async () => {
+  let server
+  let port
+  for (let attempt = 0; attempt < 8; attempt++) {
+    server = createServer()
+    await new Promise((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', resolve)
+    })
+    port = server.address().port
+    if (port <= 65511) break
+    await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+    server = undefined
+  }
+  assert.ok(server, 'an owned ephemeral listener must fit the Go port-base range')
+  try {
+    await assert.rejects(checkSDKNodePorts({ SAT20_REAL_SATOSHINET_PORT_BASE: String(port) }),
+      new RegExp(`SDK-owned SatoshiNet test node port ${port} is unavailable: EADDRINUSE`))
+  } finally {
+    await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+  }
 })
 
 test('Bitcoin Core readiness accepts only IPv4 or IPv6 loopback peer addresses', () => {

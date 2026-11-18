@@ -43,6 +43,10 @@ type rgb11L1MonitorEvidence struct {
 	utxoError   error
 }
 
+func (*rgb11L1MonitorEvidence) GetGenesisHash() (string, error) {
+	return chaincfg.TestNet4Params.GenesisHash.String(), nil
+}
+
 func (p *rgb11L1MonitorEvidence) GetUTXO(string) (*rgb11wallet.BitcoinUTXO, error) {
 	return nil, p.utxoError
 }
@@ -147,37 +151,19 @@ func TestRGB11L1MonitorReconcilesOnHealthyTicksAndReorg(t *testing.T) {
 	if err := manager.handleRGB11L1MonitorTick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if evidence.statusCalls == 0 {
-		t.Fatal("first healthy monitor checkpoint did not refresh durable RGB11 material")
+	if evidence.statusCalls != 0 {
+		t.Fatal("settled transfers were needlessly checked on a healthy tick")
 	}
-	initialCalls := evidence.statusCalls
 	chain.height = 11
-	evidence.statuses[state.WitnessTxID] = &rgb11wallet.BitcoinTxStatus{
-		TxID: state.WitnessTxID, InMempool: true,
-	}
 	if err := manager.handleRGB11L1MonitorTick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if evidence.statusCalls <= initialCalls {
-		t.Fatalf("normal tip extension did not refresh RGB11 evidence: before=%d after=%d", initialCalls, evidence.statusCalls)
+	if evidence.statusCalls != 0 {
+		t.Fatal("normal block extension checked settled transfers again")
 	}
 	stored, err := manager.rgbManager.projectionStore.LoadTransferState(state.TransferID)
-	if err != nil || stored.Status != "pending" {
-		t.Fatalf("normal extension did not reflect the current unconfirmed witness: state=%+v err=%v", stored, err)
-	}
-	unchangedTipCalls := evidence.statusCalls
-	evidence.statuses[state.WitnessTxID] = &rgb11wallet.BitcoinTxStatus{
-		TxID: state.WitnessTxID, Confirmed: true, Confirmations: 2,
-	}
-	if err := manager.handleRGB11L1MonitorTick(context.Background()); err != nil {
-		t.Fatalf("same-tip monitor refresh: %v", err)
-	}
-	if evidence.statusCalls <= unchangedTipCalls {
-		t.Fatalf("same-tip mempool/status change was not rechecked: before=%d after=%d", unchangedTipCalls, evidence.statusCalls)
-	}
-	stored, err = manager.rgbManager.projectionStore.LoadTransferState(state.TransferID)
 	if err != nil || stored.Status != "settled" {
-		t.Fatalf("same-tip refresh did not publish newly confirmed status: state=%+v err=%v", stored, err)
+		t.Fatalf("normal block extension changed a settled transfer: state=%+v err=%v", stored, err)
 	}
 
 	chain.hashes[11] = "fork-11"
@@ -198,6 +184,18 @@ func TestRGB11L1MonitorReconcilesOnHealthyTicksAndReorg(t *testing.T) {
 	resvs, err := manager.rgbManager.loadRGB11Reservations()
 	if err != nil || len(resvs) != 1 || resvs[0].Status != RS_RGB11_BROADCAST || resvs[0].State.Status != "pending" {
 		t.Fatalf("reorg did not advance common resv: %+v err=%v", resvs, err)
+	}
+
+	pendingCalls := evidence.statusCalls
+	evidence.statuses[state.WitnessTxID] = &rgb11wallet.BitcoinTxStatus{
+		TxID: state.WitnessTxID, Confirmed: true, Confirmations: 2,
+	}
+	if err := manager.handleRGB11L1MonitorTick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	stored, err = manager.rgbManager.projectionStore.LoadTransferState(state.TransferID)
+	if err != nil || stored.Status != "settled" || evidence.statusCalls <= pendingCalls {
+		t.Fatalf("pending transfer did not settle on same tip: state=%+v err=%v", stored, err)
 	}
 
 }
@@ -261,8 +259,12 @@ func TestRGB11L1MonitorRetriesSameForkOnlyUntilRefreshSucceeds(t *testing.T) {
 	if err := manager.handleRGB11L1MonitorTick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if evidence.statusCalls <= beforeCalls {
-		t.Fatalf("same-tip healthy monitor did not recheck active chain material: before=%d after=%d", beforeCalls, evidence.statusCalls)
+	if evidence.statusCalls != beforeCalls {
+		t.Fatalf("same-tip healthy monitor rechecked settled chain material: before=%d after=%d", beforeCalls, evidence.statusCalls)
+	}
+	stored, err := manager.rgbManager.projectionStore.LoadTransferState(state.TransferID)
+	if err != nil || stored == nil || stored.Status != "settled" {
+		t.Fatalf("same-tip healthy monitor changed settled transfer: state=%+v err=%v", stored, err)
 	}
 }
 
@@ -360,7 +362,7 @@ func TestRGB11L1MonitorWithoutConfiguredIndexerKeepsLocalState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager := newRGB11MultiDeviceManager(t, key, 990)
+	manager := newRGB11MultiDeviceManager(t, key, 990, accountGroupInactive)
 	manager.l1IndexerClient = NewIndexerRPCClientMgr()
 	before := snapshotRGB11ProjectionDB(t, manager.db)
 	if err := manager.handleRGB11L1MonitorTick(context.Background()); err != nil {

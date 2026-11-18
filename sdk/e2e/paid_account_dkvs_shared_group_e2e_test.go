@@ -82,14 +82,20 @@ func assertPaidAccountDKVSSharedPool(t *testing.T, setup *accountManagementAutop
 		require.NotEqual(t, "0", state.GasBalance)
 		require.Contains(t, state.Delegates, setup.owner.Address, "the owner account delegate must be active")
 		require.Contains(t, state.Delegates, setup.successor.Address, "the DKVS paid delegate must be present")
-		require.Contains(t, state.Delegates, setup.guardianActor.Address, "the Guardian delegate must be present")
+		if guardianTests {
+			require.Contains(t, state.Delegates, setup.guardianActor.Address, "the Guardian delegate must be present")
+		}
 		require.Equal(t, "10", state.Delegates[setup.owner.Address].AmountPerBlock)
 		require.Equal(t, setup.ownerBlobLimit, state.Delegates[setup.owner.Address].BlobKeyLimit)
 		require.Equal(t, "1", state.Delegates[setup.successor.Address].AmountPerBlock)
-		require.Equal(t, "10", state.Delegates[setup.guardianActor.Address].AmountPerBlock)
+		if guardianTests {
+			require.Equal(t, "10", state.Delegates[setup.guardianActor.Address].AmountPerBlock)
+		}
 		require.Equal(t, templateruntime.AutopayStatusActive, state.Delegates[setup.owner.Address].Status)
 		require.Equal(t, templateruntime.AutopayStatusActive, state.Delegates[setup.successor.Address].Status)
-		require.Equal(t, templateruntime.AutopayStatusActive, state.Delegates[setup.guardianActor.Address].Status)
+		if guardianTests {
+			require.Equal(t, templateruntime.AutopayStatusActive, state.Delegates[setup.guardianActor.Address].Status)
+		}
 	}
 }
 
@@ -180,7 +186,9 @@ func paidAccountDKVSTrackedKeys(t *testing.T, setup *accountManagementAutopaySyn
 		addPersonal(bootstrapMnemonic)
 	}
 	addPersonal(minerMnemonic, "review-unfunded/value")
-	addPersonal(setup.guardianMnemonic, "account/state")
+	if guardianTests {
+		addPersonal(setup.guardianMnemonic, "account/state")
+	}
 
 	for _, path := range []string{
 		"authenticity/pwa", "previous-owner-fresh", "successor-fresh",
@@ -276,11 +284,13 @@ func assertPaidAccountDKVSExpectedDelta(t *testing.T, setup *accountManagementAu
 			require.Equal(t, core[key], bootstrap[key], "replicated recovery package state must match")
 			require.NotEqual(t, before.coreRecords[key], core[key], "the recovery package must change the Core namespace")
 		}
-		guardianKey := setup.guardianKey
-		require.NotEmpty(t, guardianKey)
-		require.True(t, core[guardianKey].present, "Guardian mailbox data must stay on Core")
-		require.False(t, bootstrap[guardianKey].present, "Guardian mailbox data must not replicate to Bootstrap")
-		require.False(t, after.minerRecords[guardianKey].present, "Guardian mailbox data must not replicate to Miner")
+		if guardianTests {
+			guardianKey := setup.guardianKey
+			require.NotEmpty(t, guardianKey)
+			require.True(t, core[guardianKey].present, "Guardian mailbox data must stay on Core")
+			require.False(t, bootstrap[guardianKey].present, "Guardian mailbox data must not replicate to Bootstrap")
+			require.False(t, after.minerRecords[guardianKey].present, "Guardian mailbox data must not replicate to Miner")
+		}
 		stateKey, err := dkvs.PersonalKey(keyFromMnemonic(t, dkvsClientMnemonic, 0).PubKey().SerializeCompressed(), "account/state")
 		require.NoError(t, err)
 		indexKey, err := account.ManagedIndexKey(setup.accountID)

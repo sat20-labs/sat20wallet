@@ -24,7 +24,7 @@ func (p *rgb11Manager) setRGB11AddressSendState(state *rgb11wallet.TransferState
 	if state == nil || endpoint == nil {
 		return ErrRGB11Inconsistent
 	}
-	sender, err := dkvsAccountID(p.wallet)
+	sender, err := accountWalletID(p.wallet)
 	if err != nil {
 		return err
 	}
@@ -32,11 +32,11 @@ func (p *rgb11Manager) setRGB11AddressSendState(state *rgb11wallet.TransferState
 	if err != nil {
 		return err
 	}
-	relayKey, err := dkvsindexer.MailMsgKey(endpoint.AccountID, sender, messageID)
+	relayKey, err := accountMessageKey(endpoint.AccountID, sender, messageID)
 	if err != nil {
 		return err
 	}
-	ackKey, err := dkvsindexer.MailMsgKey(sender, endpoint.AccountID, messageID)
+	ackKey, err := accountMessageKey(sender, endpoint.AccountID, messageID)
 	if err != nil {
 		return err
 	}
@@ -56,7 +56,7 @@ func (p *rgb11Manager) setRGB11AddressSendState(state *rgb11wallet.TransferState
 	return nil
 }
 
-// prepareRGB11AddressBatch reuses the native one-transaction batch builder.
+// prepareRGB11AddressBatch reuses the RGB11 one-transaction batch builder.
 // Each output has its own persistence ACK, including repeated addresses.
 func (p *rgb11Manager) prepareRGB11AddressBatch(ctx context.Context, requests []RGB11AddressSendRequest,
 	verify dkvsindexer.RecordVerificationOptions) (*RGB11PreparedTransfer, error) {
@@ -65,15 +65,7 @@ func (p *rgb11Manager) prepareRGB11AddressBatch(ctx context.Context, requests []
 	}
 	endpoints := make([]*RGB11AddressEndpoint, len(requests))
 	invoices := make([]string, len(requests))
-	sender, err := dkvsAccountID(p.wallet)
-	if err != nil {
-		return nil, err
-	}
-	mailbox, err := mailboxSubscriptionTarget(sender)
-	if err != nil {
-		return nil, err
-	}
-	if err := p.accountManagementOwner().SubscribeDKVSPrefix(mailbox); err != nil {
+	if err := p.accountManagementOwner().watchAccountMailbox(p.wallet); err != nil {
 		return nil, err
 	}
 	for i, request := range requests {

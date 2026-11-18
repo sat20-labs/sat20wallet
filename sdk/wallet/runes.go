@@ -413,7 +413,10 @@ func runeIdFromTickerInfo(tickInfo *indexer.TickerInfo) (*runestone.RuneId, erro
 	return nil, fmt.Errorf("can't resolve rune id for %s", tickInfo.AssetName.String())
 }
 
-func (p *Manager) MintAsset_runes(destAddr string, tickInfo *indexer.TickerInfo, feeRate int64) (string, error) {
+func (p *Manager) MintAsset_runes(destAddr string, tickInfo *indexer.TickerInfo, feeRate int64) (opValue0 string, opErr error) {
+	opLogID := p.beginWalletLog("asset", "mint_runes_asset", "Mint Runes asset")
+	defer func() { p.finishWalletLog(opLogID, opErr, opValue0) }()
+
 	if p.wallet == nil {
 		return "", fmt.Errorf("wallet is not created/unlocked")
 	}

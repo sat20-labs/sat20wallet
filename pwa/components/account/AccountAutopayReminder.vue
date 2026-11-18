@@ -1,6 +1,6 @@
 <template>
   <div
-    v-if="autopay && !autopay.ready"
+    v-if="autopay && autopay.status !== 'ready'"
     class="mb-3 flex items-start justify-between gap-3 rounded-lg border border-amber-500/50 bg-amber-500/10 p-3"
   >
     <div class="flex min-w-0 items-start gap-2">
@@ -10,7 +10,7 @@
           {{ t('accountManagement.dkvsPaymentNeedsAttention') }}
         </div>
         <div class="mt-1 text-xs text-amber-400/90">
-          {{ accountDisplayMessage(t, autopay.message) || t('accountManagement.ui.paymentUnavailable') }}
+          {{ accountDisplayMessage(t, autopay.error_code) || t('accountManagement.ui.paymentUnavailable') }}
         </div>
       </div>
     </div>
@@ -18,49 +18,23 @@
       {{ t('accountManagement.dkvsPay') }}
     </Button>
   </div>
-  <div v-else-if="autopay?.estimated_expiry_height" class="mb-3 flex items-center justify-between gap-3 text-xs text-muted-foreground">
-    <span>{{ t('accountManagement.dkvsExpiryEstimate', { height: autopay.estimated_expiry_height }) }}</span>
+  <div v-else-if="autopay?.expiry_height" class="mb-3 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+    <span>{{ t('accountManagement.dkvsExpiryEstimate', { height: autopay.expiry_height }) }}</span>
     <Button size="sm" variant="ghost" @click="openFunding">{{ t('accountManagement.dkvsPaymentDetails') }}</Button>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { storeToRefs } from 'pinia'
 import { Icon } from '@iconify/vue'
 import { Button } from '@/components/ui/button'
-import accountSDK, { accountDisplayMessage, type AccountAutopayFundingStatus } from '@/utils/accountManagement'
+import { accountDisplayMessage } from '@/utils/accountManagement'
 import { useAccountManagementStore } from '@/store/accountManagement'
-
 const router = useRouter()
-const { t } = useI18n()
+const {t} = useI18n()
 const accountState = useAccountManagementStore()
-const { status } = storeToRefs(accountState)
-const autopay = ref<AccountAutopayFundingStatus | null>(null)
-let refreshTimer: ReturnType<typeof setInterval> | undefined
-
+const autopay = computed(() => accountState.status?.autopay)
 const openFunding = () => router.push('/wallet/setting/account-management')
-
-const refresh = async () => {
-  autopay.value = status.value?.storage_mode === 'paid' ? await accountSDK.autopayStatus() : null
-}
-
-const stopAccountWatch = watch(
-  () => [status.value?.account_id, status.value?.storage_mode],
-  () => { void refresh().catch(() => { autopay.value = null }) },
-  { immediate: true },
-)
-
-onMounted(() => {
-  refreshTimer = setInterval(() => {
-    if (document.visibilityState === 'visible') void refresh().catch(() => undefined)
-  }, 30_000)
-})
-
-onBeforeUnmount(() => {
-  stopAccountWatch()
-  if (refreshTimer) clearInterval(refreshTimer)
-})
 </script>

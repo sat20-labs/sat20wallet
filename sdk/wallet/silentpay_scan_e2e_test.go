@@ -19,6 +19,7 @@ import (
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 	db "github.com/sat20-labs/indexer/common"
+	"github.com/stretchr/testify/require"
 )
 
 func spE2EAccountManager(t *testing.T) (*Manager, *InternalWallet) {
@@ -336,18 +337,104 @@ func TestSilentPayActivationFailsAtomicallyOnStorageError(t *testing.T) {
 	}
 }
 
-func TestSilentPayEnabledWalletCannotBeDeleted(t *testing.T) {
+func TestDeleteSilentPayWallet(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
-	mgr, _, second := newSPWalletPairGroup(t, []string{"Income"})
-	if _, err := mgr.EnableSilentPay(second.GetId(), 0); err != nil {
-		t.Fatal(err)
+	mgr, first, second := newSPWalletPairGroup(t, LIGHT_NODE, []string{"Income"})
+	_, err := mgr.EnableSilentPay(second.GetId(), 0)
+	require.NoError(t, err)
+	child, root := walletFingerprint(second), walletFingerprint(first)
+	keys := [][]byte{spAccountDataKey("testnet4", child, 0), spHistoryKey("testnet4", child, 0),
+		spAccountDataKey("mainnet", child, 0), spHistoryKey("mainnet", child, 0)}
+	rootHistory := spHistoryKey("testnet4", root, 0)
+	for _, key := range append(keys, rootHistory) {
+		require.NoError(t, mgr.db.Write(key, []byte("saved")))
 	}
-	if err := mgr.DeleteWallet(second.GetId()); err == nil {
-		t.Fatal("published SP address may be forgotten by deleting its mnemonic wallet")
+	// An RGB reservation identifies this carrier even if a channel has since locked it.
+	carrier := strings.Repeat("a", 64) + ":0"
+	reservation := RGB11TransferReservation{LockOutpoint: carrier}
+	reservation.Id = 41
+	reservation.WalletId.Id = second.GetId()
+	reservation.Scope = rgb11StorageScope(second.GetId(), 0)
+	raw, err := EncodeToBytes(&reservation)
+	require.NoError(t, err)
+	resvKey := []byte(GetResvKey(RESV_TYPE_RGB11, reservation.Id))
+	require.NoError(t, mgr.db.Write(resvKey, raw))
+	require.NoError(t, mgr.utxoLockerL1.LockUtxo(carrier, "channel"))
+	dapp := strings.Repeat("b", 64) + ":1"
+	other := strings.Repeat("c", 64) + ":2"
+	for _, locker := range []*UtxoLocker{mgr.utxoLockerL1, mgr.utxoLockerL2} {
+		owner := UtxoLockOwner{Origin: "https://app.test", Network: locker.network, WalletFingerprint: child}
+		require.NoError(t, locker.LockUtxoForOwner(dapp, "app", owner))
+		owner.WalletFingerprint = root
+		require.NoError(t, locker.LockUtxoForOwner(other, "app", owner))
 	}
-	if _, ok := mgr.walletInfoMap[second.GetId()]; !ok {
-		t.Fatal("rejected deletion changed the wallet catalog")
+	manual := strings.Repeat("d", 64) + ":0"
+	require.NoError(t, mgr.SwitchWallet(second.GetId(), "password"))
+	require.NoError(t, mgr.LockUtxo(second.GetAddress(), manual, "manual"))
+	require.NoError(t, mgr.LockUtxo_SatsNet(second.GetAddress(), manual, "manual"))
+	require.NoError(t, mgr.SwitchWallet(first.GetId(), "password"))
+	mainKey := func(key []byte) []byte {
+		prefix := GetDBKeyPrefix()
+		require.Equal(t, "test-testnet-", prefix)
+		require.True(t, bytes.HasPrefix(key, []byte(prefix)))
+		return []byte("test-mainnet-" + string(key[len(prefix):]))
+	}
+	// A browser uses one physical DB. Seed its other network with the same
+	// production-encoded rows and retain an independently owned control lock.
+	copyToMain := func(key []byte) []byte {
+		row, err := mgr.db.Read(key)
+		require.NoError(t, err)
+		otherKey := mainKey(key)
+		require.NoError(t, mgr.db.Write(otherKey, row))
+		return otherKey
+	}
+	keys = append(keys, copyToMain(resvKey), copyToMain([]byte(GetLockedUtxoKey(L1_NETWORK_BITCOIN, carrier))))
+	var keep [][]byte
+	for _, locker := range []*UtxoLocker{mgr.utxoLockerL1, mgr.utxoLockerL2} {
+		for _, point := range []string{manual, dapp} {
+			key := []byte(GetLockedUtxoKey(locker.network, point))
+			keys = append(keys, key, copyToMain(key))
+		}
+		keep = append(keep, copyToMain([]byte(GetLockedUtxoKey(locker.network, other))))
+	}
+	logKey := mainKey([]byte(operationLogRecordKey("same-id")))
+	linkKey := mainKey([]byte(operationLogRelationKey(RESV_TYPE_RGB11, 41)))
+	logRow, err := EncodeToBytes(OperationLogRecord{ID: "same-id", WalletID: second.GetId()})
+	require.NoError(t, err)
+	require.NoError(t, mgr.db.Write(logKey, logRow))
+	require.NoError(t, mgr.db.Write(linkKey, []byte("same-id")))
+	keys = append(keys, logKey, linkKey)
+	original := mgr.db
+	mgr.db = &spFailCommitDB{KVDB: original}
+	require.ErrorIs(t, mgr.DeleteWallet(second.GetId()), errSPCommitInjected)
+	mgr.db = original
+	require.Contains(t, mgr.walletInfoMap, second.GetId())
+	require.True(t, mgr.utxoLockerL1.IsLocked(carrier))
+	for _, key := range keys {
+		_, err := mgr.db.Read(key)
+		require.NoError(t, err)
+	}
+	require.NoError(t, mgr.DeleteWallet(second.GetId()))
+	require.NotContains(t, mgr.walletInfoMap, second.GetId())
+	for _, key := range append(keys, resvKey) {
+		_, err := mgr.db.Read(key)
+		require.ErrorIs(t, err, db.ErrKeyNotFound)
+	}
+	for _, key := range keep {
+		_, err := mgr.db.Read(key)
+		require.NoError(t, err)
+	}
+	got, err := mgr.db.Read(rootHistory)
+	require.NoError(t, err)
+	require.Equal(t, []byte("saved"), got)
+	require.False(t, mgr.utxoLockerL1.IsLocked(carrier))
+	for _, locker := range []*UtxoLocker{mgr.utxoLockerL1, mgr.utxoLockerL2} {
+		require.False(t, locker.IsLocked(manual))
+		require.False(t, locker.IsLocked(dapp))
+		require.True(t, locker.IsLocked(other))
+		_, err := mgr.db.Read([]byte(GetLockedUtxoKey(locker.network, dapp)))
+		require.ErrorIs(t, err, db.ErrKeyNotFound)
 	}
 }

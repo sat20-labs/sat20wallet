@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"context"
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -76,7 +77,7 @@ func TestRGB11ReviewMixedACKBatchCancellation(t *testing.T) {
 					t.Fatal(err)
 				}
 				unrelated := strings.Repeat("ee", 32) + ":0"
-				if err := sender.utxoLockerL1.TryReserve([]string{unrelated}, rgb11wallet.LockReasonPending, "unrelated-owner"); err != nil {
+				if err := sender.utxoLockerL1.TryReserve([]string{unrelated}, sdkcommon.UtxoLockRGBPending, "unrelated-owner"); err != nil {
 					t.Fatal(err)
 				}
 				apply := func(index int, accepted bool) error {
@@ -125,7 +126,7 @@ func TestRGB11ReviewMixedACKBatchCancellation(t *testing.T) {
 					for _, point := range pending.State.InputOutPoints {
 						lock := sender.utxoLockerL1.GetLockedUtxoList()[point]
 						if point == rgbInput {
-							if lock == nil || lock.Reason != rgb11wallet.LockReasonRGB || lock.ReservationID != "" {
+							if lock == nil || lock.Reason != sdkcommon.UtxoLockRGB || lock.ReservationID != "" {
 								t.Fatal("rejection did not restore the original RGB carrier protection")
 							}
 						} else if lock != nil {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	"strings"
 	"sync"
 	"testing"
@@ -359,7 +360,7 @@ func coreRGB11BatchColdRestoreE2E(t *testing.T, cfg coreE2EConfig,
 		default:
 		}
 		result, syncErr := receiver.SyncConfiguredRGB11AddressMailbox(context.Background(),
-			dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+			dkvsindexer.RecordVerificationOptions{})
 		coreRequire(t, "accept CoreNode batch consignments and persist ACKs", syncErr)
 		senderState, err := sender.GetRGB11State()
 		coreRequire(t, "read current batch output identities", err)
@@ -522,7 +523,7 @@ func coreRGB11SelfSendColdRestoreE2E(t *testing.T, cfg coreE2EConfig,
 		"public self-send broadcast before its own receive ACK")
 	checkBroadcast, releaseObserver := coreObserveSelfSendBroadcast(t, chain, self, prepared, beforeBroadcast)
 	delivery, err := self.DeliverAndBroadcastConfiguredRGB11AddressTransfer(
-		prepared.State.TransferID, RGB11AddressDeliveryOptions{})
+		prepared.State.TransferID)
 	coreRequire(t, "deliver public RGB11 self-send", err)
 	coreAssert(t, delivery != nil && delivery.TransferID == prepared.State.TransferID &&
 		(delivery.AwaitingACK && !delivery.Broadcast ||
@@ -536,7 +537,7 @@ func coreRGB11SelfSendColdRestoreE2E(t *testing.T, cfg coreE2EConfig,
 	coreWaitRGB11MailboxBroadcast(t, chain, self, prepared, beforeBroadcast)
 	checkBroadcast()
 	result, err := self.SyncConfiguredRGB11AddressMailbox(context.Background(),
-		dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+		dkvsindexer.RecordVerificationOptions{})
 	coreRequire(t, "repeat self-send mailbox synchronization after broadcast", err)
 	coreAssertRGB11MailboxErrors(t, self, map[string]bool{prepared.State.TransferID: true}, result)
 	checkBroadcast()
@@ -747,7 +748,7 @@ func coreWaitSelfSendACK(t *testing.T, chain *coreE2EChain, manager *Manager,
 	deadline := time.Now().Add(45 * time.Second)
 	for {
 		result, err := manager.SyncConfiguredRGB11AddressMailbox(context.Background(),
-			dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+			dkvsindexer.RecordVerificationOptions{})
 		coreRequire(t, "receive self-send consignment and publish ACK", err)
 		coreAssertRGB11MailboxErrors(t, manager, map[string]bool{prepared.State.TransferID: true}, result)
 		coreAssert(t, chain.broadcastCount() <= beforeBroadcast+1, "self-send mailbox repeated its backend broadcast")
@@ -793,7 +794,7 @@ func coreAssertSelfSendRecoveryRolesAndLocks(t *testing.T, manager *Manager,
 		}
 		current++
 		lock := locks[proof.OutPoint]
-		coreAssert(t, lock != nil && lock.Reason == rgb11wallet.LockReasonRGB,
+		coreAssert(t, lock != nil && lock.Reason == sdkcommon.UtxoLockRGB,
 			"self-send current carrier lost its RGB lock after restore")
 	}
 	coreAssert(t, current >= 2,

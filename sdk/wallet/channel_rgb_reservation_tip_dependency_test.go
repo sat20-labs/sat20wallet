@@ -6,7 +6,7 @@ import (
 )
 
 func TestSTPRGBSpliceFactsDoNotRequireUnusedTipEndpoint(t *testing.T) {
-	observed, sources, _, _ := rgbReservationNativeEvidenceFixture(t)
+	observed, sources, _, _ := rgb11ResvEvidenceFixture(t)
 	// Complete actual source raw/status/outspend/UTXO facts are present. Tip
 	// deliberately is not: STP/core consumers in this slice never request it.
 	provider := observed.newView()

@@ -6,11 +6,11 @@ import (
 	"github.com/sat20-labs/rgb11/consignment"
 )
 
-// NativeBitcoinResolver adapts existing Bitcoin facts to the shared native
+// RGB11BitcoinResolver adapts existing Bitcoin facts to the shared RGB11
 // proof validator. It exposes no wallet balances or projection authority.
-func NativeBitcoinResolver(ctx context.Context, evidence BitcoinEvidenceProvider) consignment.BitcoinResolver {
+func RGB11BitcoinResolver(ctx context.Context, evidence BitcoinEvidenceProvider) consignment.BitcoinResolver {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return coreEvidenceResolver{ctx: ctx, provider: evidence}
+	return coreEvidenceResolver{ctx: ctx, provider: ScopedBitcoinEvidence(evidence)}
 }

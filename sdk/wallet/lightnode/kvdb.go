@@ -221,15 +221,19 @@ func (p *jsDB) DropPrefix(prefix []byte) error {
 	})
 }
 
-func (p *jsDB) snapshot(prefix []byte) (entries []scanEntry, err error) {
+func (p *jsDB) snapshot(prefix []byte, keysOnly bool) (entries []scanEntry, err error) {
 	err = p.transaction("readonly", func(store js.Value, observe func(js.Value, func(js.Value) error)) error {
 		boundedPrefix := len(prefix) > 0 && utf8.Valid(prefix)
+		method := "openCursor"
+		if keysOnly {
+			method = "openKeyCursor"
+		}
 		var request js.Value
 		if boundedPrefix {
 			keyRange := js.Global().Get("IDBKeyRange").Call("lowerBound", string(prefix))
-			request = store.Call("openCursor", keyRange)
+			request = store.Call(method, keyRange)
 		} else {
-			request = store.Call("openCursor")
+			request = store.Call(method)
 		}
 		observe(request, func(cursor js.Value) error {
 			if cursor.IsNull() {
@@ -243,11 +247,15 @@ func (p *jsDB) snapshot(prefix []byte) (entries []scanEntry, err error) {
 				cursor.Call("continue")
 				return nil
 			}
-			value, err := base64.StdEncoding.DecodeString(cursor.Get("value").String())
-			if err != nil {
-				return err
+			entry := scanEntry{key: key}
+			if !keysOnly {
+				value, err := base64.StdEncoding.DecodeString(cursor.Get("value").String())
+				if err != nil {
+					return err
+				}
+				entry.value = value
 			}
-			entries = append(entries, scanEntry{key: key, value: value})
+			entries = append(entries, entry)
 			cursor.Call("continue")
 			return nil
 		})
@@ -256,7 +264,7 @@ func (p *jsDB) snapshot(prefix []byte) (entries []scanEntry, err error) {
 	return
 }
 func (p *jsDB) Scan(options common.ScanOptions, r func(k, v []byte) error) error {
-	entries, err := p.snapshot(options.Prefix)
+	entries, err := p.snapshot(options.Prefix, options.KeysOnly)
 	if err != nil {
 		return err
 	}
@@ -286,7 +294,7 @@ func (p jsReadBatch) GetRef(key []byte) ([]byte, error) {
 	return value, nil
 }
 func (p *jsDB) View(fn func(common.ReadBatch) error) error {
-	entries, err := p.snapshot(nil)
+	entries, err := p.snapshot(nil, false)
 	if err != nil {
 		return err
 	}
@@ -303,7 +311,7 @@ func (p *jsDB) View(fn func(common.ReadBatch) error) error {
 // This is intentionally a read capability, not SnapshotDB: IndexedDB has no
 // cross-browser equivalent of that interface's disk-durability Sync contract.
 func (p *jsDB) NewReadView() (common.DBReadView, error) {
-	entries, err := p.snapshot(nil)
+	entries, err := p.snapshot(nil, false)
 	if err != nil {
 		return nil, err
 	}

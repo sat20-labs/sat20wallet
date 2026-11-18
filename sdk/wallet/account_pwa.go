@@ -33,6 +33,7 @@ const (
 
 var (
 	ErrAccountPaidStorageNotReusable      = errors.New("paid account storage is not ready for reuse")
+	ErrStorageTTLChanged                  = errors.New("temporary storage retention changed")
 	ErrAccountStorageAuthorizationMissing = errors.New("account storage authorization is unavailable")
 )
 
@@ -125,6 +126,21 @@ func (p *Manager) rememberAccountStorageAuthorization(value *AccountStorageAutho
 // work must use UseAccountStorageAuthorization so duplicate consumers cannot
 // receive the same grant. No authorization identifier is supplied by the UI.
 func (p *Manager) PendingAccountStorageAuthorization() (*AccountStorageAuthorization, error) {
+	if p == nil {
+		return nil, ErrAccountStorageAuthorizationMissing
+	}
+	// Observing an absent grant does not require a mnemonic recovery root.
+	// Release this lock before entering the normal Manager -> storage order.
+	p.accountStorageMu.Lock()
+	stopped := p.accountStorageStopped
+	missing := p.accountStorageAuthorization == nil
+	p.accountStorageMu.Unlock()
+	if stopped {
+		return nil, ErrAccountStorageRuntimeStopped
+	}
+	if missing {
+		return nil, ErrAccountStorageAuthorizationMissing
+	}
 	binding, release, err := p.lockAccountStorageState()
 	if err != nil {
 		return nil, err
@@ -341,12 +357,20 @@ func (p *Manager) GetAccountStorageOptions() ([]AccountStorageOption, error) {
 	if err != nil {
 		return nil, err
 	}
+	return p.buildStorageOptions(store.ConfigWithVerificationHeight, nil)
+}
+
+func (p *Manager) buildStorageOptions(read func() (*AccountFreeLocalPolicy, uint64, bool, error),
+	check func() error) ([]AccountStorageOption, error) {
 	options := make([]AccountStorageOption, 0, 2)
 	p.mutex.RLock()
 	paidActive := p.accountProfile != nil && p.accountProfile.StorageMode == AccountStoragePaid
 	p.mutex.RUnlock()
 	if !paidActive {
-		policy, currentHeight, _, configErr := store.ConfigWithVerificationHeight()
+		policy, currentHeight, _, configErr := read()
+		if check != nil && configErr != nil {
+			return nil, configErr
+		}
 		if configErr == nil && policy != nil && policy.Enabled {
 			options = append(options, AccountStorageOption{
 				ID: "temporary", Mode: AccountStorageTemporary, Available: true,
@@ -376,6 +400,11 @@ func (p *Manager) GetAccountStorageOptions() ([]AccountStorageOption, error) {
 		requiredBlobs, capacityErr := p.accountBlobRequirements()
 		if capacityErr != nil {
 			return nil, capacityErr
+		}
+		if check != nil {
+			if err := check(); err != nil {
+				return nil, err
+			}
 		}
 		paid.RequiredBlobKeys = requiredBlobs
 		paid.BlobKeyLimit = accountBlobTarget(nil, "", requiredBlobs)
@@ -465,20 +494,13 @@ func (p *Manager) GetAccountAutopayFundingStatus() (*AccountAutopayFundingStatus
 			return nil, err
 		}
 	}
+	usesAutopay := paidActive || pending || (record != nil && record.Status == OperationLogSucceeded)
+	if !usesAutopay {
+		return notRequired, nil
+	}
 	state, queryErr := p.accountAutopayState(defaults)
 	if queryErr != nil && record == nil {
 		return nil, queryErr
-	}
-	// Guardian hosting uses the root's delegate without changing its own
-	// backup mode. Discover that existing service from the contract, including
-	// after a cold start where no local funding receipt exists.
-	usesAutopay := paidActive || pending || (record != nil && record.Status == OperationLogSucceeded)
-	if state != nil {
-		_, hasDelegate := state.Delegates[payer]
-		usesAutopay = usesAutopay || hasDelegate
-	}
-	if !usesAutopay {
-		return notRequired, nil
 	}
 	requiredBlobs, err := p.accountBlobRequirements()
 	if err != nil {
@@ -552,6 +574,10 @@ func (p *Manager) GetAccountAutopayFundingStatus() (*AccountAutopayFundingStatus
 }
 
 func (p *Manager) ConfirmAccountStorage(optionID string, recordCount uint64) (*AccountStorageAuthorization, error) {
+	return p.confirmAccountStorage(optionID, recordCount, nil)
+}
+
+func (p *Manager) confirmAccountStorage(optionID string, recordCount uint64, selectedTTL *uint64) (*AccountStorageAuthorization, error) {
 	if p == nil {
 		return nil, fmt.Errorf("wallet is not created/unlocked")
 	}
@@ -592,6 +618,9 @@ func (p *Manager) ConfirmAccountStorage(optionID string, recordCount uint64) (*A
 		}
 		if policy == nil || !policy.Enabled || policy.MaxTTL == 0 {
 			return nil, fmt.Errorf("current node does not provide temporary DKVS cache")
+		}
+		if selectedTTL != nil && *selectedTTL != policy.MaxTTL {
+			return nil, ErrStorageTTLChanged
 		}
 		authorization = &AccountStorageAuthorization{
 			Mode:          AccountStorageTemporary,
@@ -949,7 +978,7 @@ func (p *Manager) boundAccountStorageWriter(auth AccountStorageAuthorization) (*
 		if location != auth.Location {
 			return dkvsindexer.ErrEndpointMismatch
 		}
-		if err := p.checkAccountManagedDataImport(); err != nil {
+		if err := p.CheckAccountRestore("wallets", AccountManagedDataGlobalScope); err != nil {
 			return err
 		}
 		p.mutex.RLock()
@@ -980,38 +1009,71 @@ func (p *Manager) boundAccountStorageWriter(auth AccountStorageAuthorization) (*
 	if err != nil {
 		return nil, nil, err
 	}
+	resumeWrite := store.manager.scopeReady(store.manager.sessionKey(store.client, "read")) &&
+		!store.manager.scopeReady(store.manager.sessionKey(store.client, "write"))
+	validate := func() error {
+		return p.withAccountLocalState(false, func() error {
+			location, err := p.AccountIndexerLocation()
+			if err != nil {
+				return err
+			}
+			if location != auth.Location {
+				return dkvsindexer.ErrEndpointMismatch
+			}
+			current, err := p.accountManagementRootWallet()
+			if err != nil {
+				return err
+			}
+			currentID, err := dkvsAccountID(current)
+			if err != nil {
+				return err
+			}
+			if currentID != accountID {
+				return errAccountSnapshotChanged
+			}
+			currentCore, err := p.currentCoreNodeID()
+			if err != nil {
+				return err
+			}
+			if currentCore != coreID {
+				return dkvsindexer.ErrEndpointMismatch
+			}
+			if resumeWrite {
+				pending, err := p.PendingAccountStorageAuthorization()
+				if err != nil {
+					return err
+				}
+				if auth.ID == "" || pending.ID != auth.ID {
+					return ErrAccountStorageAuthorizationMissing
+				}
+				p.mutex.RLock()
+				writeErr := p.requireAccountManagedWriteLocked()
+				p.mutex.RUnlock()
+				if writeErr != nil {
+					return writeErr
+				}
+			}
+			return p.CheckAccountRestore("wallets", AccountManagedDataGlobalScope)
+		})
+	}
+	if resumeWrite {
+		if err := validate(); err != nil {
+			return nil, nil, err
+		}
+		// An explicit, still-authorized retry may reopen this node's session.
+		// Receiving verifies the registered prefixes without rediscovering the
+		// root account, replaying the outbox or starting an inactive worker.
+		if err := store.manager.ensureCurrentSubscription(store.client); err != nil {
+			return nil, nil, err
+		}
+		if err := validate(); err != nil {
+			return nil, nil, err
+		}
+	}
 	if err := bind(); err != nil {
 		return nil, nil, err
 	}
-	err = p.withAccountLocalState(false, func() error {
-		location, err := p.AccountIndexerLocation()
-		if err != nil {
-			return err
-		}
-		if location != auth.Location {
-			return dkvsindexer.ErrEndpointMismatch
-		}
-		current, err := p.accountManagementRootWallet()
-		if err != nil {
-			return err
-		}
-		currentID, err := dkvsAccountID(current)
-		if err != nil {
-			return err
-		}
-		if currentID != accountID {
-			return errAccountSnapshotChanged
-		}
-		currentCore, err := p.currentCoreNodeID()
-		if err != nil {
-			return err
-		}
-		if currentCore != coreID {
-			return dkvsindexer.ErrEndpointMismatch
-		}
-		return p.checkAccountManagedDataImport()
-	})
-	if err != nil {
+	if err := validate(); err != nil {
 		return nil, nil, err
 	}
 	return store, root, nil
@@ -1206,12 +1268,11 @@ func (p *Manager) replaceableImportedRootProfileLocked(rootFingerprint string) b
 	if profile == nil {
 		return true
 	}
-	// A freshly imported root has no remote state Seq yet. Its encrypted local
-	// bootstrap is not a confirmed backup, nor permission to replace later edits.
+	// Only an untouched root import can be replaced. The module rows below
+	// distinguish local edits and confirmed remote data.
 	if profile.RecoveryConfigured || profile.ManagedEntered || profile.Activation != nil ||
 		profile.InitialBackupPending || profile.RootFingerprint != rootFingerprint ||
-		profile.StorageMode != AccountStorageTemporary || profile.StateSeq != 0 ||
-		profile.ManagedDataGeneration != 1 || !profile.ManagedDataDirty ||
+		profile.StorageMode != AccountStorageTemporary ||
 		len(profile.Pending) != 0 || len(p.walletInfoMap) != 1 {
 		return false
 	}
@@ -1294,6 +1355,7 @@ func (p *Manager) persistPreparedAccountRestoreLocked(prepared *preparedAccountR
 	if err := batch.Flush(); err != nil {
 		return p.stopAccountDB(accountDBWriteError(err))
 	}
+	p.clearRGBDirectPreviews()
 	p.walletInfoMap = prepared.wallets
 	if p.status == nil {
 		p.status = prepared.status
@@ -1344,7 +1406,7 @@ func (p *Manager) CreateAccountRecoveryPackage(options account.CreateOptions) (*
 	}
 	var secret []byte
 	err := p.withAccountLocalState(false, func() error {
-		if err := p.checkAccountManagedDataImport(); err != nil {
+		if err := p.CheckAccountRestore("wallets", AccountManagedDataGlobalScope); err != nil {
 			return err
 		}
 		p.mutex.RLock()

@@ -106,7 +106,7 @@ func atomicalsTestTransfer(t *testing.T, total, bitcoin int64, amounts ...int64)
 	return manager, plan, client
 }
 
-func TestAtomicalsTransferUsesNativeColoringAndPreservesFees(t *testing.T) {
+func TestARC20TransferColorAndFees(t *testing.T) {
 	atomicalsTestEnvironment(t)
 	for _, spec := range []struct {
 		name     string
@@ -142,7 +142,7 @@ func TestAtomicalsTransferUsesNativeColoringAndPreservesFees(t *testing.T) {
 			var actual int64
 			for _, output := range outputs {
 				actual += output.GetAsset(&atomicalsTestName().AssetName).Int64()
-				require.Empty(t, output.Offsets, "native ARC20 amounts must never become ordinal ranges")
+				require.Empty(t, output.Offsets, "ARC20 amounts must never become ordinal ranges")
 			}
 			require.Equal(t, spec.total, actual)
 			signed, err := SignTxWithWallet(manager.wallet, plan.Tx, plan.PrevFetcher)
@@ -151,7 +151,7 @@ func TestAtomicalsTransferUsesNativeColoringAndPreservesFees(t *testing.T) {
 			require.Equal(t, plan.Tx.TxHash(), signed.TxHash())
 			// Signing returns a copy; the transient layout plan intentionally
 			// retains output pointers. Reattach only the signatures to check the
-			// final witness against native operation-envelope restrictions.
+			// final witness against ARC20 operation-envelope restrictions.
 			for position, input := range plan.Tx.TxIn {
 				input.Witness = signed.TxIn[position].Witness
 			}
@@ -160,7 +160,7 @@ func TestAtomicalsTransferUsesNativeColoringAndPreservesFees(t *testing.T) {
 	}
 }
 
-func TestAtomicalsRebuildTransferOutputsUsesNativeClassifier(t *testing.T) {
+func TestARC20RebuildClassification(t *testing.T) {
 	atomicalsTestEnvironment(t)
 	manager, plan, client := atomicalsTestTransfer(t, 1000, 1400, 100, 400)
 	inputs, outputs, err := manager.RebuildTxOutput(plan.Tx, client.outputs)
@@ -212,16 +212,16 @@ func TestAtomicalsTransferRejectsHiddenAssetsAndImpossibleDustSplits(t *testing.
 			Destinations: []*SendAssetInfo{{Address: manager.wallet.GetAddress(), AssetAmt: indexer.NewDefaultDecimal(100)}}})
 		require.ErrorContains(t, err, "asset-free")
 	})
-	t.Run("native_id_is_required", func(t *testing.T) {
+	t.Run("ARC20_id_is_required", func(t *testing.T) {
 		manager, _, _ := atomicalsTestTransfer(t, 100, 600, 100)
 		manager.tickerInfoMap[name.String()].InscriptionId = "quark"
 		_, err := manager.atomicalsIdentity(name)
-		require.ErrorContains(t, err, "canonical native identity")
+		require.ErrorContains(t, err, "canonical ARC20 identity")
 	})
 	t.Run("no_ordinal_offsets", func(t *testing.T) {
 		input := atomicalsTestInput(1, name, 100, 600, []byte{0x51})
 		input.Offsets[name.AssetName] = indexer.AssetOffsets{{Start: 0, End: 100}}
-		require.ErrorContains(t, protocol.VerifyInput(name, input), "native ARC20")
+		require.ErrorContains(t, protocol.VerifyInput(name, input), "ARC20")
 	})
 }
 
@@ -230,7 +230,7 @@ func TestAtomicalsVerifierDetectsColorChangesBeyondItsLayout(t *testing.T) {
 	protocol := atomicalsSTPProtocol{}
 	_, plan, _ := atomicalsTestTransfer(t, 1000, 1400, 500)
 	// A later protocol must not prepend a spendable output: even though every
-	// ARC20 output pointer/value remains present, native allocation would move.
+	// ARC20 output pointer/value remains present, ARC20 allocation would move.
 	plan.Tx.TxOut = append([]*wire.TxOut{wire.NewTxOut(330, []byte{0x51})}, plan.Tx.TxOut...)
 	require.ErrorContains(t, protocol.Verify(STPAssetVerification{Operation: STPOpCommit, Tx: plan.Tx, Plan: plan}), "allocation")
 }
@@ -239,7 +239,7 @@ type atomicalsTestNode struct{ NodeRPCClient }
 
 func (*atomicalsTestNode) GetDeployedContractsReq() ([]string, error) { return nil, nil }
 
-func TestAtomicalsCommitmentProtectsNativeAndOrdinalPrefixes(t *testing.T) {
+func TestARC20CommitPrefixes(t *testing.T) {
 	atomicalsTestEnvironment(t)
 	manager := safetyTestManager(t, &Channel{ChannelInDB: *NewChannelInDB()})
 	manager.serverNode = &Node{client: &atomicalsTestNode{}}
@@ -259,9 +259,9 @@ func TestAtomicalsCommitmentProtectsNativeAndOrdinalPrefixes(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.True(t, plan.FixedPrefix)
-	require.Same(t, marker, tx.TxOut[0], "RGB reserves the first OP_RETURN before native allocation")
+	require.Same(t, marker, tx.TxOut[0], "RGB reserves the first OP_RETURN before ARC20 allocation")
 	require.EqualValues(t, 900, tx.TxOut[1].Value)
-	require.EqualValues(t, 500, tx.TxOut[2].Value, "all excess native carrier sats remain in its segment")
+	require.EqualValues(t, 500, tx.TxOut[2].Value, "all excess ARC20 carrier sats remain in its segment")
 	snapshotSTPAssetLayout(tx, nil, []*wire.TxOut{marker}, false, plan)
 	// An independently authenticated later protocol starts at equal Bitcoin
 	// input/output offsets. Its prevout contributes no fabricated ARC20 state.
@@ -317,7 +317,7 @@ func TestAtomicalsCommitmentRetiresOnlyEmptyAllocations(t *testing.T) {
 			require.Empty(t, tx.TxIn)
 			require.Len(t, tx.TxOut, 1)
 			require.Same(t, marker, tx.TxOut[0])
-			require.Nil(t, plan.ProtocolData, "an empty allocation needs no native coloring evidence")
+			require.Nil(t, plan.ProtocolData, "an empty allocation needs no ARC20 coloring evidence")
 			require.False(t, plan.FixedPrefix)
 		})
 	}
@@ -334,7 +334,7 @@ func TestAtomicalsClassifierRejectsBurnAndMismatchedFacts(t *testing.T) {
 	tx.AddTxOut(wire.NewTxOut(900, []byte{0x51}))
 	output := indexer.GenerateTxOutput(tx, 0)
 	require.Error(t, manager.ClassifySTPAtomicalsOutputs(tx, []*TxOutput{input}, []*TxOutput{output}))
-	require.Empty(t, output.Assets, "a failed native verification must not partially modify views")
+	require.Empty(t, output.Assets, "a failed ARC20 verification must not partially modify views")
 	tx.TxOut[0].Value = 1200
 	output = indexer.GenerateTxOutput(tx, 0)
 	input.OutPointStr = fmt.Sprintf("%064x:1", 1)
@@ -342,7 +342,7 @@ func TestAtomicalsClassifierRejectsBurnAndMismatchedFacts(t *testing.T) {
 	require.NoError(t, (&Manager{}).ClassifySTPAtomicalsOutputs(nil, nil, nil), "no-ARC classification must need no indexer")
 }
 
-func TestAtomicalsSpliceUsesNativeAllocationAndExactChange(t *testing.T) {
+func TestARC20SpliceAllocation(t *testing.T) {
 	atomicalsTestEnvironment(t)
 	for _, operation := range []STPAssetOperation{STPOpSpliceIn, STPOpSpliceOut} {
 		for _, spec := range []struct {
@@ -388,7 +388,7 @@ func TestAtomicalsSpliceUsesNativeAllocationAndExactChange(t *testing.T) {
 				require.EqualValues(t, spec.amount, resv.SplicingOutput.GetAsset(&name.AssetName).Int64())
 				if spec.total > spec.amount {
 					require.EqualValues(t, spec.total-spec.amount, resv.SplicingChangeOutput.GetAsset(&name.AssetName).Int64())
-					require.Equal(t, tx.TxOut[1].Value, resv.SplicingChangeOutput.Value(), "persisted native change must match its actual carrier, excluding fee budget")
+					require.Equal(t, tx.TxOut[1].Value, resv.SplicingChangeOutput.Value(), "persisted ARC20 change must match its actual carrier, excluding fee budget")
 				}
 				var inputValue, outputValue int64
 				for _, input := range tx.TxIn {

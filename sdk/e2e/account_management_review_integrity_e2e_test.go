@@ -182,21 +182,19 @@ func TestSDKAccountReviewServerSignatureVerification(t *testing.T) {
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			device, _ := accountReviewDevice(t, network, "")
-			client, err := device.GetDKVSClient()
-			require.NoError(t, err)
+			client := dkvsClientForNode(t, network.Core)
 			require.NoError(t, scenario.read(client), "same endpoint must be healthy before injection")
 			before := device.GetWalletCatalog()
 			transport := &accountReviewTamperTransport{inner: wallet.NewHTTPClient(), mode: scenario.mode, targetKey: stateKey}
 			device.SetDKVSHttpClient(transport)
-			client, err = device.GetDKVSClient()
-			require.NoError(t, err)
+			client = dkvsClientForNode(t, network.Core)
+			client.Http = transport
 			require.ErrorIs(t, scenario.read(client), dkvs.ErrInvalidSignature)
 			require.Greater(t, transport.hits.Load(), int64(0), "target signature was not modified")
 			require.Equal(t, before, device.GetWalletCatalog())
 			require.False(t, device.GetAccountManagementStatus().Active)
 			device.SetDKVSHttpClient(wallet.NewHTTPClient())
-			client, err = device.GetDKVSClient()
-			require.NoError(t, err)
+			client = dkvsClientForNode(t, network.Core)
 			require.NoError(t, scenario.read(client), "same device must recover after fault removal")
 		})
 	}

@@ -159,6 +159,19 @@ export function parsePort(value, fallback = 5189) {
   return port
 }
 
+export function sdkNodePorts(env = {}) {
+  const raw = env.SAT20_REAL_SATOSHINET_PORT_BASE
+  const text = raw === undefined || raw === '' ? '30250' : String(raw)
+  assert.match(text, /^[+-]?\d+$/, 'SAT20_REAL_SATOSHINET_PORT_BASE must be an integer')
+  const base = Number(text)
+  assert.ok(Number.isSafeInteger(base) && base >= 1024 && base <= 65511,
+    'SAT20_REAL_SATOSHINET_PORT_BASE must leave room for all node ports (1024..65511)')
+  if (env.SAT20_REAL_SATOSHINET_ATTACH) {
+    assert.equal(base, 30250, 'the existing SSH attach fixture requires the default SatoshiNet ports')
+  }
+  return [0, 1, 2, 3, 4, 10, 11, 12, 13, 14].map(offset => base + offset)
+}
+
 export function selectStages(ids, catalog = stageCatalog) {
   if (ids === null) return [...catalog]
   assert.ok(ids.length > 0, '--only needs at least one exact stage ID')
@@ -303,6 +316,12 @@ async function assertPortFree(port, label) {
   })
 }
 
+export async function checkSDKNodePorts(env) {
+  const ports = sdkNodePorts(env)
+  for (const port of ports) await assertPortFree(port, 'SDK-owned SatoshiNet test node')
+  return `${ports[0]}-${ports[4]}, ${ports[5]}-${ports[9]} free`
+}
+
 function parseLoopbackURL(value, label, expectedPath) {
   const url = new URL(value)
   assert.equal(url.protocol, 'http:', `${label} must use HTTP on loopback`)
@@ -385,19 +404,18 @@ async function checkSDKEnvironment(env, port) {
   } else {
     await assertPortFree(port, 'PWA browser')
   }
+  let sdkNodePortState = 'existing loopback forwards; test does not own node processes'
   if (env.SAT20_REAL_SATOSHINET_ATTACH) {
     assert.equal(resolve(env.SAT20_REAL_SATOSHINET_ATTACH), env.SAT20_REAL_SATOSHINET_ATTACH)
     assert.equal(statSync(env.SAT20_REAL_SATOSHINET_ATTACH).mode & 0o777, 0o600,
       'node attach configuration must be private')
   } else {
-    for (const nodePort of [30250, 30251, 30252, 30253, 30254, 30260, 30261, 30262, 30263, 30264]) {
-      await assertPortFree(nodePort, 'SDK-owned SatoshiNet test node')
-    }
+    sdkNodePortState = await checkSDKNodePorts(env)
   }
   return { core: `Bitcoin Core 31.0 regtest; ${peers.length} loopback peer(s)`, l1: 'loopback /btc/regtest healthy',
     walletFixture: 'private and required roles present', pwaPort: port,
     pwaService: env.SAT20_REAL_PWA_EXISTING_URL ? 'existing service; isolated browser context' : 'test-owned Vite',
-    sdkNodePorts: env.SAT20_REAL_SATOSHINET_ATTACH ? 'existing loopback forwards; test does not own node processes' : '30250-30254, 30260-30264 free' }
+    sdkNodePorts: sdkNodePortState }
 }
 
 export function buildPlan(stages, port, env = process.env) {
@@ -559,6 +577,7 @@ async function main(argv) {
   const groups = buildGroups(stages)
   const port = parsePort(env.SAT20_PWA_E2E_PORT)
   env.SAT20_PWA_E2E_PORT = String(port)
+  sdkNodePorts(env) // Validate the same base as the Go runner, including --check.
   if (options.mode === 'plan') {
     process.stdout.write(`${JSON.stringify({ mode: 'plan', groups, sharedHistoricalState: false }, null, 2)}\n`)
     return 0

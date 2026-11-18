@@ -174,9 +174,8 @@ func coreReplayManagedOutbox(t *testing.T, target *Manager) {
 		if err != nil && !errors.Is(err, ErrDKVSPathNotSynced) {
 			coreRequire(t, "confirm replayed account baseline", err)
 		}
-		plan, planErr := target.currentAccountManagedOutboxPlan()
-		coreRequire(t, "read replayed managed outbox", planErr)
-		if err == nil && !plan.Pending && !coreCaptureManagedProfile(target).dirty {
+		status := target.GetAccountManagementStatus()
+		if err == nil && status.DKVSPendingRequests == 0 && !status.ManagedDataDirty {
 			return
 		}
 		coreAssert(t, time.Now().Before(deadline),

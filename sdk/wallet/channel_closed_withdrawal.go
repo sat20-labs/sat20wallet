@@ -27,6 +27,10 @@ func (p *Manager) WithdrawClosedChannelExact(channelID, expectedParentID string)
 }
 
 func (p *Manager) withdrawClosedChannelExactParent(channelID, expectedParentID string) (int64, error) {
+	if gateErr := p.CheckAccountWrite("wallets", AccountManagedDataGlobalScope); gateErr != nil {
+		return 0, gateErr
+	}
+
 	p.channelIdentityMu.RLock()
 	p.mutex.RLock()
 	if p.wallet == nil {
@@ -528,10 +532,10 @@ func (p *Manager) prepareClosedWithdrawal(channel *Channel, parent *wire.MsgTx, 
 	if closedWithdrawalUsesInputFacts(&channel.ChannelInDB) || context.InputFacts != nil {
 		return p.prepareIndexedClosedWithdrawal(channel, parent, context, false)
 	}
-	// A native adapter needs its actual validation/completion path. An empty
+	// A channel adapter needs its actual validation/completion path. An empty
 	// sidecar or a fully signed Bitcoin transaction cannot bypass this guard.
-	if nativeForceClose(&ClosingReservation{Channel: channel}) {
-		return nil, fmt.Errorf("native Other recovery requires its existing native receipt completion path")
+	if needsWithdrawalFacts(channel) {
+		return nil, fmt.Errorf("channel Other recovery requires its existing channel receipt completion path")
 	}
 	txs, err := closedWithdrawalPackage(parent, channel.RemoteCommitment)
 	if err != nil {
@@ -541,7 +545,7 @@ func (p *Manager) prepareClosedWithdrawal(channel *Channel, parent *wire.MsgTx, 
 }
 
 // All dependencies are already confirmed before this hook. Legacy C2 has no
-// additional import; protocols with native receipts must finish those first.
+// additional import; protocols with channel receipts must finish those first.
 func (p *Manager) completeClosedWithdrawal(resv *ClosingReservation, contexts ...*closedChannelIntent) error {
 	if len(contexts) > 1 {
 		return fmt.Errorf("invalid closed withdrawal completion context")
@@ -564,7 +568,7 @@ func (p *Manager) completeClosedWithdrawal(resv *ClosingReservation, contexts ..
 		return err
 	}
 	if len(resv.AssetProofs) != 0 || resv.DeAnchorTx != nil {
-		return fmt.Errorf("closed withdrawal has unsupported native completion material")
+		return fmt.Errorf("closed withdrawal has unsupported channel completion material")
 	}
 	return nil
 }

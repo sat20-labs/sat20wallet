@@ -48,7 +48,6 @@ type storedTopicCurrent struct {
 type TopicMessage struct {
 	Publish   *swire.TopicPublishMessage
 	Plaintext []byte
-	Record    *swire.DKVSRecord
 }
 
 type TopicCryptoManager struct {

@@ -39,7 +39,7 @@ func TestPWAWarmUnlockDuringRGBNetworkWait(t *testing.T) {
 				release := func() { once.Do(func() { close(remote.release) }) }
 				defer release()
 				manager.http = remote
-				client, err := manager.GetDKVSClient()
+				client, err := manager.accountDKVSClient()
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -58,7 +58,7 @@ func TestPWAWarmUnlockDuringRGBNetworkWait(t *testing.T) {
 						_, e := manager.RefreshRGB11State(context.Background())
 						rgbDone <- e
 					} else {
-						_, e := manager.syncRootRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+						_, e := manager.syncRootRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{})
 						rgbDone <- e
 					}
 				}()

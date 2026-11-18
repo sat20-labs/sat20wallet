@@ -168,57 +168,10 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
     return { list, totalSats }
   }
 
-  const rgb11StateAssets = () => {
-    const total = parseAssetSummary(rgb11Store.state.assets || []).list
-    const available = new Map(
-      parseAssetSummary(rgb11Store.state.available_assets || []).list.map((item) => [item.key, String(item.amount)])
-    )
-    const pending = new Map(
-      parseAssetSummary(rgb11Store.state.pending_assets || []).list.map((item) => [item.key, String(item.amount)])
-    )
-    const result = total.map((item) => ({
-      ...item,
-      available_amount: available.get(item.key) || '0',
-      pending_amount: pending.get(item.key) || '0',
-    }))
-	const known = new Set(result.map((item) => item.key))
-	for (const info of rgb11Store.state.ticker_infos || []) {
-	  const name = info?.name || info?.Name || info?.AssetName
-	  if (!name || name.Protocol !== 'rgb11') continue
-	  const assetKey = `${name.Protocol}:${name.Type || 'f'}:${name.Ticker || ''}`
-	  if (known.has(assetKey)) continue
-	  known.add(assetKey)
-	  result.push({
-		id: assetKey,
-		key: assetKey,
-		protocol: name.Protocol,
-		type: name.Type || 'f',
-		label: name.Ticker || assetKey,
-		ticker: name.Ticker || '',
-		utxos: [],
-		amount: '0',
-		precision: Number(info?.divisibility || 0),
-		available_amount: '0',
-		pending_amount: '0',
-	  })
-	}
-	return result
-  }
-
-  const presentAssets = (list: AssetItem[]) => {
-    const stateRGB11 = rgb11StateAssets()
-    const rgb11 = stateRGB11.length
-      ? stateRGB11
-      : list.filter((item) => item.protocol === 'rgb11').map((item) => ({
-          ...item,
-          available_amount: String(item.amount),
-          pending_amount: '0',
-        }))
-    return [
-      ...list.filter((item) => item.protocol !== 'rgb11'),
-      ...decorateRGB11AssetItems(rgb11, rgb11Store.state),
-    ]
-  }
+  const presentAssets = (list: AssetItem[]) => [
+    ...list.filter(item => item.protocol !== 'rgb11'),
+    ...decorateRGB11AssetItems(rgb11Store.state.assets),
+  ]
 
   // Store Updates
   const updateStoreAssets = (list: AssetItem[], totalSats: number) => {
@@ -226,10 +179,7 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
     assetsStore.setRunesList(list.filter((item) => item?.protocol === 'runes'))
     assetsStore.setBrc20List(list.filter((item) => item?.protocol === 'brc20'))
     assetsStore.setOrdList(list.filter((item) => item?.protocol === 'ord'))
-    const rgb11 = decorateRGB11AssetItems(
-      list.filter((item) => item?.protocol === 'rgb11'),
-      rgb11Store.state
-    )
+    const rgb11 = decorateRGB11AssetItems(rgb11Store.state.assets)
     assetsStore.setRGB11List(rgb11)
 
     const plain = list.filter((item) => item?.protocol === '')

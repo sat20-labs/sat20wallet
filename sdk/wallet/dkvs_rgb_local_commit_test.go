@@ -69,9 +69,9 @@ func logRGB11LocalRecoveryGate(t *testing.T, manager *Manager) {
 	if state != nil {
 		status, prefixCount, generationCount = state.Status, len(state.Prefixes), len(state.Generations)
 	}
-	t.Logf("local recovery gate: read=%t write=%t gate_error=%v baseline_error=%v subscription_status=%s prefix_count=%d subscription_generation_count=%d subscription_error=%v registered_count=%d registered_error=%v managed_count=%d outbox=%v outbox_error=%v dirty=%t generation=%d",
+	t.Logf("local recovery gate: read=%t write=%t gate_error=%v subscription_status=%s prefix_count=%d subscription_generation_count=%d subscription_error=%v registered_count=%d registered_error=%v managed_count=%d outbox=%v outbox_error=%v dirty=%t generation=%d",
 		manager.dkvs.scopeReady(manager.dkvs.sessionKey(client, "read")), manager.dkvs.scopeReady(manager.dkvs.sessionKey(client, "write")),
-		manager.requireAccountManagedWriteLocked(), manager.requireAccountManagedBaselineLocked(client), status, prefixCount, generationCount, stateErr, len(registered), registeredErr, len(manager.dkvs.managedPaths()), states, outboxErr,
+		manager.requireAccountManagedWriteLocked(), status, prefixCount, generationCount, stateErr, len(registered), registeredErr, len(manager.dkvs.managedPaths()), states, outboxErr,
 		rgb11LocalModulePendingForTest(t, manager), rgb11LocalModuleForTest(t, manager).Generation)
 }
 
@@ -175,7 +175,7 @@ func TestRGB11LocalCommitDuringContinuousDKVSRefresh(t *testing.T) {
 		return manager.requireAccountManagedWriteLocked() == nil
 	}, 5*time.Second, 10*time.Millisecond)
 	blocking.Store(true)
-	manager.dkvs.wakeSync()
+	require.NoError(t, manager.RetryDKVSSync())
 	select {
 	case <-entered:
 	case <-time.After(5 * time.Second):
@@ -275,11 +275,6 @@ type rgb11LocalCommitFailureDB struct {
 
 func (db *rgb11LocalCommitFailureDB) noteProfileFailure(value []byte) {
 	target, _ := db.profileFailureTarget.Load().(string)
-	var profile accountManagementProfile
-	if target != "" && DecodeFromBytes(value, &profile) == nil && profile.StateHash == target {
-		db.profileFailures.Add(1)
-		return
-	}
 	var module accountLocalKV
 	if target != "" && DecodeFromBytes(value, &module) == nil && module.Baseline != nil && accountStateDigest(module.Baseline.Value) == target {
 		db.profileFailures.Add(1)
@@ -675,6 +670,8 @@ func testRGB11AcknowledgedBackupLocalCommit(t *testing.T, waitForFailedProfile b
 		manager.serverNode = service
 		_, err = manager.UnlockWallet("password")
 		require.NoError(t, err)
+		// This native fixture owns the DKVS worker; unlocking does not start the full wallet runtime.
+		require.NoError(t, manager.StartDKVSSync())
 		client, err = manager.dkvs.primaryClient()
 		require.NoError(t, err)
 		restartedWalletID, err := manager.RGB11WalletID()
@@ -856,7 +853,7 @@ func TestAccountManagedACKFinalizesAfterRemoteAdvance(t *testing.T) {
 					require.NotNil(t, value)
 					return value
 				}
-				database.profileFailureTarget.Store(manager.accountProfile.StateHash)
+				database.profileFailureTarget.Store(accountStateDigest(readLocal(manager).Value))
 				edit := func(m *Manager, label string) *corewallet.ReceiveRequest {
 					t.Helper()
 					if stateOnly {

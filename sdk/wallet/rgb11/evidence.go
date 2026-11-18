@@ -28,10 +28,25 @@ type BitcoinTip struct {
 }
 
 type BitcoinEvidenceProvider interface {
+	GetGenesisHash() (string, error)
 	GetUTXO(outpoint string) (*BitcoinUTXO, error)
 	GetRawTx(txid string) ([]byte, error)
 	GetTxStatus(txid string) (*BitcoinTxStatus, error)
 	GetOutspend(outpoint string) (*BitcoinOutspend, error)
 	GetTip() (*BitcoinTip, error)
 	Broadcast(rawTx []byte) (string, error)
+}
+
+type bitcoinEvidenceScoper interface {
+	ScopeBitcoinEvidence() BitcoinEvidenceProvider
+}
+
+// ScopedBitcoinEvidence fixes a production source for one validation operation.
+// Captured facts and candidate wrappers already own their source and are kept
+// intact; this does not introduce a cache or hold a lock across network I/O.
+func ScopedBitcoinEvidence(provider BitcoinEvidenceProvider) BitcoinEvidenceProvider {
+	if scoper, ok := provider.(bitcoinEvidenceScoper); ok {
+		return scoper.ScopeBitcoinEvidence()
+	}
+	return provider
 }

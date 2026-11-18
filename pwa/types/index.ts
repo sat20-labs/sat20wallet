@@ -51,6 +51,12 @@ export interface LockedUtxoInfo {
   vout: string
   reason?: string
   lockedTime?: number
+  category?: 'manual' | 'rgb' | 'other'
+  chain?: 'btc' | 'satsnet'
+  scope?: 'current' | 'unknown'
+  value?: number
+  assets?: { asset: string; amount: string; precision: number }[]
+  transferIDs?: string[]
 }
 
 // API Response types for locked UTXOs

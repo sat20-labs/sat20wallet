@@ -36,7 +36,7 @@ func (p *rgb11Manager) StageReservationMetadata(batch indexer.WriteBatch, scope 
 		finish(false)
 		return nil, ErrRGB11OperationScopeChanged
 	}
-	if err := owner.checkAccountManagedDataImport(); err != nil {
+	if err := owner.checkAccountRestore("wallets", AccountManagedDataGlobalScope); err != nil {
 		finish(false)
 		return nil, err
 	}

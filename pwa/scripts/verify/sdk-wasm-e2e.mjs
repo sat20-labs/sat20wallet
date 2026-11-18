@@ -75,23 +75,19 @@ export async function runSDKWASMCases({ check, device, pageErrors, preserveBrows
   const imported = async (page, localWrite = false) => {
     const result = await call(page, 'importWallet', [actor.mnemonic, actor.password])
     assert.equal(result.address, actor.address)
-    if (localWrite) await waitInactive(page)
+    if (localWrite) await assertLocalAccount(page)
     return String(result.walletId)
   }
   const catalog = page => call(page, 'getWalletCatalog')
   const poll = { timeout: 180000, intervals: [250, 500, 1000, 2000] }
-  // Local-write groups need authoritative discovery, not an activation or a
-  // fabricated ready flag. Poll only the public, non-sensitive account status.
-  const waitInactive = async page => {
-    await expect.poll(async () => {
-      const s = await call(page, 'status', [], 'sat20account_wasm')
-      return {
-        discovery: s.discovery_status ?? 'unknown',
-        localOnly: s.local_only === true,
-        configured: s.recovery_configured === true,
-        pending: s.activation_pending === true,
-      }
-    }, poll).toEqual({ discovery: 'inactive', localOnly: true, configured: false, pending: false })
+  // Local business needs no remote discovery or backup activation. A local
+  // catalog edit can remain unconfirmed while the wallet is still writable.
+  const assertLocalAccount = async page => {
+    const s = await call(page, 'getAccountView', ['{}'], 'sat20account_wasm')
+    assert.deepEqual({ state: s.state, locator: s.locator, mode: s.recovery_mode },
+      { state: 'local', locator: '', mode: '' })
+    assert.ok(['notConfigured', 'unconfirmed'].includes(s.backup_risk))
+    return s
   }
   const control = async (action, body = {}) => {
     const response = await fetch(new URL(`/${action}`, fixture.control_url), {
@@ -182,7 +178,7 @@ export async function runSDKWASMCases({ check, device, pageErrors, preserveBrows
     },
     async page => {
       const result = await call(page, 'createWallet', [actor.password])
-      await waitInactive(page)
+      await assertLocalAccount(page)
       const validated = await call(page, 'validateMnemonic', [result.mnemonic, ''])
       assert.equal(validated.address, (await call(page, 'getWalletAddress', [0])).address)
       const before = await catalog(page)
@@ -206,7 +202,7 @@ export async function runSDKWASMCases({ check, device, pageErrors, preserveBrows
       assert.notEqual(address, actor.address)
       await page.reload(); await page.waitForFunction(() => Boolean(window.__SAT20_PWA_VERIFY__))
       await call(page, 'unlockWallet', [actor.password])
-      await waitInactive(page)
+      await assertLocalAccount(page)
       assert.equal((await catalog(page)).root_account_id, root)
       assert.equal((await catalog(page)).current_account_index, 1)
       assert.equal((await call(page, 'getWalletAddress', [1])).address, address)
@@ -275,13 +271,16 @@ export async function runSDKWASMCases({ check, device, pageErrors, preserveBrows
       const namespace = 'sat20wallet_operation_log'
       const { id } = await call(page, 'beginOperationLog', [JSON.stringify({ category: 'signature', action: 'sdk-e2e', title: 'SDK log', summary: 'roundtrip', parameters: { payload: 'public test data' } })], namespace)
       await call(page, 'updateOperationLog', [id, JSON.stringify({ status: 'succeeded', message: 'independently verified', result: { verified: 'true' } })], namespace)
-      const before = JSON.parse((await call(page, 'getOperationLog', [id], namespace)).log)
+      const before = (await call(page, 'getOperationLogs', [], namespace)).find(log => log.id === id)
+      assert.ok(before)
+      assert.equal(before.kind, 'sdk-e2e')
+      assert.equal(before.status, 'succeeded')
+      assert.equal(before.history.at(-1).status, 'succeeded')
       await page.reload(); await page.waitForFunction(() => Boolean(window.__SAT20_PWA_VERIFY__))
       await call(page, 'unlockWallet', [actor.password])
-      assert.deepEqual(JSON.parse((await call(page, 'getOperationLog', [id], namespace)).log), before)
-      assert.ok(JSON.parse((await call(page, 'getOperationLogs', [], namespace)).logs).some(log => log.id === id))
-      await call(page, 'deleteAllOperationLogs', [], namespace)
-      assert.equal(JSON.parse((await call(page, 'getOperationLogs', [], namespace)).logs).length, 0)
+      assert.deepEqual((await call(page, 'getOperationLogs', [], namespace)).find(log => log.id === id), before)
+      await call(page, 'deleteOperationHistory', [], namespace)
+      assert.equal((await call(page, 'getOperationLogs', [], namespace)).length, 0)
       assert.equal((await call(page, 'getWalletAddress', [0])).address, actor.address)
     },
     async page => {
@@ -364,7 +363,18 @@ export async function runSDKWASMCases({ check, device, pageErrors, preserveBrows
       const ids = []
       for (const [index, key] of keys.entries()) {
         const imported = await call(page, 'importWalletWithPrivKey', [key.toString('hex'), password])
-        await waitInactive(page)
+        assert.equal((await assertLocalAccount(page)).active, false, 'private-key wallets must not activate account recovery')
+        if (index === 0) {
+          const before = await catalog(page)
+          const result = await page.evaluate(async ({ password, id }) =>
+            window.sat20account_wasm.preflightRecovery(JSON.stringify({ password, wallet_ids: [Number(id)] })),
+            { password, id: imported.walletId })
+          assert.notEqual(result.code, 0)
+          assert.equal(result.msg, 'account management requires a mnemonic root wallet')
+          await call(page, 'confirmStorage', [JSON.stringify({ id: 'temporary', record_count: 100 })], 'sat20account_wasm', true)
+          assert.deepEqual(await catalog(page), before)
+          assert.equal((await assertLocalAccount(page)).active, false)
+        }
         assert.equal(imported.address, addresses[index]); ids.push(imported.walletId)
         const payload = `private-key signature ${index}`
         const der = Buffer.from((await call(page, 'signData', [payload])).signature, 'hex')
@@ -379,7 +389,7 @@ export async function runSDKWASMCases({ check, device, pageErrors, preserveBrows
       await call(page, 'unlockWallet', ['wrong'], undefined, true)
       await call(page, 'getWalletAddress', [0], undefined, true)
       await call(page, 'unlockWallet', [password])
-      await waitInactive(page)
+      await assertLocalAccount(page)
       assert.deepEqual(await catalog(page), unlockedCatalog)
       assert.equal((await call(page, 'getWalletAddress', [0])).address, addresses[0])
       assert.ok((await catalog(page)).wallets.some(wallet => String(wallet.id) === ids[0] && wallet.name === 'SDK standalone key'))
@@ -394,7 +404,7 @@ export async function runSDKWASMCases({ check, device, pageErrors, preserveBrows
       const rootId = await imported(page, true)
       const before = await catalog(page)
       const rootPub = Buffer.from((await call(page, 'getWalletPubkey', [0])).pubKey, 'hex')
-      assert.equal((await call(page, 'status', [], 'sat20account_wasm')).active, true)
+      assert.equal((await call(page, 'getAccountView', ['{}'], 'sat20account_wasm')).active, true)
       for (const key of ['not-hex', '0'.repeat(64)]) {
         await call(page, 'importWalletWithPrivKey', [key, actor.password], undefined, true)
         assert.deepEqual(await catalog(page), before)
@@ -404,7 +414,7 @@ export async function runSDKWASMCases({ check, device, pageErrors, preserveBrows
       const privatePub = Buffer.from(secp256k1.pointFromScalar(privateKey, true))
       const privateAddress = payments.p2tr({ internalPubkey: privatePub.subarray(1), network: bitcoinNetwork }).address
       const added = await call(page, 'importWalletWithPrivKey', [privateKey.toString('hex'), actor.password])
-      await waitInactive(page)
+      await assertLocalAccount(page)
       const privateId = String(added.walletId)
       assert.notEqual(privateId, rootId)
       assert.notDeepEqual(privatePub, rootPub)
@@ -432,7 +442,7 @@ export async function runSDKWASMCases({ check, device, pageErrors, preserveBrows
       const selected = await catalog(page)
       await page.reload(); await page.waitForFunction(() => Boolean(window.__SAT20_PWA_VERIFY__))
       await call(page, 'unlockWallet', [actor.password])
-      await waitInactive(page)
+      await assertLocalAccount(page)
       assert.deepEqual(await catalog(page), selected)
       assert.equal((await call(page, 'getWalletAddress', [0])).address, privateAddress)
       await proveSigner(privatePub, rootPub)
@@ -565,6 +575,12 @@ export async function runSDKWASMCases({ check, device, pageErrors, preserveBrows
         assert.equal(order.outputs[2].assets[0].Amount.Value, '50000000')
         assert.equal(order.signatures_verified, true)
       } finally { await buyer.context().close() }
+      const orderLogs = await call(page, 'getOperationLogs', [], 'sat20wallet_operation_log')
+      for (const kind of ['build_sell_order_l2', 'finalize_sell_order_l2']) {
+        const records = orderLogs.filter(record => record.kind === kind)
+        assert.equal(records.length, 1, `${kind}: SDK must persist exactly one command record`)
+        assert.equal(records[0].status, 'succeeded')
+      }
       await call(page, 'mergeBatchSignedPsbt_SatsNet', [[split[0], split[0]], fixture.config.Chain], undefined, true)
       await call(page, 'addInputsToPsbt_SatsNet', [sample.psbt, [sample.orders[0]]], undefined, true)
       for (const method of ['buildBatchSellOrder_SatsNet', 'mergeBatchSignedPsbt_SatsNet']) await call(page, method, [['invalid'], actor.address, fixture.config.Chain], undefined, true)
@@ -631,20 +647,20 @@ export async function runSDKWASMCases({ check, device, pageErrors, preserveBrows
     },
     async page => {
       await imported(page); const before = await catalog(page)
-      const state = await call(page, 'getRGB11State')
+      const state = await call(page, 'getRGB11View')
       const locks = await call(page, 'getAllLockedUtxo', [actor.address])
       const l1 = await control('snapshot')
       for (const [method, args] of [
-        ['acceptRGB11Consignment', ['missing-request', 'invalid-consignment']],
-        ['importRGB11Contract', ['invalid-contract']],
-        ['prepareRGB11Transfer', [JSON.stringify({ invoice: 'invalid', amount: '-1' })]],
-        ['prepareRGB11AddressTransfer', [JSON.stringify({ address: 'invalid', amount: '0' })]],
-        ['resolveRGB11AddressEndpoint', ['invalid']],
-        ['receiveRGB11ProxyConsignment', [JSON.stringify({ consignment: 'invalid' })]],
-        ['resumeRGB11PreparedTransfer', ['missing-request']],
+        ['acceptRGB11Consignment', [JSON.stringify({ id: 'missing-request' })]],
+        ['prepareRGB11Consignment', [JSON.stringify({ id: 'missing-request', data: Buffer.from('invalid').toString('base64') })]],
+        ['importRGB11Contract', [JSON.stringify({ data: Buffer.from('invalid-contract').toString('base64') })]],
+        ['prepareRGB11Transfer', [JSON.stringify({ recipients: [{ destination: 'invalid', asset: 'missing', amount: '-1' }], fee_rate: 1 })]],
+        ['createRGB11Invoice', [JSON.stringify({ asset: 'missing', amount: '0', receive_mode: 'witness', transport: 'invalid' })]],
+        ['confirmRGB11Transfer', [JSON.stringify({ id: 'missing-request', receipts: [] })]],
+        ['cancelRGB11Transfer', [JSON.stringify({ id: 'missing-request' })]],
       ]) {
         await call(page, method, args, undefined, true)
-        assert.deepEqual(await call(page, 'getRGB11State'), state)
+        assert.deepEqual(await call(page, 'getRGB11View'), state)
         assert.deepEqual(await call(page, 'getAllLockedUtxo', [actor.address]), locks)
         await unchanged(page, before, l1)
       }
@@ -652,7 +668,13 @@ export async function runSDKWASMCases({ check, device, pageErrors, preserveBrows
     async page => {
       await imported(page)
       const before = BigInt((await call(page, 'getAssetAmount', [fixture.recipient.address, '::'])).availableAmt)
+      const oldLogs = new Set((await call(page, 'getOperationLogs', [], 'sat20wallet_operation_log')).map(log => log.id))
       const { txId, fee: reportedFee } = await call(page, 'batchSendAssets', [fixture.recipient.address, '::', '1000', 2, '1'])
+      const paymentLogs = (await call(page, 'getOperationLogs', [], 'sat20wallet_operation_log'))
+        .filter(log => !oldLogs.has(log.id) && log.tx_ids?.includes(txId))
+      assert.deepEqual(paymentLogs.map(log => ({ kind: log.kind, status: log.status })),
+        [{ kind: 'split_send_l1', status: 'succeeded' }],
+        'an explicit batch send must retain exactly one split operation log')
       const tx = Transaction.fromHex(await api('L1', `/btc/rawtx/${txId}`))
       assert.equal(tx.getId(), txId)
       const destination = payments.p2tr({ address: fixture.recipient.address, network: bitcoinNetwork }).output

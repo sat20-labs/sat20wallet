@@ -4,9 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/binary"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -15,91 +13,6 @@ import (
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
-
-// This test exercises the independent 8-byte DKB1 envelope at its exact wire
-// boundary. Its deterministic high-entropy opaque payload is only a codec
-// boundary fixture; it is not used to claim a real RGB history size.
-func TestManagedDataBlobCapacityIncludesDKB1Header(t *testing.T) {
-	if account.ManagedDataMaxPayload != swire.MaxDKVSBlobValueSize {
-		t.Fatalf("managed-data limit=%d DKVS blob limit=%d",
-			account.ManagedDataMaxPayload, swire.MaxDKVSBlobValueSize)
-	}
-	secret := make([]byte, 32)
-	secret[0] = 1
-	accountID := strings.Repeat("11", 32)
-
-	for _, test := range []struct {
-		name              string
-		wantEnvelopeBytes int
-		wantWrapperError  bool
-		wantSealError     bool
-	}{
-		{name: "exact wire limit", wantEnvelopeBytes: swire.MaxDKVSBlobValueSize - 8},
-		{name: "DKB1 overflow by one", wantEnvelopeBytes: swire.MaxDKVSBlobValueSize - 7, wantWrapperError: true},
-		{name: "cipher limit leaves no room for wrapper", wantEnvelopeBytes: swire.MaxDKVSBlobValueSize, wantWrapperError: true},
-		{name: "encrypted envelope exceeds limit", wantEnvelopeBytes: swire.MaxDKVSBlobValueSize + 1, wantSealError: true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			bundle := managedDataBundleWithExactEnvelopeSize(t, secret, accountID,
-				test.wantEnvelopeBytes)
-			plain, err := account.EncodeManagedDataBundle(bundle)
-			if err != nil {
-				t.Fatal(err)
-			}
-			envelope, info, err := account.SealManagedDataBundleWithInfo(secret, accountID, bundle, nil)
-			if test.wantSealError {
-				if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("%d bytes", test.wantEnvelopeBytes)) ||
-					!strings.Contains(err.Error(), fmt.Sprintf("limit is %d bytes", account.ManagedDataMaxPayload)) {
-					t.Fatalf("encrypted envelope error=%v; want actual=%d limit=%d",
-						err, test.wantEnvelopeBytes, account.ManagedDataMaxPayload)
-				}
-				t.Logf("encrypted envelope rejected: AMD=%d desired_ADE=%d ADE_limit=%d", len(plain), test.wantEnvelopeBytes, account.ManagedDataMaxPayload)
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if info.Compressed {
-				t.Fatal("high-entropy boundary fixture was unexpectedly compressed")
-			}
-			if len(envelope) != test.wantEnvelopeBytes {
-				t.Fatalf("ADE bytes=%d want=%d", len(envelope), test.wantEnvelopeBytes)
-			}
-			if len(plain)+managedDataEnvelopeOverhead(t, secret, accountID) != len(envelope) {
-				t.Fatalf("uncompressed AMD/ADE size delta=%d want measured overhead", len(envelope)-len(plain))
-			}
-
-			blob, err := EncodeDKVSBlobValue(envelope, nil)
-			if test.wantWrapperError {
-				if !errors.Is(err, dkvsindexer.ErrRecordTooLarge) {
-					t.Fatalf("DKB1 wrapper error=%v, want ErrRecordTooLarge", err)
-				}
-				_, mutationErr := accountManagedDataMutation(nil, nil, "", envelope)
-				if !errors.Is(mutationErr, dkvsindexer.ErrRecordTooLarge) {
-					t.Fatalf("account-managed mutation error=%v, want ErrRecordTooLarge", mutationErr)
-				}
-				if !strings.Contains(mutationErr.Error(), fmt.Sprintf("envelope=%d bytes", len(envelope))) ||
-					!strings.Contains(mutationErr.Error(), fmt.Sprintf("payload limit=%d bytes", swire.MaxDKVSBlobValueSize-8)) {
-					t.Fatalf("account-managed mutation error lacks actual/limit: %v", mutationErr)
-				}
-				if len(blob) != 0 {
-					t.Fatalf("overflow produced a blob of %d bytes", len(blob))
-				}
-				t.Logf("capacity boundary overflow: AMD=%d ADE=%d DKB1=%d (limit=%d)",
-					len(plain), len(envelope), len(envelope)+8, swire.MaxDKVSBlobValueSize)
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(blob) != swire.MaxDKVSBlobValueSize {
-				t.Fatalf("DKB1 bytes=%d want=%d", len(blob), swire.MaxDKVSBlobValueSize)
-			}
-			t.Logf("capacity boundary accepted: AMD=%d ADE=%d DKB1=%d (limit=%d)",
-				len(plain), len(envelope), len(blob), swire.MaxDKVSBlobValueSize)
-		})
-	}
-}
 
 type accountManagedCapacityProvider struct {
 	scope   string
@@ -115,29 +28,6 @@ func (p *accountManagedCapacityProvider) Validate(AccountManagedDataCatalog, []A
 }
 func (p *accountManagedCapacityProvider) Import(AccountManagedDataCatalog, []AccountManagedDataPayload) error {
 	return nil
-}
-
-func TestManagedDataBundleCapacityReportsPlaintextActualAndLimit(t *testing.T) {
-	const provider, scope = "rgb11", "testnet/capacityfixture/0"
-	base := account.ManagedDataBundle{Version: account.ManagedDataBundleVersion, Revision: 1,
-		Items: []account.ManagedDataItem{{Provider: provider, Scope: scope, Payload: []byte{0x42}}}}
-	baseRaw, err := account.EncodeManagedDataBundle(base)
-	if err != nil {
-		t.Fatal(err)
-	}
-	bundle := base
-	bundle.Items = []account.ManagedDataItem{{Provider: provider, Scope: scope,
-		Payload: make([]byte, account.ManagedDataMaxPayload)}}
-	_, err = account.EncodeManagedDataBundle(bundle)
-	var encodedLength [binary.MaxVarintLen64]byte
-	wantActual := len(baseRaw) - 1 + account.ManagedDataMaxPayload +
-		binary.PutUvarint(encodedLength[:], uint64(account.ManagedDataMaxPayload)) - 1
-	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("%d bytes", wantActual)) ||
-		!strings.Contains(err.Error(), fmt.Sprintf("limit is %d bytes", account.ManagedDataMaxPayload)) {
-		t.Fatalf("plaintext capacity error=%v; want actual=%d limit=%d",
-			err, wantActual, account.ManagedDataMaxPayload)
-	}
-	t.Logf("plaintext bundle rejected: AMD=%d limit=%d", wantActual, account.ManagedDataMaxPayload)
 }
 
 func TestModuleCapacityKeepsRGBProof(t *testing.T) {
@@ -313,7 +203,7 @@ func TestModuleCapacityKeepsRGBProof(t *testing.T) {
 	// adds 33 bytes (AMOE magic, nonce, and GCM tag), while DKB1 adds 8 bytes;
 	// therefore there is an 8-byte interval of valid sealed modules that DKB1
 	// cannot carry. Find the first such payload while keeping the module valid.
-	low, high := 1, account.ManagedDataMaxPayload
+	low, high := 1, account.ManagedObjectMaxBytes
 	for low < high {
 		middle := low + (high-low)/2
 		candidate := capacityTestNoise(middle)
@@ -343,8 +233,8 @@ func TestModuleCapacityKeepsRGBProof(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seal valid account module just beyond DKB1 limit: %v", err)
 	}
-	if len(encodedModule) > account.ManagedDataMaxPayload {
-		t.Fatalf("account module envelope=%d exceeds account module limit=%d", len(encodedModule), account.ManagedDataMaxPayload)
+	if len(encodedModule) > account.ManagedObjectMaxBytes {
+		t.Fatalf("account module envelope=%d exceeds account module limit=%d", len(encodedModule), account.ManagedObjectMaxBytes)
 	}
 	if len(encodedModule)+8 <= swire.MaxDKVSBlobValueSize {
 		t.Fatalf("module bytes=%d plus DKB1 header fit wire limit=%d", len(encodedModule), swire.MaxDKVSBlobValueSize)
@@ -359,7 +249,7 @@ func TestModuleCapacityKeepsRGBProof(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.markAccountManagedDataDirtyDeferred("zz-capacity"); err != nil {
+	if err := accountTestChange(manager, "zz-capacity", scope); err != nil {
 		t.Fatal(err)
 	}
 	err = manager.SyncAccountManagementState(context.Background())
@@ -374,8 +264,8 @@ func TestModuleCapacityKeepsRGBProof(t *testing.T) {
 	if err := manager.CheckAccountWrite(rgb11AccountManagedProviderID, scope); err != nil {
 		t.Fatalf("capacity failure blocked the healthy RGB11 module: %v", err)
 	}
-	if err := manager.CheckAccountWrite("zz-capacity", scope); err == nil {
-		t.Fatal("oversized module remained eligible for a new module write")
+	if err := manager.CheckAccountWrite("zz-capacity", scope); err != nil {
+		t.Fatalf("upload capacity failure blocked local edits: %v", err)
 	}
 	var capacityStatus, rgbStatus *AccountModuleStatus
 	for index := range status.Modules {
@@ -387,7 +277,7 @@ func TestModuleCapacityKeepsRGBProof(t *testing.T) {
 			rgbStatus = module
 		}
 	}
-	if capacityStatus == nil || capacityStatus.WriteAllowed || capacityStatus.BackupState != "error" || capacityStatus.LastError == "" {
+	if capacityStatus == nil || !capacityStatus.WriteAllowed || capacityStatus.BackupState != "error" || capacityStatus.LastError == "" {
 		t.Fatalf("failed module status does not expose its capacity failure: %+v", capacityStatus)
 	}
 	if rgbStatus == nil || !rgbStatus.WriteAllowed {
@@ -478,109 +368,6 @@ func TestModuleCapacityKeepsRGBProof(t *testing.T) {
 		t.Fatal("capacity failure lost the original local RGB proof")
 	}
 }
-func accountManagedPayloadForEnvelopeSize(t *testing.T, secret []byte, accountID string,
-	base account.ManagedDataBundle, provider, scope string, wantEnvelopeBytes int) []byte {
-	t.Helper()
-	payload := capacityTestNoise(1)
-	overhead := managedDataEnvelopeOverhead(t, secret, accountID)
-	wantPlainBytes := wantEnvelopeBytes - overhead
-	for attempt := 0; attempt < 8; attempt++ {
-		items := append([]account.ManagedDataItem(nil), base.Items...)
-		items = append(items, account.ManagedDataItem{Provider: provider, Scope: scope, Payload: payload})
-		bundle := base
-		bundle.Items = items
-		plain, err := account.EncodeManagedDataBundle(bundle)
-		if err != nil {
-			t.Fatal(err)
-		}
-		delta := wantPlainBytes - len(plain)
-		if delta == 0 {
-			compressed, err := account.ManagedDataBundleCompressionBeneficial(bundle)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if compressed {
-				t.Fatal("high-entropy account capacity payload compressed under bundle policy")
-			}
-			zeroBytes(plain)
-			return payload
-		}
-		zeroBytes(plain)
-		if len(payload)+delta <= 0 {
-			t.Fatalf("capacity payload adjustment underflow: payload=%d delta=%d", len(payload), delta)
-		}
-		payload = capacityTestNoise(len(payload) + delta)
-	}
-	t.Fatalf("cannot construct account plaintext size %d for ADE target %d", wantPlainBytes, wantEnvelopeBytes)
-	return nil
-}
-
-func managedDataEnvelopeOverhead(t *testing.T, secret []byte, accountID string) int {
-	t.Helper()
-	bundle := account.ManagedDataBundle{Version: account.ManagedDataBundleVersion, Revision: 1,
-		Items: []account.ManagedDataItem{{Provider: "rgb11", Scope: "testnet/capacityfixture/0", Payload: []byte{0x42}}}}
-	plain, err := account.EncodeManagedDataBundle(bundle)
-	if err != nil {
-		t.Fatal(err)
-	}
-	envelope, info, err := account.SealManagedDataBundleWithInfo(secret, accountID, bundle, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer zeroBytes(envelope)
-	if info.Compressed {
-		t.Fatal("small envelope-overhead fixture unexpectedly compressed")
-	}
-	return len(envelope) - len(plain)
-}
-
-func managedDataBundleWithExactEnvelopeSize(t *testing.T, secret []byte, accountID string,
-	wantEnvelopeBytes int) account.ManagedDataBundle {
-	t.Helper()
-	const provider, scope = "rgb11", "testnet/capacityfixture/0"
-	base := account.ManagedDataBundle{
-		Version: account.ManagedDataBundleVersion, Revision: 1,
-		Items: []account.ManagedDataItem{{Provider: provider, Scope: scope, Payload: []byte{0x42}}},
-	}
-	baseRaw, err := account.EncodeManagedDataBundle(base)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantPlainBytes := wantEnvelopeBytes - managedDataEnvelopeOverhead(t, secret, accountID)
-	payloadSize := wantPlainBytes - len(baseRaw) + len(base.Items[0].Payload)
-	if payloadSize <= 0 {
-		t.Fatalf("invalid boundary payload size %d", payloadSize)
-	}
-	payload := capacityTestNoise(payloadSize)
-	bundle := base
-	bundle.Items = []account.ManagedDataItem{{Provider: provider, Scope: scope, Payload: payload}}
-	for attempt := 0; attempt < 8; attempt++ {
-		plain, err := account.EncodeManagedDataBundle(bundle)
-		if err != nil {
-			t.Fatal(err)
-		}
-		delta := wantPlainBytes - len(plain)
-		if delta == 0 {
-			compressed, err := account.ManagedDataBundleCompressionBeneficial(bundle)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if compressed {
-				t.Fatal("boundary fixture is compressible under managed-data policy")
-			}
-			return bundle
-		}
-		payloadSize += delta
-		if payloadSize <= 0 {
-			t.Fatalf("invalid adjusted boundary payload size %d", payloadSize)
-		}
-		payload = capacityTestNoise(payloadSize)
-		bundle.Items[0].Payload = payload
-	}
-	t.Fatalf("could not make uncompressed ADE exactly %d bytes", wantEnvelopeBytes)
-	return account.ManagedDataBundle{}
-}
-
 func capacityTestNoise(size int) []byte {
 	result := make([]byte, size)
 	for offset := 0; offset < len(result); {

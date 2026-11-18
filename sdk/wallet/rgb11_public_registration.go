@@ -14,7 +14,6 @@ import (
 	"github.com/sat20-labs/rgb11/consignment"
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
-	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -23,13 +22,6 @@ var (
 	ErrRGB11PublicDataUnavailable      = errors.New("RGB11 public data unavailable")
 	ErrRGB11PublicIdentityMismatch     = errors.New("RGB11 public identity mismatch")
 )
-
-func (p *Manager) rgb11PublicRegistryVerifier() dkvsindexer.SystemVerifier {
-	if p != nil && p.rgb11RegistryVerifier != nil {
-		return p.rgb11RegistryVerifier
-	}
-	return rgb11NetworkRegistryVerifier{}
-}
 
 // requireRGB11PublicRegistration checks a signed, independently readable
 // technical record before an RGB business operation reserves funds. Naming
@@ -45,12 +37,8 @@ func (p *Manager) requireRGB11PublicRegistration(asset *swire.AssetName) error {
 	if _, err := rgb11wallet.RGB11RegistryKey(contractID); err != nil {
 		return ErrRGB11PublicIdentityMismatch
 	}
-	client, err := p.ensureDKVSManager().primaryClient()
-	if err != nil {
-		return fmt.Errorf("%w: %v", ErrRGB11PublicDataUnavailable, err)
-	}
-	registration, _, err := client.getRGB11ContractWithVerifier(contractID, p.rgb11PublicRegistryVerifier())
-	if errors.Is(err, dkvsindexer.ErrRecordNotFound) {
+	registration, _, err := p.readAccountRGBContract(contractID)
+	if errors.Is(err, ErrRGB11PublicRegistrationRequired) {
 		return fmt.Errorf("%w: %s", ErrRGB11PublicRegistrationRequired, contractID)
 	}
 	if err != nil {
@@ -86,12 +74,8 @@ func (p *Manager) verifyRGB11PublicContract(contractID string, private []byte) e
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrRGB11PublicIdentityMismatch, err)
 	}
-	client, err := p.ensureDKVSManager().primaryClient()
-	if err != nil {
-		return fmt.Errorf("%w: %v", ErrRGB11PublicDataUnavailable, err)
-	}
-	registration, value, err := client.getRGB11ContractWithVerifier(contractID, p.rgb11PublicRegistryVerifier())
-	if errors.Is(err, dkvsindexer.ErrRecordNotFound) {
+	registration, value, err := p.readAccountRGBContract(contractID)
+	if errors.Is(err, ErrRGB11PublicRegistrationRequired) {
 		return fmt.Errorf("%w: %s", ErrRGB11PublicRegistrationRequired, contractID)
 	}
 	if err != nil {
@@ -207,12 +191,8 @@ func (p *Manager) VerifyRGB11PublicContract(contractID, contentBase64 string) (*
 	if err != nil || expected.ContractID != contractHex {
 		return nil, ErrRGB11PublicIdentityMismatch
 	}
-	client, err := p.ensureDKVSManager().primaryClient()
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrRGB11PublicDataUnavailable, err)
-	}
-	registration, value, err := client.getRGB11ContractWithVerifier(contractHex, p.rgb11PublicRegistryVerifier())
-	if errors.Is(err, dkvsindexer.ErrRecordNotFound) {
+	registration, value, err := p.readAccountRGBContract(contractHex)
+	if errors.Is(err, ErrRGB11PublicRegistrationRequired) {
 		return nil, ErrRGB11PublicRegistrationRequired
 	}
 	if err != nil {

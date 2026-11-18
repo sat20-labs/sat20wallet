@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	"sync"
 	"testing"
 	"time"
@@ -25,6 +26,10 @@ type expiredCancelEvidence struct {
 	outspendErr map[string]error
 	utxos       map[string]*rgb11wallet.BitcoinUTXO
 	utxoErr     map[string]error
+}
+
+func (*expiredCancelEvidence) GetGenesisHash() (string, error) {
+	return chaincfg.TestNet4Params.GenesisHash.String(), nil
 }
 
 func (e *expiredCancelEvidence) GetUTXO(outpoint string) (*rgb11wallet.BitcoinUTXO, error) {
@@ -226,7 +231,7 @@ func seedExpiredCancelFixture(t *testing.T, fixture *expiredCancelFixture, pendi
 	if err := fixture.manager.rgbManager.projectionStore.SavePendingTransfers(pending); err != nil {
 		t.Fatal(err)
 	}
-	if err := fixture.manager.utxoLockerL1.TryReserve([]string{fixture.input}, rgb11wallet.LockReasonPending, "expired-reservation"); err != nil {
+	if err := fixture.manager.utxoLockerL1.TryReserve([]string{fixture.input}, sdkcommon.UtxoLockRGBPending, "expired-reservation"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -326,7 +331,7 @@ func TestRGB11SettledConsumesLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	lock := restartedLocker.GetLockedUtxoList()[fixture.input]
-	if lock == nil || lock.Reason != rgb11wallet.LockReasonPending ||
+	if lock == nil || lock.Reason != sdkcommon.UtxoLockRGBPending ||
 		lock.ReservationID != pending.ReservationID {
 		t.Fatalf("reorg did not restore fail-closed input reservation: %+v", lock)
 	}
@@ -501,7 +506,7 @@ func TestCancelExpiredRGB11TransferRejectsUnsafeStateAndEvidence(t *testing.T) {
 			if err := f.manager.utxoLockerL1.ReleaseReservation([]string{f.input}, "expired-reservation"); err != nil {
 				t.Fatal(err)
 			}
-			if err := f.manager.utxoLockerL1.TryReserve([]string{f.input}, rgb11wallet.LockReasonPending, "other-owner"); err != nil {
+			if err := f.manager.utxoLockerL1.TryReserve([]string{f.input}, sdkcommon.UtxoLockRGBPending, "other-owner"); err != nil {
 				t.Fatal(err)
 			}
 		}},

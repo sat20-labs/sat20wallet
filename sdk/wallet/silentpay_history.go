@@ -146,6 +146,11 @@ func (p *Manager) SyncSilentPayArchive(ctx context.Context) ([]SPAccountHistory,
 	// restart point. No block with a partially returned transaction page may
 	// contribute to this commit.
 	persist := func() error {
+		p.mutex.RLock()
+		defer p.mutex.RUnlock()
+		if err := p.checkSPScanAccounts(accounts); err != nil {
+			return err
+		}
 		batch := p.db.NewWriteBatch()
 		if batch == nil {
 			return fmt.Errorf("silentpay: no history write batch")

@@ -46,7 +46,7 @@ func (h *accountNetworkLockAuditHTTP) SendDKVSPostContext(ctx context.Context, p
 }
 
 type accountNetworkLockAuditNode struct {
-	*accountManagedActiveRateLimitClient
+	*rgb11MessageNodeClient
 	observe func(string)
 }
 
@@ -67,58 +67,45 @@ func logAccountNetworkLockCallers(t *testing.T, operation, path string) {
 
 func (n *accountNetworkLockAuditNode) SendMessageServiceReq(req *swire.MessageServiceRequest) (*swire.MessageServiceResponse, error) {
 	n.observe("message-service")
-	return n.accountManagedActiveRateLimitClient.SendMessageServiceReq(req)
+	return n.rgb11MessageNodeClient.SendMessageServiceReq(req)
 }
 
 func TestAccountNetworkBoundariesHoldNoStateLocks(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
 	t.Cleanup(func() { _chain = oldChain })
-	for _, operation := range []string{"active-data", "managed-state-publication", "recovery-read", "account-direct-message"} {
+	for _, operation := range []string{"managed-state-publication", "recovery-read", "account-direct-message"} {
 		t.Run(operation, func(t *testing.T) {
-			var manager *Manager
+			remote := newRGB11MemoryDKVSHTTP()
+			messageClient := newRGB11MessageNodeClient(remote)
+			manager := newRGB11ActivatedFlowAccount(t, accountRootWrapperTestMnemonic,
+				remote, messageClient, rgb11ManagedRecoveryEvidence{}, &rgb11FlowIndexer{})
+			manager.accountBackgroundWG.Wait()
 			var run func() error
-			var messageClient *accountManagedActiveRateLimitClient
-			if operation == "active-data" || operation == "account-direct-message" {
-				m, provider, client, _ := newManagedActiveFixture(t)
-				manager = m
-				messageClient = client
-				if operation == "active-data" {
-					run = func() error { return manager.syncAccountManagedActiveData(provider.id) }
-				} else {
-					run = func() error {
-						_, err := manager.SendAccountDirectMessage("account-network-audit", "audit",
-							manager.accountProfile.AccountID, []byte("audit"))
-						return err
-					}
+			switch operation {
+			case "account-direct-message":
+				run = func() error {
+					_, err := manager.SendAccountDirectMessage("account-network-audit", "audit",
+						manager.accountProfile.AccountID, []byte("audit"))
+					return err
 				}
-			} else {
-				remote := newRGB11MemoryDKVSHTTP()
-				client := newRGB11MessageNodeClient(remote)
-				manager = newRGB11ActivatedFlowAccount(t, accountRootWrapperTestMnemonic,
-					remote, client, rgb11ManagedRecoveryEvidence{}, &rgb11FlowIndexer{})
-				// The successful initial sync also schedules active-data cleanup.
-				// Drain that fixture work before creating a new dirty generation or
-				// auditing the foreground operation's network boundaries.
-				manager.accountBackgroundWG.Wait()
-				if operation == "managed-state-publication" {
-					if err := manager.EnsureAccount(manager.status.CurrentWallet, 1, "Audit", ""); err != nil {
-						t.Fatal(err)
-					}
-					run = func() error { return manager.SyncAccountManagementState(context.Background()) }
-				} else {
-					location, err := manager.AccountIndexerLocation()
-					if err != nil {
-						t.Fatal(err)
-					}
-					status := manager.GetAccountManagementStatus()
-					locator := account.Locator{Version: account.Version, AccountID: status.AccountID,
-						PackageID: status.PackageID, RecoveryMode: account.RecoveryMode(status.RecoveryMode)}
-					run = func() error {
-						_, err := manager.LoadAccountManagementStateForRecovery(location, locator,
-							manager.accountSecret, accountRootWrapperTestMnemonic)
-						return err
-					}
+			case "managed-state-publication":
+				if err := manager.EnsureAccount(manager.status.CurrentWallet, 1, "Audit", ""); err != nil {
+					t.Fatal(err)
+				}
+				run = func() error { return manager.SyncAccountManagementState(context.Background()) }
+			case "recovery-read":
+				location, err := manager.AccountIndexerLocation()
+				if err != nil {
+					t.Fatal(err)
+				}
+				status := manager.GetAccountManagementStatus()
+				locator := account.Locator{Version: account.Version, AccountID: status.AccountID,
+					PackageID: status.PackageID, RecoveryMode: account.RecoveryMode(status.RecoveryMode)}
+				run = func() error {
+					_, err := manager.LoadAccountManagementStateForRecovery(location, locator,
+						manager.accountSecret, accountRootWrapperTestMnemonic)
+					return err
 				}
 			}
 			remote, ok := manager.http.(*rgb11MemoryDKVSHTTP)
@@ -150,7 +137,7 @@ func TestAccountNetworkBoundariesHoldNoStateLocks(t *testing.T) {
 				}{
 					{"identity", &manager.channelIdentityMu}, {"rgb-scope", &manager.rgbOperationMu},
 					{"manager-data", &manager.mutex}, {"account-coordinator", &manager.accountSyncMu},
-					{"account-storage", &manager.accountStorageMu}, {"managed-active-sync", &manager.managedActiveSyncMu},
+					{"account-storage", &manager.accountStorageMu},
 					{"message-send", &manager.messageSendMu},
 					{"dkvs-data", &manager.dkvs.mu}, {"dkvs-coordinator", &manager.dkvs.runMu},
 					{"verification-height", &manager.dkvs.verifyMu},
@@ -189,7 +176,7 @@ func TestAccountNetworkBoundariesHoldNoStateLocks(t *testing.T) {
 			}
 			manager.http = probe
 			if messageClient != nil {
-				client := &accountNetworkLockAuditNode{accountManagedActiveRateLimitClient: messageClient, observe: probe.observe}
+				client := &accountNetworkLockAuditNode{rgb11MessageNodeClient: messageClient, observe: probe.observe}
 				manager.serverNode = NewNode(client, "message.test", SERVER_NODE, client.CoreNodePubKey(), client.CoreNodePubKey())
 			}
 			manager.dkvs.mu.Lock()
@@ -213,10 +200,10 @@ func TestAccountNetworkBoundariesHoldNoStateLocks(t *testing.T) {
 				t.Fatal("operation never reached the required transport boundary")
 			}
 			// These locks serialize network protocol operations: message sequence
-			// allocation/replay, remote CAS updates, and active-sync ordering. They
+			// allocation/replay, remote CAS updates. They
 			// do not guard the wallet selection or local UI state, and are allowed.
 			coordination := map[string]bool{
-				"message-send": true, "dkvs-record-key": true, "managed-active-sync": true,
+				"message-send": true, "dkvs-record-key": true,
 			}
 			var names, networkLocks []string
 			for name := range held {

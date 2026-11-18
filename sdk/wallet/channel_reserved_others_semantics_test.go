@@ -16,7 +16,7 @@ import (
 // Lifecycle tests distinguish a local force-close package from client recovery
 // after the exact remote server parent confirms; transport is local.
 type reservedOthersFixture struct {
-	*nativeRecoveryFixture
+	*recoveryFixture
 	left, right    *btcec.PrivateKey
 	redeem, script []byte
 	seed           wire.OutPoint
@@ -26,7 +26,7 @@ type reservedOthersFixture struct {
 
 func newReservedOthersFixture(t *testing.T) *reservedOthersFixture {
 	t.Helper()
-	f := &reservedOthersFixture{nativeRecoveryFixture: newNativeRecoveryFixture(t)}
+	f := &reservedOthersFixture{recoveryFixture: newRecoveryFixture(t)}
 	f.left, _ = btcec.PrivKeyFromBytes([]byte{1})
 	f.right, _ = btcec.PrivKeyFromBytes([]byte{2})
 	var err error
@@ -49,7 +49,7 @@ func newReservedOthersFixture(t *testing.T) *reservedOthersFixture {
 	}
 	t.Cleanup(func() { stpAssetProtocols = previousRegistry })
 	f.channel.FundingUtxos = make(map[AssetName][]*TxOutput)
-	f.channel.NativeParents, f.channel.NativePrevouts = nil, nil
+	f.channel.FundingParents, f.channel.FundingPrevouts = nil, nil
 	f.channel.LocalChanCfg.PaymentKey = f.left.PubKey()
 	f.channel.RemoteChanCfg.PaymentKey = f.right.PubKey()
 	f.channel.RedeemScript = append([]byte(nil), f.redeem...)
@@ -69,6 +69,9 @@ func newReservedOthersFixture(t *testing.T) *reservedOthersFixture {
 	f.rpc.confirmed[f.channel.LocalCommitment.DeAnchorTx.TxID()] = true
 	f.manager.l2IndexerClient = &IndexerRPCClientMgr{active: f.rpc}
 	f.channel.StaticMerkleRoot = f.channel.CalcStaticMerkleRoot()
+	if err := f.manager.SaveChannelToDB(f.channel); err != nil {
+		t.Fatal(err)
+	}
 	f.checkChain(t, f.expected, map[wire.OutPoint]*wire.TxOut{f.seed: f.seedOutput})
 	return f
 }
@@ -188,7 +191,7 @@ func TestSTPDefaultDependenciesSurviveDatabaseReopen(t *testing.T) {
 	if !ok {
 		t.Fatalf("reloaded %T instead of closing reservation", loaded)
 	}
-	packageTxs, err := nativeForceClosePackage(&restored.ClosingDataInDB)
+	packageTxs, err := forceClosePackage(&restored.ClosingDataInDB)
 	if err != nil {
 		t.Fatal(err)
 	}

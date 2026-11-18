@@ -204,7 +204,7 @@ func buildRGB11LockPlan(target RGB11StaleLockTarget,
 	if lock == nil {
 		return nil, errRGB11LockGone
 	}
-	if lock.Reason != rgb11wallet.LockReasonRGB || lock.Value != 0 || len(lock.Assets) != 0 ||
+	if lock.Reason != common.UtxoLockRGB || lock.Value != 0 || len(lock.Assets) != 0 ||
 		lock.ReservationID != "" || lock.ReservationPreviousReason != "" || lock.Owner != nil {
 		return nil, errors.New("target lock is not the exact ownerless empty RGB lock")
 	}

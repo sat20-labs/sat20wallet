@@ -101,7 +101,7 @@
         </div>
         <div v-else-if="selectedTab === 'advanced'">
           <!-- 高级发送内容 -->
-          <SplitSend :assetName="props.assetKey || ''" />
+          <SplitSend :assetName="props.assetKey || ''" embedded @completed="isOpen = false" />
         </div>
       </div>
 

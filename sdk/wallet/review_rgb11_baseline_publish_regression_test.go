@@ -47,9 +47,6 @@ func TestReviewRGB11ExplicitSyncImportsActiveAlongsideLocalCatalogEdits(t *testi
 			if err := other.SyncAccountManagementState(context.Background()); err != nil {
 				t.Fatalf("publish remote stable recovery fixture: %v", err)
 			}
-			if active, err := local.hasAccountManagedRGB11Transition(); err != nil || active {
-				t.Fatalf("local fixture unexpectedly active: %v %v", active, err)
-			}
 			if localEdit {
 				if err := local.UpdateWalletName(local.GetAccountManagementStatus().RootWalletID,
 					"Local edit requiring baseline PUT"); err != nil {
@@ -81,9 +78,6 @@ func TestReviewRGB11ExplicitSyncImportsActiveAlongsideLocalCatalogEdits(t *testi
 				})
 			if !called || err != nil {
 				t.Errorf("baseline did not restore remote pending before unrelated work: called=%v err=%v", called, err)
-			}
-			if active, err := local.hasAccountManagedRGB11Transition(); err != nil || !active {
-				t.Errorf("remote active recovery was not imported after baseline publication: active=%v err=%v", active, err)
 			}
 			if localEdit {
 				if err := other.SyncAccountManagementState(context.Background()); err != nil {

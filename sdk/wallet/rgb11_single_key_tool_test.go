@@ -235,7 +235,7 @@ func TestRGB11OrphanSelfReceiveRepairDryRunAndApply(t *testing.T) {
 	consignmentHashBytes := sha256.Sum256(consignment)
 	consignmentHash := hex.EncodeToString(consignmentHashBytes[:])
 	receipt := rgb11wallet.ValidationReceipt{
-		Version: 1, EngineBuildID: "repair-test", ConsignmentHash: consignmentHash,
+		Version: 1, EngineBuildID: rgb11wallet.RGB11EngineBuildID, ConsignmentHash: consignmentHash,
 		ContractID: "rgb:repair-test", SchemaID: "rgb11", TransferID: transferID,
 		ValidatedAt: 1, Status: "valid",
 	}
@@ -304,7 +304,7 @@ func TestRGB11OrphanSelfReceiveRepairDryRunAndApply(t *testing.T) {
 	}
 	snapshot := &rgb11wallet.RGB11WalletSnapshot{
 		Version: rgb11wallet.WalletSnapshotVersion, WalletID: "rgb11-repair-wallet",
-		AccountIndex: 0, EngineBuildID: "test", ProjectionRecords: damaged, EngineRecords: engineRecords,
+		AccountIndex: 0, EngineBuildID: rgb11wallet.RGB11EngineBuildID, ProjectionRecords: damaged, EngineRecords: engineRecords,
 	}
 	fingerprint, err := rgb11wallet.HistoricalRepairSnapshotHash(snapshot)
 	if err != nil {

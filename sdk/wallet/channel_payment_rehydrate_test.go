@@ -155,7 +155,7 @@ func TestPaymentRuntimeRecoveryRejectsInvalidRecords(t *testing.T) {
 		}},
 		{"channel not committed", func(_ *Manager, c *ChannelInDB, p *PaymentReservation) { c.UpdateTime = p.Id - 1 }},
 		{"wrong latest tx", func(_ *Manager, c *ChannelInDB, _ *PaymentReservation) { c.LastPaymentTxId = strings.Repeat("0", 64) }},
-		{"native recovery state", func(_ *Manager, c *ChannelInDB, _ *PaymentReservation) { c.Status = CS_NATIVE_RECOVERY }},
+		{"channel recovery state", func(_ *Manager, c *ChannelInDB, _ *PaymentReservation) { c.Status = CS_COMMIT_RECOVERY }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -217,22 +217,22 @@ func TestPaymentRuntimeRecoveryPreservesOtherOperation(t *testing.T) {
 	}
 }
 
-func TestPaymentRuntimeRecoveryKeepsNativeObligations(t *testing.T) {
+func TestPaymentRecoveryObligations(t *testing.T) {
 	for _, state := range []string{"unrevoked", "revoked", "corrupt", "prepared"} {
 		t.Run(state, func(t *testing.T) {
 			manager, stored, _ := pendingPaymentRestartFixture(t, RS_PAYMENT_BROADCASTED)
 			context := &Channel{ChannelInDB: *stored}
-			key := stpNativeCommitmentKey(context, "local")
-			record := &stpNativeCommitmentRecord{Version: 1, Role: "local", ChannelID: stored.ChannelId,
+			key := stpCommitmentKey(context, "local")
+			record := &stpCommitmentRecord{Version: 1, Role: "local", ChannelID: stored.ChannelId,
 				Height: uint64(stored.CommitHeight) + 1, RevokedPrevious: state == "revoked"}
 			raw, err := EncodeToBytes(record)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if state == "corrupt" {
-				raw = []byte("damaged native obligation")
+				raw = []byte("damaged channel obligation")
 			} else if state == "prepared" {
-				key = stpNativePreparedRecoveryKey(context)
+				key = stpPreparedRecoveryKey(context)
 			}
 			if err := manager.db.Write(key, raw); err != nil {
 				t.Fatal(err)
@@ -242,11 +242,11 @@ func TestPaymentRuntimeRecoveryKeepsNativeObligations(t *testing.T) {
 				t.Fatal(err)
 			}
 			if (manager.GetCurrentChannel() != nil) != (state == "unrevoked") {
-				t.Fatal("payment recovery bypassed a native obligation or blocked an ordinary unrevoked journal")
+				t.Fatal("payment recovery bypassed a channel obligation or blocked an ordinary unrevoked journal")
 			}
 			after, err := manager.db.Read(key)
 			if err != nil || !bytes.Equal(raw, after) {
-				t.Fatal("ordinary payment recovery rewrote native evidence")
+				t.Fatal("ordinary payment recovery rewrote channel evidence")
 			}
 		})
 	}

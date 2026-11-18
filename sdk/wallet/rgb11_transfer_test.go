@@ -66,6 +66,11 @@ type rgb11FlowEvidence struct {
 	broadcastCount int
 }
 
+// The flow fixtures construct their wallets and issuance on Bitcoin Testnet4.
+func (*rgb11FlowEvidence) GetGenesisHash() (string, error) {
+	return chaincfg.TestNet4Params.GenesisHash.String(), nil
+}
+
 func (e *rgb11FlowEvidence) GetUTXO(outpoint string) (*rgb11wallet.BitcoinUTXO, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -206,12 +211,12 @@ func assertRGB11PreparedConsignmentUsesUnsignedWitness(t *testing.T, raw string)
 		t.Fatal("prepared consignment has no witness bundle")
 	}
 	for _, bundle := range bundles.Items {
-		publicWitness, ok := bundle.Unwrap().Field("pubWitness")
+		publicWitness, ok := bundle.Unwrap().Field("tx")
 		publicWitness = publicWitness.Unwrap()
-		if !ok || publicWitness.Name != "tx" || publicWitness.Inner == nil {
+		if !ok {
 			t.Fatalf("prepared consignment public witness is not an embedded transaction: %+v", publicWitness)
 		}
-		inputs, ok := publicWitness.Inner.Unwrap().Field("inputs")
+		inputs, ok := publicWitness.Field("inputs")
 		inputs = inputs.Unwrap()
 		if !ok || len(inputs.Items) == 0 {
 			t.Fatal("prepared public witness has no transaction inputs")
@@ -536,7 +541,7 @@ func TestRGB11CancelPreparedOutOfBandTransfer(t *testing.T) {
 		t.Fatalf("cancelled transfer=%+v err=%v", stored, err)
 	}
 	locks := manager.utxoLockerL1.GetLockedUtxoList()
-	if locks[rgbInput] == nil || locks[rgbInput].Reason != rgb11wallet.LockReasonRGB || locks[feeInput] != nil {
+	if locks[rgbInput] == nil || locks[rgbInput].Reason != common.UtxoLockRGB || locks[feeInput] != nil {
 		t.Fatalf("unexpected locks after cancellation: %+v", locks)
 	}
 
@@ -761,7 +766,7 @@ func TestRGB11IssueFirstReleaseSchemas(t *testing.T) {
 			}
 			locked := manager.utxoLockerL1.GetLockedUtxoList()
 			for _, outpoint := range issued.OutPoints {
-				if locked[outpoint] == nil || locked[outpoint].Reason != rgb11wallet.LockReasonRGB {
+				if locked[outpoint] == nil || locked[outpoint].Reason != common.UtxoLockRGB {
 					t.Fatalf("issued carrier %s is not RGB-locked: %+v", outpoint, locked[outpoint])
 				}
 			}
@@ -1222,7 +1227,7 @@ func TestRGB11IssuedFungibleFirstReleaseSchemasSendReceive(t *testing.T) {
 				}
 				for _, input := range pending.State.InputOutPoints {
 					lock := sender.utxoLockerL1.GetLockedUtxoList()[input]
-					if !reservedInputs[input] || lock == nil || lock.Reason != rgb11wallet.LockReasonPending {
+					if !reservedInputs[input] || lock == nil || lock.Reason != common.UtxoLockRGBPending {
 						t.Fatalf("%s evicted signed transfer lost input reservation %s: proof=%t lock=%+v",
 							test.name, input, reservedInputs[input], lock)
 					}
@@ -1236,6 +1241,13 @@ type rgb11StatusEvidence struct {
 	base      rgb11wallet.BitcoinEvidenceProvider
 	statuses  map[string]*rgb11wallet.BitcoinTxStatus
 	outspends map[string]*rgb11wallet.BitcoinOutspend
+}
+
+func (e *rgb11StatusEvidence) GetGenesisHash() (string, error) {
+	if e.base != nil {
+		return e.base.GetGenesisHash()
+	}
+	return "", errors.New("status-only test evidence has no Bitcoin chain")
 }
 
 func (e *rgb11StatusEvidence) GetUTXO(outpoint string) (*rgb11wallet.BitcoinUTXO, error) {
@@ -1323,10 +1335,10 @@ func saveRGB11StatusTransfer(t *testing.T, manager *Manager, transferID, status 
 	}
 	claimableReasons := []string(nil)
 	if len(inputOutpoints) > 0 {
-		claimableReasons = append(claimableReasons, rgb11wallet.LockReasonRGB)
+		claimableReasons = append(claimableReasons, common.UtxoLockRGB)
 	}
 	if err := manager.utxoLockerL1.TryReserve([]string{inputOutpoint},
-		rgb11wallet.LockReasonPending, pending.ReservationID, claimableReasons...); err != nil {
+		common.UtxoLockRGBPending, pending.ReservationID, claimableReasons...); err != nil {
 		t.Fatal(err)
 	}
 	return witnessTxID
@@ -1395,7 +1407,7 @@ func TestRGB11RefreshRollsSettledTransferBackAfterReorg(t *testing.T) {
 		t.Fatalf("reorged transfer input count=%d", len(pending.State.InputOutPoints))
 	}
 	lock := manager.utxoLockerL1.GetLockedUtxoList()[pending.State.InputOutPoints[0]]
-	if lock != nil && (lock.Reason == rgb11wallet.LockReasonPending || lock.ReservationID != "") {
+	if lock != nil && (lock.Reason == common.UtxoLockRGBPending || lock.ReservationID != "") {
 		t.Fatalf("positively reorged spend retained operation reservation: %+v", lock)
 	}
 }
@@ -1463,7 +1475,7 @@ func TestRGB11LockRebuildDoesNotRequireBitcoinEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	lock := manager.utxoLockerL1.GetLockedUtxoList()[pending.State.InputOutPoints[0]]
-	if lock == nil || lock.Reason != rgb11wallet.LockReasonPending {
+	if lock == nil || lock.Reason != common.UtxoLockRGBPending {
 		t.Fatalf("offline restored input lock=%+v", lock)
 	}
 }

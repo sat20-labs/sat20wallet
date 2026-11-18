@@ -95,7 +95,7 @@ func TestRGB11SpentSibling(t *testing.T) {
 	// Prior sender owns this change seal; revealing it does not alter any RGB
 	// operation, witness, signature or current return input.
 	validate := func() (*rgb11wallet.PreparedValidation, error) {
-		return rgb11wallet.ValidatePreparedWith(ctx, rgb11wallet.NewNativeConsensusValidatorWithReveals(pending.ChangeSeals...), raw, evidence)
+		return rgb11wallet.ValidatePreparedWith(ctx, rgb11wallet.NewRGB11ValidatorWithReveals(pending.ChangeSeals...), raw, evidence)
 	}
 	t.Run("clean_roundtrip", func(t *testing.T) {
 		receipt, e := validate()
@@ -132,7 +132,7 @@ func TestRGB11SpentSibling(t *testing.T) {
 		evidence.spendingTx[op] = fmt.Sprintf("%064x", 8181)
 		evidence.mu.Unlock()
 		defer func() { evidence.mu.Lock(); delete(evidence.spendingTx, op); evidence.mu.Unlock() }()
-		result, e := rgb11wallet.ValidatePreparedWith(ctx, rgb11wallet.NewNativeConsensusValidator(), raw, evidence)
+		result, e := rgb11wallet.ValidatePreparedWith(ctx, rgb11wallet.NewRGB11ConsensusValidator(), raw, evidence)
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -180,7 +180,7 @@ func TestRGB11SpentSibling(t *testing.T) {
 		}
 		evidence.mu.Unlock()
 		evidence.setStatus(backID, rgb11wallet.BitcoinTxStatus{TxID: backID, Confirmed: true, Confirmations: 6})
-		validator := rgb11wallet.NewNativeConsensusValidatorWithReveals(pending.ChangeSeals...)
+		validator := rgb11wallet.NewRGB11ValidatorWithReveals(pending.ChangeSeals...)
 		receipt, e := rgb11wallet.ValidateWith(ctx, validator, raw, evidence)
 		if e != nil {
 			t.Fatalf("confirmed terminal control: %v", e)
@@ -354,7 +354,7 @@ func TestRGB11SiblingMultiTip(t *testing.T) {
 	validate := func() (*rgb11wallet.PreparedValidation, error) {
 		// Exercise the core validator directly: the SDK receive wrapper also
 		// requires exactly one prepared witness and is not this boundary.
-		return rgb11wallet.NewNativeConsensusValidator().ValidatePreparedConsignment(ctx, raw, evidence)
+		return rgb11wallet.NewRGB11ConsensusValidator().ValidatePreparedConsignment(ctx, raw, evidence)
 	}
 	if result, err := validate(); err != nil || len(result.Receipt.Allocations) != 3 || len(result.WitnessTxIDs) != 2 {
 		t.Fatalf("valid independent-branch control failed: result=%v error=%v", result != nil, err)
