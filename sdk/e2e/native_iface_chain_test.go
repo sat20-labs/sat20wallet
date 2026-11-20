@@ -54,6 +54,7 @@ func newNativeIfaceChain(t *testing.T) *nativeIfaceChain {
 		t.Setenv("SAT20_REAL_TEST_WALLETS", prebuiltSPWalletFixture(t))
 	}
 	seeds := readSDKPWARegtestMnemonics(t)
+	l1Ready := e2ePhase(t, "native_iface_l1_ready")
 	core, _, _ := spRealBitcoind(t)
 	// H0..H1000 rewards are entirely Vintage on the real non-mainnet
 	// indexer. Keep those rewards outside the faucet and mature exactly one
@@ -87,11 +88,11 @@ func newNativeIfaceChain(t *testing.T) *nativeIfaceChain {
 	require.Equal(t, 1002, fundingBlock.Height)
 	require.Len(t, fundingBlock.Tx, 1)
 	key := keyFromMnemonic(t, seeds["core"], 0)
-	l1 := newLuckyIndexer(t, core, hex.EncodeToString(key.PubKey().SerializeCompressed()))
-	// A fresh index flushes every block. Under concurrent regression load it
-	// reached height 519 in six minutes on the way to the required 1102.
+	const flushPeriod = 12
+	l1 := newLuckyIndexerWithFlush(t, core, hex.EncodeToString(key.PubKey().SerializeCompressed()), flushPeriod)
 	l1.startWithin(t, 15*time.Minute)
 	waitLuckyIndexer(t, l1, core)
+	l1Ready()
 	t.Setenv("SAT20_REAL_L1_INDEXER", l1.url)
 	f := &nativeIfaceChain{core: core, l1: l1, seeds: seeds, mineAddress: sink}
 	f.network = prepareSDKPWARegtestNodes(t)

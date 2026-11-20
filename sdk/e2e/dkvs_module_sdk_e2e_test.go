@@ -383,11 +383,11 @@ func runSDKDKVSModuleLocal(t *testing.T, f *templateFixture, mnemonic, quotaMnem
 
 	t.Run("RenewedLeaseSurvivesOriginalExpiry", func(t *testing.T) {
 		k := key(t, "review-renew-lifecycle/value")
-		original, err := client.PutSignedRecordFreeLocal(owner.Wallet, k, []byte("lease"), dkvs.RecordOptions{IssueHeight: sdkDKVSReviewHeight(t, client), TTL: 8})
+		original, err := client.PutSignedRecordFreeLocal(owner.Wallet, k, []byte("lease"), dkvs.RecordOptions{IssueHeight: sdkDKVSReviewHeight(t, client), TTL: 2})
 		require.NoError(t, err)
 		oldExpiry := dkvs.RecordExpiryHeight(original)
-		require.Greater(t, oldExpiry, uint64(4))
-		advanceHeightTo(t, oldExpiry-4)
+		require.Greater(t, oldExpiry, uint64(1))
+		advanceHeightTo(t, oldExpiry-1)
 		renewed, err := client.RenewPersonalRecord(owner.Wallet, "review-renew-lifecycle/value", dkvs.RecordOptions{IssueHeight: sdkDKVSReviewHeight(t, client), TTL: 40})
 		require.NoError(t, err)
 		require.Equal(t, original.Seq+1, renewed.Seq)
@@ -403,7 +403,7 @@ func runSDKDKVSModuleLocal(t *testing.T, f *templateFixture, mnemonic, quotaMnem
 
 	t.Run("ExpiryIsAbsentToFreshSDKReader", func(t *testing.T) {
 		k := key(t, "review-expiry/value")
-		record, err := client.PutSignedRecordFreeLocal(owner.Wallet, k, []byte("expires"), dkvs.RecordOptions{IssueHeight: sdkDKVSReviewHeight(t, client), TTL: 8})
+		record, err := client.PutSignedRecordFreeLocal(owner.Wallet, k, []byte("expires"), dkvs.RecordOptions{IssueHeight: sdkDKVSReviewHeight(t, client), TTL: 2})
 		require.NoError(t, err)
 		prefix, err := dkvs.CollectionPathForKey(k)
 		require.NoError(t, err)

@@ -91,14 +91,16 @@ func TestRealSatoshiNetAgentPredictionTenBettors(t *testing.T) {
 
 	_, height, err := network.Bootstrap.Client.GetBestBlock()
 	require.NoError(t, err)
+	// Deployment and READY precede one block per bet. Leave one block of margin.
+	betDeadline := int64(height) + int64(len(bettors)) + 3
 	contract := contractcommon.AgentPredictionContract{
 		Subtype:      contractcommon.SubtypePrediction,
 		Title:        "Home vs Away basketball prediction",
 		Description:  "Home team vs away team",
 		TimeBase:     contractcommon.TimeBaseHeight,
-		BetDeadline:  int64(height) + 20,
-		EventTime:    int64(height) + 21,
-		ConfirmAfter: int64(height) + 22,
+		BetDeadline:  betDeadline,
+		EventTime:    betDeadline + 1,
+		ConfirmAfter: betDeadline + 2,
 		SourceURL:    resultURL + "/basketball/final",
 		BetAsset:     gas,
 		MinBetUnit:   "10000",
@@ -272,14 +274,16 @@ func TestRealSatoshiNetAgentPredictionPayoutByShare(t *testing.T) {
 
 	_, height, err := network.Bootstrap.Client.GetBestBlock()
 	require.NoError(t, err)
+	// Deployment and READY precede one block per bet. Leave one block of margin.
+	betDeadline := int64(height) + int64(len(bets)) + 3
 	contract := contractcommon.AgentPredictionContract{
 		Subtype:      contractcommon.SubtypePrediction,
 		Title:        "England vs Croatia payout share test",
 		Description:  "Validate winner payout is proportional to bet share",
 		TimeBase:     contractcommon.TimeBaseHeight,
-		BetDeadline:  int64(height) + 20,
-		EventTime:    int64(height) + 21,
-		ConfirmAfter: int64(height) + 22,
+		BetDeadline:  betDeadline,
+		EventTime:    betDeadline + 1,
+		ConfirmAfter: betDeadline + 2,
 		SourceURL:    resultURL + "/football/final",
 		BetAsset:     betAsset,
 		MinBetUnit:   "10000",

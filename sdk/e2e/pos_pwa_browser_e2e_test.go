@@ -32,7 +32,6 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	scommon "github.com/sat20-labs/satoshinet/indexer/common"
-	"github.com/sat20-labs/satoshinet/rpcclient"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
@@ -992,22 +991,20 @@ func posPWAStopNode(ctx context.Context, node *testHarness) error {
 	node.Client.Shutdown()
 	node.Client.WaitForShutdown()
 	node.Client = nil
-	wait := make(chan error, 1)
-	go func() { wait <- node.cmd.Wait() }()
 	select {
-	case err := <-wait:
-		if err != nil {
-			return fmt.Errorf("%s normal stop: %w", node.role, err)
+	case <-node.exited:
+		if node.exitErr != nil {
+			return fmt.Errorf("%s normal stop: %w", node.role, node.exitErr)
 		}
 		return nil
 	case <-ctx.Done():
 		_ = node.cmd.Process.Kill()
-		<-wait
+		<-node.exited
 		node.cmd = nil
 		return ctx.Err()
 	case <-time.After(45 * time.Second):
 		_ = node.cmd.Process.Kill()
-		<-wait
+		<-node.exited
 		node.cmd = nil
 		return fmt.Errorf("%s did not stop normally in 45 seconds", node.role)
 	}
@@ -1028,28 +1025,12 @@ func posPWARestartNode(ctx context.Context, node *testHarness) error {
 	if satoshinetRuntimeLock != nil {
 		command.ExtraFiles = []*os.File{satoshinetRuntimeLock}
 	}
-	if err := command.Start(); err != nil {
+	if err := node.startProcess(command); err != nil {
 		_ = logFile.Close()
 		return err
 	}
-	node.cmd = command
 	node.extraLogFiles = append(node.extraLogFiles, logFile)
-	for {
-		client, err := rpcclient.New(&rpcclient.ConnConfig{Host: node.rpcAddr, Endpoint: "ws", User: "user", Pass: "pass",
-			DisableTLS: true, DisableAutoReconnect: true}, &rpcclient.NotificationHandlers{})
-		if err == nil {
-			if _, _, err := client.GetBestBlock(); err == nil {
-				node.Client = client
-				return nil
-			}
-			client.Shutdown()
-		}
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("%s restart RPC: %w", node.role, ctx.Err())
-		case <-time.After(100 * time.Millisecond):
-		}
-	}
+	return node.waitForRPC(ctx)
 }
 
 // Keep Playwright's graceful signal handling; the platform helper owns only

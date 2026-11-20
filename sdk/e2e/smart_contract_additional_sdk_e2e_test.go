@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -28,20 +27,7 @@ func sdkReviewRestartCore(t *testing.T, f *sdkContractReviewFixture) {
 	require.NoError(t, err)
 	require.False(t, relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)))
 	require.Equal(t, node.nodeDir, node.cmd.Dir)
-	args := append([]string(nil), node.cmd.Args...)
-	env := append([]string(nil), node.cmd.Env...)
-	extraFiles := append([]*os.File(nil), node.cmd.ExtraFiles...)
-	require.NotEmpty(t, args)
-	require.NoError(t, node.TearDown())
-	file, err := os.OpenFile(node.logFile, os.O_WRONLY|os.O_APPEND, 0600)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = file.Close() })
-	cmd := exec.Command(args[0], args[1:]...)
-	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = node.nodeDir, env, file, file
-	cmd.ExtraFiles = extraFiles
-	require.NoError(t, cmd.Start())
-	node.cmd = cmd
-	node.Client = waitForRPCClient(t, node.rpcAddr)
+	restartTestHarness(t, node)
 	peers, err := node.Client.GetPeerInfo()
 	require.NoError(t, err)
 	connected := false

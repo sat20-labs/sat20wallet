@@ -873,7 +873,7 @@ func coreProxySafetyE2E(t *testing.T, chain *coreE2EChain, sender, receiver *Man
 			coreRequire(t, "issue proxy safety asset", err)
 			expiry := time.Now().Add(time.Hour).Unix()
 			if strings.HasPrefix(name, "proxy_expired_") || name == "proxy_prepared_expiry" {
-				expiry = time.Now().Add(30 * time.Second).Unix()
+				expiry = time.Now().Add(10 * time.Second).Unix()
 			}
 			invoice, err := receiver.CreateRGB11Invoice(RGB11InvoiceRequest{
 				Mode: "blind", TransportMode: RGB11ProxyTransport,

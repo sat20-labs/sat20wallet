@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -556,6 +557,8 @@ func startSatoshiNetNodeWithArgs(t *testing.T, fakeL1 *fakeL1Indexer, role, mnem
 type testHarness struct {
 	Client         *rpcclient.Client
 	cmd            *exec.Cmd
+	exited         <-chan struct{}
+	exitErr        error
 	nodeDir        string
 	p2pAddr        string
 	rpcAddr        string
@@ -583,10 +586,7 @@ func newTestHarness(t *testing.T, exe, nodeDir, p2pAddr, rpcAddr string, args, e
 	cmd.Env = append(os.Environ(), env...)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	require.NoError(t, cmd.Start())
-
 	h := &testHarness{
-		cmd:     cmd,
 		nodeDir: nodeDir,
 		p2pAddr: p2pAddr,
 		rpcAddr: rpcAddr,
@@ -597,37 +597,69 @@ func newTestHarness(t *testing.T, exe, nodeDir, p2pAddr, rpcAddr string, args, e
 		require.NoError(t, h.TearDown())
 		require.NoError(t, logFile.Close())
 	})
-	h.Client = waitForRPCClient(t, rpcAddr)
+	require.NoError(t, h.startProcess(cmd))
+	ctx, cancel := context.WithTimeout(t.Context(), rpcReadyTimeout)
+	defer cancel()
+	require.NoError(t, h.waitForRPC(ctx))
 	return h
 }
 
-func waitForRPCClient(t *testing.T, rpcAddr string) *rpcclient.Client {
-	t.Helper()
+func (h *testHarness) startProcess(cmd *exec.Cmd) error {
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	exited := make(chan struct{})
+	h.cmd, h.exited = cmd, exited
+	go func() {
+		h.exitErr = cmd.Wait()
+		close(exited)
+	}()
+	return nil
+}
+
+func (h *testHarness) waitForRPC(ctx context.Context) error {
 	conf := rpcclient.ConnConfig{
-		Host:                 rpcAddr,
+		Host:                 h.rpcAddr,
 		Endpoint:             "ws",
 		User:                 "user",
 		Pass:                 "pass",
 		DisableTLS:           true,
 		DisableAutoReconnect: true,
 	}
-	var lastErr error
-	deadline := time.Now().Add(rpcReadyTimeout)
-	for time.Now().Before(deadline) {
+	probe := time.NewTicker(100 * time.Millisecond)
+	defer probe.Stop()
+	for {
 		client, err := rpcclient.New(&conf, &rpcclient.NotificationHandlers{})
 		if err == nil {
-			if _, _, err := client.GetBestBlock(); err == nil {
-				return client
+			if _, _, err = client.GetBestBlock(); err == nil {
+				h.Client = client
+				return nil
 			}
-			lastErr = err
 			client.Shutdown()
-		} else {
-			lastErr = err
 		}
-		time.Sleep(100 * time.Millisecond)
+		select {
+		case <-h.exited:
+			return fmt.Errorf("node exited before RPC %s was ready (%v); log: %s", h.rpcAddr, h.exitErr, h.logFile)
+		case <-ctx.Done():
+			return fmt.Errorf("RPC %s was not ready: %w (last probe: %v); log: %s", h.rpcAddr, ctx.Err(), err, h.logFile)
+		case <-probe.C:
+		}
 	}
-	require.NoError(t, lastErr)
-	return nil
+}
+
+func TestSatoshiNetEarlyExit(t *testing.T) {
+	artifacts := satoshinetCoreBuildArtifacts(t)
+	node := &testHarness{rpcAddr: "127.0.0.1:" + spRealFreePort(t)}
+	cmd := exec.Command(artifacts.coreExecutable, "--invalid-sdk-e2e-option")
+	cmd.Dir = t.TempDir()
+	t.Cleanup(func() { require.NoError(t, node.TearDown()) })
+	require.NoError(t, node.startProcess(cmd))
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	require.ErrorContains(t, node.waitForRPC(ctx), "exited before RPC")
+	var exit *exec.ExitError
+	require.ErrorAs(t, node.exitErr, &exit)
 }
 
 func (h *testHarness) IndexerURL(proxy string) (string, error) {
@@ -671,7 +703,7 @@ func (h *testHarness) TearDown() error {
 	}
 	if h.cmd != nil && h.cmd.Process != nil {
 		_ = h.cmd.Process.Kill()
-		_, _ = h.cmd.Process.Wait()
+		<-h.exited
 	}
 	h.cmd = nil
 	for _, file := range h.extraLogFiles {
@@ -703,10 +735,11 @@ func restartTestHarness(t *testing.T, h *testHarness) {
 	cmd.Env = env
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	require.NoError(t, cmd.Start())
-	h.cmd = cmd
 	h.extraLogFiles = append(h.extraLogFiles, logFile)
-	h.Client = waitForRPCClient(t, h.rpcAddr)
+	require.NoError(t, h.startProcess(cmd))
+	ctx, cancel := context.WithTimeout(t.Context(), rpcReadyTimeout)
+	defer cancel()
+	require.NoError(t, h.waitForRPC(ctx))
 }
 
 func nextNodeAddresses(t *testing.T) (string, string, string, string) {
@@ -1109,7 +1142,13 @@ func (n *realSatoshiNet) waitForTx(t *testing.T, tx *wire.MsgTx, minHeight int32
 		} else {
 			lastStatus = fmt.Sprintf("confirmations=%d block=%s", verbose.Confirmations, verbose.BlockHash)
 		}
-		_, _ = n.Bootstrap.Client.Generate(1)
+		scheduled, err := n.Bootstrap.Client.GetGenerate()
+		require.NoError(t, err)
+		if !scheduled {
+			_, err := n.Bootstrap.Client.Generate(1)
+			require.NoError(t, err, "mine transaction %s (minimum height %d)", txHash, minHeight)
+			continue
+		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	t.Fatalf("transaction %s was not mined, last status: %s", txHash, lastStatus)

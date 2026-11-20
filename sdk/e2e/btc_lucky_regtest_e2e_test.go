@@ -953,6 +953,11 @@ func (g *luckyMinerGate) releaseAll() {
 
 func newLuckyIndexer(t *testing.T, core *spRealCoreRPC, pubkey string) *luckyIndexerProc {
 	t.Helper()
+	return newLuckyIndexerWithFlush(t, core, pubkey, 1)
+}
+
+func newLuckyIndexerWithFlush(t *testing.T, core *spRealCoreRPC, pubkey string, flushPeriod int) *luckyIndexerProc {
+	t.Helper()
 	dir := testCaseDirectory(t)
 	_, source, _, ok := runtime.Caller(0)
 	require.True(t, ok)
@@ -991,13 +996,13 @@ log:
   path: %q
 basic_index:
   max_index_height: 0
-  period_flush_to_db: 1
+  period_flush_to_db: %d
 rpc_service:
   addr: 127.0.0.1:%d
   proxy: btc/regtest
   log_path: %q
 pubkey: %q
-`, dbPath, rpcPort, core.user, core.pass, filepath.Join(dir, "log"), httpPort, filepath.Join(dir, "rpc-log"), pubkey)
+`, dbPath, rpcPort, core.user, core.pass, filepath.Join(dir, "log"), flushPeriod, httpPort, filepath.Join(dir, "rpc-log"), pubkey)
 	require.NoError(t, os.WriteFile(config, []byte(configBody), 0o600))
 	proc := &luckyIndexerProc{
 		dir: dir, binary: binary, config: config,
