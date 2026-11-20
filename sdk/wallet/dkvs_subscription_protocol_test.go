@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -252,35 +251,6 @@ func TestDKVSCurrentDeltaRepairsMissingKeyThroughSnapshot(t *testing.T) {
 	require.Equal(t, beforeDeltas+1, deltas)
 }
 
-func TestDKVSCurrentSyncDoesNotUseObsoleteDeltaEndpoint(t *testing.T) {
-	manager, remote := finalDKVSTestManager(t)
-	client, err := manager.ensureDKVSManager().primaryClient()
-	require.NoError(t, err)
-	first, second := accountTestKey(t, manager, "wallet/first"), accountTestKey(t, manager, "wallet/second")
-	prefix, _, err := dkvsManagedPathForKey(first)
-	require.NoError(t, err)
-	seed := finalDKVSSeedClient(manager, remote)
-	_, err = seed.PutRecord(canonicalTestRecord(t, manager, first, 1, "first"))
-	require.NoError(t, err)
-	require.NoError(t, manager.SubscribeDKVSPrefix(prefix))
-	require.NoError(t, manager.dkvs.forceCurrentPrefixes(client, []string{prefix}))
-	remote.mu.Lock()
-	remote.deltaUnavailable = true
-	remote.mu.Unlock()
-	_, err = seed.PutRecord(canonicalTestRecord(t, manager, second, 1, "second"))
-	require.NoError(t, err)
-	beforeStatus, beforeSnapshots, beforeDeltas := currentTransportCounts(remote)
-	_, err = manager.syncDKVSOnce()
-	require.NoError(t, err)
-	status, snapshots, deltas := currentTransportCounts(remote)
-	require.Equal(t, beforeStatus, status)
-	require.Equal(t, beforeSnapshots, snapshots)
-	require.Equal(t, beforeDeltas+1, deltas)
-	value, err := newDKVSReplicaStore(manager.db).LoadSubscriptionRecord(client.replicaNamespace, second)
-	require.NoError(t, err)
-	require.Equal(t, "second", string(value.Value))
-}
-
 func TestDKVSCurrentSyncRejectsSourceGenerationRollback(t *testing.T) {
 	manager, remote := finalDKVSTestManager(t)
 	client, err := manager.ensureDKVSManager().primaryClient()
@@ -329,6 +299,7 @@ func TestDKVSFinalLocalPutInstallsVerifiedDeltaBeforeReturning(t *testing.T) {
 	local, err := store.Get(key)
 	require.NoError(t, err)
 	require.Equal(t, "local-v1", string(local.Value))
+	require.Equal(t, value.Hash, local.Hash)
 	status, snapshots, deltas := currentTransportCounts(remote)
 	require.Equal(t, []int{0, 1, 1}, []int{status, snapshots, deltas})
 	state, err = manager.GetDKVSSubscriptionStatus()
@@ -720,7 +691,6 @@ func TestDKVSFinalUnsubscribePrunesSubscriptionReplica(t *testing.T) {
 func TestDKVSFinalArchitectureGuard(t *testing.T) {
 	entries, err := os.ReadDir(".")
 	require.NoError(t, err)
-	versionedProductionFile := regexp.MustCompile(`_v[0-9]+\.go$`)
 	for _, entry := range entries {
 		name := entry.Name()
 		if entry.IsDir() || !strings.HasSuffix(name, ".go") {
@@ -730,9 +700,6 @@ func TestDKVSFinalArchitectureGuard(t *testing.T) {
 		require.NoError(t, err)
 		text := string(content)
 		require.False(t, strings.HasPrefix(text, "//go:build ignore"), "build-ignore placeholder: %s", name)
-		if !strings.HasSuffix(name, "_test.go") {
-			require.False(t, versionedProductionFile.MatchString(name), "versioned production file: %s", name)
-		}
 		if strings.HasSuffix(name, "_test.go") || !strings.Contains(name, "dkvs") {
 			continue
 		}

@@ -1235,12 +1235,69 @@ async function runRootImport(rootStep = check) {
     const catalogData = wallets => wallets.map(({ id, ...entry }) => entry)
     const expected = catalogData(await catalog(owner))
     assert.deepEqual(await catalog(imported), [])
-    await imported.goto(new URL('#/import', imported.url()).href)
-    await imported.getByRole('textbox', { name: 'Recovery Phrase', exact: true }).fill(rootMnemonic)
-    await imported.getByLabel('New Wallet Password', { exact: true }).fill(newPassword)
-    await imported.getByLabel('Confirm Password', { exact: true }).fill(newPassword)
-    await imported.getByRole('button', { name: 'Import Wallet', exact: true }).click()
-    await imported.waitForURL('**/#/wallet', { timeout: 90000 })
+    const fillForm = async page => {
+      await page.goto(new URL('#/import', page.url()).href)
+      await page.getByRole('textbox', { name: 'Recovery Phrase', exact: true }).fill(rootMnemonic)
+      await page.getByLabel('New Wallet Password', { exact: true }).fill(newPassword)
+      await page.getByLabel('Confirm Password', { exact: true }).fill(newPassword)
+    }
+    const abandoned = await device()
+    let releasePacket
+    const heldPacket = new Promise(resolve => { releasePacket = resolve })
+    let rootPrefix
+    let packageHeld = false
+    const holdPackage = async route => {
+      const req = route.request()
+      const scope = req.method() === 'POST' && req.postDataJSON()?.scope
+      if (scope?.keys?.length === 1 && scope.keys[0].endsWith('/account/root')) rootPrefix = scope.prefix
+      else if (rootPrefix && scope?.prefix === rootPrefix && !packageHeld) {
+        packageHeld = true
+        await heldPacket
+      }
+      return route.fallback()
+    }
+    try {
+      await fillForm(abandoned)
+      await abandoned.context().route('**/dkvs/active/sync*', holdPackage)
+      await abandoned.getByRole('button', {name:'Import Wallet',exact:true}).click()
+      await expect.poll(() => packageHeld, {timeout:90000,message:'root found, recovery collection read outstanding'}).toBe(true)
+      await abandoned.evaluate(() => {
+        location.hash = '#/create'
+        window.__importRelease = null
+        window.sat20wallet_wasm.release().then(result => { window.__importRelease = result.code })
+      })
+      await expect.poll(() => abandoned.evaluate(() => window.__importRelease),
+        {timeout:8000,message:'release must complete with the recovery response still held'}).toBe(0)
+      releasePacket()
+      await abandoned.context().unroute('**/dkvs/active/sync*', holdPackage)
+      await abandoned.reload()
+      await ready(abandoned)
+      assert.deepEqual(await catalog(abandoned), [], 'late recovery data did not restore the cancelled wallet')
+    } finally {
+      releasePacket()
+      await abandoned.context().close()
+    }
+
+    await fillForm(imported)
+    let rootReads = 0
+    const rootRoute = '**/dkvs/active/sync*'
+    const firstReadBusy = route => {
+      const req = route.request()
+      const keys = req.method() === 'POST' && req.postDataJSON()?.scope?.keys
+      if (keys?.length === 1 && keys[0].endsWith('/account/root') && ++rootReads === 1) {
+        return route.fulfill({status:503, contentType:'text/plain', body:'unavailable',
+          headers:{'access-control-allow-origin':'*'}})
+      }
+      return route.fallback()
+    }
+    await imported.context().route(rootRoute, firstReadBusy)
+    try {
+      await imported.getByRole('button', { name: 'Import Wallet', exact: true }).click()
+      await imported.waitForURL('**/#/wallet', { timeout: 90000 })
+      assert.ok(rootReads >= 2, 'verified recovery must follow the temporary failure')
+    } finally {
+      await imported.context().unroute(rootRoute, firstReadBusy)
+    }
     assert.equal(await imported.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().accountRecovery?.status), 'found')
     assert.equal((await accountCall(imported, 'getAccountView')).account_id, root.accounts[0].account_id)
     const restored = await catalog(imported)
@@ -1470,7 +1527,7 @@ async function runAccountGate() {
     mnemonic: rootMnemonic, password: newPassword, address: root.accounts[0].address,
   } })
   await runPwaUsageCases({ check, device, waitingDevice, ready, unlock, catalog, walletCall, accountCall,
-    password, newPassword, rootMnemonic, nodeAPIOrigins, preserveBrowserFailureState })
+    password, newPassword, nodeAPIOrigins, preserveBrowserFailureState })
   await runAccountPageCases({ check, device, preserveBrowserFailureState })
   assert.deepEqual(pageErrors, [], 'PWA must not produce unhandled page errors')
 }
@@ -1536,7 +1593,6 @@ try {
     assert.deepEqual(pageErrors, [], 'RGB recovery must not produce unhandled page errors')
   }
   else if (focusedUsageCases) {
-    let rootMnemonic
     if (focusedUsageCases.includes(rootImportCase)) {
       await check(rootImportCase, async () => {
         const { owner, recovery, imported } = await runRootImport((_name, action) => action())
@@ -1545,7 +1601,6 @@ try {
     }
     if (focusedUsageCases.some(name => requiredPwaBiometricCases.includes(name))) {
       const actor = await prepareBiometricRoot()
-      rootMnemonic = actor.mnemonic
       try { await runPwaBiometricCases({ check, device, ready, walletCall, accountCall }, { basicWallet: actor }) }
       catch (error) {
         console.error(JSON.stringify({ suite: 'runPwaBiometricCases', status: 'fail', message: error.message }))
@@ -1553,7 +1608,7 @@ try {
       }
     }
     await runPwaUsageCases({ check, device, waitingDevice, ready, unlock, catalog, walletCall, accountCall,
-      password, newPassword, questions, answers, rootMnemonic, nodeAPIOrigins, regtestMode, preserveBrowserFailureState,
+      password, newPassword, questions, answers, nodeAPIOrigins, regtestMode, preserveBrowserFailureState,
       focusedUsageCases,
       fixedAccountManagement: regtestMode ? regtestWalletFixture?.fixedAccountManagement : undefined })
     assert.deepEqual(pageErrors, [], 'focused account rerun must not produce unhandled page errors')

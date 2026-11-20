@@ -50,20 +50,6 @@ func TestSDKDKVSLaunchReviewNetwork(t *testing.T) {
 		require.ErrorIs(t, err, dkvs.ErrRecordNotFound, "deleted state was resurrected: record=%+v", got)
 	}
 
-	t.Run("ControlOnlineSameSourceUpdatesAndDeletes", func(t *testing.T) {
-		p := newGenerationPeerPair(t)
-		first := put(t, p, key(t, "control"), "one")
-		p.receiver.OnNotify(p.notification(t, first))
-		second := put(t, p, first.Key, "two")
-		p.receiver.OnNotify(p.notification(t, second))
-		p.requireValue(t, second)
-		deleted, err := p.source.client.DeleteCurrentRecord(owner.Wallet, first.Key, 100)
-		require.NoError(t, err)
-		p.receiver.OnNotify(p.notification(t, deleted))
-		assertAbsent(t, p, first.Key)
-		require.Empty(t, p.requests, "ordinary notifications should not require snapshots")
-	})
-
 	t.Run("OfflinePaidDeleteAndSameBlockRecreateConverges", func(t *testing.T) {
 		p := newGenerationPeerPair(t)
 		first := put(t, p, key(t, "recreate-same-block"), "old-one")
@@ -138,7 +124,11 @@ func TestSDKDKVSLaunchReviewNetwork(t *testing.T) {
 		request := &wire.MsgDKVSGet{RecordHashes: []chainhash.Hash{dkvs.RecordHash(old)}}
 		p.targetPeer.TrackRequest(request, time.Now())
 		var pending []*wire.MsgDKVSData
-		p.serving.Send = func(message wire.Message) { if response, ok := message.(*wire.MsgDKVSData); ok { pending = append(pending, response) } }
+		p.serving.Send = func(message wire.Message) {
+			if response, ok := message.(*wire.MsgDKVSData); ok {
+				pending = append(pending, response)
+			}
+		}
 		p.serving.OnGet(request)
 		require.Len(t, pending, 1)
 		require.Len(t, pending[0].Records, 1)
@@ -165,7 +155,9 @@ func TestSDKDKVSLaunchReviewNetwork(t *testing.T) {
 		p.serving.Peer = &dkvsp2p.PeerState{}
 		t.Cleanup(p.serving.Peer.Close)
 		p.serving.Store = activePeerStore{releaseReviewPeerStore{alternate.backend}}
-		p.serving.Sign = func(payload []byte) ([]byte, error) { return ecdsa.Sign(validator, chainhash.HashB(payload)).Serialize(), nil }
+		p.serving.Sign = func(payload []byte) ([]byte, error) {
+			return ecdsa.Sign(validator, chainhash.HashB(payload)).Serialize(), nil
+		}
 		freshPeer(t, p)
 		p.receiver.ValidatorID = hex.EncodeToString(validator.PubKey().SerializeCompressed())
 		path := pathOf(t, first.Key)

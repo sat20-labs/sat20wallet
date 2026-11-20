@@ -43,7 +43,9 @@ func runSDKAccountActivationRetry(t *testing.T, network *realSatoshiNet, mnemoni
 	require.NoError(t, err)
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	audit := newBootstrapCASAudit()
+	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
 		if audit.trackReceive.Load() && r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/active/sync") {
 			body, readErr := io.ReadAll(r.Body)
 			_ = r.Body.Close()
@@ -240,6 +242,23 @@ func runSDKAccountActivationRetry(t *testing.T, network *realSatoshiNet, mnemoni
 	require.Equal(t, grant.ID, retryGrant.ID)
 	require.NotEmpty(t, audit.takeReceives())
 	audit.blockReceive.Store(false)
+	// An obsolete grant or a different endpoint cannot even prepare the
+	// binding. The original grant must remain available for its real retry.
+	beforeRequests := requests.Load()
+	beforePrefixes, err := manager.ListSubscribedDKVSPrefixes()
+	require.NoError(t, err)
+	obsolete := *grant
+	obsolete.ID = ""
+	_, err = manager.NewAccountRepositoryForStorage(obsolete)
+	require.ErrorIs(t, err, wallet.ErrAccountStorageAuthorizationMissing)
+	otherNode := *grant
+	otherNode.Location.Host = "other.invalid"
+	_, err = manager.NewAccountRepositoryForStorage(otherNode)
+	require.ErrorIs(t, err, dkvs.ErrEndpointMismatch)
+	afterPrefixes, err := manager.ListSubscribedDKVSPrefixes()
+	require.NoError(t, err)
+	require.Equal(t, beforePrefixes, afterPrefixes)
+	require.Equal(t, beforeRequests, requests.Load())
 	// The raw binding has no outbox. Resume its unfinished explicit workflow
 	// once after the service returns, without reconfirming a known root state
 	// or purchasing another storage authorization.

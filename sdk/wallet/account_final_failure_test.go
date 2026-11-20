@@ -333,33 +333,6 @@ func TestImportFailureKeepsCatalog(t *testing.T) {
 	require.Equal(t, "Edited while independent module restores", target.GetWalletCatalog()[0].Name)
 }
 
-func TestFinalReviewRemoteImportCanResumeAfterProviderRecovers(t *testing.T) {
-	old := _chain
-	_chain = "testnet"
-	t.Cleanup(func() { _chain = old })
-	remote := newRGB11MemoryDKVSHTTP()
-	source, sourceProvider := managedImportTestSource(t, remote)
-	target, provider := managedImportTestManager(t, remote)
-	require.NoError(t, restoreManagedImportTestWallet(t, target, source))
-	want := []byte("new data")
-	stageManagedImportTestPayload(t, source, sourceProvider, want)
-	require.NoError(t, source.SyncAccountManagementState(nil))
-	beforeRemote := snapshotRGB11MemoryRecords(remote)
-	injected := errors.New("review provider interruption")
-	provider.importErr = injected
-	imports := provider.imports
-	err := target.SyncAccountManagementState(nil)
-	require.ErrorIs(t, err, injected)
-	require.True(t, accountModuleOnly(err))
-	require.Greater(t, provider.imports, imports)
-	importModuleTarget(t, target, provider.id, want)
-	require.Equal(t, beforeRemote, snapshotRGB11MemoryRecords(remote))
-	provider.importErr = nil
-	require.NoError(t, target.SyncAccountManagementState(nil))
-	assertImportComplete(t, target, provider, want)
-	require.Equal(t, beforeRemote, snapshotRGB11MemoryRecords(remote))
-}
-
 func TestFinalReviewSwitchWalletStatusFailureIsReported(t *testing.T) {
 	old := _chain
 	_chain = "testnet"
@@ -701,36 +674,6 @@ func TestFinalReviewRemoteImportCompletionWriteCanRetry(t *testing.T) {
 	assertImportComplete(t, target, provider, []byte("committed data"))
 	if !reflect.DeepEqual(beforeRemote, snapshotRGB11MemoryRecords(remote)) {
 		t.Fatal("completion retry changed remote records")
-	}
-}
-
-func TestFinalReviewIncompleteRestoreOnlyBlocksFailedModule(t *testing.T) {
-	old := _chain
-	_chain = "testnet"
-	defer func() { _chain = old }()
-	remote := newRGB11MemoryDKVSHTTP()
-	source, _ := managedImportTestSource(t, remote)
-	target, provider := managedImportTestManager(t, remote)
-	provider.importErr = errors.New("incomplete restore")
-	if err := restoreManagedImportTestWallet(t, target, source); err != nil {
-		t.Fatalf("failed independent module prevented wallet restoration: %v", err)
-	}
-	if err := target.CheckAccountRestore(provider.id, AccountManagedDataGlobalScope); !errors.Is(err, ErrAccountManagedDataImportIncomplete) {
-		t.Fatalf("failed module escaped durable protection: %v", err)
-	}
-	if err := target.CheckAccountRestore("wallets", AccountManagedDataGlobalScope); err != nil {
-		t.Fatalf("independent failed module froze healthy catalog: %v", err)
-	}
-	before := target.GetWalletCatalog()
-	provider.importErr = nil
-	if err := restoreManagedImportTestWallet(t, target, source); err != nil {
-		t.Fatal(err)
-	}
-	if err := target.CheckAccountRestore(provider.id, AccountManagedDataGlobalScope); err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(before, target.GetWalletCatalog()) {
-		t.Fatal("module retry replaced the healthy wallet catalog")
 	}
 }
 

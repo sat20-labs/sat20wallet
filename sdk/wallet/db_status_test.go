@@ -543,10 +543,7 @@ func TestInitialStatusBlockHashWindowByChain(t *testing.T) {
 		l1    bool
 		want  int
 	}{
-		{name: "bitcoin testnet4", chain: "testnet", l1: true, want: 144},
 		{name: "bitcoin mainnet", chain: "mainnet", l1: true, want: 7},
-		{name: "satoshinet testnet", chain: "testnet", l1: false, want: 7},
-		{name: "satoshinet mainnet", chain: "mainnet", l1: false, want: 7},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

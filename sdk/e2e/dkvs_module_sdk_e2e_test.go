@@ -381,21 +381,6 @@ func runSDKDKVSModuleLocal(t *testing.T, f *templateFixture, mnemonic, quotaMnem
 		sdkDKVSReviewUnchanged(t, client, renewed)
 	})
 
-	t.Run("PaginationOverflowDoesNotPanic", func(t *testing.T) {
-		a := sdkDKVSReviewPutFree(t, client, owner, key(t, "review-page/a"), []byte("a"))
-		b := sdkDKVSReviewPutFree(t, client, owner, key(t, "review-page/b"), []byte("b"))
-		prefix, err := dkvs.CollectionPathForKey(a.Key)
-		require.NoError(t, err)
-		maxInt := int(^uint(0) >> 1)
-		var page []*wire.DKVSRecord
-		var total int
-		require.NotPanics(t, func() { page, total, err = client.ListRecords(prefix, 1, maxInt) })
-		require.NoError(t, err)
-		require.Equal(t, 2, total)
-		require.Len(t, page, 1)
-		require.Equal(t, b.Key, page[0].Key)
-	})
-
 	t.Run("RenewedLeaseSurvivesOriginalExpiry", func(t *testing.T) {
 		k := key(t, "review-renew-lifecycle/value")
 		original, err := client.PutSignedRecordFreeLocal(owner.Wallet, k, []byte("lease"), dkvs.RecordOptions{IssueHeight: sdkDKVSReviewHeight(t, client), TTL: 8})

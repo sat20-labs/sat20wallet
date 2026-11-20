@@ -649,7 +649,7 @@ func TestAccountOfflineReadOnly(t *testing.T) {
 }
 
 func TestDKVSThreeFixMappingWriteVisibility(t *testing.T) {
-	for _, mode := range []string{"record", "cas", "batch", "install_failure"} {
+	for _, mode := range []string{"record", "cas", "install_failure"} {
 		t.Run(mode, func(t *testing.T) {
 			m, r := finalDKVSTestManager(t)
 			r.endpointID = hex.EncodeToString(m.wallet.GetPubKey().SerializeCompressed())

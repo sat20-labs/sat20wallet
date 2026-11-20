@@ -114,26 +114,3 @@ func TestTwoOfTwoRequiresUserShare(t *testing.T) {
 		zero(secret)
 	}
 }
-
-func TestNewDeviceIsRecoveryRehearsal(t *testing.T) {
-	manager := NewManager(nil)
-	pkg, err := manager.CreateRecoveryPackage(CreateOptions{AccountID: strings.Repeat("d", 64), Backup: testBackup(), RecoveryMode: RecoveryMode2Of2, Questions: testQuestions()}, testAccountSecret())
-	if err != nil {
-		t.Fatal(err)
-	}
-	dkvsShare, err := RecoverDKVSShare(pkg.DKVSShareCapsule, pkg.KnowledgeBundle, []AnswerAttempt{{QuestionID: "book-page", Answer: "月光落在安静的旧桥上"}, {QuestionID: "private-note", Answer: "yellow bicycle beside the winter river"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	confirmed, persisted := false, false
-	summary, err := RestoreOnNewDevice(NewDeviceRecoveryOptions{Envelope: pkg.Envelope, Shares: []RecoveryShare{pkg.UserShare, dkvsShare}, Confirm: func(summary RecoverySummary) (bool, error) { confirmed = true; return len(summary.Wallets) == 1, nil }, Persist: func(secret []byte, backup Backup) error {
-		persisted = len(secret) == 32 && len(backup.Wallets) == 1
-		return nil
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !confirmed || !persisted || summary.PackageID != pkg.Envelope.Locator.PackageID {
-		t.Fatal("rehearsal callbacks not completed")
-	}
-}

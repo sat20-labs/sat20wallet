@@ -32,6 +32,8 @@ var managerLifecycleMu sync.Mutex
 var managerAsyncTasks sync.WaitGroup
 var managerClosing bool
 var managerInitializing bool
+var managerImportCtx context.Context
+var cancelImportCtx context.CancelFunc
 
 type AsyncTaskFunc func() (interface{}, int, string)
 
@@ -288,6 +290,7 @@ func initManager(this js.Value, p []js.Value) any {
 		}
 		managerLifecycleMu.Lock()
 		_mgr = mgr
+		managerImportCtx, cancelImportCtx = context.WithCancel(context.Background())
 		managerLifecycleMu.Unlock()
 		registerWalletDataUpdateCallback()
 		mgr.Start()
@@ -310,6 +313,9 @@ func releaseManager(this js.Value, p []js.Value) any {
 	}
 	mgr := _mgr
 	managerClosing = true
+	if cancelImportCtx != nil {
+		cancelImportCtx()
+	}
 	managerLifecycleMu.Unlock()
 	handler := createUntrackedAsyncJsHandler(func() (interface{}, int, string) {
 		managerAsyncTasks.Wait()
@@ -534,6 +540,32 @@ func validateMnemonic(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(handler)
 }
 
+// The page owns the foreground request. Release also cancels it before
+// waiting for tracked tasks, including a request in its retry delay.
+func importRequestContext(signal js.Value) (context.Context, func(), error) {
+	if signal.Type() != js.TypeObject || signal.Get("aborted").Type() != js.TypeBoolean ||
+		signal.Get("addEventListener").Type() != js.TypeFunction || signal.Get("removeEventListener").Type() != js.TypeFunction {
+		return nil, nil, errors.New("expected an AbortSignal")
+	}
+	managerLifecycleMu.Lock()
+	parent := managerImportCtx
+	managerLifecycleMu.Unlock()
+	if parent == nil {
+		return nil, nil, errors.New("Manager not initialized")
+	}
+	ctx, cancel := context.WithCancel(parent)
+	listener := js.FuncOf(func(js.Value, []js.Value) any { cancel(); return nil })
+	signal.Call("addEventListener", "abort", listener)
+	if signal.Get("aborted").Bool() {
+		cancel()
+	}
+	return ctx, func() {
+		signal.Call("removeEventListener", "abort", listener)
+		listener.Release()
+		cancel()
+	}, nil
+}
+
 func importWallet(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
@@ -562,7 +594,18 @@ func importWallet(this js.Value, p []js.Value) any {
 	// return createJsRet(data, 0, "ok")
 
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
-		id, err := _mgr.ImportWallet(mnemonic, password)
+		var id int64
+		var err error
+		if len(p) == 3 {
+			ctx, done, ctxErr := importRequestContext(p[2])
+			if ctxErr != nil {
+				return nil, -1, ctxErr.Error()
+			}
+			defer done()
+			id, err = _mgr.ImportVerifiedRoot(ctx, mnemonic, password)
+		} else {
+			id, err = _mgr.ImportWallet(mnemonic, password)
+		}
 		if err != nil {
 			return nil, -1, err.Error()
 		}
@@ -579,7 +622,7 @@ func recoverAccountManagementFromRootMnemonic(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
-	if len(p) != 2 || p[0].Type() != js.TypeString || p[1].Type() != js.TypeString {
+	if (len(p) != 2 && len(p) != 3) || p[0].Type() != js.TypeString || p[1].Type() != js.TypeString {
 		return createJsRet(nil, -1, "expected mnemonic and password")
 	}
 	mnemonic, password := p[0].String(), p[1].String()
@@ -590,8 +633,18 @@ func recoverAccountManagementFromRootMnemonic(this js.Value, p []js.Value) any {
 		if identityErr != nil {
 			return nil, -1, identityErr.Error()
 		}
-		_, err := _mgr.RecoverAccountManagementFromRootMnemonic(
-			context.Background(), mnemonic, password)
+		var err error
+		if len(p) == 3 {
+			ctx, done, ctxErr := importRequestContext(p[2])
+			if ctxErr != nil {
+				return nil, -1, ctxErr.Error()
+			}
+			defer done()
+			_, err = _mgr.WaitForImportRoot(ctx, mnemonic, password)
+		} else {
+			_, err = _mgr.RecoverAccountManagementFromRootMnemonic(
+				context.Background(), mnemonic, password)
+		}
 		switch {
 		case err == nil:
 			walletID := ""
@@ -5240,6 +5293,16 @@ func verifyRGB11PublicContract(this js.Value, p []js.Value) any {
 }
 
 func main() {
+	if window := js.Global().Get("window"); window.Type() == js.TypeObject && window.Get("addEventListener").Type() == js.TypeFunction {
+		window.Call("addEventListener", "online", js.FuncOf(func(js.Value, []js.Value) any {
+			managerLifecycleMu.Lock()
+			if _mgr != nil && !managerClosing {
+				go _mgr.NotifyNetworkOnline()
+			}
+			managerLifecycleMu.Unlock()
+			return nil
+		}))
+	}
 	obj := js.Global().Get("Object").New()
 	// input: cfg, loglevel; return: ok
 	obj.Set("init", js.FuncOf(initManager))

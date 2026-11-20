@@ -26,10 +26,6 @@ func accountReviewFind(t *testing.T, manager *wallet.Manager, fingerprint string
 func TestSDKAccountReviewMultiDevice(t *testing.T) {
 	network := newDKVSNoPluginUnfundedNetwork(t)
 	waitForDKVSPeerReady(t, network)
-	t.Run("IndependentPendingChangesRebaseWithoutLoss", func(t *testing.T) {
-		t.Skip("not tested: simultaneous edits from multiple devices are unsupported")
-	})
-
 	t.Run("AlternatingReadOnlySyncDoesNotEchoRevisions", func(t *testing.T) {
 		f, device, _ := accountReviewDevicePair(t, network)
 		before := f.manager.GetAccountManagementStatus().StateSeq

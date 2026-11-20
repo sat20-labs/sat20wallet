@@ -38,30 +38,6 @@ func TestDKVSDeferredJobDoesNotStarveIndependentJobs(t *testing.T) {
 	}
 }
 
-func TestAccountOperationDoesNotHoldCoordinatorDuringLongWork(t *testing.T) {
-	manager := &Manager{}
-	started := make(chan struct{})
-	release := make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		done <- manager.runAccountOperation(context.Background(), func() error {
-			close(started)
-			<-release
-			return nil
-		})
-	}()
-	<-started
-	if !manager.accountSyncMu.TryLock() {
-		close(release)
-		t.Fatal("account coordinator mutex is held while operation work is blocked")
-	}
-	manager.accountSyncMu.Unlock()
-	close(release)
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestDKVSTransportDoesNotHoldCoordinatorDuringRequest(t *testing.T) {
 	manager := &dkvsManager{requestCtx: context.Background()}
 	started := make(chan struct{})

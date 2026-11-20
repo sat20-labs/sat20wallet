@@ -24,7 +24,7 @@ command -v python3 >/dev/null || { printf '%s\n' "Python 3 is required for resul
 for dependency in satoshinet indexer rgb11 transcend; do
   [[ -d "$WORKSPACE/$dependency" ]] || { printf 'missing SDK E2E dependency: %s\n' "$WORKSPACE/$dependency" >&2; exit 2; }
 done
-CORE_NATIVE_RUN='^TestSDKCoreModulesConnectedE2E$/^(dkvs_real_paid_cross_instance_prefix_and_CAS|backup_multiple_wallets_and_subaccounts_control|RGB11_self_send_cold_restore_and_respend|RGB11_asset_name_and_transcend_registration_descriptor|RGB_issuance_in_multiple_subaccounts|invoice_transfer_every_paid_recovery_boundary|direct_transfer_every_paid_recovery_boundary|RGB11_same_root_three_device_cas_cancel_broadcast_and_respend|RGB11_recovery_identity_batch_and_hop_lifecycles|RGB11_fullsend_history_cold_recovery_reorg_and_competing_intent|RGB11_R23_temporary_TTL_expiry_cold_restore_and_respend|RGB11_R09_same_root_real_CAS_loser_retains_private_intent_and_tests_recovery|RGB11_recovery_capacity_boundaries|RGB11_account_recovery_failure_boundaries)$'
+CORE_NATIVE_RUN='^TestSDKCoreModulesConnectedE2E$/^(dkvs_real_paid_cross_instance_prefix_and_CAS|backup_multiple_wallets_and_subaccounts_control|RGB11_asset_name_and_transcend_registration_descriptor|RGB_issuance_in_multiple_subaccounts|invoice_transfer_every_paid_recovery_boundary|direct_transfer_every_paid_recovery_boundary|RGB11_same_root_three_device_cas_cancel_broadcast_and_respend|RGB11_recovery_identity_batch_and_hop_lifecycles|RGB11_fullsend_history_cold_recovery_reorg_and_competing_intent|RGB11_R23_temporary_TTL_expiry_cold_restore_and_respend|RGB11_R09_same_root_real_CAS_loser_retains_private_intent_and_tests_recovery|RGB11_recovery_capacity_boundaries|RGB11_account_recovery_failure_boundaries)$'
 if [[ "$TAGS" == guardian ]]; then
   CORE_NATIVE_RUN="${CORE_NATIVE_RUN%')$'}|guardian_two_of_three_and_wrong_knowledge)$"
 fi
@@ -184,9 +184,12 @@ expected = set(selection.split("/^(", 1)[1][:-2].split("|"))
 prefix = "TestSDKCoreModulesConnectedE2E/"
 segments = report.get("segments", [])
 ordered = selection.split("/^(", 1)[1][:-2].split("|")
-plan = [("ordinary-recovery", ordered[:9] + ordered[10:]), ("long-history", ordered[9:10])]
-if (len(segments) != 2 or len(ordered) not in (14, 15)
-        or ordered[9] != "RGB11_fullsend_history_cold_recovery_reorg_and_competing_intent"
+plan = [("ordinary-recovery", ordered[:8] + ordered[9:]), ("long-history", ordered[8:9])]
+guardian_group = "guardian_two_of_three_and_wrong_knowledge"
+expected_count = 14 if guardian_group in expected else 13
+if (len(segments) != 2 or len(ordered) != expected_count
+        or (expected_count == 14 and ordered[-1] != guardian_group)
+        or ordered[8] != "RGB11_fullsend_history_cold_recovery_reorg_and_competing_intent"
         or report.get("shared_budget_seconds") != 5100 or report.get("budget_exhausted") is not False):
     check(False, "Core did not complete all selected native groups in two environments within the shared 85-minute budget")
 endpoints = []

@@ -71,7 +71,7 @@ func dkvsNoPluginBuildArtifacts(t *testing.T) satoshinetArtifacts {
 		copySatoshiNetRuntimeFile(t, satoshinetTestArtifacts.minerExecutable, artifacts.minerExecutable)
 		t.Logf("artifact: variant=dkvs files=wallet.so,miner source=normal elapsed_seconds=%.3f", time.Since(started).Seconds())
 	} else {
-		cmd := exec.Command("go", "build", "-buildmode=plugin", "-o", artifacts.minerPlugin, "main.go")
+		cmd := exec.Command("go", "build", "-tags=rpctest", "-buildmode=plugin", "-o", artifacts.minerPlugin, "main.go")
 		cmd.Dir = sdkPluginDir
 		output, err := cmd.CombinedOutput()
 		require.NoError(t, err, string(output))
@@ -111,7 +111,7 @@ func dkvsNoPluginBuildArtifacts(t *testing.T) satoshinetArtifacts {
 	require.NoError(t, err, string(output))
 
 	started = time.Now()
-	cmd = exec.Command("go", "build", "-mod=mod", "-modfile="+transcendMod, "-buildmode=plugin", "-o", artifacts.corePlugin, "main.go")
+	cmd = exec.Command("go", "build", "-mod=mod", "-modfile="+transcendMod, "-tags=rpctest", "-buildmode=plugin", "-o", artifacts.corePlugin, "main.go")
 	cmd.Dir = transcendPluginDir
 	output, err = cmd.CombinedOutput()
 	require.NoError(t, err, string(output))

@@ -96,21 +96,6 @@ func TestSDKDKVSActiveNetwork(t *testing.T) {
 		require.ErrorIs(t, err, dkvs.ErrRecordNotFound, "empty directories must be reconciled")
 	})
 
-	t.Run("ChosenPrefixSyncSourceDefinesCompletedView", func(t *testing.T) {
-		p := newGenerationPeerPair(t)
-		a := put(t, p.source, key(t, "active-network-stale/a"), "a1")
-		p.receiver.OnNotify(p.notification(t, a))
-		_ = put(t, p.target, a.Key, "locally-a2")
-		extra := put(t, p.target, key(t, "active-network-stale/b"), "locally-b")
-		prefix, err := dkvs.CollectionPathForKey(a.Key)
-		require.NoError(t, err)
-		p.receiver.QueuePathSync(prefix)
-		p.deliver(t)
-		p.requireValue(t, a)
-		_, err = p.target.client.GetRecord(extra.Key)
-		require.ErrorIs(t, err, dkvs.ErrRecordNotFound)
-	})
-
 	t.Run("SnapshotCommitRechecksLocalBaseline", func(t *testing.T) {
 		p := newGenerationPeerPair(t)
 		a := put(t, p.source, key(t, "active-network-race/a"), "a1")

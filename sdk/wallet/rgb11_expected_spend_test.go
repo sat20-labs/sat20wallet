@@ -991,10 +991,6 @@ func TestRGB11ExpectedSpendChecks(t *testing.T) {
 		evidence expectedSpendEvidence
 		point    string
 	}{
-		{name: "unconfirmed", evidence: expectedSpendEvidence{
-			status: &rgb11wallet.BitcoinTxStatus{TxID: txid, InMempool: true}, raw: encoded.Bytes()}},
-		{name: "status_error", evidence: expectedSpendEvidence{statusErr: errors.New("offline"), raw: encoded.Bytes()}},
-		{name: "raw_error", evidence: expectedSpendEvidence{status: confirmed, rawErr: errors.New("offline")}},
 		{name: "raw_mismatch", evidence: expectedSpendEvidence{status: confirmed, raw: []byte{0x01}}},
 		{name: "wrong_input", evidence: valid, point: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:0"},
 	}

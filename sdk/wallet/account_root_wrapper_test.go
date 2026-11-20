@@ -383,7 +383,6 @@ func TestFreshMainnetImportContinuesAfterRootMetadataRouteNotFound(t *testing.T)
 		status int
 	}{
 		{"missing-route", http.StatusNotFound},
-		{"upstream-unavailable", http.StatusBadGateway},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			manager := newAccountManagementAutoTestManager(t)

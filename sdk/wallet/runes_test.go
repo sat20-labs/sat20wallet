@@ -11,23 +11,6 @@ import (
 )
 
 func TestRunePayload(t *testing.T) {
-	hexPayload := "6a5d0d00cffc030180c0f0978ef84101"
-	paylaod, _ := hex.DecodeString(hexPayload)
-	fmt.Printf("len: %d\n %s\n", len(paylaod), hex.EncodeToString(paylaod))
-
-	stone := runestone.Runestone{}
-	result, err := stone.DecipherFromPkScript(paylaod)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	fmt.Printf("result: %v\n", result)
-
-	fmt.Printf("edicts:\n")
-	for _, v := range result.Runestone.Edicts {
-		fmt.Printf("%v\n", v)
-	}
-
 	payload, err := GetRunesEstimatePayload(nil, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -66,30 +49,6 @@ func TestRuneMintPayload(t *testing.T) {
 		}
 		fmt.Printf("mint: %v %d\n", result.Runestone.Mint, *result.Runestone.Pointer)
 	}
-}
-
-func TestParseRuneEtching(t *testing.T) {
-	// hexPayload := "6a5d18020104eb8385e294b4e2f718033005964e0680e8e6a78e06" // RUNESXBITCOIN
-	hexPayload := "6a5d2102010487a1c3f0c0ebf7fb9d01010503d4040595e80706808084fea6dee1111601" // DOGGOTOTHEMOON
-	paylaod, _ := hex.DecodeString(hexPayload)
-
-	stone := runestone.Runestone{}
-	result, err := stone.DecipherFromPkScript(paylaod)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	printEtching(result.Runestone.Etching)
-	fmt.Printf("Etching: %v\n", result.Runestone.Etching)
-
-	fmt.Printf("Mint:\n %v", result.Runestone.Mint)
-
-	fmt.Printf("edicts:\n")
-	for _, v := range result.Runestone.Edicts {
-		fmt.Printf("%v\n", v)
-	}
-
-	fmt.Printf("Pointer :%v\n", *result.Runestone.Pointer) // output index
 }
 
 func printEtching(etching *runestone.Etching) {
@@ -298,29 +257,3 @@ https://www.oklink.com/zh-hans/bitcoin/tx/9327998a4aee68a6792db8b00540976ebf81b3
 }
 
 */
-
-func TestParseOrdinals(t *testing.T) {
-
-	witnessHex := "20db8fe1cebdd4720fedf41695e42e92f4a205d581ea90abce5ceae951d955a02aac0063036f7264010118746578742f706c61696e3b636861727365743d7574662d38004ca97b2270223a226f726478222c226f70223a226465706c6f79222c227469636b223a2274657374646f67222c226d6178223a223231303030222c226c696d223a223231303030222c226e223a22313030222c2273656c66223a22313030222c22646573223a22303336376632366166323364633430666461643036373532633338323634666536323162376262616662316434316162343336623837646564313932663133333665227d68"
-	witness, _ := hex.DecodeString(witnessHex)
-
-	inscriptions, _, err := indexer.ParseInscription([][]byte{witness})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for k, v := range inscriptions {
-		fmt.Printf("%d\n", k)
-		for field, content := range v {
-			fmt.Printf("field %d\n", field)
-			if field == 11 {
-				fmt.Printf("inscriptionId: %s\n", indexer.ParseInscriptionId(content))
-			} else if field == 13 {
-				runes := runestone.NewRune(indexer.ParseRunesName(content))
-				fmt.Printf("runes name: %s\n", runes.String()) // 9df7df5c0e10d087
-			} else {
-				fmt.Printf("content: %s\n", string(content))
-			}
-		}
-	}
-	fmt.Printf("\n")
-}

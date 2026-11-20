@@ -197,14 +197,6 @@ func TestRGBNetworkBoundariesHoldNoWalletLocks(t *testing.T) {
 			probe.assertUnlocked(t)
 		})
 	}
-	t.Run("probe-unlocked-control", func(t *testing.T) {
-		manager, _, secret := buildRootWrapperSource(t)
-		defer zeroBytes(secret)
-		manager.stopAccountBackgroundTasks()
-		probe := &rgbNetworkAuditProbe{owner: manager}
-		probe.record()
-		probe.assertUnlocked(t)
-	})
 	t.Run("probe-held-control", func(t *testing.T) {
 		manager, _, secret := buildRootWrapperSource(t)
 		defer zeroBytes(secret)

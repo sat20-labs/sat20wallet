@@ -52,11 +52,11 @@ func (m *dkvsManager) desiredPrefixes(store *dkvsReplicaStore, namespace string)
 	return prefixes, nil
 }
 
-func (m *dkvsManager) subscriptionEndpointConfig(client *SatsNetDKVSClient) (*dkvsindexer.ClientConfig, error) {
+func (m *dkvsManager) subscriptionEndpointConfig(ctx context.Context, client *SatsNetDKVSClient) (*dkvsindexer.ClientConfig, error) {
 	if client == nil {
 		return nil, ErrDKVSPathNotSynced
 	}
-	config, err := client.GetDKVSClientConfig()
+	config, err := client.getDKVSClientConfigContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -100,12 +100,12 @@ func prefixStateReady(state *DKVSSubscriptionState, prefixes []string) bool {
 }
 
 func (m *dkvsManager) syncManagedPrefixes(client *SatsNetDKVSClient, store *dkvsReplicaStore, prefixes []string, force bool) (changed []string, err error) {
-	return m.syncPrefixSet(client, store, prefixes, force, true, nil, 0)
+	return m.syncPrefixSet(nil, client, store, prefixes, force, true, nil, 0)
 }
 
 // Group receiving retains the existing subscription-wide publication check.
 // A targeted Refresh/SyncCurrent only installs the explicitly requested set.
-func (m *dkvsManager) syncPrefixSet(client *SatsNetDKVSClient, store *dkvsReplicaStore, prefixes []string,
+func (m *dkvsManager) syncPrefixSet(caller context.Context, client *SatsNetDKVSClient, store *dkvsReplicaStore, prefixes []string,
 	force, expand bool, first *dkvsindexer.ActivePage, firstAfter uint64) (changed []string, err error) {
 	if m == nil || client == nil || store == nil || len(prefixes) == 0 {
 		return nil, ErrDKVSPathNotSynced
@@ -114,12 +114,22 @@ func (m *dkvsManager) syncPrefixSet(client *SatsNetDKVSClient, store *dkvsReplic
 	if err != nil {
 		return nil, err
 	}
+	ctx := caller
+	if ctx == nil {
+		ctx = m.requestContext()
+	}
 	wasWritable := m.scopeReady(m.sessionKey(client, "write"))
 	defer func() {
+		if caller != nil && caller.Err() != nil {
+			return
+		}
 		if err != nil {
 			m.markNotReady(m.sessionKey(client, "write"))
 		}
 		if err != nil && isDKVSNetworkFailure(err) {
+			m.mu.Lock()
+			m.rootOnline = nil
+			m.mu.Unlock()
 			replica := newDKVSReplicaStore(m.owner.db)
 			if !m.scopeReady(m.sessionKey(client, "read")) {
 				if cacheErr := replica.ValidateActiveCache(client.replicaNamespace); cacheErr != nil {
@@ -132,7 +142,7 @@ func (m *dkvsManager) syncPrefixSet(client *SatsNetDKVSClient, store *dkvsReplic
 			}
 		}
 	}()
-	config, err := m.subscriptionEndpointConfig(client)
+	config, err := m.subscriptionEndpointConfig(ctx, client)
 	if err != nil {
 		return nil, err
 	}
@@ -187,7 +197,7 @@ func (m *dkvsManager) syncPrefixSet(client *SatsNetDKVSClient, store *dkvsReplic
 			// Unaffected collections need only a metadata read when unchanged.
 			// Still include their baseline/root in the atomic publication check.
 			if complete && !force && !requested[prefix] && previous != nil {
-				page, e := client.GetActivePage(m.requestContext(), dkvsindexer.ActiveSyncRequest{Scope: scope, EndpointID: config.EndpointID, After: previous.Generation, PageSize: 1})
+				page, e := client.GetActivePage(ctx, dkvsindexer.ActiveSyncRequest{Scope: scope, EndpointID: config.EndpointID, After: previous.Generation, PageSize: 1})
 				if e != nil {
 					return nil, e
 				}
@@ -212,14 +222,14 @@ func (m *dkvsManager) syncPrefixSet(client *SatsNetDKVSClient, store *dkvsReplic
 					initial, usedWatchPage = watchPage, true
 				}
 			}
-			meta, records, e := client.collectActivePages(m.requestContext(), request, initial)
+			meta, records, e := client.collectActivePages(ctx, request, initial)
 			if e != nil {
 				// Only a stale continuation is a transient receive race. A source
 				// rollback on the first page has no verified meta and stays rejected.
 				if errors.Is(e, dkvsindexer.ErrStaleGeneration) && meta.EndpointID != "" {
 					e = errors.Join(e, errDKVSActivePageChanged)
 				}
-				if complete && isDKVSNetworkFailure(e) {
+				if complete && (caller == nil || caller.Err() == nil) && isDKVSNetworkFailure(e) {
 					e = errors.Join(e, store.MarkOfflineReady(client.replicaNamespace))
 				}
 				return nil, e
@@ -231,7 +241,7 @@ func (m *dkvsManager) syncPrefixSet(client *SatsNetDKVSClient, store *dkvsReplic
 		consistent := true
 		if len(candidates) > 1 {
 			for _, candidate := range candidates {
-				page, e := client.GetActivePage(m.requestContext(), dkvsindexer.ActiveSyncRequest{Scope: candidate.Meta.Scope, EndpointID: config.EndpointID, After: candidate.Meta.Generation, PageSize: 1})
+				page, e := client.GetActivePage(ctx, dkvsindexer.ActiveSyncRequest{Scope: candidate.Meta.Scope, EndpointID: config.EndpointID, After: candidate.Meta.Generation, PageSize: 1})
 				if e != nil {
 					return nil, e
 				}
@@ -247,6 +257,10 @@ func (m *dkvsManager) syncPrefixSet(client *SatsNetDKVSClient, store *dkvsReplic
 		// Only local replica publication shares the account commit gate. Fetch
 		// and verification above never hold it across network requests.
 		m.owner.mutex.Lock()
+		if caller != nil && caller.Err() != nil {
+			m.owner.mutex.Unlock()
+			return nil, caller.Err()
+		}
 		changed, err = store.InstallActiveStates(client.replicaNamespace, candidates)
 		m.owner.mutex.Unlock()
 		if usedWatchPage && errors.Is(err, dkvsindexer.ErrStaleEndpoint) {
@@ -275,6 +289,9 @@ func (m *dkvsManager) syncPrefixSet(client *SatsNetDKVSClient, store *dkvsReplic
 	}
 	if !installed {
 		return nil, dkvsindexer.ErrConcurrentUpdate
+	}
+	if caller != nil && caller.Err() != nil {
+		return changed, caller.Err()
 	}
 
 	if !sameStringList(targets, all) {
@@ -337,11 +354,15 @@ func (m *dkvsManager) grantReconciledWriteSession(client *SatsNetDKVSClient, sto
 }
 
 func (m *dkvsManager) ensureCurrentSubscription(client *SatsNetDKVSClient) error {
+	return m.ensureSubscription(nil, client)
+}
+
+func (m *dkvsManager) ensureSubscription(caller context.Context, client *SatsNetDKVSClient) error {
 	if m == nil || m.owner == nil || m.owner.db == nil || client == nil {
 		return ErrDKVSPathNotSynced
 	}
 	var changed []string
-	err := m.runTransport(func() error {
+	err := m.runReadTransport(caller, func() error {
 		store := newDKVSReplicaStore(m.owner.db)
 		prefixes, err := m.desiredPrefixes(store, client.replicaNamespace)
 		if err != nil {
@@ -350,7 +371,7 @@ func (m *dkvsManager) ensureCurrentSubscription(client *SatsNetDKVSClient) error
 		if len(prefixes) == 0 {
 			return ErrDKVSPathNotSynced
 		}
-		changed, err = m.syncManagedPrefixes(client, store, prefixes, false)
+		changed, err = m.syncPrefixSet(caller, client, store, prefixes, false, true, nil, 0)
 		return err
 	})
 	if len(changed) != 0 {
@@ -375,14 +396,14 @@ func (m *dkvsManager) forceCurrentPrefixes(client *SatsNetDKVSClient, prefixes [
 	return err
 }
 
-func (m *dkvsManager) refreshRequestedPrefixes(client *SatsNetDKVSClient, prefixes []string, force bool) error {
+func (m *dkvsManager) refreshRequestedPrefixes(caller context.Context, client *SatsNetDKVSClient, prefixes []string, force bool) error {
 	if m == nil || m.owner == nil || m.owner.db == nil || client == nil {
 		return ErrDKVSPathNotSynced
 	}
 	var changed []string
-	err := m.runTransport(func() error {
+	err := m.runReadTransport(caller, func() error {
 		var err error
-		changed, err = m.syncPrefixSet(client, newDKVSReplicaStore(m.owner.db), prefixes, force, false, nil, 0)
+		changed, err = m.syncPrefixSet(caller, client, newDKVSReplicaStore(m.owner.db), prefixes, force, false, nil, 0)
 		return err
 	})
 	if len(changed) != 0 {
@@ -630,7 +651,7 @@ func (m *dkvsManager) watchManagedActive(stop, wake <-chan struct{}, retryAt tim
 		if err != nil {
 			return err
 		}
-		config, err := m.subscriptionEndpointConfig(client)
+		config, err := m.subscriptionEndpointConfig(nil, client)
 		if err != nil {
 			return err
 		}
@@ -724,7 +745,7 @@ func (m *dkvsManager) watchManagedActive(stop, wake <-chan struct{}, retryAt tim
 				break
 			}
 		}
-		changed, err = m.syncPrefixSet(client, store, []string{response.Page.Meta.Scope.Prefix}, false, true, response.Page, after)
+		changed, err = m.syncPrefixSet(nil, client, store, []string{response.Page.Meta.Scope.Prefix}, false, true, response.Page, after)
 		return err
 	})
 	if len(changed) != 0 {

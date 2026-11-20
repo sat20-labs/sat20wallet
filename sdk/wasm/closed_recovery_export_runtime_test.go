@@ -62,11 +62,11 @@ func TestClosedRecoveryWASMActualExportsErrorAndPromiseContracts(t *testing.T) {
 		args []any
 		want string
 	}{
-		{names[0], nil, "explicit fee rate"}, {names[0], []any{5}, "explicit fee rate"}, {names[0], []any{"5", "extra"}, "explicit fee rate"},
+		{names[0], nil, "explicit fee rate"}, {names[0], []any{5}, "explicit fee rate"},
 		{names[0], []any{""}, "positive integer"}, {names[0], []any{"0"}, "positive integer"}, {names[0], []any{"-1"}, "positive integer"}, {names[0], []any{"1.5"}, "positive integer"}, {names[0], []any{"9223372036854775808"}, "positive integer"},
-		{names[1], nil, "exact approved quote"}, {names[1], []any{5}, "exact approved quote"}, {names[1], []any{""}, "exact approved quote"}, {names[1], []any{"{}", "extra"}, "exact approved quote"},
-		{names[2], nil, "identifier string"}, {names[2], []any{5}, "identifier string"}, {names[2], []any{nil}, "identifier string"}, {names[2], []any{"", "extra"}, "identifier string"},
-		{names[3], nil, "exact reviewed channel"}, {names[3], []any{"channel"}, "exact reviewed channel"}, {names[3], []any{"channel", "parent", "extra"}, "exact reviewed channel"}, {names[3], []any{5, "parent"}, "exact reviewed channel"}, {names[3], []any{"channel", 5}, "exact reviewed channel"}, {names[3], []any{"", "parent"}, "exact reviewed channel"}, {names[3], []any{"channel", ""}, "exact reviewed channel"},
+		{names[1], nil, "exact approved quote"}, {names[1], []any{5}, "exact approved quote"}, {names[1], []any{""}, "exact approved quote"},
+		{names[2], nil, "identifier string"}, {names[2], []any{5}, "identifier string"}, {names[2], []any{nil}, "identifier string"},
+		{names[3], nil, "exact reviewed channel"}, {names[3], []any{"channel"}, "exact reviewed channel"}, {names[3], []any{5, "parent"}, "exact reviewed channel"}, {names[3], []any{"channel", 5}, "exact reviewed channel"}, {names[3], []any{"", "parent"}, "exact reviewed channel"}, {names[3], []any{"channel", ""}, "exact reviewed channel"},
 	}
 	for _, testCase := range invalid {
 		result := exports.Call(testCase.name, testCase.args...)

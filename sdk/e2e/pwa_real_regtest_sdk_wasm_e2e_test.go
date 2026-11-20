@@ -161,15 +161,15 @@ func prepareSDKPWARegtestSDKWASMFixture(t *testing.T, network *realSatoshiNet,
 	map[string]string, map[string]any) {
 	t.Helper()
 	require.Equal(t, "regtest", config.Chain)
-	return prepareNativeIfaceAsset(t, network, ordinary1, ordinary2, mine,
+	return prepareNativeIfaceAsset(t, network, ordinary1, ordinary2, requireE2EFirstBackup, mine,
 		func(manager *wallet.Manager, txid string) {
 			confirmSDKPWARegtestL1SDKTransaction(t, manager, txid, mine)
 		})
 }
 
 func prepareNativeIfaceAsset(t *testing.T, network *realSatoshiNet,
-	ordinary1, ordinary2 *wallet.Manager, mine func(string, int),
-	confirmL1 func(*wallet.Manager, string)) (map[string]string, map[string]string, map[string]any) {
+	ordinary1, ordinary2 *wallet.Manager, requireSenderReady func(*testing.T, *wallet.Manager),
+	mine func(string, int), confirmL1 func(*wallet.Manager, string)) (map[string]string, map[string]string, map[string]any) {
 	t.Helper()
 	owner := sdkPWARegtestSyntheticIdentity(t, "sdk-wasm-owner")
 	buyer := sdkPWARegtestSyntheticIdentity(t, "sdk-wasm-buyer")
@@ -203,6 +203,9 @@ func prepareNativeIfaceAsset(t *testing.T, network *realSatoshiNet,
 	require.NotNil(t, channel)
 	require.Equal(t, wallet.CS_READY, channel.Status)
 	attachRGB11RegtestWallet(t, ordinary2, network)
+	require.Eventually(t, func() bool {
+		return ordinary2.GetAccountManagementStatus().WriteAllowed
+	}, rpcReadyTimeout, 20*time.Millisecond, "issuer must be writable after reconnecting")
 
 	asset := indexercommon.NewAssetNameFromString(sdkPWARegtestWASMAsset)
 	require.NotNil(t, asset)
@@ -268,7 +271,7 @@ func prepareNativeIfaceAsset(t *testing.T, network *realSatoshiNet,
 	waitRGB11RegtestPeerChannelReady(t, ordinary2, network, channelID)
 	waitSDKPWARegtestSplicingAssetReady(t, ordinary2, network, channelID,
 		spliceReservationID, anchorOutpoint, sdkPWARegtestWASMAsset, sdkPWARegtestWASMAmount)
-	prepareSDKPWARegtestL2PlainFunding(t, ordinary1, ordinary2, network)
+	prepareSDKPWARegtestL2PlainFunding(t, ordinary1, ordinary2, network, requireSenderReady)
 	waitRGB11RegtestPeerChannelReady(t, ordinary2, network, channelID)
 	assetUnlock, _, err := ordinary2.UnlockFromChannel(channelID, ordinary2.GetWallet().GetAddress(), sdkPWARegtestWASMAsset,
 		strconv.FormatInt(sdkPWARegtestWASMAmount, 10), nil, nil)

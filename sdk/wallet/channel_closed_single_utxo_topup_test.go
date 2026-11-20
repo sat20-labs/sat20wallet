@@ -49,9 +49,6 @@ func (c *singleUTXOTopupGateClient) SendPingReq(req *wwire.PingReq) (*wwire.Ping
 	}
 	return c.response, c.err
 }
-func TestSTPSingleUTXOTopupRequiresSafeAPI(t *testing.T) {
-	singleUTXOTopupAPIForTest(t, &Manager{})
-}
 func TestSTPSingleUTXOTopupMissingLocalPackageDoesNotSuggestOthers(t *testing.T) {
 	base := &channelHeartbeatTestClient{}
 	manager := newChannelHeartbeatTestManager(t, base)

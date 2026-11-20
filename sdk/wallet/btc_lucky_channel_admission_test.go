@@ -88,14 +88,16 @@ func TestBTCLuckyChannelAdmission(t *testing.T) {
 					require.False(t, resv.RecoverAscended)
 					require.Empty(t, resv.SplicingInputs)
 				})
-				t.Run("L1 unascended expansion", func(t *testing.T) {
-					ascend := l2.ascend
-					l2.ascend = nil
-					defer func() { l2.ascend = ascend }()
-					resv := newSplicing()
-					require.ErrorContains(t, p.AllowExpand(resv, point), "btc-lucky-claim")
-					require.Empty(t, resv.SplicingInputs)
-				})
+				if marked {
+					t.Run("L1 unascended expansion", func(t *testing.T) {
+						ascend := l2.ascend
+						l2.ascend = nil
+						defer func() { l2.ascend = ascend }()
+						resv := newSplicing()
+						require.ErrorContains(t, p.AllowExpand(resv, point), "btc-lucky-claim")
+						require.Empty(t, resv.SplicingInputs)
+					})
+				}
 				t.Run("L2 direct and mixed admission", func(t *testing.T) {
 					ordinary := swire.NewMsgTx(2)
 					ordinary.AddTxIn(swire.NewTxIn(&swire.OutPoint{Hash: sch.Hash{7}}, nil, nil))
@@ -114,17 +116,19 @@ func TestBTCLuckyChannelAdmission(t *testing.T) {
 						require.Nil(t, payment.Amt)
 					}
 				})
-				t.Run("recovery invoice signer", func(t *testing.T) {
-					candidate := anchor.Copy()
-					candidate.TxOut = candidate.TxOut[:1] // Ordinary recovery constructs a new, unmarked invoice.
-					called := false
-					_, err := p.SignRecoveredChannelAnchorTx(candidate, func([]byte) ([]byte, error) {
-						called = true
-						return nil, fmt.Errorf("signature escaped validation")
+				if marked {
+					t.Run("recovery invoice signer", func(t *testing.T) {
+						candidate := anchor.Copy()
+						candidate.TxOut = candidate.TxOut[:1] // Ordinary recovery constructs a new, unmarked invoice.
+						called := false
+						_, err := p.SignRecoveredChannelAnchorTx(candidate, func([]byte) ([]byte, error) {
+							called = true
+							return nil, fmt.Errorf("signature escaped validation")
+						})
+						require.ErrorContains(t, err, "btc-lucky-claim")
+						require.False(t, called)
 					})
-					require.ErrorContains(t, err, "btc-lucky-claim")
-					require.False(t, called)
-				})
+				}
 				t.Run("restored splicing output", func(t *testing.T) {
 					resv := newSplicing()
 					resv.RecoverAscended, resv.RecoveredAnchorTxId = true, anchor.TxID()

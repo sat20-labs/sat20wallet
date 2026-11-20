@@ -117,15 +117,15 @@ def main():
         subprocess.run(production_command, cwd=sdk, env=env, stdout=log,
                        stderr=subprocess.STDOUT, check=True)
         production_seconds = time.perf_counter() - production_started
-        build("wallet.so", sdk / "plugin", ["-buildmode=plugin", "main.go"])
+        build("wallet.so", sdk / "plugin", ["-tags=rpctest", "-buildmode=plugin", "main.go"])
         build("satoshinet-miner-rpctest", WORKSPACE / "satoshinet", ["-tags=rpctest,wallet_plugin", "github.com/sat20-labs/satoshinet"])
-        build("stpd-normal.so", WORKSPACE / "transcend/plugin", ["-buildmode=plugin", "main.go"])
+        build("stpd-normal.so", WORKSPACE / "transcend/plugin", ["-tags=rpctest", "-buildmode=plugin", "main.go"])
         # Both variants must resolve the same current local SDK/node/indexer inputs.
         for name in ("satoshinet", "indexer", "sat20wallet/sdk"):
             actual = subprocess.check_output([str(GO), "list", "-mod=readonly", "-m", "-f", "{{.Dir}}", "github.com/sat20-labs/" + name], cwd=WORKSPACE / "transcend", env=env, text=True).strip()
             if Path(actual).resolve() != (WORKSPACE / name).resolve():
                 raise SystemExit("Unexpected plugin replacement: " + name + " => " + actual)
-        build("stpd-dkvs.so", WORKSPACE / "transcend/plugin", ["-buildmode=plugin", "main.go"])
+        build("stpd-dkvs.so", WORKSPACE / "transcend/plugin", ["-tags=rpctest", "-buildmode=plugin", "main.go"])
         build("satoshinet-core-rpctest", WORKSPACE / "satoshinet", ["-tags=rpctest,stp_plugin", "github.com/sat20-labs/satoshinet"])
         build("e2e.test", sdk, ["./e2e"])
         build("wallet.test", sdk, ["./wallet"])

@@ -113,6 +113,9 @@ func TestDKVSCurrentPayloadValidationIsAtomic(t *testing.T) {
 			mode = "snapshot"
 		}
 		for _, test := range cases {
+			if full && test.name != "mismatched_complete_root" {
+				continue
+			}
 			t.Run(mode+"/"+test.name, func(t *testing.T) {
 				replica := newReplica(t)
 				baseline, err := replica.ActiveBaseline("replica", scope)

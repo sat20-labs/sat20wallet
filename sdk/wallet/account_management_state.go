@@ -619,7 +619,7 @@ func (p *Manager) restoreAccountManagementStateOperation(value RecoveredAccountM
 	secret []byte, password string, locator account.Locator,
 	options AccountManagementRestoreOptions,
 	allowedImportedRoot string) ([]RestoredWalletResult, error) {
-	return p.restoreAccountCopies(value, secret, password, locator, options, allowedImportedRoot)
+	return p.restoreAccountCopies(value, secret, password, locator, options, allowedImportedRoot, nil)
 }
 
 func (p *Manager) finishAccountManagementRestorePostSync() {
@@ -1082,7 +1082,10 @@ func (p *Manager) requireAccountManagedWriteLocked() error {
 		return ErrDKVSPathNotSynced
 	}
 	if p.accountProfile == nil || !p.accountProfile.RecoveryConfigured {
-		if service, _ := p.accountServiceStateLocked(); !p.accountLocalOnlyLocked(service) {
+		if service, err := p.accountServiceStateLocked(); !p.accountLocalOnlyLocked(service) {
+			if err != nil && !errors.Is(err, ErrDKVSPathNotSynced) {
+				return fmt.Errorf("%w: %w", ErrRootAccountDiscoveryPending, err)
+			}
 			return ErrRootAccountDiscoveryPending
 		}
 		return nil

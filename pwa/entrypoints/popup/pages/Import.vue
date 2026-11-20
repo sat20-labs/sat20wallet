@@ -112,7 +112,7 @@
 
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import { ref } from 'vue'
+import { onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useToast } from '@/components/ui/toast-new'
 import { useForm } from 'vee-validate'
@@ -134,6 +134,7 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { useWalletStore } from '@/store'
+import { getWalletIdentityState, subscribeWalletIdentity } from '@/lib/identity-boundary'
 import { passwordSchema, mnemonicSchema, privateKeySchema } from '@/utils/validation'
 import {KeyRound, Loader2Icon} from 'lucide-vue-next'
 
@@ -184,39 +185,54 @@ const form = useForm({
   validationSchema: formSchema,
 })
 
+let importRequest: AbortController | undefined
+const cancelImport = () => importRequest?.abort()
+watch(() => [tab.value, form.values.mnemonic, form.values.password], cancelImport, { flush: 'sync' })
+window.addEventListener('pagehide', cancelImport)
+onBeforeUnmount(() => {
+  window.removeEventListener('pagehide', cancelImport)
+  cancelImport()
+})
+
 const onSubmit = form.handleSubmit(async (values) => {
   if (loading.value || importCommitted.value) return
   loading.value = true
+  const request = new AbortController()
+  importRequest = request
+  const generation = getWalletIdentityState().generation
+  const unsubscribe = walletStore.hasWallet ? undefined : subscribeWalletIdentity(state => {
+    if (state.generation !== generation) request.abort()
+  })
   try {
-	if (tab.value === 'mnemonic') {
-    if (values.mnemonic) {
-      const [err, result] = await walletStore.importWallet(
-        values.mnemonic,
-			values.password
-      )
-      if (result) importCommitted.value = true
-      if (err && result) {
-        committedReadError.value = true
-        showToast('info', t('pwaUi.import.imported'), t('pwaUi.import.savedReload'))
-        return
-      }
-      if (err) {
-        showToast('destructive', t('common.error'), err)
-        loading.value = false
-        return
-      }
-
-	  const identity = result
-		? t('pwaUi.import.identity', { address: result.address, fingerprint: result.fingerprint })
-		: ''
-	  showToast('success', t('common.success'), t('pwaUi.import.success', { identity }))
-      router.push('/wallet')
+    if (tab.value !== 'mnemonic' || !values.mnemonic) return
+    const [err, result] = await walletStore.importWallet(
+      values.mnemonic, values.password, undefined, request.signal
+    )
+    if (result) {
+      importCommitted.value = true
+      committedReadError.value = Boolean(err) || request.signal.aborted
     }
-  }
-
+    if (request.signal.aborted) return
+    if (err && result) {
+      showToast('info', t('pwaUi.import.imported'), t('pwaUi.import.savedReload'))
+      return
+    }
+    if (err) {
+      showToast('destructive', t('common.error'), err)
+      return
+    }
+    const identity = result
+      ? t('pwaUi.import.identity', { address: result.address, fingerprint: result.fingerprint })
+      : ''
+    showToast('success', t('common.success'), t('pwaUi.import.success', { identity }))
+    router.push('/wallet')
   } catch (error: any) {
-    showToast('destructive', t('common.error'), error?.message || t('pwaUi.import.failed'))
+    if (!request.signal.aborted) {
+      showToast('destructive', t('common.error'), error?.message || t('pwaUi.import.failed'))
+    }
   } finally {
+    unsubscribe?.()
+    importRequest = undefined
     loading.value = false
   }
 })

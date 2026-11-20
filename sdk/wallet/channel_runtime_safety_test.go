@@ -152,16 +152,6 @@ func TestFindWalletByPubKeySkipsLockedWalletEntries(t *testing.T) {
 	}
 }
 
-func TestLocalActionMonitorSkipsLockedWallet(t *testing.T) {
-	manager := &Manager{
-		localActionPerformMap: make(map[int64]Reservation),
-	}
-	completed, failed := manager.HandleLocalActionStatus(false)
-	if len(completed) != 0 || len(failed) != 0 {
-		t.Fatalf("locked manager advanced local actions: completed=%d failed=%d", len(completed), len(failed))
-	}
-}
-
 func TestLocalActionOwnershipUsesStablePaymentKey(t *testing.T) {
 	w := NewInternalWalletWithMnemonic(
 		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire",

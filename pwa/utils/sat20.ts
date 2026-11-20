@@ -68,9 +68,10 @@ class WalletManager {
 
   async importWallet(
     mnemonic: string,
-    password: string
+    password: string,
+    signal?: AbortSignal
   ): Promise<[Error | undefined, { walletId: string } | undefined]> {
-    return this._handleRequest('importWallet', mnemonic, password.toString())
+    return this._handleRequest('importWallet', mnemonic, password.toString(), ...(signal ? [signal] : []))
   }
 
   async validateMnemonic(
@@ -82,12 +83,14 @@ class WalletManager {
 
   async recoverAccountManagementFromRootMnemonic(
     mnemonic: string,
-    password: string
+    password: string,
+    signal?: AbortSignal
   ): Promise<[Error | undefined, RootAccountRecoveryResult | undefined]> {
     return this._handleRequest(
       'recoverAccountManagementFromRootMnemonic',
       mnemonic,
-      password.toString()
+      password.toString(),
+      ...(signal ? [signal] : [])
     )
   }
   async recoverAccountManagementFromCurrentWallet(

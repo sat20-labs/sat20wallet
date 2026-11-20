@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	indexercommon "github.com/sat20-labs/indexer/common"
 	strict "github.com/sat20-labs/rgb11/strict_encoding"
@@ -28,6 +29,7 @@ const (
 	accountRootWrapperPayloadMagic  = "ARWP"
 	accountRootWrapperCodecVersion  = uint8(1)
 	accountRootWrapperJobID         = "account-root-key-wrapper"
+	rootQueryTimeout                = 30 * time.Second
 	accountRootWrapperMaxNetwork    = 64
 	accountRootWrapperMaxAccountID  = 128
 	accountRootWrapperMaxPackageID  = 128
@@ -691,7 +693,6 @@ func (p *Manager) RecoverAccountManagementFromRootMnemonic(ctx context.Context,
 	opLogID := p.beginWalletLog("account", "recover_account_root", "Recover managed account")
 	defer func() { p.finishWalletLog(opLogID, opErr, nil) }()
 
-
 	if p == nil {
 		return nil, fmt.Errorf("wallet manager is unavailable")
 	}
@@ -715,6 +716,38 @@ func (p *Manager) RecoverAccountManagementFromRootMnemonic(ctx context.Context,
 	}
 	p.finishAccountManagementRestorePostSync()
 	return results, nil
+}
+
+// WaitForImportRoot belongs to the open first-mnemonic import. Only its
+// exact root read may repeat. It never owns the account transaction while
+// waiting for the node and never retains the mnemonic beyond this call.
+func (p *Manager) WaitForImportRoot(ctx context.Context, mnemonic, password string) ([]RestoredWalletResult, error) {
+	if ctx == nil || p == nil {
+		return nil, ErrRootAccountDiscoveryPending
+	}
+	if err := p.accountDBFailure(); err != nil {
+		return nil, err
+	}
+	store, err := p.accountDKVSStore()
+	if err != nil {
+		return nil, err
+	}
+	location, err := p.AccountIndexerLocation()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(store.manager.requestContext(), cancel)
+	defer func() { stop(); cancel() }()
+	store.readCtx = ctx
+	results, err := p.recoverManagedRoot(ctx, mnemonic, password, store, location, true, true)
+	if ctx.Err() != nil && errors.Is(err, ErrRootAccountDiscoveryPending) {
+		return nil, ctx.Err()
+	}
+	if err == nil {
+		p.finishAccountManagementRestorePostSync()
+	}
+	return results, err
 }
 
 func (p *Manager) accountManagementRootMnemonic(password string) (string, error) {
@@ -766,7 +799,7 @@ func (p *Manager) RecoverAccountManagementFromCurrentWallet(ctx context.Context,
 			return locationErr
 		}
 		var recoveryErr error
-		results, recoveryErr = p.recoverManagedRoot(ctx, mnemonic, password, store, location, false)
+		results, recoveryErr = p.recoverManagedRoot(ctx, mnemonic, password, store, location, false, false)
 		return recoveryErr
 	})
 	if err != nil {
@@ -779,7 +812,7 @@ func (p *Manager) RecoverAccountManagementFromCurrentWallet(ctx context.Context,
 func (p *Manager) recoverAccountManagementFromRootMnemonic(ctx context.Context,
 	mnemonic, password string, reader accountRootWrapperStore,
 	location AccountIndexerLocation) ([]RestoredWalletResult, error) {
-	return p.recoverManagedRoot(ctx, mnemonic, password, reader, location, true)
+	return p.recoverManagedRoot(ctx, mnemonic, password, reader, location, true, false)
 }
 
 func (p *Manager) firstRootEmptyLocked() bool {
@@ -872,43 +905,74 @@ func firstRootRefreshPending(err error) bool {
 	return retryable(err, false) && unavailable
 }
 
-func readFirstRoot(store *dkvsStore, key string) (*dkvsValue, error) {
-	readLocal := func() (*dkvsValue, error) {
-		return store.getConfirmedVerified(key, dkvsindexer.RecordVerificationOptions{})
+// Read a verified local positive or one complete, source-bound view of the
+// root key. An empty local replica or an unsuccessful receive proves nothing.
+func readFirstRoot(ctx context.Context, store *dkvsStore, key, pinned string) (*dkvsValue, string, error) {
+	client := store.client
+	value, err := store.getConfirmedVerified(key, dkvsindexer.RecordVerificationOptions{})
+	if err == nil {
+		client.endpointMu.RLock()
+		defer client.endpointMu.RUnlock()
+		return value, client.endpointID, nil
 	}
-	value, err := readLocal()
-	switch err {
-	case ErrDKVSRecordNotFound:
-		// A confirmed local miss, even in READY, may precede a remote creation.
-		err = store.SyncCurrent(key)
-	case ErrDKVSPathNotSynced:
-		// No read grant yet: perform one strict receive, not Get/WaitReady's
-		// offline fallback followed by a second refresh.
-		err = store.manager.ensureCurrentSubscription(store.client)
-	default:
-		return value, err
+	if !errors.Is(err, ErrDKVSRecordNotFound) && !errors.Is(err, ErrDKVSPathNotSynced) {
+		return nil, "", err
 	}
-	if err != nil && !firstRootRefreshPending(err) {
-		return nil, err
+	if ctx == nil {
+		ctx = client.requestContext()
 	}
-	value, localErr := readLocal()
-	switch localErr {
-	case ErrDKVSRecordNotFound:
-		if err == nil {
-			return nil, ErrRootAccountNotFound
-		}
-	case ErrDKVSPathNotSynced:
-		if err == nil {
-			return nil, ErrRootAccountDiscoveryPending
-		}
-	default:
-		return value, localErr // local DB/verification errors are not transport errors
+	configCtx, cancelConfig := context.WithTimeout(ctx, rootQueryTimeout)
+	config, err := client.getDKVSClientConfigContext(configCtx)
+	cancelConfig()
+	if err != nil {
+		return nil, "", rootReadError(err)
 	}
-	return nil, fmt.Errorf("%w: %v", ErrRootAccountDiscoveryPending, err)
+	if config.EndpointID == "" {
+		return nil, "", dkvsindexer.ErrStaleEndpoint
+	}
+	if pinned != "" && config.EndpointID != pinned {
+		return nil, config.EndpointID, dkvsindexer.ErrEndpointMismatch
+	}
+	replica := newDKVSReplicaStore(store.manager.owner.db)
+	state, err := replica.LoadSubscriptionState(client.replicaNamespace)
+	if err != nil && !errors.Is(err, indexercommon.ErrKeyNotFound) {
+		return nil, "", err
+	}
+	if err := store.manager.validateSubscriptionEndpointSwitch(replica, client.replicaNamespace, state, config); err != nil {
+		return nil, "", err
+	}
+	prefix, err := dkvsindexer.CollectionPathForKey(key)
+	if err != nil {
+		return nil, "", err
+	}
+	scope := dkvsindexer.ActiveScope{Prefix: prefix, Keys: []string{key}}
+	readCtx, cancelRead := context.WithTimeout(ctx, rootQueryTimeout)
+	defer cancelRead()
+	meta, records, err := client.collectActivePages(readCtx, dkvsindexer.ActiveSyncRequest{
+		Scope: scope, EndpointID: config.EndpointID, Full: true,
+	}, nil)
+	if err != nil {
+		return nil, config.EndpointID, rootReadError(err)
+	}
+	root, err := dkvsindexer.ActiveRecordsRoot(records)
+	if err != nil || root != meta.Root {
+		return nil, "", dkvsindexer.ErrInvalidSnapshot
+	}
+	if len(records) == 0 {
+		return nil, meta.EndpointID, ErrRootAccountNotFound
+	}
+	return cloneDKVSValue(records[0]), meta.EndpointID, nil
+}
+
+func rootReadError(err error) error {
+	if firstRootRefreshPending(err) {
+		return fmt.Errorf("%w: %w", ErrRootAccountDiscoveryPending, err)
+	}
+	return err
 }
 
 func (p *Manager) recoverManagedRoot(ctx context.Context, mnemonic, password string,
-	reader accountRootWrapperStore, location AccountIndexerLocation, mnemonicImport bool) ([]RestoredWalletResult, error) {
+	reader accountRootWrapperStore, location AccountIndexerLocation, mnemonicImport, waitForFirst bool) ([]RestoredWalletResult, error) {
 	root := NewInternalWalletWithMnemonic(mnemonic, "", GetChainParam())
 	if root == nil {
 		return nil, fmt.Errorf("invalid account root wallet")
@@ -922,24 +986,50 @@ func (p *Manager) recoverManagedRoot(ctx context.Context, mnemonic, password str
 	if err != nil {
 		return nil, err
 	}
+	if ctx != nil && ctx.Err() != nil {
+		if waitForFirst {
+			return nil, ctx.Err()
+		}
+		return nil, rootDiscoveryError(ctx.Err())
+	}
 	store, managed := reader.(*dkvsStore)
 	p.mutex.RLock()
 	mismatch := p.accountProfile != nil && p.accountProfile.RecoveryConfigured &&
 		(p.accountProfile.AccountID != accountID || p.accountProfile.RootFingerprint != walletFingerprint(root))
 	first := mnemonicImport && managed && p.firstRootEmptyLocked()
+	if waitForFirst && !first {
+		p.mutex.RUnlock()
+		return nil, errAccountSnapshotChanged
+	}
+	localRoot := managed && p.accountProfile != nil && !p.accountProfile.RecoveryConfigured &&
+		p.accountProfile.AccountID == accountID
 	generation, namespace, selected := p.accountGeneration, p.dkvsReplicaNamespace(), p.wallet
 	var selectedID common.WalletId
 	if first && selected != nil {
 		selectedID = selected.GetWalletId()
 	}
 	currentLocked := func() bool {
-		return p.accountGeneration == generation && p.firstRootEmptyLocked() && p.wallet == selected &&
-			(selected == nil || selected.GetWalletId() == selectedID) && p.firstRootSourceLocked(store, location, namespace)
+		if p.accountGeneration != generation || !p.firstRootSourceLocked(store, location, namespace) {
+			return false
+		}
+		if localRoot {
+			return p.accountProfile != nil && p.accountProfile.AccountID == accountID && !p.accountProfile.RecoveryConfigured
+		}
+		return p.firstRootEmptyLocked() && p.wallet == selected &&
+			(selected == nil || selected.GetWalletId() == selectedID)
 	}
-	current := !first || currentLocked()
+	checkRoot := first || localRoot
+	current := !checkRoot || currentLocked()
 	var network string
-	if first && current {
+	if checkRoot && current {
 		network = p.cfg.Chain
+	}
+	if localRoot && current && p.rootCheck.matches(store.client, key) && !p.rootCheck.active {
+		service, stateErr := p.accountServiceStateLocked()
+		if stateErr == nil && service == "inactive" {
+			p.mutex.RUnlock()
+			return nil, ErrRootAccountNotFound
+		}
 	}
 	p.mutex.RUnlock()
 	if mismatch {
@@ -948,49 +1038,159 @@ func (p *Manager) recoverManagedRoot(ctx context.Context, mnemonic, password str
 	if !current {
 		return nil, ErrRootAccountDiscoveryPending
 	}
-	if p.dkvs != nil {
+	if p.dkvs != nil && !checkRoot {
 		p.dkvs.rememberPaths([]string{key})
-		if !first {
-			p.dkvs.wakeSync()
-		}
-	}
-	if ctx != nil {
-		if err := ctx.Err(); err != nil {
-			return nil, rootDiscoveryError(err)
-		}
+		p.dkvs.wakeSync()
 	}
 	var wrapper *dkvsValue
-	if first {
-		// root/accountID/key are private to this request. Recheck their
-		// local destination after transport, before accepting either answer.
-		wrapper, err = readFirstRoot(store, key)
-		p.mutex.RLock()
-		current = currentLocked()
-		p.mutex.RUnlock()
-		if !current || (ctx != nil && ctx.Err() != nil) {
-			return nil, ErrRootAccountDiscoveryPending
-		}
-		if err != nil {
-			return nil, err
-		}
+	var observation accountRootCheck
+	if checkRoot {
+		observation = accountRootCheck{client: store.client, key: key, generation: generation}
+		wrapper, err = p.readObservedRoot(ctx, store, &observation, waitForFirst, currentLocked)
 	} else {
 		wrapper, err = reader.Get(key)
-		if err != nil {
-			return nil, rootDiscoveryError(err)
-		}
+		err = rootDiscoveryError(err)
 		network = _chain
 	}
-	if wrapper == nil {
-		return nil, ErrRootAccountDiscoveryPending
+	var config accountRootWrapperPayload
+	if err == nil {
+		if wrapper == nil {
+			return nil, ErrRootAccountDiscoveryPending
+		}
+		config, err = openAccountRootWrapper(root, network, accountID, wrapper.Value)
+		defer zeroBytes(config.Secret)
+		observation.active = err == nil
 	}
-	config, err := openAccountRootWrapper(root, network, accountID, wrapper.Value)
+	if checkRoot {
+		p.mutex.Lock()
+		if waitForFirst {
+			if err := ctx.Err(); err != nil {
+				p.mutex.Unlock()
+				return nil, err
+			}
+			if err := p.accountDBFailure(); err != nil {
+				p.mutex.Unlock()
+				return nil, err
+			}
+		}
+		if !currentLocked() || (ctx != nil && ctx.Err() != nil) {
+			p.mutex.Unlock()
+			if waitForFirst {
+				return nil, errAccountSnapshotChanged
+			}
+			return nil, ErrRootAccountDiscoveryPending
+		}
+		if err == nil || err == ErrRootAccountNotFound {
+			if !observation.matches(store.client, key) {
+				p.mutex.Unlock()
+				return nil, ErrRootAccountDiscoveryPending
+			}
+			p.rootCheck = observation
+		} else if p.rootCheck.key == key && !p.rootCheck.active {
+			p.rootCheck = accountRootCheck{}
+		}
+		p.mutex.Unlock()
+	}
 	if err != nil {
 		return nil, err
 	}
-	defer zeroBytes(config.Secret)
 	if !managed {
 		return nil, fmt.Errorf("managed root recovery requires a verified account source")
 	}
+	var beforeCommit func() error
+	if waitForFirst {
+		beforeCommit = func() error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if !currentLocked() || !observation.matches(store.client, key) {
+				return errAccountSnapshotChanged
+			}
+			return p.accountDBFailure()
+		}
+		var results []RestoredWalletResult
+		err := p.runAccountApplicationSync(ctx, func() error {
+			p.mutex.RLock()
+			err := beforeCommit()
+			p.mutex.RUnlock()
+			if err == nil {
+				results, err = p.restoreRootRecord(ctx, root, accountID, password, config, store, location, beforeCommit)
+			}
+			return err
+		})
+		return results, err
+	}
+	return p.restoreRootRecord(ctx, root, accountID, password, config, store, location, nil)
+}
+
+func (p *Manager) readObservedRoot(ctx context.Context, store *dkvsStore, seen *accountRootCheck,
+	wait bool, currentLocked func() bool) (*dkvsValue, error) {
+	client := store.client
+	var pinned string
+	if wait {
+		client.endpointMu.RLock()
+		pinned = client.endpointID
+		client.endpointMu.RUnlock()
+	}
+	for {
+		if wait {
+			if err := p.accountDBFailure(); err != nil {
+				return nil, err
+			}
+		}
+		store.manager.mu.Lock()
+		if store.manager.rootOnline == nil {
+			store.manager.rootOnline = new(byte)
+		}
+		seen.online = store.manager.rootOnline
+		store.manager.mu.Unlock()
+		value, endpoint, err := readFirstRoot(ctx, store, seen.key, pinned)
+		seen.endpoint = endpoint
+		if !wait {
+			return value, err
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		client.endpointMu.RLock()
+		known := client.endpointID
+		client.endpointMu.RUnlock()
+		if pinned == "" {
+			pinned = known
+		}
+		if pinned != known || endpoint != "" && endpoint != pinned {
+			return nil, dkvsindexer.ErrEndpointMismatch
+		}
+		if !errors.Is(err, ErrRootAccountDiscoveryPending) || errors.Is(err, context.Canceled) || !isDKVSNetworkFailure(err) {
+			return value, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(dkvsSyncRetryDelay):
+		}
+		p.mutex.RLock()
+		current := currentLocked()
+		p.mutex.RUnlock()
+		if !current {
+			return nil, errAccountSnapshotChanged
+		}
+		client.endpointMu.RLock()
+		sameEndpoint := pinned == "" || pinned == client.endpointID
+		client.endpointMu.RUnlock()
+		if !sameEndpoint {
+			return nil, dkvsindexer.ErrEndpointMismatch
+		}
+	}
+}
+
+func (p *Manager) restoreRootRecord(ctx context.Context, root common.Wallet, accountID, password string,
+	config accountRootWrapperPayload, store *dkvsStore, location AccountIndexerLocation, beforeCommit func() error) ([]RestoredWalletResult, error) {
+	key, err := accountRootWrapperKey(root)
+	if err != nil {
+		return nil, err
+	}
+	store.manager.rememberPaths([]string{key})
 	packageKey, err := dkvsindexer.AccountPersonalKey(accountID, accountPackagePath(config.PackageID))
 	if err != nil {
 		return nil, err
@@ -1011,6 +1211,9 @@ func (p *Manager) recoverManagedRoot(ctx context.Context, mnemonic, password str
 		return nil, err
 	}
 	if existing {
+		if beforeCommit != nil {
+			return nil, errAccountSnapshotChanged
+		}
 		if err := p.syncAccountModules(ctx); err != nil && !accountModuleOnly(err) {
 			return nil, err
 		}
@@ -1022,5 +1225,5 @@ func (p *Manager) recoverManagedRoot(ctx context.Context, mnemonic, password str
 	}
 	return p.restoreAccountCopies(*recovered, config.Secret, password, pkg.Envelope.Locator,
 		AccountManagementRestoreOptions{Location: location, StorageMode: config.StorageMode,
-			RecordTTL: config.RecordTTL, AutopayContract: config.AutopayContract}, walletFingerprint(root))
+			RecordTTL: config.RecordTTL, AutopayContract: config.AutopayContract}, walletFingerprint(root), beforeCommit)
 }

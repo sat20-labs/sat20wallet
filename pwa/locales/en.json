@@ -1355,10 +1355,8 @@
     "dkvsStatusReadFailed": "Could not read the account backup status. Please try again later.",
     "readiness": {
       "local": "This account is stored on this device only. Local business remains available; cross-device recovery is not enabled.",
-      "discoveryUnverified": "Remote backup has not been verified. If you already have a remote backup, restore the account first. Continuing locally may conflict with that data.",
-      "discoveryContinued": "Continuing locally. The remote backup remains unverified.",
+      "discoveryUnverified": "Remote backup has not been verified. Changes to account data are temporarily unavailable.",
       "restoreAccount": "Restore account",
-      "continueLocal": "Continue locally",
       "locked": "The account is locked. Unlock it to continue.",
       "syncing": "The account is syncing and being verified. Related new business is temporarily unavailable; existing operations and local browsing remain available.",
       "error": "Account sync hit a network error. Related new business is temporarily unavailable.",

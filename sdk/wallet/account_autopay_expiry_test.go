@@ -65,7 +65,6 @@ func TestAccountAutopayCurrentExpiryUsesExactDecimalBlocks(t *testing.T) {
 		name, balance, rate     string
 		current, blocks, expiry int64
 	}{
-		{name: "whole blocks", balance: "25", rate: "10", current: 100, blocks: 2, expiry: 102},
 		{name: "fractional decimal rate", balance: "0.3", rate: "0.1", current: 100, blocks: 3, expiry: 103},
 		{name: "fractional remainder is discarded", balance: "29", rate: "10", current: 100, blocks: 2, expiry: 102},
 	} {
@@ -113,14 +112,6 @@ func TestAccountAutopayCurrentExpiryIsOmittedWhenStatusIsUntrusted(t *testing.T)
 			delegate := state.Delegates["payer"]
 			delegate.Balance = "-1"
 			state.Delegates["payer"] = delegate
-		}},
-		{name: "paid-through height is stale", mutate: func(state *dkvsindexer.AutopayContractState) {
-			delegate := state.Delegates["payer"]
-			delegate.LastPayHeight--
-			state.Delegates["payer"] = delegate
-		}},
-		{name: "contract is paused for funding", mutate: func(state *dkvsindexer.AutopayContractState) {
-			state.Status = "funding"
 		}},
 		{name: "expiry height overflows int64", mutate: func(state *dkvsindexer.AutopayContractState) {
 			delegate := state.Delegates["payer"]

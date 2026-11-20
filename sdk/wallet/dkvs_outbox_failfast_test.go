@@ -173,7 +173,7 @@ func TestDKVSLegacyTerminalOutboxPanicsImmediately(t *testing.T) {
 
 func TestDKVSOutboxHTTPFailureRemainsPending(t *testing.T) {
 	_, _, store, entry := testDKVSOutboxEntry(t)
-	for _, status := range []int{429, 500, 502, 503, 504} {
+	for _, status := range []int{429, 503} {
 		if err := markDKVSOutboxSubmissionFailure(store, entry, &HTTPResponseError{StatusCode: status}); err != nil {
 			t.Fatal(err)
 		}

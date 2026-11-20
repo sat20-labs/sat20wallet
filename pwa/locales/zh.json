@@ -1355,10 +1355,8 @@
     "dkvsStatusReadFailed": "账户备份状态读取失败，请稍后重试。",
     "readiness": {
       "local": "账户仅保存在本机；本地业务可继续，跨设备恢复备份尚未启用。",
-      "discoveryUnverified": "尚未核实远端备份。如果你已有远端备份，请先恢复账户；继续本地操作可能与远端数据冲突。",
-      "discoveryContinued": "本次继续本地使用，远端备份仍未核实。",
+      "discoveryUnverified": "尚未核实远端备份，暂时无法更改账户数据。",
       "restoreAccount": "恢复账户",
-      "continueLocal": "仍继续本地使用",
       "locked": "账户当前已锁定；请解锁后继续。",
       "syncing": "正在同步并核对账户状态；相关新业务暂不可用，现有操作和本地浏览仍可继续。",
       "error": "账户同步遇到网络错误；相关新业务暂不可用。",

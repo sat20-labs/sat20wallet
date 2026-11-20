@@ -27,6 +27,15 @@ type sdkContractReviewFixture struct {
 	blocked              bool
 }
 
+// Contract actors use standalone SDK managers. Complete root discovery before
+// their first signature without activating backup or binding the signer.
+func localContractWallet(t *testing.T, node *testHarness, mnemonic string) *wallet.Manager {
+	t.Helper()
+	manager, _ := newWalletManagerForNode(t, node, mnemonic)
+	requireE2EInactive(t, manager, "123456")
+	return manager
+}
+
 // Only initial fixture funding uses anchor/split builders. Every contract
 // deployment/call/close/query goes through public SDK Manager methods.
 func newSDKContractReviewFixture(t *testing.T) *sdkContractReviewFixture {
@@ -34,8 +43,8 @@ func newSDKContractReviewFixture(t *testing.T) *sdkContractReviewFixture {
 	f := newTemplateFixture(t, map[string]int64{reviewAssetA: 20000, reviewAssetB: 20000})
 	// Establish this fixture's SDK network before deriving payer addresses;
 	// a preceding Bitcoin regtest case may have selected a different chain.
-	owner, _ := newWalletManagerForNode(t, f.Network.Core, dkvsClientMnemonic)
-	other, _ := newWalletManagerForNode(t, f.Network.Core, messageTopicMemberMnemonic)
+	owner := localContractWallet(t, f.Network.Core, dkvsClientMnemonic)
+	other := localContractWallet(t, f.Network.Core, messageTopicMemberMnemonic)
 	reader, _ := newWalletManagerForNode(t, f.Network.Bootstrap, "")
 	ownerKey := newDKVSKeyPathActor(t, keyFromMnemonic(t, dkvsClientMnemonic, 0))
 	otherKey := newDKVSKeyPathActor(t, keyFromMnemonic(t, messageTopicMemberMnemonic, 0))

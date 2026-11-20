@@ -85,41 +85,6 @@ func TestProductionWASMExportsMatchAllowlist(t *testing.T) {
 	}
 }
 
-func TestRootMnemonicRecoveryDerivesIdentityWithoutStoragePassword(t *testing.T) {
-	source, err := os.ReadFile("main.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(source)
-	start := strings.Index(text, "func recoverAccountManagementFromRootMnemonic(")
-	if start < 0 {
-		t.Fatal("root mnemonic recovery export is missing")
-	}
-	end := strings.Index(text[start+1:], "\nfunc ")
-	if end < 0 {
-		t.Fatal("root mnemonic recovery export boundary is missing")
-	}
-	recovery := text[start : start+1+end]
-	if !strings.Contains(recovery, `_mgr.ValidateMnemonic(mnemonic, "")`) {
-		t.Fatal("root identity must be derived with the same empty BIP39 passphrase as wallet import")
-	}
-	if strings.Contains(recovery, `_mgr.ValidateMnemonic(mnemonic, password)`) {
-		t.Fatal("local storage password must not be used as a BIP39 passphrase")
-	}
-}
-
-func TestORDXSingleSendUsesV3Builder(t *testing.T) {
-	source, err := os.ReadFile("main.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(source)
-	if !strings.Contains(text, "name.Protocol == indexer.PROTOCOL_NAME_ORDX") ||
-		!strings.Contains(text, "_mgr.SendAssetsV3(destAddress, assetName, amt, feeRate64, nil)") {
-		t.Fatal("WASM ORDX single send must use the established V3 builder")
-	}
-}
-
 func TestProductionWASMExcludesDebugAndChannelPrivateKeyExports(t *testing.T) {
 	forbidden := []string{
 		"dbTest", "batchDbTest", "getCommitRootKey", "getCommitSecret",

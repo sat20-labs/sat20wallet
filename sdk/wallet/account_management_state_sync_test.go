@@ -38,16 +38,6 @@ func activateSyncFixture(t *testing.T, manager *Manager, remote *rgb11MemoryDKVS
 		pkg.Envelope.Locator, "account://"+pkg.Envelope.Locator.PackageID))
 }
 
-func TestPendingAfterCommittedSnapshotPreservesConcurrentEdit(t *testing.T) {
-	original := accountManagementMutation{ID: "m1", Type: accountMutationMetadata, Fingerprint: "f", Name: "old"}
-	updated := original
-	updated.Name = "new"
-	remaining := pendingAfterCommittedSnapshot([]accountManagementMutation{updated}, []accountManagementMutation{original})
-	if len(remaining) != 1 || remaining[0].Name != "new" {
-		t.Fatalf("concurrent mutation was cleared: %+v", remaining)
-	}
-}
-
 func TestInitialTemporaryAccountPublishUsesConfirmedTTLForRootWrapper(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"

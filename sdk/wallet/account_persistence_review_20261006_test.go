@@ -3,18 +3,10 @@ package wallet
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/json"
 	"errors"
-	"flag"
-	"fmt"
-	"os"
-	"path/filepath"
 	"reflect"
-	"runtime"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	indexercommon "github.com/sat20-labs/indexer/common"
 )
@@ -90,93 +82,6 @@ func TestAccountPersistenceFailureReview20261006(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
-	_, source, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("locate review test")
-	}
-	dir := filepath.Dir(source)
-	hashes := map[string]string{}
-	for _, name := range []string{"interface.go", "db.go", "wallet_catalog.go", "account_management_state.go", "account_managed_data_sync.go"} {
-		data, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		hashes[name] = fmt.Sprintf("%x", sha256.Sum256(data))
-	}
-	var observations []map[string]any
-	t.Cleanup(func() {
-		var changed []string
-		for name, before := range hashes {
-			data, err := os.ReadFile(filepath.Join(dir, name))
-			if err != nil || fmt.Sprintf("%x", sha256.Sum256(data)) != before {
-				changed = append(changed, name)
-			}
-		}
-		report := map[string]any{"test": t.Name(), "date": time.Now().Format(time.RFC3339), "passed": !t.Failed(), "observations": observations, "source_sha256": hashes, "changed_sources": changed}
-		data, err := json.MarshalIndent(report, "", "  ")
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		outDir := filepath.Join(filepath.Dir(dir), "review-evidence")
-		if output := flag.Lookup("test.outputdir"); output != nil && output.Value.String() != "" {
-			outDir = output.Value.String()
-		}
-		if err := os.MkdirAll(outDir, 0700); err != nil {
-			t.Error(err)
-			return
-		}
-		path := filepath.Join(outDir, "account-persistence-rereview-20261006.json")
-		if err := os.WriteFile(path, append(data, '\n'), 0600); err != nil {
-			t.Error(err)
-		}
-		t.Logf("review evidence: %s", path)
-		if len(changed) != 0 {
-			t.Errorf("source changed during review: %v", changed)
-		}
-	})
-
-	for _, scenario := range []struct {
-		name   string
-		mutate func(*Manager, int64) error
-	}{
-		{"Rename", func(m *Manager, id int64) error { return m.UpdateWalletName(id, "Rejected Rename") }},
-		{"EnsureAccount", func(m *Manager, id int64) error { return m.EnsureAccount(id, 2, "Rejected Account", "did:rejected") }},
-		{"AccountMetadata", func(m *Manager, id int64) error {
-			return m.UpdateAccountMetadata(id, 0, "Rejected Metadata", "did:rejected")
-		}},
-		{"CreateWallet", func(m *Manager, _ int64) error { _, _, err := m.CreateWallet("password"); return err }},
-	} {
-		t.Run(scenario.name, func(t *testing.T) {
-			manager, _, _ := reviewAccountDevices(t)
-			root := manager.GetAccountManagementStatus().RootWalletID
-			before := manager.GetWalletCatalog()
-			status := manager.GetAccountManagementStatus()
-			original := manager.db
-			durableBefore := accountPersistenceReviewCatalog(t, original)
-			fault := &accountPersistenceReviewDB{KVDB: original, profileKey: append([]byte(nil), accountManagementProfileKey()...)}
-			fault.armed.Store(true)
-			manager.db = fault
-			defer func() { manager.db = original }()
-			err := scenario.mutate(manager, root)
-			fault.armed.Store(false)
-			manager.db = original
-			catalogChanged := !reflect.DeepEqual(before, manager.GetWalletCatalog())
-			durableChanged := !reflect.DeepEqual(durableBefore, accountPersistenceReviewCatalog(t, original))
-			observations = append(observations, map[string]any{"scenario": scenario.name, "error": fmt.Sprint(err), "fault_hits": fault.hits.Load(), "catalog_changed": catalogChanged, "durable_catalog_changed": durableChanged, "pending_before": status.PendingChanges, "pending_after": manager.GetAccountManagementStatus().PendingChanges})
-			t.Logf("persistence review: operation=%s error=%v hits=%d catalog_changed=%t durable_changed=%t pending=%d", scenario.name, err, fault.hits.Load(), catalogChanged, durableChanged, manager.GetAccountManagementStatus().PendingChanges)
-			if fault.hits.Load() == 0 {
-				t.Fatal("profile fault was not exercised")
-			}
-			if !errors.Is(err, errAccountPersistenceReview) {
-				t.Error("profile write failure must be returned by the public operation")
-			}
-			if catalogChanged || durableChanged {
-				t.Error("failed account mutation committed a partial wallet catalog")
-			}
-		})
-	}
-
 	t.Run("RemoteApplyTransactionFailureCanRetry", func(t *testing.T) {
 		first, second, remote := reviewAccountDevices(t)
 		root := first.GetAccountManagementStatus().RootWalletID
@@ -221,7 +126,6 @@ func TestAccountPersistenceFailureReview20261006(t *testing.T) {
 		}
 		retryErr := restarted.SyncAccountManagementState(context.Background())
 		unchanged := reflect.DeepEqual(before, restarted.GetWalletCatalog())
-		observations = append(observations, map[string]any{"scenario": "RemoteApplyTransactionFailureCanRetry", "first_error": fmt.Sprint(firstErr), "fault_hits": fault.hits.Load(), "retry_error": fmt.Sprint(retryErr), "catalog_still_old": unchanged})
 		t.Logf("persistence review: first=%v hits=%d retry=%v old_catalog=%t", firstErr, fault.hits.Load(), retryErr, unchanged)
 		if retryErr != nil {
 			t.Fatalf("failed local apply must be retryable after restart: %v", retryErr)

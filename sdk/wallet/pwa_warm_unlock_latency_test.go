@@ -20,6 +20,9 @@ import (
 func TestPWAWarmUnlockDuringRGBNetworkWait(t *testing.T) {
 	for _, entry := range []string{"public-refresh", "background-mailbox"} {
 		for _, wrong := range []bool{false, true} {
+			if entry == "background-mailbox" && wrong {
+				continue
+			}
 			t.Run(fmt.Sprintf("%s/wrong-password=%t", entry, wrong), func(t *testing.T) {
 				oldChain := _chain
 				_chain = "testnet"

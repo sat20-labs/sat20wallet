@@ -211,11 +211,12 @@ test('first mnemonic import discovers managed recovery before falling back to lo
   assert.match(importFlow, /walletManager\.validateMnemonic\(mnemonic, ''\)/)
   assert.doesNotMatch(importFlow, /walletManager\.validateMnemonic\(mnemonic, password\)/)
   assert.match(importFlow, /const shouldDiscoverRoot = !rootAccountId\.value \|\| !hasWallet\.value \|\| accountRecovery\.value\?\.status === 'pending'/)
-  assert.match(importFlow, /walletManager\.recoverAccountManagementFromRootMnemonic\([\s\S]*if \(recoveryError \|\| !recovery\)[\s\S]*return/)
+  assert.match(importFlow, /const firstImportSignal = !hasWallet\.value \? signal : undefined/)
+  assert.match(importFlow, /walletManager\.recoverAccountManagementFromRootMnemonic\(\s*processedMnemonic,\s*password,\s*firstImportSignal,?\s*\)[\s\S]*if \(recoveryError \|\| !recovery\)[\s\S]*return/)
   assert.match(importFlow, /const fixedRootAccountId = rootAccountId\.value \|\| recoveredRootAccountId[\s\S]*discoveredRootAccountId = fixedRootAccountId[\s\S]*walletStorage\.batchUpdate\(\{[\s\S]*rootAccountId: discoveredRootAccountId/)
   assert.match(importFlow, /if \(recovery\.status === 'found'\)[\s\S]*recovered = true/)
-  assert.match(importFlow, /if \(!recovered\)[\s\S]*walletManager\.importWallet\(processedMnemonic, password\)/)
-  assert.match(importFlow, /walletManager\.importWallet\(processedMnemonic, password\)/)
+  assert.match(importFlow, /if \(!recovered\) \{[^}]*walletManager\.importWallet\(processedMnemonic, password, firstImportSignal\)/)
+  assert.equal(importFlow.match(/walletManager\.importWallet\(/g)?.length, 1)
 })
 
 test('root account identity is a stable public key and local wallet IDs remain transient', () => {

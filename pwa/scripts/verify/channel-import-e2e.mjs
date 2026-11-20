@@ -45,7 +45,16 @@ export async function runChannelImportCase(t, fixture) {
     else return route.fallback()
     return route.fulfill({ contentType: 'application/json', json: { code: 0, msg: 'ok', data } })
   }
+  const registerGenesisRoute = async context => {
+    const indexer = fixture.config.IndexerL1
+    const genesisURL = new URL(`${indexer.Scheme}://${indexer.Host}/${indexer.Proxy}/btc/block/blockhash/0`).href
+    await context.route(genesisURL, route => {
+      if (route.request().method() !== 'GET') return route.fallback()
+      return route.fulfill({ contentType: 'application/json', json: { code: 0, msg: 'ok', data: fixture.bitcoin_evidence.genesis_hash } })
+    })
+  }
   const channelPage = await device()
+  await registerGenesisRoute(channelPage.context())
   let channelBroadcasts = 0
   await channelPage.context().route('**/v3/bitcoin/**', bitcoinRoute)
   await channelPage.context().route('**/*', route => {
@@ -77,6 +86,7 @@ export async function runChannelImportCase(t, fixture) {
         } finally { db.close() }
       }
       const peer = await device()
+      await registerGenesisRoute(peer.context())
       let peerRoot
       let peerRenamed = false
       const caseFailures = []

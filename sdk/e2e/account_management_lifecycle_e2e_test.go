@@ -153,10 +153,6 @@ func TestRealSatoshiNetAccountManagementLifecycleAndConcurrentDevices(t *testing
 	require.Equal(t, "Cold Savings", freshCatalog[0].Accounts[2].Name)
 	require.Equal(t, "did:root:2", freshCatalog[0].Accounts[2].DID)
 
-	t.Run("ConcurrentDeviceEdits", func(t *testing.T) {
-		t.Skip("not tested: simultaneous edits from multiple devices are unsupported")
-	})
-
 	// Recovery from a different endpoint must not expose endpoint-local state.
 	other, otherLocation := newWalletManagerForNode(t, network.Bootstrap, "")
 	_, err = other.LoadAccountManagementStateForRecovery(otherLocation,

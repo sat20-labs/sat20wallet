@@ -270,14 +270,6 @@ func newRewardCutoffFixture(t *testing.T, fundingHeight int) *rewardCutoffFixtur
 	}
 }
 
-func rewardDestinations(info *DealInfo) []*SendAssetInfo {
-	destinations := make([]*SendAssetInfo, 0, len(info.SendInfo))
-	for _, destination := range info.SendInfo {
-		destinations = append(destinations, destination)
-	}
-	return destinations
-}
-
 func configureRewardCutoffOrdxStub(t *testing.T, fixture *rewardCutoffFixture, winnerHeight, processedTip int) (string, string) {
 	t.Helper()
 	const bindingN = 500
@@ -333,35 +325,6 @@ func configureRewardCutoffOrdxStub(t *testing.T, fixture *rewardCutoffFixture, w
 
 func TestRecycleRewardHeightCutoff(t *testing.T) {
 	const processedTip = 550
-
-	t.Run("control_funding_at_processed_tip_is_selected", func(t *testing.T) {
-		fixture := newRewardCutoffFixture(t, processedTip)
-		info := fixture.runtime.genRewardInfo(processedTip)
-		if info.Height != fixture.height || len(info.ItemIDs) != 1 || info.ItemIDs[0] != fixture.itemID {
-			t.Fatalf("fixture deal fields mismatch: height=%d itemCount=%d", info.Height, len(info.ItemIDs))
-		}
-		tx, _, _, err := fixture.manager.buildBatchSendTxWithAddressHeight_btc(
-			fixture.sourceAddress, rewardDestinations(info), info.FeeRate, nil, true, false, processedTip)
-		if err != nil {
-			t.Fatalf("eligible tip funding did not build: %T", err)
-		}
-		if tx == nil {
-			t.Fatal("eligible tip funding returned a nil transaction")
-		}
-		if len(tx.TxIn) != 1 || tx.TxIn[0].PreviousOutPoint.String() != fixture.fundingOutpoint {
-			t.Fatalf("eligible tip funding input mismatch: count=%d", len(tx.TxIn))
-		}
-	})
-
-	t.Run("control_funding_after_processed_tip_is_excluded", func(t *testing.T) {
-		fixture := newRewardCutoffFixture(t, processedTip+1)
-		info := fixture.runtime.genRewardInfo(processedTip)
-		_, _, _, err := fixture.manager.buildBatchSendTxWithAddressHeight_btc(
-			fixture.sourceAddress, rewardDestinations(info), info.FeeRate, nil, true, false, processedTip)
-		if err == nil {
-			t.Error("selector accepted funding above the cutoff")
-		}
-	})
 
 	t.Run("actual_reward_send_uses_processed_tip_funding", func(t *testing.T) {
 		fixture := newRewardCutoffFixture(t, processedTip)

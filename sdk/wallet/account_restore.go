@@ -265,7 +265,7 @@ func (p *Manager) authenticateAccountRestore(accountID, fingerprint string,
 
 func (p *Manager) restoreAccountCopies(value RecoveredAccountManagementState, secret []byte,
 	password string, locator account.Locator, options AccountManagementRestoreOptions,
-	allowedRoot string) ([]RestoredWalletResult, error) {
+	allowedRoot string, beforeCommit func() error) ([]RestoredWalletResult, error) {
 	validated, err := validateAccountCopies(value, secret, locator)
 	if err != nil {
 		return nil, err
@@ -345,7 +345,7 @@ func (p *Manager) restoreAccountCopies(value RecoveredAccountManagementState, se
 	err = p.withAccountLocalState(false, func() error {
 		p.mutex.Lock()
 		defer p.mutex.Unlock()
-		if err := p.persistPreparedAccountRestoreLocked(prepared, profile); err != nil {
+		if err := p.persistPreparedAccountRestoreLocked(prepared, profile, beforeCommit); err != nil {
 			return err
 		}
 		zeroBytes(p.accountSecret)

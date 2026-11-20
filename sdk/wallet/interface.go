@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -218,6 +219,12 @@ func (p *Manager) Close() {
 func (p *Manager) CreateWallet(password string) (opValue0 int64, opValue1 string, opErr error) {
 	opLogID := p.beginWalletLog("wallet", "create_wallet", "Create wallet")
 	defer func() { p.finishWalletLog(opLogID, opErr, nil) }()
+	first := false
+	defer func() {
+		if first && opErr == nil {
+			p.discoverNewRoot(password)
+		}
+	}()
 
 	p.channelIdentityMu.Lock()
 	defer p.channelIdentityMu.Unlock()
@@ -242,8 +249,9 @@ func (p *Manager) CreateWallet(password string) (opValue0 int64, opValue1 string
 		return -1, "", err
 	}
 
-	if p.accountProfile == nil && len(p.walletInfoMap) == 0 {
-		if err := p.activateFirstMnemonicWalletLocked(wallet, mnemonic, password); err != nil {
+	first = p.firstRootEmptyLocked()
+	if first {
+		if err := p.activateFirstMnemonicWalletLocked(nil, wallet, mnemonic, password); err != nil {
 			p.mutex.Unlock()
 			return -1, "", err
 		}
@@ -300,9 +308,40 @@ func (p *Manager) CreateMonitorWallet(address string) (int64, error) {
 	return id, nil
 }
 
-func (p *Manager) ImportWallet(mnemonic string, password string) (opValue0 int64, opErr error) {
+func (p *Manager) ImportWallet(mnemonic string, password string) (int64, error) {
+	return p.importWallet(nil, mnemonic, password)
+}
+
+// ImportVerifiedRoot commits the foreground import only while the exact
+// negative lookup still belongs to this account session and endpoint.
+func (p *Manager) ImportVerifiedRoot(ctx context.Context, mnemonic, password string) (int64, error) {
+	if p == nil || ctx == nil {
+		return -1, ErrRootAccountDiscoveryPending
+	}
+	if err := p.accountDBFailure(); err != nil {
+		return -1, err
+	}
+	return p.importWallet(ctx, mnemonic, password)
+}
+
+// A foreground import can be cancelled after Put. Only an atomic batch
+// keeps its writes private until the final validity check and Flush.
+func (p *Manager) newImportBatch(foreground bool) (db.WriteBatch, error) {
+	if foreground {
+		return NewAtomicWriteBatch(p.db)
+	}
+	return p.db.NewWriteBatch(), nil
+}
+
+func (p *Manager) importWallet(ctx context.Context, mnemonic, password string) (opValue0 int64, opErr error) {
 	opLogID := p.beginWalletLog("wallet", "import_wallet", "Import wallet")
 	defer func() { p.finishWalletLog(opLogID, opErr, nil) }()
+	first := false
+	defer func() {
+		if first && opErr == nil {
+			p.discoverNewRoot(password)
+		}
+	}()
 
 	p.channelIdentityMu.Lock()
 	defer p.channelIdentityMu.Unlock()
@@ -323,6 +362,16 @@ func (p *Manager) ImportWallet(mnemonic string, password string) (opValue0 int64
 	}
 
 	p.mutex.Lock()
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			p.mutex.Unlock()
+			return -1, err
+		}
+		if !p.firstRootEmptyLocked() {
+			p.mutex.Unlock()
+			return -1, ErrRootAccountDiscoveryPending
+		}
+	}
 	if err := p.checkAccountRestore("wallets", AccountManagedDataGlobalScope); err != nil {
 		p.mutex.Unlock()
 		return -1, err
@@ -333,8 +382,9 @@ func (p *Manager) ImportWallet(mnemonic string, password string) (opValue0 int64
 		return -1, err
 	}
 
-	if p.accountProfile == nil && len(p.walletInfoMap) == 0 {
-		if err := p.activateFirstMnemonicWalletLocked(wallet, mnemonic, password); err != nil {
+	first = p.firstRootEmptyLocked()
+	if first {
+		if err := p.activateFirstMnemonicWalletLocked(ctx, wallet, mnemonic, password); err != nil {
 			p.mutex.Unlock()
 			return -1, err
 		}
@@ -387,7 +437,7 @@ func (p *Manager) commitTypedWalletLocked(wallet common.Wallet, secret, password
 // activateFirstMnemonicWalletLocked persists the first mnemonic wallet,
 // selected status and account-management profile in one database transaction.
 // The live manager is changed only after the batch commits.
-func (p *Manager) activateFirstMnemonicWalletLocked(wallet common.Wallet, mnemonic, password string) error {
+func (p *Manager) activateFirstMnemonicWalletLocked(ctx context.Context, wallet common.Wallet, mnemonic, password string) error {
 	walletRecord, err := p.prepareWalletSecret(mnemonic, password, WALLET_TYPE_MNEMONIC, wallet)
 	if err != nil {
 		return err
@@ -416,7 +466,10 @@ func (p *Manager) activateFirstMnemonicWalletLocked(wallet common.Wallet, mnemon
 	if err != nil {
 		return err
 	}
-	batch := p.db.NewWriteBatch()
+	batch, err := p.newImportBatch(ctx != nil)
+	if err != nil {
+		return err
+	}
 	if batch == nil {
 		return fmt.Errorf("create first wallet batch")
 	}
@@ -429,6 +482,20 @@ func (p *Manager) activateFirstMnemonicWalletLocked(wallet common.Wallet, mnemon
 	}
 	if err := batch.Put(accountManagementProfileKey(), profileBytes); err != nil {
 		return err
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		key, keyErr := accountRootWrapperKey(wallet)
+		client, sourceErr := p.accountDKVSClient()
+		if keyErr != nil || sourceErr != nil || p.rootCheck.active ||
+			p.rootCheck.generation != p.accountGeneration || !p.rootCheck.matches(client, key) {
+			return ErrRootAccountDiscoveryPending
+		}
+		if err := p.accountDBFailure(); err != nil {
+			return err
+		}
 	}
 	if err := batch.Flush(); err != nil {
 		return err

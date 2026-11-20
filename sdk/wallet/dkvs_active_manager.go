@@ -1,5 +1,29 @@
 package wallet
 
+import (
+	"context"
+	"errors"
+)
+
+// Root creation has already committed. A started runtime finishes its entry
+// query before returning to the UI. Standalone clients can call the same
+// recovery API explicitly. No identity lock is held during remote I/O.
+func (p *Manager) discoverNewRoot(password string) {
+	p.actionMonitorLock.Lock()
+	running := p.actionMonitorRunning
+	p.actionMonitorLock.Unlock()
+	if !running {
+		return
+	}
+	ctx, cancel := context.WithTimeout(p.ensureDKVSManager().requestContext(), accountManagedDataReadyTimeout)
+	defer cancel()
+	_, err := p.RecoverAccountManagementFromCurrentWallet(ctx, password)
+	if errors.Is(err, ErrRootAccountNotFound) {
+		err = nil
+	}
+	p.dkvs.setLastSyncError(err)
+}
+
 // accountDKVSClient returns the endpoint client privately coordinated by this
 // Manager. Explicit subscriptions are served from the confirmed local replica;
 // writes use the same durable client outbox as account-management domains.
@@ -89,6 +113,22 @@ func (p *Manager) startAccountRuntime(discover bool) {
 		if err := p.startAccountDiscovery(); err != nil {
 			Log.Warningf("start account entry discovery failed: %v", err)
 		}
+	}
+}
+
+// NotifyNetworkOnline delivers a host connectivity event to the current SDK runtime.
+func (p *Manager) NotifyNetworkOnline() {
+	p.dkvsInitMu.Lock()
+	m := p.dkvs
+	p.dkvsInitMu.Unlock()
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onlineEpoch++
+	if m.recheckOnOnline {
+		m.startWorkerLocked(true, false)
 	}
 }
 

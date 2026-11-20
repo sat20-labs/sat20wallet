@@ -261,10 +261,7 @@ func (f *spManagerRegtest) manager(t *testing.T, mnemonic string) *wallet.Manage
 	t.Cleanup(func() { manager.Close(); require.NoError(t, db.Close()) })
 	_, err := manager.ImportWallet(mnemonic, "sp-regtest-only")
 	require.NoError(t, err)
-	require.NoError(t, manager.RetryDKVSSync())
-	require.Eventually(t, func() bool {
-		return manager.GetAccountManagementStatus().LocalOnly
-	}, 20*time.Second, 20*time.Millisecond, "real DKVS must confirm account absence before SP fixture edits")
+	requireE2EInactive(t, manager, "sp-regtest-only")
 	return manager
 }
 

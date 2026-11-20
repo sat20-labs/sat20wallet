@@ -43,6 +43,9 @@ type dkvsManager struct {
 	clients                  map[string]*SatsNetDKVSClient
 	paths                    map[string]struct{}
 	ready                    map[string]*byte // Session-only grant identity; never persisted.
+	rootOnline               *byte            // Independent of starting the backup worker.
+	onlineEpoch              uint64           // Counts connectivity events, including during a cold check.
+	recheckOnOnline          bool             // One failed discovery can be retried on reconnect.
 	lastSyncErrorCode        string
 	lastSyncError            string
 	lastSyncErrorAt          int64
@@ -91,6 +94,7 @@ type dkvsValueMutation struct {
 }
 type dkvsUpdateBuilder func(current map[string]*dkvsValue, nextSequence map[string]uint64) ([]dkvsValueMutation, error)
 type dkvsStore struct {
+	readCtx context.Context // set only on the foreground import's private store
 	manager *dkvsManager
 	client  *SatsNetDKVSClient
 }
@@ -148,7 +152,7 @@ func (m *dkvsManager) readEndpointHeight(client *SatsNetDKVSClient, expected str
 	if m == nil || client == nil {
 		return 0, ErrDKVSPathNotSynced
 	}
-	config, err := m.subscriptionEndpointConfig(client)
+	config, err := m.subscriptionEndpointConfig(nil, client)
 	if err != nil {
 		return 0, err
 	}
@@ -467,9 +471,12 @@ func (m *dkvsManager) pathsReady(client *SatsNetDKVSClient, keys []string) bool 
 func (s *dkvsStore) IsReady(keys ...string) bool {
 	return s != nil && s.manager != nil && s.client != nil && s.manager.pathsReady(s.client, keys)
 }
-func (m *dkvsManager) waitPathsReady(client *SatsNetDKVSClient, keys []string) error {
+func (m *dkvsManager) waitPathsReady(caller context.Context, client *SatsNetDKVSClient, keys []string) error {
 	if m == nil || client == nil || len(keys) == 0 {
 		return ErrDKVSPathNotSynced
+	}
+	if caller != nil && caller.Err() != nil {
+		return caller.Err()
 	}
 	for _, key := range keys {
 		if !m.desiredPrefixContainsKey(client, key) {
@@ -483,7 +490,10 @@ func (m *dkvsManager) waitPathsReady(client *SatsNetDKVSClient, keys []string) e
 	if !errors.Is(err, ErrDKVSPathNotSynced) {
 		return err
 	}
-	if err := m.ensureCurrentSubscription(client); err != nil {
+	if err := m.ensureSubscription(caller, client); err != nil {
+		if caller != nil && caller.Err() != nil {
+			return caller.Err()
+		}
 		if m.scopeReady(m.sessionKey(client, "read")) {
 			return m.requirePathsReady(client, keys)
 		}
@@ -495,7 +505,7 @@ func (s *dkvsStore) WaitReady(keys ...string) error {
 	if s == nil || s.manager == nil || s.client == nil {
 		return ErrDKVSPathNotSynced
 	}
-	return s.manager.waitPathsReady(s.client, keys)
+	return s.manager.waitPathsReady(s.readCtx, s.client, keys)
 }
 func (s *dkvsStore) SyncCurrent(keys ...string) error {
 	if s == nil || s.manager == nil || s.client == nil || len(keys) == 0 {
@@ -512,7 +522,7 @@ func (s *dkvsStore) SyncCurrent(keys ...string) error {
 		}
 		prefixes = append(prefixes, prefix)
 	}
-	return s.manager.refreshRequestedPrefixes(s.client, prefixes, false)
+	return s.manager.refreshRequestedPrefixes(s.readCtx, s.client, prefixes, false)
 }
 func (s *dkvsStore) hasLocalRecordEvidence(keys ...string) (bool, error) {
 	if s == nil || s.manager == nil || s.manager.owner == nil || s.manager.owner.db == nil || s.client == nil {
@@ -580,7 +590,11 @@ func (s *dkvsStore) GetVerified(key string, options dkvsindexer.RecordVerificati
 		}
 		return s.getConfirmedVerified(key, options)
 	}
-	ctx, cancel := context.WithTimeout(s.client.requestContext(), dkvsUnmanagedReadTimeout)
+	ctx := s.readCtx
+	if ctx == nil {
+		ctx = s.client.requestContext()
+	}
+	ctx, cancel := context.WithTimeout(ctx, dkvsUnmanagedReadTimeout)
 	defer cancel()
 	record, err := s.client.GetRecordDirectContext(ctx, key)
 	if err != nil {
@@ -1328,7 +1342,7 @@ func (m *dkvsManager) registerDirectoriesLocked(client *SatsNetDKVSClient, store
 	if len(desired) == 0 {
 		return nil
 	}
-	return m.refreshRequestedPrefixes(client, prefixes, true)
+	return m.refreshRequestedPrefixes(nil, client, prefixes, true)
 }
 func (m *dkvsManager) registerKeysLocked(client *SatsNetDKVSClient, store *dkvsReplicaStore, keys []string) error {
 	prefixes := make([]string, 0, len(keys))
@@ -1355,7 +1369,7 @@ func (m *dkvsManager) waitDirectoriesReady(client *SatsNetDKVSClient, directorie
 	}
 	// Child prefixes filter their registered collection; they do not own a
 	// separate generation. Keys and directories use the same readiness gate.
-	return m.waitPathsReady(client, directories)
+	return m.waitPathsReady(nil, client, directories)
 }
 func (m *dkvsManager) rememberDirectories(directories []string) {
 	if m == nil {
@@ -1483,18 +1497,31 @@ func newDKVSManager(owner *Manager) *dkvsManager {
 // Only the coordinator slot is held across transport operations. Data-state
 // mutexes remain available to the UI, cancellation, and domain callbacks.
 func (m *dkvsManager) runTransport(operation func() error) (err error) {
+	return m.runReadTransport(nil, operation)
+}
+
+func (m *dkvsManager) runReadTransport(caller context.Context, operation func() error) (err error) {
 	if m == nil || operation == nil {
 		return ErrDKVSPathNotSynced
 	}
+	ctx := caller
+	if ctx == nil {
+		ctx = m.requestContext()
+	}
 	for {
+		if caller != nil && caller.Err() != nil {
+			return caller.Err()
+		}
 		m.runMu.Lock()
 		if !m.runActive {
 			m.runActive, m.runDone = true, make(chan struct{})
 			done := m.runDone
 			m.runMu.Unlock()
 			defer func() {
-				if err != nil && isDKVSNetworkFailure(err) {
-					m.invalidateOnlineSession()
+				if err != nil && (caller == nil || caller.Err() == nil) && isDKVSNetworkFailure(err) {
+					// A failed submission can return an HTTP refusal over a
+					// healthy connection. It still revokes remote write readiness.
+					m.revokeOnlineGrants(isDKVSOutboxGlobalTransportFailure(err))
 				}
 				m.runMu.Lock()
 				defer m.runMu.Unlock()
@@ -1512,8 +1539,8 @@ func (m *dkvsManager) runTransport(operation func() error) (err error) {
 		}
 		select {
 		case <-done:
-		case <-m.requestContext().Done():
-			return m.requestContext().Err()
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 }
@@ -1784,32 +1811,38 @@ func (m *dkvsManager) startWorker(discover bool) bool {
 		return false
 	}
 	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.startWorkerLocked(discover, discover)
+}
+
+func (m *dkvsManager) startWorkerLocked(discover, allowRecheck bool) bool {
 	if m.stop != nil {
-		m.mu.Unlock()
 		return false
 	}
+	m.recheckOnOnline = false
 	stop, done, wake := make(chan struct{}), make(chan struct{}), make(chan struct{}, 1)
 	var requestCtx context.Context
 	var cancelRequests context.CancelFunc
 	if discover {
+		// A new discovery run must verify an earlier root miss against the node.
+		m.rootOnline = nil
 		requestCtx, cancelRequests = context.WithTimeout(context.Background(), accountManagedDataReadyTimeout)
 	} else {
 		requestCtx, cancelRequests = context.WithCancel(context.Background())
 	}
 	m.ready = make(map[string]*byte)
 	m.stop, m.done, m.wake, m.requestCtx, m.cancelRequests, m.stopping = stop, done, wake, requestCtx, cancelRequests, false
-	m.mu.Unlock()
 	if discover {
-		go m.runDiscovery(stop, done, wake)
+		go m.runDiscovery(stop, done, wake, m.onlineEpoch, allowRecheck)
 	} else {
 		go m.run(stop, done, wake)
 	}
 	return true
 }
 
-// A cold entry performs exactly one discovery/resumption, without ordinary
-// outbox work, unrelated jobs, long-polling or automatic discovery retries.
-func (m *dkvsManager) runDiscovery(stop, done, wake chan struct{}) {
+// Each attempt ends its worker. Only a connectivity event can trigger the
+// single follow-up to a cold check that failed while the network was down.
+func (m *dkvsManager) runDiscovery(stop, done, wake chan struct{}, onlineEpoch uint64, allowRecheck bool) {
 	err := m.owner.refreshAccountService(true)
 	m.setLastSyncError(err)
 	m.notifyStatusCallback()
@@ -1817,7 +1850,11 @@ func (m *dkvsManager) runDiscovery(stop, done, wake chan struct{}) {
 	// boundary either continues this owned lifetime or starts after its release.
 	m.owner.mutex.RLock()
 	m.mu.Lock()
-	configured := m.owner.accountProfile != nil && m.owner.accountProfile.RecoveryConfigured
+	profile := m.owner.accountProfile
+	configured := profile != nil && profile.RecoveryConfigured
+	recheck := allowRecheck && !m.stopping && profile != nil && !configured && profile.Activation == nil &&
+		errors.Is(err, ErrRootAccountDiscoveryPending) &&
+		(isDKVSNetworkFailure(err) || errors.Is(m.requestCtx.Err(), context.DeadlineExceeded))
 	if m.cancelRequests != nil {
 		m.cancelRequests()
 	}
@@ -1832,6 +1869,13 @@ func (m *dkvsManager) runDiscovery(stop, done, wake chan struct{}) {
 	}
 	if m.done == done && !m.stopping {
 		m.stop, m.done, m.wake, m.requestCtx, m.cancelRequests, m.stopping = nil, nil, nil, nil, nil, false
+		if recheck {
+			if m.onlineEpoch != onlineEpoch {
+				m.startWorkerLocked(true, false)
+			} else {
+				m.recheckOnOnline = true
+			}
+		}
 		// The Manager remains usable after discovery. Its per-key mutex
 		// identities must survive concurrent explicit activation/recovery.
 	}
@@ -1845,6 +1889,7 @@ func (m *dkvsManager) stopAndWait() {
 		return
 	}
 	m.mu.Lock()
+	m.recheckOnOnline = false
 	stop, done, cancelRequests := m.stop, m.done, m.cancelRequests
 	if stop == nil {
 		releaseDKVSManagerRuntime(m)
@@ -1971,10 +2016,17 @@ func (m *dkvsManager) requireWritePaths(client *SatsNetDKVSClient, keys []string
 }
 
 func (m *dkvsManager) invalidateOnlineSession() {
+	m.revokeOnlineGrants(true)
+}
+
+func (m *dkvsManager) revokeOnlineGrants(disconnected bool) {
 	if m == nil {
 		return
 	}
 	m.mu.Lock()
+	if disconnected {
+		m.rootOnline = nil
+	}
 	for key := range m.ready {
 		if strings.HasPrefix(key, "write\x00") {
 			delete(m.ready, key)

@@ -1,8 +1,14 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -12,6 +18,7 @@ import (
 	indexerdb "github.com/sat20-labs/indexer/indexer/db"
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet"
+	dkvs "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -23,13 +30,14 @@ var errAccountE2EProfileWrite = errors.New("account E2E: injected profile write 
 // actual online baseline before enabling a local persistence fault.
 type accountE2EProfileWriteDB struct {
 	indexercommon.KVDB
-	fail          atomic.Bool
-	key           string
-	failRead      atomic.Bool
-	writes        atomic.Int64
-	failures      atomic.Int64
-	failFlush     bool
-	moduleReceipt bool
+	fail            atomic.Bool
+	key             string
+	failRead        atomic.Bool
+	writes          atomic.Int64
+	failures        atomic.Int64
+	failFlush       bool
+	moduleReceipt   bool
+	cancelOnProfile context.CancelFunc
 }
 
 func (d *accountE2EProfileWriteDB) Write(key, value []byte) error {
@@ -75,7 +83,7 @@ func (d *accountE2EProfileWriteDB) Read(key []byte) ([]byte, error) {
 }
 
 func (d *accountE2EProfileWriteDB) NewWriteBatch() indexercommon.WriteBatch {
-	return &accountE2EProfileWriteBatch{WriteBatch: d.KVDB.NewWriteBatch(), database: d}
+	return &accountE2EProfileWriteBatch{WriteBatch: d.KVDB.NewWriteBatch(), database: d, bulk: true}
 }
 
 // Keep the fault hook on the real underlying atomic transaction.
@@ -95,12 +103,29 @@ type accountE2EProfileWriteBatch struct {
 	indexercommon.WriteBatch
 	database *accountE2EProfileWriteDB
 	profile  bool
+	bulk     bool
 }
 
 func (b *accountE2EProfileWriteBatch) Put(key, value []byte) error {
 	b.database.writes.Add(1)
 	matched := b.database.matchesWrite(key, value)
 	b.profile = b.profile || matched
+	if matched && b.database.cancelOnProfile != nil {
+		if err := b.WriteBatch.Put(key, value); err != nil {
+			return err
+		}
+		// Exercise the permitted bulk rollover on this exact row, using the
+		// real database rather than depending on its machine-specific size limit.
+		if b.bulk {
+			if err := b.WriteBatch.Flush(); err != nil {
+				return err
+			}
+			b.WriteBatch.Close()
+			b.WriteBatch = b.database.KVDB.NewWriteBatch()
+		}
+		b.database.cancelOnProfile()
+		return nil
+	}
 	if b.database.fail.Load() && !b.database.failFlush && matched {
 		b.database.failures.Add(1)
 		return errAccountE2EProfileWrite
@@ -142,6 +167,121 @@ func accountFailureReady(t *testing.T, device *wallet.Manager) {
 func TestSDKAccountFailureRegressions(t *testing.T) {
 	network := newDKVSNoPluginUnfundedNetwork(t)
 	waitForDKVSPeerReady(t, network)
+
+	t.Run("StoppedDBBlocksFirstImport", func(t *testing.T) {
+		source := prepareAccountReviewWithMnemonic(t, network, "", true)
+		source.activate(t)
+		cfg, _ := accountReviewConfig(t, network)
+		phrase := accountSyncMnemonic(t, 233)
+		root, err := wallet.ValidateMnemonicForCurrentNetwork(phrase, "")
+		require.NoError(t, err)
+		key, err := dkvs.AccountPersonalKey(root.AccountID, "account/root")
+		require.NoError(t, err)
+		proxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: cfg.IndexerL2.Scheme, Host: cfg.IndexerL2.Host})
+		var down atomic.Bool
+		down.Store(true)
+		var rejected atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if down.Load() && strings.HasSuffix(r.URL.Path, "/dkvs/active/sync") {
+				body, err := io.ReadAll(r.Body)
+				r.Body.Close()
+				if err != nil {
+					http.Error(w, "read root query", http.StatusBadRequest)
+					return
+				}
+				if bytes.Contains(body, []byte(key)) {
+					rejected.Add(1)
+					http.Error(w, "temporary outage", http.StatusServiceUnavailable)
+					return
+				}
+				r.Body = io.NopCloser(bytes.NewReader(body))
+			}
+			proxy.ServeHTTP(w, r)
+		}))
+		t.Cleanup(server.Close)
+		cfg.IndexerL2.Host = strings.TrimPrefix(server.URL, "http://")
+		dir := t.TempDir()
+		db := indexerdb.NewKVDB(dir)
+		require.NotNil(t, db)
+		fault := &accountE2EProfileWriteDB{KVDB: db}
+		device := wallet.NewManager(cfg, fault)
+		t.Cleanup(func() { device.Close(); db.Close() })
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		waiting := make(chan error, 1)
+		go func() {
+			_, err := device.WaitForImportRoot(ctx, phrase, accountReviewPassword)
+			waiting <- err
+		}()
+		require.Eventually(t, func() bool { return rejected.Load() > 0 }, 5*time.Second, 10*time.Millisecond)
+		fault.fail.Store(true)
+		_, err = device.WaitForImportRoot(ctx, source.rootMnemonic, accountReviewPassword)
+		require.ErrorIs(t, err, wallet.ErrAccountDBStopped)
+		require.Positive(t, fault.failures.Load())
+		fault.fail.Store(false)
+		down.Store(false)
+		select {
+		case err := <-waiting:
+			require.ErrorIs(t, err, wallet.ErrAccountDBStopped)
+			require.ErrorIs(t, err, errAccountE2EProfileWrite)
+		case <-ctx.Done():
+			t.Fatal("first discovery continued after the database stopped")
+		}
+		_, err = device.WaitForImportRoot(ctx, phrase, accountReviewPassword)
+		require.ErrorIs(t, err, wallet.ErrAccountDBStopped)
+		require.ErrorIs(t, err, errAccountE2EProfileWrite)
+		_, err = device.ImportVerifiedRoot(ctx, phrase, accountReviewPassword)
+		require.ErrorIs(t, err, wallet.ErrAccountDBStopped, "a stopped database cannot accept a different first wallet")
+		require.ErrorIs(t, err, errAccountE2EProfileWrite)
+		require.Empty(t, device.GetWalletCatalog())
+		device.Close()
+		db.Close()
+		db = indexerdb.NewKVDB(dir)
+		require.NotNil(t, db)
+		device = wallet.NewManager(cfg, db)
+		require.Empty(t, device.GetWalletCatalog())
+		_, err = db.Read([]byte(wallet.GetDBKeyPrefix() + "account-management-profile-v1"))
+		require.ErrorIs(t, err, indexercommon.ErrKeyNotFound)
+	})
+
+	for _, found := range []bool{false, true} {
+		name := "CancelAbsentBeforeCommit"
+		if found {
+			name = "CancelFoundBeforeCommit"
+		}
+		t.Run(name, func(t *testing.T) {
+			phrase := accountSyncMnemonic(t, 232)
+			if found {
+				source := prepareAccountReviewWithMnemonic(t, network, "", true)
+				source.activate(t)
+				phrase = source.rootMnemonic
+			}
+			cfg, _ := accountReviewConfig(t, network)
+			dir := t.TempDir()
+			db := indexerdb.NewKVDB(dir)
+			require.NotNil(t, db)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			device := wallet.NewManager(cfg, &accountE2EProfileWriteDB{KVDB: db, cancelOnProfile: cancel})
+			t.Cleanup(func() { device.Close(); db.Close() })
+			_, err := device.WaitForImportRoot(ctx, phrase, accountReviewPassword)
+			if !found {
+				require.ErrorIs(t, err, wallet.ErrRootAccountNotFound)
+				_, err = device.ImportVerifiedRoot(ctx, phrase, accountReviewPassword)
+			}
+			require.ErrorIs(t, ctx.Err(), context.Canceled, "profile was queued in the real batch")
+			require.ErrorIs(t, err, context.Canceled)
+			require.Empty(t, device.GetWalletCatalog())
+			device.Close()
+			db.Close()
+			db = indexerdb.NewKVDB(dir)
+			require.NotNil(t, db)
+			device = wallet.NewManager(cfg, db)
+			require.Empty(t, device.GetWalletCatalog())
+			_, err = db.Read([]byte(wallet.GetDBKeyPrefix() + "account-management-profile-v1"))
+			require.ErrorIs(t, err, indexercommon.ErrKeyNotFound)
+		})
+	}
 
 	for _, scenario := range []struct {
 		name   string
@@ -414,48 +554,6 @@ func TestSDKAccountFailureRegressions(t *testing.T) {
 		device := accountFailureRestore(t, f)
 		assert.Equal(t, len(f.manager.GetWalletCatalog()), len(device.GetWalletCatalog()), "accepted catalog entries must remain recoverable")
 		accountReviewFind(t, device, before[0].Fingerprint)
-	})
-
-	t.Run("IndependentWalletCreationMustConverge", func(t *testing.T) {
-		t.Skip("not tested: simultaneous edits from multiple devices are unsupported")
-		f := prepareAccountReviewWithMnemonic(t, network, "", true)
-		f.activate(t)
-		second := accountFailureRestore(t, f)
-		firstID, _, err := f.manager.CreateWallet(accountReviewPassword)
-		require.NoError(t, err)
-		secondID, _, err := second.CreateWallet(accountReviewPassword)
-		require.NoError(t, err)
-		var fingerprints []string
-		for _, pair := range []struct {
-			manager *wallet.Manager
-			id      int64
-		}{{f.manager, firstID}, {second, secondID}} {
-			for _, entry := range pair.manager.GetWalletCatalog() {
-				if entry.ID == pair.id {
-					fingerprints = append(fingerprints, entry.Fingerprint)
-				}
-			}
-		}
-		require.Len(t, fingerprints, 2)
-		require.NotEqual(t, fingerprints[0], fingerprints[1])
-		require.NoError(t, second.SyncAccountManagementState(context.Background()))
-		firstSync := f.manager.SyncAccountManagementState(context.Background())
-		secondSync := second.SyncAccountManagementState(context.Background())
-		retry := f.manager.SyncAccountManagementState(context.Background())
-		assert.NoError(t, firstSync, "independently generated default names must not permanently block convergence")
-		assert.NoError(t, secondSync)
-		assert.NoError(t, retry)
-		if firstSync != nil || secondSync != nil || retry != nil {
-			return
-		}
-		third := accountFailureRestore(t, f)
-		for _, device := range []*wallet.Manager{f.manager, second, third} {
-			assert.Len(t, device.GetWalletCatalog(), 3)
-			for _, fingerprint := range fingerprints {
-				accountReviewFind(t, device, fingerprint)
-			}
-			assert.Zero(t, device.GetAccountManagementStatus().PendingChanges)
-		}
 	})
 
 	t.Run("SwitchAccountCannotBypassRecoveryLimit", func(t *testing.T) {

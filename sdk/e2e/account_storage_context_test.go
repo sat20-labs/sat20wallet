@@ -133,13 +133,22 @@ func TestSDKStorageContext(t *testing.T) {
 			})
 
 			if branch == "DiscoveryFinishes" {
-				// While discovery's own verified-config request is paused, the
-				// next config request can only belong to our foreground call.
+				// Hold discovery until the foreground quote has reached the wire.
 				w.config.Store(discovery)
 				_, err := d.mgr.RefreshAccount(context.Background())
 				require.NoError(t, err)
 				background := awaitStoreEvent(t, discovery.seen, "background config from real core")
 				require.NoError(t, background.err)
+				// The synchronous policy read uses the worker context directly.
+				// Discovery's config request has a shorter, per-request context.
+				probe := newStoreReplyGate()
+				probe.open()
+				w.config.Store(probe)
+				_, err = d.mgr.GetAccountStorageOptions()
+				require.NoError(t, err)
+				worker := awaitStoreEvent(t, probe.seen, "worker context from policy read")
+				require.NoError(t, worker.err)
+				require.NoError(t, worker.ctx.Err())
 				w.config.Store(foreground)
 				query.start(caller, d.mgr)
 				first := awaitStoreEvent(t, foreground.seen, "foreground config from real core")
@@ -147,7 +156,9 @@ func TestSDKStorageContext(t *testing.T) {
 				discovery.open()
 				// Observe the discovery lifetime ending naturally. Never cancel
 				// the worker, stop the manager, or start another discovery.
-				awaitStoreEvent(t, background.ctx.Done(), "normal completion of discovery")
+				awaitStoreEvent(t, worker.ctx.Done(), "normal completion of discovery")
+				require.ErrorIs(t, worker.ctx.Err(), context.Canceled)
+				require.NoError(t, first.ctx.Err())
 				status := d.mgr.GetAccountManagementStatus()
 				require.Equal(t, "inactive", status.DiscoveryStatus)
 				require.True(t, status.LocalOnly)

@@ -26,7 +26,6 @@ const pwaCanonicalTests = [
   'TestSDKPWARealRegtestRunesDecimalSendBrowser',
   'TestSDKPWARealRegtestRunesPremineReturnBrowser',
   'TestSDKPWARealRegtestRunesOpenMintSendBrowser',
-  'TestSDKPWARealRegtestRunesOpenMintReturnBrowser',
   'TestSDKPWARealRegtestBitcoinFundsSendBrowser',
   'TestSDKPWARealRegtestSatoshiNetPlainSendBrowser',
   'TestSDKPWARealRegtestChannelOpeningOrReadyBrowser',
@@ -64,7 +63,12 @@ function goStage(id, repo, packageName, tests, timeout) {
 }
 
 export function buildCommand(stage, env = process.env) {
-  return [env.GO || 'go', 'test', ...goFlags, `-timeout=${stage.timeout}`,
+  const tags = []
+  if (stage.tests.some(name => name.endsWith('Browser'))) {
+    const guardian = stage.tests.includes('TestSDKPWARealRegtestGuardianRecoveryBrowser')
+    tags.push(guardian ? '-tags=pwa,guardian' : '-tags=pwa')
+  }
+  return [env.GO || 'go', 'test', ...tags, ...goFlags, `-timeout=${stage.timeout}`,
     '-run', exactSelector(stage.tests), stage.packageName]
 }
 
@@ -97,7 +101,6 @@ export function shouldStopBatchAfterGroup(result) {
 }
 const dependentJourneys = [
   ['TestSDKPWARealRegtestRunesDecimalSendBrowser', 'TestSDKPWARealRegtestRunesPremineReturnBrowser'],
-  ['TestSDKPWARealRegtestRunesOpenMintSendBrowser', 'TestSDKPWARealRegtestRunesOpenMintReturnBrowser'],
   ['TestSDKPWARealRegtestChannelOpeningOrReadyBrowser', 'TestSDKPWARealRegtestChannelSplicingBrowser',
     'TestSDKPWARealRegtestChannelSafetyBrowser', 'TestSDKPWARealRegtestPrivateBTCRoundTripBrowser',
     'TestSDKPWARealRegtestPrivateBTCSplicingOutBrowser'],

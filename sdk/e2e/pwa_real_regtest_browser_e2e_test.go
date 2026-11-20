@@ -33,8 +33,10 @@ const sdkPWARegtestPaidAccountUsageCase = "usage: fixed regtest ordinary-1 renew
 // Funds a fresh B0 address through the SDK's real L2 send path, then checks
 // the same confirmed output in both the parent transaction and receiver indexer.
 func prepareSDKPWARegtestL2PlainFunding(t *testing.T, sender, receiver *wallet.Manager,
-	network *realSatoshiNet) {
+	network *realSatoshiNet, requireSenderReady func(*testing.T, *wallet.Manager)) {
 	t.Helper()
+	attachRGB11RegtestWallet(t, sender, network)
+	requireSenderReady(t, sender)
 	plainAsset := wallet.ParseAssetString(wallet.PLAIN_ASSET.String())
 	require.NotNil(t, plainAsset)
 	senderBefore := sender.GetAssetBalance_SatsNet("", plainAsset)

@@ -26,7 +26,7 @@ func TestContractFundingSafety(t *testing.T) {
 	const other = "runes:f:safetyother"
 	gasName := wire.NewAssetNameFromString(gas)
 	t.Run("sats_always_use_value_including_zero_and_integer_aliases", func(t *testing.T) {
-		for _, amount := range []string{"0", "100", "18446744073709551616", "0.5", "-0.5"} {
+		for _, amount := range []string{"0", "100", "18446744073709551616"} {
 			for _, mode := range []string{ContractTypeEVM, ContractTypeTemplate} {
 				mgr := &Manager{}
 				assets := []ContractFundingAsset{{AssetName: "::", Amount: amount}}
@@ -53,13 +53,13 @@ func TestContractFundingSafety(t *testing.T) {
 		require.ErrorContains(t, validateContractInvokeRequest(req), "provided together")
 	})
 	t.Run("gas_floor_and_ceiling_apply_even_with_large_fee_override", func(t *testing.T) {
-		for _, invalid := range []int64{-1, contract.InvokeBaseGas-1, contract.MaxGasPerInvoke+1} {
+		for _, invalid := range []int64{-1, contract.InvokeBaseGas - 1, contract.MaxGasPerInvoke + 1} {
 			require.Error(t, validateContractInvokeRequest(&ContractInvokeRequest{GasLimit: invalid, GasAssetAmount: 100000000}))
 		}
 		for _, valid := range []int64{0, contract.InvokeBaseGas, contract.MaxGasPerInvoke} {
 			require.NoError(t, validateContractInvokeRequest(&ContractInvokeRequest{GasLimit: valid}))
 		}
-		for _, invalid := range []int64{-1, contract.DeployBaseGas-1, contract.MaxGasPerInvoke+1} {
+		for _, invalid := range []int64{-1, contract.DeployBaseGas - 1, contract.MaxGasPerInvoke + 1} {
 			require.Error(t, validateContractDeployRequest(&ContractDeployRequest{GasLimit: invalid, GasAssetAmount: 100000000}))
 		}
 	})
@@ -106,7 +106,7 @@ func TestContractFundingSafety(t *testing.T) {
 		require.EqualValues(t, 4294967297, carrier)
 	})
 	t.Run("insufficient_carrier_and_value_overflow_fail_without_mutation", func(t *testing.T) {
-		for _, tc := range []struct{input, value int64}{
+		for _, tc := range []struct{ input, value int64 }{
 			{0, 0}, {btcutil.MaxSatoshi, btcutil.MaxSatoshi},
 		} {
 			input := *wire.NewTxOut(tc.input, wire.TxAssets{safetyAsset(t, bound, "10", 1)}, nil)

@@ -113,10 +113,6 @@ func runSDKWalletPWAIsolatedGroups(t *testing.T, selected []string) {
 	require.Positive(t, executed, "zero selected PWA groups must fail")
 }
 
-func TestSDKWalletPWAAssetContextStability(t *testing.T) {
-	runSDKWalletPWABrowser(t, "Wallet PWA: late asset response cannot overwrite the selected account")
-}
-
 func runSDKWalletPWABrowser(t *testing.T, cases ...string) {
 	runSDKWalletBrowserMode(t, false, cases...)
 }

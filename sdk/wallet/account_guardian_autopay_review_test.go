@@ -79,9 +79,10 @@ func TestTemporaryPaidReuse(t *testing.T) {
 	delegate := state.Delegates[payer]
 	delegate.Balance = "0"
 	state.Delegates[payer] = delegate
-	_, err = manager.ReusePaidAccountStorage(accountDefaultRecordCount)
+	denied, err := manager.ReusePaidAccountStorage(accountDefaultRecordCount)
 	require.ErrorIs(t, err, ErrAccountPaidStorageNotReusable,
 		"an exhausted delegate needs a new explicit payment confirmation")
+	require.Nil(t, denied, "an exhausted delegate must not yield a reusable authorization")
 	options, err = manager.GetStorageOptions(context.Background(), accountDefaultRecordCount)
 	require.NoError(t, err)
 	paid = nil

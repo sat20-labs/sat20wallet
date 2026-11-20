@@ -261,6 +261,11 @@ func prepareSDKPWARegtestAssetsInternal(t *testing.T, existingOnly ...bool) (*wa
 			require.True(t, status.Active, "recovered fixture must retain the existing account profile")
 			require.NoError(t, manager.SwitchWallet(status.RootWalletID, password))
 			require.NoError(t, manager.SwitchAccount(0))
+		} else if os.Getenv("SAT20_E2E_LOCAL_REAL") == "1" && os.Getenv("SAT20_REAL_SATOSHINET_ATTACH") == "" {
+			status := manager.GetAccountManagementStatus()
+			if !status.RecoveryConfigured && !status.ActivationPending {
+				requireE2EInactive(t, manager, password)
+			}
 		}
 		// Check the fixed identity without logging the mnemonic or private key.
 		expected := wallet.NewInternalWalletWithMnemonic(seeds[role], "", wallet.GetChainParam())

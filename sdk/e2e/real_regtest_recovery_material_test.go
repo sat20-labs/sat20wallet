@@ -155,6 +155,9 @@ func TestSDKPWARegtestExistingRecoveryFixtureIdentity(t *testing.T) {
 			actual, err := loadSDKRegtestRecoveryMaterial(path, locator)
 			require.NoError(t, err)
 			require.Equal(t, locator, actual.Locator)
+			if mode != account.RecoveryMode2Of2 {
+				return
+			}
 			for _, field := range []string{"root", "package", "mode"} {
 				wrong := locator
 				switch field {

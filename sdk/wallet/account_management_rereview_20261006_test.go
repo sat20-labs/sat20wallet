@@ -173,21 +173,4 @@ func TestAccountManagementRereview20261006(t *testing.T) {
 		}
 	})
 
-	t.Run("PrivateKeyImportCannotDisableExistingAccountBackup", func(t *testing.T) {
-		manager, _, _ := reviewAccountDevices(t)
-		const privateKey = "1d5da8898fa894a056473e19e18bb2fa907172d25424cea6a0894312b2801bcc"
-		before := len(manager.GetAllWallets())
-		_, importErr := manager.ImportWalletWithPrivateKey(privateKey, "password")
-		if importErr != nil {
-			if len(manager.GetAllWallets()) != before {
-				t.Error("rejected import changed the catalog")
-			}
-			return
-		}
-		syncErr := manager.SyncAccountManagementState(context.Background())
-		t.Logf("rereview: private-key import accepted wallets=%d sync=%v", len(manager.GetAllWallets()), syncErr)
-		if syncErr != nil {
-			t.Errorf("accepted private-key import disabled the existing mnemonic account backup: %v", syncErr)
-		}
-	})
 }

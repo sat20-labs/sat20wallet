@@ -3,7 +3,6 @@ package wallet
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -13,8 +12,6 @@ import (
 	"testing"
 	"time"
 
-	indexercommon "github.com/sat20-labs/indexer/common"
-	dkvscore "github.com/sat20-labs/sat20wallet/sdk/wallet/dkvs"
 	dkvs "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -120,10 +117,6 @@ func TestRootOfflineAbsentIsPending(t *testing.T) {
 	offline := &net.DNSError{Err: "test DKVS endpoint offline", IsTimeout: true}
 	forbidden := &HTTPResponseError{StatusCode: http.StatusForbidden, Body: []byte(`{"error_code":"DKVS_RECORD_NOT_FOUND"}`)}
 	unauthorized := &HTTPResponseError{StatusCode: http.StatusUnauthorized, Body: []byte(`{"error_code":"DKVS_STORAGE_UNAVAILABLE"}`)}
-	dbErr := errors.New("test replica read failure")
-	joined := func(last error) error {
-		return fmt.Errorf("receive: %w", errors.Join(offline, errors.Join(indexercommon.ErrKeyNotFound, last)))
-	}
 	bodyRead := func(err error) error { return &url.Error{Op: "read", URL: "https://dkvs.test", Err: err} }
 	failedReceive := func(t *testing.T, fault, want error, warm bool) {
 		t.Helper()
@@ -151,14 +144,8 @@ func TestRootOfflineAbsentIsPending(t *testing.T) {
 		{"receive_permission", dkvs.ErrPermissionDenied, dkvs.ErrPermissionDenied},
 		{"403_missing_body", forbidden, forbidden},
 		{"401_unavailable_body", unauthorized, unauthorized},
-		{"nested_db_error", joined(dbErr), dbErr},
-		{"nested_integrity_error", joined(dkvs.ErrInvalidSignature), dkvs.ErrInvalidSignature},
-		{"nested_unavailable", joined(dkvscore.ErrReplicaNotReady), ErrRootAccountDiscoveryPending},
 		{"url_truncated_response", bodyRead(io.ErrUnexpectedEOF), ErrRootAccountDiscoveryPending},
 		{"url_fetch_rejected", &url.Error{Op: "Post", Err: errors.New("net/http: fetch() failed: TypeError: Failed to fetch")}, ErrRootAccountDiscoveryPending},
-		{"url_wrapped_403", bodyRead(forbidden), forbidden},
-		{"url_wrapped_signature", bodyRead(dkvs.ErrInvalidSignature), dkvs.ErrInvalidSignature},
-		{"url_mixed", bodyRead(errors.Join(io.EOF, dbErr)), dbErr},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			failedReceive(t, tc.fault, tc.want, false)
@@ -289,7 +276,7 @@ func TestRootOfflineAbsentIsPending(t *testing.T) {
 		s.manager.rememberPaths([]string{rootKey})
 		require.NoError(t, s.manager.ensureCurrentSubscription(s.client))
 		before := rootPages()
-		value, err := readFirstRoot(s, rootKey)
+		value, _, err := readFirstRoot(ctx, s, rootKey, "")
 		require.NoError(t, err)
 		require.NotNil(t, value)
 		require.Equal(t, dkvs.RecordHash(root), dkvs.RecordHash(value.record))

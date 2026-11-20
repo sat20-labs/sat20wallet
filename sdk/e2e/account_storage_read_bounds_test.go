@@ -26,6 +26,17 @@ func storeNoReadEffects(t *testing.T, d *nativeUIDevice, want error) {
 	assert.Zero(t, d.http.broadcasts.Load(), "a preview must not broadcast")
 }
 
+// These quote cases begin with an existing source-bound subscription. Root
+// discovery alone only proves whether the account has a remote backup.
+func syncQuoteSubscription(t *testing.T, manager *wallet.Manager) {
+	t.Helper()
+	id := manager.GetAccountManagementStatus().AccountID
+	require.NotEmpty(t, id)
+	require.NoError(t, manager.SubscribeDKVSPrefix("/mail/"+id))
+	_, _, err := manager.ReadAccountDirectMessages(0, 1)
+	require.NoError(t, err)
+}
+
 func TestSDKStorageReadBounds(t *testing.T) {
 	n := newDKVSNoPluginUnfundedNetwork(t)
 	waitForDKVSPeerReady(t, n)
@@ -203,15 +214,23 @@ func TestSDKStorageReadBounds(t *testing.T) {
 			return httputil.NewSingleHostReverseProxy(target)
 		}
 		a, b := proxyTo(n.Core), proxyTo(n.Bootstrap)
-		var other, outage atomic.Bool
-		var rejected, peerConfigs atomic.Int64
+		var other, outage, switchOnRoot atomic.Bool
+		var rejected, peerConfigs, peerRootReads atomic.Int64
 		b.ModifyResponse = func(r *http.Response) error {
 			if r.StatusCode == http.StatusOK && strings.HasSuffix(r.Request.URL.Path, "/v3/dkvs/config") {
 				peerConfigs.Add(1)
 			}
+			if strings.HasSuffix(r.Request.URL.Path, "/v3/dkvs/active/sync") {
+				peerRootReads.Add(1)
+			}
 			return nil
 		}
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.URL.Path, "/v3/dkvs/active/sync") && switchOnRoot.CompareAndSwap(true, false) {
+				other.Store(true)
+				http.Error(w, "primary temporarily unavailable", http.StatusServiceUnavailable)
+				return
+			}
 			if outage.Load() && r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/btc/block/bestblockheight") {
 				rejected.Add(1)
 				http.Error(w, "temporary height outage", http.StatusServiceUnavailable)
@@ -234,6 +253,7 @@ func TestSDKStorageReadBounds(t *testing.T) {
 		_, err = d.mgr.ImportWallet(accountSyncMnemonic(t, 247), d.password)
 		require.NoError(t, err)
 		requireE2EInactive(t, d.mgr, d.password)
+		syncQuoteSubscription(t, d.mgr)
 		baseline := func(t *testing.T) {
 			t.Helper()
 			s, err := d.mgr.GetDKVSSubscriptionStatus()
@@ -280,6 +300,19 @@ func TestSDKStorageReadBounds(t *testing.T) {
 			assert.Zero(t, len(opts), "reject the entire quote, including paid options")
 			baseline(t)
 			storeNoReadEffects(t, d, wallet.ErrAccountStorageAuthorizationMissing)
+		})
+		t.Run("FirstImportSourceSwitch", func(t *testing.T) {
+			fresh := newNativeUIDevice(t, cfg, "")
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			switchOnRoot.Store(true)
+			defer other.Store(false)
+			configs, reads := peerConfigs.Load(), peerRootReads.Load()
+			_, err := fresh.mgr.WaitForImportRoot(ctx, accountSyncMnemonic(t, 236), fresh.password)
+			require.ErrorIs(t, err, dkvs.ErrEndpointMismatch)
+			require.Greater(t, peerConfigs.Load(), configs)
+			require.Equal(t, reads, peerRootReads.Load(), "the replacement must not receive the root query")
+			require.Empty(t, fresh.mgr.GetWalletCatalog())
 		})
 	})
 }

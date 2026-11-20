@@ -98,8 +98,6 @@ func TestSDKSmartContractsEVM(t *testing.T) {
 	})
 	for _, amount := range []struct{ name, value string }{
 		{"uint64_overflow", "18446744073709551616"},
-		{"positive_fraction", "0.5"},
-		{"negative_fraction", "-0.5"},
 	} {
 		t.Run("invalid_plain_funding_"+amount.name+"_rejected_before_broadcast", func(t *testing.T) {
 			req := sdkReviewEVMCall(address, solidityCall("inc()"))

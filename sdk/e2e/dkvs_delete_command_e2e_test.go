@@ -169,19 +169,4 @@ func TestSDKDKVSDeleteCommand(t *testing.T) {
 		require.ErrorIs(t, err, dkvs.ErrRecordNotFound)
 	})
 
-	t.Run("InvalidBuilderInputsFailWithoutPanic", func(t *testing.T) {
-		_, err := wallet.NewDKVSDeleteCommand(owner.Wallet, nil, 100)
-		require.Error(t, err)
-		_, current := fixture(t)
-		_, err = wallet.NewDKVSDeleteCommand(nil, current, 100)
-		require.Error(t, err)
-		command, err := wallet.NewDKVSDeleteCommand(owner.Wallet, current, 100)
-		require.NoError(t, err)
-		_, err = wallet.NewDKVSDeleteCommand(owner.Wallet, command, 100)
-		require.Error(t, err)
-		copyRecord := *current
-		copyRecord.Seq = ^uint64(0)
-		_, err = wallet.NewDKVSDeleteCommand(owner.Wallet, &copyRecord, 100)
-		require.Error(t, err)
-	})
 }

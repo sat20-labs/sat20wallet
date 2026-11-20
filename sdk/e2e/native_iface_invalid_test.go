@@ -21,7 +21,7 @@ func runNativeIfaceInvalid(t *testing.T, f *nativeIfaceChain) {
 			d := f.device(t, dkvsClientMnemonic)
 			m := d.mgr
 			if group == "22_amounts_channel_targets" {
-				attachRGB11RegtestWallet(t, m, f.network)
+				attachNativeIfaceWallet(t, m, f.network)
 				require.True(t, m.IsReady())
 			}
 			require.NoError(t, m.CheckAccountWrite("wallets", wallet.AccountManagedDataGlobalScope))

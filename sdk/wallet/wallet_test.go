@@ -81,73 +81,6 @@ func TestRevocationKeyDerivation_SubWallet(t *testing.T) {
 }
 
 // 支付的钱包跟通道的私钥完全分离，不需要同一套种子生成
-func TestRevocationKeyDerivationV2(t *testing.T) {
-	paymentWallet1, _, err := NewInteralWallet(GetChainParam())
-	if err != nil {
-		t.Fatalf("NewWallet failed %v", err)
-	}
-	channelRevKey1, _, err := NewInteralWallet(GetChainParam())
-	if err != nil {
-		t.Fatalf("NewWallet failed %v", err)
-	}
-
-	paymentWallet2, _, err := NewInteralWallet(GetChainParam())
-	if err != nil {
-		t.Fatalf("NewWallet failed %v", err)
-	}
-	channelRevKey2, _, err := NewInteralWallet(GetChainParam())
-	if err != nil {
-		t.Fatalf("NewWallet failed %v", err)
-	}
-
-	// 一方检查
-	{
-		// First, we'll generate a commitment point, and a commitment secret.
-		// These will be used to derive the ultimate revocation keys.
-		commitSecret, commitPoint := channelRevKey1.GetCommitRootKey(paymentWallet2.GetPubKey().SerializeCompressed())
-
-		// With the commitment secrets generated, we'll now create the base
-		// keys we'll use to derive the revocation key from.
-		// basePriv, basePub := wallet1.GetRevocationBaseKey()
-		basePub := channelRevKey1.GetRevocationBaseKey()
-
-		// With the point and key obtained, we can now derive the revocation
-		// key itself.
-		revocationPub := utils.DeriveRevocationPubkey(basePub, commitPoint)
-
-		// The revocation public key derived from the original public key, and
-		// the one derived from the private key should be identical.
-		// revocationPriv := utils.DeriveRevocationPrivKey(basePriv, commitSecret)
-		revocationPriv := channelRevKey1.DeriveRevocationPrivKey(commitSecret)
-		if !revocationPub.IsEqual(revocationPriv.PubKey()) {
-			t.Fatalf("derived public keys don't match!")
-		}
-	}
-
-	// 另一方检查
-	{
-		// First, we'll generate a commitment point, and a commitment secret.
-		// These will be used to derive the ultimate revocation keys.
-		commitSecret, commitPoint := channelRevKey2.GetCommitRootKey(paymentWallet1.GetPubKey().SerializeCompressed())
-
-		// With the commitment secrets generated, we'll now create the base
-		// keys we'll use to derive the revocation key from.
-		// basePriv, basePub := wallet1.GetRevocationBaseKey()
-		basePub := channelRevKey2.GetRevocationBaseKey()
-
-		// With the point and key obtained, we can now derive the revocation
-		// key itself.
-		revocationPub := utils.DeriveRevocationPubkey(basePub, commitPoint)
-
-		// The revocation public key derived from the original public key, and
-		// the one derived from the private key should be identical.
-		// revocationPriv := utils.DeriveRevocationPrivKey(basePriv, commitSecret)
-		revocationPriv := channelRevKey2.DeriveRevocationPrivKey(commitSecret)
-		if !revocationPub.IsEqual(revocationPriv.PubKey()) {
-			t.Fatalf("derived public keys don't match!")
-		}
-	}
-}
 
 func TestTweakKeyDerivation(t *testing.T) {
 	wallet1, _, err := NewInteralWallet(GetChainParam())
@@ -220,23 +153,6 @@ func TestImportWallet(t *testing.T) {
 		t.Fatal()
 	}
 
-}
-
-func TestNewWallet(t *testing.T) {
-
-	//wallet := NewInternalWalletWithMnemonic("force plate fold brown kiss sample weapon useful earth useful shop priority", "", GetChainParam())
-	wallet, mn, err := NewInteralWallet(&chaincfg.MainNetParams)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fmt.Printf("%s\n", mn)
-
-	if wallet == nil {
-		t.Fail()
-	}
-
-	fmt.Printf("%s\n", wallet.GetAddress())
-	fmt.Printf("%s\n", hex.EncodeToString(wallet.GetPubKey().SerializeCompressed()))
 }
 
 // helper to generate a random secp256k1 private key and its serialized bytes

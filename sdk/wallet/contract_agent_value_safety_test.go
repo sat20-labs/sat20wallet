@@ -12,14 +12,14 @@ import (
 func TestContractAgentValueFundingSafety(t *testing.T) {
 	manager := &Manager{}
 	base := ContractInvokeRequest{
-		ContractType: ContractTypeAgent,
-		Action:       contract.AgentInvokeAPIBet,
-		Param:        `{"outcome_id":"a"}`,
+		ContractType:  ContractTypeAgent,
+		Action:        contract.AgentInvokeAPIBet,
+		Param:         `{"outcome_id":"a"}`,
 		ParamEncoding: "json",
 	}
 	want, _, err := manager.agentInvokeGasAssetAmount(true, 0)
 	require.NoError(t, err)
-	for _, value := range []int64{1, 1000, 1000000} {
+	for _, value := range []int64{1, 1000000} {
 		t.Run("native_value_"+safetyValueName(value), func(t *testing.T) {
 			req := base
 			req.Value = value

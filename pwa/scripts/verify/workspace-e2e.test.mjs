@@ -24,6 +24,13 @@ test('stage commands contain one Go test verb before their flags and package', (
     assert.ok(command[2].startsWith('-'), 'Go flags must follow the test verb')
     assert.ok(command.includes('-failfast'), 'shared-wallet cases stop after the first failure')
   }
+  const flags = step => buildCommand(step).filter(arg => arg.startsWith('-tags='))
+  const basic = buildGroups(selectTests(selectStages(['pwa-canonical']),
+    ['TestSDKPWARealRegtestWalletBasicAndBiometricBrowser']))[0]
+  assert.ok(basic.steps.filter(step => step.purpose === 'prerequisite').every(step => !flags(step).length))
+  assert.deepEqual(flags(basic.steps.at(-1)), ['-tags=pwa'])
+  const guardian = buildGroups(selectStages(['pwa-guardian-2of3']))[0]
+  assert.deepEqual(flags(guardian.steps.at(-1)), ['-tags=pwa,guardian'])
 })
 
 test('default catalog contains only real local-chain entry points', () => {

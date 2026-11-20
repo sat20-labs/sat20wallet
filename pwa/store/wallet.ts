@@ -417,9 +417,10 @@ export const useWalletStore = defineStore('wallet', () => {
     feeRate.value = value
   }
 
-  const syncWalletCatalog = async (_selectedWalletId?: string) => {
+  const syncWalletCatalog = async (_selectedWalletId?: string, signal?: AbortSignal) => {
     const readGeneration = getWalletIdentityState().generation
     const snapshot = await readWalletCatalogState()
+    signal?.throwIfAborted()
     // A user switch supersedes an earlier asynchronous catalog read. The
     // switch itself publishes its verified selection; discard the stale read.
     if (getWalletIdentityState().generation !== readGeneration) return wallets.value
@@ -442,6 +443,7 @@ export const useWalletStore = defineStore('wallet', () => {
         rootAccountId: snapshot.rootAccountId,
         address: identity?.address ?? null, pubkey: identity?.pubKey ?? null,
       })
+      if (signal?.aborted) return wallets.value
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('sat20:account-status-updated'))
       }
@@ -559,7 +561,10 @@ export const useWalletStore = defineStore('wallet', () => {
 		mnemonic: string,
 		password: string,
     onProgress?: (stage: 'validating' | 'recovering' | 'importing' | 'catalog') => void,
+    signal?: AbortSignal,
   ): Promise<[Error | undefined, MnemonicValidation | undefined]> => {
+    const firstImportSignal = !hasWallet.value ? signal : undefined
+    const shouldDiscoverRoot = !rootAccountId.value || !hasWallet.value || accountRecovery.value?.status === 'pending'
 		// The password protects local wallet storage; it is not a BIP39
 		// passphrase. Identity derivation must match ImportWallet, which uses an
 		// empty BIP39 passphrase.
@@ -573,12 +578,13 @@ export const useWalletStore = defineStore('wallet', () => {
 		let res: { walletId: string } | undefined
 		let discoveredRecovery: AccountRecoveryState | null = null
 		let discoveredRootAccountId = ''
-		const shouldDiscoverRoot = !rootAccountId.value || !hasWallet.value || accountRecovery.value?.status === 'pending'
+		signal?.throwIfAborted()
 		if (shouldDiscoverRoot) {
       onProgress?.('recovering')
 		  const [recoveryError, recovery] = await walletManager.recoverAccountManagementFromRootMnemonic(
 			processedMnemonic,
 			password,
+			firstImportSignal,
 		  )
 		  if (recoveryError || !recovery) {
 			return [recoveryError || new Error('Root account discovery failed'), undefined]
@@ -614,24 +620,32 @@ export const useWalletStore = defineStore('wallet', () => {
 
 		let err: Error | undefined
 		if (!recovered) {
+      signal?.throwIfAborted()
       onProgress?.('importing')
-		  ;[err, res] = await walletManager.importWallet(processedMnemonic, password)
+		  ;[err, res] = await walletManager.importWallet(processedMnemonic, password, firstImportSignal)
 		}
     if (err || !res) {
       console.error(err)
       return [err || new Error('Wallet import failed'), undefined]
     }
     try {
-    onProgress?.('catalog')
-    if (discoveredRecovery) {
-      await walletStorage.batchUpdate({ accountRecovery: discoveredRecovery, rootAccountId: discoveredRootAccountId })
-      accountRecovery.value = discoveredRecovery
-    }
-    await syncWalletCatalog()
-    await setLocked(false)
-    openWalletSession()
-    refreshCurrentChannelInBackground('importWallet')
-    return [undefined, mnemonicIdentity]
+      signal?.throwIfAborted()
+      onProgress?.('catalog')
+      if (discoveredRecovery) {
+        await walletStorage.batchUpdate({ accountRecovery: discoveredRecovery, rootAccountId: discoveredRootAccountId })
+        signal?.throwIfAborted()
+        accountRecovery.value = discoveredRecovery
+      }
+      await syncWalletCatalog(undefined, firstImportSignal)
+      signal?.throwIfAborted()
+      await setLocked(false)
+      if (signal?.aborted) {
+        if (!isWalletSessionUnlocked()) await setLocked(true)
+        signal.throwIfAborted()
+      }
+      openWalletSession()
+      refreshCurrentChannelInBackground('importWallet')
+      return [undefined, mnemonicIdentity]
     } catch (error) {
       // An identity alongside the error proves the SDK import committed.
       // The caller may reload its view, but must not import again.

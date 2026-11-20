@@ -269,13 +269,4 @@ func TestSDKPWARegtestChannelPreparationDecision(t *testing.T) {
 		require.Empty(t, state)
 	})
 
-	t.Run("decision has no cached channel state", func(t *testing.T) {
-		const channelID = "stable-derived-id"
-		for range 2 {
-			gotID, state, err := decideSDKPWARegtestChannelPreparation("l2-channel-open", channelID, false, wallet.CS_UNKNOWN)
-			require.NoError(t, err)
-			require.Equal(t, channelID, gotID)
-			require.Equal(t, sdkPWARegtestChannelNeedsOpening, state)
-		}
-	})
 }

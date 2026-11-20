@@ -73,6 +73,7 @@ func TestSDKStorageHeaderLoss(t *testing.T) {
 	_, err = d.mgr.ImportWallet(accountSyncMnemonic(t, 248), d.password)
 	require.NoError(t, err)
 	requireE2EInactive(t, d.mgr, d.password)
+	syncQuoteSubscription(t, d.mgr)
 	s, err := d.mgr.GetDKVSSubscriptionStatus()
 	require.NoError(t, err)
 	require.True(t, s.EndpointID == core.EndpointID)

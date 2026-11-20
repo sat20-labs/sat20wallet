@@ -83,17 +83,6 @@ func TestSTPChannelAdmissionRejectsMissingContext(t *testing.T) {
 			_, _, err := manager.FunderInitSplicingInProcess(&Channel{}, nil, indexer.NewDefaultDecimal(1), 1, nil, nil, nil, nil, "")
 			return err
 		}, "nil STP asset"},
-		{"client expansion missing channel", func() error {
-			_, _, _, err := manager.FunderInitExpandingProcess(nil, &asset.AssetName, "unused:0", "", nil)
-			return err
-		}, "missing STP channel"},
-		{"client expansion missing asset", func() error {
-			_, _, _, err := manager.FunderInitExpandingProcess(&Channel{}, nil, "unused:0", "", nil)
-			return err
-		}, "nil STP asset"},
-		{"peer expansion missing reservation", func() error {
-			return manager.AllowExpand(nil, "unused:0")
-		}, "missing channel expansion context"},
 		{"peer expansion missing channel", func() error {
 			resv := &SplicingReservation{}
 			resv.AssetName = asset

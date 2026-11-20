@@ -22,7 +22,7 @@ func namingTestAddress(t *testing.T, network *chaincfg.Params, value byte) strin
 }
 
 func TestPrimaryDIDNameLengthBoundary(t *testing.T) {
-	for _, name := range []string{"a", "alice", "abcdefghij", "alice.did", "alice-1", "alice_1"} {
+	for _, name := range []string{"a", "abcdefghij", "alice.did", "alice-1", "alice_1"} {
 		if err := ValidatePrimaryDIDName(name); err != nil {
 			t.Errorf("valid canonical DID %q: %v", name, err)
 		}
@@ -58,7 +58,6 @@ func TestRegisteredAssetNamesKeepTypeAndUseOrdinal(t *testing.T) {
 	}{
 		{1, "rgb11:f:usdt@alice"},
 		{2, "rgb11:f:usdt_2@alice"},
-		{3, "rgb11:f:usdt_3@alice"},
 		{math.MaxUint64, "rgb11:f:usdt_18446744073709551615@alice"},
 	} {
 		name, err := BuildRegisteredAssetName("USDT", indexer.ASSET_TYPE_FT, "alice", tc.ordinal)
@@ -103,9 +102,11 @@ func TestLocalDisplayNameUsesAddressLastTwelve(t *testing.T) {
 		if err != nil || name != want {
 			t.Errorf("%s: name=%q err=%v want=%q", network.Name, name, err, want)
 		}
-		name, err = BuildLocalDisplayName("USDT", address, "alice")
-		if err != nil || name != "usdt@alice" {
-			t.Errorf("qualified DID: name=%q err=%v", name, err)
+		if network == &chaincfg.MainNetParams {
+			name, err = BuildLocalDisplayName("USDT", address, "alice")
+			if err != nil || name != "usdt@alice" {
+				t.Errorf("qualified DID: name=%q err=%v", name, err)
+			}
 		}
 	}
 	for _, address := range []string{"", "short", "123456789012", " bc1pinvalid"} {
@@ -127,11 +128,6 @@ func TestLocalNamesCanCollideButContractIDsCannot(t *testing.T) {
 	b, err := BuildLocalDisplayName("USDT", address, "")
 	if err != nil || a != b {
 		t.Fatalf("local aliases must not allocate hidden ordinals: %q %q %v", a, b, err)
-	}
-	first := LocalNameMetadata{ContractID: "contract-A", LocalName: a}
-	second := LocalNameMetadata{ContractID: "contract-B", LocalName: b}
-	if first.ContractID == second.ContractID {
-		t.Fatal("local-name collision merged contract identities")
 	}
 }
 

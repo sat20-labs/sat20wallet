@@ -8,6 +8,34 @@ import (
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 )
 
+// A root observation belongs to the selected source and this unlocked session.
+// It never grants permission to publish a record.
+type accountRootCheck struct {
+	client     *SatsNetDKVSClient
+	key        string
+	endpoint   string
+	active     bool
+	online     *byte
+	generation uint64
+}
+
+func (r accountRootCheck) matches(client *SatsNetDKVSClient, key string) bool {
+	if r.client != client || r.key != key || r.endpoint == "" {
+		return false
+	}
+	if !r.active {
+		client.manager.mu.Lock()
+		online := r.online != nil && r.online == client.manager.rootOnline
+		client.manager.mu.Unlock()
+		if !online {
+			return false
+		}
+	}
+	client.endpointMu.RLock()
+	defer client.endpointMu.RUnlock()
+	return client.endpointID == r.endpoint
+}
+
 // Online grants authorize service activation. A verified cached wrapper still
 // identifies an activated account whose local backup import is incomplete.
 func (p *Manager) accountDiscoveryRootLocked() (common.Wallet, error) {
@@ -62,12 +90,18 @@ func (p *Manager) accountServiceStateLocked() (string, error) {
 	}
 	wrapper := values[wrapperKey]
 	if wrapper == nil {
-		if err := p.dkvs.requireOnlineGroup(client, keys); err != nil {
-			return "unknown", err
+		checked := p.rootCheck.matches(client, wrapperKey)
+		if checked && p.rootCheck.active {
+			return "active-waiting-backup", ErrRootAccountDiscoveryPending
 		}
 		if values[stateKey] != nil || values[dataKey] != nil ||
 			p.accountProfile != nil && (p.accountProfile.RecoveryConfigured || p.accountProfile.Activation != nil) {
 			return "unknown", ErrDKVSPathNotSynced
+		}
+		if !checked {
+			if err := p.dkvs.requireOnlineGroup(client, keys); err != nil {
+				return "unknown", err
+			}
 		}
 		return "inactive", nil
 	}

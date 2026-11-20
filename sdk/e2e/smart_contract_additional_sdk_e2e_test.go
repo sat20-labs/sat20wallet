@@ -140,7 +140,7 @@ func runSDKSmartContractsAdditional(t *testing.T, f *sdkContractReviewFixture) {
 
 func TestSDKSmartContractsFunding(t *testing.T) {
 	base := newTemplateFixtureWithProfiles(t, sdkSmartContractFundingProfiles())
-	owner, _ := newWalletManagerForNode(t, base.Network.Core, dkvsClientMnemonic)
+	owner := localContractWallet(t, base.Network.Core, dkvsClientMnemonic)
 	reader, _ := newWalletManagerForNode(t, base.Network.Bootstrap, "")
 	runSDKSmartContractsFunding(t, base, owner, reader, false)
 }
@@ -268,8 +268,8 @@ func TestSDKSmartContractsReviewSharedNetworkGroup(t *testing.T) {
 
 func newSDKContractReviewFixtureForTemplate(t *testing.T, f *templateFixture) *sdkContractReviewFixture {
 	t.Helper()
-	owner, _ := newWalletManagerForNode(t, f.Network.Core, dkvsClientMnemonic)
-	other, _ := newWalletManagerForNode(t, f.Network.Core, messageTopicMemberMnemonic)
+	owner := localContractWallet(t, f.Network.Core, dkvsClientMnemonic)
+	other := localContractWallet(t, f.Network.Core, messageTopicMemberMnemonic)
 	reader, _ := newWalletManagerForNode(t, f.Network.Bootstrap, "")
 	ownerKey := newDKVSKeyPathActor(t, keyFromMnemonic(t, dkvsClientMnemonic, 0))
 	otherKey := newDKVSKeyPathActor(t, keyFromMnemonic(t, messageTopicMemberMnemonic, 0))

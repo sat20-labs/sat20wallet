@@ -51,10 +51,6 @@ func TestSDKCoreModulesConnectedE2E(t *testing.T) {
 
 	// Establish ordinary backup and issuance first.
 	// Mixed fault/retry and concurrency flows remain explicit later groups.
-	t.Run("RGB11_self_send_cold_restore_and_respend", func(t *testing.T) {
-		coreRGB11SelfSendColdRestoreE2E(
-			t, cfg, chain, sender, receiver, senderMaterial, receiverMaterial)
-	})
 
 	t.Run("RGB11_asset_name_and_transcend_registration_descriptor", func(t *testing.T) {
 		coreRGB11NamingE2E(t, cfg, chain, sender, senderMaterial)

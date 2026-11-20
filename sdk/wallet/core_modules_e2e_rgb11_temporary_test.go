@@ -163,6 +163,12 @@ func coreInstallRGB11TemporaryTTLPolicy(manager *Manager) *coreRGB11TemporaryPol
 func coreRGB11TemporaryRecoveryMaterial(t *testing.T, manager *Manager) *coreRecoveryMaterial {
 	t.Helper()
 	coreRequire(t, "initialize temporary account", manager.InitializeAccountManagement(coreE2EPassword))
+	// The TTL fixture replaces the node client. Confirm this source before
+	// authorizing storage or publishing any recovery material.
+	_, err := manager.RecoverAccountManagementFromCurrentWallet(context.Background(), coreE2EPassword)
+	if !errors.Is(err, ErrRootAccountNotFound) {
+		t.Fatalf("confirm temporary account on its TTL policy source: %v", err)
+	}
 	coreWaitAccountOnline(t, manager)
 	authorization, err := manager.ConfirmAccountStorage(AccountStorageTemporary, 0)
 	coreRequire(t, "confirm real temporary DKVS storage", err)

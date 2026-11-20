@@ -90,20 +90,24 @@ func TestSDKAccountPWAEntryPoints(t *testing.T) {
 		require.Equal(t, walletID, manager.GetAccountManagementStatus().RootWalletID)
 		require.False(t, manager.GetAccountManagementStatus().RecoveryConfigured)
 		require.Equal(t, confirmed, requests.Load(), "import must reuse the completed discovery")
+		_, err = manager.RefreshAccount(ctx)
+		require.NoError(t, err)
+		require.Eventually(t, func() bool {
+			return requests.Load() > confirmed && manager.GetAccountManagementStatus().DiscoveryStatus == "inactive"
+		}, 5*time.Second, 20*time.Millisecond, "explicit retry must verify the previously absent root online")
 	})
 
-	t.Run("ConfirmedLocalWalletAllowsOfflineOperations", func(t *testing.T) {
+	t.Run("OfflineWalletIsReadOnly", func(t *testing.T) {
 		config, _ := accountReviewConfig(t, network)
 		target, err := url.Parse("http://" + config.IndexerL2.Host)
 		require.NoError(t, err)
 		proxy := httputil.NewSingleHostReverseProxy(target)
 		var offline atomic.Bool
-		var rootWrapperLookups atomic.Int32
-		var rootWrapperKey string
+		var offlineRequests atomic.Int32
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if offline.Load() {
-				if strings.HasSuffix(r.URL.Path, "/v3/dkvs/record") && r.URL.Query().Get("key") == rootWrapperKey {
-					rootWrapperLookups.Add(1)
+				if strings.Contains(r.URL.Path, "/v3/dkvs/") {
+					offlineRequests.Add(1)
 				}
 				http.Error(w, "controlled node unavailable after confirmation", http.StatusServiceUnavailable)
 				return
@@ -122,14 +126,23 @@ func TestSDKAccountPWAEntryPoints(t *testing.T) {
 		require.ErrorIs(t, err, wallet.ErrRootAccountNotFound)
 		walletID, err := manager.ImportWallet(mnemonic, accountReviewPassword)
 		require.NoError(t, err)
-		root := manager.GetWallet()
-		require.NotNil(t, root)
-		rootWrapperKey, err = dkvs.PersonalKey(root.GetPubKey().SerializeCompressed(), "account/root")
-		require.NoError(t, err)
+		require.True(t, manager.GetAccountManagementStatus().LocalOnly)
 		identity := manager.GetAccountManagementStatus().AccountID
 		before := manager.GetWalletCatalog()
+		// A second root lookup uses the same node. Its real transport failure
+		// must revoke the running wallet's previously confirmed local access.
+		offline.Store(true)
+		_, err = manager.RecoverAccountManagementFromRootMnemonic(context.Background(), accountSyncMnemonic(t, 211), accountReviewPassword)
+		require.ErrorIs(t, err, wallet.ErrRootAccountDiscoveryPending)
+		require.Positive(t, offlineRequests.Load())
+		require.False(t, manager.GetAccountManagementStatus().WriteAllowed)
+		require.ErrorIs(t, manager.UpdateWalletName(walletID, "offline rename"), wallet.ErrRootAccountDiscoveryPending)
+		require.Equal(t, before, manager.GetWalletCatalog())
+		offline.Store(false)
+		requireE2EInactive(t, manager, accountReviewPassword)
 		manager.Close()
 		db.Close()
+		offlineRequests.Store(0)
 		offline.Store(true)
 		db = indexerdb.NewKVDB(dir)
 		require.NotNil(t, db)
@@ -143,20 +156,18 @@ func TestSDKAccountPWAEntryPoints(t *testing.T) {
 		require.True(t, status.Active, "minimum local identity is not service activation")
 		require.Equal(t, walletID, status.RootWalletID)
 		require.Equal(t, identity, status.AccountID)
-		require.True(t, status.LocalOnly, "confirmed local identity remains available offline")
-		require.True(t, status.WriteAllowed)
+		require.False(t, status.LocalOnly)
+		require.False(t, status.WriteAllowed)
 		require.False(t, status.RecoveryConfigured)
 		require.False(t, status.ActivationPending)
 		require.False(t, status.DKVSWriteAllowed)
 		view, err := manager.GetAccountView(context.Background())
 		require.NoError(t, err)
 		require.Equal(t, "notConfigured", view.BackupRisk, "offline local use must retain the missing-backup warning")
-		require.NoError(t, manager.UpdateWalletName(walletID, "local while discovery is unavailable"))
-		before = manager.GetWalletCatalog()
-		require.Equal(t, "local while discovery is unavailable", before[0].Name)
+		require.ErrorIs(t, manager.UpdateWalletName(walletID, "offline rename"), wallet.ErrRootAccountDiscoveryPending)
+		require.Equal(t, before, manager.GetWalletCatalog())
 		require.ErrorIs(t, manager.SyncAccountManagementState(context.Background()), wallet.ErrDKVSPathNotSynced)
-		require.Never(t, func() bool { return rootWrapperLookups.Load() > 0 }, time.Second, 20*time.Millisecond,
-			"after authoritative NotFound, cold start must not repeat the root-wrapper lookup")
+		require.Eventually(t, func() bool { return offlineRequests.Load() > 0 }, 5*time.Second, 20*time.Millisecond)
 		_, err = manager.ConfirmAccountStorage(wallet.AccountStorageTemporary, 0)
 		require.Error(t, err, "unavailable storage policy must not prepare an activation or remote write")
 		pending, err := manager.PendingAccountStorageAuthorization()
@@ -167,6 +178,10 @@ func TestSDKAccountPWAEntryPoints(t *testing.T) {
 		require.Equal(t, status.AccountID, after.AccountID)
 		require.False(t, after.RecoveryConfigured)
 		require.False(t, after.ActivationPending)
+		offline.Store(false)
+		requireE2EInactive(t, manager, accountReviewPassword)
+		require.NoError(t, manager.UpdateWalletName(walletID, "online rename"))
+		require.Equal(t, "online rename", manager.GetWalletCatalog()[0].Name)
 	})
 
 	t.Run("CreateFirstWalletAutomaticallyInitializesAccount", func(t *testing.T) {

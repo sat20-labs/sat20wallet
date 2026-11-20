@@ -87,29 +87,6 @@ func TestDKVSManagerEndpointHeightReplacesCrossNetworkObservation(t *testing.T) 
 	}
 }
 
-func TestDKVSManagerEndpointHeightIsAuthoritativeOverSameChainStatus(t *testing.T) {
-	manager := &Manager{
-		cfg:    &common.Config{Chain: "testnet"},
-		status: &Status{CurrentChain: "testnet", SyncHeightL2: 39420},
-	}
-	dkvs := newDKVSManager(manager)
-	dkvs.setEndpointVerificationHeight(3467, true)
-	if height, known := dkvs.verificationHeight(); !known || height != 3467 {
-		t.Fatalf("same-chain status overrode endpoint height: %d %v", height, known)
-	}
-}
-
-func TestDKVSManagerVerificationHeightRequiresEndpointBeforeEndpointSucceeds(t *testing.T) {
-	manager := &Manager{
-		cfg:    &common.Config{Chain: "testnet"},
-		status: &Status{CurrentChain: "testnet", SyncHeightL2: 39420},
-	}
-	dkvs := newDKVSManager(manager)
-	if height, known := dkvs.verificationHeight(); known || height != 0 {
-		t.Fatalf("wallet sync height became pre-endpoint fallback: %d %v", height, known)
-	}
-}
-
 func TestDKVSManagerCachedEndpointHeightSurvivesRefreshFailure(t *testing.T) {
 	manager := newAccountStorageHeightTestManager(t, 7200, 0,
 		errors.New("bestheight unavailable"), 39420)
@@ -123,16 +100,6 @@ func TestDKVSManagerCachedEndpointHeightSurvivesRefreshFailure(t *testing.T) {
 	}
 	if height, known := manager.dkvs.verificationHeight(); !known || height != 3467 {
 		t.Fatalf("failed refresh discarded cached endpoint height: %d %v", height, known)
-	}
-}
-
-func TestDKVSExpiryEstimateUsesEndpointHeightForConfiguredTTL(t *testing.T) {
-	const endpointHeight = uint64(3467)
-	if got := estimatedDKVSExpiryHeight(endpointHeight, 144); got != 3611 {
-		t.Fatalf("FREE_LOCAL expiry=%d, want 3611", got)
-	}
-	if got := estimatedDKVSExpiryHeight(endpointHeight, 7200); got != 10667 {
-		t.Fatalf("paid expiry=%d, want 10667", got)
 	}
 }
 

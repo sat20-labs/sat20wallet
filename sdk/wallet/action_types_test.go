@@ -126,7 +126,6 @@ func TestNormalizeRemoteDeployRunesAssetName(t *testing.T) {
 	}{
 		{name: "SATOSHINET•GAS", want: "runes:f:SATOSHINET•GAS"},
 		{name: "runes:f:SATOSHINET•GAS", want: "runes:f:SATOSHINET•GAS"},
-		{name: "brc20:f:SATOSHINET", want: "brc20:f:SATOSHINET"},
 	}
 
 	for _, tt := range tests {

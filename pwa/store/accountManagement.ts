@@ -12,7 +12,6 @@ export const useAccountManagementStore = defineStore('accountManagement', () => 
   const retrying = ref(false)
   const retryQueued = ref(false)
   const retryFailed = ref(false)
-  const localRiskAccepted = ref(false)
   const sessionReady = computed(() => walletStore.hasWallet && !walletStore.locked &&
     !walletStore.isSwitchingWallet && !walletStore.isSwitchingAccount && !walletStore.isSwitchingNetwork)
   const identityKey = computed(() => JSON.stringify([
@@ -43,7 +42,6 @@ export const useAccountManagementStore = defineStore('accountManagement', () => 
     retrying.value = false
     retryQueued.value = false
     retryFailed.value = false
-    localRiskAccepted.value = false
   }
 
   const isCurrent = (generation: number, key: string) =>
@@ -103,6 +101,8 @@ export const useAccountManagementStore = defineStore('accountManagement', () => 
 
   const retryNow = async () => {
     if (!started || !sessionReady.value || retrying.value || hasDatabaseIssue.value) return
+    if (statusReadFailed.value) return refresh()
+    if (!canRetryBackup.value) return
     const generation = ++retryGeneration
     const key = identityKey.value
     const eventGeneration = statusEventGeneration
@@ -127,6 +127,9 @@ export const useAccountManagementStore = defineStore('accountManagement', () => 
   const rgb11WriteAllowed = computed(() => sessionReady.value && rgb11ModuleStatus.value?.can_write === true)
   const moduleIssues = computed(() => status.value?.modules?.filter(item => item.error_code) || [])
   const hasDatabaseIssue = computed(() => status.value?.error_code === 'ACCOUNT_DB_WRITE_FAILED')
+  const canRetryBackup = computed(() => Boolean(status.value &&
+    (status.value.backup_risk !== 'notConfigured' || status.value.state === 'activating' ||
+      status.value.discovery_status === 'active-waiting-backup')))
   const quotaModuleIssues = computed(() => moduleIssues.value.filter(item => item.error_code === 'DKVS_QUOTA_EXCEEDED'))
   const hasQuotaIssue = computed(() => status.value?.error_code === 'DKVS_QUOTA_EXCEEDED' || quotaModuleIssues.value.length > 0)
   const quotaNeedsActivation = computed(() => hasQuotaIssue.value && status.value?.state === 'local')
@@ -153,11 +156,11 @@ export const useAccountManagementStore = defineStore('accountManagement', () => 
     retrying,
     retryQueued,
     retryFailed,
-    localRiskAccepted,
     sessionReady,
     shouldShowBanner,
     moduleIssues,
     hasDatabaseIssue,
+    canRetryBackup,
     quotaModuleIssues,
     hasQuotaIssue,
     quotaNeedsActivation,

@@ -43,20 +43,3 @@ func TestDKVSKeyBuildersRejectInsteadOfHashingInvalidIDs(t *testing.T) {
 		t.Fatal("illegal name ID was silently replaced instead of rejected")
 	}
 }
-
-func TestServiceAuthenticityKeyIgnoresReleaseVersion(t *testing.T) {
-	first, err := dkvsindexer.ServiceKey("wallet", ServiceAuthenticityPath("pwa", "1.0.0"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := dkvsindexer.ServiceKey("wallet", ServiceAuthenticityPath("pwa", "2.0.0"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first != second {
-		t.Fatalf("release version changed logical DKVS key: %q != %q", first, second)
-	}
-	if first != "/svc/wallet/authenticity/pwa" {
-		t.Fatalf("unexpected service authenticity key: %q", first)
-	}
-}

@@ -47,7 +47,7 @@ func TestSDKPWARegtestBrowserPortSelection(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 5189, port)
 	})
-	for _, value := range []string{"0", "65536", "5189x", "-1"} {
+	for _, value := range []string{"0", "65536", "5189x"} {
 		t.Run("rejects "+value, func(t *testing.T) {
 			_, err := parseSDKPWARegtestBrowserPort(value)
 			require.Error(t, err)

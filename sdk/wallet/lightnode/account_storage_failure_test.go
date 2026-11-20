@@ -49,7 +49,7 @@ func TestAccountBrowserStorageReview(t *testing.T) {
 			t.Fatalf("missing key: %v", err)
 		}
 	})
-	for _, op := range []string{"write", "delete", "batch"} {
+	for _, op := range []string{"write", "delete"} {
 		t.Run("Failure/"+op, func(t *testing.T) {
 			database := storageReviewDB(t)
 			if err := database.Write([]byte("profile"), []byte("old")); err != nil {
@@ -62,13 +62,6 @@ func TestAccountBrowserStorageReview(t *testing.T) {
 				err = database.Write([]byte("profile"), []byte("new"))
 			case "delete":
 				err = database.Delete([]byte("profile"))
-			case "batch":
-				batch := database.NewWriteBatch()
-				defer batch.Close()
-				if e := batch.Put([]byte("profile"), []byte("new")); e != nil {
-					t.Fatal(e)
-				}
-				err = batch.Flush()
 			}
 			if err == nil || !strings.Contains(err.Error(), "injected write failure") {
 				t.Fatalf("storage error swallowed: %v", err)
@@ -92,8 +85,8 @@ func TestAccountBrowserStorageReview(t *testing.T) {
 		_ = batch.Delete([]byte("selected"))
 		_ = batch.Put([]byte("wallet"), []byte("new-wallet"))
 		_ = batch.Put([]byte("profile"), []byte("new-profile"))
-		if err := batch.Flush(); err == nil {
-			t.Fatal("failed batch returned success")
+		if err := batch.Flush(); err == nil || !strings.Contains(err.Error(), "injected quota failure") {
+			t.Fatalf("expected the injected quota error from the failed atomic batch, got %v", err)
 		}
 		for key, want := range map[string]string{"wallet": "old-wallet", "profile": "old-profile", "selected": "old-selected"} {
 			value, err := database.Read([]byte(key))

@@ -2,7 +2,6 @@ package wallet
 
 import (
 	"bytes"
-	"fmt"
 	"testing"
 
 	"github.com/btcsuite/btcd/wire"
@@ -97,12 +96,4 @@ func TestAnchorScript(t *testing.T) {
 	if !data.Assets.Equal(txOutput.Assets) {
 		t.Fatalf("")
 	}
-}
-
-
-func TestParseUtxoId(t *testing.T) {
-	
-	h, txIndex, vout := indexer.FromUtxoId(113284057661440)
-	fmt.Printf("%d %d %d\n", h, txIndex, vout)
-
 }

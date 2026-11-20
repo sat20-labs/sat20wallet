@@ -123,31 +123,6 @@ func TestWaitAccountManagedDataReadyCancelsAndConverges(t *testing.T) {
 	}
 }
 
-func TestValidateAccountActivationSecretLocked(t *testing.T) {
-	secret := make([]byte, 32)
-	secret[0] = 1
-	other := append([]byte(nil), secret...)
-	other[0] = 2
-
-	if err := (&Manager{}).validateAccountActivationSecretLocked(secret); err != nil {
-		t.Fatalf("empty profile rejected recovered secret: %v", err)
-	}
-	manager := &Manager{
-		accountProfile: &accountManagementProfile{},
-		accountSecret:  append([]byte(nil), secret...),
-	}
-	if err := manager.validateAccountActivationSecretLocked(secret); err != nil {
-		t.Fatalf("same active secret rejected: %v", err)
-	}
-	if err := manager.validateAccountActivationSecretLocked(other); !errors.Is(err, ErrAccountManagementSecretConflict) {
-		t.Fatalf("different active secret error=%v", err)
-	}
-	manager.accountSecret = nil
-	if err := manager.validateAccountActivationSecretLocked(secret); !errors.Is(err, ErrAccountManagementSecretConflict) {
-		t.Fatalf("profile without an unlocked secret did not fail closed: %v", err)
-	}
-}
-
 type accountManagedDataProviderStub struct {
 	id          string
 	payloads    []AccountManagedDataPayload

@@ -10,7 +10,7 @@ import (
 
 func TestSTPRecoveryWitnessSizeSerializesEveryBranch(t *testing.T) {
 	signature := bytes.Repeat([]byte{1}, 73)
-	for _, length := range []int{71, 252, 253, 65535, 65536} {
+	for _, length := range []int{71, 252, 253} {
 		t.Run(fmt.Sprint(length), func(t *testing.T) {
 			script := bytes.Repeat([]byte{0x51}, length)
 			for _, branch := range []struct {

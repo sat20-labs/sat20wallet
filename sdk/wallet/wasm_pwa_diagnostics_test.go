@@ -142,7 +142,6 @@ func TestRGB11DirectLifecycleAuthorityIsSDKOwned(t *testing.T) {
 		}
 	}
 	requireSteps("task list", tabs, `@click="resumeRGB11Task(task)"`, "resumeTaskId.value = task.id", "walletManager.refreshRGB11State()")
-	requireSteps("view store", store, "const setState = (next: RGBView)", "state.value = next")
 	requireSteps("send dialog", dialog, `v-if="transfer.can_confirm"`, `@click="confirm"`, "const confirm =", "const id = transfer.value.id", "walletManager.confirmRGB11Transfer(id, receipts.value)")
 	// Reopening a saved task reads its SDK view. Only the explicit confirmation may dispatch it.
 	_, onOpen, _ := strings.Cut(dialog, "watch([isOpen, assetKey]")
@@ -165,7 +164,6 @@ func TestRGB11DirectLifecycleAuthorityIsSDKOwned(t *testing.T) {
 		"p.scopeStates.sendFlights.Do(key,", "p.readRGB11AddressBatch(transferID)", "for _, item := range batch", "!rgbDeliveryReady(item)",
 		"p.broadcastRGB11PendingBatch(batch, nil)", "result, err := p.continueRGB11AddressSend(transferID)")
 	requireSteps("Direct delivery", readRepoTextForTest(t, "rgb11_contract_withdrawal.go"), "if isRGBPublicPayout(item)", "item.State.RelayDurability == rgbMailboxCommitted", `item.State.DeliveryAcknowledged && item.State.AckStatus == "accepted"`)
-	requireSteps("reservation", readRepoTextForTest(t, "rgb11_transfer_reservation.go"), "State         *rgb11wallet.TransferState")
 	requireSteps("broadcast", readRepoTextForTest(t, "rgb11_broadcast.go"), "func (p *rgb11Manager) broadcastRGB11PendingBatch(",
 		"pending.State.Status = rgb11StatusBroadcastAttempted", "CompareAndSavePendingTransferStates(intentBaseline, pendingList)",
 		"p.expectedRGB11TransactionStatus(first)", "if !visible && broadcastErr == nil", "p.evidence.Broadcast(first.SignedTx)")

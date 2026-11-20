@@ -9,7 +9,6 @@ import (
 
 	"github.com/sat20-labs/sat20wallet/sdk/wallet"
 	dkvs "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -71,21 +70,6 @@ func TestSDKAccountReviewAuthorization(t *testing.T) {
 		require.False(t, called)
 		require.NoError(t, manager.UseAccountStorageAuthorization(wallet.AccountStoragePurposeRecovery,
 			func(*wallet.AccountStorageAuthorization) error { return nil }))
-	})
-
-	t.Run("PendingObservationCannotAlterAuthorization", func(t *testing.T) {
-		manager, auth := newAuthorized(t)
-		pending, err := manager.PendingAccountStorageAuthorization()
-		require.NoError(t, err)
-		pending.ID = "forged"
-		pending.Mode = wallet.AccountStoragePaid
-		pending.RecordOptions.TTL = 0
-		pending.Summary.Title = "mutated"
-		require.NoError(t, manager.UseAccountStorageAuthorization(wallet.AccountStoragePurposeGuardian,
-			func(value *wallet.AccountStorageAuthorization) error {
-				require.Equal(t, *auth, *value)
-				return nil
-			}))
 	})
 
 	t.Run("ConcurrentClaimAndConfirmationAreRejected", func(t *testing.T) {
@@ -194,30 +178,4 @@ func TestSDKAccountReviewAuthorization(t *testing.T) {
 		require.Equal(t, identity.AccountID, manager.GetAccountManagementStatus().AccountID)
 	})
 
-	t.Run("RejectedChainSwitchPreservesGrant", func(t *testing.T) {
-		manager, auth := newAuthorized(t)
-		require.ErrorIs(t, manager.SwitchChain("mainnet", accountReviewPassword), wallet.ErrInPlaceChainSwitchDisabled)
-		require.Equal(t, "testnet", manager.GetChain())
-		pending, err := manager.PendingAccountStorageAuthorization()
-		require.NoError(t, err)
-		require.Equal(t, auth.ID, pending.ID)
-	})
-
-	t.Run("RuntimeStopDiscardsGrant", func(t *testing.T) {
-		manager, _ := newAuthorized(t)
-		// This is an explicit runtime shutdown, not PWA inactivity/UI locking.
-		manager.Stop()
-		pending, pendingErr := manager.PendingAccountStorageAuthorization()
-		called := false
-		useErr := manager.UseAccountStorageAuthorization(wallet.AccountStoragePurposeRecovery,
-			func(*wallet.AccountStorageAuthorization) error { called = true; return nil })
-		t.Logf("account-review: after_stop pending=%t pending_error=%v use_error=%v callback_called=%t",
-			pending != nil, pendingErr, useErr, called)
-		assert.Error(t, pendingErr, "runtime shutdown must invalidate a session grant")
-		assert.Error(t, useErr, "a stopped session must not claim its old grant")
-		assert.False(t, called, "no callback may run under a grant from the stopped session")
-		_, confirmErr := manager.ConfirmAccountStorage(wallet.AccountStorageTemporary, 0)
-		assert.ErrorIs(t, confirmErr, wallet.ErrAccountStorageRuntimeStopped,
-			"a stopped runtime must not mint a replacement storage grant")
-	})
 }

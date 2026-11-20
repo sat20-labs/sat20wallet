@@ -20,9 +20,6 @@
         <Button v-if="canRetry" size="sm" variant="outline" :disabled="store.retrying" @click="store.retryNow">
           {{ store.retrying ? t('accountManagement.readiness.retrying') : t('accountManagement.readiness.retryNow') }}
         </Button>
-        <Button v-if="discoveryIssue && !store.localRiskAccepted" size="sm" @click="store.localRiskAccepted = true">
-          {{ t('accountManagement.readiness.continueLocal') }}
-        </Button>
         <Button v-if="!discoveryIssue" size="sm" variant="ghost" @click="openSettings">
           {{ store.hasQuotaIssue ? t(store.quotaActionKey) : t('accountManagement.readiness.manage') }}
         </Button>
@@ -42,23 +39,21 @@ const store = useAccountManagementStore()
 const router = useRouter()
 const { t } = useI18n()
 const state = computed(() => store.status)
-// Local access is already granted by the SDK. This only explains an unknown
-// remote result and records the user's choice for this unlocked identity.
 const discoveryIssue = computed(() => !store.hasDatabaseIssue && !store.hasQuotaIssue && !store.statusReadFailed &&
-  state.value?.state === 'local' && state.value.discovery_status === 'unknown')
+  state.value?.discovery_status === 'unknown' && state.value.backup_risk === 'notConfigured' &&
+  Boolean(state.value.error_code) && state.value.state !== 'locked')
 const isError = computed(() => store.statusReadFailed || store.retryFailed || state.value?.state === 'error' ||
   store.hasQuotaIssue)
-const canRetry = computed(() => !store.hasDatabaseIssue && (discoveryIssue.value || store.statusReadFailed || store.retryFailed || state.value?.state === 'error' ||
+const canRetry = computed(() => !store.hasDatabaseIssue && (store.statusReadFailed || store.canRetryBackup && (store.retryFailed || state.value?.state === 'error' ||
   state.value?.backup_state === 'pending' || state.value?.backup_state === 'uploading' ||
   state.value?.backup_state === 'cleanup' || store.moduleIssues.length > 0 ||
-  store.hasQuotaIssue))
+  store.hasQuotaIssue)))
 
 const message = computed(() => {
   if (store.hasDatabaseIssue) return t('accountManagement.readiness.databaseFailed')
   if (store.quotaNoticeKey) return t(store.quotaNoticeKey)
   if (store.statusReadFailed) return t('accountManagement.readiness.readFailed')
-  if (discoveryIssue.value) return t(store.localRiskAccepted
-    ? 'accountManagement.readiness.discoveryContinued' : 'accountManagement.readiness.discoveryUnverified')
+  if (discoveryIssue.value) return t('accountManagement.readiness.discoveryUnverified')
   if (store.retryFailed) return t('accountManagement.readiness.retryFailed')
   if (store.loading && !state.value) return t('accountManagement.readiness.syncing')
   switch (state.value?.state) {

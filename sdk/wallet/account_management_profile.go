@@ -191,6 +191,7 @@ func (p *Manager) clearAccountManagementSession() {
 }
 
 func (p *Manager) clearAccountManagementSessionLocked() {
+	p.rootCheck = accountRootCheck{}
 	zeroBytes(p.accountSecret)
 	p.accountSecret = nil
 	p.accountPassword = ""

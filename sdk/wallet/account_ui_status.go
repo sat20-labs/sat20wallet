@@ -55,10 +55,10 @@ func (p *Manager) GetAccountView(ctx context.Context) (*AccountView, error) {
 	view := &AccountView{Active: s.Active, AccountID: s.AccountID, State: s.AccountState, RecoveryMode: s.RecoveryMode,
 		DiscoveryStatus: s.DiscoveryStatus, Locator: s.PublicLocator, BackupState: s.BackupState,
 		LastRehearsalAt: s.LastRehearsalAt, ErrorCode: s.LastDKVSSyncErrorCode}
-	if s.ManagedDataDirty || s.PendingChanges > 0 {
-		view.BackupRisk = "unconfirmed"
-	} else if !s.Active || !s.RecoveryConfigured {
+	if !s.Active || !s.RecoveryConfigured {
 		view.BackupRisk = "notConfigured"
+	} else if s.ManagedDataDirty || s.PendingChanges > 0 {
+		view.BackupRisk = "unconfirmed"
 	}
 	view.Modules = []ModuleView{p.rgbModuleView(s)}
 	if s.ActivationPending {

@@ -170,6 +170,28 @@ func nativeIfaceOpenChannel(t *testing.T, f *nativeIfaceChain, manager *wallet.M
 	require.Equal(t, wallet.CS_READY, manager.GetChannel(id).Status)
 }
 
+// Native interface wallets have verified an absent root; they do not configure recovery.
+func requireNativeIfaceLocalSender(t *testing.T, sender *wallet.Manager) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		return sender.GetAccountManagementStatus().DiscoveryStatus == "inactive"
+	}, rpcReadyTimeout, 20*time.Millisecond, "local account discovery after wallet start")
+	status := sender.GetAccountManagementStatus()
+	require.Equal(t, "inactive", status.DiscoveryStatus)
+	require.True(t, status.LocalOnly)
+	require.False(t, status.RecoveryConfigured)
+	require.False(t, status.ActivationPending)
+	require.Equal(t, "local", status.AccountState)
+	require.True(t, status.WriteAllowed)
+}
+
+// Start begins a fresh discovery even when the wallet was previously writable.
+func attachNativeIfaceWallet(t *testing.T, manager *wallet.Manager, network *realSatoshiNet) {
+	t.Helper()
+	attachRGB11RegtestWallet(t, manager, network)
+	requireNativeIfaceLocalSender(t, manager)
+}
+
 func runNativeIfaceRealL2(t *testing.T, f *nativeIfaceChain) {
 	t.Helper()
 	a := f.device(t, f.seeds["ordinary-1"]).mgr
@@ -183,8 +205,8 @@ func runNativeIfaceRealL2(t *testing.T, f *nativeIfaceChain) {
 	}
 	t.Log("real L2 prerequisite: Bitcoin-backed H1/H2/H3 bootstrap")
 	nativeIfaceBootstrap(t, f, a)
-	attachRGB11RegtestWallet(t, a, f.network)
-	attachRGB11RegtestWallet(t, b, f.network)
+	attachNativeIfaceWallet(t, a, f.network)
+	attachNativeIfaceWallet(t, b, f.network)
 	t.Log("real L2 prerequisite: exact POS31/32/33 activation and same-DB restart")
 	_, err := activateNativeIfacePOS(t, t.Context(), f.network, a, sdkPWARegtestPOSV2ActivationHeight, func() ([]string, error) {
 		var pool []string
@@ -193,12 +215,12 @@ func runNativeIfaceRealL2(t *testing.T, f *nativeIfaceChain) {
 	})
 	require.NoError(t, err)
 	// The activation driver restarts Core at H31 with the same database.
-	attachRGB11RegtestWallet(t, b, f.network)
+	attachNativeIfaceWallet(t, b, f.network)
 	t.Log("real L2 prerequisite: actual SDK open and both-peer READY")
 	nativeIfaceOpenChannel(t, f, b)
 	t.Log("real L2 prerequisite: BRC20 deploy/mint/transfer-inscription/splice/unlock")
 	require.Nil(t, b.GetTickerInfoV2(sdkPWARegtestWASMAsset), "the fresh chain must exercise actual BRC20 deployment")
-	owner, buyer, sample := prepareNativeIfaceAsset(t, f.network, a, b,
+	owner, buyer, sample := prepareNativeIfaceAsset(t, f.network, a, b, requireNativeIfaceLocalSender,
 		func(_ string, blocks int) { f.mine(t, blocks) },
 		func(manager *wallet.Manager, txid string) { f.confirmL1(t, manager, txid) })
 	asset := indexercommon.NewAssetNameFromString(sdkPWARegtestWASMAsset)

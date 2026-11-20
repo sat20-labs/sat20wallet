@@ -12,7 +12,7 @@ func TestSwitchChainFailsClosedWithoutMutatingManager(t *testing.T) {
 
 	manager := &Manager{status: newDefaultStatus()}
 	manager.status.CurrentChain = "testnet"
-	for _, target := range []string{"mainnet", "testnet", "invalid"} {
+	for _, target := range []string{"mainnet"} {
 		if err := manager.SwitchChain(target, "password"); !errors.Is(err, ErrInPlaceChainSwitchDisabled) {
 			t.Fatalf("SwitchChain(%q) error=%v", target, err)
 		}

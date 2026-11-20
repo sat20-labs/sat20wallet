@@ -40,7 +40,6 @@ unset GOFLAGS GOOS GOARCH RGB11_HISTORY_ORACLE_DIR \
 
 wallet_excluded_roots=(
   TestSDKCoreModulesConnectedE2E TestSDKCoreModulesValidation
-  TestDiagnosticGuardianPackageMatch TestDiagnosticRemoteAccountRecoveryReadOnly
   TestLiveChannelHeartbeatRestore TestLaunchPoolContract TestSwapContract
   TestAmmContract TestAmmContract_Runes TestSmartContractDeploymentRefundRedEvidence
   TestSmartContractModuleValidation TestSmartContractAdmissionValidation
@@ -85,8 +84,8 @@ import re
 import sys
 
 workdir, manifest = map(pathlib.Path, sys.argv[1:3])
-extra, e2e = sys.argv[3:29], sys.argv[29:]
-if len(extra) != 26 or len(set(extra)) != 26 or len(e2e) != 25 or len(set(e2e)) != 25:
+extra, e2e = sys.argv[3:27], sys.argv[27:]
+if len(extra) != 24 or len(set(extra)) != 24 or len(e2e) != 25 or len(set(e2e)) != 25:
     raise SystemExit("supplemental root count or uniqueness mismatch")
 wallet = []
 for raw in manifest.read_text().splitlines():
@@ -102,7 +101,7 @@ for raw in manifest.read_text().splitlines():
         raise SystemExit("wallet functional root missing from source: " + name)
     wallet.append(name)
 if len(wallet) != 70 or set(wallet) & set(extra):
-    raise SystemExit("expected 70 functional wallet roots disjoint from 26 exclusions")
+    raise SystemExit("expected 70 functional wallet roots disjoint from 24 exclusions")
 for package, names in (("wallet", extra), ("e2e", e2e)):
     source = "\n".join(path.read_text() for path in (workdir / package).glob("*_test.go"))
     for name in names:

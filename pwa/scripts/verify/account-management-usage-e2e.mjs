@@ -48,18 +48,19 @@ export const runtimeAccountCases = ["usage: background catalog refresh cannot in
 
 export async function runPwaUsageCases(t) {
   const { check, device, waitingDevice, ready, unlock, catalog, walletCall, accountCall, password, newPassword } = t
-  const importMnemonic = t.rootMnemonic || 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
   const failures = []
   const scenario = async (name, action) => {
     if (t.focusedUsageCases && !t.focusedUsageCases.includes(name)) return
     try { await check(name, action) } catch (error) { failures.push({ name, message: error.message }) }
   }
+  const createLocal = page => page.evaluate(async password => {
+    const [error, mnemonic] = await window.__SAT20_PWA_VERIFY__.useWalletStore().createWallet(password)
+    if (error) throw error
+    return mnemonic
+  }, password)
   const fresh = async () => {
     const page = await device()
-    await page.evaluate(async password => {
-      const [error] = await window.__SAT20_PWA_VERIFY__.useWalletStore().createWallet(password)
-      if (error) throw error
-    }, password)
+    await createLocal(page)
     await waitForAccountWrite(page, accountCall)
     return page
   }
@@ -305,6 +306,7 @@ export async function runPwaUsageCases(t) {
     await page.evaluate(() => { location.hash = '#/wallet/setting/account-management' })
     await status.getByRole('button',{name:accountMessages.readiness.retryNow,exact:true}).click()
     await settled(page)
+    await waitForAccountWrite(page,accountCall)
     // Restore only the observation wrapper for this final normal UI action.
     await page.evaluate(() => {
       const original = window.sat20wallet_wasm.updateWalletName
@@ -317,6 +319,7 @@ export async function runPwaUsageCases(t) {
     })
     try {
       const dialog = await renameThroughUI('Online rename after retry')
+      assert.deepEqual(await page.evaluate(() => window.__offlineRenameObservation),{code:0,rejected:false})
       await expect(dialog).not.toBeVisible()
       assert.equal((await catalog(page))[0].name,'Online rename after retry')
       await settled(page)
@@ -597,8 +600,16 @@ export async function runPwaUsageCases(t) {
       assert.equal(inactive.backup_risk,'notConfigured')
       assert.equal(Boolean(inactive.locator),false)
       assert.equal(beforeActivationWatchCount,0,'unactivated wallet started ordinary DKVS watch')
-      // A previously created local wallet may continue locally after a real
-      // failed cold discovery, but only with the remote-backup risk visible.
+      await page.evaluate(async () => {
+        const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
+        await store.updateWalletName(store.walletId, 'Local before cold start')
+      })
+      const localCatalog = await catalog(page)
+      assert.equal(localCatalog[0].name,'Local before cold start')
+      const localView = await accountCall(page,'getAccountView')
+      assert.equal(localView.backup_state,'none')
+      assert.equal(localView.backup_risk,'notConfigured')
+      // A cold device retains its catalog. Editing requires a successful root check.
       await page.context().route(faultPath, failDiscovery)
       await page.reload(); await ready(page); await unlock(page)
       try {
@@ -606,7 +617,8 @@ export async function runPwaUsageCases(t) {
           const probe = await page.evaluate(() => ({...window.__dkvsEntryProbe}))
           const view = await accountCall(page, 'getAccountView')
           return faultHits > 0 && probe.rejected > 0 && probe.eventRejected > 0 &&
-            view.state === 'local' && view.backup_risk === 'notConfigured'
+            view.discovery_status === 'unknown' && Boolean(view.error_code) &&
+            view.backup_risk === 'notConfigured' && view.modules.every(module => !module.can_write)
         },{timeout:90000,message:'SDK must process failed cold discovery before the warning assertion'}).toBe(true)
       } finally {
         const probe = await page.evaluate(() => ({...window.__dkvsEntryProbe}))
@@ -614,59 +626,72 @@ export async function runPwaUsageCases(t) {
         console.log(JSON.stringify({coldDiscoveryWarning:{faultHits,...probe,state:view.state,
           backupRisk:view.backup_risk,errorCode:view.error_code,hasLocator:Boolean(view.locator),watchCount}}))
       }
-      assert.deepEqual(await catalog(page), committed, 'failed discovery must retain the local catalog')
+      assert.deepEqual(await catalog(page), localCatalog, 'failed discovery must retain the local catalog')
       assert.equal(watchCount,0)
       assert.equal((await accountCall(page,'getAccountView')).discovery_status,'unknown')
       const warning = page.locator('aside').filter({hasText:'Remote backup has not been verified'})
       await expect(warning).toBeVisible()
       await expect(warning.getByRole('button',{name:'Restore account',exact:true})).toBeVisible()
-      await expect(warning.getByRole('button',{name:accountMessages.readiness.retryNow,exact:true})).toBeEnabled()
-      await warning.getByRole('button',{name:'Continue locally',exact:true}).click()
+      await expect(warning.getByRole('button',{name:accountMessages.readiness.retryNow,exact:true})).toHaveCount(0)
+      await expect(warning.getByRole('button',{name:'Continue locally',exact:true})).toHaveCount(0)
       await page.evaluate(() => { location.hash = '#/wallet/manager' })
       const walletText = JSON.parse(readFileSync(new URL('../../locales/en.json', import.meta.url),'utf8')).walletManager
       await expect(page.getByRole('heading',{name:walletText.title,exact:true})).toBeVisible()
-      await page.locator('div.font-medium').filter({hasText:committed[0].name}).getByRole('button').click()
+      await page.locator('div.font-medium').filter({hasText:localCatalog[0].name}).getByRole('button').click()
       const renameDialog = page.getByRole('dialog',{name:walletText.editWalletName,exact:true})
-      await renameDialog.locator('#walletName').fill('Local after discovery warning')
+      await renameDialog.locator('#walletName').fill('Offline rename must be rejected')
       await renameDialog.getByRole('button',{name:walletText.save,exact:true}).click()
-      await expect(renameDialog).not.toBeVisible()
-      const localCatalog = await catalog(page)
-      assert.equal(localCatalog[0].name,'Local after discovery warning')
-      assert.equal(localCatalog[0].fingerprint,committed[0].fingerprint)
-      assert.equal(watchCount,0,'local continuation must not activate backup or ordinary watch')
-      const afterLocal = await accountCall(page,'getAccountView')
-      assert.equal(afterLocal.state,'local')
-      assert.equal(afterLocal.discovery_status,'unknown')
-      await expect(page.locator('aside').filter({hasText:'Continuing locally. The remote backup remains unverified.'})).toBeVisible()
-      await page.context().unroute(faultPath, failDiscovery)
+      await expect(page.getByText(/managed account discovery is pending/i).first()).toBeVisible()
+      await expect(renameDialog).toBeVisible()
+      assert.deepEqual(await catalog(page),localCatalog,'rejected rename must leave the durable catalog unchanged')
+      assert.equal(watchCount,0,'failed discovery must not start a backup watch')
+      await page.keyboard.press('Escape')
       await page.evaluate(() => { location.hash = '#/wallet/setting/account-management' })
+      await expect(page.locator('section').first()).toBeVisible()
       const retry = page.locator('section').first().getByRole('button',{
         name:accountMessages.readiness.retryNow,exact:true})
-      await expect(retry).toBeEnabled()
-      await page.evaluate(async () => {
-        const {useAccountManagementStore} = await import('/store/accountManagement.ts')
-        window.__entryAccountStore = useAccountManagementStore()
-      })
+      await expect(retry).toHaveCount(0)
+      await page.context().setOffline(true)
+      await expect.poll(() => page.evaluate(() => navigator.onLine)).toBe(false)
       const baseline = await page.evaluate(() => ({...window.__dkvsEntryProbe}))
-      await retry.click()
+      assert.equal(faultHits,1,'the cold check must not poll while disconnected')
+      await page.context().unroute(faultPath, failDiscovery)
+      await page.context().setOffline(false)
       try {
         await expect.poll(() => page.evaluate(previous => {
           const p = window.__dkvsEntryProbe
           return p.completedStart > previous.started && p.eventStart > previous.started && p.events > previous.events
-        },baseline),{timeout:90000,message:'explicit Retry must complete a new discovery and notify SDK status'}).toBe(true)
-        await expect.poll(() => page.evaluate(() => window.__entryAccountStore.retrying),{timeout:90000}).toBe(false)
-        await expect(retry).toBeEnabled()
+        },baseline),{timeout:90000,message:'reconnect must complete one SDK discovery and publish its result'}).toBe(true)
+        assert.equal(await page.evaluate(() => window.__dkvsEntryProbe.started),baseline.started+1)
+        await expect(retry).toHaveCount(0)
       } finally {
         const progress = await page.evaluate(() => ({...window.__dkvsEntryProbe}))
-        console.log(JSON.stringify({dkvsActivationWatchEvidence:{phase:'explicit-retry',
+        console.log(JSON.stringify({dkvsActivationWatchEvidence:{phase:'reconnect',
           baselineStarted:baseline.started,baselineEvents:baseline.events,...progress,watchCount}}))
       }
-      assert.equal(watchCount,0,'explicit unactivated Retry must not start ordinary watch')
+      assert.equal(watchCount,0,'reconnect must not start an unactivated backup watch')
       const verifiedLocal = await accountCall(page,'getAccountView')
       assert.equal(verifiedLocal.error_code || '', '')
       assert.equal(verifiedLocal.discovery_status,'inactive')
       await expect(page.locator('aside').filter({hasText:'Remote backup has not been verified'})).toHaveCount(0)
-      await expect(page.locator('aside').filter({hasText:'Continuing locally. The remote backup remains unverified.'})).toHaveCount(0)
+      await page.evaluate(() => { location.hash = '#/wallet/manager' })
+      await page.locator('div.font-medium').filter({hasText:localCatalog[0].name}).getByRole('button').click()
+      await renameDialog.locator('#walletName').fill('Renamed after reconnect')
+      await renameDialog.getByRole('button',{name:walletText.save,exact:true}).click()
+      await expect(renameDialog).not.toBeVisible()
+      assert.equal((await catalog(page))[0].name,'Renamed after reconnect')
+      // Start a fresh SDK with the browser itself offline, including the node config request.
+      await page.reload(); await ready(page)
+      await page.context().setOffline(true)
+      await unlock(page)
+      await expect.poll(() => accountCall(page,'getAccountView'),{timeout:90000}).toMatchObject({
+        discovery_status:'unknown', backup_risk:'notConfigured', error_code:expect.stringMatching(/.+/),
+      })
+      const offlineReads = await page.evaluate(() => window.__dkvsEntryProbe.started)
+      await page.context().setOffline(false)
+      await waitForAccountWrite(page,accountCall)
+      assert.equal(await page.evaluate(() => window.__dkvsEntryProbe.started),offlineReads+1)
+      assert.equal(watchCount,0)
       // Existing public SDK setup performs real temporary-storage activation;
       // this positive control does not synthesize profile or transport state.
       await setup(page)
@@ -686,6 +711,18 @@ export async function runPwaUsageCases(t) {
   })
 
   await scenario('usage: import page and cold selection use SDK without redundant PWA persistence', async () => {
+    const source = await device()
+    let importMnemonic, rootId
+    try {
+      importMnemonic = await createLocal(source)
+      await waitForAccountWrite(source, accountCall)
+      const view = await accountCall(source, 'getAccountView')
+      assert.equal(view.discovery_status, 'inactive')
+      assert.ok(view.account_id)
+      rootId = view.account_id
+    } finally {
+      await source.context().close()
+    }
     const page = await device()
     try {
       await page.evaluate(() => {
@@ -700,9 +737,13 @@ export async function runPwaUsageCases(t) {
         }
         location.hash = '#/import'
       })
-      await page.getByRole('textbox', { name: 'Recovery Phrase', exact: true }).fill(importMnemonic)
-      await page.getByLabel('New Wallet Password', { exact: true }).fill(password)
-      await page.getByLabel('Confirm Password', { exact: true }).fill(password)
+      const submit = page.getByRole('button', { name: 'Import Wallet', exact: true })
+      const fillImport = async () => {
+        await page.getByRole('textbox', { name: 'Recovery Phrase', exact: true }).fill(importMnemonic)
+        await page.getByLabel('New Wallet Password', { exact: true }).fill(password)
+        await page.getByLabel('Confirm Password', { exact: true }).fill(password)
+      }
+      await fillImport()
       // Fresh empty device, real endpoint fault, no fabricated SDK response.
       // AccountView requires an unlocked session and is not a pre-import API.
       assert.deepEqual(await catalog(page), [])
@@ -712,7 +753,7 @@ export async function runPwaUsageCases(t) {
         const recover = api.recoverAccountManagementFromRootMnemonic
         const importWallet = api.importWallet
         const storeImport = store.importWallet
-        const observed = {recoverCode:null,recoverStatus:null,importCalls:0,settled:false}
+        const observed = {recoverCode:null,recoverStatus:null,importCalls:0,settled:0}
         window.__pendingImportObserved = observed
         api.recoverAccountManagementFromRootMnemonic = async (...args) => {
           const result = await recover(...args)
@@ -722,7 +763,7 @@ export async function runPwaUsageCases(t) {
         }
         api.importWallet = async (...args) => { observed.importCalls++; return importWallet(...args) }
         store.importWallet = async (...args) => {
-          try { return await storeImport(...args) } finally { observed.settled = true }
+          try { return await storeImport(...args) } finally { observed.settled++ }
         }
         window.__restorePendingImport = () => {
           api.recoverAccountManagementFromRootMnemonic = recover
@@ -730,41 +771,78 @@ export async function runPwaUsageCases(t) {
           store.importWallet = storeImport
         }
       })
-      let discoveryFaultHits = 0
-      const discoveryUnavailable = route => {
-        if (new URL(route.request().url()).pathname.endsWith('/dkvs/active/sync')) {
-          discoveryFaultHits++; return route.abort('failed')
+      const rootRoute = '**/dkvs/active/sync*'
+      const observed = () => page.evaluate(() => ({...window.__pendingImportObserved}))
+      const rootKey = `/personal/${rootId.toLowerCase()}/account/root`
+      const attempts = []
+      let response = 0
+      let releaseRead
+      const heldRead = new Promise(resolve => { releaseRead = resolve })
+      const fault = async route => {
+        const request = route.request()
+        const keys = request.method() === 'POST' && request.postDataJSON()?.scope?.keys
+        if (keys?.length !== 1 || keys[0] !== rootKey) return route.fallback()
+        attempts.push({at:Date.now(),response})
+        if (response === 0) {
+          await heldRead
+          return route.fallback()
         }
-        return route.fallback()
+        if (response === 200) {
+          // A healthy but slow node must be able to finish the same request.
+          await new Promise(resolve => setTimeout(resolve, 6000))
+          return route.fallback()
+        }
+        return route.fulfill({status:response, contentType:'text/plain', body:'unavailable',
+          headers:{'access-control-allow-origin':'*'}})
       }
-      await page.context().route('**/dkvs/active/sync*',discoveryUnavailable)
+      await page.context().route(rootRoute, fault)
       try {
-        await page.getByRole('button',{name:'Import Wallet',exact:true}).click()
-        try {
-          await expect.poll(() => discoveryFaultHits,{timeout:90000}).toBeGreaterThan(0)
-          await expect.poll(() => page.evaluate(() => window.__pendingImportObserved),{timeout:90000}).toMatchObject({recoverCode:0,recoverStatus:'pending',settled:true})
-        } finally {
-          const observed = await page.evaluate(() => window.__pendingImportObserved)
-          console.log(JSON.stringify({pendingImportEvidence:{discoveryFaultHits,...observed,
-            catalogCount:(await catalog(page)).length,hash:new URL(page.url()).hash}}))
-        }
-        const observed = await page.evaluate(() => window.__pendingImportObserved)
-        assert.equal(observed.importCalls,0,'unknown remote backup must not fall through to ImportWallet')
-        assert.deepEqual(await catalog(page),[],'pending discovery must leave the catalog empty')
-        assert.equal(new URL(page.url()).hash,'#/import','pending discovery must not enter wallet')
-        await expect(page.getByRole('textbox',{name:'Recovery Phrase',exact:true})).toHaveValue(importMnemonic)
-        await expect(page.getByRole('button',{name:'Import Wallet',exact:true})).toBeEnabled()
-        // Import.vue uses vue-sonner for actual failure presentation. Do not
-        // require a new wording to establish the business RED above.
-        await expect(page.locator('[data-sonner-toast][data-type="error"]').first()).toBeVisible()
+        await submit.click()
+        await expect.poll(() => attempts.length, {timeout:90000}).toBeGreaterThan(0)
+        await page.evaluate(() => { location.hash = '#/create' })
+        await expect.poll(observed, {timeout:3000, message:'cancel the in-flight root read promptly'})
+          .toMatchObject({settled:1,importCalls:0})
+        releaseRead()
+        const afterCancel = attempts.length
+        await page.waitForTimeout(5500)
+        assert.equal(attempts.length, afterCancel, 'leaving the import page must cancel the next read')
+        assert.deepEqual(await catalog(page), [])
+
+        await page.evaluate(() => { location.hash = '#/import' })
+        await fillImport()
+        response = 403
+        await submit.click()
+        await expect.poll(observed, {timeout:15000}).toMatchObject({settled:2,importCalls:0})
+        assert.equal(attempts.length, afterCancel + 1, 'access denial must end this request')
+        assert.deepEqual(await catalog(page), [])
+        await expect(submit).toBeEnabled()
+
+        response = 503
+        const start = attempts.length
+        await submit.click()
+        await expect.poll(() => attempts.length > start ? attempts.at(-1).at - attempts[start].at : 0,
+          {timeout:90000, message:'retry a temporary failure beyond the old 30s limit'}).toBeGreaterThan(30000)
+        await expect(submit).toBeDisabled()
+        assert.equal(new URL(page.url()).hash, '#/import')
+        assert.deepEqual(await catalog(page), [])
+        const pending = await observed()
+        assert.equal(pending.settled, 2)
+        assert.equal(pending.importCalls, 0)
+        response = 200
+        await expect.poll(() => new URL(page.url()).hash, {timeout:90000}).toBe('#/wallet')
+        await expect.poll(observed).toMatchObject({recoverCode:0,recoverStatus:'not_found',settled:3,importCalls:1})
+        const atCommit = attempts.length
+        assert.equal(attempts.filter(item => item.response === 200).length, 1, 'accept the slow root response on its first attempt')
+        await page.waitForTimeout(5500)
+        assert.equal(attempts.length, atCommit, 'verified absence must stop foreground retries')
+        console.log(JSON.stringify({pendingImportEvidence:{cancelReads:afterCancel,deniedReads:1,
+          unavailableReads:attempts.slice(start).filter(item => item.response === 503).length,
+          unavailableMs:attempts[atCommit-2].at-attempts[start].at,...await observed()}}))
       } finally {
-        await page.context().unroute('**/dkvs/active/sync*',discoveryUnavailable)
+        releaseRead()
+        await page.context().unroute(rootRoute, fault)
         await page.evaluate(() => window.__restorePendingImport())
       }
-      // Retry the same form after restoring discovery; retain all original
-      // online import and cold-selection persistence assertions below.
-      await page.getByRole('button', { name: 'Import Wallet', exact: true }).click()
-      await expect.poll(() => new URL(page.url()).hash, { timeout: 90000 }).toBe('#/wallet')
       assert.equal(await page.evaluate(() => window.usageRedundantWrites), 0)
       await waitForAccountWrite(page, accountCall)
       await page.evaluate(async () => {
@@ -782,12 +860,65 @@ export async function runPwaUsageCases(t) {
         return { walletId: store.walletId, index: store.accountIndex, address: store.address, pubkey: store.publicKey }
       })
       assert.deepEqual(after, before)
+      assert.equal((await catalog(page))[0].accounts[0].account_id, rootId)
       const saved = await page.evaluate(async () => {
         const { Storage } = await import('/lib/storage-adapter.ts')
         const raw = (await Storage.get({ key: 'local:wallet_state_snapshot_v1' })).value
         return raw ? Object.keys(JSON.parse(raw).state) : []
       })
       for (const key of ['wallets','walletId','accountIndex','address','pubkey','locked','rootAccountId','hasWallet']) assert.equal(saved.includes(key), false)
+      const holdCommittedImport = async (late, expectedWallets = 1) => {
+        await late.evaluate(async () => {
+          const sdk = (await import('/utils/sat20.ts')).default
+          const submit = sdk.importWallet.bind(sdk)
+          const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
+          const importWallet = store.importWallet
+          store.importWallet = async (...args) => {
+            try { return await importWallet(...args) } finally { window.__importDone = true }
+          }
+          sdk.importWallet = async (...args) => {
+            const result = await submit(...args)
+            if (result[0] || !result[1]) throw new Error('SDK did not commit the wallet')
+            await new Promise(resolve => { window.__deliverImport = resolve })
+            return result
+          }
+          location.hash = '#/import'
+        })
+        await late.getByRole('textbox', {name:'Recovery Phrase',exact:true}).fill(importMnemonic)
+        await late.getByLabel('New Wallet Password', {exact:true}).fill(password)
+        await late.getByLabel('Confirm Password', {exact:true}).fill(password)
+        await late.getByRole('button', {name:'Import Wallet',exact:true}).click()
+        await late.waitForFunction(() => typeof window.__deliverImport === 'function', undefined, {timeout:90000})
+        assert.equal((await catalog(late)).length, expectedWallets)
+      }
+      const edited = await device()
+      try {
+        await holdCommittedImport(edited)
+        await edited.getByLabel('New Wallet Password', {exact:true}).fill(newPassword)
+        await edited.evaluate(() => window.__deliverImport())
+        await expect(edited.getByRole('button', {name:'Reload wallet',exact:true})).toBeVisible()
+        await expect(edited.getByRole('button', {name:'Import Wallet',exact:true})).toBeDisabled()
+      } finally { await edited.context().close() }
+      for (const existing of [false, true]) {
+        const late = existing ? await fresh() : await device()
+        const expectedWallets = existing ? 2 : 1
+        try {
+          if (existing) await late.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().lockWallet())
+          await holdCommittedImport(late, expectedWallets)
+          await late.evaluate(async existing => {
+            if (!existing) await window.__SAT20_PWA_VERIFY__.useWalletStore().lockWallet()
+            location.hash = '#/unlock'
+          }, existing)
+          await late.waitForURL('**/#/unlock')
+          await expect(late.getByRole('button', {name:'Import Wallet',exact:true})).toHaveCount(0)
+          await late.evaluate(() => window.__deliverImport())
+          await late.waitForFunction(() => window.__importDone === true)
+          assert.equal(await late.evaluate(async () => (await import('/lib/walletSession.ts')).isWalletSessionUnlocked()), false)
+          assert.equal(await late.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().locked), true)
+          assert.equal(new URL(late.url()).hash, '#/unlock')
+          assert.equal((await catalog(late)).length, expectedWallets)
+        } finally { await late.context().close() }
+      }
     } finally { await page.context().close() }
   })
 

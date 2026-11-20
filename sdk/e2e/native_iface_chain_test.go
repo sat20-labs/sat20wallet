@@ -108,7 +108,6 @@ func newNativeIfaceChain(t *testing.T) *nativeIfaceChain {
 			"b@" + f.network.Bootstrap.nodePubKey + "@http://" + f.network.Bootstrap.stpAddr + "/regtest"}}
 	f.faucet = f.device(t, faucetMnemonic).mgr
 	require.Equal(t, faucetAddress, f.faucet.GetWallet().GetAddress())
-	requireE2EInactive(t, f.faucet, nativeIfacePassword)
 	nativeIfaceFundPool(t, f, fundingBlock.Tx[0])
 	return f
 }
@@ -200,6 +199,7 @@ func newNativeIfaceDevice(t *testing.T, cfg *sdkcommon.Config, mnemonic string) 
 	if mnemonic != "" {
 		_, err := d.mgr.ImportWallet(mnemonic, nativeIfacePassword)
 		require.NoError(t, err)
+		requireE2EInactive(t, d.mgr, nativeIfacePassword)
 	}
 	return d
 }

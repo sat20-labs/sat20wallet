@@ -9,15 +9,15 @@ SUITE="sat20wallet-sdk-account-rgb-groups"
 TIMEOUT_MS="2400000"
 GROUP_NAMES=(account_sync address_ack recovery_closure)
 GROUP_PACKAGES=(./wallet ./wallet ./wallet/rgb11)
-GROUP_COUNTS=(15 10 10)
+GROUP_COUNTS=(14 10 10)
 GROUP_RUNS=(
-  '^(TestModuleCapacityKeepsRGBProof|TestWaitAccountManagedDataReadyCancelsAndConverges|TestDKVSReviewAccountReadinessCheckUsesOnlyConfirmedReplica|TestDKVSReviewAccountReadyCancellationPreservesReceivingWorker|TestDKVSReviewAccountReadyWaitCancelsDuringInitialSync|TestDKVSReadyNeedsWallet|TestDKVSAccountBackupJobCoalescesWithinBoundedDeadline|TestDKVSDeferredJobDoesNotStarveIndependentJobs|TestAccountOperationDoesNotHoldCoordinatorDuringLongWork|TestDKVSTransportDoesNotHoldCoordinatorDuringRequest|TestDKVSNotificationsCoalesceAndRunOutsideInternalLocks|TestDKVSPendingAccountJobDoesNotHoldRunMuWhileWaitingForAccountSync|TestAccountColdSyncGrantsWrite|TestAccountNoACKFailureBlocks|TestAccountSyncScopePinned)$'
+  '^(TestModuleCapacityKeepsRGBProof|TestWaitAccountManagedDataReadyCancelsAndConverges|TestDKVSReviewAccountReadinessCheckUsesOnlyConfirmedReplica|TestDKVSReviewAccountReadyCancellationPreservesReceivingWorker|TestDKVSReviewAccountReadyWaitCancelsDuringInitialSync|TestDKVSReadyNeedsWallet|TestDKVSAccountBackupJobCoalescesWithinBoundedDeadline|TestDKVSDeferredJobDoesNotStarveIndependentJobs|TestDKVSTransportDoesNotHoldCoordinatorDuringRequest|TestDKVSNotificationsCoalesceAndRunOutsideInternalLocks|TestDKVSPendingAccountJobDoesNotHoldRunMuWhileWaitingForAccountSync|TestAccountColdSyncGrantsWrite|TestAccountNoACKFailureBlocks|TestAccountSyncScopePinned)$'
   '^(TestRGB11AddressCodecsAndAccountEncryption|TestRGB11AddressMailboxUsesMessageManagerSenderSequence|TestRGB11AddressTransferSchemeA|TestRGB11AddressNACKCancelsBeforeBroadcast|TestRGB11ReviewMixedACKBatchCancellation|TestRGB11ReviewRecipientRejectionPreservesIrreversibleIntent|TestRGB11DirectBatchRequiresEveryOutputACK|TestRGB11DirectReservationResumesAfterSDKRestart|TestRGB11DirectPreparedMailboxPolicyMatchesDelivery|TestRGB11AddressBroadcastUsesDurableIntent)$'
   '^(TestStableRecoveryContainsInvoiceAndPendingOperationClosure|TestRecoveryPreservesZeroBalanceContractAlias|TestRecoveryKeepsReferencedContractValidationWhenAnotherReceiptSortsFirst|TestMergeSelectedRecoveryAdoptsCleanTransferPhase|TestSelectedRecoveryCannotClearBoundTransferIdentity|TestSelectedRecoveryConstrainsPendingPrivateSigningIntent|TestSelectedRecoveryOnlyReleasesTerminalReservationOwner|TestMergeSelectedRecoveryAcceptsCompactedRejectedSend|TestMergeSelectedRecoveryRejectsDroppedLocalPending|TestMergeSelectedRecoveryAcceptsCompletedReceiveReplacingReservation)$'
 )
 
 if [[ "$#" -ne 0 ]]; then
-  printf '%s\n' "This fixed 35-root SDK functional-group runner accepts no arguments." >&2
+  printf '%s\n' "This fixed 34-root SDK functional-group runner accepts no arguments." >&2
   exit 2
 fi
 for executable in "$GO_BIN" /usr/bin/python3; do
@@ -53,7 +53,7 @@ write_status() {
   local i
   {
     printf 'state=%s\nsuite=%s\nrun_id=%s\npid=%s\n' "$state" "$SUITE" "$run_id" "$$"
-    printf 'scope=3 fixed related groups, 35 roots; no Core/PWA/live/full-package acceptance\n'
+    printf 'scope=3 fixed related groups, 34 roots; no Core/PWA/live/full-package acceptance\n'
     printf 'group_failure_policy=complete current group, stop before next group on any failure\n'
     printf 'working_directory=%s\ntimeout_ms=%s\npackage_timeout=10m\n' "$WORKDIR" "$TIMEOUT_MS"
     printf 'started_at_utc=%s\nstarted_epoch=%s\n' "$started_at_utc" "$started_epoch"
@@ -120,7 +120,6 @@ fixed = {'account_sync': ('github.com/sat20-labs/sat20wallet/sdk/wallet',
                    'TestDKVSReadyNeedsWallet',
                    'TestDKVSAccountBackupJobCoalescesWithinBoundedDeadline',
                    'TestDKVSDeferredJobDoesNotStarveIndependentJobs',
-                   'TestAccountOperationDoesNotHoldCoordinatorDuringLongWork',
                    'TestDKVSTransportDoesNotHoldCoordinatorDuringRequest',
                    'TestDKVSNotificationsCoalesceAndRunOutsideInternalLocks',
                    'TestDKVSPendingAccountJobDoesNotHoldRunMuWhileWaitingForAccountSync',

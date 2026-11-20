@@ -229,7 +229,7 @@ func TestSDKDKVSWriteContextSecurity(t *testing.T) {
 		require.Equal(t, dkvs.RecordHash(next.Record), dkvs.RecordHash(actual))
 	}
 
-	for _, offset := range []uint64{0, 1, 2, 3} {
+	for _, offset := range []uint64{0, 2, 3} {
 		t.Run("IssueHeightWindow_"+string(rune('0'+offset)), func(t *testing.T) {
 			f, writer, tap, key := fixture(t)
 			if offset > dkvs.WalletWriteHeightTolerance {

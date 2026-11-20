@@ -38,11 +38,6 @@ func closedAssetRestoreFixture(t *testing.T) (*Manager, *Channel, *AssetName, *T
 	return manager, channel, asset, output
 }
 
-func TestClosedAssetRestorePrivateBoundary(t *testing.T) {
-	manager, _, _, _ := closedAssetRestoreFixture(t)
-	_ = closedAssetRestoreAPI(t, manager)
-}
-
 func TestClosedAssetRestoreCanceledEntryHasNoChild(t *testing.T) {
 	manager, channel, asset, output := closedAssetRestoreFixture(t)
 	api := closedAssetRestoreAPI(t, manager)

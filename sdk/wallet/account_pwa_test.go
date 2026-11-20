@@ -102,7 +102,7 @@ func TestPersistPreparedAccountRestoreCommitsCatalogAndStatusTogether(t *testing
 	prepared, err := manager.prepareAccountRestoreLocked(backup, "password123")
 	if err == nil {
 		manager.mutex.Lock()
-		err = manager.persistPreparedAccountRestoreLocked(prepared, nil)
+		err = manager.persistPreparedAccountRestoreLocked(prepared, nil, nil)
 		manager.mutex.Unlock()
 	}
 	if err != nil {

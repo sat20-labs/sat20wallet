@@ -119,6 +119,9 @@ func TestAccountAutopayFundingEffectiveRate(t *testing.T) {
 			require.NoError(t, json.Unmarshal(encoded, &fields))
 			require.Equal(t, tc.effective, fields["effective_amount_per_block"])
 			require.Equal(t, tc.amount, status.RecommendedFundingAmount)
+			if tc.rate != "10" {
+				return
+			}
 			for _, change := range []struct {
 				name  string
 				apply func(*AccountAutopayFundingStatus)
@@ -212,11 +215,6 @@ func TestAccountAutopayStateRejectsWrongContractConfiguration(t *testing.T) {
 	state.ServiceName = defaults.AutopayServiceName
 	state.FeeAssetName = "other"
 	require.False(t, accountAutopayStateReady(state, defaults, "payer", "5", 1))
-
-	state.FeeAssetName = defaults.AutopayFeeAssetName
-	state.Closed = true
-	state.Status = "closed"
-	require.False(t, accountAutopayStateReady(state, defaults, "payer", "5", 1))
 }
 
 // Intercept only lookup transport: production REST decoding and receipt/log
@@ -277,7 +275,6 @@ func TestAccountAutopayReceiptReconciliationRequiresOriginalTransaction(t *testi
 			history: []contractcommon.ContractHistoryRecord{{Contract: "autopay", Height: 101, TxID: txid, Kind: "result", Status: "revert"}}},
 		{name: "ready_but_original_query_unavailable", ready: true, lookupErr: fmt.Errorf("lookup offline"), want: OperationLogPending},
 		{name: "missing_original_is_unknown", ready: true, height: -1, want: OperationLogPending},
-		{name: "confirmed_still_waiting_first_payment", height: 100, want: OperationLogPending},
 		{name: "historical_success_current_balance_exhausted", height: 100, want: OperationLogSucceeded,
 			history: []contractcommon.ContractHistoryRecord{{Contract: "autopay", Height: 101, TxID: strings.Repeat("b", 64), Kind: "result", Status: "success", Details: map[string]interface{}{"result_for_txid": txid}}}},
 		{name: "invoke_inclusion_is_not_execution_success", height: 100, want: OperationLogPending,

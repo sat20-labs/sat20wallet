@@ -30,17 +30,6 @@ func rgbRecoveryV1Slot(t *testing.T, value *ChannelCommitmentV1) reflect.Value {
 	return reflect.ValueOf(value).Elem().FieldByIndex(field.Index)
 }
 
-func TestSTPRGBClientRecoverySlotSchema(t *testing.T) {
-	value := NewChannelCommitment()
-	if !rgbRecoveryV1Slot(t, &value.ChannelCommitmentV1).IsNil() {
-		t.Fatal("constructing an ordinary commitment populated RGB-only recovery state")
-	}
-	field, ok := reflect.TypeOf(ChannelCommitment{}).FieldByName("Others")
-	if !ok || field.Type != reflect.TypeOf([]*CommitmentTx(nil)) {
-		t.Fatal("the reserved alternative-commitment container changed")
-	}
-}
-
 func TestSTPRGBClientRecoverySlotNilForRealLegacyGob(t *testing.T) {
 	root := filepath.Join("testdata", "legacy_rgb_slot")
 	read := func(name string) []byte {

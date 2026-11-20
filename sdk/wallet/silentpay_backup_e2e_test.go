@@ -34,36 +34,30 @@ func TestSilentPayStandaloneBackupRestoresEnabledAccountsE2E(t *testing.T) {
 	require.NoError(t, err)
 	closeSource()
 
-	for _, api := range []string{"RestoreAccountBackup", "RestoreAccountBackupWithResult"} {
-		t.Run(api, func(t *testing.T) {
-			var restoredBackup account.Backup
-			require.NoError(t, json.Unmarshal(encoded, &restoredBackup))
-			target, closeTarget := newDevice()
-			defer closeTarget()
-			if api == "RestoreAccountBackup" {
-				require.NoError(t, target.RestoreAccountBackup(restoredBackup, newPassword))
-			} else {
-				_, err := target.RestoreAccountBackupWithResult(restoredBackup, newPassword)
-				require.NoError(t, err)
-			}
-			discoverInactiveAccount(t, target)
-			catalog := target.GetWalletCatalog()
-			require.Len(t, catalog, 1)
-			require.Len(t, catalog[0].Accounts, 3)
-			for index := uint32(0); index < 3; index++ {
-				enabled, address, err := target.SilentPayAccount(catalog[0].ID, index)
-				require.NoError(t, err)
-				wantAddress, wantEnabled := wantAddresses[index]
-				require.Equal(t, wantEnabled, enabled, "standalone backup lost SP opt-in for account %d", index)
-				require.Equal(t, wantAddress, address)
-			}
-			persisted, err := loadWallet(target.db, catalog[0].ID)
+	t.Run("RestoreAccountBackupWithResult", func(t *testing.T) {
+		var restoredBackup account.Backup
+		require.NoError(t, json.Unmarshal(encoded, &restoredBackup))
+		target, closeTarget := newDevice()
+		defer closeTarget()
+		_, err := target.RestoreAccountBackupWithResult(restoredBackup, newPassword)
+		require.NoError(t, err)
+		discoverInactiveAccount(t, target)
+		catalog := target.GetWalletCatalog()
+		require.Len(t, catalog, 1)
+		require.Len(t, catalog[0].Accounts, 3)
+		for index := uint32(0); index < 3; index++ {
+			enabled, address, err := target.SilentPayAccount(catalog[0].ID, index)
 			require.NoError(t, err)
-			require.Equal(t, map[uint32]bool{0: true, 2: true}, persisted.SPEnabled)
-			_, err = target.UnlockWallet(newPassword)
-			require.NoError(t, err)
-			_, err = target.LastSyncedSilentPay(catalog[0].ID, 0)
-			require.ErrorContains(t, err, "no complete balance scan", "restoring opt-in must not invent a scanned balance")
-		})
-	}
+			wantAddress, wantEnabled := wantAddresses[index]
+			require.Equal(t, wantEnabled, enabled, "standalone backup lost SP opt-in for account %d", index)
+			require.Equal(t, wantAddress, address)
+		}
+		persisted, err := loadWallet(target.db, catalog[0].ID)
+		require.NoError(t, err)
+		require.Equal(t, map[uint32]bool{0: true, 2: true}, persisted.SPEnabled)
+		_, err = target.UnlockWallet(newPassword)
+		require.NoError(t, err)
+		_, err = target.LastSyncedSilentPay(catalog[0].ID, 0)
+		require.ErrorContains(t, err, "no complete balance scan", "restoring opt-in must not invent a scanned balance")
+	})
 }

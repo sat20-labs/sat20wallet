@@ -146,10 +146,10 @@ func newSDKSmartContractTemplateReviewSharedFixtures(t *testing.T) (
 	templateOtherMnemonic := messageTopicMemberMnemonic
 	escrowOwnerMnemonic := accountSyncMnemonic(t, escrowMnemonicMarker)
 	validationOwnerMnemonic := accountSyncMnemonic(t, validationMnemonicMarker)
-	templateOwner, _ := newWalletManagerForNode(t, base.Network.Core, templateOwnerMnemonic)
-	templateOther, _ := newWalletManagerForNode(t, base.Network.Core, templateOtherMnemonic)
-	escrowOwner, _ := newWalletManagerForNode(t, base.Network.Core, escrowOwnerMnemonic)
-	validationOwner, _ := newWalletManagerForNode(t, base.Network.Core, validationOwnerMnemonic)
+	templateOwner := localContractWallet(t, base.Network.Core, templateOwnerMnemonic)
+	templateOther := localContractWallet(t, base.Network.Core, templateOtherMnemonic)
+	escrowOwner := localContractWallet(t, base.Network.Core, escrowOwnerMnemonic)
+	validationOwner := localContractWallet(t, base.Network.Core, validationOwnerMnemonic)
 	reader, _ := newWalletManagerForNode(t, base.Network.Bootstrap, "")
 
 	templateOwnerKey := newDKVSKeyPathActor(t, keyFromMnemonic(t, templateOwnerMnemonic, 0))

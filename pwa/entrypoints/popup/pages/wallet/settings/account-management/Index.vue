@@ -9,7 +9,7 @@
         <p v-if="state.last_rehearsal_at">{{ t('accountManagement.ui.lastRehearsal', {value: new Date(state.last_rehearsal_at).toLocaleString()}) }}</p>
         <p v-if="state.error_code" role="alert">{{ state.error_code }}</p>
         <p v-for="module in state.modules.filter(item => item.error_code)" :key="module.name">{{ module.name }}: {{ module.error_code }}</p>
-        <Button variant="outline" :disabled="busy" @click="run(async () => { await accountState.retryNow() })">{{ t('accountManagement.readiness.retryNow') }}</Button>
+        <Button v-if="accountState.canRetryBackup" variant="outline" :disabled="busy" @click="run(async () => { await accountState.retryNow() })">{{ t('accountManagement.readiness.retryNow') }}</Button>
         <template v-if="state.locator">
           <Textarea :model-value="state.locator" readonly />
           <Button variant="outline" @click="copy(state.locator)">{{ t('accountManagement.ui.copyRecoveryCode') }}</Button>

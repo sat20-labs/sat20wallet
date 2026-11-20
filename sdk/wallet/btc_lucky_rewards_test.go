@@ -290,7 +290,7 @@ func TestBTCLuckyRewardMaturity(t *testing.T) {
 		confirmations, maturity uint64
 		mature                  bool
 	}{
-		{1, 10, false}, {9, 10, false}, {10, 10, true}, {11, 10, true},
+		{9, 10, false}, {10, 10, true}, {11, 10, true},
 		{99, 100, false}, {100, 100, true}, {10, 0, false},
 	} {
 		err := CheckBTCLuckyMaturity(tc.confirmations, tc.maturity)

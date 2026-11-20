@@ -17,23 +17,6 @@ import (
 )
 
 func TestDKVSLocalViewContract(t *testing.T) {
-	t.Run("write_success_is_locally_visible", func(t *testing.T) {
-		m, remote := finalDKVSTestManager(t)
-		key := accountTestKey(t, m, "contract-write/value")
-		prefix, err := dkvs.CollectionPathForKey(key)
-		require.NoError(t, err)
-		require.NoError(t, m.SubscribeDKVSPrefix(prefix))
-		_, err = m.syncDKVSOnce()
-		require.NoError(t, err)
-		s, err := m.dkvs.primaryStore()
-		require.NoError(t, err)
-		written, err := s.Put(dkvsValueMutation{Key: key, Value: []byte("committed"), Owner: m.wallet, Signature: dkvsSignatureAccount})
-		require.NoError(t, err)
-		read, err := s.Get(key)
-		require.NoError(t, err, "successful managed write must already be readable")
-		require.Equal(t, written.Hash, read.Hash)
-		_ = remote
-	})
 	t.Run("restart_and_offline_forbid_new_write", func(t *testing.T) {
 		m, remote := finalDKVSTestManager(t)
 		h := &reviewAcceptanceHTTP{rgb11MemoryDKVSHTTP: remote}

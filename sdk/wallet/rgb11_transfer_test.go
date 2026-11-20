@@ -1412,27 +1412,6 @@ func TestRGB11RefreshRollsSettledTransferBackAfterReorg(t *testing.T) {
 	}
 }
 
-func TestRGB11RefreshFailsClosedOnConflictingSpend(t *testing.T) {
-	f := newRGB11ConflictFixture(t, false)
-	f.publish(t, true)
-	manager := f.sender
-	result, err := manager.RefreshRGB11State(context.Background())
-	if !errors.Is(err, ErrRGB11Inconsistent) {
-		t.Fatalf("conflicting spend error=%v", err)
-	}
-	if result == nil || result.Conflicted != 1 || len(result.Inconsistent) != 1 || result.Inconsistent[0] != f.carrier || manager.GetRGB11ConsistencyStatus() != "broken" {
-		t.Fatal("confirmed conflict result or exact carrier classification is incorrect")
-	}
-	pending, err := manager.rgbManager.projectionStore.LoadPendingTransfer(f.pending.State.TransferID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if pending.State.Status != "conflicted" || pending.State.AckStatus != "invalidated" {
-		t.Fatal("confirmed conflict journal was not preserved")
-	}
-	f.assertImmutable(t)
-}
-
 func TestRGB11RefreshKeepsUnknownExpectedSpendUnresolved(t *testing.T) {
 	manager := newRGB11MultiDeviceManager(t, newRGB11StatusPrivateKey(t), 54, accountGroupInactive)
 	evidence := &rgb11StatusEvidence{

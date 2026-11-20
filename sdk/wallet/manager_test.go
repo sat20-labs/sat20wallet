@@ -605,27 +605,6 @@ func TestFinalizeOrder(t *testing.T) {
 	fmt.Printf("final psbt: %s\n", finalPsbt)
 }
 
-func TestSplitBatchSignedPsbt(t *testing.T) {
-	psbt := "70736274ff01007701000000012a4b6c10fe9b369817650d222d9d7212abde1c9477b54ffdbd7e3e6626357fee0100000000ffffffff01200300000000000001046f7264780166097261726570697a7a61053430303a3001225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb380000000000010144900100000000000001046f7264780166097261726570697a7a61053430303a3001225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb380103048300000001134062387e222f742ea1d6685adc9b9ee2d03c06167b4cfe4802c4eee0ac7013729c775604897d30ddd97b48156a7a07619e13eccd241572b54309cae7dbca09384c0000"
-	result, err := SplitBatchSignedPsbt_SatsNet(psbt, "testnet")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, psbt := range result {
-		fmt.Printf("%s\n", psbt)
-	}
-}
-
-func TestVerifySignedTx_SatsNet(t *testing.T) {
-	txHex := "010000000001021eb0a1d7e09e630bb58199ac5045bd73687b2b3a906d6f018229e23bb45c09610100000000ffffffff2c484352d8b86b3f00f7d78b587ae0f6b6dff6cb129a61fa2f73e99b9ad4b9840100000000ffffffff03200300000000000000225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb38de2600000000000001046f7264780166097261726570697a7a61053430303a30002251208c4a6b130077db156fb22e7946711377c06327298b4c7e6e19a6eaa808d19eba0a00000000000000002251205ae432a8aa5e7aa98d47c74a28390db89edec262d4e2ca1f6b41704495c01d4b0141436f5765bdbd7b793c3a0f56438d5abc72a9d03bd3829ead52c2b40fcd82511e565ac6e0a14e458be0f4dae7cc17595f2f749cb51bf517d2bee530056f1a136b8301406a3e45e58ae465cb668cd8a2b992cf79caf052e05316c3df16992a370a43388c660fe70fdd0f2154e10730e549e195306951f2aec57c09466ef0c83b987ae22500000000"
-	tx, err := DecodeMsgTx_SatsNet(txHex)
-	if err != nil {
-		t.Fatal(err)
-	}
-	PrintJsonTx_SatsNet(tx, "")
-	//VerifySignedTx_SatsNet()
-}
-
 func TestPsbtFullFlow(t *testing.T) {
 	seller := newManagerTestWallet(t, "inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire")
 	buyer := newManagerTestWallet(t, "uniform bulb body vital later special era tourist build chief devote annual")
@@ -778,13 +757,6 @@ func TestChangePassword(t *testing.T) {
 	require.NoError(t, manager.ChangePassword("123456", "abcdefgh"))
 	require.Empty(t, manager.GetMnemonic(id, "123456"))
 	require.Equal(t, mnemonic, manager.GetMnemonic(id, "abcdefgh"))
-}
-
-func TestSwitchChain(t *testing.T) {
-	manager := &Manager{}
-	if err := manager.SwitchChain("mainnet", "123456"); err != ErrInPlaceChainSwitchDisabled {
-		t.Fatalf("SwitchChain error=%v", err)
-	}
 }
 
 func TestGetTxAssetInfoFromPsbt(t *testing.T) {

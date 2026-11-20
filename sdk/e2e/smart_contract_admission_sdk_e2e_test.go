@@ -91,7 +91,7 @@ func TestSDKSmartContractsAdmission(t *testing.T) {
 	key := newDKVSKeyPathActor(t, keyFromMnemonic(t, dkvsClientMnemonic, 0))
 	splitToDKVSKeyPathActors(t, base, base.gasAnchor, wallet.GetGasAssetName(),
 		[]int64{50000000, 50000000}, []int64{1000000, 1000000}, []*dkvsKeyPathActor{key, key})
-	owner, _ := newWalletManagerForNode(t, base.Network.Core, dkvsClientMnemonic)
+	owner := localContractWallet(t, base.Network.Core, dkvsClientMnemonic)
 	reader, _ := newWalletManagerForNode(t, base.Network.Bootstrap, "")
 	script, err := wallet.GetP2TRpkScript(owner.GetWallet().GetPaymentPubKey())
 	require.NoError(t, err)

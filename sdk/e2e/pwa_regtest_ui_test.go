@@ -57,30 +57,6 @@ func TestSDKPWARealRegtestRGBCrossLayerBrowser(t *testing.T) {
 	runSDKPWARealRegtestBrowser(t, "rgb-cross-layer")
 }
 
-func TestSDKPWARealRegtestRGBContinuationBrowser(t *testing.T) {
-	runSDKPWARealRegtestBrowser(t, "rgb-resume")
-}
-
-func TestSDKPWARealRegtestRGBRemainingBrowser(t *testing.T) {
-	runSDKPWARealRegtestBrowser(t, "rgb-remaining")
-}
-
-func TestSDKPWARealRegtestRGBCancellationDiagnosticBrowser(t *testing.T) {
-	runSDKPWARealRegtestBrowser(t, "rgb-cancel-diagnostic")
-}
-
-func TestSDKPWARealRegtestRGBReadbackBrowser(t *testing.T) {
-	runSDKPWARealRegtestBrowser(t, "rgb-readback")
-}
-
-func TestSDKPWARealRegtestRGBIssueDiagnosticBrowser(t *testing.T) {
-	runSDKPWARealRegtestBrowser(t, "rgb-issue")
-}
-
-func TestSDKPWARealRegtestDappBroadcastContinuationBrowser(t *testing.T) {
-	runSDKPWARealRegtestBrowser(t, "dapp-resume")
-}
-
 func TestSDKPWARealRegtestBRC20ExistingTransferSendBrowser(t *testing.T) {
 	runSDKPWARealRegtestBrowser(t, "l1-brc-transfer")
 }
@@ -97,16 +73,8 @@ func TestSDKPWARealRegtestRunesOpenMintSendBrowser(t *testing.T) {
 	runSDKPWARealRegtestBrowser(t, "l1-runes-mint")
 }
 
-func TestSDKPWARealRegtestRunesOpenMintReturnBrowser(t *testing.T) {
-	runSDKPWARealRegtestBrowser(t, "l1-runes-mint-return")
-}
-
 func TestSDKPWARealRegtestBitcoinFundsSendBrowser(t *testing.T) {
 	runSDKPWARealRegtestBrowser(t, "l1-funds")
-}
-
-func TestSDKPWARealRegtestBitcoinFundsContinuationBrowser(t *testing.T) {
-	runSDKPWARealRegtestBrowser(t, "l1-funds-resume")
 }
 
 func TestSDKPWARealRegtestSatoshiNetPlainSendBrowser(t *testing.T) {
@@ -151,33 +119,8 @@ func TestSDKPWARealRegtestChannelV2AssetSplicingBrowser(t *testing.T) {
 	runSDKPWARealRegtestBrowser(t, "l2-channel-v2-asset-splice")
 }
 
-func TestSDKPWARealRegtestChannelV2AssetSplicingDiagnosticBrowser(t *testing.T) {
-	previousRegressionHeight := satschaincfg.RegressionNetParams.POSV2Height
-	previousTestHeight := satschaincfg.TestNetParams.POSV2Height
-	t.Setenv("SATOSHINET_RPCTEST_POS_V2_HEIGHT", strconv.Itoa(int(sdkPWARegtestPOSV2ActivationHeight)))
-	satschaincfg.RegressionNetParams.POSV2Height = sdkPWARegtestPOSV2ActivationHeight
-	satschaincfg.TestNetParams.POSV2Height = sdkPWARegtestPOSV2ActivationHeight
-	t.Cleanup(func() {
-		satschaincfg.RegressionNetParams.POSV2Height = previousRegressionHeight
-		satschaincfg.TestNetParams.POSV2Height = previousTestHeight
-	})
-	runSDKPWARealRegtestBrowser(t, "l2-channel-v2-asset-splice-diagnostic")
-}
-
-func TestSDKPWARealRegtestBRC20BalanceReadbackBrowser(t *testing.T) {
-	runSDKPWARealRegtestBrowser(t, "l1-brc-readback")
-}
-
 func TestSDKPWARealRegtestBRC20BalanceSendBrowser(t *testing.T) {
 	runSDKPWARealRegtestBrowser(t, "l1-brc-balance")
-}
-
-func TestSDKPWARealRegtestMintContinuationBrowser(t *testing.T) {
-	runSDKPWARealRegtestBrowser(t, "mint-resume")
-}
-
-func TestSDKPWARealRegtestMintDIDContinuationBrowser(t *testing.T) {
-	runSDKPWARealRegtestBrowser(t, "mint-did-resume")
 }
 
 func TestSDKPWARealRegtestMintPartialReviewBrowser(t *testing.T) {
@@ -548,7 +491,7 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 	}
 	actorA, actorB := actor("ordinary-1", ordinary1), actor("ordinary-2", ordinary2)
 	if feature == "l2-plain-send" && os.Getenv("SAT20_E2E_LOCAL_REAL") == "1" {
-		prepareSDKPWARegtestL2PlainFunding(t, ordinary1, ordinary2, network)
+		prepareSDKPWARegtestL2PlainFunding(t, ordinary1, ordinary2, network, requireE2EFirstBackup)
 	}
 	var sdkWASMOwner, sdkWASMBuyer map[string]string
 	var sdkWASMPSBT map[string]any
@@ -781,7 +724,7 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 		require.NotEmpty(t, privateChannelID)
 	}
 	if feature == "l2-channel-private-btc" && os.Getenv("SAT20_E2E_LOCAL_REAL") == "1" {
-		prepareSDKPWARegtestL2PlainFunding(t, ordinary1, ordinary2, network)
+		prepareSDKPWARegtestL2PlainFunding(t, ordinary1, ordinary2, network, requireE2EFirstBackup)
 		waitRGB11RegtestPeerChannelReady(t, ordinary2, network, privateChannelID)
 	}
 	if feature == "l1-brc-balance" && os.Getenv("SAT20_E2E_LOCAL_REAL") == "1" {

@@ -128,6 +128,15 @@ func (p *Manager) beginAccountAutopayFunding() (func(), error) {
 // that result. An in-use authorization cannot be silently replaced by Confirm
 // or ReusePaidStorage, including a second request which might fund AUTOPAY.
 func (p *Manager) beginAccountStoragePreparation() (*accountStorageAuthorizationSession, error) {
+	if p == nil {
+		return nil, ErrDKVSPathNotSynced
+	}
+	p.accountStorageMu.Lock()
+	stopped := p.accountStorageStopped
+	p.accountStorageMu.Unlock()
+	if stopped {
+		return nil, ErrAccountStorageRuntimeStopped
+	}
 	if err := p.prepareAccountWrite(); err != nil {
 		return nil, err
 	}

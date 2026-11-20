@@ -114,7 +114,6 @@ func coreE2ESegments(selector string) []coreE2ESegment {
 	ordinary := []string{
 		"dkvs_real_paid_cross_instance_prefix_and_CAS",
 		"backup_multiple_wallets_and_subaccounts_control",
-		"RGB11_self_send_cold_restore_and_respend",
 		"RGB11_asset_name_and_transcend_registration_descriptor",
 		"RGB_issuance_in_multiple_subaccounts",
 		"invoice_transfer_every_paid_recovery_boundary",
@@ -141,7 +140,7 @@ func coreE2ESegments(selector string) []coreE2ESegment {
 	if selector == root && pwaTests {
 		// The explicit browser journey keeps its original position and fixtures
 		// in the ordinary segment; native-only runners never build its WASM.
-		ordinary = append(ordinary[:5:5], append([]string{"PWA_RGB11_nonempty_recovery_and_failure_retry"}, ordinary[5:]...)...)
+		ordinary = append(ordinary[:4:4], append([]string{"PWA_RGB11_nonempty_recovery_and_failure_retry"}, ordinary[4:]...)...)
 	}
 	if selector == selectGroups(all) || (selector == root && !pwaTests) {
 		// Ordinary and recovery cases keep their source order while reusing one
@@ -165,7 +164,6 @@ func TestCoreE2ESegmentsNativeKeepsHistoryIsolated(t *testing.T) {
 	groups := []string{
 		"dkvs_real_paid_cross_instance_prefix_and_CAS",
 		"backup_multiple_wallets_and_subaccounts_control",
-		"RGB11_self_send_cold_restore_and_respend",
 		"RGB11_asset_name_and_transcend_registration_descriptor",
 		"RGB_issuance_in_multiple_subaccounts",
 		"invoice_transfer_every_paid_recovery_boundary",
@@ -181,16 +179,16 @@ func TestCoreE2ESegmentsNativeKeepsHistoryIsolated(t *testing.T) {
 	if guardianTests {
 		groups = append(groups, "guardian_two_of_three_and_wrong_knowledge")
 	}
-	expectedCount := 14
+	expectedCount := 13
 	if guardianTests {
 		expectedCount++
 	}
 	require.Len(t, groups, expectedCount)
 	selector := root + "/^(" + strings.Join(groups, "|") + ")$"
-	ordinaryRecovery := append(append([]string(nil), groups[:9]...), groups[10:]...)
+	ordinaryRecovery := append(append([]string(nil), groups[:8]...), groups[9:]...)
 	expected := []coreE2ESegment{
 		{Name: "ordinary-recovery", Run: root + "/^(" + strings.Join(ordinaryRecovery, "|") + ")$"},
-		{Name: "long-history", Run: root + "/^(" + groups[9] + ")$"},
+		{Name: "long-history", Run: root + "/^(" + groups[8] + ")$"},
 	}
 	require.Equal(t, expected, coreE2ESegments(selector))
 	require.False(t, coreChildNeedsWASM(selector))

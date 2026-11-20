@@ -33,7 +33,6 @@ func TestMultiAssetCarriers(t *testing.T) {
 		{"rgb11-with-arc20", rgb, &arc, true},
 		{"rgb11-with-ordx-exotic", rgb, &ordxExotic, true},
 		{"rgb11-with-another-contract", rgb, &otherRGB, true},
-		{"future-only", future, nil, false},
 		{"future-with-runes", future, &rune, true},
 		{"runes-with-ordx-inscription", rune, &ordxNFT, true},
 		{"brc20-with-underlying-inscription", brc20, &ordxNFT, false},

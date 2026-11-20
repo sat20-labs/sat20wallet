@@ -80,14 +80,20 @@ export async function runSDKWASMCases({ check, device, pageErrors, preserveBrows
   }
   const catalog = page => call(page, 'getWalletCatalog')
   const poll = { timeout: 180000, intervals: [250, 500, 1000, 2000] }
-  // Local business needs no remote discovery or backup activation. A local
-  // catalog edit can remain unconfirmed while the wallet is still writable.
+  // A verified inactive root can edit locally without configuring backup.
   const assertLocalAccount = async page => {
     const s = await call(page, 'getAccountView', ['{}'], 'sat20account_wasm')
     assert.deepEqual({ state: s.state, locator: s.locator, mode: s.recovery_mode },
       { state: 'local', locator: '', mode: '' })
     assert.ok(['notConfigured', 'unconfirmed'].includes(s.backup_risk))
     return s
+  }
+  const assertColdLocal = async page => {
+    await expect.poll(async () => {
+      const view = await call(page, 'getAccountView', ['{}'], 'sat20account_wasm')
+      return view.discovery_status
+    }, { timeout: 35000, message: 'cold unlock must verify the inactive mnemonic root' }).toBe('inactive')
+    return assertLocalAccount(page)
   }
   const control = async (action, body = {}) => {
     const response = await fetch(new URL(`/${action}`, fixture.control_url), {
@@ -202,7 +208,7 @@ export async function runSDKWASMCases({ check, device, pageErrors, preserveBrows
       assert.notEqual(address, actor.address)
       await page.reload(); await page.waitForFunction(() => Boolean(window.__SAT20_PWA_VERIFY__))
       await call(page, 'unlockWallet', [actor.password])
-      await assertLocalAccount(page)
+      await assertColdLocal(page)
       assert.equal((await catalog(page)).root_account_id, root)
       assert.equal((await catalog(page)).current_account_index, 1)
       assert.equal((await call(page, 'getWalletAddress', [1])).address, address)
@@ -442,7 +448,7 @@ export async function runSDKWASMCases({ check, device, pageErrors, preserveBrows
       const selected = await catalog(page)
       await page.reload(); await page.waitForFunction(() => Boolean(window.__SAT20_PWA_VERIFY__))
       await call(page, 'unlockWallet', [actor.password])
-      await assertLocalAccount(page)
+      await assertColdLocal(page)
       assert.deepEqual(await catalog(page), selected)
       assert.equal((await call(page, 'getWalletAddress', [0])).address, privateAddress)
       await proveSigner(privatePub, rootPub)

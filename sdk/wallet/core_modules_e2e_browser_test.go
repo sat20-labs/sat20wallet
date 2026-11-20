@@ -67,9 +67,12 @@ func coreRGBBrowserE2E(t *testing.T, source *Manager, cfg coreE2EConfig, chain *
 			Confirmed: status.Confirmed, BlockHeight: status.BlockHeight, BlockHash: status.BlockHash, Confirmations: status.Confirmations}
 	}
 	chain.mu.Unlock()
+	genesisHash, err := source.l1IndexerClient.GetBlockHash(0)
+	coreRequire(t, "read source Bitcoin genesis hash for browser recovery", err)
+	coreAssert(t, len(genesisHash) == 64 && strings.Trim(genesisHash, "0") != "", "source Bitcoin genesis hash is invalid")
 	tip, err := chain.GetTip()
 	coreRequire(t, "read controlled browser Bitcoin tip", err)
-	evidence := map[string]any{"utxos": utxos, "outspends": outspends, "raw": raw, "status": statuses,
+	evidence := map[string]any{"genesis_hash": genesisHash, "utxos": utxos, "outspends": outspends, "raw": raw, "status": statuses,
 		"tip": indexerwire.BitcoinTip{Height: tip.Height, BlockHash: tip.BlockHash}}
 	// Local channel work is not part of account/RGB recovery. Supply the same
 	// persisted funding records a PWA keeps across a reload, using the existing

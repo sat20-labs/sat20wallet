@@ -970,6 +970,7 @@ func (p *Manager) boundAccountStorageWriter(auth AccountStorageAuthorization) (*
 	var root common.Wallet
 	var accountID string
 	var coreID string
+	var resumeWrite bool
 	err := p.withAccountLocalState(false, func() error {
 		location, err := p.AccountIndexerLocation()
 		if err != nil {
@@ -980,12 +981,6 @@ func (p *Manager) boundAccountStorageWriter(auth AccountStorageAuthorization) (*
 		}
 		if err := p.CheckAccountRestore("wallets", AccountManagedDataGlobalScope); err != nil {
 			return err
-		}
-		p.mutex.RLock()
-		writeErr := p.requireAccountManagedWriteLocked()
-		p.mutex.RUnlock()
-		if writeErr != nil {
-			return writeErr
 		}
 		root, err = p.accountManagementRootWallet()
 		if err != nil {
@@ -1000,18 +995,22 @@ func (p *Manager) boundAccountStorageWriter(auth AccountStorageAuthorization) (*
 			return err
 		}
 		store, err = p.accountDKVSStoreForLocation(location)
-		return err
+		if err != nil {
+			return err
+		}
+		resumeWrite = store.manager.scopeReady(store.manager.sessionKey(store.client, "read")) &&
+			!store.manager.scopeReady(store.manager.sessionKey(store.client, "write"))
+		if resumeWrite {
+			return nil // The authorized read below will recheck write eligibility.
+		}
+		p.mutex.RLock()
+		defer p.mutex.RUnlock()
+		return p.requireAccountManagedWriteLocked()
 	})
 	if err != nil {
 		return nil, nil, err
 	}
-	bind, err := p.prepareAccountCoreNodeBinding(root, store)
-	if err != nil {
-		return nil, nil, err
-	}
-	resumeWrite := store.manager.scopeReady(store.manager.sessionKey(store.client, "read")) &&
-		!store.manager.scopeReady(store.manager.sessionKey(store.client, "write"))
-	validate := func() error {
+	validate := func(requireWrite bool) error {
 		return p.withAccountLocalState(false, func() error {
 			location, err := p.AccountIndexerLocation()
 			if err != nil {
@@ -1046,6 +1045,8 @@ func (p *Manager) boundAccountStorageWriter(auth AccountStorageAuthorization) (*
 				if auth.ID == "" || pending.ID != auth.ID {
 					return ErrAccountStorageAuthorizationMissing
 				}
+			}
+			if requireWrite {
 				p.mutex.RLock()
 				writeErr := p.requireAccountManagedWriteLocked()
 				p.mutex.RUnlock()
@@ -1057,23 +1058,31 @@ func (p *Manager) boundAccountStorageWriter(auth AccountStorageAuthorization) (*
 		})
 	}
 	if resumeWrite {
-		if err := validate(); err != nil {
+		if err := validate(false); err != nil {
 			return nil, nil, err
 		}
+	}
+	// Preparation registers the binding prefix. Even that local side effect
+	// must follow validation of the original grant when reopening a session.
+	bind, err := p.prepareAccountCoreNodeBinding(root, store)
+	if err != nil {
+		return nil, nil, err
+	}
+	if resumeWrite {
 		// An explicit, still-authorized retry may reopen this node's session.
 		// Receiving verifies the registered prefixes without rediscovering the
 		// root account, replaying the outbox or starting an inactive worker.
 		if err := store.manager.ensureCurrentSubscription(store.client); err != nil {
 			return nil, nil, err
 		}
-		if err := validate(); err != nil {
-			return nil, nil, err
-		}
+	}
+	if err := validate(true); err != nil {
+		return nil, nil, err
 	}
 	if err := bind(); err != nil {
 		return nil, nil, err
 	}
-	if err := validate(); err != nil {
+	if err := validate(resumeWrite); err != nil {
 		return nil, nil, err
 	}
 	return store, root, nil
@@ -1307,7 +1316,7 @@ func (p *Manager) replaceableImportedRootProfileLocked(rootFingerprint string) b
 // recovery. Wallet records, status and optional management profile become
 // visible together; manager memory is updated only after a successful Flush.
 func (p *Manager) persistPreparedAccountRestoreLocked(prepared *preparedAccountRestore,
-	profile *accountManagementProfile) error {
+	profile *accountManagementProfile, beforeCommit func() error) error {
 	if err := p.accountDBFailure(); err != nil {
 		return err
 	}
@@ -1317,7 +1326,10 @@ func (p *Manager) persistPreparedAccountRestoreLocked(prepared *preparedAccountR
 	if p.accountGeneration != prepared.generation {
 		return errAccountSnapshotChanged
 	}
-	batch := p.db.NewWriteBatch()
+	batch, err := p.newImportBatch(beforeCommit != nil)
+	if err != nil {
+		return err
+	}
 	if batch == nil {
 		return fmt.Errorf("create account restore batch")
 	}
@@ -1350,6 +1362,11 @@ func (p *Manager) persistPreparedAccountRestoreLocked(prepared *preparedAccountR
 	for _, copy := range prepared.copies {
 		if err := p.writeAccountLocal(batch, copy); err != nil {
 			return p.stopAccountDB(err)
+		}
+	}
+	if beforeCommit != nil {
+		if err := beforeCommit(); err != nil {
+			return err
 		}
 	}
 	if err := batch.Flush(); err != nil {
@@ -1493,7 +1510,7 @@ func (p *Manager) RestoreAccountBackupWithResult(value account.Backup, password 
 		p.channelIdentityMu.Lock()
 		releaseRGB11Scope := p.beginRGB11ScopeChange()
 		p.mutex.Lock()
-		err = p.persistPreparedAccountRestoreLocked(prepared, nil)
+		err = p.persistPreparedAccountRestoreLocked(prepared, nil, nil)
 		if err == nil {
 			results = append([]RestoredWalletResult(nil), prepared.results...)
 		}

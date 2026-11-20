@@ -129,12 +129,14 @@ declare interface WalletManager {
   // Imports an existing wallet using a mnemonic and password, and returns the wallet ID.
   importWallet(
     mnemonic: string,
-    password: string
+    password: string,
+    signal?: AbortSignal
   ): Promise<SatsnetResponse<{ walletId: string }>>
 
   recoverAccountManagementFromRootMnemonic(
     mnemonic: string,
-    password: string
+    password: string,
+    signal?: AbortSignal
   ): Promise<SatsnetResponse<RootAccountRecoveryResult>>
 
   recoverAccountManagementFromCurrentWallet(

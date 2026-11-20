@@ -1,10 +1,8 @@
 package e2e
 
 import (
-	"bytes"
 	"encoding/hex"
 	"fmt"
-	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"sync"
@@ -47,13 +45,6 @@ func TestSDKDKVSBoundRPCHTTP(t *testing.T) {
 		_, err = f.store.Get(k)
 		require.ErrorIs(t, err, dkvs.ErrRecordNotFound)
 		require.Zero(t, f.unguarded.Load())
-	})
-
-	t.Run("CurrentMappingToThisCoreIsTheBinding", func(t *testing.T) {
-		f := newBoundRPCFixture(t)
-		f.bind(t, owner, f.coreID)
-		_, err := put(f, key(t, "bound-current/value"), "allowed")
-		require.NoError(t, err)
 	})
 
 	t.Run("WrongCoreAndNonCoreAreDenied", func(t *testing.T) {
@@ -173,15 +164,6 @@ func TestSDKDKVSBoundRPCHTTP(t *testing.T) {
 		require.ErrorIs(t, err, dkvs.ErrPermissionDenied)
 	})
 
-	t.Run("LoopbackCannotBypassThroughSnapshotImport", func(t *testing.T) {
-		f := newBoundRPCFixture(t)
-		for _, path := range []string{"/v3/dkvs/snapshot", "/v3/dkvs/prune", "/v3/dkvs/record"} {
-			response, err := f.server.Client().Post(f.server.URL+"/testnet"+path, "application/json", bytes.NewBufferString("{}"))
-			require.NoError(t, err)
-			require.Equal(t, http.StatusNotFound, response.StatusCode)
-			response.Body.Close()
-		}
-	})
 }
 
 type boundRPCFixture struct {

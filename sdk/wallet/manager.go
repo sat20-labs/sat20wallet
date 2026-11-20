@@ -149,6 +149,7 @@ type Manager struct {
 	dkvs         *dkvsManager
 
 	accountProfile              *accountManagementProfile
+	rootCheck                   accountRootCheck
 	accountSecret               []byte
 	accountPassword             string
 	accountSyncMu               sync.Mutex

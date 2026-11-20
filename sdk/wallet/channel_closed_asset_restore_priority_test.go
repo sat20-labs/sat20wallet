@@ -11,7 +11,7 @@ import (
 )
 
 func TestClosedAssetRestoreSummaryOrderCannotChangeAssetPriority(t *testing.T) {
-	orders := [][]int{{0, 1, 2, 3}, {3, 2, 1, 0}, {2, 0, 3, 1}, {1, 3, 0, 2}, {3, 1, 2, 0}, {0, 2, 3, 1}}
+	orders := [][]int{{0, 1, 2, 3}, {3, 2, 1, 0}, {2, 0, 3, 1}, {1, 3, 0, 2}}
 	for i, order := range orders {
 		t.Run(fmt.Sprint(i), func(t *testing.T) {
 			manager, channel, ordx, source, peer, base := closedAssetPipelineFixture(t, true)

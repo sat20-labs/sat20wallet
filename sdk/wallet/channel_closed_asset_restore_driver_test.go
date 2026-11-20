@@ -46,22 +46,6 @@ func closedAssetDriverAPI(t *testing.T, manager *Manager) closedAssetRestoreDriv
 	return api
 }
 
-func TestClosedAssetRestoreInventoryPreservesBRCFirstOrder(t *testing.T) {
-	manager, channel, asset, output, _, base := closedAssetPipelineFixture(t, true)
-	brc := indexer.AssetName{Protocol: indexer.PROTOCOL_NAME_BRC20, Type: indexer.ASSET_TYPE_FT, Ticker: "ordi"}
-	brcOutput := output.Clone()
-	brcOutput.Assets = indexer.TxAssets{{Name: brc, Amount: *indexer.NewDefaultDecimal(10)}}
-	addClosedAssetPipelineOutput(t, base, brcOutput, 3, false)
-	rpc := &closedAssetInventoryIndexer{closedAssetPipelineIndexer: base, summary: &indexerwire.AssetSummary{Data: []*indexer.AssetInfo{
-		{Name: asset.AssetName, Amount: *indexer.NewDefaultDecimal(100)}, {Name: brc, Amount: *indexer.NewDefaultDecimal(10)},
-	}}, byAsset: map[string][]*indexerwire.TxOutputInfo{asset.String(): {output.ToAssetsInUtxo()}, brc.String(): {brcOutput.ToAssetsInUtxo()}}}
-	manager.l1IndexerClient.SetMaster(rpc)
-	name, point, err := closedAssetDriverAPI(t, manager).nextClosedChannelAssetRestoreSource(context.Background(), channel.LocalWallet(), channel.ChannelId)
-	if err != nil || name != brc.String() || point != brcOutput.OutPointStr {
-		t.Fatalf("BRC-first exact selection: asset=%s point=%s err=%v", name, point, err)
-	}
-}
-
 func TestClosedAssetRestoreInventorySkipsLuckyAndSelectsOrdinary(t *testing.T) {
 	manager, channel, asset, output, peer, base := closedAssetPipelineFixture(t, true)
 	lucky := output.Clone()

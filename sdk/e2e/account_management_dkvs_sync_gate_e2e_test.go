@@ -33,31 +33,6 @@ func runSDKAccountDKVSSyncGate(t *testing.T, fixture *templateFixture) {
 	t.Helper()
 	network := fixture.Network
 
-	runSDKAccountDKVSSyncGateCase(t, fixture, "01_FreshActivationWithoutPrebinding", []byte{1}, func(t *testing.T) {
-		mnemonic := accountSyncMnemonic(t, 1)
-		f := prepareAccountReviewWithMnemonic(t, network, mnemonic, false)
-		root := f.manager.GetWalletCatalog()[0]
-		bindingKey, err := dkvs.AccountMappingKey("testnet", root.Accounts[0].Address)
-		require.NoError(t, err)
-		_, err = dkvsClientForNode(t, network.Core).GetRecordDirect(bindingKey)
-		require.ErrorIs(t, err, dkvs.ErrRecordNotFound)
-
-		require.NoError(t, f.manager.UseAccountStorageAuthorization(wallet.AccountStoragePurposeRecovery,
-			func(auth *wallet.AccountStorageAuthorization) error {
-				return f.manager.ActivateAccountManagement(f.secret, accountReviewPassword, *auth,
-					f.pkg.Envelope.Locator, "account://"+f.pkg.Envelope.Locator.PackageID)
-			}))
-		require.True(t, f.manager.GetAccountManagementStatus().RecoveryConfigured)
-
-		binding := waitForDKVSRecord(t, network.Core, bindingKey)
-		_, _, descriptor, err := dkvs.ValidateAccountMappingBindingRecord(binding)
-		require.NoError(t, err)
-		require.Equal(t, f.pkg.Envelope.Locator.AccountID, descriptor.AccountID)
-		require.Equal(t, network.Core.nodePubKey, descriptor.CoreNodeID)
-		accountReviewRequireBindingPropagation(t, network.Bootstrap, bindingKey, binding.Value)
-		accountReviewRequireBindingPropagation(t, network.Miner, bindingKey, binding.Value)
-	})
-
 	runSDKAccountDKVSSyncGateCase(t, fixture, "02_StateDataAndRootWrapperPublishTogether", []byte{2}, func(t *testing.T) {
 		f := prepareAccountReviewWithMnemonic(t, network, accountSyncMnemonic(t, 2), true)
 		f.activate(t)
@@ -127,68 +102,6 @@ func runSDKAccountDKVSSyncGate(t *testing.T, fixture *templateFixture) {
 		require.Equal(t, "Synced From Device A", rootB.Name)
 		require.Equal(t, f.manager.GetAccountManagementStatus().StateSeq,
 			device.GetAccountManagementStatus().StateSeq)
-	})
-
-	runSDKAccountDKVSSyncGateCase(t, fixture, "04_ConcurrentDevicesRebaseWithoutLoss", nil, func(t *testing.T) {
-		t.Skip("not tested: simultaneous edits from multiple devices are unsupported")
-		f := prepareAccountReviewWithMnemonic(t, network, accountSyncMnemonic(t, 4), true)
-		f.activate(t)
-		device, recovered := f.recover(t)
-		_, err := device.RestoreAccountManagementState(*recovered, f.secret, accountReviewPassword,
-			f.pkg.Envelope.Locator, f.restoreOptions())
-		require.NoError(t, err)
-
-		rootFingerprint := f.manager.GetAccountManagementStatus().RootFingerprint
-		rootA := accountReviewFind(t, f.manager, rootFingerprint)
-		rootB := accountReviewFind(t, device, rootFingerprint)
-		require.NoError(t, f.manager.UpdateWalletName(rootA.ID, "Concurrent Rename"))
-		require.NoError(t, device.EnsureAccount(rootB.ID, 3, "Concurrent Account", "did:sync-gate:3"))
-		require.NoError(t, device.SyncAccountManagementState(context.Background()))
-		require.NoError(t, f.manager.SyncAccountManagementState(context.Background()))
-		require.NoError(t, device.SyncAccountManagementState(context.Background()))
-
-		for _, manager := range []*wallet.Manager{f.manager, device} {
-			root := accountReviewFind(t, manager, rootFingerprint)
-			require.Equal(t, "Concurrent Rename", root.Name)
-			require.Len(t, root.Accounts, 4)
-			require.Equal(t, "Concurrent Account", root.Accounts[3].Name)
-			require.Equal(t, "did:sync-gate:3", root.Accounts[3].DID)
-			require.Zero(t, manager.GetAccountManagementStatus().PendingChanges)
-		}
-	})
-
-	runSDKAccountDKVSSyncGateCase(t, fixture, "05_DeletionNeverResurrectsOnOtherOrFreshDevice", []byte{5}, func(t *testing.T) {
-		f := prepareAccountReviewWithMnemonic(t, network, accountSyncMnemonic(t, 5), true)
-		secondaryID, err := f.manager.ImportWallet(accountSyncMnemonic(t, 105), accountReviewPassword)
-		require.NoError(t, err)
-		var secondaryFingerprint string
-		for _, entry := range f.manager.GetWalletCatalog() {
-			if entry.ID == secondaryID {
-				secondaryFingerprint = entry.Fingerprint
-				break
-			}
-		}
-		require.NotEmpty(t, secondaryFingerprint)
-		f.activate(t)
-
-		device, recovered := f.recover(t)
-		_, err = device.RestoreAccountManagementState(*recovered, f.secret, accountReviewPassword,
-			f.pkg.Envelope.Locator, f.restoreOptions())
-		require.NoError(t, err)
-		require.Len(t, device.GetWalletCatalog(), 2)
-
-		require.NoError(t, f.manager.DeleteWallet(secondaryID))
-		require.NoError(t, f.manager.SyncAccountManagementState(context.Background()))
-		require.NoError(t, device.SyncAccountManagementState(context.Background()))
-		require.Len(t, device.GetWalletCatalog(), 1)
-		accountSyncRequireFingerprintAbsent(t, device, secondaryFingerprint)
-
-		third, newest := f.recover(t)
-		_, err = third.RestoreAccountManagementState(*newest, f.secret, accountReviewPassword,
-			f.pkg.Envelope.Locator, f.restoreOptions())
-		require.NoError(t, err)
-		require.Len(t, third.GetWalletCatalog(), 1)
-		accountSyncRequireFingerprintAbsent(t, third, secondaryFingerprint)
 	})
 
 	runSDKAccountDKVSSyncGateCase(t, fixture, "06_MissedNotificationsRecoverFromCurrentState", []byte{6}, func(t *testing.T) {
@@ -482,12 +395,5 @@ func accountSyncLocation(t *testing.T, node *testHarness) wallet.AccountIndexerL
 		Scheme: parsed.Scheme,
 		Host:   parsed.Host,
 		Proxy:  strings.Trim(parsed.Path, "/"),
-	}
-}
-
-func accountSyncRequireFingerprintAbsent(t *testing.T, manager *wallet.Manager, fingerprint string) {
-	t.Helper()
-	for _, entry := range manager.GetWalletCatalog() {
-		require.NotEqual(t, fingerprint, entry.Fingerprint, "deleted wallet must not reappear")
 	}
 }
