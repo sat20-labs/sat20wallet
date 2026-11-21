@@ -438,7 +438,9 @@ func runSDKWalletBrowserMode(t *testing.T, sdkWASM bool, cases ...string) {
 	}
 	publicContracts := map[string]string{}
 	needsPublic := !sdkWASM && len(cases) == 0
+	needsFaucet := needsPublic
 	for _, name := range cases {
+		needsFaucet = needsFaucet || name == "Tools PWA: Faucet sends sats and receives actual contract-settled GAS"
 		needsPublic = needsPublic || strings.HasPrefix(name, "POS PWA:") ||
 			name == "Tools PWA: direct WASM reconciles Exchange index queries and deployed service status" ||
 			name == "Funds PWA: public BTC withdrawal returns confirmed Bitcoin funds" ||
@@ -446,6 +448,14 @@ func runSDKWalletBrowserMode(t *testing.T, sdkWASM bool, cases ...string) {
 	}
 	if needsPublic {
 		publicContracts = posPWADeployPublicContracts(t, ctx, control, []string{"::", asset})
+	}
+	var faucetAddress string
+	if needsFaucet {
+		faucet := wallet.NewFaucetContract()
+		faucet.AssetName = *indexercommon.NewAssetNameFromString(gas)
+		faucet.Price = "0.001"
+		faucetAddress = wallet.ExtractChannelId(posPWADeployContract(t, ctx, control, faucet, 1))
+		require.NotEmpty(t, faucetAddress)
 	}
 	server := httptest.NewServer(http.HandlerFunc(control.serveHTTP))
 	t.Cleanup(server.Close)
@@ -466,8 +476,9 @@ func runSDKWalletBrowserMode(t *testing.T, sdkWASM bool, cases ...string) {
 		"stake":           map[string]string{"asset": stakeL1, "amount": fmt.Sprint(stakeL1Amount)},
 		"publicContracts": publicContracts,
 		"coreSTPURL":      "http://" + core.stpAddr + "/testnet",
-		"tools":           map[string]string{"evmInitCode": "0x" + hex.EncodeToString(evmInitCode), "evmContractName": "SDKReviewProbe", "gasAsset": gas},
-		"asset":           map[string]string{"key": asset, "type": "ORDX", "ticker": "pwapos"},
+		"tools": map[string]string{"evmInitCode": "0x" + hex.EncodeToString(evmInitCode),
+			"evmContractName": "SDKReviewProbe", "gasAsset": gas, "faucetAddress": faucetAddress},
+		"asset": map[string]string{"key": asset, "type": "ORDX", "ticker": "pwapos"},
 		"amounts": map[string]string{"opening": "1000000", "splicing_btc": "100000", "splicing_asset": "700",
 			"deposit_btc": "10000", "deposit_asset": "600"},
 		"wasmPath": wasmPath, "wasmRuntimePath": wasmRuntimePath,

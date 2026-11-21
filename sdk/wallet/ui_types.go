@@ -177,6 +177,7 @@ type AccountAPI interface {
 
 	// 在付费前核对用户选中的钱包及密码，返回备份清单，不导出私密备份。
 	PreflightRecovery(password string, walletIDs []int64) (*RecoverySummary, error)
+	GetStorageAvailability(ctx context.Context) ([]StorageOption, error)
 	// 按用户选择的存储容量返回报价；0 表示采用现有默认容量。
 	GetStorageOptions(ctx context.Context, recordCount uint64) ([]StorageOption, error)
 	// 只执行用户确认的报价。已有同一存储授权时继续/复用，不再付款。
@@ -192,7 +193,7 @@ type AccountAPI interface {
 	ActivateRecovery(ctx context.Context, sessionID string, req ActivationInput) (*AccountView, error)
 
 	// rehearsal=true 为当前根账户的恢复演练；SDK 限定目标并禁止 Commit。
-	LoadRecovery(ctx context.Context, locator string, rehearsal bool) (*RecoveryView, error)
+	LoadRecovery(ctx context.Context, recoveryFile string, rehearsal bool) (*RecoveryView, error)
 	// 一次提交本次用户输入的全部材料，SDK 验证并返回可确认的恢复清单。
 	// 不再开放 RecoverKnowledge、SetUserShare、ConsumeGuardianResponse。
 	PreviewRecovery(ctx context.Context, sessionID string, factors RecoveryFactors) (*RecoveryView, error)
@@ -297,13 +298,12 @@ type Answer struct {
 
 type RecoveryFactors struct {
 	Answers          []Answer `json:"answers"`
-	UserShare        string   `json:"user_share"`
 	GuardianResponse string   `json:"guardian_response"`
 }
 
 type ActivationInput struct {
 	Password     string          `json:"password"`
-	SavedLocator string          `json:"saved_locator"` // 用户重新输入已保存的最终恢复码，SDK 校验
+	RecoveryFile string          `json:"recovery_file"`
 	Factors      RecoveryFactors `json:"factors"`
 }
 

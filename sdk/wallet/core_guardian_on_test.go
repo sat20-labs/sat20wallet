@@ -18,7 +18,9 @@ func coreGuardianCases(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain, sen
 		blank := coreNewE2EManager(t, cfg, chain, "")
 		pkg, err := blank.LoadAccountRecoveryPackage(material.auth.Location, material.locator)
 		coreRequire(t, "load package for negative test", err)
-		_, err = account.RecoverDKVSShare(pkg.DKVSShareCapsule, pkg.KnowledgeBundle,
+		questions, err := account.OpenRecoveryKnowledge(*pkg, material.userShare)
+		coreRequire(t, "decrypt recovery questions with user share", err)
+		_, err = account.RecoverDKVSShare(pkg.DKVSShareCapsule, questions,
 			[]account.AnswerAttempt{{QuestionID: "one", Answer: "incorrect"}, {QuestionID: "two", Answer: "incorrect"}})
 		coreAssert(t, err != nil && len(blank.GetWalletCatalog()) == 0, "wrong knowledge changed empty wallet state")
 	})

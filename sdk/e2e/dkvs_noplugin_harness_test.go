@@ -21,6 +21,20 @@ import (
 
 var dkvsNoPluginTestArtifacts satoshinetArtifacts
 
+func dkvsArtifactsAt(dir string) satoshinetArtifacts {
+	artifacts := satoshinetArtifacts{
+		coreExecutable:  filepath.Join(dir, "satoshinet-core-dkvs-rpctest"),
+		corePlugin:      filepath.Join(dir, "stpd.so"),
+		minerExecutable: filepath.Join(dir, "satoshinet-miner-dkvs-rpctest"),
+		minerPlugin:     filepath.Join(dir, "wallet.so"),
+	}
+	if runtime.GOOS == "windows" {
+		artifacts.coreExecutable += ".exe"
+		artifacts.minerExecutable += ".exe"
+	}
+	return artifacts
+}
+
 // dkvsNoPluginBuildArtifacts builds the DKVS test runtime in the same role
 // configuration as the production scripts: bootstrap/core use stp_plugin and
 // stpd.so, while the ordinary miner uses wallet_plugin and wallet.so.
@@ -51,16 +65,7 @@ func dkvsNoPluginBuildArtifacts(t *testing.T) satoshinetArtifacts {
 	outputDir := filepath.Join(e2eRuntimeDirectory(t), "dkvs")
 	require.NoError(t, os.MkdirAll(outputDir, 0o755))
 
-	artifacts := satoshinetArtifacts{
-		coreExecutable:  filepath.Join(outputDir, "satoshinet-core-dkvs-rpctest"),
-		corePlugin:      filepath.Join(outputDir, "stpd.so"),
-		minerExecutable: filepath.Join(outputDir, "satoshinet-miner-dkvs-rpctest"),
-		minerPlugin:     filepath.Join(outputDir, "wallet.so"),
-	}
-	if runtime.GOOS == "windows" {
-		artifacts.coreExecutable += ".exe"
-		artifacts.minerExecutable += ".exe"
-	}
+	artifacts := dkvsArtifactsAt(outputDir)
 
 	// A successful normal coreOnly cache can donate Core; the miner plugin
 	// and executable are reused only as a fully published pair.
@@ -257,11 +262,11 @@ func newDKVSNoPluginTemplateFixtureWithArgs(t *testing.T, assets map[string]int6
 		profiles = append(profiles, templateAssetProfile{Name: asset, Asset: asset, Precision: 0,
 			Supply: fmt.Sprintf("%d", assets[asset])})
 	}
-	return newDKVSNoPluginTemplateFixtureWithProfilesAndArgs(t, profiles, bootstrapArgs, coreArgs, minerArgs)
+	return newDKVSNoPluginTemplateFixtureWithProfilesAndArgs(t, profiles, bootstrapArgs, coreArgs, minerArgs, false)
 }
 
 func newDKVSNoPluginTemplateFixtureWithProfilesAndArgs(t *testing.T, profiles []templateAssetProfile,
-	bootstrapArgs, coreArgs, minerArgs []string) *templateFixture {
+	bootstrapArgs, coreArgs, minerArgs []string, scheduledOnly bool) *templateFixture {
 	t.Helper()
 	oldEnableTesting := indexercommon.ENABLE_TESTING
 	indexercommon.ENABLE_TESTING = true
@@ -303,6 +308,15 @@ func newDKVSNoPluginTemplateFixtureWithProfilesAndArgs(t *testing.T, profiles []
 	fakeL1.setNameOwner("alice", primaryDIDOwner.Address)
 	fakeL1.setNameOwner("company", primaryDIDOwner.Address)
 	network := newDKVSNoPluginNetworkWithArgs(t, fakeL1, bootstrapArgs, coreArgs, minerArgs)
+	network.scheduledOnly = scheduledOnly
+	if scheduledOnly {
+		// Both peers must be able to process PoS proposals before funding.
+		require.Eventually(t, func() bool {
+			bootstrapReady, bootstrapErr := network.Bootstrap.Client.GetGenerate()
+			coreReady, coreErr := network.Core.Client.GetGenerate()
+			return bootstrapErr == nil && coreErr == nil && bootstrapReady && coreReady
+		}, 30*time.Second, 100*time.Millisecond, "Bootstrap and Core PoS miners must be ready before funding")
+	}
 
 	gasAnchor := buildAnchorTx(t, templateLockedOutPoint("gas", 0), lockedValue,
 		txAsset(gas, 100000000), gas+"-100000000-0-0", witnessScript, bootstrapKey, lockedPkScript)

@@ -9,26 +9,26 @@ import (
 	"github.com/sat20-labs/rgb11/strict_types"
 )
 
-// An IFA control and a sibling state on the same Bitcoin carrier belong to
-// different RGB transitions. Commit them in one bundle so the carrier is
+// IFA asset and control assignments on the same carrier may require
+// different transitions. Commit them in one bundle so the carrier is
 // consumed once and every previous assignment has exactly one consumer.
 func buildRGB11TwoTransitionBundle(
-	inflationInputs []operations.TransitionInput, inflation strict_types.Value,
-	inflationCommit operations.TransitionCommitment,
+	primaryInputs []operations.TransitionInput, primary strict_types.Value,
+	primaryCommit operations.TransitionCommitment,
 	preservedInputs []operations.TransitionInput, preserved strict_types.Value,
 	preservedCommit operations.TransitionCommitment,
 ) (strict_types.Value, operations.BundleCommitment, error) {
-	if len(inflationInputs) == 0 || len(preservedInputs) == 0 ||
-		inflationCommit.OperationID == preservedCommit.OperationID {
+	if len(primaryInputs) == 0 || len(preservedInputs) == 0 ||
+		primaryCommit.OperationID == preservedCommit.OperationID {
 		return strict_types.Value{}, operations.BundleCommitment{}, operations.ErrBuildTransition
 	}
 	type entry struct {
 		input    operations.TransitionInput
 		consumer [32]byte
 	}
-	entries := make([]entry, 0, len(inflationInputs)+len(preservedInputs))
-	for _, input := range inflationInputs {
-		entries = append(entries, entry{input, inflationCommit.OperationID})
+	entries := make([]entry, 0, len(primaryInputs)+len(preservedInputs))
+	for _, input := range primaryInputs {
+		entries = append(entries, entry{input, primaryCommit.OperationID})
 	}
 	for _, input := range preservedInputs {
 		entries = append(entries, entry{input, preservedCommit.OperationID})
@@ -65,18 +65,18 @@ func buildRGB11TwoTransitionBundle(
 		encoded.Write(item.consumer[:])
 	}
 	writeU16(2)
-	if bytes.Compare(inflationCommit.OperationID[:], preservedCommit.OperationID[:]) < 0 {
-		encoded.Write(inflationCommit.OperationID[:])
-		encoded.Write(inflation.Encoded)
+	if bytes.Compare(primaryCommit.OperationID[:], preservedCommit.OperationID[:]) < 0 {
+		encoded.Write(primaryCommit.OperationID[:])
+		encoded.Write(primary.Encoded)
 		encoded.Write(preservedCommit.OperationID[:])
 		encoded.Write(preserved.Encoded)
 	} else {
 		encoded.Write(preservedCommit.OperationID[:])
 		encoded.Write(preserved.Encoded)
-		encoded.Write(inflationCommit.OperationID[:])
-		encoded.Write(inflation.Encoded)
+		encoded.Write(primaryCommit.OperationID[:])
+		encoded.Write(primary.Encoded)
 	}
-	registry, err := strict_types.RC1Registry()
+	registry, err := strict_types.RC2Registry()
 	if err != nil {
 		return strict_types.Value{}, operations.BundleCommitment{}, err
 	}

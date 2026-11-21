@@ -53,7 +53,7 @@ Strict 指工作区 `rgb11/strict_encoding`：固定整数为小端，集合/字
 | `/personal/<A>/account/root` | `ARWR` + codec u8（当前 1）+ Strict 编码的 Network、AccountID、Nonce、Ciphertext。AES-GCM 密文解开为 `ARWP` + u8(1) 业务载荷：账户 Secret、PackageID、StorageMode、RecordTTL、AutopayContract、可选 GuardianLocation。 | SDK `accountRootWrapperPath`、`encodeAccountRootWrapperEnvelope`；根钱包恢复入口，账户备份同一生命周期。根恢复对象使用稳定的短路径 `account/root`。 |
 | `/personal/<A>/account/state` | `AME1` + nonce(12B) + AES-GCM 密文；明文为 DEFLATE 压缩的 `AMS1` 紧凑状态，包含 RootFingerprint 与 Wallets（Fingerprint、Deleted、Name、Type、Secret、AccountCount、SubAccounts）。 | `accountManagedStatePath` / `SealManagedState`；wallets/global 的当前目录，不在此存 RGB11 完整数据。 |
 | `/personal/<A>/account/index` | `AMIE` + u8(1) + nonce(12B) + AES-GCM 密文；明文 `AMIX` + u8(1) + Strict 条目列表。每项 `Provider, Scope, Key, Codec, Deleted`，按 Provider/Scope 排序，最多 4096 项。 | `ManagedIndexKey` / `SealManagedIndex`；定位分模块备份。 |
-| `/personal/<A>/account/recovery/<P>` | `ACRP` + u8(1) + Strict 紧凑恢复包，详细字段见第 3 节。 | `accountPackagePath` / `EncodeRecoveryPackageStorage`；每个恢复包一个不可变值，Guardian 投递另外处理。 |
+| `/personal/<A>/account/recovery/<P>` | `ACRP` + u8(3) + Strict 紧凑恢复包，详细字段见第 3 节。 | `accountPackagePath` / `EncodeRecoveryPackageStorage`；每个恢复包一个不可变值，Guardian 投递另外处理。 |
 | `/blob/<A>/<entry-id>` | `DKB1` 外壳，Metadata 为空；Data 为 `AMOE` + u8(1) + nonce + AES-GCM 密文，明文 `AMOD` + u8(1) + `Provider, Scope, Codec, Payload`。 | `ManagedModuleKey` / `SealManagedModule`；当前分模块备份，`entry-id` 计算见第 3 节。 |
 
 ### 2.2 Blob、资产与合约
@@ -101,7 +101,7 @@ Strict 指工作区 `rgb11/strict_encoding`：固定整数为小端，集合/字
 
 ### 3.1 账户模块标识与载荷
 
-`ManagedEntryID(provider, scope)` 当前计算：`SHA256("sat20-account-entry-v1\x00" + Strict.String(provider) + Strict.String(scope))`，输出 64 字符小写 hex。字段有明确长度边界。它不含 payload、codec、账户或本地 revision；业务内容改变不会生成新 key。`v1` 位于密码学域分离输入中，不是路径后缀；本轮保留该域，避免将 key 命名清理混入密码学派生规则调整。
+`ManagedEntryID` 使用 HKDF-SHA256 从 `AccountSecret` 派生 32 字节密钥，盐为 32 字节的 `AccountID`，用途标签为 `sat20-account-blob-entry-id-v1`。对 `Strict.String(provider) + Strict.String(scope)` 计算 HMAC-SHA256，输出完整的 64 字符小写 hex。同一账户的业务内容更新仍定位到同一 key。加密索引的 `Key` 字段保存完整 Blob key，读取时按同一规则校验。
 
 `Scope` 是 `global` 或 `<network>/<wallet-fingerprint>/<account-index>`。当前注册的模块为：
 
@@ -115,7 +115,9 @@ Strict 指工作区 `rgb11/strict_encoding`：固定整数为小端，集合/字
 
 ### 3.2 恢复包
 
-`ACRP` 恢复包按顺序保存：AccountID(32B)、PackageID(16B)、RecoveryMode、加密备份 Nonce/Ciphertext、CreatedAt、可选 Guardian locator（MailboxID、ShareID、CapsuleHash）、可选完整 Guardian capsule、DKVS share 的 Nonce/Ciphertext、知识问题列表（ID、Prompt、CaseSensitive、IgnorePunctuation、Salt、Vault、Nonce、Ciphertext）。以 `EncodeRecoveryPackageStorage` 的字段顺序和长度限制为准，省略可从 envelope 推导的重复版本、locator、算法与哈希。不能把加密备份、DKVS share、Guardian share 混为一个明文秘密。
+`ACRP` v3 依次保存 AccountID(32B)、PackageID(16B)、RecoveryMode、加密备份的 Nonce/Ciphertext、可选 Guardian locator（MailboxID、ShareID、CapsuleHash）、可选完整 Guardian capsule、DKVS 分片的 Nonce/Ciphertext，以及问答数据的 Nonce(12B)/Ciphertext。解码器只接受 v3。
+
+题目 ID、题目正文、规范化规则、Salt、Vault 和问答分片密文一起用 AES-256-GCM 加密。SDK 使用用户分片和 PackageID 通过 HKDF-SHA256 派生专用密钥，并将 AccountID、PackageID、版本和恢复模式绑定到认证数据。普通恢复包读取只解析外层，需要题目时使用 `OpenRecoveryKnowledge` 解密。
 
 ### 3.3 DirectMessage 内的业务数据
 

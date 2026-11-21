@@ -26,16 +26,36 @@
               </CardDescription>
             </CardHeader>
             <CardContent class="space-y-3">
+              <p v-if="faucetListState !== 'ready' || !faucetContracts.length" role="status" class="text-xs text-muted-foreground">
+                {{ t(faucetListState === 'loading' ? 'tools.faucet.loadingContracts'
+                  : faucetListState === 'error' ? 'tools.faucet.loadContractsFailed' : 'tools.faucet.noContracts') }}
+              </p>
+              <ul v-else class="max-h-48 space-y-2 overflow-y-auto">
+                <li v-for="contract in faucetContracts" :key="contract.url">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    class="h-auto w-full flex-col items-start gap-1 whitespace-normal px-3 py-2 text-left"
+                    :aria-pressed="faucetContract?.url === contract.url"
+                    :disabled="isFaucetSending"
+                    @click="selectFaucet(contract)"
+                  >
+                    <span>{{ contract.asset }}</span>
+                    <span class="break-all text-xs text-muted-foreground">{{ contract.address }}</span>
+                  </Button>
+                </li>
+              </ul>
               <div class="space-y-1">
-                <Label>{{ t('tools.faucet.contractAddress') }}</Label>
-                <Input v-model="faucetAddress" :placeholder="t('tools.faucet.addressPlaceholder')" />
+                <Label for="faucet-address">{{ t('tools.faucet.contractAddress') }}</Label>
+                <Input id="faucet-address" v-model="faucetAddress" :disabled="isFaucetSending" :placeholder="t('tools.faucet.addressPlaceholder')"
+                  @update:model-value="faucetSelectedUrl = ''" />
                 <p class="text-xs leading-5 text-muted-foreground">{{ t('tools.faucet.addressHint') }}</p>
               </div>
               <div class="space-y-1">
                 <Label>{{ t('tools.faucet.amount') }}</Label>
-                <Input v-model="faucetAmount" type="number" min="1" />
+                <Input v-model="faucetAmount" type="number" min="1" :disabled="isFaucetSending" />
               </div>
-              <Button class="w-full" :disabled="isFaucetSending" @click="sendFaucetSats">
+              <Button class="w-full" :disabled="isFaucetSending || faucetListState === 'loading'" @click="sendFaucetSats">
                 <Icon :icon="isFaucetSending ? 'lucide:loader' : 'lucide:send'" class="h-4 w-4" :class="{ 'animate-spin': isFaucetSending }" />
                 {{ t('tools.faucet.send') }}
               </Button>
@@ -909,6 +929,9 @@
             {{ t('tools.txConfirm.description') }}
           </DialogDescription>
         </DialogHeader>
+        <p v-if="txConfirmPayload?.warning" role="alert" class="rounded-sm border border-border bg-muted p-3 text-sm font-medium">
+          {{ txConfirmPayload.warning }}
+        </p>
         <div class="space-y-2 rounded-sm border border-border bg-muted/30 p-3 text-sm">
           <div v-for="row in txConfirmRows" :key="row.label" class="grid grid-cols-[88px_1fr] gap-3">
             <span class="text-muted-foreground">{{ row.label }}</span>
@@ -1008,6 +1031,20 @@ const contractToolPage = ref<'home' | 'deploy' | 'invoke'>('home')
 const invokeToolPage = ref<'list' | 'detail'>('list')
 
 const faucetAddress = ref('')
+type FaucetContract = { url: string; address: string; asset: string }
+const faucetContracts = ref<FaucetContract[]>([])
+const faucetSelectedUrl = ref('')
+const faucetMatches = computed(() => faucetContracts.value.filter(contract => contract.address === faucetAddress.value.trim()))
+const faucetContract = computed(() => {
+  const matches = faucetMatches.value
+  return matches.find(contract => contract.url === faucetSelectedUrl.value)
+    ?? (matches.length === 1 ? matches[0] : undefined)
+})
+const selectFaucet = (contract: { url: string; address: string }) => {
+  faucetAddress.value = contract.address
+  faucetSelectedUrl.value = contract.url
+}
+const faucetListState = ref<'loading' | 'ready' | 'error'>('loading')
 const faucetAmount = ref('1000')
 const faucetResult = ref('')
 const isFaucetSending = ref(false)
@@ -1317,6 +1354,7 @@ type ToolTxConfirmRow = {
 
 type ToolTxConfirmPayload = {
   purpose: string
+  warning?: string
   to?: string
   asset?: string
   amount?: string
@@ -1518,11 +1556,64 @@ watch(deployContractType, () => {
   if (deployContractType.value === 'evm') void loadEVMCompilerConfig()
 })
 watch([env, network], () => {
+  faucetAddress.value = ''
+  faucetSelectedUrl.value = ''
+  faucetContracts.value = []
+  faucetResult.value = ''
   selectedContractSchemaKey.value = ''
   deployContractForm.value = {}
   contractSchemas.value = []
   void restoreSupportedContractsCache()
 })
+
+const readFaucetStatus = async (contract: FaucetContract) => {
+  try {
+    const [error, result] = await sat20.getDeployedContractStatus(contract.url)
+    if (error || typeof result?.contractStatus !== 'string') return 'statusUnavailable'
+    const status = JSON.parse(result.contractStatus)
+    const terms = status?.Contract
+    if (status?.channelAddr !== contract.address || terms?.contractType !== 'faucet.tc' ||
+        !Number.isSafeInteger(status.status)) return 'statusUnavailable'
+    if (status.status < 100 || status.status >= 200) return 'inactive'
+    const heights = [status.currentBlock, status.enableBlock, terms.startBlock, terms.endBlock]
+    if (heights.some(height => !Number.isSafeInteger(height) || height < 0)) return 'statusUnavailable'
+    if (status.currentBlock < Math.max(status.enableBlock, terms.startBlock) ||
+        (terms.endBlock !== 0 && status.currentBlock > terms.endBlock)) return 'inactive'
+    return 'active'
+  } catch {
+    return 'statusUnavailable'
+  }
+}
+
+watch([activeTab, env, network], async ([tab], _previous, onCleanup) => {
+  if (tab !== 'faucet') return
+
+  let current = true
+  onCleanup(() => { current = false })
+  faucetListState.value = 'loading'
+
+  const [listError, deployed] = await sat20.getDeployedContractsInServer()
+  if (!current) return
+  if (listError || !Array.isArray(deployed?.contractURLs)) {
+    faucetListState.value = 'error'
+    return
+  }
+
+  const contracts = [...new Set(deployed.contractURLs)].flatMap((url: unknown) => {
+    const match = typeof url === 'string' && /^([^_]+)_(.+)_faucet\.tc$/.exec(url)
+    return match ? [{ url: match[0], address: match[1], asset: match[2] }] : []
+  })
+  faucetContracts.value = contracts
+  faucetListState.value = 'ready'
+
+  const sgas = contracts.filter(contract => contract.asset === 'brc20:f:sgas')
+  if (sgas.length !== 1 || faucetAddress.value.trim()) return
+
+  const [contract] = sgas
+  if (await readFaucetStatus(contract) === 'active' && current && !faucetAddress.value.trim()) {
+    selectFaucet(contract)
+  }
+}, { immediate: true })
 
 onMounted(() => {
   void restoreSupportedContractsCache()
@@ -1550,21 +1641,47 @@ const compareDecimalStrings = (a: unknown, b: unknown) => {
 }
 const isPositiveDecimalString = (value: unknown) => compareDecimalStrings(value, '0') > 0
 
+const faucetReviewKey = () => JSON.stringify([
+  env.value, network.value, walletStore.rootAccountId, walletStore.walletId,
+  walletStore.accountIndex, walletStore.address, faucetAddress.value.trim(),
+  faucetAmount.value, faucetContract.value?.url, faucetMatches.value.length > 0,
+])
+
 const sendFaucetSats = async () => {
+  if (isFaucetSending.value || faucetListState.value === 'loading') return
   try {
     isFaucetSending.value = true
     faucetResult.value = ''
     const destinationAddress = faucetAddress.value.trim()
     if (!destinationAddress) throw new Error(t('tools.faucet.addressRequired'))
     const amount = String(parsePositiveInteger(faucetAmount.value, t('tools.faucet.amount')))
+    const contract = faucetContract.value
+    if (!contract && faucetSelectedUrl.value) throw new Error(t('tools.faucet.statusUnavailable'))
+    if (!contract && faucetMatches.value.length > 0) throw new Error(t('tools.faucet.selectContract'))
+    const reviewKey = faucetReviewKey()
+    const assertReviewCurrent = () => {
+      if (faucetReviewKey() !== reviewKey) throw new Error(t('tools.txConfirm.contextChanged'))
+    }
+    const checkStatus = async () => {
+      if (!contract) return
+      const status = await readFaucetStatus(contract)
+      if (status !== 'active') throw new Error(t(`tools.faucet.${status}`))
+    }
+    await checkStatus()
+    assertReviewCurrent()
     const confirmed = await confirmToolTransaction({
-      purpose: t('tools.txConfirm.purposes.faucetGas'),
+      purpose: t(contract ? 'tools.txConfirm.purposes.faucet' : 'tools.faucet.plainTransfer'),
+      warning: contract ? undefined : t('tools.faucet.unverifiedWarning'),
       to: destinationAddress,
       asset: displayAssetName('::'),
       amount,
       network: l2NetworkLabel(),
+      details: contract ? [{ label: t('tools.faucet.payoutAsset'), value: contract.asset }] : undefined,
     })
     if (!confirmed) return
+    assertReviewCurrent()
+    await checkStatus()
+    assertReviewCurrent()
     const [err, result] = await sat20.sendAssets_SatsNet(destinationAddress, '::', amount, '')
     if (err) throw err
     const txid = result?.txId || ''

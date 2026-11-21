@@ -85,7 +85,7 @@ func runNativePaidUI(t *testing.T) {
 	created, err := owner.mgr.CreateRecovery(ctx, nativeUISetupReq(owner.mgr, owner.password))
 	require.NoError(t, err)
 	_, err = owner.mgr.ActivateRecovery(ctx, created.SessionID, wallet.ActivationInput{
-		Password: owner.password, SavedLocator: "not-the-saved-code", Factors: nativeUIFactors(t, created)})
+		Password: owner.password, RecoveryFile: "not-the-saved-code", Factors: nativeUIFactors()})
 	require.Error(t, err)
 	nativeUIActivate(t, owner, created)
 	require.Equal(t, before, owner.mgr.GetWalletCatalog())
@@ -121,9 +121,9 @@ func runNativePaidUI(t *testing.T) {
 		v, e := owner.mgr.RefreshAccount(ctx)
 		return e == nil && v.Autopay != nil && v.Autopay.Status == "ready"
 	}, 60*time.Second, 200*time.Millisecond)
-	rehearsal, err := owner.mgr.LoadRecovery(ctx, created.Locator, true)
+	rehearsal, err := owner.mgr.LoadRecovery(ctx, nativeUIRecoveryFile(t, created), true)
 	require.NoError(t, err)
-	preview, err := owner.mgr.PreviewRecovery(ctx, rehearsal.SessionID, nativeUIFactors(t, created))
+	preview, err := owner.mgr.PreviewRecovery(ctx, rehearsal.SessionID, nativeUIFactors())
 	require.NoError(t, err)
 	require.False(t, preview.CanCommit)
 	require.Len(t, preview.Summary.Wallets, len(before))

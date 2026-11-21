@@ -61,7 +61,9 @@ func runSDKAccountGuardianIdentitySurvivesAccountRecovery(t *testing.T, network 
 			} else {
 				loaded, err := fresh.LoadAccountRecoveryPackage(g.location, g.pkg.Envelope.Locator)
 				require.NoError(t, err)
-				knowledge, err := account.RecoverDKVSShare(loaded.DKVSShareCapsule, loaded.KnowledgeBundle, e2eKnowledgeAnswers())
+				questions, err := account.OpenRecoveryKnowledge(*loaded, g.pkg.UserShare)
+				require.NoError(t, err)
+				knowledge, err := account.RecoverDKVSShare(loaded.DKVSShareCapsule, questions, e2eKnowledgeAnswers())
 				require.NoError(t, err)
 				backup, secret, err := account.RecoverAccount(loaded.Envelope, g.pkg.UserShare, knowledge)
 				require.NoError(t, err)

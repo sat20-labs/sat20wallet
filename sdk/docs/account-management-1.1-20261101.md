@@ -10,7 +10,7 @@
 
 ## 核心对象和远端版本
 
-固定 wrapper 保存账户解密材料、当前恢复包及存储配置。固定 index 只管理 provider、scope、key、codec 和明确删除标记。wallets/global 保存钱包资料；RGB、SilentPay 等复用原 provider/scope payload，分别保存独立 KV。恢复包只负责根钱包或解密能力恢复，不承担全部业务快照。
+固定 wrapper 保存账户解密材料、当前恢复包及存储配置。固定 index 只管理 provider、scope、key、codec 和明确删除标记。wallets/global 保存钱包资料和 SilentPay 启用标记。RGB 恢复数据按 provider/scope 保存独立 KV。恢复包只负责根钱包或解密能力恢复，不承担全部业务快照。
 
 DKVS Seq 就是各 KV 的远端版本。账户 value 不另存 Revision；移除 ManagedState.Revision、钱包项 Revision，以及绑定大 blob 的 DataRevision/DataHash。Version/Codec 仅表示格式。模块原有业务 payload 版本不改。本地变更计数只用于排队及 ACK，区分发送 N 和后来 N+1，不上传、不跨设备比较。
 
@@ -84,11 +84,11 @@ wrapper、index、恢复包、模块完整副本不随远端 TTL 删除。确认
 | --- | --- | --- |
 | wrapper | `/personal/<AccountID>/account/root-key-wrapper/current` | 账户根保护的格式/Network/AccountID/Nonce/Ciphertext；解密为 Secret、PackageID、StorageMode、RecordTTL、AutopayContract。删重复 RecoveryMode/PublicLocator/RecoveryConfigured，不加 IndexKey。 |
 | index | `/personal/<AccountID>/account/index` | 账户密钥加密；Version、Entries，每项 Provider/Scope/Key/Codec/Deleted。不放内容 hash、ACK、dirty、时间和进度。只接受当前账户受管 key。 |
-| wallets/global | `/personal/<AccountID>/account/state` | 加密的 Version、RootFingerprint、Wallets；每钱包 Fingerprint/Deleted/Name/Type/Secret/AccountCount/SubAccounts，子账户 Index/Name/DID。删除项不带多余秘密。不含任何 Revision、DataRevision、DataHash。 |
-| 模块 | `/blob/<AccountID>/<EntryID>` | EntryID 为 Provider 和规范 Scope 无歧义编码的完整 SHA-256 hex，不截断、不按内容生成；64 字节段满足 DKVS 现有限制。DKB1 Metadata 为空，Data 为账户加密的格式/nonce/ciphertext；解密 Provider/Scope/Codec/Payload。认证绑定账户、网络、key。 |
-| 恢复包 | `/personal/<AccountID>/account/recovery/<PackageID>` | 沿用主要紧凑编码，增加可选 GuardianCapsule 密文与引用。UserShare 不明文上传。TTL 重传同 PackageID、原保护内容。 |
+| wallets/global | `/personal/<AccountID>/account/state` | `wallets-v2` 加密记录。钱包条目包含 Fingerprint、Deleted、Name、Type、Secret、AccountCount、SubAccounts 和 SPEnabled。子账户包含 Index、Name 和 DID，SPEnabled 保存已启用 SilentPay 的子账户索引。删除项只保留标识和删除标记。 |
+| 模块 | `/blob/<AccountID>/<EntryID>` | EntryID 为 Provider 和规范 Scope 紧凑编码的完整 HMAC-SHA256 hex，密钥从 AccountSecret 派生。DKB1 Metadata 为空，Data 为账户加密的格式/nonce/ciphertext；解密 Provider/Scope/Codec/Payload。认证绑定账户、网络、key。 |
+| 恢复包 | `/personal/<AccountID>/account/recovery/<PackageID>` | 紧凑编码 v3，移除创建时间。问答数据用 UserShare 派生的密钥加密，DKVS 保存密文以及可选的 GuardianCapsule 密文与引用。TTL 重传同 PackageID、原密文。 |
 
-RGB payload 保留 RecoveryPackage 的业务 Version/WalletID/AccountIndex/EngineBuildID/ProjectionRecords/EngineRecords，SnapshotRecord 为 Key/Value，完整证明、pending/transfer、预约、consignment 由 RGB 校验。SilentPay 先复用已启用 scope 的字节 1；启用登记，删除必须明确意图，不按一次 Export 缺项推断。通道、文档等 payload 待各自明确，不编造字段。
+RGB payload 保留 RecoveryPackage 的业务 Version/WalletID/AccountIndex/EngineBuildID/ProjectionRecords/EngineRecords，SnapshotRecord 为 Key/Value，完整证明、pending/transfer、预约、consignment 由 RGB 校验。SilentPay 启用时只更新钱包 state。同一钱包的多设备合并保留双方已启用的子账户索引。SilentPay 扫描结果和进度保存在本地。
 
 Core binding `/account/<network>/<rootAddress>`、guardian share `/mail/<mailbox>/share/<package>/<share>`、公开 RGB `/contract/rgb11/<contractID>`、Direct mailbox `/mail/<recipient>/msg/<sender>/<messageID>` 保持原职责，不纳入个人备份 ACK。binding 内容相同不重写。RGB11_ACK 业务消息不是 DKVS 写 ACK。不新增/依赖 ACCOUNT_MANAGED_ACTIVE 通道。新协议退出旧整体 `account-managed-data` blob，不双写。
 

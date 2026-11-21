@@ -462,6 +462,7 @@ func activateNativeIfacePOS(t *testing.T, ctx context.Context, network *realSato
 		require.Equal(t, expectedHeight-1, baselineHeight,
 			"only one real SDK transaction may advance each scheduled activation height")
 		baselineBlock := blockAtHeight(t, network.Bootstrap, baselineHeight)
+		requireE2EAccountWrite(t, ordinaryA)
 		submittedAt := time.Now()
 		tx, err := ordinaryA.SendAssets_SatsNet(ordinaryA.GetWallet().GetAddress(), wallet.PLAIN_ASSET.String(), "10000", nil)
 		require.NoError(t, err, "ordinary-1 real SDK self-send for POS activation height %d", expectedHeight)

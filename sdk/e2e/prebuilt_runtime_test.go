@@ -61,6 +61,11 @@ func stagePrebuiltSatoshiNetArtifacts(t *testing.T, variant string, coreOnly boo
 	}
 	defer e2ePhase(t, "node_prebuilt_stage")()
 	require.Contains(t, []string{"normal", "dkvs"}, variant)
+	if bundle.CoreInputs != "" {
+		inputs, err := captureBuildInputs(false)
+		require.NoError(t, err)
+		require.Equal(t, bundle.CoreInputs, fingerprintPWABuildInputs(inputs), "PWA Core build inputs changed during this run")
+	}
 	output := filepath.Join(e2eRuntimeDirectory(t), variant)
 	require.NoError(t, os.MkdirAll(output, 0700))
 	coreName, minerName := "satoshinet-core-rpctest", "satoshinet-miner-rpctest"

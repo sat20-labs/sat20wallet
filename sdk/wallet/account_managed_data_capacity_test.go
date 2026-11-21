@@ -170,7 +170,7 @@ func TestModuleCapacityKeepsRGBProof(t *testing.T) {
 		t.Fatal("confirmed remote RGB11 module does not contain the issued proof")
 	}
 
-	walletModule, err := accountEntry(accountID, "wallets", AccountManagedDataGlobalScope)
+	walletModule, err := accountEntry(nil, accountID, "wallets", AccountManagedDataGlobalScope)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestModuleCapacityKeepsRGBProof(t *testing.T) {
 		beforeRemote[key] = value
 	}
 
-	capacityEntry, err := accountEntry(accountID, "zz-capacity", scope)
+	capacityEntry, err := accountEntry(secret, accountID, "zz-capacity", scope)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +291,7 @@ func TestModuleCapacityKeepsRGBProof(t *testing.T) {
 		localCapacity.Provider != capacityEntry.Provider || localCapacity.Scope != capacityEntry.Scope {
 		t.Fatal("capacity failure changed the durable module identity")
 	}
-	pendingEntry, err := accountEntry(localCapacity.AccountID, localCapacity.Provider, localCapacity.Scope)
+	pendingEntry, err := accountEntry(secret, localCapacity.AccountID, localCapacity.Provider, localCapacity.Scope)
 	if err != nil || pendingEntry != capacityEntry ||
 		localCapacity.Key != "" && localCapacity.Key != capacityEntry.Key ||
 		localCapacity.Codec != "" && localCapacity.Codec != capacityEntry.Codec {

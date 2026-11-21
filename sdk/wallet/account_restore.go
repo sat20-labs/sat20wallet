@@ -96,7 +96,7 @@ func (p *Manager) loadAccountCopies(store *dkvsStore, root common.Wallet,
 		if entry.Deleted {
 			continue
 		}
-		if err := store.rememberAccountModule(accountID, entry); err != nil {
+		if err := store.rememberAccountModule(secret, accountID, entry); err != nil {
 			return nil, err
 		}
 		if err := store.WaitReady(entry.Key); err != nil {
@@ -141,7 +141,7 @@ func validateAccountCopies(value RecoveredAccountManagementState, secret []byte,
 	if err := validateAccountWalletState(state); err != nil {
 		return value, err
 	}
-	index, err := account.NormalizeManagedIndex(locator.AccountID, value.Index)
+	index, err := account.NormalizeManagedIndex(secret, locator.AccountID, value.Index)
 	if err != nil {
 		return value, err
 	}
@@ -281,6 +281,21 @@ func (p *Manager) restoreAccountCopies(value RecoveredAccountManagementState, se
 		}
 		return p.restoredCatalogResults(), nil
 	}
+	// Preserve opt-ins from an existing root without an account profile. The
+	// same wallet generation must still be current when the restore commits.
+	var repairedWallets []byte
+	p.mutex.RLock()
+	generation := p.accountGeneration
+	keepRoot := allowedRoot != "" && allowedRoot == value.State.RootFingerprint && p.accountProfile == nil
+	repaired := keepRoot && mergeWalletSilentPay(findManagedWallet(&value.State, allowedRoot),
+		p.walletInfoByFingerprintLocked(allowedRoot))
+	p.mutex.RUnlock()
+	if repaired {
+		repairedWallets, err = account.SealManagedState(secret, locator.AccountID, value.State, nil)
+		if err != nil {
+			return nil, err
+		}
+	}
 	backup, err := account.BackupFromManagedState(value.State)
 	if err != nil {
 		return nil, err
@@ -289,6 +304,9 @@ func (p *Manager) restoreAccountCopies(value RecoveredAccountManagementState, se
 	prepared, err := p.prepareAccountRestoreWithRootLocked(backup, password, allowedRoot)
 	if err != nil {
 		return nil, err
+	}
+	if allowedRoot != "" && prepared.generation != generation {
+		return nil, errAccountSnapshotChanged
 	}
 	rootInfo := walletInfoByFingerprintInMap(prepared.wallets, value.State.RootFingerprint)
 	if rootInfo == nil || rootInfo.Wallet == nil {
@@ -336,6 +354,10 @@ func (p *Manager) restoreAccountCopies(value RecoveredAccountManagementState, se
 			Baseline: cloneDKVSRecord(copy.Record), Generation: 1, Captured: 1, Confirmed: 1}
 		if copy.Entry.Provider != "account" && copy.Entry.Provider != "wallets" {
 			local.Restoring = true
+		}
+		if repaired && copy.Entry.Provider == "wallets" && copy.Entry.Scope == AccountManagedDataGlobalScope {
+			local.Value = repairedWallets
+			local.Generation, local.Captured = 2, 2
 		}
 		if len(copy.Value) == 0 {
 			local.Captured, local.Confirmed, local.LastError = 0, 0, "account module is missing remotely"

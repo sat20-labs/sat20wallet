@@ -302,18 +302,17 @@ func TestSDKPWARealRegtestRGB11StandardRecoveryDirectReturn(t *testing.T) {
 	require.Positive(t, deployOperationGas)
 
 	channel := ensureRGB11RegtestChannel(t, ordinaryA, network, mineL1)
-	aCost := rgb11RegtestPaidStorageCost(t, ordinaryA)
-	bCost := rgb11RegtestPaidStorageCost(t, ordinaryB)
-	ensureRGB11RegtestAccountManagement(t, ordinaryA)
-	ensureRGB11RegtestAccountManagement(t, ordinaryB)
+	for _, manager := range []*wallet.Manager{ordinaryA, ordinaryB} {
+		ensureRGB11RegtestAccountManagement(t, manager)
+		if !manager.GetAccountManagementStatus().RecoveryConfigured {
+			temporary, err := manager.ConfirmAccountStorage(wallet.AccountStorageTemporary, 100)
+			require.NoError(t, err)
+			ensureRGB11RegtestRecoveryPackage(t, manager, temporary)
+			requireE2EFirstBackup(t, manager)
+		}
+	}
 	aAuth, aNeedsPayment := reusableRGB11RegtestPaidStorage(t, ordinaryA)
 	bAuth, bNeedsPayment := reusableRGB11RegtestPaidStorage(t, ordinaryB)
-	bTarget := bCost + sdkOperationGas
-	bBalanceBeforeFunding := rgb11RegtestSgasBalance(t, ordinaryB)
-	bFundingShortfall := int64(0)
-	if bNeedsPayment && bBalanceBeforeFunding < bTarget {
-		bFundingShortfall = bTarget - bBalanceBeforeFunding
-	}
 	// Budget only unfinished real operations. An existing operating reserve is
 	// reused at its actual remaining size, not refilled to the first-run quote.
 	stateJSON, err := ordinaryA.QueryContract(&wallet.ContractQueryRequest{
@@ -345,23 +344,34 @@ func TestSDKPWARealRegtestRGB11StandardRecoveryDirectReturn(t *testing.T) {
 			gasFunding = 0
 		}
 	}
-	sgasTarget := bFundingShortfall
-	if aNeedsPayment {
-		sgasTarget += aCost + sdkOperationGas
-	}
+	// Paid quotes require the live contract, so fund its operator costs first.
+	sgasTarget := int64(0)
 	if needsDeploy {
 		sgasTarget += deployOperationGas
 	}
 	if gasFunding > 0 {
 		sgasTarget += gasFunding + sdkOperationGas
 	}
-	t.Logf("remaining real budget: deploy=%t paid_A=%t paid_B=%t B_shortfall=%d gas_funding=%d operating_reserve=%d A_SGAS_target=%d",
-		needsDeploy, aNeedsPayment, bNeedsPayment, bFundingShortfall, gasFunding, gasQuote, sgasTarget)
+	t.Logf("AUTOPAY operator budget: deploy=%t gas_funding=%d operating_reserve=%d A_SGAS_target=%d",
+		needsDeploy, gasFunding, gasQuote, sgasTarget)
 	if sgasTarget > 0 {
 		ensureRGB11RegtestSgas(t, ordinaryA, channel, network, mineL1, sgasTarget)
 	}
 	autopayBudget := ensureRGB11RegtestAutopay(t, ordinaryA, network, defaults,
 		gasQuote, triggerFee+resultFee, !needsDeploy && gasFunding == 0)
+	sgasTarget = 0
+	if aNeedsPayment {
+		sgasTarget = rgb11RegtestPaidStorageCost(t, ordinaryA) + sdkOperationGas
+	}
+	var bTarget, bFundingShortfall int64
+	if bNeedsPayment {
+		bTarget = rgb11RegtestPaidStorageCost(t, ordinaryB) + sdkOperationGas
+		bFundingShortfall = max(0, bTarget-rgb11RegtestSgasBalance(t, ordinaryB))
+		sgasTarget += bFundingShortfall
+	}
+	if sgasTarget > 0 {
+		ensureRGB11RegtestSgas(t, ordinaryA, channel, network, mineL1, sgasTarget)
+	}
 	if aNeedsPayment {
 		aAuth = confirmRGB11RegtestPaidStorage(t, ordinaryA, ordinaryA, network)
 	}
@@ -380,6 +390,8 @@ func TestSDKPWARealRegtestRGB11StandardRecoveryDirectReturn(t *testing.T) {
 
 	aPackage, _, _ := ensureRGB11RegtestRecoveryPackage(t, ordinaryA, aAuth)
 	bPackage, bUserSharePath, bPublicLocator := ensureRGB11RegtestRecoveryPackage(t, ordinaryB, bAuth)
+	require.Equal(t, wallet.AccountStoragePaid, ordinaryA.GetAccountManagementStatus().StorageMode)
+	require.Equal(t, wallet.AccountStoragePaid, ordinaryB.GetAccountManagementStatus().StorageMode)
 	aRootID, err := ordinaryA.RootAccountID()
 	require.NoError(t, err)
 	bRootID, err := ordinaryB.RootAccountID()
@@ -816,7 +828,8 @@ func ensureRGB11RegtestAutopay(t *testing.T, manager *wallet.Manager, network *r
 		} `json:"details"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(infoJSON), &info))
-	if info.Details.Exists != nil && !*info.Details.Exists {
+	created := info.Details.Exists != nil && !*info.Details.Exists
+	if created {
 		content, contentErr := defaults.AutopayContent()
 		require.NoError(t, contentErr)
 		deployed, deployErr := manager.DeployUnifiedContract(&wallet.ContractDeployRequest{
@@ -887,6 +900,12 @@ func ensureRGB11RegtestAutopay(t *testing.T, manager *wallet.Manager, network *r
 	require.Greater(t, remainingBudget, int64(0), "operating budget exhausted during funding")
 	require.GreaterOrEqual(t, verifiedGas.Cmp(new(big.Rat).SetInt64(remainingBudget*perSettlementGas)), 0,
 		"remaining gas must cover the unconsumed portion of the explicit settlement budget")
+	require.Equal(t, "active", state.Status, "the funded contract must be open for paid storage")
+	if created {
+		require.Empty(t, state.Delegates, "operator funding alone must open the contract to the first delegate")
+		require.Zero(t, state.PaidBlocks)
+		require.Zero(t, state.LastPayHeight)
+	}
 	return rgb11RegtestAutopayBudget{
 		StartingGasBalance: new(big.Rat).Set(currentGas),
 		FundingAmount:      new(big.Rat).Set(fundingAmount),
@@ -964,6 +983,13 @@ func ensureRGB11RegtestChannel(t *testing.T, manager *wallet.Manager, network *r
 	}
 	channel := find()
 	if channel == nil {
+		if manager.GetAccountManagementStatus().RecoveryConfigured {
+			ctx, cancel := context.WithTimeout(t.Context(), rpcReadyTimeout)
+			defer cancel()
+			require.NoError(t, manager.WaitAccountManagedDataReady(ctx))
+		} else {
+			requireE2EInactive(t, manager, rgb11RegtestWalletPassword)
+		}
 		channelID, openErr := manager.OpenChannel(2, 50_000, nil, "RGB11 real regtest recovery")
 		require.NoError(t, openErr)
 		require.Equal(t, expectedID, channelID)
@@ -1255,6 +1281,7 @@ func confirmRGB11RegtestPaidStorage(t *testing.T, manager, heartbeat *wallet.Man
 func ensureRGB11RegtestRecoveryPackage(t *testing.T, manager *wallet.Manager,
 	authorization *wallet.AccountStorageAuthorization) (*account.RecoveryPackage, string, string) {
 	t.Helper()
+	require.NotNil(t, authorization)
 	status := manager.GetAccountManagementStatus()
 	accountID, err := manager.RootAccountID()
 	require.NoError(t, err)
@@ -1266,12 +1293,12 @@ func ensureRGB11RegtestRecoveryPackage(t *testing.T, manager *wallet.Manager,
 	require.NotEmpty(t, rootBackup.Wallets)
 	rootMnemonic := string(rootBackup.Wallets[0].Secret)
 	require.NotEmpty(t, rootMnemonic)
-	userSharePath := rgb11RegtestUserSharePath(t, accountID)
-	if status.RecoveryConfigured {
+	if status.RecoveryConfigured && status.StorageMode == authorization.Mode {
 		mode := account.RecoveryMode(status.RecoveryMode)
 		require.Contains(t, []account.RecoveryMode{account.RecoveryMode2Of2, account.RecoveryMode2Of3}, mode)
 		locator := account.Locator{Version: account.Version, AccountID: accountID,
 			PackageID: status.PackageID, RecoveryMode: mode}
+		userSharePath := rgb11RegtestUserSharePath(t, locator)
 		if material := sdkRegtestRecoveryMaterialFor(t, locator); material != nil {
 			userSharePath = material.UserSharePath
 		}
@@ -1289,11 +1316,16 @@ func ensureRGB11RegtestRecoveryPackage(t *testing.T, manager *wallet.Manager,
 		require.Equal(t, accountID, status.AccountID)
 		return pkg, userSharePath, sdkRegtestSignedRecoveryLocator(t, manager, authorization, locator)
 	}
+	if status.RecoveryConfigured {
+		require.Equal(t, wallet.AccountStorageTemporary, status.StorageMode)
+		require.Equal(t, wallet.AccountStoragePaid, authorization.Mode)
+	}
 	packageValue, err := manager.CreateAccountRecoveryPackage(account.CreateOptions{
 		AccountID: accountID, Backup: rootBackup, RecoveryMode: account.RecoveryMode2Of2,
 		Questions: e2eKnowledgeQuestions(),
 	})
 	require.NoError(t, err)
+	userSharePath := rgb11RegtestUserSharePath(t, packageValue.Envelope.Locator)
 	storeRGB11RegtestUserShare(t, userSharePath, packageValue.UserShare)
 	publicLocator := sdkRegtestSignedRecoveryLocator(t, manager, authorization, packageValue.Envelope.Locator)
 	var recoveredSecret []byte
@@ -1347,19 +1379,23 @@ func recoverRGB11RegtestPackage(t *testing.T, pkg *account.RecoveryPackage,
 	if pkg == nil {
 		return account.Backup{}, nil, errors.New("recovery package is missing")
 	}
-	share, err := account.RecoverDKVSShare(pkg.DKVSShareCapsule, pkg.KnowledgeBundle, sdkRegtestRecoveryAnswers(t, pkg))
+	questions, err := account.OpenRecoveryKnowledge(*pkg, userShare)
+	if err != nil {
+		return account.Backup{}, nil, err
+	}
+	share, err := account.RecoverDKVSShare(pkg.DKVSShareCapsule, questions, sdkRegtestRecoveryAnswers(t, pkg.Envelope.Locator, questions))
 	if err != nil {
 		return account.Backup{}, nil, err
 	}
 	return account.RecoverAccount(pkg.Envelope, userShare, share)
 }
 
-func rgb11RegtestUserSharePath(t *testing.T, accountID string) string {
+func rgb11RegtestUserSharePath(t *testing.T, locator account.Locator) string {
 	t.Helper()
 	runtimeDir := os.Getenv("SAT20_REAL_REGTEST_RUNTIME")
 	require.True(t, filepath.IsAbs(runtimeDir))
 	root := filepath.Join(runtimeDir, "recovery-user-shares")
-	nameDigest := sha256.Sum256([]byte(accountID))
+	nameDigest := sha256.Sum256([]byte(locator.AccountID + "/" + locator.PackageID))
 	dir := filepath.Join(root, hex.EncodeToString(nameDigest[:]))
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	require.NoError(t, os.Chmod(root, 0o700))

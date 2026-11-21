@@ -7,7 +7,6 @@ import (
 
 	"github.com/sat20-labs/rgb11/consignment"
 	"github.com/sat20-labs/rgb11/issuance"
-	"github.com/sat20-labs/rgb11/operations"
 	"github.com/sat20-labs/rgb11/schemas"
 	"github.com/sat20-labs/rgb11/seals"
 	"github.com/sat20-labs/rgb11/strict_types"
@@ -90,12 +89,9 @@ func TestRGB11RegistrarPublicContractHasNoGenesisDisclosures(t *testing.T) {
 			canonical, err := rgb11wallet.PublicRGB11Contract(value.ContractContent)
 			require.NoError(t, err)
 			require.Equal(t, value.ContractContent, canonical)
-			for _, field := range []string{"terminals", "bundles"} {
-				v, ok := public.Value.Field(field)
-				require.True(t, ok)
-				require.Empty(t, v.Unwrap().Items)
-				require.Empty(t, v.Unwrap().Entries)
-			}
+			bundles, ok := public.Value.Field("bundles")
+			require.True(t, ok)
+			require.Empty(t, bundles.Unwrap().Items)
 			direct, err := rgb11wallet.EncodeRGB11RegistryValue(rgb11wallet.RGB11ContractValue{ContractContent: raw})
 			require.NoError(t, err)
 			require.Equal(t, stored.Value, direct, "direct registry encoding must also enforce public content")
@@ -110,7 +106,7 @@ func TestRGB11RegistrarPublicContractHasNoGenesisDisclosures(t *testing.T) {
 // A contract envelope may carry transfer history. Even valid history is not
 // appropriate for the shared genesis catalog and must remain private.
 func TestRGB11PublicContractDropsTransferHistory(t *testing.T) {
-	raw, err := os.ReadFile("../../../rgb11/testvectors/rc1/nia-transfer.rgba")
+	raw, err := os.ReadFile("../../../rgb11/testvectors/rc2/nia-transfer.rgba")
 	require.NoError(t, err)
 	transfer, err := consignment.Decode(raw)
 	require.NoError(t, err)
@@ -124,21 +120,8 @@ func TestRGB11PublicContractDropsTransferHistory(t *testing.T) {
 	require.True(t, binaryTransfer.GenesisValid)
 	_, err = rgb11wallet.PublicRGB11Contract(transferFile)
 	require.ErrorIs(t, err, dkvsindexer.ErrInvalidRecord, "a valid transfer is rejected by the contract type check")
-	// Keep the V1 history and its canonical terminal seals while relabeling
-	// only the envelope, so public normalization must remove both.
-	history, ok := transfer.Value.Field("bundles")
-	require.True(t, ok)
-	require.NotEmpty(t, history.Unwrap().Items)
-	bundleValue, ok := history.Unwrap().Items[0].Unwrap().Field("bundle")
-	require.True(t, ok)
-	bundle, err := operations.CommitBundle(bundleValue)
-	require.NoError(t, err)
-	terminals, ok := transfer.Value.Field("terminals")
-	require.True(t, ok)
-	require.Len(t, terminals.Unwrap().Entries, 1)
-	terminalID, ok := terminals.Unwrap().Entries[0].Key.Bytes()
-	require.True(t, ok)
-	require.Equal(t, bundle.BundleID[:], terminalID)
+	// Keep the original witness bundles while relabeling the envelope.
+	// Public normalization must remove that history.
 	value := transfer.Value.Clone()
 	for i := range value.Fields {
 		if value.Fields[i].Name == "transfer" {
@@ -152,9 +135,6 @@ func TestRGB11PublicContractDropsTransferHistory(t *testing.T) {
 	bundles, ok := private.Value.Field("bundles")
 	require.True(t, ok)
 	require.NotEmpty(t, bundles.Unwrap().Items, "fixture must actually carry private transfer history")
-	privateTerminals, ok := private.Value.Field("terminals")
-	require.True(t, ok)
-	require.NotEmpty(t, privateTerminals.Unwrap().Entries, "fixture must actually carry private terminals")
 	file, err := consignment.EncodeFile(private)
 	require.NoError(t, err)
 	before := append([]byte(nil), file...)
@@ -167,9 +147,6 @@ func TestRGB11PublicContractDropsTransferHistory(t *testing.T) {
 	publicBundles, ok := public.Value.Field("bundles")
 	require.True(t, ok)
 	require.Empty(t, publicBundles.Unwrap().Items)
-	terminals, ok = public.Value.Field("terminals")
-	require.True(t, ok)
-	require.Empty(t, terminals.Unwrap().Entries)
 	genesis, ok := public.Value.Field("genesis")
 	require.True(t, ok)
 	require.Zero(t, publicPrivacyRevealedCount(genesis))

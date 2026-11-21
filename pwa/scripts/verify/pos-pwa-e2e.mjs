@@ -1,4 +1,5 @@
 import { setupAccount, waitAccountBackup } from './account-fixture-e2e.mjs'
+import { waitForAccountWrite } from './account-management-usage-e2e.mjs'
 import { assertSnapshotTransactionDelta } from './l1-snapshot-assertions.mjs'
 import assert from 'node:assert/strict'
 import { randomBytes } from 'node:crypto'
@@ -578,12 +579,13 @@ export async function runPwaPosCases(t, fixture) {
       assert.equal(asset.precision, 0)
       return sum + asInteger(asset.available)
     }, 0n)
-  const rgbCarriers = async (key, state) => {
-    const total = rgbStateAmount(state, key)
-    if (total === 0n) return []
-    const selected = await walletCall(page, 'getUtxosWithAsset', fixture.address, String(total), key)
-    return selected.utxos
-  }
+  const rgbCarriers = (key, state) => state.locks.flatMap(lock => {
+    if (lock.chain !== 'btc' || lock.scope !== 'current' || lock.reason !== 'rgb') return []
+    const asset = lock.assets?.find(item => item.asset === key)
+    if (!asset) return []
+    assert.equal(asset.precision, 0)
+    return [{ outpoint: lock.outpoint, amount: asInteger(asset.amount) }]
+  })
   const addressAmount = async (chain, address, key) => {
     if (rgbCrossLayer && chain === 'Bitcoin' && address === fixture.address && key === fixture.asset.key) {
       return rgbStateAmount(await rgbState(), key)
@@ -708,6 +710,7 @@ export async function runPwaPosCases(t, fixture) {
     }
   }
   const sendL1 = async (token, split = false) => {
+    await waitForAccountWrite(page, accountCall)
     const key = token ? fixture.asset.key : '::'
     const amount = token ? 400n : (split ? 1000n : 2000n)
     const count = split ? 2n : 1n
@@ -719,8 +722,8 @@ export async function runPwaPosCases(t, fixture) {
     const logs = await operationLogs()
     if (split) await splitThroughUI(token, amount)
     else await clickAssetOperation('Send', amount, token)
-    const funding = await pendingFunding(before)
     const txid = await newOperationTx(split ? 'split_send_l1' : 'send_asset_l1', logs)
+    const funding = await pendingFunding(before)
     assert.equal(txid, funding.txid)
     const tx = await confirmL1Payment(funding)
     const paid = tx.outs.filter(output => output.script.toString('hex') === recipientScript)
@@ -912,9 +915,10 @@ export async function runPwaPosCases(t, fixture) {
     if (token && rgbCrossLayer) {
       const state = await rgbState()
       assert.equal(state.error_code, '')
-      const carriers = (await rgbCarriers(key, state)).filter(point => point.startsWith(`${funding.txid}:`))
-      assert.equal(carriers.length, 1, 'RGB splicing-out must credit one SDK-selected asset carrier from this exact transaction')
-      const carrier = carriers[0]
+      const carriers = rgbCarriers(key, state).filter(row => row.outpoint.startsWith(`${funding.txid}:`))
+      assert.equal(carriers.length, 1, 'RGB splicing-out must credit one wallet RGB carrier from this exact transaction')
+      const [{ outpoint: carrier, amount: received }] = carriers
+      assert.equal(received, amount)
       const vout = Number(carrier.split(':')[1])
       assert.ok(Number.isSafeInteger(vout) && vout >= 0 && vout < tx.outs.length)
       assert.equal(tx.outs[vout].script.toString('hex'), walletScript)
@@ -980,9 +984,19 @@ export async function runPwaPosCases(t, fixture) {
     assert.ok(creditSats > 0n)
     await expect.poll(() => addressAmount('Bitcoin', fixture.address, '::'), pollOptions).toBe(l1SatsBefore + creditSats)
     if (token) {
-      await expect.poll(() => addressAmount('Bitcoin', fixture.address, key), pollOptions).toBe(l1Before + amount)
+      const receivedAmount = rgbCrossLayer ? async () => {
+        // Refresh through the same SDK call as the Bitcoin RGB page. It reads
+        // the incoming consignment and confirms the receipt against Bitcoin.
+        const state = await walletCall(page, 'refreshRGB11State')
+        assert.equal(state.error_code, '')
+        return rgbStateAmount(state, key)
+      } : () => addressAmount('Bitcoin', fixture.address, key)
+      await expect.poll(receivedAmount, pollOptions).toBe(l1Before + amount)
       await expect.poll(() => readL2Amount(key), pollOptions).toBe(l2Before - amount)
       if (rgbCrossLayer) {
+        const returned = rgbCarriers(key, await rgbState()).filter(row => row.outpoint.startsWith(`${funding.txid}:`))
+        assert.equal(returned.reduce((total, carrier) => total + carrier.amount, 0n), amount,
+          'the confirmed Bitcoin withdrawal must credit the exact RGB amount')
         const expectedPlainAfterWithdraw = rgbPlainBeforeWithdraw - rgbWithdrawFee - 10n
         await expect.poll(() => readL2Amount('::'), pollOptions).toBe(expectedPlainAfterWithdraw)
       }
@@ -1077,9 +1091,10 @@ export async function runPwaPosCases(t, fixture) {
     const current = await rgbState()
     assert.equal(current.error_code, '')
     assert.equal(rgbStateAmount(current, key), expectedAmount)
-    const carriers = await rgbCarriers(key, current)
-    assert.ok(carriers.length, 'the SDK must select the actual RGB carriers for its full available balance')
-    for (const point of carriers) {
+    const carriers = rgbCarriers(key, current)
+    assert.ok(carriers.length, 'the wallet RGB view must include the asset carriers')
+    assert.equal(carriers.reduce((total, carrier) => total + carrier.amount, 0n), expectedAmount)
+    for (const { outpoint: point } of carriers) {
       assert.match(point, /^[0-9a-f]{64}:\d+$/)
       const [txid, voutText] = point.split(':')
       const [status] = await crossLayerEvidence('/v3/bitcoin/utxos/status', { outpoints: [point] })
@@ -1481,6 +1496,7 @@ export async function runPwaPosCases(t, fixture) {
     }, { mnemonic: fixture.mnemonic, password: fixture.password })
     await expect(page.getByRole('tab', { name: 'Bitcoin', exact: true })).toBeVisible()
     await assertIdentity()
+    await waitForAccountWrite(page, accountCall)
     await selectMode('lightning')
 
     if (fixture.resumePrivateChannel) {

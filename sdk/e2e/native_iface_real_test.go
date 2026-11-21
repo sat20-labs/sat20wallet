@@ -200,9 +200,7 @@ func runNativeIfaceRealL2(t *testing.T, f *nativeIfaceChain) {
 	f.fund(t, b.GetWallet().GetAddress(), 10_000_000)
 	core := wallet.NewInternalWalletWithMnemonic(f.seeds["core"], "", wallet.GetChainParam())
 	require.NotNil(t, core)
-	for i := 0; i < 8; i++ {
-		f.fund(t, core.GetAddress(), 1_000_000)
-	}
+	f.fundOutputs(t, core.GetAddress(), 1_000_000, 8)
 	t.Log("real L2 prerequisite: Bitcoin-backed H1/H2/H3 bootstrap")
 	nativeIfaceBootstrap(t, f, a)
 	attachNativeIfaceWallet(t, a, f.network)

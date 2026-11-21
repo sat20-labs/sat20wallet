@@ -685,7 +685,7 @@ func TestRGB11ProxyDeliveryWaitsForAckBeforeBroadcast(t *testing.T) {
 	if err := packet.Serialize(&preparedPSBT); err != nil {
 		t.Fatal(err)
 	}
-	consignment, err := os.ReadFile("../../../rgb11/testvectors/rc1/nia-transfer.rgba")
+	consignment, err := os.ReadFile("../../../rgb11/testvectors/rc2/nia-transfer.rgba")
 	if err != nil {
 		t.Fatal(err)
 	}

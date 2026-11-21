@@ -63,7 +63,10 @@ func coreRGBFullSendRecoveryColdRestoreE2E(t *testing.T, cfg coreE2EConfig, chai
 	initialBroadcastCount := chain.broadcastCount()
 	var lastPrepared *RGB11PreparedTransfer
 	previousSizes := make(map[string]coreManagedRecoverySize, 2)
-	for hop := 1; hop <= 20; hop++ {
+	const hops = 20
+	samples := make([]map[string]any, 0, 2*hops)
+	coreLogE2EMetrics(t, "rgb11_full_send_history", &samples)
+	for hop := 1; hop <= hops; hop++ {
 		hopStarted := time.Now()
 		source, destination := sender, receiver
 		if hop%2 == 0 {
@@ -107,15 +110,22 @@ func coreRGBFullSendRecoveryColdRestoreE2E(t *testing.T, cfg coreE2EConfig, chai
 				coreSynchronizeRestoredAccount(t, sender)
 			})
 		lastPrepared = prepared
-		if hop == 20 {
+		if hop == hops {
 			// The final transfer is receiver -> sender. Save its exact consumer
 			// edge so the newly-created receiver database can test reorg recovery.
 			if prepared == nil || prepared.State == nil || len(prepared.State.InputOutPoints) == 0 {
 				t.Fatal("core-e2e: final full-send omitted its consumed input")
 			}
 		}
+		transfer := coreE2EDuration("full_send_transfer", hopStarted)
+		transfer["hop"] = hop
+		samples = append(samples, transfer)
+		sizeStarted := time.Now()
 		coreLogManagedRecoverySize(t, hop, "sender", sender, previousSizes)
 		coreLogManagedRecoverySize(t, hop, "receiver", receiver, previousSizes)
+		size := coreE2EDuration("recovery_size_analysis", sizeStarted)
+		size["hop"] = hop
+		samples = append(samples, size)
 		t.Logf("core-e2e: RGB11 full-send hop=%d elapsed_ms=%d", hop, time.Since(hopStarted).Milliseconds())
 	}
 	if lastPrepared == nil || lastPrepared.State == nil || lastPrepared.TxID == "" ||
@@ -151,7 +161,7 @@ func coreRGBFullSendRecoveryColdRestoreE2E(t *testing.T, cfg coreE2EConfig, chai
 	}
 	coreAssert(t, foundConsumedProof, "cold restore omitted the last consumed allocation proof/consumer history")
 	coreAssert(t, !consumedProofIsCurrent, "cold restore made the last consumed allocation spendable")
-	coreAssert(t, chain.broadcastCount() == initialBroadcastCount+20,
+	coreAssert(t, chain.broadcastCount() == initialBroadcastCount+hops,
 		"cold restore or settled-state adoption unexpectedly rebroadcast a transaction")
 
 	coreReorgControlledTransaction(t, chain, lastPrepared.TxID)
@@ -621,7 +631,7 @@ func coreRGBBackupFacts(t *testing.T, ctx context.Context, manager *Manager) {
 			manager.debugID, accountTraceScope(scope), module != nil, readErr)
 		return
 	}
-	entry, err := accountEntry(accountID, rgb11AccountManagedProviderID, scope)
+	entry, err := accountEntry(secret, accountID, rgb11AccountManagedProviderID, scope)
 	if err != nil {
 		t.Logf("RGB backup facts: manager=%d entry_error=%T", manager.debugID, err)
 		return
@@ -1392,7 +1402,7 @@ func coreLogManagedRecoverySize(t *testing.T, hop int, role string, manager *Man
 	manager.mutex.RUnlock()
 	defer zeroBytes(secret)
 	for _, payload := range providerPayloads {
-		entry, err := accountEntry(accountID, rgb11AccountManagedProviderID, payload.Scope)
+		entry, err := accountEntry(secret, accountID, rgb11AccountManagedProviderID, payload.Scope)
 		coreRequire(t, "resolve independent RGB module for size sample", err)
 		blob, err := sealAccountPayload(secret, accountID, network, entry, payload.Payload)
 		coreRequire(t, "encode independent RGB module for size sample", err)

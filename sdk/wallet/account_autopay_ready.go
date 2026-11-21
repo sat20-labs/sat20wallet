@@ -61,6 +61,19 @@ type AccountAutopayFundingStatus struct {
 	EstimatedFundedExpiryHeight int64  `json:"estimated_funded_expiry_height,omitempty"`
 }
 
+func accountAutopayContractMatches(state *dkvsindexer.AutopayContractState, defaults dkvsindexer.NetworkDefaults) bool {
+	return state != nil && state.TemplateName == TEMPLATE_CONTRACT_AUTOPAY && !state.Closed &&
+		strings.EqualFold(strings.TrimSpace(state.ServiceName), defaults.AutopayServiceName) &&
+		strings.EqualFold(strings.TrimSpace(state.Recipient), defaults.AutopayRecipient) &&
+		strings.TrimSpace(state.FeeAssetName) == defaults.AutopayFeeAssetName && state.CurrentBlock > 0
+}
+
+func accountAutopayOffer(state *dkvsindexer.AutopayContractState, defaults dkvsindexer.NetworkDefaults) bool {
+	return accountAutopayContractMatches(state, defaults) &&
+		strings.EqualFold(strings.TrimSpace(state.Contract), defaults.AutopayContract) &&
+		strings.EqualFold(strings.TrimSpace(state.Status), "active")
+}
+
 func accountAutopayStateFundingStatus(state *dkvsindexer.AutopayContractState,
 	defaults dkvsindexer.NetworkDefaults, payer, requiredAmount string, requiredBlobs uint32) AccountAutopayFundingStatus {
 
@@ -79,13 +92,9 @@ func accountAutopayStateFundingStatus(state *dkvsindexer.AutopayContractState,
 		return result
 	}
 	result.CurrentBlock = state.CurrentBlock
-	if state.TemplateName != TEMPLATE_CONTRACT_AUTOPAY || state.Closed ||
+	if !accountAutopayContractMatches(state, defaults) ||
 		(!strings.EqualFold(strings.TrimSpace(state.Status), "active") &&
-			!strings.EqualFold(strings.TrimSpace(state.Status), "funding")) ||
-		!strings.EqualFold(strings.TrimSpace(state.ServiceName), defaults.AutopayServiceName) ||
-		!strings.EqualFold(strings.TrimSpace(state.Recipient), defaults.AutopayRecipient) ||
-		strings.TrimSpace(state.FeeAssetName) != defaults.AutopayFeeAssetName ||
-		state.CurrentBlock <= 0 {
+			!strings.EqualFold(strings.TrimSpace(state.Status), "funding")) {
 		result.Reason = AccountAutopayReasonContractInactive
 		result.Message = "AUTOPAY 合约当前不可用，请检查网络或联系节点维护者。"
 		return result

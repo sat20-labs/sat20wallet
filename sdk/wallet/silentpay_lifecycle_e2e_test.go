@@ -26,14 +26,6 @@ func TestSilentPayProductionManagerLifecycleE2E(t *testing.T) {
 	require.NoError(t, manager.SwitchAccount(1))
 	address, err := manager.EnableSilentPay(id, 1)
 	require.NoError(t, err)
-	// Automatic provider registration must survive normal initialization.
-	found := false
-	for _, provider := range manager.accountManagedDataProviders() {
-		if provider.ID() == silentPayManagedProviderID {
-			found = true
-		}
-	}
-	require.True(t, found, "production NewManager must register the SP provider")
 	payment := spPWAMakePayment(t, manager.GetWallet().(*InternalWallet), 1, 83, 1, 15, 54321)
 	manager.SetIndexerHttpClient(spPWANewIndexer(payment))
 	_, err = manager.SyncSilentPayLive(context.Background())

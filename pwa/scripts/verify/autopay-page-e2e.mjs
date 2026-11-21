@@ -54,10 +54,10 @@ export async function runAutopayPageCase(t, fixture) {
         case_sensitive: false, ignore_punctuation: true }, answer: q.answer, confirmation: q.confirmation }))
       const created = await accountCall(page, 'createRecovery', { password: fixture.password,
         wallet_ids: ids, mode: '2of2', questions, guardian_contact: '' })
-      const share = Buffer.from(created.files.find(file => file.name === 'user-share.txt').data, 'base64').toString('utf8')
+      const recoveryFile = Buffer.from(created.files.find(file => file.name === 'user-share.txt').data, 'base64').toString('utf8')
       await accountCall(page, 'activateRecovery', created.session_id, { password: fixture.password,
-        saved_locator: created.locator, factors: { answers: t.questions.map(q => ({ question_id: q.id, text: q.answer })),
-          user_share: share, guardian_response: '' } })
+        recovery_file: recoveryFile, factors: { answers: t.questions.map(q => ({ question_id: q.id, text: q.answer })),
+          guardian_response: '' } })
       await expect.poll(async () => (await accountCall(page, 'getAccountView')).backup_state,
         { timeout: 90000 }).toBe('backed_up')
       const initial = (await accountCall(page, 'getAccountView')).autopay

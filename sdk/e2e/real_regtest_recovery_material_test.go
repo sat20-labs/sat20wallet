@@ -77,7 +77,7 @@ func sdkRegtestRecoveryMaterialFor(t *testing.T, locator account.Locator) *sdkRe
 	return material
 }
 
-func bindSDKRegtestRecoveryAnswers(pkg *account.RecoveryPackage, retained []sdkRegtestRecoveryAnswer) ([]account.AnswerAttempt, error) {
+func bindSDKRegtestRecoveryAnswers(questions account.KnowledgeRecoveryBundle, retained []sdkRegtestRecoveryAnswer) ([]account.AnswerAttempt, error) {
 	byPrompt := make(map[string]string)
 	for _, answer := range retained {
 		if answer.Prompt == "" || answer.Answer == "" {
@@ -90,7 +90,7 @@ func bindSDKRegtestRecoveryAnswers(pkg *account.RecoveryPackage, retained []sdkR
 	}
 	var answers []account.AnswerAttempt
 	seen := make(map[string]bool)
-	for _, question := range pkg.KnowledgeBundle.QuestionShares {
+	for _, question := range questions.QuestionShares {
 		if answer, found := byPrompt[question.Question.Prompt]; found {
 			if seen[question.Question.Prompt] {
 				return nil, fmt.Errorf("package knowledge prompts must match distinct retained questions")
@@ -99,16 +99,16 @@ func bindSDKRegtestRecoveryAnswers(pkg *account.RecoveryPackage, retained []sdkR
 			answers = append(answers, account.AnswerAttempt{QuestionID: question.Question.ID, Answer: answer})
 		}
 	}
-	if len(answers) < 2 || len(answers) < int(pkg.KnowledgeBundle.Threshold) {
+	if len(answers) < 2 || len(answers) < int(questions.Threshold) {
 		return nil, fmt.Errorf("retained knowledge prompts do not match this package's required threshold")
 	}
 	return answers, nil
 }
 
-func sdkRegtestRecoveryAnswers(t *testing.T, pkg *account.RecoveryPackage) []account.AnswerAttempt {
+func sdkRegtestRecoveryAnswers(t *testing.T, locator account.Locator, questions account.KnowledgeRecoveryBundle) []account.AnswerAttempt {
 	t.Helper()
-	if material := sdkRegtestRecoveryMaterialFor(t, pkg.Envelope.Locator); material != nil {
-		answers, err := bindSDKRegtestRecoveryAnswers(pkg, material.Answers)
+	if material := sdkRegtestRecoveryMaterialFor(t, locator); material != nil {
+		answers, err := bindSDKRegtestRecoveryAnswers(questions, material.Answers)
 		require.NoError(t, err)
 		return answers
 	}
@@ -179,24 +179,24 @@ func TestSDKPWARegtestExistingRecoveryFixtureIdentity(t *testing.T) {
 }
 
 func TestSDKPWARegtestRecoveryAnswersUseExactPackagePrompts(t *testing.T) {
-	pkg := &account.RecoveryPackage{KnowledgeBundle: account.KnowledgeRecoveryBundle{Threshold: 2,
+	questions := account.KnowledgeRecoveryBundle{Threshold: 2,
 		QuestionShares: []account.EncryptedQuestionShare{
 			{Question: account.KnowledgeQuestion{ID: "book-page", Prompt: "first original prompt"}},
 			{Question: account.KnowledgeQuestion{ID: "private-phrase", Prompt: "second original prompt"}},
-		}}}
+		}}
 	retained := []sdkRegtestRecoveryAnswer{
 		{QuestionID: "book", Prompt: "first original prompt", Answer: "first retained answer"},
 		{QuestionID: "note", Prompt: "second original prompt", Answer: "second retained answer"},
 	}
-	bound, err := bindSDKRegtestRecoveryAnswers(pkg, retained)
+	bound, err := bindSDKRegtestRecoveryAnswers(questions, retained)
 	require.NoError(t, err)
 	require.Equal(t, []account.AnswerAttempt{{QuestionID: "book-page", Answer: retained[0].Answer},
 		{QuestionID: "private-phrase", Answer: retained[1].Answer}}, bound)
 	wrong := append([]sdkRegtestRecoveryAnswer(nil), retained...)
 	wrong[0].Prompt = "another package's prompt"
-	_, err = bindSDKRegtestRecoveryAnswers(pkg, wrong)
+	_, err = bindSDKRegtestRecoveryAnswers(questions, wrong)
 	require.Error(t, err)
-	_, err = bindSDKRegtestRecoveryAnswers(pkg, []sdkRegtestRecoveryAnswer{retained[0], retained[0]})
+	_, err = bindSDKRegtestRecoveryAnswers(questions, []sdkRegtestRecoveryAnswer{retained[0], retained[0]})
 	require.Error(t, err)
 }
 
@@ -238,16 +238,18 @@ func TestSDKPWARegtestExistingRecoveryMaterialReadback(t *testing.T) {
 			t.Cleanup(func() { manager.Close(); db.Close() })
 			pkg, err := manager.LoadAccountRecoveryPackage(location, material.Locator)
 			require.NoError(t, err)
+			questions, err := account.OpenRecoveryKnowledge(*pkg, share)
+			require.NoError(t, err)
 			var provided, available []string
 			for _, answer := range material.Answers {
 				provided = append(provided, answer.QuestionID)
 			}
-			for _, question := range pkg.KnowledgeBundle.QuestionShares {
+			for _, question := range questions.QuestionShares {
 				available = append(available, question.Question.ID)
 				t.Logf("package question ID=%s; prompt SHA256=%x", question.Question.ID, sha256.Sum256([]byte(question.Question.Prompt)))
 			}
 			t.Logf("mode=%s; provided question IDs=%v; package question IDs=%v", material.Locator.RecoveryMode, provided, available)
-			dkvsShare, err := account.RecoverDKVSShare(pkg.DKVSShareCapsule, pkg.KnowledgeBundle, sdkRegtestRecoveryAnswers(t, pkg))
+			dkvsShare, err := account.RecoverDKVSShare(pkg.DKVSShareCapsule, questions, sdkRegtestRecoveryAnswers(t, pkg.Envelope.Locator, questions))
 			require.NoError(t, err, "decrypt the existing DKVS capsule using its retained knowledge material")
 			backup, secret, err := account.RecoverAccount(pkg.Envelope, share, dkvsShare)
 			require.NoError(t, err, "combine existing user/DKVS shares and decrypt the original backup")

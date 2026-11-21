@@ -3,7 +3,11 @@ package e2e
 import "testing"
 
 func TestSDKAccountReview(t *testing.T) {
-	chain := newNativeIfaceChain(t)
+	runNativeAccountReview(t, newNativeIfaceChain(t))
+}
+
+func runNativeAccountReview(t *testing.T, chain *nativeIfaceChain) {
+	t.Helper()
 	for _, item := range []struct {
 		name    string
 		pending bool

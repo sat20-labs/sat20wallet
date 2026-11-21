@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"bytes"
+	"context"
 	"errors"
 
 	"github.com/sat20-labs/sat20wallet/sdk/account"
@@ -130,16 +131,16 @@ func (p *Manager) accountServiceStateLocked() (string, error) {
 
 // Only an explicit entry/retry discovers an inactive account. Ordinary
 // replaceable backup jobs never rediscover or resume an unactivated account.
-func (p *Manager) refreshAccountService(discover bool) (resultErr error) {
+func (p *Manager) refreshAccountService(ctx context.Context, discover bool) (resultErr error) {
 	finish := p.accountSyncResult("service")
 	defer func() { finish(resultErr) }()
 	p.mutex.RLock()
-	if p.accountProfile == nil || len(p.accountSecret) != 32 || p.accountPassword == "" {
+	if !p.accountDiscoveryUnlockedLocked() {
 		p.mutex.RUnlock()
 		return nil
 	}
-	pending := p.accountProfile.Activation != nil
-	configured := p.accountProfile.RecoveryConfigured
+	pending := p.accountProfile != nil && p.accountProfile.Activation != nil
+	configured := p.accountProfile != nil && p.accountProfile.RecoveryConfigured
 	password := p.accountPassword
 	secret := bytes.Clone(p.accountSecret)
 	p.mutex.RUnlock()
@@ -147,10 +148,9 @@ func (p *Manager) refreshAccountService(discover bool) (resultErr error) {
 	if !configured && !discover {
 		return nil
 	}
-	ctx := p.ensureDKVSManager().requestContext()
 	if pending {
 		return p.runAccountOperation(ctx, func() error {
-			_, err := p.resumePendingActivation(secret, password)
+			_, err := p.resumePendingActivation(ctx, secret, password)
 			return err
 		})
 	}
@@ -161,7 +161,7 @@ func (p *Manager) refreshAccountService(discover bool) (resultErr error) {
 		}
 		return err
 	}
-	if err := p.ensureAccountCoreBindingForSync(); err != nil {
+	if err := p.ensureAccountCoreBindingForSync(ctx); err != nil {
 		return err
 	}
 	return p.SyncAccountManagementState(ctx)

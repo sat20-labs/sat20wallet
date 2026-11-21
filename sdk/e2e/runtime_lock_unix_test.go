@@ -16,6 +16,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	lane := flag.String("sat20-e2e-lane", "", "isolated native E2E pilot lane (core or template)")
 	flag.Parse()
 	// Ownership helpers are child test binaries used only to exercise process
 	// cleanup. They must not reacquire the package-wide E2E runtime lock held by
@@ -23,29 +24,14 @@ func TestMain(m *testing.M) {
 	if isOwnedProcessTestHelper() {
 		os.Exit(m.Run())
 	}
-	// Serialize the real-node workload and inherited node processes, including
-	// builds. Each process owns a fresh runtime root under this lock.
 	if err := flag.Set("test.parallel", "1"); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	lock, err := os.OpenFile(filepath.Join(os.TempDir(), "sat20wallet-satoshinet-rpctest.lock"), os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "open SatoshiNet E2E runtime lock:", err)
+	if err := lockE2ERuntime(*lane); err != nil {
+		fmt.Fprintln(os.Stderr, "lock SatoshiNet E2E runtime:", err)
 		os.Exit(1)
 	}
-	if err = unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
-		if err != unix.EWOULDBLOCK && err != unix.EAGAIN {
-			fmt.Fprintln(os.Stderr, "lock SatoshiNet E2E runtime:", err)
-			os.Exit(1)
-		}
-		fmt.Fprintln(os.Stderr, "waiting for the previous SatoshiNet E2E run and its nodes to exit")
-		if err = unix.Flock(int(lock.Fd()), unix.LOCK_EX); err != nil {
-			fmt.Fprintln(os.Stderr, "lock SatoshiNet E2E runtime:", err)
-			os.Exit(1)
-		}
-	}
-	satoshinetRuntimeLock = lock
 	rc := m.Run()
 	started := time.Now()
 	if err := cleanupE2ERuntime(); err != nil {
@@ -53,10 +39,69 @@ func TestMain(m *testing.M) {
 		rc = 1
 	}
 	fmt.Fprintf(os.Stderr, "e2e-phase: name=runtime_cleanup elapsed_seconds=%.3f\n", time.Since(started).Seconds())
-	// Nodes inherit this descriptor. Close without explicitly unlocking so an
+	// Nodes inherit these descriptors. Close without explicitly unlocking so an
 	// interrupted test cannot release shared directories while its nodes live.
-	_ = lock.Close()
+	for _, lock := range satoshinetRuntimeLocks {
+		_ = lock.Close()
+	}
 	os.Exit(rc)
+}
+
+func lockE2ERuntime(lane string) error {
+	const splitPort = 25000
+	lockPath := filepath.Join(os.TempDir(), "sat20wallet-satoshinet-rpctest.lock")
+	mode := unix.LOCK_EX
+	if lane != "" {
+		selector := flag.Lookup("test.run").Value.String()
+		switch lane {
+		case "core":
+			const childRun = "^TestSDKCoreModulesConnectedE2E$/^RGB11_fullsend_history_cold_recovery_reorg_and_competing_intent$"
+			if selector != "^TestSDKCoreModulesE2E$" || os.Getenv("SAT20WALLET_CORE_E2E_CHILD_RUN") != childRun {
+				return fmt.Errorf("core lane requires the native Core long-history selector")
+			}
+			lastHarnessPort = splitPort - 5
+		case "template":
+			if selector != "^TestSDKTemplateContractSharedNetwork$" {
+				return fmt.Errorf("template lane requires the template contract shared-network selector")
+			}
+			nextHarnessPort = splitPort - 5
+		default:
+			return fmt.Errorf("unknown E2E pilot lane %q", lane)
+		}
+		mode = unix.LOCK_SH
+	}
+	// Default runs exclude every pilot lane. Pilots share the global lock and
+	// hold their own exclusive lock for their assigned ports.
+	if err := holdE2ELock(lockPath, mode); err != nil {
+		return err
+	}
+	if lane != "" {
+		if err := holdE2ELock(lockPath+"."+lane, unix.LOCK_EX); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "E2E pilot lane=%s ports=%d-%d\n", lane, nextHarnessPort+5, lastHarnessPort+4)
+	}
+	return nil
+}
+
+func holdE2ELock(path string, mode int) error {
+	lock, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	err = unix.Flock(int(lock.Fd()), mode|unix.LOCK_NB)
+	if err == unix.EWOULDBLOCK || err == unix.EAGAIN {
+		fmt.Fprintln(os.Stderr, "waiting for the previous SatoshiNet E2E run and its nodes to exit")
+		started := time.Now()
+		err = unix.Flock(int(lock.Fd()), mode)
+		fmt.Fprintf(os.Stderr, "e2e-phase: name=runtime_lock_wait elapsed_seconds=%.3f\n", time.Since(started).Seconds())
+	}
+	if err != nil {
+		_ = lock.Close()
+		return err
+	}
+	satoshinetRuntimeLocks = append(satoshinetRuntimeLocks, lock)
+	return nil
 }
 
 func isOwnedProcessTestHelper() bool {

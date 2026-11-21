@@ -213,9 +213,8 @@ func rgb11AssertGraphTips(t *testing.T, raw []byte, want int) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	terminals, ok := c.Value.Field("terminals")
-	if !ok || len(terminals.Unwrap().Entries) != 0 {
-		t.Fatal("witness fixture must have empty terminals")
+	if _, ok := c.Value.Field("terminals"); ok {
+		t.Fatal("rc.2 witness fixture carries obsolete terminals")
 	}
 	tips := make(map[[32]byte]bool)
 	parents := make(map[[32]byte]bool)
@@ -254,7 +253,7 @@ func rgb11AssertGraphTips(t *testing.T, raw []byte, want int) {
 }
 
 // Two real independent successor branches leave a disclosed allocation on an
-// earlier operation. Empty terminals cannot identify a unique receiving tip.
+// earlier operation. The disclosed graph has no unique receiving tip.
 func TestRGB11SiblingMultiTip(t *testing.T) {
 	a, b, imported, evidence, rpc := newRGB11GenericSendFixture(t)
 	a.rgbManager.scopeStates.stopReconciliations()
@@ -371,6 +370,6 @@ func TestRGB11SiblingMultiTip(t *testing.T) {
 	evidence.spendingTx[op] = fmt.Sprintf("%064x", 9494)
 	evidence.mu.Unlock()
 	if _, err = validate(); !errors.Is(err, coreconsignment.ErrOutpointSpend) {
-		t.Fatalf("ambiguous empty-terminal history must not skip a spent sibling: %v", err)
+		t.Fatalf("ambiguous history must not skip a spent sibling: %v", err)
 	}
 }

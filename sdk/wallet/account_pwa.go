@@ -357,21 +357,22 @@ func (p *Manager) GetAccountStorageOptions() ([]AccountStorageOption, error) {
 	if err != nil {
 		return nil, err
 	}
-	return p.buildStorageOptions(store.ConfigWithVerificationHeight, nil)
+	return p.buildStorageOptions(store.ConfigWithVerificationHeight, nil, "", accountDefaultRecordCount, true)
 }
 
 func (p *Manager) buildStorageOptions(read func() (*AccountFreeLocalPolicy, uint64, bool, error),
-	check func() error) ([]AccountStorageOption, error) {
+	check func() error, selected string, recordCount uint64, quotePaid bool) ([]AccountStorageOption, error) {
 	options := make([]AccountStorageOption, 0, 2)
 	p.mutex.RLock()
-	paidActive := p.accountProfile != nil && p.accountProfile.StorageMode == AccountStoragePaid
+	activated := p.accountProfile != nil && p.accountProfile.RecoveryConfigured && p.accountProfile.Activation == nil
+	paidActive := activated && p.accountProfile.StorageMode == AccountStoragePaid
 	p.mutex.RUnlock()
-	if !paidActive {
+	if selected != AccountStoragePaid && !paidActive {
 		policy, currentHeight, _, configErr := read()
 		if check != nil && configErr != nil {
 			return nil, configErr
 		}
-		if configErr == nil && policy != nil && policy.Enabled {
+		if configErr == nil && policy != nil && policy.Enabled && policy.MaxTTL != 0 {
 			options = append(options, AccountStorageOption{
 				ID: "temporary", Mode: AccountStorageTemporary, Available: true,
 				Title: "临时缓存", Description: "由当前连接节点临时保存；到期后数据可能被删除。",
@@ -391,58 +392,64 @@ func (p *Manager) buildStorageOptions(read func() (*AccountFreeLocalPolicy, uint
 		}
 	}
 
-	defaults := dkvsindexer.NetworkDefaultsForParams(GetChainParam_SatsNet())
-	paid := AccountStorageOption{ID: "paid", Mode: AccountStoragePaid, Title: "付费保存"}
-	if !defaults.Enabled || defaults.AutopayContract == "" {
-		paid.Description = "当前网络尚未提供可用的 DKVS 付费保存配置。"
-		paid.Warnings = []string{paid.Description}
-	} else {
-		requiredBlobs, capacityErr := p.accountBlobRequirements()
-		if capacityErr != nil {
-			return nil, capacityErr
-		}
-		if check != nil {
-			if err := check(); err != nil {
-				return nil, err
-			}
-		}
-		paid.RequiredBlobKeys = requiredBlobs
-		paid.BlobKeyLimit = accountBlobTarget(nil, "", requiredBlobs)
-		if root, rootErr := p.accountManagementRootWallet(); rootErr == nil {
-			if state, stateErr := p.accountAutopayState(defaults); stateErr == nil {
-				payer := PublicKeyToP2TRAddress_SatsNet(root.GetPubKey())
-				paid.BlobKeyLimit = accountBlobTarget(state, payer, requiredBlobs)
-			}
-		}
-		amountPerBlock, amountErr := accountAmountPerBlock(defaults, accountDefaultRecordCount)
-		if amountErr != nil {
-			return nil, amountErr
-		}
-		cost, costErr := multiplyDecimal(amountPerBlock, accountPaidDefaultFundingBlocks)
-		if costErr != nil {
-			return nil, costErr
-		}
-		annual, annualErr := multiplyDecimal(amountPerBlock, 2_628_000)
-		if annualErr != nil {
-			return nil, annualErr
-		}
-		paid.Available = true
-		paid.Description = "通过 AUTOPAY 按区块持续支付后，全网保存加密账户数据。"
-		paid.Warnings = []string{"余额不足、未继续支付时，付费同步会失败或停止；已付费记录不会自动降级为节点临时缓存。"}
-		paid.FeeAsset = defaults.AutopayFeeAssetName
-		paid.ContractAddress = defaults.AutopayContract
-		paid.EstimatedCost = cost
-		paid.EstimatedAnnualCost = annual
-		paid.RecordCount = accountDefaultRecordCount
-		paid.DefaultRecordCount = accountDefaultRecordCount
-		paid.FullRecordFee = defaults.FullRecordFeePerBlock
-		paid.MinimumAmountPerBlock = defaults.AutopayMinAmountPerBlock
-		paid.AmountPerBlock = amountPerBlock
-		paid.MinimumRetention = fmt.Sprintf("initial funding for %d blocks", accountPaidDefaultFundingBlocks)
-		paid.RecommendedRetention = "持续支付期间全网保存"
+	if selected == AccountStorageTemporary || !activated {
+		return options, nil
 	}
-	options = append(options, paid)
-	return options, nil
+	defaults := dkvsindexer.NetworkDefaultsForParams(GetChainParam_SatsNet())
+	if !defaults.Enabled || defaults.AutopayContract == "" {
+		return options, nil
+	}
+	state, err := p.accountAutopayState(defaults)
+	if err != nil || !accountAutopayOffer(state, defaults) {
+		return options, nil
+	}
+	if !quotePaid {
+		return append(options, AccountStorageOption{ID: AccountStoragePaid, Mode: AccountStoragePaid, Available: true}), nil
+	}
+	paid, err := p.buildPaidStorageQuote(defaults, state, recordCount)
+	if err != nil {
+		if len(options) != 0 {
+			return options, nil
+		}
+		return nil, err
+	}
+	return append(options, paid), nil
+}
+
+func (p *Manager) buildPaidStorageQuote(defaults dkvsindexer.NetworkDefaults, state *dkvsindexer.AutopayContractState,
+	recordCount uint64) (AccountStorageOption, error) {
+	root, err := p.accountManagementRootWallet()
+	if err != nil {
+		return AccountStorageOption{}, err
+	}
+	requiredBlobs, err := p.accountBlobRequirements()
+	if err != nil {
+		return AccountStorageOption{}, err
+	}
+	amountPerBlock, err := accountAmountPerBlock(defaults, recordCount)
+	if err != nil {
+		return AccountStorageOption{}, err
+	}
+	cost, err := multiplyDecimal(amountPerBlock, accountPaidDefaultFundingBlocks)
+	if err != nil {
+		return AccountStorageOption{}, err
+	}
+	annual, err := multiplyDecimal(amountPerBlock, 2_628_000)
+	if err != nil {
+		return AccountStorageOption{}, err
+	}
+	payer := PublicKeyToP2TRAddress_SatsNet(root.GetPubKey())
+	return AccountStorageOption{
+		ID: AccountStoragePaid, Mode: AccountStoragePaid, Available: true, Title: "付费保存",
+		Description:      "通过 AUTOPAY 按区块持续支付后，全网保存加密账户数据。",
+		Warnings:         []string{"余额不足、未继续支付时，付费同步会失败或停止；已付费记录不会自动降级为节点临时缓存。"},
+		RequiredBlobKeys: requiredBlobs, BlobKeyLimit: accountBlobTarget(state, payer, requiredBlobs),
+		FeeAsset: defaults.AutopayFeeAssetName, ContractAddress: defaults.AutopayContract,
+		EstimatedCost: cost, EstimatedAnnualCost: annual, RecordCount: recordCount, DefaultRecordCount: accountDefaultRecordCount,
+		FullRecordFee: defaults.FullRecordFeePerBlock, MinimumAmountPerBlock: defaults.AutopayMinAmountPerBlock,
+		AmountPerBlock: amountPerBlock, MinimumRetention: fmt.Sprintf("initial funding for %d blocks", accountPaidDefaultFundingBlocks),
+		RecommendedRetention: "持续支付期间全网保存",
+	}, nil
 }
 
 func (p *Manager) GetAccountAutopayFundingStatus() (*AccountAutopayFundingStatus, error) {
@@ -478,10 +485,11 @@ func (p *Manager) GetAccountAutopayFundingStatus() (*AccountAutopayFundingStatus
 		return nil, err
 	}
 	pending := accountAutopayLogPending(record)
+	usesAutopay := paidActive || pending || (record != nil && record.Status == OperationLogSucceeded)
+	if !usesAutopay {
+		return notRequired, nil
+	}
 	if !defaults.Enabled || defaults.AutopayContract == "" {
-		if !paidActive && record == nil {
-			return notRequired, nil
-		}
 		return nil, fmt.Errorf("paid DKVS storage is not configured for the current network")
 	}
 	requiredAmount, err := accountAmountPerBlock(defaults, accountDefaultRecordCount)
@@ -493,10 +501,6 @@ func (p *Manager) GetAccountAutopayFundingStatus() (*AccountAutopayFundingStatus
 		if err != nil {
 			return nil, err
 		}
-	}
-	usesAutopay := paidActive || pending || (record != nil && record.Status == OperationLogSucceeded)
-	if !usesAutopay {
-		return notRequired, nil
 	}
 	state, queryErr := p.accountAutopayState(defaults)
 	if queryErr != nil && record == nil {
@@ -683,6 +687,9 @@ func (p *Manager) confirmPaidAccountStorageWithWallet(location AccountIndexerLoc
 			return nil, &AccountAutopayPendingError{TransactionID: previous.TxID, Cause: err}
 		}
 		return nil, fmt.Errorf("check existing AUTOPAY storage: %w", err)
+	}
+	if p.accountRecoveryConfigured() && !accountAutopayOffer(state, defaults) {
+		return nil, fmt.Errorf("AUTOPAY contract is unavailable for paid storage")
 	}
 	if accountAutopayLogPending(previous) {
 		waiting, receiptErr := p.reconcileAccountAutopayReceipt(previous)

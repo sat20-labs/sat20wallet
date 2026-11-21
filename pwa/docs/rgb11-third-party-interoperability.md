@@ -1,6 +1,31 @@
 # RGB11 第三方钱包互操作验收
 
-## 固定测试基线
+## 当前验收基线
+
+PWA 的 Wallet SDK 已对齐 RGB `0.11.2-rc.2`，第三方对端统一使用同版本的官方 **`rgb-cmd`**（命令 `rgb`）。先在 **Bitcoin Regtest** 用 NIA 跑双向收发，需要公开网络证据时再在 **Testnet4** 抽样。RC2 的 V1 consignment 去掉了 `terminals`。 [CLI 安装与版本基线](https://github.com/sat20-labs/rgb11/blob/main/OFFICIAL_INTEROP.md#当前钱包互操作基线) · [RC2 对齐记录](https://github.com/sat20-labs/rgb11/blob/main/RC2_ALIGNMENT.md)
+
+### 准备
+
+1. 核对 PWA 实际加载的 SDK/WASM、`rgb --version` 和两端的 Bitcoin 网络。PWA 与 CLI 使用独立测试钱包。CLI 用本轮专用 `--data-dir`，Regtest 接本轮本地 Esplora 或 Electrum。Testnet4 复验时显式切换 CLI 和索引端点。
+2. CLI 用 `rgb import` 导入官方 RC2 NIA Schema 定义，用 `rgb schemata` 核对 Schema ID。准备双方已确认的纯 BTC 费用、CLI 外部 PSBT 签名器及发行用的空白 UTXO。首轮使用 witness 发票。测试 blind 发票时，先确认接收端有适用的 UTXO，结果单独登记。
+3. 通过带网络的标准发票、`.rgb` 合约和 `RGB\0TFR` 二进制 consignment 交换数据。PWA 下载的 `.rgbc` 与 CLI 保存的转移 `.rgb` 都按 `RGB\0TFR` 文件头识别。外部链路使用文件交换。SAT20 Direct 和 DKVS 钱包间传输单独验收。
+
+### 双向收发
+
+| 用例 | 执行步骤 |
+| --- | --- |
+| PWA 发行 NIA，CLI 接收后返回 | PWA 从 **Issue RGB Asset** 发行，CLI 用 `rgb import` 导入合约并用 `rgb invoice --address-based` 生成收款发票。PWA 走 **Invoice** 模式准备交易并导出标准二进制 consignment。CLI 用 `rgb validate` 验证 consignment，并核对本钱包的发票、合约与收款输出。接上真实验证产生的广播前回执后，在 PWA 确认广播。Bitcoin 确认后用 `rgb accept` 接收并核对可用余额，再向 PWA 新发票转回部分资产。 |
+| CLI 发行另一份 NIA，PWA 接收后返回 | CLI 用 `rgb issue` 从测试 Genesis 配置发行并导出合约。PWA 从 **Import RGB Contract** 导入，核对可用余额为零。PWA 选择 **Witness address** 和 **Out-of-band file exchange**，生成收款发票。CLI 用 `rgb transfer` 生成 consignment 和 PSBT，PWA 导入并执行 **Validate before broadcast**。用测试签名器签名，CLI `rgb finalize --publish` 广播。待交易可见后，PWA 从原请求执行 **Complete receive after broadcast**，确认后核对可用余额，再向 CLI 新发票转回部分资产。 |
+
+CLI 的 `validate` 输出不包含 PWA 要求的广播前 JSON 回执。PWA → CLI 方向的回执对接仍待验证。缺少真实回执时，将这一腿记为 `BLOCKED`，保留实际失败或缺失证据。 [PWA 回执校验实现](../../sdk/wallet/rgb_ui.go)
+
+每一腿记录发行者、Contract ID、Schema ID、发票和 consignment 摘要、验证与回执结果、Bitcoin TxID 和确认高度、收款及找零位置、两端可用余额。两腿分别确认，且收款和找零守恒后才能记该往返 `PASS`。目前通过了 CLI 版本、网络、文件读取与发票解析预检，RC2 链上双向收发待验收。
+
+## 历史 Iris 验收资料
+
+以下为旧版 SDK 与 Iris 在 Testnet4 上的记录，保留当时使用的工具和结果。
+
+### 当时的测试基线
 
 - 钱包：Iris Wallet Android
 - 版本：`0.3.1`，version code `73`
@@ -12,14 +37,10 @@
 - Bitcoin 网络：Testnet4
 - Electrum：`ssl://electrum.iriswallet.com:50053`
 
-该版本的 NIA、CFA、UDA schema ID 与 SAT20 PWA 使用的
-`rgb-lib 0.3.0-beta.7` / RGB `0.11.1-rc.11` 一致。IFA 不在当前
-RGB11/NIA 验收范围内。
+历史测试采用 NIA。该 Iris 版本的 NIA、CFA、UDA Schema ID 与当时用于
+SAT20 PWA 互操作验证的 `rgb-lib 0.3.0-beta.7`（RGB `0.11.1-rc.11`）一致。
 
-不要使用 RGB-WG `rgb-wallet 0.11.0-beta.7` 替代 Iris。该版本属于
-更早的 RGB-WG 技术栈，不是 PWA 当前采用的 RGB v0.11.1 互操作基线。
-
-## 构建说明
+### 当时的构建说明
 
 本地构建可以做以下两项纯构建适配，不修改钱包或 RGB 业务逻辑：
 
@@ -36,7 +57,7 @@ RGB11/NIA 验收范围内。
 Debug APK 的签名和构建产物不要求字节级可复现。每次测试必须重新核对源码
 commit、variant、package、版本及 RGB 依赖。
 
-## 验收范围
+### 当时的验收范围
 
 第三方互操作必须使用标准 RGB 流程，不使用 SAT20 DKVS 传递第三方数据：
 
@@ -51,7 +72,7 @@ commit、variant、package、版本及 RGB 依赖。
 每个方向记录 contract ID、invoice、consignment、anchor transaction、
 接收状态和最终余额。Bitcoin Testnet4 确认较慢时，每 10 分钟检查一次。
 
-## 标准文件要求
+### 当时的标准文件要求
 
 - 合约文件使用 RGB 标准二进制封装，文件头为 `RGB\0CON`，扩展名 `.rgb`。
 - 转移 consignment 使用 RGB 标准二进制封装，文件头为 `RGB\0TFR`，

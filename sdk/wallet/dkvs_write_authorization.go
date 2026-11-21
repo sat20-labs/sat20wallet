@@ -18,7 +18,7 @@ func (p *SatsNetDKVSClient) WithWriteSigner(signer common.Wallet) *SatsNetDKVSCl
 	endpoint := p.endpointID
 	p.endpointMu.RUnlock()
 	copyClient := &SatsNetDKVSClient{RESTClient: p.RESTClient, manager: p.manager,
-		replicaNamespace: p.replicaNamespace, endpointID: endpoint}
+		replicaNamespace: p.replicaNamespace, endpointID: endpoint, requestCtx: p.requestCtx}
 	if signer != nil {
 		copyClient.writeSigner = signer.Clone()
 	}

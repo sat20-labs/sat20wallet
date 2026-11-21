@@ -2,6 +2,7 @@ package account
 
 import (
 	"bytes"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -66,34 +67,39 @@ func validManagedName(value string, limit int) bool {
 	return true
 }
 
-// Entry identity has explicit field boundaries and never includes payload,
-// codec, account, or a local revision. A content update retains the same key.
-func ManagedEntryID(provider, scope string) (string, error) {
+// ManagedEntryID derives a stable ID from an account's secret and module scope.
+func ManagedEntryID(secret []byte, accountID, provider, scope string) (string, error) {
+	if !validHex(accountID, 64) {
+		return "", ErrInvalidAccountID
+	}
+	if len(secret) != accountSecretSize {
+		return "", ErrInvalidBackup
+	}
 	provider, scope, err := managedNames(provider, scope)
 	if err != nil {
 		return "", err
 	}
 	var buf bytes.Buffer
 	e := strict.NewEncoder(&buf)
-	_ = e.Raw([]byte("sat20-account-entry-v1\x00"))
 	_ = e.String(provider, 1, managedProviderMax)
 	_ = e.String(scope, 1, managedScopeMax)
-	hash := sha256.Sum256(buf.Bytes())
-	return hex.EncodeToString(hash[:]), nil
+	salt, _ := hex.DecodeString(accountID)
+	key := hkdfSHA256(secret, salt, []byte("sat20-account-blob-entry-id-v1"), sha256.Size)
+	defer zero(key)
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write(buf.Bytes())
+	return hex.EncodeToString(mac.Sum(nil)), nil
 }
 
-func ManagedModuleKey(accountID, provider, scope string) (string, error) {
-	if !validHex(accountID, 64) {
-		return "", ErrInvalidAccountID
-	}
-	id, err := ManagedEntryID(provider, scope)
+func ManagedModuleKey(secret []byte, accountID, provider, scope string) (string, error) {
+	id, err := ManagedEntryID(secret, accountID, provider, scope)
 	if err != nil {
 		return "", err
 	}
 	return "/blob/" + accountID + "/" + id, nil
 }
 
-func NormalizeManagedIndex(accountID string, value ManagedIndex) (ManagedIndex, error) {
+func NormalizeManagedIndex(secret []byte, accountID string, value ManagedIndex) (ManagedIndex, error) {
 	if !validHex(accountID, 64) {
 		return ManagedIndex{}, ErrInvalidAccountID
 	}
@@ -109,11 +115,13 @@ func NormalizeManagedIndex(accountID string, value ManagedIndex) (ManagedIndex, 
 		if err != nil || !validManagedName(entry.Codec, managedCodecMax) {
 			return ManagedIndex{}, ErrInvalidBackup
 		}
-		key, err := ManagedModuleKey(accountID, entry.Provider, entry.Scope)
 		coreKey := entry.Provider == "wallets" && entry.Scope == "global" &&
 			entry.Key == "/personal/"+accountID+"/account/state"
-		if err != nil || (entry.Key != key && !coreKey) {
-			return ManagedIndex{}, ErrInvalidBackup
+		if !coreKey {
+			key, err := ManagedModuleKey(secret, accountID, entry.Provider, entry.Scope)
+			if err != nil || entry.Key != key {
+				return ManagedIndex{}, ErrInvalidBackup
+			}
 		}
 		id := entry.Provider + "\x00" + entry.Scope
 		if seen[id] || keys[entry.Key] {
@@ -131,8 +139,8 @@ func NormalizeManagedIndex(accountID string, value ManagedIndex) (ManagedIndex, 
 	return result, nil
 }
 
-func encodeManagedIndex(accountID string, value ManagedIndex) ([]byte, error) {
-	value, err := NormalizeManagedIndex(accountID, value)
+func encodeManagedIndex(secret []byte, accountID string, value ManagedIndex) ([]byte, error) {
+	value, err := NormalizeManagedIndex(secret, accountID, value)
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +166,7 @@ func encodeManagedIndex(accountID string, value ManagedIndex) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func decodeManagedIndex(accountID string, value []byte) (ManagedIndex, error) {
+func decodeManagedIndex(secret []byte, accountID string, value []byte) (ManagedIndex, error) {
 	r := bytes.NewReader(value)
 	d := strict.NewDecoder(r)
 	magic, err := d.Raw(uint64(len(managedIndexMagic)))
@@ -191,7 +199,7 @@ func decodeManagedIndex(accountID string, value []byte) (ManagedIndex, error) {
 		}
 		result.Entries = append(result.Entries, entry)
 	}
-	canonical, err := encodeManagedIndex(accountID, result)
+	canonical, err := encodeManagedIndex(secret, accountID, result)
 	if err != nil || r.Len() != 0 || !bytes.Equal(canonical, value) {
 		return ManagedIndex{}, ErrRecoveryFailed
 	}
@@ -255,7 +263,7 @@ func SealManagedIndex(secret []byte, accountID, network string, value ManagedInd
 	if err != nil {
 		return nil, err
 	}
-	plain, err := encodeManagedIndex(accountID, value)
+	plain, err := encodeManagedIndex(secret, accountID, value)
 	if err != nil {
 		return nil, err
 	}
@@ -273,5 +281,5 @@ func OpenManagedIndex(secret []byte, accountID, network string, value []byte) (M
 		return ManagedIndex{}, err
 	}
 	defer zero(plain)
-	return decodeManagedIndex(accountID, plain)
+	return decodeManagedIndex(secret, accountID, plain)
 }

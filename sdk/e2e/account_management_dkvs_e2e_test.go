@@ -186,14 +186,15 @@ func prepareAccountManagementAutopaySync(t *testing.T, fixture *templateFixture,
 	require.NoError(t, err)
 	require.NoError(t, walletManager.InitializeAccountManagement("123456"))
 	require.Equal(t, pubKey, walletManager.GetWallet().GetPubKey().SerializeCompressed())
-	ownerBlobLimit := accountReviewBlobLimit(t, walletManager)
+	// The fixture provisions the pool before activating any paid account.
+	ownerBlobLimit := templateruntime.AutopayDefaultBlobKeyLimit
 	var guardianManager *wallet.Manager
 	var guardianLocation wallet.AccountIndexerLocation
 	var guardianBlobLimit uint32
 	if guardianTests {
 		guardianManager, guardianLocation = accountReviewDevice(t, fixture.Network, guardianMnemonic)
 		require.NoError(t, guardianManager.RegisterAccountManagedDataProvider(&e2eAccountManagedProvider{}))
-		guardianBlobLimit = accountReviewBlobLimit(t, guardianManager)
+		guardianBlobLimit = templateruntime.AutopayDefaultBlobKeyLimit
 	}
 	if successor != nil {
 		delegateParam, delegateErr := (&contractcommon.TemplateAutopayConfigInvokeParam{
@@ -383,6 +384,7 @@ func runAccountManagementAutopaySync(t *testing.T, setup *accountManagementAutop
 		require.False(t, guardianStatus.ActivationPending)
 		require.True(t, guardianStatus.DKVSWriteAllowed)
 		require.Equal(t, wallet.AccountStoragePaid, guardianStatus.StorageMode)
+		require.Equal(t, setup.guardianBlobLimit, accountReviewBlobLimit(t, guardianManager))
 		require.False(t, guardianStatus.ManagedDataDirty)
 		require.Zero(t, guardianStatus.PendingChanges)
 		require.Zero(t, guardianStatus.DKVSPendingRequests)
@@ -556,7 +558,9 @@ func runAccountManagementAutopaySync(t *testing.T, setup *accountManagementAutop
 		require.NoError(t, err)
 	}
 
-	dkvsShare, err := account.RecoverDKVSShare(loaded.DKVSShareCapsule, loaded.KnowledgeBundle,
+	knowledge, err := account.OpenRecoveryKnowledge(*loaded, pkg.UserShare)
+	require.NoError(t, err)
+	dkvsShare, err := account.RecoverDKVSShare(loaded.DKVSShareCapsule, knowledge,
 		[]account.AnswerAttempt{{QuestionID: "book", Answer: "月光落在安静的旧桥上。"},
 			{QuestionID: "note", Answer: "yellow bicycle beside the winter river"}})
 	require.NoError(t, err)
@@ -574,6 +578,7 @@ func runAccountManagementAutopaySync(t *testing.T, setup *accountManagementAutop
 		30*time.Second, 100*time.Millisecond,
 		"reconfirm storage only after the owner has a verified online write session")
 	t.Run("PWAReadyPaidStorageDoesNotFundTwiceOrDowngrade", func(t *testing.T) {
+		require.Equal(t, setup.ownerBlobLimit, accountReviewBlobLimit(t, walletManager))
 		confirmed, err := walletManager.ConfirmAccountStorage(wallet.AccountStoragePaid, 100)
 		require.NoError(t, err)
 		require.Empty(t, confirmed.TransactionID)

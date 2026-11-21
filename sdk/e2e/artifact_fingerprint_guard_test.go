@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"crypto/sha256"
+	"debug/buildinfo"
 	"debug/elf"
 	"debug/macho"
 	"encoding/hex"
@@ -28,23 +29,29 @@ type pwaBuildInputSnapshot struct {
 	files     map[string]string
 }
 
-// This runs immediately before NodeReadiness in the cross-layer acceptance
-// process. It builds the real Core/plugin pair once, verifies the linker
-// fingerprints for every shared Go package, and refuses to continue if the
-// shared source inputs changed while that pair was being built.
+const pwaCoreOutputEnv = "SAT20_REAL_PWA_CORE_BUNDLE"
+
+// This validates a pair for either the current PWA run or one cross-layer step.
 func TestSDKPWARealRegtestArtifactFingerprintGuard(t *testing.T) {
+	bundleDir := os.Getenv(pwaCoreOutputEnv)
 	if os.Getenv("SAT20_REAL_RGB_CROSS_LAYER") == "1" {
-		require.Empty(t, os.Getenv(prebuiltE2EEnv), "RGB cross-layer guard must build every artifact with this run's GOFLAGS overlay")
+		require.Empty(t, os.Getenv(prebuiltE2EEnv), "RGB cross-layer guard must build from the current sources")
+		require.Empty(t, bundleDir, "RGB cross-layer builds are private to each step")
 		require.Equal(t, int32(32), chaincfg.RegressionNetParams.POSV2Height, "RGB cross-layer regtest must retain the POS v2 schedule")
 		t.Logf("private regtest activation: POSV2Height=%d", chaincfg.RegressionNetParams.POSV2Height)
 	}
+	if bundleDir != "" {
+		require.True(t, filepath.IsAbs(bundleDir), "PWA artifact directory must be absolute")
+		require.Empty(t, os.Getenv(prebuiltE2EEnv), "build the run's artifact bundle from the current sources")
+	}
 
-	before, err := capturePWABuildInputs()
+	includeTests := bundleDir == ""
+	before, err := captureBuildInputs(includeTests)
 	require.NoError(t, err, "capture build inputs before Core/plugin build")
 
-	artifacts := satoshinetCoreBuildArtifacts(t)
+	artifacts := buildSatoshiNetTestArtifacts(t, true, bundleDir)
 
-	after, err := capturePWABuildInputs()
+	after, err := captureBuildInputs(includeTests)
 	require.NoError(t, err, "capture build inputs after Core/plugin build")
 	changes := changedPWABuildInputs(before, after)
 	if len(changes) != 0 {
@@ -84,11 +91,46 @@ func TestSDKPWARealRegtestArtifactFingerprintGuard(t *testing.T) {
 	require.Equal(t, pluginFingerprints[btcLuckyPackage], coreFingerprints[btcLuckyPackage],
 		"the btclucky fingerprint that previously failed plugin loading must match")
 
+	inputs := fingerprintPWABuildInputs(after)
 	t.Logf("artifact fingerprint guard passed: shared_packages=%d build_input_files=%d build_input_sha256=%s",
-		shared, len(after.files), fingerprintPWABuildInputs(after))
+		shared, len(after.files), inputs)
+	if bundleDir != "" {
+		bundle := e2eArtifactBundle{
+			GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
+			CoreInputs: inputs, Files: make(map[string]string),
+		}
+		for _, path := range []string{artifacts.coreExecutable, artifacts.corePlugin} {
+			info, err := buildinfo.ReadFile(path)
+			require.NoError(t, err)
+			require.Equal(t, bundle.GoVersion, info.GoVersion, "artifact toolchain for %s", filepath.Base(path))
+			digest, err := fileSHA256(path)
+			require.NoError(t, err)
+			bundle.Files[filepath.Base(path)] = digest
+		}
+		manifest, err := json.Marshal(bundle)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(bundleDir, "manifest.json"), manifest, 0600))
+	}
+}
+
+func TestPWACoreInputScope(t *testing.T) {
+	t.Setenv("GOFLAGS", "")
+	all, err := capturePWABuildInputs()
+	require.NoError(t, err)
+	core, err := captureBuildInputs(false)
+	require.NoError(t, err)
+	testFile := "sat20wallet/sdk/e2e/harness_test.go"
+	require.Contains(t, all.files, testFile)
+	require.NotContains(t, core.files, testFile)
+	require.Contains(t, core.files, "satoshinet/pos_config_rpctest.go")
+	require.Contains(t, core.files, "transcend/plugin/main.go")
 }
 
 func capturePWABuildInputs() (pwaBuildInputSnapshot, error) {
+	return captureBuildInputs(true)
+}
+
+func captureBuildInputs(includeTests bool) (pwaBuildInputSnapshot, error) {
 	_, sourceFile, _, ok := runtime.Caller(0)
 	if !ok {
 		return pwaBuildInputSnapshot{}, fmt.Errorf("locate e2e source directory")
@@ -124,6 +166,10 @@ func capturePWABuildInputs() (pwaBuildInputSnapshot, error) {
 			if relative == "" {
 				continue
 			}
+			// go build excludes these files from both Core and stpd.so.
+			if !includeTests && strings.HasSuffix(relative, "_test.go") {
+				continue
+			}
 			path := filepath.Join(root, filepath.FromSlash(relative))
 			if !isGoBuildInput(path) {
 				continue
@@ -146,36 +192,41 @@ func capturePWABuildInputs() (pwaBuildInputSnapshot, error) {
 			return pwaBuildInputSnapshot{}, err
 		}
 	}
-	contracts := filepath.Join(workspace, "sat20wallet", "sdk", "e2e", "testdata", "contracts")
-	if err := filepath.WalkDir(contracts, func(path string, entry os.DirEntry, err error) error {
-		if err != nil || entry.IsDir() {
-			return err
+	if includeTests {
+		contracts := filepath.Join(workspace, "sat20wallet", "sdk", "e2e", "testdata", "contracts")
+		if err := filepath.WalkDir(contracts, func(path string, entry os.DirEntry, err error) error {
+			if err != nil || entry.IsDir() {
+				return err
+			}
+			if filepath.Ext(path) != ".sol" && filepath.Ext(path) != ".json" {
+				return nil
+			}
+			return addBuildInputPath(workspace, path, snapshot.files)
+		}); err != nil && !os.IsNotExist(err) {
+			return pwaBuildInputSnapshot{}, fmt.Errorf("fingerprint Solidity build inputs: %w", err)
 		}
-		if filepath.Ext(path) != ".sol" && filepath.Ext(path) != ".json" {
-			return nil
-		}
-		return addBuildInputPath(workspace, path, snapshot.files)
-	}); err != nil && !os.IsNotExist(err) {
-		return pwaBuildInputSnapshot{}, fmt.Errorf("fingerprint Solidity build inputs: %w", err)
-	}
-	if os.Getenv("SAT20_REAL_RGB_CROSS_LAYER") != "1" {
-		return snapshot, nil
 	}
 	// The source overlay is a build input too: its JSON binds original paths
 	// to replacement files, whose bytes need not exist in any Git checkout.
 	flags := strings.Fields(os.Getenv("GOFLAGS"))
 	var overlayPath string
+	var hasOverlay bool
 	for i := 0; i < len(flags); i++ {
 		flag := strings.Trim(flags[i], "\"'")
 		if strings.HasPrefix(flag, "-overlay=") {
+			hasOverlay = true
 			overlayPath = strings.TrimPrefix(flag, "-overlay=")
 		} else if flag == "-overlay" {
+			hasOverlay = true
 			i++
 			if i >= len(flags) {
 				return pwaBuildInputSnapshot{}, fmt.Errorf("GOFLAGS -overlay requires a path")
 			}
 			overlayPath = strings.Trim(flags[i], "\"'")
 		}
+	}
+	if !hasOverlay {
+		return snapshot, nil
 	}
 	if !filepath.IsAbs(overlayPath) {
 		return pwaBuildInputSnapshot{}, fmt.Errorf("Go source overlay path must be absolute: %s", overlayPath)
@@ -191,7 +242,7 @@ func capturePWABuildInputs() (pwaBuildInputSnapshot, error) {
 		return pwaBuildInputSnapshot{}, fmt.Errorf("decode Go source overlay: %w", err)
 	}
 	if len(overlay.Replace) == 0 {
-		return pwaBuildInputSnapshot{}, fmt.Errorf("RGB Go source overlay must contain source replacements")
+		return pwaBuildInputSnapshot{}, fmt.Errorf("Go source overlay must contain source replacements")
 	}
 	digest := sha256.Sum256(data)
 	snapshot.files["overlay:"+overlayPath] = hex.EncodeToString(digest[:])

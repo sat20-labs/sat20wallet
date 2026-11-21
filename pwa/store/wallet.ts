@@ -150,20 +150,24 @@ export const useWalletStore = defineStore('wallet', () => {
     if (err || !result) {
       throw err || new Error('Failed to load wallet catalog')
     }
-    const catalog: WalletData[] = result.wallets.map(item => ({
-      id: String(item.id),
-      name: item.name,
-      fingerprint: item.fingerprint,
-      accounts: item.accounts.map(account => ({
-        index: account.index,
-        name: account.name,
-        did: account.did,
-        address: account.address,
-        pubKey: account.pub_key,
-        accountId: account.account_id,
-        spEnabled: Boolean(account.sp_enabled),
-      })),
-    }))
+    const catalog: WalletData[] = result.wallets.map(item => {
+      const generatedName = /^(Wallet [1-9]\d*) ([0-9a-f]{64})$/.exec(item.name)
+      const name = generatedName && generatedName[2] === item.fingerprint ? generatedName[1] : item.name
+      return {
+        id: String(item.id),
+        name,
+        fingerprint: item.fingerprint,
+        accounts: item.accounts.map(account => ({
+          index: account.index,
+          name: account.name,
+          did: account.did,
+          address: account.address,
+          pubKey: account.pub_key,
+          accountId: account.account_id,
+          spEnabled: Boolean(account.sp_enabled),
+        })),
+      }
+    })
     return { catalog, walletId: result.current_wallet_id, accountIndex: result.current_account_index, rootAccountId: result.root_account_id }
   }
   const readWalletCatalog = async (): Promise<WalletData[]> => (await readWalletCatalogState()).catalog

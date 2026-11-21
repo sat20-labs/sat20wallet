@@ -27,6 +27,15 @@ func requireE2EInactive(t *testing.T, manager *wallet.Manager, password string) 
 	}, 20*time.Second, 20*time.Millisecond, "real inactive discovery before local business or storage authorization")
 }
 
+func requireE2EAccountWrite(t *testing.T, manager *wallet.Manager) {
+	t.Helper()
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		status := manager.GetAccountManagementStatus()
+		assert.True(c, status.WriteAllowed, "account state=%s discovery=%s DKVS=%s error=%s",
+			status.AccountState, status.DiscoveryStatus, status.DKVSStatus, status.LastDKVSSyncErrorCode)
+	}, 30*time.Second, 20*time.Millisecond, "wait for the wallet's existing account write gate")
+}
+
 // Activation returns before the asynchronous private backup is confirmed.
 // A new device can recover only after that actual backup has completed.
 func requireE2EFirstBackup(t *testing.T, manager *wallet.Manager) {

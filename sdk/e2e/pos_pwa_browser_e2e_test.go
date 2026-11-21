@@ -55,85 +55,95 @@ func failUnexpectedPWASkip(t *testing.T) {
 // API in its temporary test directory, then checks both peers' public state.
 func posPWADeployPublicContracts(t *testing.T, parent context.Context, f *posPWAControl, assets []string) map[string]string {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(parent, 3*time.Minute)
-	defer cancel()
-	witness, _, err := getP2WSHScript(f.keys[0].PubKey().SerializeCompressed(), f.keys[1].PubKey().SerializeCompressed())
-	require.NoError(t, err)
-	witnessHash := sha256.Sum256(witness)
-	channel, err := btcutil.NewAddressWitnessScriptHash(witnessHash[:], &chaincfg.TestNetParams)
-	require.NoError(t, err)
 	contracts := make(map[string]string)
 	for _, asset := range assets {
 		contract := wallet.NewTranscendContract()
 		contract.AssetName = *indexercommon.NewAssetNameFromString(asset)
-		content, err := json.Marshal(map[string]any{"index": 0, "template": wallet.TEMPLATE_CONTRACT_TRANSCEND,
-			"content": contract.Content(), "feeRate": 1, "local": true})
-		require.NoError(t, err)
-		request, err := http.NewRequestWithContext(ctx, http.MethodPost,
-			"http://"+f.network.Core.managementAddr+"/local/contract/deploy", bytes.NewReader(content))
-		require.NoError(t, err)
-		request.Header.Set("Content-Type", "application/json")
-		response, err := (&http.Client{Timeout: 30 * time.Second}).Do(request)
-		require.NoError(t, err)
-		var deployed struct {
-			wwire.BaseResp
-			TxID          string `json:"txId"`
-			ReservationID int64  `json:"resvId"`
-		}
-		err = json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&deployed)
-		response.Body.Close()
-		require.NoError(t, err)
-		require.Equal(t, http.StatusOK, response.StatusCode)
-		require.Zero(t, deployed.Code, "deploy public %s: %s", asset, deployed.Msg)
-		require.Positive(t, deployed.ReservationID)
-		txid, err := chainhash.NewHashFromStr(deployed.TxID)
-		require.NoError(t, err, "public deployment must broadcast its actual signed fee transaction")
-		contractURL := wallet.GenerateContractURl(channel.EncodeAddress(), asset, wallet.TEMPLATE_CONTRACT_TRANSCEND)
-		for {
-			ready := true
-			targetHeight := int32(0)
-			for _, node := range []*testHarness{f.network.Bootstrap, f.network.Core} {
-				var response wwire.ContractStatusResp
-				readErr := posPWAReadJSON("http://"+node.stpAddr+"/testnet"+wwire.QUERY_INFO_CONTRACT+"/"+url.PathEscape(contractURL), &response)
-				var state struct {
-					Status int `json:"status"`
-					Height int `json:"currentBlock"`
-					Enable int `json:"enableBlock"`
-				}
-				if readErr != nil || response.Code != 0 || json.Unmarshal([]byte(response.Status), &state) != nil {
-					ready = false
-					continue
-				}
-				if state.Status < wallet.CONTRACT_STATUS_READY || state.Status >= wallet.CONTRACT_STATUS_CLOSING || state.Height < state.Enable {
-					ready = false
-				}
-				if state.Enable != wallet.INIT_ENABLE_BLOCK && state.Enable > int(targetHeight) {
-					targetHeight = int32(state.Enable)
-				}
+		contracts[asset] = posPWADeployContract(t, parent, f, contract, 0)
+	}
+	return contracts
+}
+
+func posPWADeployContract(t *testing.T, parent context.Context, f *posPWAControl, contract wallet.Contract,
+	accountIndex uint32) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(parent, 3*time.Minute)
+	defer cancel()
+	// Faucet owns its channel exclusively. Use a different Core subaccount
+	// from the public Transcend contracts.
+	coreKey := keyFromMnemonic(t, coreMnemonic, accountIndex)
+	witness, _, err := getP2WSHScript(f.keys[0].PubKey().SerializeCompressed(), coreKey.PubKey().SerializeCompressed())
+	require.NoError(t, err)
+	witnessHash := sha256.Sum256(witness)
+	channel, err := btcutil.NewAddressWitnessScriptHash(witnessHash[:], &chaincfg.TestNetParams)
+	require.NoError(t, err)
+	asset := contract.GetAssetName().String()
+	content, err := json.Marshal(map[string]any{"index": accountIndex, "template": contract.GetTemplateName(),
+		"content": contract.Content(), "feeRate": 1, "local": true})
+	require.NoError(t, err)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		"http://"+f.network.Core.managementAddr+"/local/contract/deploy", bytes.NewReader(content))
+	require.NoError(t, err)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := (&http.Client{Timeout: 30 * time.Second}).Do(request)
+	require.NoError(t, err)
+	var deployed struct {
+		wwire.BaseResp
+		TxID          string `json:"txId"`
+		ReservationID int64  `json:"resvId"`
+	}
+	err = json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&deployed)
+	response.Body.Close()
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	require.Zero(t, deployed.Code, "deploy public %s: %s", asset, deployed.Msg)
+	require.Positive(t, deployed.ReservationID)
+	txid, err := chainhash.NewHashFromStr(deployed.TxID)
+	require.NoError(t, err, "public deployment must broadcast its actual signed fee transaction")
+	contractURL := wallet.GenerateContractURl(channel.EncodeAddress(), asset, contract.GetTemplateName())
+	for {
+		ready := true
+		targetHeight := int32(0)
+		for _, node := range []*testHarness{f.network.Bootstrap, f.network.Core} {
+			var response wwire.ContractStatusResp
+			readErr := posPWAReadJSON("http://"+node.stpAddr+"/testnet"+wwire.QUERY_INFO_CONTRACT+"/"+url.PathEscape(contractURL), &response)
+			var state struct {
+				Status int `json:"status"`
+				Height int `json:"currentBlock"`
+				Enable int `json:"enableBlock"`
 			}
-			if ready {
-				mined, err := f.network.Bootstrap.Client.GetRawTransactionVerbose(txid)
-				require.NoError(t, err)
-				require.Positive(t, mined.Confirmations, "public contract must be backed by a canonical deployment transaction")
-				break
-			}
-			_, height, err := f.network.Bootstrap.Client.GetBestBlock()
-			require.NoError(t, err)
-			require.Less(t, height, posPWAActivationHeight-6, "public setup must leave room for the PWA pre-H workflows")
-			if targetHeight > height {
-				require.NoError(t, f.produce(ctx))
+			if readErr != nil || response.Code != 0 || json.Unmarshal([]byte(response.Status), &state) != nil {
+				ready = false
 				continue
 			}
-			select {
-			case <-ctx.Done():
-				t.Fatalf("public %s never became active on both STP peers: %v", asset, ctx.Err())
-			case <-time.After(200 * time.Millisecond):
+			if state.Status < wallet.CONTRACT_STATUS_READY || state.Status >= wallet.CONTRACT_STATUS_CLOSING || state.Height < state.Enable {
+				ready = false
+			}
+			if state.Enable != wallet.INIT_ENABLE_BLOCK && state.Enable > int(targetHeight) {
+				targetHeight = int32(state.Enable)
 			}
 		}
-		contracts[asset] = contractURL
+		if ready {
+			mined, err := f.network.Bootstrap.Client.GetRawTransactionVerbose(txid)
+			require.NoError(t, err)
+			require.Positive(t, mined.Confirmations, "public contract must be backed by a canonical deployment transaction")
+			break
+		}
+		_, height, err := f.network.Bootstrap.Client.GetBestBlock()
+		require.NoError(t, err)
+		require.Less(t, height, posPWAActivationHeight-6, "public setup must leave room for the PWA pre-H workflows")
+		if targetHeight > height {
+			require.NoError(t, f.produce(ctx))
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("public %s never became active on both STP peers: %v", asset, ctx.Err())
+		case <-time.After(200 * time.Millisecond):
+		}
 	}
 	require.NoError(t, f.waitSynced(ctx))
-	return contracts
+	return contractURL
 }
 
 type posPWANodeState struct {
@@ -1022,9 +1032,7 @@ func posPWARestartNode(ctx context.Context, node *testHarness) error {
 	command := exec.Command(previous.Path, previous.Args[1:]...)
 	command.Dir, command.Env = previous.Dir, append([]string(nil), previous.Env...)
 	command.Stdout, command.Stderr = logFile, logFile
-	if satoshinetRuntimeLock != nil {
-		command.ExtraFiles = []*os.File{satoshinetRuntimeLock}
-	}
+	command.ExtraFiles = satoshinetRuntimeLocks
 	if err := node.startProcess(command); err != nil {
 		_ = logFile.Close()
 		return err

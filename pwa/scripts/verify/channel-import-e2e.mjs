@@ -13,10 +13,9 @@ export async function runChannelImportCase(t, fixture) {
   }, { timeout: 90000 }).toBe(true)
   const navigateRecovery = async page => {
     await page.evaluate(() => { location.hash = '#/restore-account' })
-    await page.getByPlaceholder(ui.pasteLocator).fill(fixture.locator)
+    await page.getByPlaceholder(ui.pasteRecoveryFile).fill(fixture.recovery_file)
     await page.getByRole('button', { name: ui.loadBackup, exact: true }).click()
     for (let i = 0; i < fixture.answers.length; i++) await page.locator('section input[type=password]').nth(i).fill(fixture.answers[i].answer)
-    await page.getByPlaceholder(ui.pasteUserShare).fill(fixture.user_share)
     await page.getByRole('button', { name: ui.previewRecovery, exact: true }).click()
     await page.locator('#restore-local-password').fill(fixture.password)
     await page.locator('#restore-confirm-password').fill(fixture.password)

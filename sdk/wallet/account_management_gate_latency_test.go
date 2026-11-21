@@ -7,12 +7,115 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
+	"github.com/stretchr/testify/require"
 )
+
+type bindingSyncBarrier struct {
+	*rgb11MemoryDKVSHTTP
+	armed   atomic.Bool
+	entered chan context.Context
+	release chan struct{}
+}
+
+func (h *bindingSyncBarrier) SendDKVSPostContext(ctx context.Context, path string, body []byte) ([]byte, error) {
+	if path == "/v3/dkvs/active/sync" && h.armed.CompareAndSwap(true, false) {
+		h.entered <- ctx
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-h.release:
+		}
+	}
+	return h.rgb11MemoryDKVSHTTP.SendDKVSPostContext(ctx, path, body)
+}
+
+func TestCoreBindDuringDiscovery(t *testing.T) {
+	for _, scenario := range []string{"discovery completes", "wallet closes"} {
+		t.Run(scenario, func(t *testing.T) {
+			manager, remote, service := newInactiveAccountGroup(t, accountRootWrapperTestMnemonic, "password")
+			node := NewNode(service, "message.test", SERVER_NODE, service.CoreNodePubKey(), service.CoreNodePubKey())
+			require.NoError(t, manager.SetAccountServiceNode(node))
+			barrier := &bindingSyncBarrier{rgb11MemoryDKVSHTTP: remote,
+				entered: make(chan context.Context, 1), release: make(chan struct{})}
+			manager.SetDKVSHttpClient(barrier)
+
+			atCompletion, finish := make(chan struct{}), make(chan struct{})
+			var allowFinish, allowSync sync.Once
+			defer allowSync.Do(func() { close(barrier.release) })
+			defer allowFinish.Do(func() { close(finish) })
+			var reported atomic.Bool
+			manager.dkvs.setStatusCallback(func() {
+				if reported.CompareAndSwap(false, true) {
+					close(atCompletion)
+					<-finish
+				}
+			})
+			require.NoError(t, manager.startAccountDiscovery())
+			select {
+			case <-atCompletion:
+			case <-time.After(5 * time.Second):
+				t.Fatal("discovery did not reach completion")
+			}
+			manager.dkvs.mu.Lock()
+			discoveryDone := manager.dkvs.done
+			manager.dkvs.mu.Unlock()
+			require.NotNil(t, discoveryDone)
+
+			barrier.armed.Store(true)
+			result := make(chan error, 1)
+			go func() { result <- manager.BindAccountToCurrentCoreNode() }()
+			var request context.Context
+			select {
+			case request = <-barrier.entered:
+			case err := <-result:
+				t.Fatalf("binding ended before its initial sync: %v", err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("binding did not reach initial sync")
+			}
+			allowFinish.Do(func() { close(finish) })
+			select {
+			case <-discoveryDone:
+			case <-time.After(5 * time.Second):
+				t.Fatal("binding blocked discovery completion")
+			}
+			survived := request.Err()
+			if scenario == "wallet closes" {
+				manager.Close()
+			} else {
+				allowSync.Do(func() { close(barrier.release) })
+			}
+			select {
+			case err := <-result:
+				if scenario == "wallet closes" {
+					require.ErrorIs(t, err, context.Canceled)
+					require.ErrorIs(t, request.Err(), context.Canceled)
+				} else {
+					require.NoError(t, err)
+					store, err := manager.accountDKVSStore()
+					require.NoError(t, err)
+					root, err := manager.accountManagementRootWallet()
+					require.NoError(t, err)
+					key, err := dkvsindexer.AccountMappingKey(GetChainParam().Name, root.GetAddress())
+					require.NoError(t, err)
+					record, err := store.Get(key)
+					require.NoError(t, err)
+					_, _, descriptor, err := dkvsindexer.ValidateAccountMappingBindingRecord(record.record)
+					require.NoError(t, err)
+					require.Equal(t, remote.endpointID, descriptor.CoreNodeID)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("binding did not return")
+			}
+			require.NoError(t, survived, "ending discovery must leave the binding request live")
+		})
+	}
+}
 
 type blockedAccountConfigHTTP struct {
 	*rgb11MemoryDKVSHTTP
@@ -69,7 +172,7 @@ func TestAccountRemoteCommitDoesNotDependOnCurrentSelection(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			entry, err := accountEntry(manager.accountProfile.AccountID, "wallets", AccountManagedDataGlobalScope)
+			entry, err := accountEntry(nil, manager.accountProfile.AccountID, "wallets", AccountManagedDataGlobalScope)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -110,7 +213,7 @@ func TestAccountRemoteCommitRejectsChangedManagedDataGeneration(t *testing.T) {
 	manager.mutex.RUnlock()
 	defer zeroBytes(secret)
 	accountID := manager.accountProfile.AccountID
-	entry, err := accountEntry(accountID, "wallets", AccountManagedDataGlobalScope)
+	entry, err := accountEntry(nil, accountID, "wallets", AccountManagedDataGlobalScope)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +260,7 @@ func TestAccountRemoteCommitSurvivesPWAReauthentication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	entry, err := accountEntry(manager.accountProfile.AccountID, "wallets", AccountManagedDataGlobalScope)
+	entry, err := accountEntry(nil, manager.accountProfile.AccountID, "wallets", AccountManagedDataGlobalScope)
 	if err != nil {
 		t.Fatal(err)
 	}

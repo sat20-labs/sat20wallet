@@ -1,13 +1,17 @@
 package wallet
 
 import (
+	"bytes"
 	"context"
 	"errors"
-	btcwire "github.com/btcsuite/btcd/wire"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	btcwire "github.com/btcsuite/btcd/wire"
+	"github.com/sat20-labs/sat20wallet/sdk/account"
+	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	"github.com/stretchr/testify/require"
 )
 
@@ -89,14 +93,56 @@ func TestSDKPartialRestore(t *testing.T) {
 	created, err := source.CreateRecovery(ctx, request)
 	require.NoError(t, err)
 	require.True(t, created.CanActivate)
+	var recoveryFile string
 	for _, file := range created.Files {
 		if file.Name == "user-share.txt" {
-			factors.UserShare = string(file.Data)
+			recoveryFile = string(file.Data)
 		}
 	}
-	require.NotEmpty(t, factors.UserShare)
+	require.NotEmpty(t, recoveryFile)
+	locator := strings.Split(recoveryFile, "\n")
+	require.Len(t, locator, 2)
+	require.Equal(t, created.Locator, locator[0])
+	public, err := DecodeAccountPublicLocator(locator[0], source.GetChain())
+	require.NoError(t, err)
+	userShare, err := account.DecodeRecoveryShare(locator[1])
+	require.NoError(t, err)
+	require.Equal(t, public.Locator.PackageID, userShare.PackageID)
+	other := public
+	other.Locator.PackageID = strings.Repeat("f", 32)
+	require.NoError(t, source.SignAccountPublicLocator(&other))
+	otherCode, err := source.encodeAccountLocator(other)
+	require.NoError(t, err)
+	key, err := dkvsindexer.AccountPersonalKey(public.Locator.AccountID, accountPackagePath(public.Locator.PackageID))
+	require.NoError(t, err)
+	store, err := source.accountDKVSStoreForLocation(public.StorageLocation)
+	require.NoError(t, err)
+	record, err := store.GetAuthoritative(key)
+	require.NoError(t, err)
+	require.NotNil(t, record)
+	require.True(t, bytes.HasPrefix(record.Value, []byte{'A', 'C', 'R', 'P', 3}))
+	previous := bytes.Clone(record.Value)
+	previous[4] = 2
+	_, err = account.DecodeRecoveryPackageStorage(previous)
+	require.ErrorIs(t, err, account.ErrInvalidRecoveryPackage)
+	for _, q := range request.Questions {
+		require.False(t, bytes.Contains(record.Value, []byte(q.Question.Prompt)), "question prompt leaked to DKVS")
+	}
+	require.False(t, bytes.Contains(record.Value, []byte(userShare.Data)), "user share leaked to DKVS")
+	stored, err := account.DecodeRecoveryPackageStorage(record.Value)
+	require.NoError(t, err)
+	require.Empty(t, stored.KnowledgeBundle.QuestionShares)
+	require.Empty(t, stored.UserShare)
+	_, err = account.OpenRecoveryKnowledge(*stored, account.RecoveryShare{})
+	require.Error(t, err)
+	tampered := bytes.Clone(record.Value)
+	tampered[len(tampered)-1] ^= 1
+	stored, err = account.DecodeRecoveryPackageStorage(tampered)
+	require.NoError(t, err)
+	_, err = account.OpenRecoveryKnowledge(*stored, userShare)
+	require.ErrorIs(t, err, account.ErrRecoveryFailed)
 	active, err := source.ActivateRecovery(ctx, created.SessionID, ActivationInput{
-		Password: "password", SavedLocator: created.Locator, Factors: factors})
+		Password: "password", RecoveryFile: recoveryFile, Factors: factors})
 	require.NoError(t, err)
 	require.True(t, active.Active)
 	require.NoError(t, source.SyncAccountManagementState(ctx))
@@ -109,8 +155,13 @@ func TestSDKPartialRestore(t *testing.T) {
 	target, _, _, closeTarget := newAccountGroup(t, remote)
 	target.http = remote
 	fault := nativeUIInstallRGBFault(t, target)
-	loaded, err := target.LoadRecovery(ctx, created.Locator, false)
+	_, err = target.LoadRecovery(ctx, created.Locator, false)
+	require.ErrorIs(t, err, account.ErrInvalidRecoveryPackage)
+	_, err = target.LoadRecovery(ctx, otherCode+"\n"+locator[1], false)
+	require.EqualError(t, err, "user share does not match recovery package")
+	loaded, err := target.LoadRecovery(ctx, strings.ReplaceAll(recoveryFile, "\n", "\r\n")+"\r\n", false)
 	require.NoError(t, err)
+	require.Len(t, loaded.Questions, len(request.Questions))
 	preview, err := target.PreviewRecovery(ctx, loaded.SessionID, factors)
 	require.NoError(t, err)
 	require.True(t, preview.CanCommit)

@@ -47,11 +47,16 @@ export async function runPwaRgbCases(t, fixture) {
       const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
       const [error] = await store.importWallet(actor.mnemonic, actor.password)
       if (error) throw error
-      if (Number(actor.account_index || 0)) await store.switchToAccount(Number(actor.account_index))
-      if (store.address !== actor.address) throw new Error('RGB fixture scope does not match the selected wallet address')
       location.hash = '#/wallet'
     }, actor)
     await waitForAccountWrite(page, accountCall)
+    const index = Number(actor.account_index || 0)
+    if (index !== 0) {
+      await page.evaluate(index => window.__SAT20_PWA_VERIFY__.useWalletStore().switchToAccount(index), index)
+      await waitForAccountWrite(page, accountCall)
+    }
+    assert.equal(await page.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().address),
+      actor.address, 'RGB fixture scope does not match the selected wallet address')
     await button(page, 'RGB').click()
     await expect(button(page, tr.issue)).toBeVisible()
     return page
@@ -142,16 +147,21 @@ export async function runPwaRgbCases(t, fixture) {
     if (!keepOpen) await close(form)
     return result
   }
+  const checkRecipients = async (form, prepared) => {
+    for (const [index, recipient] of prepared.recipients.entries()) {
+      const row = form.getByRole('listitem').nth(index)
+      await expect(row.getByText(recipient.amount.amount, { exact: true })).toBeVisible()
+      await expect(row.getByText(recipient.amount.asset, { exact: true })).toBeVisible()
+      await expect(row.getByText(recipient.destination, { exact: true })).toBeVisible()
+    }
+  }
   const prepare = async (owner, asset, requests, inflate = false) => {
     await button(card(owner, asset), inflate ? tr.inflate : messages.l1AssetsTabs.send).click()
     const form = dialog(owner, inflate ? tr.inflate : tr.sendTitle)
     if (!inflate) await form.locator('select').selectOption('invoice')
     await form.locator('textarea').fill(requests.map(item => item.invoice).join('\n'))
     const prepared = await observe(owner, inflate ? 'prepareRGB11Inflation' : 'prepareRGB11Transfer', () => button(form, tr.prepare).click())
-    for (const recipient of prepared.recipients) {
-      await expect(form.getByText(`${recipient.amount.amount} · ${recipient.amount.asset}`, { exact: true })).toBeVisible()
-      await expect(form.getByText(recipient.destination, { exact: true })).toBeVisible()
-    }
+    await checkRecipients(form, prepared)
     assert.equal(prepared.needs_receipts, true)
     return { form, prepared }
   }
@@ -172,7 +182,9 @@ export async function runPwaRgbCases(t, fixture) {
     const pending = owner.locator('div.rounded.border.border-zinc-700').filter({ has: owner.getByText(prepared.id, { exact: true }) })
     await button(pending, tr.retryTask).click()
     form = dialog(owner, tr.sendTitle)
+    await form.getByText(tr.transferDetails, { exact: true }).click()
     await expect(form.getByText(prepared.id, { exact: true })).toBeVisible()
+    await checkRecipients(form, prepared)
     const files = await observe(owner, 'exportRGB11Transfer', () => button(form, tr.downloadConsignment).click())
     const receipts = []
     for (const [index, request] of requests.entries()) {
@@ -214,7 +226,11 @@ export async function runPwaRgbCases(t, fixture) {
       await importContract(receiver, issued)
       await receive(receiver, issued.asset, '1', 'blind', 'proxy')
       const request = await receive(receiver, issued.asset, '1')
-      const canceled = await prepare(sender, issued.asset, [request])
+      const other = await issue(sender, 'NIA', 'PWAOTHER')
+      const canceled = await prepare(sender, other.asset, [request])
+      assert.equal(canceled.prepared.recipients[0].amount.asset, issued.asset.asset)
+      await expect(canceled.form.getByText(other.asset.contract_id, { exact: true })).toHaveCount(0)
+      await expect(canceled.form.getByText(/PWAOTHER/i)).toHaveCount(0)
       await cancel(sender, canceled.form)
       await manual(sender, receiver, issued.asset, ['1', '2'])
       await balance(receiver, issued.asset, '3')
@@ -267,6 +283,7 @@ export async function runPwaRgbCases(t, fixture) {
         assert.equal(saved.can_cancel, false)
         assert.equal(saved.can_confirm, true)
         await expect(form.getByText(tr.preview, { exact: true })).toHaveCount(0)
+        await form.getByText(tr.transferDetails, { exact: true }).click()
         await expect(form.getByText(prepared.id, { exact: true })).toBeVisible()
         await expect(button(form, messages.common.cancel)).toHaveCount(0)
         await expect(button(form, messages.common.confirm)).toBeEnabled()
@@ -308,6 +325,7 @@ export async function runPwaRgbCases(t, fixture) {
       // Reopen the original pending action while the recipient is still offline.
       await button(task, tr.retryTask).click()
       const pendingForm = dialog(sender, tr.sendTitle)
+      await pendingForm.getByText(tr.transferDetails, { exact: true }).click()
       await expect(pendingForm.getByText(prepared.id, { exact: true })).toBeVisible()
       await close(pendingForm)
       await receiver.context().setOffline(false)

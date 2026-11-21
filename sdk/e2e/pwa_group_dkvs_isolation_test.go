@@ -16,7 +16,9 @@ import (
 // the regression itself succeeds only when B is clean. Evidence and failed A's
 // databases remain in the private child runtime, outside automatic TempDir.
 func TestPWAGroupDKVSFixturesDoNotShareCommittedWrites(t *testing.T) {
+	const artifactDirEnv = "SAT20_PWA_DKVS_AB_ARTIFACT_DIR"
 	if os.Getenv("SAT20_PWA_DKVS_AB_CHILD") != "1" {
+		artifacts := dkvsNoPluginBuildArtifacts(t)
 		evidence, err := os.MkdirTemp(os.TempDir(), "pwa-dkvs-ab-")
 		require.NoError(t, err)
 		require.NoError(t, os.Chmod(evidence, 0700))
@@ -24,7 +26,8 @@ func TestPWAGroupDKVSFixturesDoNotShareCommittedWrites(t *testing.T) {
 		log, err := os.OpenFile(logPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 		require.NoError(t, err)
 		cmd := exec.Command(os.Args[0], "-test.run=^TestPWAGroupDKVSFixturesDoNotShareCommittedWrites$", "-test.v", "-test.timeout=10m")
-		cmd.Env = append(os.Environ(), "SAT20_PWA_DKVS_AB_CHILD=1", "TMPDIR="+evidence)
+		cmd.Env = append(os.Environ(), "SAT20_PWA_DKVS_AB_CHILD=1", "TMPDIR="+evidence,
+			artifactDirEnv+"="+filepath.Dir(artifacts.coreExecutable))
 		cmd.Stdout, cmd.Stderr = log, log
 		runErr := cmd.Run()
 		require.NoError(t, log.Close())
@@ -38,6 +41,18 @@ func TestPWAGroupDKVSFixturesDoNotShareCommittedWrites(t *testing.T) {
 		require.True(t, strings.Contains(text, "--- PASS: TestPWAGroupDKVSFixturesDoNotShareCommittedWrites/B"), "B inherited DKVS state or failed setup; inspect private child evidence")
 		return
 	}
+	// Only the binaries come from the parent. Both fixtures still start fresh nodes.
+	artifactDir := os.Getenv(artifactDirEnv)
+	require.True(t, filepath.IsAbs(artifactDir), "expected the parent DKVS artifact directory")
+	artifacts := dkvsArtifactsAt(artifactDir)
+	childDir := filepath.Join(e2eRuntimeDirectory(t), "dkvs")
+	require.NoError(t, os.MkdirAll(childDir, 0700))
+	for _, path := range []string{artifacts.coreExecutable, artifacts.corePlugin, artifacts.minerExecutable, artifacts.minerPlugin} {
+		require.FileExists(t, path)
+		require.NoError(t, os.Symlink(path, filepath.Join(childDir, filepath.Base(path))))
+	}
+	dkvsNoPluginTestArtifacts = dkvsArtifactsAt(childDir)
+
 	fresh := func(t *testing.T) *templateFixture {
 		f := newDKVSNoPluginTemplateFixtureWithArgs(t, map[string]int64{}, nil, nil, dkvsMinerArgs(t))
 		waitForDKVSPeerReady(t, f.Network)

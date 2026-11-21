@@ -271,8 +271,10 @@ func coreManagedRemoteRecords(t *testing.T, manager *Manager,
 	t.Helper()
 	manager.mutex.RLock()
 	accountID := manager.accountProfile.AccountID
+	secret := bytes.Clone(manager.accountSecret)
 	manager.mutex.RUnlock()
-	key, err := account.ManagedModuleKey(accountID, rgb11AccountManagedProviderID, coreSelectedRGBScope(manager))
+	defer zeroBytes(secret)
+	key, err := account.ManagedModuleKey(secret, accountID, rgb11AccountManagedProviderID, coreSelectedRGBScope(manager))
 	coreRequire(t, "derive selected RGB module key", err)
 	client := NewSatsNetDKVSClient(cfg.Core.Scheme, cfg.Core.Host, cfg.Core.Proxy, nil)
 	record, err := client.GetRecordDirect(key)
@@ -489,7 +491,7 @@ func coreInstallUnrelatedCapacityFailure(t *testing.T, manager *Manager, cfg cor
 				if value.Provider != provider.ID() || value.Deleted {
 					continue
 				}
-				entry, entryErr := accountEntry(accountID, value.Provider, value.Scope)
+				entry, entryErr := accountEntry(manager.accountSecret, accountID, value.Provider, value.Scope)
 				if entryErr != nil {
 					err = entryErr
 					break

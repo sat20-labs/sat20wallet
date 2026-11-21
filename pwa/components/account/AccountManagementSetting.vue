@@ -10,7 +10,7 @@
           {{ t('accountManagement.ui.intro') }}
         </p>
       </div>
-      <Button size="sm" @click="open">{{ t('accountManagement.ui.manage') }}</Button>
+      <Button size="sm" @click="open">{{ t(actionLabel) }}</Button>
     </div>
     <div v-if="state" class="space-y-1 rounded border p-3 text-xs text-muted-foreground">
       <p>{{ t('accountManagement.ui.accountStatus', {value: t(`accountManagement.accountState.${state.state}`)}) }}</p>
@@ -20,6 +20,9 @@
       <p v-if="state.last_rehearsal_at">{{ t('accountManagement.ui.lastRehearsal', {value: new Date(state.last_rehearsal_at).toLocaleString()}) }}</p>
       <p v-if="state.error_code" role="alert">{{ state.error_code }}</p>
       <p v-if="accountState.quotaNoticeKey" role="alert">{{ t(accountState.quotaNoticeKey) }}</p>
+      <p v-if="accountState.canActivate">{{ t('accountManagement.ui.activateCacheHint') }}</p>
+      <p v-else-if="accountState.storagePhase === 'activate' && accountState.storageOffers">{{ t('accountManagement.ui.temporaryUnavailable') }}</p>
+      <p v-if="accountState.storageReadFailed">{{ t('accountManagement.ui.configReadFailed') }}</p>
     </div>
     <p v-if="statusReadError" role="status" class="text-xs text-destructive">{{ t(statusReadError) }}</p>
   </div>
@@ -27,12 +30,11 @@
 
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
 import { Icon } from '@iconify/vue'
 import { Button } from '@/components/ui/button'
-import { accountDisplayMessage } from '@/utils/accountManagement'
 import { useAccountManagementStore } from '@/store/accountManagement'
 
 const { t } = useI18n()
@@ -41,5 +43,13 @@ const accountState = useAccountManagementStore()
 const { status: state } = storeToRefs(accountState)
 const statusReadError = computed(() => accountState.statusReadFailed ? 'accountManagement.dkvsStatusReadFailed' : '')
 
-const open = () => router.push('/wallet/setting/account-management')
+const needsRestore = computed(() => state.value?.backup_risk === 'notConfigured' &&
+  state.value.discovery_status === 'active-waiting-backup')
+const actionLabel = computed(() => {
+  if (needsRestore.value) return 'accountManagement.ui.restoreExisting'
+  if (accountState.canActivate) return 'accountManagement.ui.activateAccount'
+  return 'accountManagement.ui.manage'
+})
+const open = () => router.push(needsRestore.value ? '/restore-account' : '/wallet/setting/account-management')
+watch(() => accountState.storagePhase, () => { void accountState.refreshStorageOffers() }, {immediate: true})
 </script>

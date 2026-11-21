@@ -72,12 +72,12 @@ test('WASM wallet and account facades record phases without call data', async ()
   } }).default
   const account = loadModule('../../utils/accountManagement.ts', deps, { sat20account_wasm: {
     loadRecovery: async raw => {
-      assert.equal(JSON.parse(raw).locator, input)
+      assert.equal(JSON.parse(raw).recovery_file, input)
       return { code: 0, data: { session_id: 'test-session', mode: '2of2', questions: [],
         summary: { account_id: output, wallets: [] }, can_commit: false } }
     },
     previewRecovery: async raw => {
-      assert.equal(JSON.parse(raw).factors.user_share, input)
+      assert.deepEqual(JSON.parse(raw).factors.answers, [{ question_id: 'question-1', text: input }])
       return { code: -1, error_code: 'TEST_REFUSED', msg: rejection }
     },
   } }).default
@@ -87,7 +87,7 @@ test('WASM wallet and account facades record phases without call data', async ()
   assert.equal(value.fingerprint, output)
   const setup = await account.loadRecovery(input)
   assert.equal(setup.summary.account_id, output)
-  await assert.rejects(account.previewRecovery(setup.session_id, { answers: [], user_share: input, guardian_response: '' }),
+  await assert.rejects(account.previewRecovery(setup.session_id, { answers: [{ question_id: 'question-1', text: input }], guardian_response: '' }),
     error => error.code === 'TEST_REFUSED' && error.message === rejection)
 
   const rows = Array.from(diagnostics.snapshotWasmRuntimeDiagnostics())

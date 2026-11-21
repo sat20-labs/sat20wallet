@@ -3,6 +3,8 @@ package wallet
 import (
 	"fmt"
 	"sort"
+
+	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
 // AccountModuleStatus exposes backup health without leaking data or transport
@@ -89,6 +91,12 @@ func (p *Manager) fillAccountStatus(status *AccountManagementStatus) {
 	}
 	status.BackupState = "backed_up"
 	status.ManagedDataDirty, status.PendingChanges = false, 0
+	temporary := p.accountProfile.StorageMode == AccountStorageTemporary
+	cacheUnverified := temporary && !status.DKVSWriteAllowed
+	var height uint64
+	if temporary && p.dkvs != nil {
+		height, _ = p.dkvs.verificationHeight()
+	}
 	// Confirmed module rows alone do not complete the first backup: its
 	// directory may still be awaiting publication. Business readiness is separate.
 	if p.accountProfile.InitialBackupPending {
@@ -109,10 +117,16 @@ func (p *Manager) fillAccountStatus(status *AccountManagementStatus) {
 		}
 	}
 	for _, value := range values {
-		if value.Provider == "account" && !controls[value.Key] {
-			continue
+		if value.Provider == "account" {
+			if !controls[value.Key] {
+				continue
+			}
+			delete(controls, value.Key)
 		}
 		deleted := accountDeleteConfirmed(value, entries)
+		if temporary && !deleted && value.Baseline != nil && dkvsindexer.IsExpired(value.Baseline, height) {
+			cacheUnverified = true
+		}
 		backup := "backed_up"
 		if value.Generation > value.Confirmed || !deleted && !accountStorageConfirmed(value, p.accountProfile) {
 			if deleted {
@@ -166,5 +180,8 @@ func (p *Manager) fillAccountStatus(status *AccountManagementStatus) {
 			module.BackupState = "error"
 		}
 		status.Modules = append(status.Modules, module)
+	}
+	if status.BackupState == "backed_up" && (cacheUnverified || temporary && len(controls) != 0) {
+		status.BackupState = "pending"
 	}
 }

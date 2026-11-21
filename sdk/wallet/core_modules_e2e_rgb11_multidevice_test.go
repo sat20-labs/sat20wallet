@@ -502,7 +502,7 @@ func coreRGB11SameRootCASLoserE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2
 	// Freeze the independently signed module baseline, rather than treating a
 	// local business result or wallet catalog sequence as a remote publication.
 	scope := coreSelectedRGBScope(deviceA)
-	module, err := accountEntry(rootID, rgb11AccountManagedProviderID, scope)
+	module, err := accountEntry(deviceA.accountSecret, rootID, rgb11AccountManagedProviderID, scope)
 	coreRequire(t, "identify exact R09 RGB module", err)
 	baseline := coreReadRGBClosure(t, deviceA, cfg)
 	defer coreZeroRGBPayloads(baseline.payloads)

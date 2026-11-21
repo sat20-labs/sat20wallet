@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"strings"
 	"sync"
 
@@ -27,8 +28,8 @@ type accountRecoverySession struct {
 	Rehearsal bool
 	Package   *account.RecoveryPackage
 	Locator   accountLocatorPayload
-	DKVSShare *account.RecoveryShare
-	UserShare *account.RecoveryShare
+	UserShare account.RecoveryShare
+	Knowledge account.KnowledgeRecoveryBundle
 
 	Backup       *account.Backup
 	Secret       []byte
@@ -84,11 +85,8 @@ func clearAccountRecoverySession(session *accountRecoverySession) {
 	}
 	zeroAccountBytes(session.Secret)
 	wipeRecoveryBackup(session.Backup)
-	for _, share := range []*account.RecoveryShare{session.DKVSShare, session.UserShare} {
-		if share != nil {
-			*share = account.RecoveryShare{}
-		}
-	}
+	session.UserShare = account.RecoveryShare{}
+	session.Knowledge = account.KnowledgeRecoveryBundle{}
 	if session.ManagedState != nil {
 		for index := range session.ManagedState.State.Wallets {
 			zeroAccountBytes(session.ManagedState.State.Wallets[index].Secret)
@@ -107,7 +105,6 @@ func clearAccountRecoverySession(session *accountRecoverySession) {
 		session.ManagedState.Envelope = nil
 	}
 	session.Secret, session.Backup, session.ManagedState = nil, nil, nil
-	session.DKVSShare, session.UserShare = nil, nil
 }
 
 func snapshotRecoveryForCommit(session *accountRecoverySession) *accountRecoverySession {
@@ -155,6 +152,26 @@ func (p *Manager) encodeAccountLocator(value accountLocatorPayload) (string, err
 func (p *Manager) decodeAccountLocator(value string) (accountLocatorPayload, error) {
 	return DecodeAccountPublicLocator(value, p.GetChain())
 }
+
+func (p *Manager) decodeRecoveryFile(value string) (accountLocatorPayload, account.RecoveryShare, error) {
+	locatorText, shareText, ok := strings.Cut(strings.TrimSpace(value), "\n")
+	if !ok || strings.Contains(shareText, "\n") {
+		return accountLocatorPayload{}, account.RecoveryShare{}, account.ErrInvalidRecoveryPackage
+	}
+	locator, err := p.decodeAccountLocator(locatorText)
+	if err != nil {
+		return accountLocatorPayload{}, account.RecoveryShare{}, err
+	}
+	share, err := account.DecodeRecoveryShare(strings.TrimSpace(shareText))
+	if err != nil {
+		return accountLocatorPayload{}, account.RecoveryShare{}, err
+	}
+	if share.Role != account.ShareRoleUser || share.PackageID != locator.Locator.PackageID {
+		return accountLocatorPayload{}, account.RecoveryShare{}, fmt.Errorf("user share does not match recovery package")
+	}
+	return locator, share, nil
+}
+
 func recoveryFile(name, text string) *ExportFile {
 	return &ExportFile{Name: name, MIME: "text/plain", Data: []byte(text)}
 }
@@ -165,9 +182,9 @@ func recoverySummary(value account.RecoverySummary) RecoverySummary {
 	}
 	return result
 }
-func recoveryQuestions(pkg *account.RecoveryPackage) []Question {
-	result := make([]Question, 0, len(pkg.KnowledgeBundle.QuestionShares))
-	for _, entry := range pkg.KnowledgeBundle.QuestionShares {
+func recoveryQuestions(knowledge account.KnowledgeRecoveryBundle) []Question {
+	result := make([]Question, 0, len(knowledge.QuestionShares))
+	for _, entry := range knowledge.QuestionShares {
 		q := entry.Question
 		result = append(result, Question{ID: q.ID, Prompt: q.Prompt, CaseSensitive: q.CaseSensitive, IgnorePunctuation: q.IgnorePunctuation})
 	}
@@ -239,8 +256,13 @@ func (p *Manager) CreateRecovery(ctx context.Context, request RecoverySetup) (op
 			if err := recovery.Publish(ctx, *pkg); err != nil {
 				return err
 			}
-			if _, err := recovery.Load(ctx, pkg.Envelope.Locator); err != nil {
+			stored, err := recovery.Load(ctx, pkg.Envelope.Locator)
+			if err != nil {
 				return fmt.Errorf("verify published recovery package: %w", err)
+			}
+			knowledge, err := account.OpenRecoveryKnowledge(*stored, pkg.UserShare)
+			if err != nil {
+				return fmt.Errorf("verify published recovery questions: %w", err)
 			}
 			locator := accountLocatorPayload{
 				Version: account.Version, Network: manager.GetChain(),
@@ -266,9 +288,12 @@ func (p *Manager) CreateRecovery(ctx context.Context, request RecoverySetup) (op
 				return err
 			}
 			summary := account.SummarizeBackup(pkg.Envelope.Locator, backup)
-			session = &accountActivationSession{Package: pkg, Summary: summary, Authorization: *storage,
+			stored.UserShare = pkg.UserShare
+			session = &accountActivationSession{Package: stored, Summary: summary, Authorization: *storage,
 				Locator: locator}
-			data = &RecoverySetupView{SessionID: sessionID, Locator: locatorText, Summary: recoverySummary(summary), Questions: recoveryQuestions(pkg), Files: []ExportFile{*recoveryFile("user-share.txt", userShare)}, CanActivate: true}
+			data = &RecoverySetupView{SessionID: sessionID, Locator: locatorText, Summary: recoverySummary(summary),
+				Questions: recoveryQuestions(knowledge),
+				Files:     []ExportFile{*recoveryFile("user-share.txt", locatorText+"\n"+userShare)}, CanActivate: true}
 
 			return nil
 		})
@@ -306,41 +331,40 @@ func (p *Manager) ActivateRecovery(ctx context.Context, sessionID string, reques
 
 	p.recoverySessions.Lock()
 	session := p.recoverySessions.activation[sessionID]
-	p.recoverySessions.Unlock()
 	if session == nil || session.Package == nil {
+		p.recoverySessions.Unlock()
 		return nil, fmt.Errorf("activation session expired")
 	}
-	savedLocator, err := p.encodeAccountLocator(session.Locator)
+	pkg := *session.Package
+	p.recoverySessions.Unlock()
+	locator, companion, err := p.decodeRecoveryFile(request.RecoveryFile)
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(request.SavedLocator) != savedLocator {
+	if !reflect.DeepEqual(locator, session.Locator) {
 		return nil, fmt.Errorf("saved recovery code does not match the final recovery code")
 	}
 
 	if strings.TrimSpace(request.Password) == "" {
 		return nil, fmt.Errorf("wallet password is required")
 	}
-	if session.Package.Envelope.Locator.RecoveryMode == account.RecoveryMode2Of3 {
+	if pkg.Envelope.Locator.RecoveryMode == account.RecoveryMode2Of3 {
 		return nil, ErrGuardianDisabled
 	}
-	dkvsShare, err := account.RecoverDKVSShare(session.Package.DKVSShareCapsule, session.Package.KnowledgeBundle, recoveryAnswers(request.Factors.Answers))
-	if err != nil {
-		return nil, err
-	}
-	companion, err := account.DecodeRecoveryShare(request.Factors.UserShare)
-	if err != nil {
-		return nil, err
-	}
-	if companion != session.Package.UserShare {
+	if companion != pkg.UserShare {
 		return nil, fmt.Errorf("user recovery share does not match the activation session")
 	}
-	backup, secret, err := account.RecoverAccount(session.Package.Envelope, dkvsShare, companion)
+	knowledge, err := account.OpenRecoveryKnowledge(pkg, companion)
 	if err != nil {
-		if session.Package.Envelope.Locator.RecoveryMode == account.RecoveryMode2Of2 {
-			return nil, fmt.Errorf("knowledge recovery share does not match the activation package")
-		}
-		return nil, fmt.Errorf("recovered shares do not match the activation package")
+		return nil, err
+	}
+	dkvsShare, err := account.RecoverDKVSShare(pkg.DKVSShareCapsule, knowledge, recoveryAnswers(request.Factors.Answers))
+	if err != nil {
+		return nil, err
+	}
+	backup, secret, err := account.RecoverAccount(pkg.Envelope, dkvsShare, companion)
+	if err != nil {
+		return nil, fmt.Errorf("knowledge recovery share does not match the activation package")
 	}
 	defer zeroAccountBytes(secret)
 	defer wipeRecoveryBackup(&backup)
@@ -349,7 +373,7 @@ func (p *Manager) ActivateRecovery(ctx context.Context, sessionID string, reques
 		return nil, err
 	}
 	if err := p.ActivateAccountManagement(secret, request.Password, session.Authorization,
-		session.Package.Envelope.Locator, publicLocator); err != nil {
+		pkg.Envelope.Locator, publicLocator); err != nil {
 		return nil, err
 	}
 	p.recoverySessions.Lock()
@@ -360,8 +384,8 @@ func (p *Manager) ActivateRecovery(ctx context.Context, sessionID string, reques
 
 }
 
-func (p *Manager) LoadRecovery(ctx context.Context, locatorText string, rehearsal bool) (*RecoveryView, error) {
-	locator, err := p.decodeAccountLocator(locatorText)
+func (p *Manager) LoadRecovery(ctx context.Context, recoveryFile string, rehearsal bool) (*RecoveryView, error) {
+	locator, userShare, err := p.decodeRecoveryFile(recoveryFile)
 	if err != nil {
 		return nil, err
 	}
@@ -376,6 +400,10 @@ func (p *Manager) LoadRecovery(ctx context.Context, locatorText string, rehearsa
 	if err != nil {
 		return nil, err
 	}
+	knowledge, err := account.OpenRecoveryKnowledge(*pkg, userShare)
+	if err != nil {
+		return nil, err
+	}
 	sessionID, err := accountRandomID(nil)
 	if err != nil {
 		return nil, err
@@ -384,9 +412,11 @@ func (p *Manager) LoadRecovery(ctx context.Context, locatorText string, rehearsa
 	if p.recoverySessions.recovery == nil {
 		p.recoverySessions.recovery = make(map[string]*accountRecoverySession)
 	}
-	p.recoverySessions.recovery[sessionID] = &accountRecoverySession{Package: pkg, Locator: locator, Rehearsal: rehearsal}
+	p.recoverySessions.recovery[sessionID] = &accountRecoverySession{
+		Package: pkg, Locator: locator, Rehearsal: rehearsal, UserShare: userShare, Knowledge: knowledge,
+	}
 	p.recoverySessions.Unlock()
-	return &RecoveryView{SessionID: sessionID, Mode: string(pkg.Envelope.Locator.RecoveryMode), Questions: recoveryQuestions(pkg)}, nil
+	return &RecoveryView{SessionID: sessionID, Mode: string(pkg.Envelope.Locator.RecoveryMode), Questions: recoveryQuestions(knowledge)}, nil
 
 }
 
@@ -407,39 +437,20 @@ func (p *Manager) PreviewRecovery(ctx context.Context, sessionID string, factors
 
 	p.recoverySessions.Lock()
 	session := p.recoverySessions.recovery[sessionID]
-	p.recoverySessions.Unlock()
 	if session == nil || session.Package == nil {
+		p.recoverySessions.Unlock()
 		return nil, fmt.Errorf("recovery session expired")
 	}
-	if len(factors.Answers) > 0 {
-		share, err := account.RecoverDKVSShare(session.Package.DKVSShareCapsule, session.Package.KnowledgeBundle, recoveryAnswers(factors.Answers))
-		if err != nil {
-			return nil, err
-		}
-		session.DKVSShare = &share
-	}
-	if factors.UserShare != "" {
-		share, err := account.DecodeRecoveryShare(factors.UserShare)
-		if err != nil {
-			return nil, err
-		}
-		if share.PackageID != session.Package.Envelope.Locator.PackageID {
-			return nil, fmt.Errorf("user share does not match recovery package")
-		}
-		session.UserShare = &share
-	}
-
-	shares := make([]account.RecoveryShare, 0, 2)
-	if session.DKVSShare != nil {
-		shares = append(shares, *session.DKVSShare)
-	}
-	if session.UserShare != nil && len(shares) < 2 {
-		shares = append(shares, *session.UserShare)
-	}
-	if len(shares) < 2 {
+	pkg, userShare, knowledge := session.Package, session.UserShare, session.Knowledge
+	p.recoverySessions.Unlock()
+	if len(factors.Answers) == 0 {
 		return nil, account.ErrInsufficientShares
 	}
-	backup, secret, err := account.RecoverAccount(session.Package.Envelope, shares...)
+	dkvsShare, err := account.RecoverDKVSShare(pkg.DKVSShareCapsule, knowledge, recoveryAnswers(factors.Answers))
+	if err != nil {
+		return nil, err
+	}
+	backup, secret, err := account.RecoverAccount(pkg.Envelope, dkvsShare, userShare)
 	if err != nil {
 		return nil, err
 	}
@@ -477,7 +488,7 @@ func (p *Manager) PreviewRecovery(ctx context.Context, sessionID string, factors
 	session.ManagedState = managed
 	p.recoverySessions.Unlock()
 	summary := recoverySummary(account.SummarizeBackup(session.Package.Envelope.Locator, latestBackup))
-	return &RecoveryView{SessionID: sessionID, Mode: string(session.Package.Envelope.Locator.RecoveryMode), Questions: recoveryQuestions(session.Package), Summary: &summary, CanCommit: !session.Rehearsal}, nil
+	return &RecoveryView{SessionID: sessionID, Mode: string(pkg.Envelope.Locator.RecoveryMode), Questions: recoveryQuestions(knowledge), Summary: &summary, CanCommit: !session.Rehearsal}, nil
 
 }
 

@@ -139,8 +139,8 @@ func TestSDKStorageContext(t *testing.T) {
 				require.NoError(t, err)
 				background := awaitStoreEvent(t, discovery.seen, "background config from real core")
 				require.NoError(t, background.err)
-				// The synchronous policy read uses the worker context directly.
-				// Discovery's config request has a shorter, per-request context.
+				// The synchronous policy read uses the manager session. The
+				// discovery's request has a separate, finite lifetime.
 				probe := newStoreReplyGate()
 				probe.open()
 				w.config.Store(probe)
@@ -154,10 +154,12 @@ func TestSDKStorageContext(t *testing.T) {
 				first := awaitStoreEvent(t, foreground.seen, "foreground config from real core")
 				require.NoError(t, first.err)
 				discovery.open()
-				// Observe the discovery lifetime ending naturally. Never cancel
-				// the worker, stop the manager, or start another discovery.
-				awaitStoreEvent(t, worker.ctx.Done(), "normal completion of discovery")
-				require.ErrorIs(t, worker.ctx.Err(), context.Canceled)
+				// Verify that discovery completed while the foreground quote is
+				// still waiting. The durable manager session stays available.
+				require.Eventually(t, func() bool {
+					return d.mgr.GetAccountManagementStatus().DiscoveryStatus == "inactive"
+				}, 10*time.Second, 20*time.Millisecond)
+				require.NoError(t, worker.ctx.Err())
 				require.NoError(t, first.ctx.Err())
 				status := d.mgr.GetAccountManagementStatus()
 				require.Equal(t, "inactive", status.DiscoveryStatus)
@@ -182,11 +184,9 @@ func TestSDKStorageContext(t *testing.T) {
 				warm, err := d.mgr.GetStorageOptions(context.Background(), 100)
 				require.NoError(t, err)
 				require.Greater(t, w.heights.Load(), before, "prime a genuine height from this authority")
-				var paidAvailable bool
-				for _, o := range warm {
-					paidAvailable = paidAvailable || o.ID == "paid" && o.Available
-				}
-				require.True(t, paidAvailable, "uncanceled control offers the test network's paid plan")
+				require.Len(t, warm, 1)
+				require.Equal(t, wallet.AccountStorageTemporary, warm[0].ID)
+				require.True(t, warm[0].Available, "uncanceled control offers temporary storage before activation")
 				w.height.Store(foreground)
 				query.start(caller, d.mgr)
 				height := awaitStoreEvent(t, foreground.seen, "foreground real height response")

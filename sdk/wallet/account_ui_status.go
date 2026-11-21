@@ -7,7 +7,6 @@ import (
 	"strconv"
 
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
-	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
 // The existing account backup covers the wallet catalog. The UI submits IDs,
@@ -57,7 +56,7 @@ func (p *Manager) GetAccountView(ctx context.Context) (*AccountView, error) {
 		LastRehearsalAt: s.LastRehearsalAt, ErrorCode: s.LastDKVSSyncErrorCode}
 	if !s.Active || !s.RecoveryConfigured {
 		view.BackupRisk = "notConfigured"
-	} else if s.ManagedDataDirty || s.PendingChanges > 0 {
+	} else if s.ManagedDataDirty || s.PendingChanges > 0 || s.BackupState == "pending" {
 		view.BackupRisk = "unconfirmed"
 	}
 	view.Modules = []ModuleView{p.rgbModuleView(s)}
@@ -73,6 +72,9 @@ func (p *Manager) GetAccountView(ctx context.Context) (*AccountView, error) {
 		view.Storage = p.storageView(auth)
 	} else if !errors.Is(err, ErrAccountStorageAuthorizationMissing) {
 		return nil, err
+	}
+	if !s.RecoveryConfigured {
+		return view, nil
 	}
 	// Funding status checks local payment intent before querying AUTOPAY.
 	funding, fundingErr := p.GetAccountAutopayFundingStatus()
@@ -121,7 +123,7 @@ func storageOption(raw AccountStorageOption, source func(*PaymentQuote)) Storage
 	if !raw.Available {
 		result.UnavailableCode = "storage_unavailable"
 	}
-	if raw.Mode == AccountStoragePaid {
+	if raw.Mode == AccountStoragePaid && raw.ContractAddress != "" {
 		result.WarningCodes = []string{"continuous_payment_required"}
 		result.Payment = &PaymentQuote{Contract: raw.ContractAddress, Amount: AssetAmount{Asset: raw.FeeAsset, Amount: raw.EstimatedCost, Precision: uint8(contractcommon.GasFeePrecision)}, RatePerBlock: raw.AmountPerBlock, FundingBlocks: accountPaidDefaultFundingBlocks, ModuleLimit: raw.BlobKeyLimit}
 		source(result.Payment)
@@ -131,7 +133,18 @@ func storageOption(raw AccountStorageOption, source func(*PaymentQuote)) Storage
 func (p *Manager) storageView(auth *AccountStorageAuthorization) *StorageView {
 	return &StorageView{Option: storageOption(auth.Summary, p.paymentSource), Status: "ready", TxID: auth.TransactionID, CanCancel: true}
 }
-func (p *Manager) GetStorageOptions(ctx context.Context, count uint64) (result []StorageOption, err error) {
+
+// Availability is a read-only preview. Paid capacity and prices are computed
+// only when the caller requests an actual quote.
+func (p *Manager) GetStorageAvailability(ctx context.Context) ([]StorageOption, error) {
+	return p.getStorageOptions(ctx, 0, "", false)
+}
+
+func (p *Manager) GetStorageOptions(ctx context.Context, count uint64) ([]StorageOption, error) {
+	return p.getStorageOptions(ctx, count, "", true)
+}
+
+func (p *Manager) getStorageOptions(ctx context.Context, count uint64, selected string, quotePaid bool) (result []StorageOption, err error) {
 	q, cancel, err := p.beginStorageQuote(ctx)
 	if err != nil {
 		return nil, err
@@ -147,28 +160,12 @@ func (p *Manager) GetStorageOptions(ctx context.Context, count uint64) (result [
 	if count == 0 {
 		count = accountDefaultRecordCount
 	}
-	options, err := p.buildStorageOptions(q.readPolicy, q.current)
+	options, err := p.buildStorageOptions(q.readPolicy, q.current, selected, count, quotePaid)
 	if err != nil {
 		return nil, err
 	}
-	defaults := dkvsindexer.NetworkDefaultsForParams(GetChainParam_SatsNet())
 	result = make([]StorageOption, 0, len(options))
 	for _, o := range options {
-		if o.ID == AccountStoragePaid && o.Available {
-			rate, err := accountAmountPerBlock(defaults, count)
-			if err != nil {
-				return nil, err
-			}
-			cost, err := multiplyDecimal(rate, accountPaidDefaultFundingBlocks)
-			if err != nil {
-				return nil, err
-			}
-			annual, err := multiplyDecimal(rate, 2_628_000)
-			if err != nil {
-				return nil, err
-			}
-			o.RecordCount, o.AmountPerBlock, o.EstimatedCost, o.EstimatedAnnualCost = count, rate, cost, annual
-		}
 		result = append(result, storageOption(o, q.paymentSource))
 	}
 	return result, nil
@@ -177,6 +174,9 @@ func (p *Manager) ConfirmStorage(ctx context.Context, confirmed StorageOption) (
 	opLogID := p.beginWalletLog("account", "account_storage_confirm", "Configure account storage")
 	defer func() { p.finishWalletLog(opLogID, opErr, opValue0) }()
 
+	if confirmed.ID == AccountStoragePaid && !p.accountRecoveryConfigured() {
+		return nil, fmt.Errorf("activate account management before upgrading storage")
+	}
 	if auth, err := p.PendingAccountStorageAuthorization(); err == nil {
 		if auth.Summary.ID != confirmed.ID || (confirmed.ID == AccountStoragePaid && auth.Summary.RecordCount != confirmed.RecordCount) {
 			return nil, fmt.Errorf("cancel existing storage setup before changing the plan")
@@ -188,7 +188,7 @@ func (p *Manager) ConfirmStorage(ctx context.Context, confirmed StorageOption) (
 	} else if !errors.Is(err, ErrAccountStorageAuthorizationMissing) {
 		return nil, err
 	}
-	options, err := p.GetStorageOptions(ctx, confirmed.RecordCount)
+	options, err := p.getStorageOptions(ctx, confirmed.RecordCount, confirmed.ID, true)
 	if err != nil {
 		return nil, err
 	}

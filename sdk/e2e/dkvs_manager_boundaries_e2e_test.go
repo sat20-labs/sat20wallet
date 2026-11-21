@@ -75,7 +75,9 @@ func runRealSatoshiNetDKVSManagerFreeLocalIsolationAndRecovery(t *testing.T, fix
 	sameEndpoint, _ := newWalletManagerForNode(t, fixture.Network.Core, mnemonic)
 	loaded, err := sameEndpoint.LoadAccountRecoveryPackage(primaryLocation, pkg.Envelope.Locator)
 	require.NoError(t, err)
-	dkvsShare, err := account.RecoverDKVSShare(loaded.DKVSShareCapsule, loaded.KnowledgeBundle,
+	knowledge, err := account.OpenRecoveryKnowledge(*loaded, pkg.UserShare)
+	require.NoError(t, err)
+	dkvsShare, err := account.RecoverDKVSShare(loaded.DKVSShareCapsule, knowledge,
 		e2eKnowledgeAnswers())
 	require.NoError(t, err)
 	restored, recoveredSecret, err := account.RecoverAccount(loaded.Envelope, dkvsShare, pkg.UserShare)
@@ -84,7 +86,7 @@ func runRealSatoshiNetDKVSManagerFreeLocalIsolationAndRecovery(t *testing.T, fix
 	require.Equal(t, backup.Wallets[0].Name, restored.Wallets[0].Name)
 	require.Equal(t, uint32(2), restored.Wallets[0].AccountCount)
 
-	_, err = account.RecoverDKVSShare(loaded.DKVSShareCapsule, loaded.KnowledgeBundle,
+	_, err = account.RecoverDKVSShare(loaded.DKVSShareCapsule, knowledge,
 		[]account.AnswerAttempt{{QuestionID: "book", Answer: "wrong"},
 			{QuestionID: "note", Answer: "also wrong"}})
 	require.Error(t, err)

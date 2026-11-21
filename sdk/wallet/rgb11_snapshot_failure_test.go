@@ -120,7 +120,7 @@ func TestRGB11SnapshotFailureRevokesLiveReadiness(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					walletEntry, err := accountEntry(manager.accountProfile.AccountID, "wallets", AccountManagedDataGlobalScope)
+					walletEntry, err := accountEntry(nil, manager.accountProfile.AccountID, "wallets", AccountManagedDataGlobalScope)
 					if err != nil {
 						t.Fatal(err)
 					}

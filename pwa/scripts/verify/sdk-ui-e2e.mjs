@@ -67,7 +67,7 @@ export async function runSDKUICases(helpers, fixture) {
   const rgb = (p, name, input, fails = false) => call(p, name, input === undefined ? [] : [JSON.stringify(input)], undefined, fails)
   const account = (p, name, input = {}, fails = false) => call(p, name, [JSON.stringify(input)], accountNS, fails)
   const text = file => Buffer.from(file.data, 'base64').toString('utf8')
-  const share = setup => text(setup.files.find(f => f.name === 'user-share.txt'))
+  const recoveryFile = setup => text(setup.files.find(f => f.name === 'user-share.txt'))
   const questions = [
     ['place', 'childhood place', 'violet hill beside the old station'],
     ['note', 'private note', 'yellow bicycle beside the river'],
@@ -179,7 +179,7 @@ export async function runSDKUICases(helpers, fixture) {
   }
   const activate = async (page, actor, created, factors) => {
     const view = await account(page, 'activateRecovery', { session_id: created.session_id,
-      input: { password: actor.password, saved_locator: created.locator, factors } })
+      input: { password: actor.password, recovery_file: recoveryFile(created), factors } })
     assert.equal(view.active, true)
     await expect.poll(async () => {
       const v = await account(page, 'refreshAccount')
@@ -190,7 +190,7 @@ export async function runSDKUICases(helpers, fixture) {
   const localBackup = async (page, actor, walletIDs) => {
     await storage(page, 'temporary')
     const created = await setup(page, actor, walletIDs)
-    await activate(page, actor, created, { answers, user_share: share(created) })
+    await activate(page, actor, created, { answers })
     return created
   }
   const issue = (page, kind, ticker) => rgb(page, 'issueRGB11Asset', {
@@ -276,9 +276,9 @@ export async function runSDKUICases(helpers, fixture) {
     await account(owner, 'confirmStorage', bad, true)
     await storage(owner, 'paid')
     const created = await setup(owner, ownerActor, walletIDs)
-    const factors = { answers, user_share: share(created) }
+    const factors = { answers }
     await account(owner, 'activateRecovery', { session_id: created.session_id,
-      input: { password: ownerActor.password, saved_locator: 'not-the-saved-code', factors } }, true)
+      input: { password: ownerActor.password, recovery_file: 'not-the-saved-code', factors } }, true)
     await activate(owner, ownerActor, created, factors)
     let status = await account(owner, 'getAccountView')
     assert.equal(status.storage.option.id, 'paid')
@@ -301,7 +301,7 @@ export async function runSDKUICases(helpers, fixture) {
       status = await account(owner, 'refreshAccount')
       return status.autopay.status
     }, poll).toBe('ready')
-    const rehearsal = await account(owner, 'loadRecovery', { locator: created.locator, rehearsal: true })
+    const rehearsal = await account(owner, 'loadRecovery', { recovery_file: recoveryFile(created), rehearsal: true })
     const preview = await account(owner, 'previewRecovery', { session_id: rehearsal.session_id, factors })
     assert.equal(preview.can_commit, false); assert.equal(preview.summary.wallets.length, walletIDs.length)
     await account(owner, 'commitRecovery', { session_id: rehearsal.session_id, new_password: ownerActor.password }, true)
@@ -309,7 +309,7 @@ export async function runSDKUICases(helpers, fixture) {
     const before = await call(owner, 'getWalletCatalog')
     await owner.context().close()
     const restored = await device(); pages.push(restored)
-    const loaded = await account(restored, 'loadRecovery', { locator: created.locator })
+    const loaded = await account(restored, 'loadRecovery', { recovery_file: recoveryFile(created) })
     const ready = await account(restored, 'previewRecovery', { session_id: loaded.session_id, factors })
     assert.equal(ready.can_commit, true)
     const newPassword = `${ownerActor.password}-restored`
@@ -609,11 +609,11 @@ export async function runSDKUICases(helpers, fixture) {
     const abandoned = await setup(owner, actor, walletIDs)
     await account(owner, 'abortRecovery', { session_id: abandoned.session_id })
     await account(owner, 'activateRecovery', { session_id: abandoned.session_id,
-      input: { password: actor.password, saved_locator: abandoned.locator,
-        factors: { answers, user_share: share(abandoned) } } }, 'activation session expired')
+      input: { password: actor.password, recovery_file: recoveryFile(abandoned),
+        factors: { answers } } }, 'activation session expired')
     await storage(owner, 'temporary')
     const created = await setup(owner, actor, walletIDs)
-    await activate(owner, actor, created, { answers, user_share: share(created) })
+    await activate(owner, actor, created, { answers })
     const status = await account(owner, 'getAccountView')
     assert.equal(status.backup_risk, '')
     await owner.context().setOffline(true)
@@ -649,12 +649,12 @@ export async function runSDKUICases(helpers, fixture) {
       JSON.stringify({ created, status, before }), { mode: 0o600 })
     await owner.context().close()
     const restored = await device(); pages.push(restored)
-    await account(restored, 'loadRecovery', { locator: 'invalid recovery package' }, true)
-    let loaded = await account(restored, 'loadRecovery', { locator: created.locator })
+    await account(restored, 'loadRecovery', { recovery_file: 'invalid recovery package' }, true)
+    let loaded = await account(restored, 'loadRecovery', { recovery_file: recoveryFile(created) })
     await account(restored, 'commitRecovery', { session_id: loaded.session_id,
       new_password: actor.password }, 'account recovery preview is required')
-    const factors = { answers, user_share: share(created) }
-    await account(restored, 'previewRecovery', { session_id: loaded.session_id, factors: { answers: answers.map(a => ({ ...a, text: 'wrong answer' })), user_share: share(created) } }, true)
+    const factors = { answers }
+    await account(restored, 'previewRecovery', { session_id: loaded.session_id, factors: { answers: answers.map(a => ({ ...a, text: 'wrong answer' })) } }, true)
     let preview = await account(restored, 'previewRecovery', { session_id: loaded.session_id, factors })
     assert.equal(preview.can_commit, true)
     assert.equal(preview.summary.wallets.length, walletIDs.length)
@@ -662,13 +662,13 @@ export async function runSDKUICases(helpers, fixture) {
     await account(restored, 'abortRecovery', { session_id: loaded.session_id })
     await account(restored, 'commitRecovery', { session_id: loaded.session_id,
       new_password: actor.password }, 'recovery session expired')
-    loaded = await account(restored, 'loadRecovery', { locator: created.locator })
+    loaded = await account(restored, 'loadRecovery', { recovery_file: recoveryFile(created) })
     await account(restored, 'previewRecovery', { session_id: loaded.session_id, factors })
     await restored.reload()
     await restored.waitForFunction(() => Boolean(window.__SAT20_PWA_VERIFY__), undefined, { timeout: 90000 })
     await account(restored, 'commitRecovery', { session_id: loaded.session_id,
       new_password: actor.password }, 'recovery session expired')
-    loaded = await account(restored, 'loadRecovery', { locator: created.locator })
+    loaded = await account(restored, 'loadRecovery', { recovery_file: recoveryFile(created) })
     preview = await account(restored, 'previewRecovery', { session_id: loaded.session_id, factors })
     assert.equal(preview.can_commit, true)
     const newPassword = `${actor.password}-restored`
@@ -845,8 +845,8 @@ export async function runSDKUICases(helpers, fixture) {
     await preserveBrowserFailureState?.()
     await owner.context().close()
     const target = await device(); pages.push(target)
-    const loaded = await account(target, 'loadRecovery', { locator: created.locator })
-    await account(target, 'previewRecovery', { session_id: loaded.session_id, factors: { answers, user_share: share(created) } })
+    const loaded = await account(target, 'loadRecovery', { recovery_file: recoveryFile(created) })
+    await account(target, 'previewRecovery', { session_id: loaded.session_id, factors: { answers } })
     await account(target, 'commitRecovery', { session_id: loaded.session_id, new_password: actor.password })
     await reload(target, actor.password)
     const restored = (await call(target, 'getWalletCatalog')).wallets.find(w => w.fingerprint === child.fingerprint)
@@ -884,11 +884,10 @@ export async function runSDKUICases(helpers, fixture) {
         if ([...document.querySelectorAll('h2')].some(node => messages.includes(node.textContent.trim()))) sessionStorage.setItem('e2e-partial-success', 'true')
       }).observe(document.body, { childList: true, subtree: true, characterData: true })
     }, messages)
-    await target.locator('section textarea').fill(created.locator)
+    await target.locator('section textarea').fill(recoveryFile(created))
     await target.locator('section button').click()
     await expect(target.locator('section input[type=password]')).toHaveCount(questions.length)
     for (const [i, question] of questions.entries()) await target.locator('section input[type=password]').nth(i).fill(question.answer)
-    await target.locator('section textarea').fill(share(created))
     await target.locator('section button').click()
     await target.locator('#restore-local-password').fill(actor.password)
     await target.locator('#restore-confirm-password').fill(actor.password)

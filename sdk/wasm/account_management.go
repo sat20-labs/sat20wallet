@@ -88,12 +88,16 @@ func accountGetStorageOptions(_ js.Value, args []js.Value) any {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
 	var request struct {
-		RecordCount uint64 `json:"record_count"`
+		RecordCount      uint64 `json:"record_count"`
+		AvailabilityOnly bool   `json:"availability_only"`
 	}
 	if err := accountParseJSON(args, &request); err != nil {
 		return createJsRet(nil, -1, err.Error())
 	}
 	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
+		if request.AvailabilityOnly {
+			return accountViewResult(_mgr.GetStorageAvailability(context.Background()))
+		}
 		return accountViewResult(_mgr.GetStorageOptions(context.Background(), request.RecordCount))
 	}))
 }
@@ -214,14 +218,14 @@ func accountLoadRecovery(_ js.Value, args []js.Value) any {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
 	var request struct {
-		Locator   string `json:"locator"`
-		Rehearsal bool   `json:"rehearsal"`
+		RecoveryFile string `json:"recovery_file"`
+		Rehearsal    bool   `json:"rehearsal"`
 	}
 	if err := accountParseJSON(args, &request); err != nil {
 		return createJsRet(nil, -1, err.Error())
 	}
 	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
-		return accountViewResult(_mgr.LoadRecovery(context.Background(), request.Locator, request.Rehearsal))
+		return accountViewResult(_mgr.LoadRecovery(context.Background(), request.RecoveryFile, request.Rehearsal))
 	}))
 }
 

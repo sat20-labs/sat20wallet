@@ -141,7 +141,9 @@ func TestAccountGuardianIdentitySurvivesAccountRecovery(t *testing.T) {
 	configureRGB11DKVSTestManager(target, remote)
 	loaded, err := target.LoadAccountRecoveryPackage(location, pkg.Envelope.Locator)
 	require.NoError(t, err)
-	share, err := account.RecoverDKVSShare(loaded.DKVSShareCapsule, loaded.KnowledgeBundle, coreAnswers())
+	questions, err := account.OpenRecoveryKnowledge(*loaded, pkg.UserShare)
+	require.NoError(t, err)
+	share, err := account.RecoverDKVSShare(loaded.DKVSShareCapsule, questions, coreAnswers())
 	require.NoError(t, err)
 	ref := loaded.Manifest.Guardian
 	require.NotNil(t, ref)

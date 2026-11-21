@@ -381,11 +381,13 @@ func configureSDKPWARegtestPOSV2(t *testing.T) {
 
 func TestSDKPWARealRegtestV2AssetPreparation(t *testing.T) {
 	configureSDKPWARegtestPOSV2(t)
-	prepareSDKPWARegtestNodes(t)
+	network := prepareSDKPWARegtestNodes(t)
 	a, b, mine := prepareSDKPWARegtestAssets(t, true)
 	active, err := b.AnchorOutputsActive()
 	require.NoError(t, err)
 	require.True(t, active, "the activation case in this group must finish before V2 asset preparation")
+	attachRGB11RegtestWallet(t, a, network)
+	requireE2EAccountWrite(t, a)
 	prepareSDKPWARegtestChannelV2Asset(t, a, b, mine)
 }
 

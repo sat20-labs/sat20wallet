@@ -17,7 +17,7 @@ func TestACKBlobReferenceBinding(t *testing.T) {
 	t.Cleanup(func() { _chain = old })
 	manager, remote, pkg, auth, secret := newLocalActivationFixture(t)
 	defer zeroBytes(secret)
-	module, err := accountEntry(manager.accountProfile.AccountID, "wallets", AccountManagedDataGlobalScope)
+	module, err := accountEntry(nil, manager.accountProfile.AccountID, "wallets", AccountManagedDataGlobalScope)
 	require.NoError(t, err)
 	moduleKey := module.Key
 	database := &rgb11LocalCommitFailureDB{KVDB: manager.db}

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { isDeepStrictEqual } from 'node:util'
 import { expect } from '@playwright/test'
-import { setupAccount, restoreAccount, waitAccountBackup, recoveryAnswers, recoveryShare } from './account-fixture-e2e.mjs'
+import { setupAccount, restoreAccount, waitAccountBackup, recoveryAnswers, recoveryFile } from './account-fixture-e2e.mjs'
 import { runChannelImportCase } from './channel-import-e2e.mjs'
 const accountMessages = JSON.parse(readFileSync(new URL('../../locales/en.json', import.meta.url), 'utf8')).accountManagement
 export function installWalletStartProbe() {
@@ -46,6 +46,11 @@ export async function waitForAccountWrite(page, accountCall) {
 
 export const runtimeAccountCases = ["usage: background catalog refresh cannot invalidate a subaccount switch", "usage: independent address DID entry persists changes and clearing through recovery", "usage: address DID persistence failure leaves catalog and recovery value unchanged", "usage: committed creation and import pages recover from a catalog read failure without replay", "usage: SDK creation page delivers mnemonic without redundant PWA persistence", "usage: import page and cold selection use SDK without redundant PWA persistence", "usage: IndexedDB open failure recovers on explicit retry", "usage: PWA snapshot read failure preserves durable and displayed account state", "usage: cold startup SDK status read failure preserves selection and retries from page", "usage: browser password transaction failure preserves every wallet and original password", "usage: same-context PWA pages serialize Manager lifetime", "usage: refresh serializes PWA Manager startup", "usage: active Manager rejects a pending account write after same-page lock", "usage: same-page subaccount switch discards a stale account response", "usage: committed wallet selection survives single Manager handoff", "usage: password changes apply on single Manager handoff", 'usage: maintenance rehearsal locks after inactivity and discards its session', 'usage: committed recovery response loss does not duplicate wallets', 'usage: background backup failure and recovery remain visible on the account page']
 
+export const fixedRegtestUsageCases = [
+  'usage: fixed regtest ordinary-1 adds selects renames subaccount and preserves root identity',
+  'usage: fixed regtest ordinary-1 renews paid storage through current AUTOPAY',
+]
+
 export async function runPwaUsageCases(t) {
   const { check, device, waitingDevice, ready, unlock, catalog, walletCall, accountCall, password, newPassword } = t
   const failures = []
@@ -80,6 +85,128 @@ export async function runPwaUsageCases(t) {
     await expect(dialog).not.toBeVisible()
   }
 
+  if (t.focusedUsageCases?.some(name => fixedRegtestUsageCases.includes(name))) {
+    const actor = t.fixedAccountManagement?.owner
+    assert.equal(actor?.role, 'ordinary-1')
+    const usingFixedOwner = async action => {
+      const page = await device()
+      try {
+        const identity = await walletCall(page, 'validateMnemonic', actor.mnemonic, '')
+        assert.equal(identity.address, actor.address)
+        assert.ok(identity.fingerprint)
+        const importError = await page.evaluate(async ({ mnemonic, password }) => {
+          const [error] = await window.__SAT20_PWA_VERIFY__.useWalletStore().importWallet(mnemonic, password)
+          return error?.message
+        }, { mnemonic: actor.mnemonic, password: actor.password })
+        assert.equal(importError, undefined)
+        const readRoot = async () => {
+          const roots = await catalog(page)
+          assert.equal(roots.length, 1)
+          const [root] = roots
+          assert.equal(root.fingerprint, identity.fingerprint)
+          assert.equal(root.accounts.find(account => account.index === 0)?.address, actor.address)
+          return root
+        }
+        const reload = async () => {
+          await page.reload(); await ready(page); await unlock(page, actor.password)
+          await waitForAccountWrite(page, accountCall)
+        }
+        await readRoot()
+        await reload()
+        return await action(page, readRoot, reload)
+      } catch (error) {
+        await t.preserveBrowserFailureState?.()
+        throw error
+      } finally { await page.context().close() }
+    }
+    await scenario(fixedRegtestUsageCases[0], () => usingFixedOwner(async (page, readRoot, reload) => {
+      const before = await readRoot()
+      const index = Math.max(...before.accounts.map(account => account.index)) + 1
+      const name = `Fixed regtest selected ${index}`
+      await page.evaluate(async ({ index, name }) => {
+        const wallet = window.__SAT20_PWA_VERIFY__.useWalletStore()
+        await wallet.addAccount(`Fixed regtest subaccount ${index}`, index)
+        await wallet.updateAccountName(index, name)
+      }, { index, name })
+      const updated = await readRoot()
+      assert.equal(updated.id, before.id)
+      assert.deepEqual(updated.accounts.filter(account => account.index !== index), before.accounts)
+      const created = updated.accounts.find(account => account.index === index)
+      assert.equal(created?.name, name)
+      const selected = await walletCall(page, 'getWalletCatalog')
+      assert.equal(selected.current_account_index, index)
+      assert.equal(created.address, (await walletCall(page, 'getWalletAddress', index)).address)
+      assert.equal(created.pub_key, (await walletCall(page, 'getWalletPubkey', index)).pubKey)
+      await waitForAccountWrite(page, accountCall)
+      await page.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().switchToAccount(0))
+      assert.equal((await walletCall(page, 'getWalletCatalog')).current_account_index, 0)
+      await reload()
+      assert.deepEqual(await readRoot(), updated)
+      assert.equal((await walletCall(page, 'getWalletCatalog')).current_account_index, 0)
+      assert.equal(await page.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().address), actor.address)
+    }))
+    await scenario(fixedRegtestUsageCases[1], () => usingFixedOwner(async (page, readRoot) => {
+      const root = await readRoot()
+      assert.equal((await walletCall(page, 'getWalletCatalog')).current_account_index, 0)
+      const before = await accountCall(page, 'getAccountView')
+      assert.equal(before.state, 'ready')
+      assert.equal(before.storage?.option.id, 'paid')
+      assert.ok(before.locator)
+      const initial = before.autopay
+      assert.equal(initial?.status, 'ready')
+      assert.equal(initial.can_fund, true)
+      assert.ok(initial.expiry_height > 0)
+      const quote = initial.quote
+      assert.equal(quote.source_address, actor.address)
+      assert.equal(quote.source_account, 0)
+      assert.equal(quote.network, 'regtest')
+      assert.ok(quote.contract && quote.amount.asset && Number(quote.amount.amount) > 0)
+
+      const isBroadcast = request => request.method() === 'POST' && new URL(request.url()).pathname.endsWith('/btc/tx')
+      let broadcasts = 0
+      page.on('request', request => {
+        if (isBroadcast(request)) broadcasts++
+      })
+      await page.evaluate(() => { location.hash = '#/wallet/setting/account-management' })
+      const panel = page.locator('section').filter({ has: page.getByRole('heading', { name: accountMessages.dkvsPaymentDetails, exact: true }) })
+      await panel.getByRole('button', { name: accountMessages.dkvsPay, exact: true }).click()
+      const dialog = page.getByRole('dialog', { name: accountMessages.dkvsPay, exact: true })
+      for (const term of [quote.source_address, quote.contract, quote.amount.asset, quote.amount.amount, String(quote.funding_blocks)]) {
+        await expect(dialog).toContainText(term)
+      }
+      const [response] = await Promise.all([
+        page.waitForResponse(result => isBroadcast(result.request()), { timeout: 90000 }),
+        dialog.getByRole('button', { name: 'Confirm', exact: true }).click(),
+      ])
+      assert.equal(response.status(), 200)
+      const receipt = await response.json()
+      assert.equal(receipt.code, 0)
+      assert.match(receipt.data, /^[0-9a-f]{64}$/i)
+      const [expiryPrefix, expirySuffix] = accountMessages.dkvsExpiryEstimate.split('{height}')
+      const expiryLine = panel.locator('p:visible').filter({ hasText: expiryPrefix })
+      let displayedHeight = 0
+      // Reading the SDK can reconcile the receipt itself. Wait for the page first.
+      await expect.poll(async () => {
+        const [label] = await expiryLine.allTextContents()
+        displayedHeight = label ? Number(label.slice(expiryPrefix.length, label.length - expirySuffix.length)) : 0
+        return displayedHeight
+      }, { timeout: 90000 }).toBeGreaterThan(initial.expiry_height)
+      await expect(panel.getByText(receipt.data, { exact: true })).toBeVisible()
+      const after = await accountCall(page, 'getAccountView')
+      assert.equal(after.autopay?.tx_id, receipt.data)
+      assert.equal(after.autopay.status, 'ready')
+      assert.ok(!after.autopay.error_code)
+      assert.equal(after.autopay.expiry_height, displayedHeight)
+      await expect(expiryLine).toHaveText(accountMessages.dkvsExpiryEstimate.replace('{height}', String(displayedHeight)))
+      assert.equal(after.account_id, before.account_id)
+      assert.equal(after.locator, before.locator)
+      assert.equal(after.storage?.option.id, 'paid')
+      assert.deepEqual(await readRoot(), root)
+      assert.equal(broadcasts, 1)
+      return { metrics: { previous_expiry_height: initial.expiry_height, expiry_height: displayedHeight, broadcasts } }
+    }))
+  }
+
   await scenario('usage: maintenance rehearsal locks after inactivity and discards its session', () => using(async page => {
     const material = await setup(page)
     await page.evaluate(async () => {
@@ -91,7 +218,7 @@ export async function runPwaUsageCases(t) {
       location.hash = '#/wallet/setting/account-management'
     })
     await page.getByRole('button', { name: accountMessages.ui.rehearsalTitle, exact: true }).click()
-    await page.getByPlaceholder(accountMessages.ui.pasteLocator).fill(material.locator)
+    await page.getByPlaceholder(accountMessages.ui.pasteRecoveryFile).fill(recoveryFile(material))
     const began = Date.now()
     await page.getByRole('button', { name: accountMessages.ui.loadBackup, exact: true }).click()
     await page.waitForFunction(() => Boolean(window.idleSession))
@@ -102,8 +229,8 @@ export async function runPwaUsageCases(t) {
     await page.locator('form input[type=password]').fill(password)
     await page.locator('form button[type=submit]').click()
     await page.waitForURL('**/#/restore-account?mode=rehearsal')
-    await assert.rejects(accountCall(page, 'previewRecovery', session, { answers: recoveryAnswers, user_share: recoveryShare(material) }), /session|expired/i)
-    await expect(page.getByPlaceholder(accountMessages.ui.pasteUserShare)).toHaveCount(0)
+    await assert.rejects(accountCall(page, 'previewRecovery', session, { answers: recoveryAnswers }), /session|expired/i)
+    await expect(page.getByPlaceholder(accountMessages.ui.pasteRecoveryFile)).toHaveValue('')
     await page.goBack()
     await page.waitForURL('**/#/wallet/setting/account-management')
     await expect(page.getByRole('heading', { name: accountMessages.ui.managementTitle, exact: true })).toBeVisible()
@@ -115,10 +242,9 @@ export async function runPwaUsageCases(t) {
     try {
       const material = await setup(owner)
       await page.evaluate(() => { location.hash = '#/restore-account' })
-      await page.getByPlaceholder(accountMessages.ui.pasteLocator).fill(material.locator)
+      await page.getByPlaceholder(accountMessages.ui.pasteRecoveryFile).fill(recoveryFile(material))
       await page.getByRole('button', { name: accountMessages.ui.loadBackup, exact: true }).click()
       for (const [index, answer] of recoveryAnswers.entries()) await page.locator('section input[type=password]').nth(index).fill(answer.text)
-      await page.getByPlaceholder(accountMessages.ui.pasteUserShare).fill(recoveryShare(material))
       await page.getByRole('button', { name: accountMessages.ui.previewRecovery, exact: true }).click()
       await page.locator('#restore-local-password').fill(password)
       await page.locator('#restore-confirm-password').fill(password)

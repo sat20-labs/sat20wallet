@@ -38,6 +38,7 @@ func prepareSDKPWARegtestAccountUsageFunding(t *testing.T, manager *wallet.Manag
 	network *realSatoshiNet, mine func(string, int)) {
 	t.Helper()
 	attachRGB11RegtestWallet(t, manager, network)
+	requireE2EAccountWrite(t, manager)
 	quote, err := manager.GetAccountAutopayFundingStatus()
 	require.NoError(t, err)
 	require.True(t, quote.Required)
@@ -606,8 +607,27 @@ func prepareSDKPWARegtestRGBBrowserCoinsWithTargets(t *testing.T, a, b *wallet.M
 	previous := txscript.NewCannedPrevOutputFetcher(sourceScript, input.OutValue.Value)
 	tx, err = wallet.SignTxWithWallet(signer, tx, previous)
 	require.NoError(t, err)
+	checkMempool := os.Getenv("SAT20_E2E_LOCAL_REAL") == "1"
+	if checkMempool {
+		existing, err := a.GetIndexerClient().GetExistingUtxos([]string{input.OutPointStr})
+		require.NoError(t, err)
+		require.Equal(t, []string{input.OutPointStr}, existing, "indexer must see the confirmed input before broadcast")
+	}
 	_, err = a.BroadcastTx(tx)
 	require.NoError(t, err, "accept the existing SDK-signed L1 preparation transaction")
+	if checkMempool {
+		txid := tx.TxHash().String()
+		var mempool []string
+		require.NoError(t, json.Unmarshal(realRegtestBitcoinCLI(t, "getrawmempool"), &mempool))
+		require.Contains(t, mempool, txid, "the owned Bitcoin Core must have the unconfirmed transaction")
+		require.Eventually(t, func() bool {
+			existing, err := a.GetIndexerClient().GetExistingUtxos([]string{input.OutPointStr})
+			return err == nil && len(existing) == 0
+		}, 30*time.Second, 200*time.Millisecond, "indexer must observe the spend before mining")
+		require.NoError(t, json.Unmarshal(realRegtestBitcoinCLI(t, "getrawmempool"), &mempool))
+		require.Contains(t, mempool, txid)
+		t.Logf("L1 indexer observed the unconfirmed spend: txid=%s input=%s", txid, input.OutPointStr)
+	}
 	mine(sourceAddress, 1)
 	require.GreaterOrEqual(t, free(a), targetA)
 	require.GreaterOrEqual(t, free(b), targetB)

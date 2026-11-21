@@ -139,18 +139,25 @@ func TestSDKAccountPWATemporaryExpiry(t *testing.T) {
 		require.NoError(t, err)
 		keys := []string{stateKey, dataKey, wrapperKey, packageKey}
 		index, _ := readAccountE2EIndex(t, network.Core, secret, beforeStatus.AccountID)
+		var rgbKey string
 		for _, entry := range index.Entries {
 			if !entry.Deleted && entry.Key != stateKey {
 				keys = append(keys, entry.Key)
+				if rgbKey == "" && entry.Provider == "rgb11" {
+					rgbKey = entry.Key
+				}
 			}
 		}
+		require.NotEmpty(t, rgbKey)
 		var expiresAt uint64
 		beforeValues := make(map[string][]byte)
+		beforeRecords := make(map[string]*wire.DKVSRecord)
 		for _, key := range keys {
 			record, err := client.GetRecordDirect(key)
 			require.NoError(t, err)
 			require.Equal(t, shortTTL, record.TTL)
 			beforeValues[key] = append([]byte(nil), record.Value...)
+			beforeRecords[key] = record
 			if key == packageKey {
 				require.Equal(t, packageBytes, record.Value)
 			}
@@ -158,8 +165,46 @@ func TestSDKAccountPWATemporaryExpiry(t *testing.T) {
 			require.NotZero(t, expiry)
 			expiresAt = max(expiresAt, expiry)
 		}
-		// Close every writer before advancing the real lease heights. The
-		// closed wallet is never used to sign or publish replacement records.
+		// One RGB key receives a definite write conflict. Cold unlock still
+		// renews the healthy keys with the same ciphertext.
+		rgbRefusal := &pwaRefusalHTTP{inner: wallet.NewHTTPClient(), key: rgbKey, code: dkvs.ErrorCodeWriteConflict}
+		rgbRefusal.left.Store(100)
+		manager.Close()
+		manager = nil
+		require.NoError(t, database.Close())
+		database = nil
+		advanceBlock()
+		database = indexerdb.NewKVDB(dir)
+		require.NotNil(t, database)
+		manager = wallet.NewManager(config, database)
+		require.NotNil(t, manager)
+		manager.SetDKVSHttpClient(&accountReviewTTLPolicyTransport{inner: rgbRefusal, ttl: shortTTL})
+		manager.Start()
+		_, err = manager.UnlockWallet(accountReviewPassword)
+		require.NoError(t, err)
+		require.Eventually(t, func() bool { return rgbRefusal.hits.Load() > 0 }, 15*time.Second, 100*time.Millisecond)
+		for _, key := range keys {
+			if key == rgbKey {
+				current, err := client.GetRecordDirect(key)
+				require.NoError(t, err)
+				require.Equal(t, dkvs.RecordHash(beforeRecords[key]), dkvs.RecordHash(current))
+				continue
+			}
+			var renewed *wire.DKVSRecord
+			require.Eventually(t, func() bool {
+				current, err := client.GetRecordDirect(key)
+				if err != nil || dkvs.RecordExpiryHeight(current) <= dkvs.RecordExpiryHeight(beforeRecords[key]) {
+					return false
+				}
+				renewed = current
+				return true
+			}, 6*time.Second, 100*time.Millisecond, "cold unlock should renew the active lease")
+			require.Equal(t, beforeValues[key], renewed.Value)
+			require.Greater(t, renewed.Seq, beforeRecords[key].Seq)
+			require.NoError(t, dkvs.VerifySignature(renewed))
+			expiresAt = max(expiresAt, dkvs.RecordExpiryHeight(renewed))
+		}
+		require.Equal(t, beforeStatus.PublicLocator, manager.GetAccountManagementStatus().PublicLocator)
 		manager.Close()
 		manager = nil
 		require.NoError(t, database.Close())
@@ -180,17 +225,32 @@ func TestSDKAccountPWATemporaryExpiry(t *testing.T) {
 				return errors.Is(err, dkvs.ErrRecordNotFound)
 			}, 15*time.Second, 200*time.Millisecond, "offline temporary record must expire")
 		}
-		// Reopen the same database through the production lifecycle. Unlock
-		// uses its persisted wallet; no second import or copied Manager cache.
-		database = indexerdb.NewKVDB(dir)
-		require.NotNil(t, database)
-		manager = wallet.NewManager(config, database)
-		require.NotNil(t, manager)
-		manager.SetDKVSHttpClient(leasePolicy)
-		require.Nil(t, manager.GetWallet())
-		_, err = manager.UnlockWallet(accountReviewPassword)
-		require.NoError(t, err)
-		require.NoError(t, manager.StartDKVSSync())
+		reopen := func(transport wallet.HttpClient) {
+			database = indexerdb.NewKVDB(dir)
+			require.NotNil(t, database)
+			manager = wallet.NewManager(config, database)
+			require.NotNil(t, manager)
+			manager.SetDKVSHttpClient(transport)
+			require.Nil(t, manager.GetWallet())
+			_, err := manager.UnlockWallet(accountReviewPassword)
+			require.NoError(t, err)
+			require.NoError(t, manager.StartDKVSSync())
+		}
+		// Fail only the directory submission after the SDK has prepared the
+		// expired key's new write. Close the process state before retrying.
+		refusal := &pwaRefusalHTTP{inner: wallet.NewHTTPClient(), key: dataKey, code: dkvs.ErrorCodeWriteConflict}
+		refusal.left.Store(100)
+		reopen(&accountReviewTTLPolicyTransport{inner: refusal, ttl: shortTTL})
+		require.Eventually(t, func() bool { return refusal.hits.Load() > 0 },
+			15*time.Second, 100*time.Millisecond, "expired directory upload did not reach the refusal")
+		manager.Close()
+		manager = nil
+		require.NoError(t, database.Close())
+		database = nil
+		_, err = client.GetRecordDirect(dataKey)
+		require.ErrorIs(t, err, dkvs.ErrRecordNotFound)
+
+		reopen(leasePolicy)
 		f.manager = manager
 		afterStatus := manager.GetAccountManagementStatus()
 		require.True(t, beforeStatus.AccountID == afterStatus.AccountID &&

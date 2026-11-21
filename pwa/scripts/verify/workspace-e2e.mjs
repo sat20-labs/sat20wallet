@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { chmodSync, closeSync, existsSync, mkdtempSync, openSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createServer, isIP } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, resolve } from 'node:path'
@@ -14,34 +14,57 @@ const scriptDir = dirname(fileURLToPath(import.meta.url))
 export const pwaRoot = resolve(scriptDir, '../..')
 export const workspaceRoot = resolve(pwaRoot, '../..')
 
-// ChannelActivation is a prerequisite of the V2 asset-splice journey.
-// Diagnostic, continuation, and readback cases stay out of the default catalog.
-const pwaCanonicalTests = [
-  'TestSDKPWARealRegtestWalletBasicAndBiometricBrowser',
-  'TestSDKPWARealRegtestAssetContextStabilityBrowser',
-  'TestSDKPWARealRegtestRGBBrowser',
-  'TestSDKPWARealRegtestRGBIFAInflationBrowser',
-  'TestSDKPWARealRegtestRGBAddressTransferBrowser',
-  'TestSDKPWARealRegtestBRC20ExistingTransferSendBrowser',
-  'TestSDKPWARealRegtestRunesDecimalSendBrowser',
-  'TestSDKPWARealRegtestRunesPremineReturnBrowser',
-  'TestSDKPWARealRegtestRunesOpenMintSendBrowser',
-  'TestSDKPWARealRegtestBitcoinFundsSendBrowser',
-  'TestSDKPWARealRegtestSatoshiNetPlainSendBrowser',
+const fixedAccountUsageTests = ['TestSDKPWARealRegtestFixedAccountManagementBrowser']
+const forceCloseCSVCase = 'TestSDKPWARealRegtestForceCloseCSVBrowser'
+const rgbCrossLayer = 'TestSDKPWARealRegtestRGBCrossLayerBrowser'
+const guardianCase = 'TestSDKPWARealRegtestGuardianRecoveryBrowser'
+const miningCase = 'TestSDKPWARealRegtestMiningBrowser'
+const rgbFullCase = 'TestSDKPWARealRegtestRGBBrowser'
+const v2SpliceCase = 'TestSDKPWARealRegtestChannelV2AssetSplicingBrowser'
+const runeSendCase = 'TestSDKPWARealRegtestRunesDecimalSendBrowser'
+const runeReturnCase = 'TestSDKPWARealRegtestRunesPremineReturnBrowser'
+const channelCases = [
   'TestSDKPWARealRegtestChannelOpeningOrReadyBrowser',
   'TestSDKPWARealRegtestChannelSplicingBrowser',
   'TestSDKPWARealRegtestChannelSafetyBrowser',
   'TestSDKPWARealRegtestPrivateBTCRoundTripBrowser',
   'TestSDKPWARealRegtestPrivateBTCSplicingOutBrowser',
-  'TestSDKPWARealRegtestChannelV2AssetSplicingBrowser',
-  'TestSDKPWARealRegtestBRC20BalanceSendBrowser',
-  'TestSDKPWARealRegtestMintBrowser',
-  'TestSDKPWARealRegtestMiningBrowser',
-  'TestSDKPWARealRegtestDappPermissionsBrowser',
 ]
+const [openingCase, spliceCase] = channelCases
 
-const fixedAccountUsageTests = ['TestSDKPWARealRegtestFixedAccountManagementBrowser']
-const forceCloseCSVCase = 'TestSDKPWARealRegtestForceCloseCSVBrowser'
+// Each functional group owns fresh chains and runs its cases in this order.
+const pwaGroups = [
+  { id: 'wallet-and-dapp', cases: [
+    'TestSDKPWARealRegtestWalletBasicAndBiometricBrowser',
+    'TestSDKPWARealRegtestAssetContextStabilityBrowser',
+    'TestSDKPWARealRegtestDappPermissionsBrowser',
+  ] },
+  { id: 'account-recovery-and-renewal', cases: fixedAccountUsageTests },
+  { id: 'bitcoin-assets', cases: [
+    'TestSDKPWARealRegtestBitcoinFundsSendBrowser',
+    'TestSDKPWARealRegtestMintBrowser',
+    'TestSDKPWARealRegtestBRC20ExistingTransferSendBrowser',
+    'TestSDKPWARealRegtestBRC20BalanceSendBrowser',
+    runeSendCase,
+    runeReturnCase,
+    'TestSDKPWARealRegtestRunesOpenMintSendBrowser',
+  ] },
+  { id: 'rgb11-onchain', cases: [
+    rgbFullCase,
+    'TestSDKPWARealRegtestRGBIFAInflationBrowser',
+    'TestSDKPWARealRegtestRGBAddressTransferBrowser',
+  ] },
+  { id: 'satoshinet-and-btc-channel', cases: [
+    'TestSDKPWARealRegtestSatoshiNetPlainSendBrowser', ...channelCases, forceCloseCSVCase,
+  ] },
+  { id: 'pos-v2', cases: [v2SpliceCase] },
+  { id: 'rgb11-cross-layer', cases: [rgbCrossLayer] },
+  { id: 'btc-mining', cases: [miningCase] },
+  { id: 'guardian-2of3', cases: [guardianCase], blockedReason: 'Guardian 2-of-3 is disabled in the SDK and PWA' },
+]
+const pwaTests = pwaGroups.flatMap(group => group.cases)
+const separatePwaTests = [forceCloseCSVCase, rgbCrossLayer, guardianCase, ...fixedAccountUsageTests]
+const pwaCanonicalTests = pwaTests.filter(test => !separatePwaTests.includes(test))
 const sdkRequiredEnv = [
   'SAT20_REAL_BITCOIN_CLI',
   'SAT20_REAL_BITCOIN_DATADIR',
@@ -53,6 +76,8 @@ const sdkRequiredEnv = [
 ]
 const exactSelector = names => `^(${names.join('|')})$`
 const goFlags = ['-mod=readonly', '-p=1', '-parallel=1', '-failfast', '-json', '-count=1']
+const coreBundleEnv = 'SAT20WALLET_E2E_ARTIFACTS'
+const coreOutputEnv = 'SAT20_REAL_PWA_CORE_BUNDLE'
 
 function goStage(id, repo, packageName, tests, timeout) {
   return {
@@ -65,7 +90,7 @@ function goStage(id, repo, packageName, tests, timeout) {
 export function buildCommand(stage, env = process.env) {
   const tags = []
   if (stage.tests.some(name => name.endsWith('Browser'))) {
-    const guardian = stage.tests.includes('TestSDKPWARealRegtestGuardianRecoveryBrowser')
+    const guardian = stage.tests.includes(guardianCase)
     tags.push(guardian ? '-tags=pwa,guardian' : '-tags=pwa')
   }
   return [env.GO || 'go', 'test', ...tags, ...goFlags, `-timeout=${stage.timeout}`,
@@ -80,10 +105,10 @@ export const stageCatalog = [
   goStage('sdk-assets', 'sat20wallet/sdk', './e2e', ['TestSDKPWARealRegtestL1AssetPreparation'], '60m'),
   goStage('sdk-wasm-real', 'sat20wallet/sdk', './e2e', ['TestSDKPWARealRegtestSDKWASMInterfacesBrowser'], '60m'),
   goStage('pwa-canonical', 'sat20wallet/sdk', './e2e', pwaCanonicalTests, '60m'),
-  goStage('pwa-rgb-cross-layer', 'sat20wallet/sdk', './e2e', ['TestSDKPWARealRegtestRGBCrossLayerBrowser'], '60m'),
+  goStage('pwa-rgb-cross-layer', 'sat20wallet/sdk', './e2e', [rgbCrossLayer], '60m'),
   goStage('pwa-force-close-csv', 'sat20wallet/sdk', './e2e', [forceCloseCSVCase], '60m'),
   goStage('pwa-fixed-account-usage', 'sat20wallet/sdk', './e2e', fixedAccountUsageTests, '60m'),
-  goStage('pwa-guardian-2of3', 'sat20wallet/sdk', './e2e', ['TestSDKPWARealRegtestGuardianRecoveryBrowser'], '60m'),
+  goStage('pwa-guardian-2of3', 'sat20wallet/sdk', './e2e', [guardianCase], '60m'),
 ]
 
 const readiness = stageCatalog[0].tests[0]
@@ -92,7 +117,7 @@ const rgbPreparation = stageCatalog[1].tests[0]
 const assetPreparation = stageCatalog[2].tests[0]
 const activation = 'TestSDKPWARealRegtestChannelActivationBrowser'
 const accountPreparation = 'TestSDKPWARealRegtestFreshAccountPreparation'
-const rgbCrossLayer = 'TestSDKPWARealRegtestRGBCrossLayerBrowser'
+const sdkWasmCase = stageCatalog[3].tests[0]
 
 export function shouldStopBatchAfterGroup(result) {
   if (result?.error || result?.cleanupError) return true
@@ -100,53 +125,50 @@ export function shouldStopBatchAfterGroup(result) {
     event.status === 'fail' && [readiness, accountPreparation, assetPreparation].includes(event.test))
 }
 const dependentJourneys = [
-  ['TestSDKPWARealRegtestRunesDecimalSendBrowser', 'TestSDKPWARealRegtestRunesPremineReturnBrowser'],
-  ['TestSDKPWARealRegtestChannelOpeningOrReadyBrowser', 'TestSDKPWARealRegtestChannelSplicingBrowser',
-    'TestSDKPWARealRegtestChannelSafetyBrowser', 'TestSDKPWARealRegtestPrivateBTCRoundTripBrowser',
-    'TestSDKPWARealRegtestPrivateBTCSplicingOutBrowser'],
-  [activation, 'TestSDKPWARealRegtestV2AssetPreparation', 'TestSDKPWARealRegtestChannelV2AssetSplicingBrowser'],
+  [runeSendCase, runeReturnCase],
+  channelCases,
+  [openingCase, spliceCase, forceCloseCSVCase],
+  [openingCase, activation, 'TestSDKPWARealRegtestV2AssetPreparation', v2SpliceCase],
+  [openingCase, rgbCrossLayer],
+  [openingCase, sdkWasmCase],
 ]
 
-// Each group gets a fresh full chain. Only explicitly dependent journeys share
-// that group's state, including the real preparation steps listed in its log.
-export function buildGroups(stages) {
+export function buildGroups(stages, { reuseCore = true } = {}) {
   const selected = stages.flatMap(stage => stage.tests)
+  const sdkGroups = selected.filter(test => !pwaTests.includes(test))
+    .map(test => ({ id: test.replace(/^TestSDKPWARealRegtest/, ''), cases: [test] }))
   const groups = []
-  const handled = new Set()
-  const sdkWasmCase = 'TestSDKPWARealRegtestSDKWASMInterfacesBrowser'
-  for (const name of selected) {
-    if (handled.has(name)) continue
-    const family = dependentJourneys.find(names => names.includes(name)) ?? [name]
-    const last = Math.max(...family.map((test, i) => selected.includes(test) ? i : -1))
-    const cases = family.slice(0, last + 1)
-    cases.forEach(test => handled.add(test))
+  for (const { id, cases, blockedReason } of [...sdkGroups, ...pwaGroups]) {
+    const selectedTests = cases.filter(test => selected.includes(test))
+    if (!selectedTests.length) continue
+    if (blockedReason) {
+      groups.push({ id, selectedTests, blockedReason, steps: [] })
+      continue
+    }
+
+    const [first] = selectedTests
     let prerequisites = [readiness, accountPreparation, assetPreparation]
-    if (cases.some(test => ['TestSDKPWARealRegtestRGBBrowser', ...fixedAccountUsageTests].includes(test))) {
+    if (selectedTests.some(test => [rgbFullCase, ...fixedAccountUsageTests].includes(test))) {
       prerequisites = [readiness, rgbPreparation, assetPreparation]
     }
-    if (name === readiness) prerequisites = []
-    else if (name === rgbPreparation) prerequisites = [readiness]
-    else if (name === assetPreparation) prerequisites = [readiness, accountPreparation]
-    if (cases.includes(activation) || cases.includes(sdkWasmCase) ||
-      cases.includes('TestSDKPWARealRegtestRGBCrossLayerBrowser')) {
-      prerequisites.push('TestSDKPWARealRegtestChannelOpeningOrReadyBrowser')
-    }
-    if (cases.includes(forceCloseCSVCase)) {
-      prerequisites.push('TestSDKPWARealRegtestChannelOpeningOrReadyBrowser',
-        'TestSDKPWARealRegtestChannelSplicingBrowser')
-    }
-    const tests = [...new Set([...prerequisites, ...cases])]
-    groups.push({ id: name.replace(/^TestSDKPWARealRegtest/, ''),
-      selectedTests: cases.filter(test => selected.includes(test)),
+    if (first === readiness) prerequisites = []
+    else if (first === rgbPreparation) prerequisites = [readiness]
+    else if (first === assetPreparation) prerequisites = [readiness, accountPreparation]
+
+    const ordered = selectedTests.flatMap(test => {
+      const journey = dependentJourneys.find(names => names.indexOf(test) > 0)
+      return journey ? journey.slice(0, journey.indexOf(test) + 1) : [test]
+    })
+    const tests = [...new Set([...prerequisites, ...ordered])]
+    groups.push({ id, selectedTests,
+      reuseCore: reuseCore && pwaTests.includes(first) && !selectedTests.includes(rgbCrossLayer),
       steps: tests.map(test => {
-        // Each step is a separate Go process and may rebuild Core/stpd.so.
-        // Verify the actual pair immediately before every cross-layer step,
-        // then reuse that validated pair within the same process.
-        const testNames = cases.includes(rgbCrossLayer)
+        // The cross-layer gate validates a fresh pair in each Go process.
+        const testNames = selectedTests.includes(rgbCrossLayer)
           ? [artifactFingerprintGuard, test]
           : [test]
         return { ...goStage(test, 'sat20wallet/sdk', './e2e', testNames, '60m'),
-          purpose: cases.includes(test) && selected.includes(test) ? 'case' : 'prerequisite' }
+          purpose: selectedTests.includes(test) ? 'case' : 'prerequisite' }
       }),
       isolation: 'fresh local Bitcoin Core, L1 indexer, Electrs, SatoshiNet/STP, wallets and browser storage',
     })
@@ -187,7 +209,8 @@ export function selectStages(ids, catalog = stageCatalog) {
 export function configureStages(stages, env) {
   for (const key of ['SAT20_REAL_SATOSHINET_ATTACH', 'SAT20_REAL_RECOVERY_FIXTURES',
     'SAT20_REAL_SDK_WALLET_DIR', 'SAT20_REAL_PWA_EXISTING_URL', 'SAT20_REAL_REGTEST_RUNTIME',
-    'SAT20_REAL_L1_INDEXER', 'SAT20_REAL_ESPLORA', 'SAT20_REAL_BITCOIN_DATADIR']) {
+    'SAT20_REAL_L1_INDEXER', 'SAT20_REAL_ESPLORA', 'SAT20_REAL_BITCOIN_DATADIR',
+    coreBundleEnv, coreOutputEnv]) {
     assert.ok(!env[key], `${key} supplies external or retained state; local E2E creates its own environment`)
   }
   return stages
@@ -229,12 +252,35 @@ export function summarizeGoJSON(text, expectedTests) {
   return { expected: expectedTests.length, passed, failed, skipped, missing, testEventCount: matching.length }
 }
 
+export function summarizeGoPhases(text) {
+  const phases = new Map()
+  let waitingForLock = false
+  for (const { Output: output } of parseGoJSON(text)) {
+    if (typeof output !== 'string') continue
+    if (output.includes('waiting for the previous SatoshiNet E2E run and its nodes to exit')) waitingForLock = true
+    const match = output.match(/\be2e-phase: name=([a-z_]+) elapsed_seconds=(\d+(?:\.\d+)?)(?:\s|$)/)
+    if (!match) continue
+    const [, name, seconds] = match
+    const timing = phases.get(name) ?? { count: 0, durationMs: 0 }
+    timing.count++
+    timing.durationMs += Math.round(Number(seconds) * 1000)
+    phases.set(name, timing)
+    if (name === 'runtime_lock_wait') waitingForLock = false
+  }
+  return { phases: Object.fromEntries(phases), waitingForLock }
+}
+
 export function parseArguments(argv) {
-  const options = { mode: 'run', only: null, tests: null, envFile: null }
+  const options = { mode: 'run', only: null, tests: null, envFile: null, reuseCore: true }
   const flags = new Set()
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     if (arg === '--help' || arg === '-h') { options.mode = 'help'; continue }
+    if (arg === '--rebuild-core') {
+      assert.ok(options.reuseCore, '--rebuild-core may be provided once')
+      options.reuseCore = false
+      continue
+    }
     if (arg === '--plan' || arg === '--check') {
       assert.equal(options.mode, 'run', `${arg} cannot be combined with another mode`)
       options.mode = arg.slice(2)
@@ -283,16 +329,17 @@ function readEnvFile(path) {
   return values
 }
 
-// Freeze the private overlay for the whole RGB group, including the later
+// Freeze any source overlay for the whole RGB group, including the later
 // WASM build after the Core/plugin guard has finished.
 export function captureGoOverlayInputs(env) {
   const flags = (env.GOFLAGS || '').trim().split(/\s+/).map(flag => flag.replace(/^["']|["']$/g, ''))
   let overlay
   for (let i = 0; i < flags.length; i++) {
     if (flags[i].startsWith('-overlay=')) overlay = flags[i].slice('-overlay='.length)
-    else if (flags[i] === '-overlay') overlay = flags[++i]
+    else if (flags[i] === '-overlay') overlay = flags[++i] ?? ''
   }
-  assert.ok(overlay && isAbsolute(overlay), 'RGB cross-layer requires an absolute GOFLAGS overlay path')
+  if (overlay === undefined) return null
+  assert.ok(isAbsolute(overlay), 'RGB cross-layer GOFLAGS overlay path must be absolute')
   const data = readFileSync(overlay)
   const replacements = JSON.parse(data).Replace
   assert.ok(replacements && Object.keys(replacements).length, 'RGB overlay must contain source replacements')
@@ -557,18 +604,30 @@ export function spawnStage(stage, env, logPath, { command = buildCommand(stage, 
 
 function helpText() {
   return [
-    'Usage: node workspace-e2e.mjs [--plan|--check] [--only STAGE... ] [--tests EXACT_TEST... ] [--env-file PRIVATE_FILE]',
+    'Usage: node workspace-e2e.mjs [--plan|--check] [--only STAGE... ] [--tests EXACT_TEST... ] [--env-file PRIVATE_FILE] [--rebuild-core]',
     '',
     'Modes: --plan prints independent groups and ordered prerequisites; --check validates local binaries; default creates fresh real chains.',
-    '--only accepts exact stage IDs and runs only those stages, in catalog order; no previous results are reused automatically.',
+    '--only selects exact stages. PWA cases run in functional group order on fresh chains.',
     '--tests selects exact cases within those stages; omitted cases remain recorded as not selected, never as PASS.',
+    '--rebuild-core builds Core and stpd.so in each Go step for a comparison run.',
     'External services, SSH forwards, retained wallets and recovery files are rejected. Only immutable binaries and public test vectors are reused.',
     `Stages: ${stageCatalog.map(stage => stage.id).join(', ')}`,
     'The browser runner defaults to SAT20_PWA_E2E_PORT=5189. Standalone PWA commands keep their existing 5179 default.',
   ].join('\n')
 }
 
+async function runGoStep(step, env, log) {
+  const execution = await spawnStage(step, env, log)
+  const output = readFileSync(log, 'utf8')
+  const tests = summarizeGoJSON(output, step.tests)
+  const passed = execution.exitCode === 0 && !execution.timedOut &&
+    tests.failed.length === 0 && tests.skipped.length === 0 && tests.missing.length === 0
+  return { test: step.id, purpose: step.purpose, status: passed ? 'pass' : 'fail',
+    ...execution, tests, ...summarizeGoPhases(output), log }
+}
+
 async function main(argv) {
+  const batchStarted = performance.now()
   const options = parseArguments(argv)
   if (options.mode === 'help') {
     process.stdout.write(`${helpText()}\n`)
@@ -577,21 +636,28 @@ async function main(argv) {
   const env = effectiveEnv(options.envFile)
   const configured = configureStages(options.stages, env)
   const stages = selectTests(configured, options.tests)
-  const groups = buildGroups(stages)
+  const groups = buildGroups(stages, options)
+  const coreBuild = groups.some(group => group.reuseCore)
+    ? { ...goStage('pwa-core-build', 'sat20wallet/sdk', './e2e', [artifactFingerprintGuard], '60m'),
+      purpose: 'artifact', requires: [] }
+    : null
   const port = parsePort(env.SAT20_PWA_E2E_PORT)
   env.SAT20_PWA_E2E_PORT = String(port)
   sdkNodePorts(env) // Validate the same base as the Go runner, including --check.
   if (options.mode === 'plan') {
-    process.stdout.write(`${JSON.stringify({ mode: 'plan', groups, sharedHistoricalState: false }, null, 2)}\n`)
+    process.stdout.write(`${JSON.stringify({ mode: 'plan', coreBuild, groups, sharedHistoricalState: false }, null, 2)}\n`)
     return 0
   }
-  const dependencies = await checkLocalRealDependencies({ env, workspaceRoot })
+  const dependencies = options.mode === 'check' || groups.some(group => !group.blockedReason)
+    ? await checkLocalRealDependencies({ env, workspaceRoot })
+    : null
   if (options.mode === 'check') {
     process.stdout.write(`${JSON.stringify({ mode: 'check', dependencies, groups: groups.map(g => g.id) })}\n`)
     return 0
   }
   const runDir = mkdtempSync(resolve(tmpdir(), 'sat20-workspace-e2e-'))
   chmodSync(runDir, 0o700)
+  const coreDir = resolve(runDir, 'pwa-core')
   const reportPath = resolve(runDir, 'summary.json')
   const report = { mode: 'local-real', runDir, dependencies, status: 'running', groups: [] }
   const save = () => writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 })
@@ -602,29 +668,50 @@ async function main(argv) {
   process.on('SIGINT', interrupt)
   process.on('SIGTERM', interrupt)
   try {
+    if (coreBuild) {
+      const buildEnv = { ...env, [coreOutputEnv]: coreDir }
+      delete buildEnv.SAT20_REAL_RGB_CROSS_LAYER
+      process.stdout.write('Building Core and stpd.so for this PWA run; full output saved.\n')
+      report.coreBuild = await runGoStep(coreBuild, buildEnv, resolve(runDir, 'pwa-core-build.jsonl'))
+      if (report.coreBuild.status === 'pass') {
+        report.coreBuild.manifest = JSON.parse(readFileSync(resolve(coreDir, 'manifest.json'), 'utf8'))
+      }
+      save()
+    }
     for (const group of groups) {
-      if (interrupted) break
+      if (interrupted || report.coreBuild?.status === 'fail') break
+      const started = performance.now()
       const directory = resolve(runDir, group.id)
       const result = { id: group.id, selectedTests: group.selectedTests, isolation: group.isolation,
-        directory, status: 'running', executed: [], notRun: [] }
+        directory, reuseCore: Boolean(group.reuseCore), status: 'running', executed: [], notRun: [] }
       report.groups.push(result)
+      if (group.blockedReason) {
+        result.status = 'blocked'
+        result.blockedReason = group.blockedReason
+        result.notRun = group.selectedTests
+        result.durationMs = 0
+        save()
+        continue
+      }
       save()
       let environment, groupEnv
       try {
         // Ordinary Lucky miners pay a 2-of-2 with their serving core.
-        const minesBitcoin = group.selectedTests.includes('TestSDKPWARealRegtestMiningBrowser')
+        const minesBitcoin = group.selectedTests.includes(miningCase)
         environment = await startLocalRealRegtest({ directory, workspaceRoot, env,
           indexerPubKey: minesBitcoin ? regtestCorePubKey : undefined,
           artifactsDirectory: resolve(runDir, 'artifacts') })
         result.environment = environment.manifest
         groupEnv = { ...env, ...environment.env, SAT20_E2E_LOCAL_REAL: '1' }
         delete groupEnv.SAT20_REAL_RGB_CROSS_LAYER
+        if (group.reuseCore) groupEnv[coreBundleEnv] = coreDir
         if (group.selectedTests.includes(rgbCrossLayer)) {
           groupEnv.SAT20_REAL_RGB_CROSS_LAYER = '1'
           result.overlayInputs = { before: captureGoOverlayInputs(groupEnv) }
           save()
         }
         result.prerequisites = await checkSDKEnvironment(groupEnv, port)
+        result.setupMs = Math.round(performance.now() - started)
         for (const [index, step] of group.steps.entries()) {
           if (interrupted) {
             result.notRun.push(...group.steps.slice(index).map(s => s.id))
@@ -632,14 +719,10 @@ async function main(argv) {
           }
           const log = resolve(directory, `${step.id}.jsonl`)
           process.stdout.write(`Running ${group.id}/${step.id}; full output saved.\n`)
-          const execution = await spawnStage(step, groupEnv, log, { command: buildCommand(step, groupEnv) })
-          const tests = summarizeGoJSON(readFileSync(log, 'utf8'), step.tests)
-          const passed = execution.exitCode === 0 && !execution.timedOut &&
-            tests.failed.length === 0 && tests.skipped.length === 0 && tests.missing.length === 0
-          result.executed.push({ test: step.id, purpose: step.purpose, status: passed ? 'pass' : 'fail',
-            ...execution, tests, log })
+          const execution = await runGoStep(step, groupEnv, log)
+          result.executed.push(execution)
           save()
-          if (!passed) {
+          if (execution.status !== 'pass') {
             result.status = 'fail'
             result.notRun.push(...group.steps.slice(index + 1).map(s => s.id))
             break
@@ -651,6 +734,8 @@ async function main(argv) {
         result.error = error.message
         result.notRun = group.steps.filter(s => !result.executed.some(e => e.test === s.id)).map(s => s.id)
       } finally {
+        const cleanupStarted = performance.now()
+        result.setupMs ??= Math.round(cleanupStarted - started)
         if (result.overlayInputs) {
           try {
             result.overlayInputs.after = captureGoOverlayInputs(groupEnv)
@@ -664,18 +749,31 @@ async function main(argv) {
           try { await environment.discardData(); result.dataRemoved = true }
           catch (error) { result.status = 'fail'; result.cleanupError = error.message }
         }
+        result.cleanupMs = Math.round(performance.now() - cleanupStarted)
+        result.durationMs = Math.round(performance.now() - started)
         save()
       }
       // Shared preparation and environment errors affect every fresh group;
       // a failed business prerequisite remains local to this group's journey.
       if (shouldStopBatchAfterGroup(result)) break
     }
+  } catch (error) {
+    report.error = error.message
   } finally {
     process.off('SIGINT', interrupt)
     process.off('SIGTERM', interrupt)
+    if (coreBuild) {
+      try { rmSync(coreDir, { recursive: true, force: true }) }
+      catch (error) { report.cleanupError = error.message }
+    }
   }
   report.notRun = groups.filter(g => !report.groups.some(r => r.id === g.id)).map(g => g.id)
-  report.status = !interrupted && report.notRun.length === 0 && report.groups.every(g => g.status === 'pass') ? 'pass' : 'fail'
+  report.status = 'fail'
+  if (!interrupted && !report.error && !report.cleanupError && report.notRun.length === 0 &&
+      report.groups.every(g => ['pass', 'blocked'].includes(g.status))) {
+    report.status = report.groups.some(g => g.status === 'blocked') ? 'blocked' : 'pass'
+  }
+  report.durationMs = Math.round(performance.now() - batchStarted)
   save()
   process.stdout.write(`${JSON.stringify({ status: report.status, summary: reportPath })}\n`)
   return report.status === 'pass' ? 0 : 1

@@ -36,8 +36,7 @@ type SPAccountBalance struct {
 	Complete     bool               `json:"complete"`
 }
 
-// The object is a local gob value. It is not synced to the remote account
-// provider; only monotonic SP enablement is managed globally.
+// Scan results use local storage. The wallet catalog syncs only SP enablement.
 type spAccountSyncDisk struct {
 	Version uint32
 	Network string

@@ -86,7 +86,7 @@ func (e rgb11VectorEvidence) GetTip() (*BitcoinTip, error)     { return &Bitcoin
 func (e rgb11VectorEvidence) Broadcast([]byte) (string, error) { return e.witnessTxID, nil }
 
 func TestRGB11TransferReceipt(t *testing.T) {
-	armored, err := os.ReadFile("../../../../rgb11/testvectors/rc1/nia-transfer.rgba")
+	armored, err := os.ReadFile("../../../../rgb11/testvectors/rc2/nia-transfer.rgba")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestRGB11ReceiptOpoutOrder(t *testing.T) {
 }
 
 func TestRGB11PreparedNoReceipt(t *testing.T) {
-	armored, err := os.ReadFile("../../../../rgb11/testvectors/rc1/nia-transfer.rgba")
+	armored, err := os.ReadFile("../../../../rgb11/testvectors/rc2/nia-transfer.rgba")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +215,7 @@ func TestRGB11PreparedNoReceipt(t *testing.T) {
 }
 
 func TestRGB11PreparedHistory(t *testing.T) {
-	armored, err := os.ReadFile("../../../../rgb11/testvectors/rc1/nia-transfer.rgba")
+	armored, err := os.ReadFile("../../../../rgb11/testvectors/rc2/nia-transfer.rgba")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +250,7 @@ func TestRGB11PreparedHistory(t *testing.T) {
 }
 
 func TestRGB11SelectedOpouts(t *testing.T) {
-	armored, err := os.ReadFile("../../../../rgb11/testvectors/rc1/nia-transfer.rgba")
+	armored, err := os.ReadFile("../../../../rgb11/testvectors/rc2/nia-transfer.rgba")
 	if err != nil {
 		t.Fatal(err)
 	}

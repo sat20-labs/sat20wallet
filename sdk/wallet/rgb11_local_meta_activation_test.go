@@ -92,7 +92,7 @@ func TestRGBMetaDuringBackup(t *testing.T) {
 			defer cancel()
 			require.NoError(t, manager.WaitAccountManagedDataReady(ctx))
 			row := rgb11LocalModuleForTest(t, manager)
-			entry, err := accountEntry(row.AccountID, row.Provider, row.Scope)
+			entry, err := accountEntry(secret, row.AccountID, row.Provider, row.Scope)
 			require.NoError(t, err)
 			moduleKey = entry.Key
 			walletID, err := manager.RGB11WalletID()

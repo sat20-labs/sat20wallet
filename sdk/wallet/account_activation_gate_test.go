@@ -212,7 +212,7 @@ func TestActivationAckColdFinalize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	walletModule, err := accountEntry(manager.accountProfile.AccountID, "wallets", AccountManagedDataGlobalScope)
+	walletModule, err := accountEntry(nil, manager.accountProfile.AccountID, "wallets", AccountManagedDataGlobalScope)
 	if err != nil {
 		t.Fatal(err)
 	}

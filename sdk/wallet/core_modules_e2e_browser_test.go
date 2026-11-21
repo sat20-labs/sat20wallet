@@ -122,7 +122,7 @@ func coreRGBBrowserE2E(t *testing.T, source *Manager, cfg coreE2EConfig, chain *
 	coreRequire(t, "read handed-off selected wallet", DecodeFromBytes(encodedWallet, &selectedWallet))
 	coreAssert(t, selectedWallet.Id == selection.CurrentWallet && int(selection.CurrentAccount) < selectedWallet.Accounts,
 		"native device handoff has an unavailable SDK selection")
-	fixture, err := json.Marshal(map[string]any{"config": configuration, "locator": locator, "user_share": share,
+	fixture, err := json.Marshal(map[string]any{"config": configuration, "recovery_file": locator + "\n" + share,
 		"answers": coreAnswers(), "password": coreE2EPassword, "root_mnemonic": coreE2ESenderMnemonic,
 		"maintenance_mnemonic": cfg.MaintenanceMnemonic,
 		"bitcoin_evidence":     evidence,

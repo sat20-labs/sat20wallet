@@ -234,7 +234,7 @@ func (p *Manager) prepareAccountActivation(secret []byte, password string,
 // Service activation publishes only the immutable recovery/service wrapper.
 // Private state/data are independently backed up by the normal account job.
 // The persisted exact envelope and ordinary outbox survive an uncertain ACK.
-func (p *Manager) resumePendingActivation(secret []byte, password string) (bool, error) {
+func (p *Manager) resumePendingActivation(ctx context.Context, secret []byte, password string) (bool, error) {
 	p.mutex.RLock()
 	if p.accountProfile == nil || p.accountProfile.Activation == nil {
 		p.mutex.RUnlock()
@@ -259,6 +259,7 @@ func (p *Manager) resumePendingActivation(secret []byte, password string) (bool,
 	if err != nil {
 		return true, err
 	}
+	store.readCtx = ctx
 	wrapperKey, err := accountRootWrapperKey(root)
 	if err != nil {
 		return true, err
@@ -379,7 +380,7 @@ func (p *Manager) resumePendingActivation(secret []byte, password string) (bool,
 	})
 	if err == nil {
 		defer p.startAccountRuntime(false)
-		baseline, baselineErr := p.prepareAccountBaseline(context.Background())
+		baseline, baselineErr := p.prepareAccountBaseline(ctx)
 		if baselineErr != nil {
 			return true, baselineErr
 		}

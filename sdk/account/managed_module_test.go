@@ -9,7 +9,7 @@ import (
 func TestManagedModuleRoundTrip(t *testing.T) {
 	id := strings.Repeat("a", 64)
 	module := ManagedModule{Provider: "notes", Scope: "global", Codec: "notes-v1", Payload: []byte("a private note")}
-	key, err := ManagedModuleKey(id, module.Provider, module.Scope)
+	key, err := ManagedModuleKey(testAccountSecret(), id, module.Provider, module.Scope)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +26,7 @@ func TestManagedModuleRoundTrip(t *testing.T) {
 	if err != nil || bytes.Equal(first, second) {
 		t.Fatal("module update did not produce a fresh envelope", err)
 	}
-	nextKey, err := ManagedModuleKey(id, module.Provider, module.Scope)
+	nextKey, err := ManagedModuleKey(testAccountSecret(), id, module.Provider, module.Scope)
 	if err != nil || nextKey != key {
 		t.Fatal("content or codec update changed the module key", err)
 	}
@@ -48,7 +48,7 @@ func TestManagedModuleRoundTrip(t *testing.T) {
 func TestManagedModuleContext(t *testing.T) {
 	id := strings.Repeat("a", 64)
 	module := ManagedModule{Provider: "rgb11", Scope: "testnet/abc/0", Codec: "rgb11-v1", Payload: []byte("provider payload")}
-	key, err := ManagedModuleKey(id, module.Provider, module.Scope)
+	key, err := ManagedModuleKey(testAccountSecret(), id, module.Provider, module.Scope)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestManagedModuleContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	other, err := ManagedModuleKey(id, "silentpay", module.Scope)
+	other, err := ManagedModuleKey(testAccountSecret(), id, "silentpay", module.Scope)
 	if err != nil {
 		t.Fatal(err)
 	}

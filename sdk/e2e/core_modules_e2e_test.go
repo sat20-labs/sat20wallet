@@ -205,8 +205,10 @@ func runCoreE2ESegment(t *testing.T, ctx context.Context, deadline time.Time,
 	needsBrowser := coreChildNeedsWASM(childRun)
 	nodesReady := e2ePhase(t, "core_node_fixture")
 	defaults := dkvsindexer.NetworkDefaultsForParams(&chaincfg.TestNetParams)
-	f := newDKVSNoPluginTemplateFixtureWithArgs(t,
-		map[string]int64{defaults.AutopayFeeAssetName: 240000}, nil, nil, dkvsMinerArgs(t))
+	feeAsset := defaults.AutopayFeeAssetName
+	f := newDKVSNoPluginTemplateFixtureWithProfilesAndArgs(t,
+		[]templateAssetProfile{{Name: feeAsset, Asset: feeAsset, Supply: "240000"}},
+		nil, nil, dkvsMinerArgs(t), true)
 	waitForDKVSPeerReady(t, f.Network)
 	nodesReady()
 	autopayReady := e2ePhase(t, "core_autopay_fixture")

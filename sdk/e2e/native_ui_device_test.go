@@ -219,19 +219,22 @@ func nativeUIQuestions() []wallet.QuestionInput {
 	}
 	return result
 }
-func nativeUIFactors(t *testing.T, setup *wallet.RecoverySetupView) wallet.RecoveryFactors {
-	t.Helper()
+func nativeUIFactors() wallet.RecoveryFactors {
 	var factors wallet.RecoveryFactors
 	for _, q := range nativeUIQuestions() {
 		factors.Answers = append(factors.Answers, wallet.Answer{QuestionID: q.Question.ID, Text: q.Answer})
 	}
+	return factors
+}
+func nativeUIRecoveryFile(t *testing.T, setup *wallet.RecoverySetupView) string {
+	t.Helper()
 	for _, f := range setup.Files {
 		if f.Name == "user-share.txt" {
-			factors.UserShare = string(f.Data)
+			return string(f.Data)
 		}
 	}
-	require.NotEmpty(t, factors.UserShare)
-	return factors
+	t.Fatal("user-share.txt is missing")
+	return ""
 }
 func nativeUISetupReq(m *wallet.Manager, password string) wallet.RecoverySetup {
 	request := wallet.RecoverySetup{Password: password, Mode: "2of2", Questions: nativeUIQuestions()}
@@ -274,7 +277,7 @@ func nativeUIConfirm(t *testing.T, m *wallet.Manager, option wallet.StorageOptio
 func nativeUIActivate(t *testing.T, d *nativeUIDevice, setup *wallet.RecoverySetupView) {
 	t.Helper()
 	view, err := d.mgr.ActivateRecovery(context.Background(), setup.SessionID, wallet.ActivationInput{
-		Password: d.password, SavedLocator: setup.Locator, Factors: nativeUIFactors(t, setup)})
+		Password: d.password, RecoveryFile: nativeUIRecoveryFile(t, setup), Factors: nativeUIFactors()})
 	require.NoError(t, err)
 	require.True(t, view.Active)
 	nativeUIBackup(t, d.mgr)
@@ -304,9 +307,9 @@ func nativeUICatalog(t *testing.T, m *wallet.Manager, before []wallet.WalletCata
 func nativeUIRestore(t *testing.T, d *nativeUIDevice, setup *wallet.RecoverySetupView) *wallet.RecoveryResult {
 	t.Helper()
 	ctx := context.Background()
-	loaded, err := d.mgr.LoadRecovery(ctx, setup.Locator, false)
+	loaded, err := d.mgr.LoadRecovery(ctx, nativeUIRecoveryFile(t, setup), false)
 	require.NoError(t, err)
-	preview, err := d.mgr.PreviewRecovery(ctx, loaded.SessionID, nativeUIFactors(t, setup))
+	preview, err := d.mgr.PreviewRecovery(ctx, loaded.SessionID, nativeUIFactors())
 	require.NoError(t, err)
 	require.True(t, preview.CanCommit)
 	require.NotNil(t, preview.Summary)

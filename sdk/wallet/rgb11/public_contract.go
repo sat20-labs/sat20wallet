@@ -20,8 +20,6 @@ func PublicRGB11Contract(content []byte) ([]byte, error) {
 	for i := range value.Fields {
 		f := &value.Fields[i]
 		switch f.Name {
-		case "terminals":
-			f.Value = strict_types.Value{Kind: strict_types.ValueMap}
 		case "bundles":
 			f.Value = strict_types.Value{Kind: strict_types.ValueList}
 		case "genesis":

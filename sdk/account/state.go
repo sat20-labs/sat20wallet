@@ -15,13 +15,13 @@ import (
 )
 
 const (
-	ManagedStateVersion   = uint32(1)
+	ManagedStateVersion   = uint32(2)
 	MaxManagedStateItems  = 1024
 	MaxManagedStateString = 4096
 )
 
 var (
-	managedStatePlainMagic    = []byte{'A', 'M', 'S', '1'}
+	managedStatePlainMagic    = []byte{'A', 'M', 'S', '2'}
 	managedStateEnvelopeMagic = []byte{'A', 'M', 'E', '1'}
 )
 
@@ -33,6 +33,7 @@ type ManagedWallet struct {
 	Secret       []byte
 	AccountCount uint32
 	SubAccounts  []SubAccount
+	SPEnabled    []uint32
 }
 
 type ManagedState struct {
@@ -147,6 +148,7 @@ func normalizedManagedState(value ManagedState) (ManagedState, error) {
 			item.Type = WalletMnemonic
 			item.AccountCount = 0
 			item.SubAccounts = nil
+			item.SPEnabled = nil
 			continue
 		}
 		if item.AccountCount > MaxManagedStateItems {
@@ -154,7 +156,7 @@ func normalizedManagedState(value ManagedState) (ManagedState, error) {
 		}
 		backup, err := NormalizeBackup(Backup{Version: BackupVersion, Wallets: []WalletBackup{{
 			Name: item.Name, Type: item.Type, Secret: item.Secret, AccountCount: item.AccountCount,
-			SubAccounts: item.SubAccounts,
+			SubAccounts: item.SubAccounts, SPEnabled: item.SPEnabled,
 		}}})
 		if err != nil {
 			return ManagedState{}, err
@@ -169,6 +171,7 @@ func normalizedManagedState(value ManagedState) (ManagedState, error) {
 		item.Secret = backup.Wallets[0].Secret
 		item.AccountCount = backup.Wallets[0].AccountCount
 		item.SubAccounts = backup.Wallets[0].SubAccounts
+		item.SPEnabled = backup.Wallets[0].SPEnabled
 		sort.Slice(item.SubAccounts, func(i, j int) bool {
 			return item.SubAccounts[i].Index < item.SubAccounts[j].Index
 		})
@@ -191,7 +194,7 @@ func BackupFromManagedState(value ManagedState) (Backup, error) {
 		}
 		result.Wallets = append(result.Wallets, WalletBackup{
 			Name: item.Name, Type: item.Type, Secret: item.Secret, AccountCount: item.AccountCount,
-			SubAccounts: append([]SubAccount(nil), item.SubAccounts...),
+			SubAccounts: item.SubAccounts, SPEnabled: item.SPEnabled,
 		})
 	}
 	return NormalizeBackup(result)
@@ -232,6 +235,10 @@ func encodeManagedState(value ManagedState) ([]byte, error) {
 			if err := writeStateString(&raw, sub.DID); err != nil {
 				return nil, err
 			}
+		}
+		writeStateUvarint(&raw, uint64(len(wallet.SPEnabled)))
+		for _, index := range wallet.SPEnabled {
+			writeStateUvarint(&raw, uint64(index))
 		}
 	}
 	if raw.Len() > MaxRecoveryObjectSize {
@@ -349,6 +356,17 @@ func decodeManagedState(value []byte) (ManagedState, error) {
 					return ManagedState{}, err
 				}
 				item.SubAccounts = append(item.SubAccounts, SubAccount{Index: uint32(subIndex), Name: name, DID: did})
+			}
+			spCount, err := readStateUvarint(stream)
+			if err != nil || spCount > accountCount {
+				return ManagedState{}, ErrRecoveryFailed
+			}
+			for i := uint64(0); i < spCount; i++ {
+				index, err := readStateUvarint(stream)
+				if err != nil || index >= accountCount {
+					return ManagedState{}, ErrRecoveryFailed
+				}
+				item.SPEnabled = append(item.SPEnabled, uint32(index))
 			}
 		}
 		state.Wallets = append(state.Wallets, item)

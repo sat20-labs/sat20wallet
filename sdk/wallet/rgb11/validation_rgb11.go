@@ -22,11 +22,11 @@ import (
 )
 
 const (
-	RGB11EngineBuildID = "rgb11-go-0.11.2-rc.1+sat20.1"
+	RGB11EngineBuildID = "rgb11-go-0.11.2-rc.2+sat20.1"
 )
 
 // RGB11ConsensusValidator is the production Go validator checked against the
-// official 0.11.2-rc.1 Rust vectors.
+// official 0.11.2-rc.2 Rust vectors.
 type RGB11ConsensusValidator struct {
 	Reveals []seals.GraphBlindSeal
 }

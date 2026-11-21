@@ -177,6 +177,17 @@ func nativeUITransaction(t *testing.T, f *nativeIfaceChain, txid string) *btcwir
 func nativeUISend(t *testing.T, f *nativeIfaceChain, owner, receiver *nativeUIDevice,
 	asset *wallet.RGBAssetView, amount, mode, format string, inflate bool) *wallet.RGBTransferView {
 	t.Helper()
+	confirmed, invoice := nativeUIBroadcast(t, f, owner, receiver, asset, amount, mode, format, inflate)
+	f.mine(t, 1)
+	accepted, err := receiver.mgr.AcceptRGBConsignment(context.Background(), invoice.ID)
+	require.NoError(t, err)
+	require.Equal(t, confirmed.TxID, accepted.TxID)
+	return confirmed
+}
+
+func nativeUIBroadcast(t *testing.T, f *nativeIfaceChain, owner, receiver *nativeUIDevice,
+	asset *wallet.RGBAssetView, amount, mode, format string, inflate bool) (*wallet.RGBTransferView, *wallet.RGBReceiveView) {
+	t.Helper()
 	ctx := context.Background()
 	invoice := nativeUIInvoice(t, receiver, asset, amount, mode, "")
 	var prepared *wallet.RGBTransferView
@@ -225,11 +236,7 @@ func nativeUISend(t *testing.T, f *nativeIfaceChain, owner, receiver *nativeUIDe
 	require.Equal(t, prepared.ID, confirmed.ID)
 	require.Equal(t, prepared.TxID, confirmed.TxID)
 	nativeUITransaction(t, f, confirmed.TxID)
-	f.mine(t, 1)
-	accepted, err := receiver.mgr.AcceptRGBConsignment(ctx, invoice.ID)
-	require.NoError(t, err)
-	require.Equal(t, confirmed.TxID, accepted.TxID)
-	return confirmed
+	return confirmed, invoice
 }
 
 func runNativeRGBManual(t *testing.T, f *nativeIfaceChain) {
@@ -541,7 +548,9 @@ func runNativeRGBDirect(t *testing.T, f *nativeIfaceChain) {
 	require.GreaterOrEqual(t, ownIndex, 0)
 	require.GreaterOrEqual(t, otherIndex, 0)
 	nativeUIBalance(t, owner, asset, "89.75")
-	spent := nativeUISend(t, f, owner, owner, asset, "1", "witness", ".asc", false)
+	spent, invoice := nativeUIBroadcast(t, f, owner, owner, asset, "1", "witness", ".asc", false)
+	f.mine(t, 1)
+	nativeUIRepeatSelfReceive(t, owner, spent, invoice, "89.75")
 	spendTx := nativeUITransaction(t, f, spent.TxID)
 	consumed := false
 	for _, input := range spendTx.TxIn {
@@ -562,6 +571,67 @@ func runNativeRGBDirect(t *testing.T, f *nativeIfaceChain) {
 	f.mine(t, 1)
 	require.NoError(t, <-done)
 	nativeUIBalance(t, receiver, asset, "10.25")
+}
+
+func runNativeRGBBlindSelf(t *testing.T, f *nativeIfaceChain) {
+	owner := newNativeUIDevice(t, f.cfg, accountSyncMnemonic(t, 234))
+	nativeUIFund(t, f, owner.mgr.GetWallet().GetAddress())
+	asset := nativeUIIssue(t, owner, "NIA", "UIBS")
+	sent, invoice := nativeUIBroadcast(t, f, owner, owner, asset, "1", "blind", ".asc", false)
+	f.mine(t, 1)
+	nativeUIRepeatSelfReceive(t, owner, sent, invoice, "100")
+}
+
+func nativeUIRepeatSelfReceive(t *testing.T, owner *nativeUIDevice, sent *wallet.RGBTransferView,
+	invoice *wallet.RGBReceiveView, balance string) {
+	t.Helper()
+	ctx := context.Background()
+	_, err := owner.mgr.RefreshRGBState(ctx)
+	require.NoError(t, err)
+	state, err := owner.mgr.GetRGB11State()
+	require.NoError(t, err)
+	var receiveOut, changeOut, consignmentHash string
+	for _, transfer := range state.Transfers {
+		if transfer.TransferID != sent.ID {
+			continue
+		}
+		// A single-recipient self-transfer has the same ID on both sides.
+		// Refresh processes the receive first when their IDs are equal.
+		require.Equal(t, "settled", transfer.Status)
+		if transfer.Direction == "receive" {
+			require.Equal(t, invoice.ID, transfer.ReceiveRequestID)
+			require.Len(t, transfer.OutputOutPoints, 1)
+			receiveOut, consignmentHash = transfer.OutputOutPoints[0], transfer.ConsignmentHash
+		} else {
+			require.NotEmpty(t, transfer.OutputOutPoints)
+			changeOut = transfer.OutputOutPoints[len(transfer.OutputOutPoints)-1]
+		}
+	}
+	require.NotEmpty(t, receiveOut)
+	require.NotEmpty(t, changeOut)
+	if invoice.ReceiveMode == "blind" {
+		require.False(t, strings.HasPrefix(receiveOut, sent.TxID+":"), "blind carrier predates the RGB witness")
+	}
+	var projected []string
+	for _, proof := range state.Proofs {
+		if proof.ConsignmentHash == consignmentHash && proof.AssetName.String() == invoice.Amount.Asset {
+			projected = append(projected, proof.OutPoint)
+		}
+	}
+	require.ElementsMatch(t, []string{receiveOut, changeOut}, projected)
+	accepted, err := owner.mgr.AcceptRGBConsignment(ctx, invoice.ID)
+	require.NoError(t, err)
+	require.Equal(t, sent.TxID, accepted.TxID)
+	require.Equal(t, "completed", accepted.Status)
+	view, err := owner.mgr.GetRGBView()
+	require.NoError(t, err)
+	for _, asset := range view.Assets {
+		if asset.Asset == invoice.Amount.Asset {
+			require.Equal(t, balance, asset.Available)
+			return
+		}
+	}
+	t.Fatal("self-transfer asset missing after repeated acceptance")
 }
 
 func runNativeDID(t *testing.T, f *nativeIfaceChain) {

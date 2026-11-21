@@ -247,9 +247,6 @@ func (q *storageQuoteRead) readPolicy() (*AccountFreeLocalPolicy, uint64, bool, 
 		if check := q.current(); check != nil {
 			return nil, 0, false, check
 		}
-		if quoteTransportDown(err, false) {
-			return nil, 0, false, nil // temporary policy unknown; paid browsing remains available
-		}
 		return nil, 0, false, err
 	}
 	endpoint := strings.TrimSpace(config.EndpointID)

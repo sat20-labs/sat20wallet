@@ -7,7 +7,7 @@ export const recoveryQuestions = [
   ['family', 'family phrase', 'meet under the tree at six'],
 ].map(([id, prompt, answer]) => ({ question: { id, prompt, case_sensitive: false, ignore_punctuation: true }, answer, confirmation: answer }))
 export const recoveryAnswers = recoveryQuestions.map(q => ({ question_id: q.question.id, text: q.answer }))
-export const recoveryShare = material => Buffer.from(material.files.find(file => file.name === 'user-share.txt').data, 'base64').toString('utf8')
+export const recoveryFile = material => Buffer.from(material.files.find(file => file.name === 'user-share.txt').data, 'base64').toString('utf8')
 export async function waitAccountBackup(page, accountCall) {
   await expect.poll(async () => (await accountCall(page, 'getAccountView')).backup_state,
     { timeout: 90000 }).toBe('backed_up')
@@ -22,14 +22,14 @@ export async function setupAccount(t, page, password = t.password) {
     password, wallet_ids: (await t.catalog(page)).map(wallet => wallet.id), mode: '2of2', questions: recoveryQuestions,
   })
   await t.accountCall(page, 'activateRecovery', material.session_id, {
-    password, saved_locator: material.locator, factors: { answers: recoveryAnswers, user_share: recoveryShare(material) },
+    password, recovery_file: recoveryFile(material), factors: { answers: recoveryAnswers },
   })
   await waitAccountBackup(page, t.accountCall)
   return material
 }
 export async function restoreAccount(t, page, material, password = t.password) {
-  const session = await t.accountCall(page, 'loadRecovery', material.locator)
-  await t.accountCall(page, 'previewRecovery', session.session_id, { answers: recoveryAnswers, user_share: recoveryShare(material) })
+  const session = await t.accountCall(page, 'loadRecovery', recoveryFile(material))
+  await t.accountCall(page, 'previewRecovery', session.session_id, { answers: recoveryAnswers })
   const result = await t.accountCall(page, 'commitRecovery', session.session_id, password)
   assert.equal(result.complete, true)
   await page.reload(); await t.ready(page); await t.unlock(page, password)

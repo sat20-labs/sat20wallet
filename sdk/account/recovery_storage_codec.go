@@ -12,8 +12,7 @@ const (
 	recoveryStorageMagic        = "ACRP"
 	guardianStorageMagic        = "AGRD"
 	recoveryStorageCodecVersion = uint8(1)
-	recoveryPackageCodecVersion = uint8(1)
-	maxRecoveryQuestions        = 16
+	recoveryPackageCodecVersion = uint8(3)
 )
 
 func EncodeGuardianCapsuleStorage(value GuardianShareCapsule) ([]byte, error) {
@@ -137,7 +136,6 @@ func EncodeRecoveryPackageStorage(value RecoveryPackage) ([]byte, error) {
 		func() error { return encoder.U8(recoveryModeCode(value.Envelope.Locator.RecoveryMode)) },
 		func() error { return encoder.Bytes(envelopeNonce, 1, 64) },
 		func() error { return encoder.Bytes(envelopeCiphertext, 1, MaxRecoveryObjectSize) },
-		func() error { return encoder.U64(uint64(value.Manifest.CreatedAt)) },
 		func() error { return encoder.Bool(value.Manifest.Guardian != nil) },
 	} {
 		if err := encode(); err != nil {
@@ -173,47 +171,19 @@ func EncodeRecoveryPackageStorage(value RecoveryPackage) ([]byte, error) {
 	if err := encoder.Bytes(dkvsCiphertext, 1, MaxRecoveryObjectSize); err != nil {
 		return nil, err
 	}
-	shares := value.KnowledgeBundle.QuestionShares
-	if err := encoder.Length(uint64(len(shares)), maxRecoveryQuestions); err != nil {
+	knowledgeNonce, err := decodeRecoveryBase64(value.SealedKnowledge.Nonce)
+	if err != nil || len(knowledgeNonce) != 12 {
+		return nil, ErrInvalidRecoveryPackage
+	}
+	knowledgeCiphertext, err := decodeRecoveryBase64(value.SealedKnowledge.Ciphertext)
+	if err != nil {
 		return nil, err
 	}
-	for _, share := range shares {
-		salt, err := decodeRecoveryBase64(share.Salt)
-		if err != nil {
-			return nil, err
-		}
-		nonce, err := decodeRecoveryBase64(share.Nonce)
-		if err != nil {
-			return nil, err
-		}
-		ciphertext, err := decodeRecoveryBase64(share.Ciphertext)
-		if err != nil {
-			return nil, err
-		}
-		if err := encoder.String(share.Question.ID, 1, 128); err != nil {
-			return nil, err
-		}
-		if err := encoder.String(share.Question.Prompt, 1, 2048); err != nil {
-			return nil, err
-		}
-		if err := encoder.Bool(share.Question.CaseSensitive); err != nil {
-			return nil, err
-		}
-		if err := encoder.Bool(share.Question.IgnorePunctuation); err != nil {
-			return nil, err
-		}
-		if err := encoder.Bytes(salt, 1, 64); err != nil {
-			return nil, err
-		}
-		if err := encoder.Bytes(share.Vault, 1, MaxRecoveryObjectSize); err != nil {
-			return nil, err
-		}
-		if err := encoder.Bytes(nonce, 1, 64); err != nil {
-			return nil, err
-		}
-		if err := encoder.Bytes(ciphertext, 1, MaxRecoveryObjectSize); err != nil {
-			return nil, err
-		}
+	if err := encoder.Raw(knowledgeNonce); err != nil {
+		return nil, err
+	}
+	if err := encoder.Bytes(knowledgeCiphertext, 16, MaxRecoveryObjectSize); err != nil {
+		return nil, err
 	}
 	if buf.Len() > MaxRecoveryObjectSize {
 		return nil, ErrInvalidRecoveryPackage
@@ -263,10 +233,6 @@ func DecodeRecoveryPackageStorage(value []byte) (*RecoveryPackage, error) {
 	if err != nil {
 		return nil, err
 	}
-	createdAt, err := decoder.U64()
-	if err != nil || createdAt > uint64(^uint64(0)>>1) {
-		return nil, ErrInvalidRecoveryPackage
-	}
 	hasGuardian, err := decoder.Bool()
 	if err != nil {
 		return nil, err
@@ -309,54 +275,12 @@ func DecodeRecoveryPackageStorage(value []byte) (*RecoveryPackage, error) {
 	if err != nil {
 		return nil, err
 	}
-	questionCount, err := decoder.Length(maxRecoveryQuestions)
-	if err != nil || questionCount == 0 {
-		return nil, ErrInvalidRecoveryPackage
+	knowledgeNonce, err := decoder.Raw(12)
+	if err != nil {
+		return nil, err
 	}
-	questions := make([]EncryptedQuestionShare, 0, questionCount)
-	for index := uint64(0); index < questionCount; index++ {
-		id, err := decoder.String(1, 128)
-		if err != nil {
-			return nil, err
-		}
-		prompt, err := decoder.String(1, 2048)
-		if err != nil {
-			return nil, err
-		}
-		caseSensitive, err := decoder.Bool()
-		if err != nil {
-			return nil, err
-		}
-		ignorePunctuation, err := decoder.Bool()
-		if err != nil {
-			return nil, err
-		}
-		salt, err := decoder.Bytes(1, 64)
-		if err != nil {
-			return nil, err
-		}
-		vault, err := decoder.Bytes(1, MaxRecoveryObjectSize)
-		if err != nil {
-			return nil, err
-		}
-		nonce, err := decoder.Bytes(1, 64)
-		if err != nil {
-			return nil, err
-		}
-		ciphertext, err := decoder.Bytes(1, MaxRecoveryObjectSize)
-		if err != nil {
-			return nil, err
-		}
-		questions = append(questions, EncryptedQuestionShare{
-			Question: KnowledgeQuestion{
-				ID: id, Prompt: prompt, CaseSensitive: caseSensitive,
-				IgnorePunctuation: ignorePunctuation,
-			},
-			Salt: encodeRecoveryBase64(salt), Vault: vault,
-			Nonce: encodeRecoveryBase64(nonce), Ciphertext: encodeRecoveryBase64(ciphertext),
-		})
-	}
-	if reader.Len() != 0 {
+	knowledgeCiphertext, err := decoder.Bytes(16, MaxRecoveryObjectSize)
+	if err != nil || reader.Len() != 0 {
 		return nil, ErrInvalidRecoveryPackage
 	}
 	envelope := Envelope{
@@ -378,21 +302,132 @@ func DecodeRecoveryPackageStorage(value []byte) (*RecoveryPackage, error) {
 		Envelope: envelope, GuardianCapsule: guardianCapsule,
 		Manifest: Manifest{
 			Version: Version, Locator: locator, Threshold: 2, Total: total,
-			EnvelopeHash: envelopeHash, CreatedAt: int64(createdAt), Guardian: guardian,
+			EnvelopeHash: envelopeHash, Guardian: guardian,
 		},
 		DKVSShareCapsule: DKVSShareCapsule{
 			Version: Version, PackageID: locator.PackageID, Algorithm: "aes-256-gcm",
 			Nonce: encodeRecoveryBase64(dkvsNonce), Ciphertext: encodeRecoveryBase64(dkvsCiphertext),
 		},
-		KnowledgeBundle: KnowledgeRecoveryBundle{
-			Version: Version, PackageID: locator.PackageID, Threshold: 2,
-			Total: uint8(len(questions)), QuestionShares: questions,
+		SealedKnowledge: EncryptedBlob{
+			Algorithm: "aes-256-gcm", Nonce: encodeRecoveryBase64(knowledgeNonce),
+			Ciphertext: encodeRecoveryBase64(knowledgeCiphertext),
 		},
 	}
 	if err := validateStoredRecoveryPackage(*result); err != nil {
 		return nil, err
 	}
 	return result, nil
+}
+
+func encodeRecoveryKnowledge(value KnowledgeRecoveryBundle) ([]byte, error) {
+	if value.Version != Version || value.Threshold != knowledgeQuestionThreshold ||
+		value.Total != knowledgeQuestionCount || len(value.QuestionShares) != knowledgeQuestionCount {
+		return nil, ErrInvalidRecoveryPackage
+	}
+	var buf bytes.Buffer
+	encoder := strict.NewEncoder(&buf)
+	shares := value.QuestionShares
+	if err := encoder.Length(uint64(len(shares)), knowledgeQuestionCount); err != nil {
+		return nil, err
+	}
+	for _, share := range shares {
+		salt, err := decodeRecoveryBase64(share.Salt)
+		if err != nil {
+			return nil, err
+		}
+		nonce, err := decodeRecoveryBase64(share.Nonce)
+		if err != nil {
+			return nil, err
+		}
+		ciphertext, err := decodeRecoveryBase64(share.Ciphertext)
+		if err != nil {
+			return nil, err
+		}
+		if err := encoder.String(share.Question.ID, 1, 128); err != nil {
+			return nil, err
+		}
+		if err := encoder.String(share.Question.Prompt, 1, 2048); err != nil {
+			return nil, err
+		}
+		if err := encoder.Bool(share.Question.CaseSensitive); err != nil {
+			return nil, err
+		}
+		if err := encoder.Bool(share.Question.IgnorePunctuation); err != nil {
+			return nil, err
+		}
+		if err := encoder.Bytes(salt, 1, 64); err != nil {
+			return nil, err
+		}
+		if err := encoder.Bytes(share.Vault, 1, MaxRecoveryObjectSize); err != nil {
+			return nil, err
+		}
+		if err := encoder.Bytes(nonce, 1, 64); err != nil {
+			return nil, err
+		}
+		if err := encoder.Bytes(ciphertext, 1, MaxRecoveryObjectSize); err != nil {
+			return nil, err
+		}
+	}
+	return buf.Bytes(), nil
+}
+
+func decodeRecoveryKnowledge(packageID string, value []byte) (KnowledgeRecoveryBundle, error) {
+	reader := bytes.NewReader(value)
+	decoder := strict.NewDecoder(reader)
+	questionCount, err := decoder.Length(knowledgeQuestionCount)
+	if err != nil || questionCount != knowledgeQuestionCount {
+		return KnowledgeRecoveryBundle{}, ErrInvalidRecoveryPackage
+	}
+	questions := make([]EncryptedQuestionShare, 0, questionCount)
+	for index := uint64(0); index < questionCount; index++ {
+		id, err := decoder.String(1, 128)
+		if err != nil {
+			return KnowledgeRecoveryBundle{}, err
+		}
+		prompt, err := decoder.String(1, 2048)
+		if err != nil {
+			return KnowledgeRecoveryBundle{}, err
+		}
+		caseSensitive, err := decoder.Bool()
+		if err != nil {
+			return KnowledgeRecoveryBundle{}, err
+		}
+		ignorePunctuation, err := decoder.Bool()
+		if err != nil {
+			return KnowledgeRecoveryBundle{}, err
+		}
+		salt, err := decoder.Bytes(1, 64)
+		if err != nil {
+			return KnowledgeRecoveryBundle{}, err
+		}
+		vault, err := decoder.Bytes(1, MaxRecoveryObjectSize)
+		if err != nil {
+			return KnowledgeRecoveryBundle{}, err
+		}
+		nonce, err := decoder.Bytes(1, 64)
+		if err != nil {
+			return KnowledgeRecoveryBundle{}, err
+		}
+		ciphertext, err := decoder.Bytes(1, MaxRecoveryObjectSize)
+		if err != nil {
+			return KnowledgeRecoveryBundle{}, err
+		}
+		questions = append(questions, EncryptedQuestionShare{
+			Question: KnowledgeQuestion{
+				ID: id, Prompt: prompt, CaseSensitive: caseSensitive,
+				IgnorePunctuation: ignorePunctuation,
+			},
+			Salt: encodeRecoveryBase64(salt), Vault: vault,
+			Nonce: encodeRecoveryBase64(nonce), Ciphertext: encodeRecoveryBase64(ciphertext),
+		})
+	}
+	if reader.Len() != 0 {
+		return KnowledgeRecoveryBundle{}, ErrInvalidRecoveryPackage
+	}
+	return KnowledgeRecoveryBundle{
+		Version: Version, PackageID: packageID, Threshold: knowledgeQuestionThreshold,
+		Total: knowledgeQuestionCount, QuestionShares: questions,
+	}, nil
 }
 
 func validateStoredRecoveryPackage(value RecoveryPackage) error {
@@ -409,10 +444,7 @@ func validateStoredRecoveryPackage(value RecoveryPackage) error {
 	packageID := value.Envelope.Locator.PackageID
 	if value.DKVSShareCapsule.Version != Version || value.DKVSShareCapsule.PackageID != packageID ||
 		value.DKVSShareCapsule.Algorithm != "aes-256-gcm" || value.DKVSShareCapsule.Nonce == "" ||
-		value.DKVSShareCapsule.Ciphertext == "" || value.KnowledgeBundle.Version != Version ||
-		value.KnowledgeBundle.PackageID != packageID || value.KnowledgeBundle.Threshold != 2 ||
-		int(value.KnowledgeBundle.Total) != len(value.KnowledgeBundle.QuestionShares) || len(value.KnowledgeBundle.QuestionShares) == 0 ||
-		len(value.KnowledgeBundle.QuestionShares) > maxRecoveryQuestions {
+		value.DKVSShareCapsule.Ciphertext == "" || validateEncryptedBlob(value.SealedKnowledge) != nil {
 		return ErrInvalidRecoveryPackage
 	}
 	if value.Envelope.Locator.RecoveryMode == RecoveryMode2Of3 &&

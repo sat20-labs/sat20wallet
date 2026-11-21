@@ -399,6 +399,15 @@ async function waitIndexer(url, logPath) {
   }, logPath)
 }
 
+async function waitIndexerPeer(rpc, logPath) {
+  return waitFor('L1 indexer P2P peer on owned Bitcoin Core', INDEXER_READY_TIMEOUT_MS, () => {
+    const peers = parseRPCJSON(rpc(['getpeerinfo']), 'getpeerinfo')
+    assert.ok(peers.every(peer => isLoopbackPeerAddr(peer.addr)), 'Bitcoin Core may only have loopback peers')
+    return peers.find(peer => peer.inbound && peer.addrbind === `127.0.0.1:${CORE_P2P_PORT}` &&
+      /(?:^|\/)MempoolSync:[^/]+\//.test(peer.subver ?? ''))
+  }, logPath)
+}
+
 async function waitElectrs(url, coreGenesisHash, logPath) {
   await waitFor('local Electrs Esplora API', ELECTRS_READY_TIMEOUT_MS, async () => {
     const response = await fetch(`${url}/blocks/tip/hash`, { signal: AbortSignal.timeout(3000) })
@@ -643,6 +652,9 @@ export async function startLocalRealRegtest({ directory, workspaceRoot, env = pr
     })
     const indexerURL = `http://127.0.0.1:${apiPort}/btc/regtest`
     await waitIndexer(indexerURL, indexer.entry.logPath)
+    const indexerPeer = await waitIndexerPeer(args => bitcoinCLI(dependencies, coreDir, rpcPort, args), indexer.entry.logPath)
+    manifest.indexerPeer = { addr: indexerPeer.addr, addrbind: indexerPeer.addrbind, subver: indexerPeer.subver }
+    persist()
     assert.equal(indexer.child.exitCode, null, 'owned L1 indexer exited before readiness')
 
     const coreTipHash = bitcoinCLI(dependencies, coreDir, rpcPort, ['getbestblockhash'])
@@ -709,6 +721,7 @@ export async function startRetainedRGBRegtest({ directory, workspaceRoot, env = 
   assert.equal(env.SAT20_REAL_SATOSHINET_ATTACH ?? '', '')
   const dependencies = checkLocalRealDependencies({ env, workspaceRoot })
   const { ports, paths } = manifest
+  assert.equal(ports.bitcoinP2P, CORE_P2P_PORT, 'retained Core must use the indexer regtest P2P port')
   for (const port of [...Object.values(ports), 5189, 30250, 30251, 30252, 30253, 30254, 30260, 30261, 30262, 30263, 30264]) {
     await requirePortFree(port, 'retained RGB continuation')
   }
@@ -759,6 +772,7 @@ export async function startRetainedRGBRegtest({ directory, workspaceRoot, env = 
     chmodSync(paths.indexerConfig, 0o600)
     const indexer = start(manifest.indexerBinary, ['-env', paths.indexerConfig], dependencies.indexerRoot, 'indexer.log')
     await waitIndexer(manifest.endpoints.indexer, indexer.entry.logPath)
+    const indexerPeer = await waitIndexerPeer(rpc, indexer.entry.logPath)
     const electrs = start(dependencies.electrs, ['--network', 'regtest', '--jsonrpc-import',
       '--daemon-dir', paths.bitcoinData, '--daemon-rpc-addr', `127.0.0.1:${ports.bitcoinRPC}`,
       '--db-dir', paths.electrsData, '--http-addr', `127.0.0.1:${ports.electrsHTTP}`,
@@ -766,7 +780,10 @@ export async function startRetainedRGBRegtest({ directory, workspaceRoot, env = 
       '--monitoring-addr', `127.0.0.1:${ports.electrsMonitoring}`], root, 'electrs.log')
     await waitElectrs(manifest.endpoints.esplora, rpc(['getbestblockhash']), electrs.entry.logPath)
     for (const entry of processes) assert.equal(entry.child.exitCode, null)
-    writeManifest(join(logs, 'processes.json'), { processes: processes.map(item => item.entry) })
+    writeManifest(join(logs, 'processes.json'), {
+      processes: processes.map(item => item.entry),
+      indexerPeer: { addr: indexerPeer.addr, addrbind: indexerPeer.addrbind, subver: indexerPeer.subver },
+    })
     return { env: ownedEnv, close }
   } catch (error) {
     try { await close() } catch (stopError) { error.message += `; ${stopError.message}` }

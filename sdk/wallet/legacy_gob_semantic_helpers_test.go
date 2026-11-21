@@ -4,9 +4,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	indexer "github.com/sat20-labs/indexer/common"
 	"reflect"
 	"sort"
+
+	indexer "github.com/sat20-labs/indexer/common"
 )
 
 // The semantic oracle preserves all exported legacy fields, including struct-key

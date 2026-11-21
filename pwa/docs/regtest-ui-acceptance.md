@@ -45,7 +45,8 @@ node pwa/scripts/verify/workspace-e2e.mjs --only pwa-canonical \
 ## 3. L1 过后，分模块继续
 
 - **聪网普通汇款**：相关 SDK/聪网测试和资源就绪后，重复上面的 `--plan`、`--check`、正式命令，只将精确 selector 换成 `TestSDKPWARealRegtestSatoshiNetPlainSendBrowser`，仍用 `--only pwa-canonical`。这是新组、新本机链，不承接 L1 数据。实际从真实 Anchor 准备有余额的测试账户，经 UI 发送既有用例的 2,000 sats；核唯一 TxID、出块/确认、双方余额、收件输出和网费。
-- **账户与 RGB11**：在对应自动化放行后，按 `--only pwa-canonical --tests TestSDKPWARealRegtestFixedAccountManagementBrowser` 或 `--only pwa-canonical --tests TestSDKPWARealRegtestRGBBrowser` 分组执行；跨层另选 `--only pwa-rgb-cross-layer --tests TestSDKPWARealRegtestRGBCrossLayerBrowser`。各组先看计划里的真实准备与依赖步骤。账户冷恢复要独立浏览器上下文、核相同 root/恢复包和恢复后的余额与历史；RGB11 记录实际合约 ID、proof、TxID/确认、数量及收件状态。不要把地址互转、跨层、私有通道或 Iris 互操作在未选择、未实际执行时记成通过。其它资产/通道/合约只跑本轮受影响并有真实用例的模块。
+- **账户与 RGB11**：在对应自动化放行后，按 `--only pwa-canonical --tests TestSDKPWARealRegtestFixedAccountManagementBrowser` 或 `--only pwa-canonical --tests TestSDKPWARealRegtestRGBBrowser` 分组执行；跨层另选 `--only pwa-rgb-cross-layer --tests TestSDKPWARealRegtestRGBCrossLayerBrowser`。各组先看计划里的真实准备与依赖步骤。账户冷恢复要独立浏览器上下文、核相同 root/恢复包和恢复后的余额与历史；RGB11 记录实际合约 ID、proof、TxID/确认、数量及收件状态。其它资产/通道/合约只跑本轮受影响并有真实用例的模块。
+- **RGB11 外部钱包互操作**。使用官方 `rgb-cmd 0.11.2-rc.2`，在同一条本地 Regtest 链上先验 NIA 双向收发。记录实际执行的 PWA UI、CLI、回执、确认和余额。此项单独执行、单独出结果。 [第三方互操作验收指引](rgb11-third-party-interoperability.md#当前验收基线)
 
 ## 4. 证据、失败与恢复
 

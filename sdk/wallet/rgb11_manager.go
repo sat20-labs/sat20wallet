@@ -1789,10 +1789,8 @@ func rgb11StrictUnwrapPointer(value *strict_types.Value) *strict_types.Value {
 	return value
 }
 
-// rgb11ContractFromValidatedHistory deterministically derives a contract
-// consignment from an already validated contract or transfer object. Transfers
-// contain the complete static contract data and validated history; only the
-// transfer marker and recipient terminal disclosures are removed.
+// rgb11ContractFromValidatedHistory exports the validated genesis as a static
+// contract. Witness bundles remain private wallet history.
 func rgb11ContractFromValidatedHistory(raw []byte, contractID string) ([]byte, *coreconsignment.Container, error) {
 	container, err := coreconsignment.Decode(raw)
 	if err != nil {
@@ -1801,29 +1799,21 @@ func rgb11ContractFromValidatedHistory(raw []byte, contractID string) ([]byte, *
 	if container.ContractID != contractID || container.Armor == nil {
 		return nil, nil, rgb11wallet.ErrValidationReceipt
 	}
-	if container.Armor.Type == "contract" {
-		file, err := coreconsignment.EncodeFile(container)
-		return file, container, err
-	}
-	if container.Armor.Type != "transfer" {
+	if container.Armor.Type != "contract" && container.Armor.Type != "transfer" {
 		return nil, nil, rgb11wallet.ErrValidationReceipt
 	}
 
 	value := container.Value.Clone()
 	transfer := rgb11StrictValuePointer(&value, "transfer")
-	terminals := rgb11StrictValuePointer(&value, "terminals")
-	bundles := rgb11StrictValuePointer(&value, "bundles")
-	if transfer == nil || terminals == nil || bundles == nil {
+	bundles := rgb11StrictUnwrapPointer(rgb11StrictValuePointer(&value, "bundles"))
+	if transfer == nil || bundles == nil || bundles.Kind != strict_types.ValueList {
 		return nil, nil, rgb11wallet.ErrValidationReceipt
+	}
+	if container.Armor.Type == "contract" && len(bundles.Items) == 0 {
+		file, err := coreconsignment.EncodeFile(container)
+		return file, container, err
 	}
 	*transfer = strict_types.Value{Kind: strict_types.ValueEnum, Name: "false", Text: "false", Tag: 0}
-	terminals = rgb11StrictUnwrapPointer(terminals)
-	bundles = rgb11StrictUnwrapPointer(bundles)
-	if terminals == nil || terminals.Kind != strict_types.ValueMap ||
-		bundles == nil || bundles.Kind != strict_types.ValueList {
-		return nil, nil, rgb11wallet.ErrValidationReceipt
-	}
-	terminals.Entries = nil
 	bundles.Items = nil
 
 	armor, err := coreconsignment.EncodeArmor(value)
@@ -3220,7 +3210,7 @@ func (p *rgb11Manager) prepareRGB11TransferForEndpointsMode(ctx context.Context,
 
 	reveals := make([]seals.GraphBlindSeal, 0, len(selected))
 	inputs := make([]operations.TransitionInput, 0, len(selected))
-	inflationInputs := make([]operations.TransitionInput, 0, len(selected))
+	primaryInputs := make([]operations.TransitionInput, 0, len(selected))
 	preservationInputs := make([]operations.TransitionInput, 0, len(selected))
 	for _, allocation := range selected {
 		operationID, err := hex.DecodeString(allocation.proof.OperationID)
@@ -3234,12 +3224,10 @@ func (p *rgb11Manager) prepareRGB11TransferForEndpointsMode(ctx context.Context,
 			Index: uint16(allocation.proof.AssignmentIndex),
 		}
 		inputs = append(inputs, input)
-		if inflation {
-			if allocation.target {
-				inflationInputs = append(inflationInputs, input)
-			} else {
-				preservationInputs = append(preservationInputs, input)
-			}
+		if allocation.target {
+			primaryInputs = append(primaryInputs, input)
+		} else {
+			preservationInputs = append(preservationInputs, input)
 		}
 		graph, err := seals.DecodeGraphBlindSeal(allocation.proof.SealDisclosure)
 		if err != nil {
@@ -3347,12 +3335,15 @@ func (p *rgb11Manager) prepareRGB11TransferForEndpointsMode(ctx context.Context,
 		changeSecrets = append(changeSecrets, secret.secret)
 	}
 
+	separateSibling := base.GenesisReport.Kind == schemas.IFA && len(preservationInputs) > 0
 	transitionInputs := inputs
+	if separateSibling {
+		transitionInputs = primaryInputs
+	}
 	transitionType := uint16(10_000)
 	var metadata map[uint16][]byte
 	var globals map[uint16][][]byte
 	if inflation {
-		transitionInputs = inflationInputs
 		transitionType = 8000
 		remaining := make([]byte, 8)
 		issued := make([]byte, 8)
@@ -3361,7 +3352,7 @@ func (p *rgb11Manager) prepareRGB11TransferForEndpointsMode(ctx context.Context,
 		metadata = map[uint16][]byte{1000: remaining}
 		globals = map[uint16][][]byte{2010: [][]byte{issued}}
 	}
-	if !inflation {
+	if !separateSibling {
 		outputs = append(outputs, preservationOutputs...)
 	}
 	transition, transitionCommitment, err := operations.BuildTransition(operations.TransitionSpec{
@@ -3372,26 +3363,42 @@ func (p *rgb11Manager) prepareRGB11TransferForEndpointsMode(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	var preservationTransition strict_types.Value
-	var preservationCommitment operations.TransitionCommitment
-	if inflation && len(preservationInputs) > 0 {
-		preservationTransition, preservationCommitment, err = operations.BuildTransition(operations.TransitionSpec{
-			ContractID: [32]byte(contractID), Nonce: uint64(time.Now().UnixNano()) + 1,
-			TransitionType: 10_000, Inputs: preservationInputs, Outputs: preservationOutputs,
-		})
-		if err != nil {
-			return nil, err
-		}
-	}
 	var bundleValue strict_types.Value
 	var bundleCommitment operations.BundleCommitment
-	if inflation && len(preservationInputs) > 0 {
+	var psbtTransitions []rgb11PSBTTransition
+	if separateSibling {
+		// The rc.2 IFA schema moves each assignment type in its own
+		// transition. The wallet projects one control state per carrier.
+		if len(preservationOutputs) != 1 {
+			return nil, ErrRGB11AssetPreservation
+		}
+		var preserveType uint16
+		switch preservationOutputs[0].AssignmentType {
+		case 4000:
+			preserveType = 10_000
+		case 4010:
+			preserveType = 8015
+		case 4012:
+			preserveType = 8016
+		default:
+			return nil, ErrRGB11AssetPreservation
+		}
+		preservation, preservationCommit, buildErr := operations.BuildTransition(operations.TransitionSpec{
+			ContractID: [32]byte(contractID), Nonce: uint64(time.Now().UnixNano()) + 1,
+			TransitionType: preserveType, Inputs: preservationInputs, Outputs: preservationOutputs,
+		})
+		if buildErr != nil {
+			return nil, buildErr
+		}
 		bundleValue, bundleCommitment, err = buildRGB11TwoTransitionBundle(
-			inflationInputs, transition, transitionCommitment,
-			preservationInputs, preservationTransition, preservationCommitment,
+			transitionInputs, transition, transitionCommitment,
+			preservationInputs, preservation, preservationCommit,
 		)
+		psbtTransitions = append(psbtTransitions, rgb11PSBTTransition{
+			ID: preservationCommit.OperationID, Encoded: preservation.Encoded,
+		})
 	} else {
-		bundleValue, bundleCommitment, err = operations.BuildBundle(inputs, transition)
+		bundleValue, bundleCommitment, err = operations.BuildBundle(transitionInputs, transition)
 	}
 	if err != nil {
 		return nil, err
@@ -3443,7 +3450,7 @@ func (p *rgb11Manager) prepareRGB11TransferForEndpointsMode(ctx context.Context,
 	packet, signedTx, signedPSBT, err := p.buildRGB11PSBT(
 		tx, prevFetcher, [32]byte(contractID), transitionCommitment.OperationID,
 		transition.Encoded, bundleCommitment.BundleID, mpcProof, mpcCommitment, inputs,
-		rgb11PSBTTransition{ID: preservationCommitment.OperationID, Encoded: preservationTransition.Encoded},
+		psbtTransitions...,
 	)
 	if err != nil {
 		return nil, err

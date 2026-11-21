@@ -163,21 +163,30 @@ func nativeIfaceFundPool(t *testing.T, f *nativeIfaceChain, coinbaseID string) {
 
 func (f *nativeIfaceChain) fund(t *testing.T, address string, sats int64) {
 	t.Helper()
+	f.fundOutputs(t, address, sats, 1)
+}
+
+func (f *nativeIfaceChain) fundOutputs(t *testing.T, address string, sats int64, count int) {
+	t.Helper()
 	require.Positive(t, sats)
-	txid, _, err := f.faucet.BatchSendPlainSats(address, sats, 1, 1, nil)
+	require.Positive(t, count)
+	txid, _, err := f.faucet.BatchSendPlainSats(address, sats, count, 1, nil)
 	require.NoError(t, err)
 	require.Len(t, txid, 64)
 	f.mine(t, 1)
+	want := make(map[string]struct{}, count)
+	for vout := range count {
+		want[fmt.Sprintf("%s:%d", txid, vout)] = struct{}{}
+	}
 	outputs := f.faucet.GetIndexerClient().GetUtxoListWithTicker(address, &indexercommon.ASSET_PLAIN_SAT)
-	found := false
 	for _, out := range outputs {
-		if out.OutPoint == txid+":0" {
+		if _, ok := want[out.OutPoint]; ok {
 			require.Equal(t, sats, out.Value)
 			require.Empty(t, out.Assets)
-			found = true
+			delete(want, out.OutPoint)
 		}
 	}
-	require.True(t, found, "real SDK funding must create the indexed plain recipient output")
+	require.Empty(t, want, "real SDK funding must create every indexed plain recipient output")
 }
 
 type nativeIfaceDevice struct {

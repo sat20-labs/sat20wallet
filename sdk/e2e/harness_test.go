@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -58,8 +59,9 @@ var (
 	satoshinetTestArtifacts  satoshinetArtifacts
 	satoshinetNodeDirsMu     sync.Mutex
 	activeSatoshiNetNodeDirs = make(map[string]bool)
-	satoshinetRuntimeLock    *os.File
+	satoshinetRuntimeLocks   []*os.File
 	nextHarnessPort          uint32 = harnessPortStart - 5
+	lastHarnessPort                 = harnessPortEnd
 	satoshinetTestConf              = `env: test
 chain: testnet
 mode: %s
@@ -461,11 +463,12 @@ func (f *fakeL1Indexer) host() string {
 }
 
 type realSatoshiNet struct {
-	Bootstrap *testHarness
-	Core      *testHarness
-	Miner     *testHarness
-	Nodes     []*testHarness
-	fakeL1    *fakeL1Indexer
+	Bootstrap     *testHarness
+	Core          *testHarness
+	Miner         *testHarness
+	Nodes         []*testHarness
+	fakeL1        *fakeL1Indexer
+	scheduledOnly bool
 }
 
 func newRealSatoshiNet(t *testing.T, fakeL1 *fakeL1Indexer) *realSatoshiNet {
@@ -573,6 +576,9 @@ type testHarness struct {
 func newTestHarness(t *testing.T, exe, nodeDir, p2pAddr, rpcAddr string, args, env []string) *testHarness {
 	t.Helper()
 	defer e2ePhase(t, "node_start")()
+	if len(satoshinetRuntimeLocks) == 2 {
+		t.Logf("E2E pilot node RPC %s", rpcAddr)
+	}
 	require.NoError(t, os.MkdirAll(filepath.Join(nodeDir, "logs"), 0o755))
 	logPath := filepath.Join(nodeDir, "btcd.stdout.log")
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
@@ -580,10 +586,15 @@ func newTestHarness(t *testing.T, exe, nodeDir, p2pAddr, rpcAddr string, args, e
 
 	cmd := exec.Command(exe, args...)
 	cmd.Dir = nodeDir
-	if satoshinetRuntimeLock != nil {
-		cmd.ExtraFiles = []*os.File{satoshinetRuntimeLock}
-	}
+	cmd.ExtraFiles = satoshinetRuntimeLocks
 	cmd.Env = append(os.Environ(), env...)
+	if slices.Contains(args, "--regtest") {
+		cmd.Env = append(cmd.Env,
+			"SATOSHINET_POS_MINER_INTERVAL=1",
+			"SATOSHINET_POS_CHECKING_INTERVAL=1",
+			"SATOSHINET_POS_PREWARNING_INTERVAL=1",
+		)
+	}
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	h := &testHarness{
@@ -729,9 +740,7 @@ func restartTestHarness(t *testing.T, h *testHarness) {
 	require.NoError(t, err)
 	cmd := exec.Command(exe, args...)
 	cmd.Dir = dir
-	if satoshinetRuntimeLock != nil {
-		cmd.ExtraFiles = []*os.File{satoshinetRuntimeLock}
-	}
+	cmd.ExtraFiles = satoshinetRuntimeLocks
 	cmd.Env = env
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
@@ -746,8 +755,8 @@ func nextNodeAddresses(t *testing.T) (string, string, string, string) {
 	t.Helper()
 	for {
 		base := atomic.AddUint32(&nextHarnessPort, 5)
-		if base > harnessPortEnd {
-			t.Fatalf("SatoshiNet E2E port range exhausted: next block starts at %d, allowed blocks end at %d", base, harnessPortEnd)
+		if base > lastHarnessPort {
+			t.Fatalf("SatoshiNet E2E port range exhausted: next block starts at %d, allowed blocks end at %d", base, lastHarnessPort)
 		}
 		p2p := fmt.Sprintf("127.0.0.1:%d", base)
 		rpc := fmt.Sprintf("127.0.0.1:%d", base+1)
@@ -825,14 +834,14 @@ func joinBlocks(nodes []*testHarness) error {
 }
 
 func satoshinetBuildArtifacts(t *testing.T) satoshinetArtifacts {
-	return buildSatoshiNetTestArtifacts(t, false)
+	return buildSatoshiNetTestArtifacts(t, false, "")
 }
 
 func satoshinetCoreBuildArtifacts(t *testing.T) satoshinetArtifacts {
-	return buildSatoshiNetTestArtifacts(t, true)
+	return buildSatoshiNetTestArtifacts(t, true, "")
 }
 
-func buildSatoshiNetTestArtifacts(t *testing.T, coreOnly bool) satoshinetArtifacts {
+func buildSatoshiNetTestArtifacts(t *testing.T, coreOnly bool, bundleDir string) satoshinetArtifacts {
 	t.Helper()
 	satoshinetBuildMu.Lock()
 	defer satoshinetBuildMu.Unlock()
@@ -857,12 +866,19 @@ func buildSatoshiNetTestArtifacts(t *testing.T, coreOnly bool) satoshinetArtifac
 	require.FileExists(t, filepath.Join(sdkPluginDir, "main.go"))
 	require.FileExists(t, filepath.Join(transcendPluginDir, "main.go"))
 
-	outputDir := filepath.Join(e2eRuntimeDirectory(t), "normal")
-	require.NoError(t, os.MkdirAll(outputDir, 0o755))
+	outputDir := bundleDir
+	pluginName := "stpd-normal.so"
+	if outputDir == "" {
+		outputDir = filepath.Join(e2eRuntimeDirectory(t), "normal")
+		pluginName = "stpd.so"
+		require.NoError(t, os.MkdirAll(outputDir, 0o755))
+	} else {
+		require.NoError(t, os.Mkdir(outputDir, 0700))
+	}
 
 	artifacts := satoshinetArtifacts{
 		coreExecutable:  filepath.Join(outputDir, "satoshinet-core-rpctest"),
-		corePlugin:      filepath.Join(outputDir, "stpd.so"),
+		corePlugin:      filepath.Join(outputDir, pluginName),
 		minerExecutable: filepath.Join(outputDir, "satoshinet-miner-rpctest"),
 		minerPlugin:     filepath.Join(outputDir, "wallet.so"),
 	}
@@ -1142,12 +1158,14 @@ func (n *realSatoshiNet) waitForTx(t *testing.T, tx *wire.MsgTx, minHeight int32
 		} else {
 			lastStatus = fmt.Sprintf("confirmations=%d block=%s", verbose.Confirmations, verbose.BlockHash)
 		}
-		scheduled, err := n.Bootstrap.Client.GetGenerate()
-		require.NoError(t, err)
-		if !scheduled {
-			_, err := n.Bootstrap.Client.Generate(1)
-			require.NoError(t, err, "mine transaction %s (minimum height %d)", txHash, minHeight)
-			continue
+		if !n.scheduledOnly {
+			scheduled, err := n.Bootstrap.Client.GetGenerate()
+			require.NoError(t, err)
+			if !scheduled {
+				_, err := n.Bootstrap.Client.Generate(1)
+				require.NoError(t, err, "mine transaction %s (minimum height %d)", txHash, minHeight)
+				continue
+			}
 		}
 		time.Sleep(100 * time.Millisecond)
 	}

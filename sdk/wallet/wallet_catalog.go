@@ -3,6 +3,7 @@ package wallet
 import (
 	"crypto/sha256"
 	"fmt"
+	"maps"
 	"reflect"
 	"sort"
 	"strings"
@@ -477,18 +478,10 @@ func (p *Manager) commitWalletCatalogMutationLocked(candidate *WalletInfo, statu
 		}
 	}
 	walletChanged := live == nil || live.Name != candidate.Name || live.Accounts != candidate.Accounts ||
-		!reflect.DeepEqual(live.AccountNames, candidate.AccountNames) || !reflect.DeepEqual(live.AccountDIDs, candidate.AccountDIDs)
+		!reflect.DeepEqual(live.AccountNames, candidate.AccountNames) ||
+		!reflect.DeepEqual(live.AccountDIDs, candidate.AccountDIDs) || !maps.Equal(live.SPEnabled, candidate.SPEnabled)
 	if walletChanged {
 		if err := p.stageAccountChange(batch, "wallets", AccountManagedDataGlobalScope); err != nil {
-			return err
-		}
-	}
-	for index, enabled := range candidate.SPEnabled {
-		if !enabled || live != nil && live.SPEnabled[index] {
-			continue
-		}
-		scope := AccountManagedDataScope{Network: p.cfg.Chain, WalletFingerprint: walletFingerprint(candidate.Wallet), AccountIndex: index}
-		if err := p.stageAccountChange(batch, silentPayManagedProviderID, scope.ID()); err != nil {
 			return err
 		}
 	}

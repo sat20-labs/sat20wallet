@@ -19,6 +19,7 @@ import (
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 	db "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/sat20wallet/sdk/account"
 	"github.com/stretchr/testify/require"
 )
 
@@ -220,46 +221,55 @@ func runSPAccountScan(t *testing.T, mgr *Manager, wallet *InternalWallet) {
 	}
 }
 
-func TestSilentPayManagedDataRestoresMonotonicAccountFlag(t *testing.T) {
-	originalChain := _chain
-	_chain = "testnet"
-	t.Cleanup(func() { _chain = originalChain })
-	mgr, w := spAccountGroup(t, accountGroupInactive)
-	if _, err := mgr.EnableSilentPay(w.GetId(), 1); err != nil {
-		t.Fatal(err)
+func TestSilentPayStateMultiDeviceE2E(t *testing.T) {
+	first, second, remote := reviewAccountDevices(t)
+	firstID := first.GetAccountManagementStatus().RootWalletID
+	secondID := second.GetAccountManagementStatus().RootWalletID
+	require.NoError(t, first.EnsureAccount(firstID, 1, "Savings", ""))
+	syncImportGroup(t, first, nil)
+	syncImportGroup(t, second, nil)
+
+	store, err := first.accountDKVSStore()
+	require.NoError(t, err)
+	status := first.GetAccountManagementStatus()
+	indexKey, err := account.ManagedIndexKey(status.AccountID)
+	require.NoError(t, err)
+	indexBefore, err := store.GetAuthoritative(indexKey)
+	require.NoError(t, err)
+
+	main, err := first.EnableSilentPay(firstID, 0)
+	require.NoError(t, err)
+	savings, err := second.EnableSilentPay(secondID, 1)
+	require.NoError(t, err)
+	require.NotEmpty(t, main)
+	require.NotEmpty(t, savings)
+	require.NotEqual(t, main, savings)
+	syncImportGroup(t, first, nil)
+	syncImportGroup(t, second, nil)
+	syncImportGroup(t, first, nil)
+
+	indexAfter, err := store.GetAuthoritative(indexKey)
+	require.NoError(t, err)
+	require.Equal(t, indexBefore.Hash, indexAfter.Hash)
+	for _, index := range []uint32{0, 1} {
+		scope := AccountManagedDataScope{
+			Network: first.GetChain(), WalletFingerprint: status.RootFingerprint, AccountIndex: index,
+		}
+		key, err := account.ManagedModuleKey(first.accountSecret, status.AccountID, "silentpay", scope.ID())
+		require.NoError(t, err)
+		_, err = store.GetAuthoritative(key)
+		require.ErrorIs(t, err, ErrDKVSRecordNotFound)
 	}
-	provider := &silentPayAccountManagedDataProvider{owner: mgr}
-	catalog := AccountManagedDataCatalog{Network: "testnet", Scopes: []AccountManagedDataScope{
-		{WalletID: w.GetId(), WalletFingerprint: walletFingerprint(w), AccountIndex: 0, Network: "testnet"},
-		{WalletID: w.GetId(), WalletFingerprint: walletFingerprint(w), AccountIndex: 1, Network: "testnet"},
-	}}
-	payload, err := provider.Export(catalog)
-	if err != nil || len(payload) != 1 || payload[0].Scope != catalog.Scopes[1].ID() {
-		t.Fatal("SP opt-in not exported", err)
-	}
-	other, otherWallet := spAccountGroup(t, accountGroupInactive)
-	otherProvider := &silentPayAccountManagedDataProvider{owner: other}
-	restoredCatalog := AccountManagedDataCatalog{Network: "testnet", Scopes: []AccountManagedDataScope{
-		{WalletFingerprint: walletFingerprint(otherWallet), AccountIndex: 0, Network: "testnet"},
-		{WalletFingerprint: walletFingerprint(otherWallet), AccountIndex: 1, Network: "testnet"},
-	}}
-	if err := otherProvider.Import(restoredCatalog, payload); err != nil {
-		t.Fatal(err)
-	}
-	if other.GetWalletCatalog()[0].Accounts[0].SPEnabled ||
-		!other.GetWalletCatalog()[0].Accounts[1].SPEnabled {
-		t.Fatal("SP recovered in the wrong subaccount")
-	}
-	// Older/stale managed-data snapshots never silently disable an address
-	// that may have been published already.
-	if err := otherProvider.Import(restoredCatalog, nil); err != nil {
-		t.Fatal(err)
-	}
-	if !other.GetWalletCatalog()[0].Accounts[1].SPEnabled {
-		t.Fatal("remote account metadata erased an existing SP address")
-	}
-	if _, _, err := other.SilentPayAccount(otherWallet.GetId(), 1); errors.Is(err, ErrSilentPayUnsupported) {
-		t.Fatal("restored account unexpectedly locked")
+
+	restored := reviewColdCopy(t, first, remote)
+	for _, manager := range []*Manager{first, second, restored} {
+		id := manager.GetAccountManagementStatus().RootWalletID
+		for index, want := range []string{main, savings} {
+			enabled, address, err := manager.SilentPayAccount(id, uint32(index))
+			require.NoError(t, err)
+			require.True(t, enabled)
+			require.Equal(t, want, address)
+		}
 	}
 }
 

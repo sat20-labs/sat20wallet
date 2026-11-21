@@ -20,12 +20,14 @@ func TestSDKUIFlows(t *testing.T) {
 	}{
 		{"RGBManual", runNativeRGBManual},
 		{"RGBDirectOffline", runNativeRGBDirect},
+		{"RGBBlindSelfReceiveFirst", runNativeRGBBlindSelf},
 		{"RGBBlindUDA", runNativeRGBBlind},
 		{"RGBProxy", runNativeRGBProxy},
 		{"DIDHistory", runNativeDID},
 	} {
 		t.Run(item.name, func(t *testing.T) { item.run(t, chain) })
 	}
+	t.Run("AccountReview", func(t *testing.T) { runNativeAccountReview(t, chain) })
 }
 
 func prepareSDKUIActors(t *testing.T, source *wallet.Manager, network *realSatoshiNet,

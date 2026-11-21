@@ -25,7 +25,7 @@ func (p *Manager) stageAccountWalletDelete(batch indexer.WriteBatch, fingerprint
 		if value.Provider == "account" || len(parts) != 3 || parts[1] != fingerprint || value.Deleted {
 			continue
 		}
-		entry, err := accountEntry(value.AccountID, value.Provider, value.Scope)
+		entry, err := accountEntry(p.accountSecret, value.AccountID, value.Provider, value.Scope)
 		if err != nil {
 			return err
 		}
@@ -104,7 +104,7 @@ func (p *Manager) stageNewWalletScopes(batch indexer.WriteBatch, candidate *Wall
 	for index := first; index < max(candidate.Accounts, 1); index++ {
 		scope := AccountManagedDataScope{Network: p.cfg.Chain,
 			WalletFingerprint: walletFingerprint(candidate.Wallet), AccountIndex: uint32(index)}.ID()
-		entry, err := accountEntry(p.accountProfile.AccountID, rgb11AccountManagedProviderID, scope)
+		entry, err := accountEntry(p.accountSecret, p.accountProfile.AccountID, rgb11AccountManagedProviderID, scope)
 		if err != nil {
 			return err
 		}
@@ -243,7 +243,7 @@ func (p *Manager) cleanAccountDeleted(store *dkvsStore, snapshot *accountManagem
 		if before == nil || !before.Deleted {
 			continue
 		}
-		if err := store.rememberAccountModule(snapshot.profile.AccountID, entry); err != nil {
+		if err := store.rememberAccountModule(snapshot.secret, snapshot.profile.AccountID, entry); err != nil {
 			return err
 		}
 		if err := store.WaitReady(entry.Key); err != nil {

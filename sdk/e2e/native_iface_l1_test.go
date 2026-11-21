@@ -97,9 +97,7 @@ func runNativeIfaceL1(t *testing.T, f *nativeIfaceChain) {
 	mnemonic := dkvsClientMnemonic
 	address := nativeIfaceAddress(t, keyFromMnemonic(t, mnemonic, 0).PubKey().SerializeCompressed(), &chaincfg.RegressionNetParams)
 	recipient := nativeIfaceAddress(t, keyFromMnemonic(t, f.seeds["ordinary-2"], 0).PubKey().SerializeCompressed(), &chaincfg.RegressionNetParams)
-	for i := 0; i < 3; i++ {
-		f.fund(t, address, 1_000_000)
-	}
+	f.fundOutputs(t, address, 1_000_000, 3)
 	f.fund(t, recipient, 100_000)
 
 	t.Run("07_l1_psbt_single_batch", func(t *testing.T) {

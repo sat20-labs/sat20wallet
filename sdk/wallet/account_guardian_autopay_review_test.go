@@ -26,7 +26,12 @@ func TestTemporaryPaidReuse(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
-	manager := newAutopayWriteFixture(t, false)
+	manager, _, pkg, auth, secret := newLocalActivationFixture(t)
+	require.NoError(t, manager.ActivateAccountManagement(secret, "password", *auth,
+		pkg.Envelope.Locator, "account://"+pkg.Envelope.Locator.PackageID))
+	syncImportGroup(t, manager, nil)
+	require.Equal(t, AccountStorageTemporary, manager.GetAccountManagementStatus().StorageMode)
+	require.NoError(t, manager.CancelStorageSetup())
 	before, err := json.Marshal(manager.accountProfile)
 	require.NoError(t, err)
 	root, err := manager.accountManagementRootWallet()
@@ -50,9 +55,6 @@ func TestTemporaryPaidReuse(t *testing.T) {
 	// Ordinary status does not discover an unused remote delegate. The current
 	// PWA explicitly selects paid storage and reuses that same payer/contract.
 	require.False(t, status.Required)
-	// The fixture selected a temporary setup. The PWA requires cancelling
-	// that unused selection before confirming a different storage plan.
-	require.NoError(t, manager.CancelStorageSetup())
 	options, err := manager.GetStorageOptions(context.Background(), accountDefaultRecordCount)
 	require.NoError(t, err)
 	var paid *StorageOption

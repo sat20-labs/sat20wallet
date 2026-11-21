@@ -237,7 +237,9 @@ func coreRestoreE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain, materi
 	}
 	pkg, err := target.LoadAccountRecoveryPackage(material.auth.Location, material.locator)
 	coreRequire(t, "load recovery package from real DKVS", err)
-	share, err := account.RecoverDKVSShare(pkg.DKVSShareCapsule, pkg.KnowledgeBundle, coreAnswers())
+	questions, err := account.OpenRecoveryKnowledge(*pkg, material.userShare)
+	coreRequire(t, "decrypt recovery questions with user share", err)
+	share, err := account.RecoverDKVSShare(pkg.DKVSShareCapsule, questions, coreAnswers())
 	coreRequire(t, "recover knowledge share", err)
 	companion := material.userShare
 	if len(material.guardianPrivate) > 0 {

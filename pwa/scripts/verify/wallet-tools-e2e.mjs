@@ -146,7 +146,7 @@ export async function runPwaToolsCases(t, fixture) {
     await confirmedWork(result.txid)
     return result
   }
-  const confirmedWork = async txid => {
+  const confirmedTx = async txid => {
     assert.match(txid, txidPattern)
     let transaction
     await expect.poll(async () => {
@@ -155,6 +155,10 @@ export async function runPwaToolsCases(t, fixture) {
     }, poll).toBe(true)
     assert.equal(transaction.txid, txid)
     assert.match(transaction.blockhash, txidPattern)
+    return transaction
+  }
+  const confirmedWork = async txid => {
+    const transaction = await confirmedTx(txid)
     assert.ok(transaction.results?.length, 'broadcast/confirmation alone is not contract execution')
     for (const result of transaction.results) {
       assert.ok(result.confirmations > 0)
@@ -240,7 +244,7 @@ export async function runPwaToolsCases(t, fixture) {
       if (kind === 'result') assert.equal(record.status, 'success')
     }
   }
-  const sendGasThroughUI = async (address, quantity) => {
+  const sendGasThroughUI = async (address, quantity, confirm = confirmedWork) => {
     await visit(page, '/wallet')
     await page.getByRole('tab', { name: 'SatoshiNet', exact: true }).click()
     const kind = { ordx: 'ORDX', runes: 'Runes', brc20: 'BRC20' }[gas.split(':')[0]]
@@ -270,7 +274,7 @@ export async function runPwaToolsCases(t, fixture) {
       if (receipt?.status === 'failed') throw new Error(JSON.stringify(receipt))
       return receipt?.status === 'succeeded'
     }, poll).toBe(true)
-    return confirmedWork(receipt.tx_ids[0])
+    return confirm(receipt.tx_ids[0])
   }
   const logs = async () => {
     const response = await page.evaluate(() => window.sat20wallet_operation_log.getOperationLogs())
@@ -319,42 +323,56 @@ export async function runPwaToolsCases(t, fixture) {
     })
 
     await check(requiredPwaToolsCases[1], async () => {
+      const faucet = fixture.tools.faucetAddress
+      assert.ok(faucet, 'the fixture must deploy a real Faucet template')
+      await sendGasThroughUI(faucet, 2000000n, confirmedTx)
+      await expect.poll(() => amount(page, faucet, gas), poll).toBe(2000000n)
+      const faucetInventory = await amount(page, faucet, gas)
+      assert.ok(faucetInventory > 990000n, 'faucet needs enough confirmed inventory for the swap')
       buyer = await importWallet(fixture.recipient)
       const deployerPage = page
       page = buyer
       await toolsTab('Faucet')
-      await fill('Contract address', exchange.contractAddress)
+      await fill('Contract address', actor.address)
       await fill('Sats amount', '1000')
       const before = await amount(page, fixture.recipient.address, gas)
       assert.equal(await amount(page, exchange.contractAddress, gas), exchangeInventory)
       await panel().getByRole('button', { name: 'Send sats', exact: true }).click()
-      await expect(page.getByRole('dialog')).toContainText(exchange.contractAddress)
+      await expect(page.getByRole('dialog')).toContainText('Ordinary transfer')
+      await expect(page.getByRole('dialog').getByRole('alert')).toContainText('You may receive no assets')
+      await page.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click()
+      await panel().getByRole('list').getByRole('button').filter({ hasText: faucet }).click()
+      await panel().getByRole('button', { name: 'Send sats', exact: true }).click()
+      await expect(page.getByRole('dialog')).toContainText(faucet)
+      await expect(page.getByRole('dialog')).toContainText('Request assets from a faucet')
       await page.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click()
       assert.equal(await amount(page, fixture.recipient.address, gas), before)
       await panel().getByRole('button', { name: 'Send sats', exact: true }).click()
-      await confirmTools([exchange.contractAddress, '1000', 'testnet'])
+      await confirmTools([faucet, gas, '1000', 'testnet'])
       const receipt = panel().locator('p').filter({ hasText: /^txid: [0-9a-f]{64}$/ })
       await expect(receipt).toHaveCount(1, { timeout: 120000 })
-      const work = await confirmedWork((await receipt.textContent()).trim().slice(6))
-      const funding = contractFunding(work, exchange.contractAddress)
-      assert.equal(funding.length, 1)
-      assert.equal(funding[0].contract.value, 1000, 'Faucet changed the requested sats amount')
-      assert.equal(gasInOutputs(funding), 0n, 'Faucet is a plain-sats default invoke')
-      const settled = gasOutputs(work, fixture.recipient.pk_script)
-      // A default invoke without GAS retains 1% of native input: 1000-10
-      // sats buy exactly 990,000 GAS at the configured 0.001 sats/GAS.
-      assert.equal(settled, 990000n, 'Faucet settlement must honor price and default-invoke retention')
+      const work = await confirmedTx((await receipt.textContent()).trim().slice(6))
+      // The STP Faucet settles asynchronously. Tie the independently
+      // confirmed payout to the input outpoint from its invocation history.
+      let invocation
+      await expect.poll(async () => {
+        const result = await walletCall(page, 'getContractInvokeHistoryByAddressInServer',
+          `${faucet}_${gas}_faucet.tc`, fixture.recipient.address, 0, 100)
+        invocation = JSON.parse(result.history).data?.find(item => item.InUtxo.startsWith(`${work.txid}:`))
+        return invocation?.Done === 1 && txidPattern.test(invocation.OutTxId)
+      }, poll).toBe(true)
+      const inputIndex = Number(invocation.InUtxo.split(':')[1])
+      assert.equal(work.output_sats[inputIndex], 1000, 'Faucet changed the requested sats amount')
+      const input = work.vout.find(output => output.n === inputIndex)
+      assert.ok(input, 'Faucet history must reference an output of the confirmed payment')
+      assert.equal(gasInOutputs([input]), 0n, 'Faucet is a plain-sats default invoke')
+      const payout = await confirmedTx(invocation.OutTxId)
+      const settled = gasInOutputs(payout.vout.filter(output => output.scriptPubKey.hex === fixture.recipient.pk_script))
+      // The Faucet charges 10 sats before converting at 0.001 sats per GAS.
+      assert.equal(settled, 990000n, 'Faucet settlement must honor its price and swap fee')
       await expect.poll(() => amount(page, fixture.recipient.address, gas), poll).toBe(before + 990000n)
-      exchangeInventory -= 990000n
-      await expect.poll(() => amount(page, exchange.contractAddress, gas), poll).toBe(exchangeInventory)
-      await openContract(exchange.contractAddress)
-      // Plain-sats funding has no explicit invoke op. Mainline indexes its
-      // canonical Result; confirmedWork already proves it consumes this work.
+      await expect.poll(() => amount(page, faucet, gas), poll).toBe(faucetInventory - 990000n)
       assert.equal((work.contractOps || []).filter(op => op.kind === 'invoke').length, 0)
-      for (const result of work.results) {
-        await historyThroughUI(exchange.contractAddress, result.txid, 'result')
-        await openContract(exchange.contractAddress)
-      }
       page = deployerPage
     })
 

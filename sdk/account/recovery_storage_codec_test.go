@@ -42,9 +42,15 @@ func TestRecoveryPackageStorageCodecIsCompactDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	knowledge, err := OpenRecoveryKnowledge(*decoded, pkg.UserShare)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if decoded.Envelope != pkg.Envelope || decoded.Manifest != pkg.Manifest ||
 		decoded.DKVSShareCapsule != pkg.DKVSShareCapsule ||
-		!equalKnowledgeRecoveryBundle(decoded.KnowledgeBundle, pkg.KnowledgeBundle) {
+		decoded.SealedKnowledge != pkg.SealedKnowledge || decoded.UserShare != (RecoveryShare{}) ||
+		len(decoded.KnowledgeBundle.QuestionShares) != 0 ||
+		!equalKnowledgeRecoveryBundle(knowledge, pkg.KnowledgeBundle) {
 		t.Fatal("compact recovery package changed after round trip")
 	}
 	corrupt := append(append([]byte(nil), first...), 1)

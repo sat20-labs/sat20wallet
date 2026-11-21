@@ -180,7 +180,11 @@ func (p *Manager) prepareBindingOnNode(root common.Wallet, store *dkvsStore, nod
 	if err != nil {
 		return nil, err
 	}
-	config, err := store.client.GetDKVSClientConfig()
+	ctx := store.readCtx
+	if ctx == nil {
+		ctx = store.client.requestContext()
+	}
+	config, err := store.client.getDKVSClientConfigContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -209,7 +213,7 @@ func (p *Manager) prepareBindingOnNode(root common.Wallet, store *dkvsStore, nod
 		return nil, err
 	}
 	return func() error {
-		return p.commitAccountCoreBinding(root, store, key, coreID, prefix, value)
+		return p.commitAccountCoreBinding(ctx, root, store, key, coreID, prefix, value)
 	}, nil
 }
 

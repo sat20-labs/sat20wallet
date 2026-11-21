@@ -14,7 +14,7 @@ import (
 
 func stageRemoteImportWithRGBPayload(t *testing.T, target *Manager, payload []byte) (*accountLocalKV, error) {
 	t.Helper()
-	entry, err := accountEntry(target.accountProfile.AccountID, rgb11AccountManagedProviderID, AccountManagedDataGlobalScope)
+	entry, err := accountEntry(target.accountSecret, target.accountProfile.AccountID, rgb11AccountManagedProviderID, AccountManagedDataGlobalScope)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +144,7 @@ func TestRemoteImportMarkerRetriesAfterPublicContractReturns(t *testing.T) {
 	}
 	remote.records[registryKey] = record
 	beforeRemote = snapshotRGB11MemoryRecords(remote)
-	entry, err := accountEntry(target.accountProfile.AccountID, rgb11AccountManagedProviderID, AccountManagedDataGlobalScope)
+	entry, err := accountEntry(target.accountSecret, target.accountProfile.AccountID, rgb11AccountManagedProviderID, AccountManagedDataGlobalScope)
 	if err != nil {
 		t.Fatal(err)
 	}

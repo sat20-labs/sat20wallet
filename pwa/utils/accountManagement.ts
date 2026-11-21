@@ -29,6 +29,7 @@ class AccountManagementSDK {
     return this.request<RecoverySummary>('preflightRecovery', { password, wallet_ids: walletIDs })
   }
   getStorageOptions(recordCount = 0) { return this.request<StorageOption[]>('getStorageOptions', { record_count: recordCount }) }
+  getStorageAvailability() { return this.request<StorageOption[]>('getStorageOptions', { availability_only: true }) }
   confirmStorage(confirmed: StorageOption) { return this.request<StorageView>('confirmStorage', confirmed) }
   cancelStorageSetup() { return this.request<void>('cancelStorageSetup') }
   fundAutopay(confirmed: PaymentQuote) { return this.request<PaymentView>('fundAutopay', confirmed) }
@@ -36,7 +37,7 @@ class AccountManagementSDK {
   activateRecovery(sessionID: string, input: ActivationInput) {
     return this.request<AccountView>('activateRecovery', { session_id: sessionID, input })
   }
-  loadRecovery(locator: string, rehearsal = false) { return this.request<RecoveryView>('loadRecovery', { locator, rehearsal }) }
+  loadRecovery(recoveryFile: string, rehearsal = false) { return this.request<RecoveryView>('loadRecovery', { recovery_file: recoveryFile, rehearsal }) }
   previewRecovery(sessionID: string, factors: RecoveryFactors) {
     return this.request<RecoveryView>('previewRecovery', { session_id: sessionID, factors })
   }
@@ -64,6 +65,7 @@ const accountDisplayMessageKeys: Record<string, string> = {
   "guardian recovery is disabled": "accountManagement.ui.guardianDisabled",
   "account management requires a mnemonic root wallet": "accountManagement.ui.mnemonicRootRequired",
   "invalid recovery package": "accountManagement.ui.invalidRecoveryPackage",
+  "user share does not match recovery package": "accountManagement.ui.recoveryFileMismatch",
   "insufficient recovery shares": "accountManagement.ui.insufficientShares",
   "account recovery failed": "accountManagement.ui.recoveryFailed",
   "账户管理 SDK 尚未加载": "accountManagement.ui.sdkNotLoaded",

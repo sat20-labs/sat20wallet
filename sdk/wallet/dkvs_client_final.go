@@ -28,6 +28,7 @@ type SatsNetDKVSClient struct {
 	replicaNamespace string
 	endpointMu       sync.RWMutex
 	endpointID       string
+	requestCtx       context.Context
 	// Only request-scoped clones own a signer. Published record signatures
 	// never grant a raw/read-only client the ability to create authorization.
 	writeSigner common.Wallet
@@ -63,10 +64,22 @@ func NewSatsNetDKVSClient(scheme, host, proxy string, http HttpClient) *SatsNetD
 	return &SatsNetDKVSClient{RESTClient: NewRESTClient(scheme, host, proxy, http)}
 }
 func (p *SatsNetDKVSClient) requestContext() context.Context {
+	if p != nil && p.requestCtx != nil {
+		return p.requestCtx
+	}
 	if p != nil && p.manager != nil {
 		return p.manager.requestContext()
 	}
 	return context.Background()
+}
+
+func (p *SatsNetDKVSClient) withRequestContext(ctx context.Context) *SatsNetDKVSClient {
+	if ctx == nil {
+		return p
+	}
+	client := p.WithWriteSigner(p.writeSigner)
+	client.requestCtx = ctx
+	return client
 }
 func (p *SatsNetDKVSClient) sendGetRequest(url *URL) ([]byte, error) {
 	if client, ok := p.Http.(ContextHttpClient); ok {

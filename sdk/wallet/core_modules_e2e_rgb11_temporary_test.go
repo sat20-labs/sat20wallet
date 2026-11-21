@@ -228,7 +228,9 @@ func coreRestoreRGB11TemporaryE2E(t *testing.T, cfg coreE2EConfig,
 	coreInstallRGB11TemporaryTTLPolicy(target)
 	pkg, err := target.LoadAccountRecoveryPackage(material.auth.Location, material.locator)
 	coreRequire(t, "load temporary recovery package from real CoreNode", err)
-	share, err := account.RecoverDKVSShare(pkg.DKVSShareCapsule, pkg.KnowledgeBundle, coreAnswers())
+	questions, err := account.OpenRecoveryKnowledge(*pkg, material.userShare)
+	coreRequire(t, "decrypt recovery questions with user share", err)
+	share, err := account.RecoverDKVSShare(pkg.DKVSShareCapsule, questions, coreAnswers())
 	coreRequire(t, "recover temporary DKVS share", err)
 	backup, secret, err := account.RecoverAccount(pkg.Envelope, material.userShare, share)
 	coreRequire(t, "recover temporary account secret", err)
@@ -335,21 +337,27 @@ func coreTemporaryL2HeightHeartbeat(t *testing.T, cfg coreE2EConfig,
 	t.Helper()
 	script, err := stxscript.NullDataScript([]byte(fmt.Sprintf("rgb11-ttl-%d", time.Now().UnixNano())))
 	coreRequire(t, "build L2 height heartbeat", err)
-	_, err = payer.SendNullData_SatsNet(script)
+	txid, err := payer.SendNullData_SatsNet(script)
 	coreRequire(t, "broadcast real L2 height heartbeat", err)
 	client := NewSatsNetDKVSClient(cfg.Core.Scheme, cfg.Core.Host, cfg.Core.Proxy, nil)
+	indexer := NewIndexerClient(cfg.Core.Scheme, cfg.Core.Host, cfg.Core.Proxy, NewHTTPClient())
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		height, err := client.GetBestHeight()
 		coreRequire(t, "read actual Core height after L2 heartbeat", err)
 		if height > afterHeight {
-			return height
+			info, err := indexer.GetTxInfo(txid)
+			if err == nil && info != nil && info.TxID == txid && info.Confirmations > 0 &&
+				info.BlockHeight > int64(afterHeight) && height >= uint64(info.BlockHeight) {
+				t.Logf("L2 heartbeat confirmed: txid=%s block=%d core_height=%d", txid, info.BlockHeight, height)
+				return height
+			}
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
 	actual, err := client.GetBestHeight()
 	coreRequire(t, "read final actual Core height", err)
-	t.Fatalf("core-e2e: L2 heartbeat did not advance Core height past %d (height=%d)", afterHeight, actual)
+	t.Fatalf("core-e2e: L2 heartbeat %s did not confirm on Core above height %d (height=%d)", txid, afterHeight, actual)
 	return actual
 }
 
@@ -517,7 +525,9 @@ func coreRGB11TemporaryTTLExpiryColdRestoreE2E(t *testing.T,
 	coreInstallRGB11TemporaryTTLPolicy(partialCold)
 	pkg, err := partialCold.LoadAccountRecoveryPackage(material.auth.Location, material.locator)
 	coreRequire(t, "load still-live old package for missing-module cold test", err)
-	share, err := account.RecoverDKVSShare(pkg.DKVSShareCapsule, pkg.KnowledgeBundle, coreAnswers())
+	questions, err := account.OpenRecoveryKnowledge(*pkg, material.userShare)
+	coreRequire(t, "decrypt recovery questions with user share", err)
+	share, err := account.RecoverDKVSShare(pkg.DKVSShareCapsule, questions, coreAnswers())
 	coreRequire(t, "recover share while RGB module is expired", err)
 	backup, secret, err := account.RecoverAccount(pkg.Envelope, material.userShare, share)
 	coreRequire(t, "recover secret while RGB module is expired", err)

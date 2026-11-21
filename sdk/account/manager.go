@@ -6,17 +6,15 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"time"
 )
 
 type Manager struct {
 	repository Repository
 	random     io.Reader
-	now        func() time.Time
 }
 
 func NewManager(repository Repository) *Manager {
-	return &Manager{repository: repository, random: rand.Reader, now: time.Now}
+	return &Manager{repository: repository, random: rand.Reader}
 }
 
 func NewManagerWithRandom(repository Repository, random io.Reader) *Manager {
@@ -81,12 +79,17 @@ func (m *Manager) CreateRecoveryPackage(options CreateOptions, accountSecret []b
 	if err != nil {
 		return nil, err
 	}
+	sealed, err := sealRecoveryKnowledge(locator, shares[0], knowledge, m.random)
+	if err != nil {
+		return nil, err
+	}
 	envelopeHash, err := HashEnvelope(envelope)
 	if err != nil {
 		return nil, err
 	}
-	manifest := Manifest{Version: Version, Locator: locator, Threshold: 2, Total: uint8(len(shares)), EnvelopeHash: envelopeHash, CreatedAt: m.now().UnixMilli()}
-	result := &RecoveryPackage{Envelope: envelope, Manifest: manifest, UserShare: shares[0], DKVSShareCapsule: dkvsCapsule, KnowledgeBundle: knowledge}
+	manifest := Manifest{Version: Version, Locator: locator, Threshold: 2, Total: uint8(len(shares)), EnvelopeHash: envelopeHash}
+	result := &RecoveryPackage{Envelope: envelope, Manifest: manifest, UserShare: shares[0],
+		DKVSShareCapsule: dkvsCapsule, KnowledgeBundle: knowledge, SealedKnowledge: sealed}
 	if options.RecoveryMode == RecoveryMode2Of3 {
 		capsule, err := EncryptGuardianShare(shares[2], options.GuardianPublicKey, m.random)
 		if err != nil {
@@ -107,32 +110,11 @@ func (m *Manager) CreateRecoveryPackage(options CreateOptions, accountSecret []b
 }
 
 func ValidateRecoveryPackage(value RecoveryPackage) error {
-	if err := validateEnvelope(value.Envelope); err != nil {
+	if err := validateStoredRecoveryPackage(value); err != nil {
 		return err
 	}
-	if err := validateManifest(value.Manifest, value.Envelope.Locator); err != nil {
-		return err
-	}
-	hash, err := HashEnvelope(value.Envelope)
-	if err != nil || hash != value.Manifest.EnvelopeHash {
-		return ErrInvalidRecoveryPackage
-	}
-	if _, err := validateShare(value.UserShare); err != nil || value.UserShare.Role != ShareRoleUser || value.UserShare.PackageID != value.Envelope.Locator.PackageID {
-		return ErrInvalidRecoveryPackage
-	}
-	if value.DKVSShareCapsule.Version != Version || value.DKVSShareCapsule.PackageID != value.Envelope.Locator.PackageID || value.KnowledgeBundle.PackageID != value.Envelope.Locator.PackageID {
-		return ErrInvalidRecoveryPackage
-	}
-	if value.Envelope.Locator.RecoveryMode == RecoveryMode2Of3 {
-		if value.GuardianCapsule == nil || value.Manifest.Guardian == nil {
-			return ErrInvalidRecoveryPackage
-		}
-		hash, err := HashGuardianCapsule(*value.GuardianCapsule)
-		if err != nil || hash != value.Manifest.Guardian.CapsuleHash || value.GuardianCapsule.ShareID != value.Manifest.Guardian.ShareID {
-			return ErrInvalidRecoveryPackage
-		}
-	}
-	return nil
+	_, err := OpenRecoveryKnowledge(value, value.UserShare)
+	return err
 }
 
 func (m *Manager) Publish(ctx context.Context, value RecoveryPackage) error {
@@ -142,6 +124,8 @@ func (m *Manager) Publish(ctx context.Context, value RecoveryPackage) error {
 	if err := ValidateRecoveryPackage(value); err != nil {
 		return err
 	}
+	value.UserShare = RecoveryShare{}
+	value.KnowledgeBundle = KnowledgeRecoveryBundle{}
 	return m.repository.SaveRecoveryPackage(ctx, value)
 }
 

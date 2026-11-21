@@ -1,7 +1,7 @@
 import { computed, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 import accountSDK from '@/utils/accountManagement'
-import type { AccountView, ModuleView } from '@/utils/walletViews'
+import type { AccountView, ModuleView, StorageOption } from '@/utils/walletViews'
 import { useWalletStore } from './wallet'
 
 export const useAccountManagementStore = defineStore('accountManagement', () => {
@@ -12,6 +12,8 @@ export const useAccountManagementStore = defineStore('accountManagement', () => 
   const retrying = ref(false)
   const retryQueued = ref(false)
   const retryFailed = ref(false)
+  const storageOffers = ref<StorageOption[] | null>(null)
+  const storageReadFailed = ref(false)
   const sessionReady = computed(() => walletStore.hasWallet && !walletStore.locked &&
     !walletStore.isSwitchingWallet && !walletStore.isSwitchingAccount && !walletStore.isSwitchingNetwork)
   const identityKey = computed(() => JSON.stringify([
@@ -31,17 +33,21 @@ export const useAccountManagementStore = defineStore('accountManagement', () => 
   let requestGeneration = 0
   let retryGeneration = 0
   let statusEventGeneration = 0
+  let offerGeneration = 0
   let stopIdentityWatch: (() => void) | undefined
 
   const clear = () => {
     requestGeneration++
     retryGeneration++
+    offerGeneration++
     status.value = null
     loading.value = false
     statusReadFailed.value = false
     retrying.value = false
     retryQueued.value = false
     retryFailed.value = false
+    storageOffers.value = null
+    storageReadFailed.value = false
   }
 
   const isCurrent = (generation: number, key: string) =>
@@ -130,6 +136,33 @@ export const useAccountManagementStore = defineStore('accountManagement', () => 
   const canRetryBackup = computed(() => Boolean(status.value &&
     (status.value.backup_risk !== 'notConfigured' || status.value.state === 'activating' ||
       status.value.discovery_status === 'active-waiting-backup')))
+
+  const storagePhase = computed(() => {
+    const view = status.value
+    if (view?.state === 'local' && view.discovery_status === 'inactive') return 'activate'
+    if (view?.state === 'ready' && view.discovery_status === 'active' && view.storage?.option.id === 'temporary') return 'upgrade'
+    return ''
+  })
+  const canActivate = computed(() => storagePhase.value === 'activate' &&
+    storageOffers.value?.some(option => option.id === 'temporary' && option.available) === true)
+  const canUpgrade = computed(() => storagePhase.value === 'upgrade' &&
+    storageOffers.value?.some(option => option.id === 'paid' && option.available) === true)
+  const refreshStorageOffers = async () => {
+    const generation = ++offerGeneration
+    const identity = identityKey.value
+    const phase = storagePhase.value
+    storageOffers.value = null
+    storageReadFailed.value = false
+    if (!sessionReady.value || !phase) return
+    const current = () => generation === offerGeneration && identity === identityKey.value &&
+      phase === storagePhase.value && sessionReady.value
+    try {
+      const options = await accountSDK.getStorageAvailability()
+      if (current()) storageOffers.value = options
+    } catch {
+      if (current()) storageReadFailed.value = true
+    }
+  }
   const quotaModuleIssues = computed(() => moduleIssues.value.filter(item => item.error_code === 'DKVS_QUOTA_EXCEEDED'))
   const hasQuotaIssue = computed(() => status.value?.error_code === 'DKVS_QUOTA_EXCEEDED' || quotaModuleIssues.value.length > 0)
   const quotaNeedsActivation = computed(() => hasQuotaIssue.value && status.value?.state === 'local')
@@ -157,10 +190,16 @@ export const useAccountManagementStore = defineStore('accountManagement', () => 
     retryQueued,
     retryFailed,
     sessionReady,
+    identityKey,
     shouldShowBanner,
     moduleIssues,
     hasDatabaseIssue,
     canRetryBackup,
+    storagePhase,
+    storageOffers,
+    storageReadFailed,
+    canActivate,
+    canUpgrade,
     quotaModuleIssues,
     hasQuotaIssue,
     quotaNeedsActivation,
@@ -172,6 +211,7 @@ export const useAccountManagementStore = defineStore('accountManagement', () => 
     start,
     stop,
     refresh,
+    refreshStorageOffers,
     retryNow,
   }
 })

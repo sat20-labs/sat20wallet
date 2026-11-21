@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -229,6 +230,9 @@ func (p *Manager) GetAccountManagementStatus() AccountManagementStatus {
 	localOnly := p.accountLocalOnlyLocked(service)
 	if p.accountProfile == nil {
 		result := AccountManagementStatus{LocalOnly: localOnly, DiscoveryStatus: service}
+		if p.dkvs != nil {
+			result.LastDKVSSyncErrorCode, result.LastDKVSSyncError, result.LastDKVSSyncErrorAt = p.dkvs.lastSyncErrorStatus()
+		}
 		p.fillAccountStatus(&result)
 		return result
 	}
@@ -368,15 +372,19 @@ func (p *Manager) managedWalletFromInfoLocked(info *WalletInfo, password string,
 		return account.ManagedWallet{}, err
 	}
 	subAccounts := make([]account.SubAccount, 0, info.Accounts)
+	var spEnabled []uint32
 	for index := uint32(0); index < uint32(info.Accounts); index++ {
 		subAccounts = append(subAccounts, account.SubAccount{
 			Index: index, Name: info.AccountNames[index], DID: info.AccountDIDs[index],
 		})
+		if info.SPEnabled[index] {
+			spEnabled = append(spEnabled, index)
+		}
 	}
 	return account.ManagedWallet{
 		Fingerprint: walletFingerprint(info.Wallet),
 		Name:        info.Name, Type: typ, Secret: material, AccountCount: uint32(info.Accounts),
-		SubAccounts: subAccounts,
+		SubAccounts: subAccounts, SPEnabled: spEnabled,
 	}, nil
 }
 
@@ -555,7 +563,7 @@ func (p *Manager) activateAccountManagement(secret []byte, password string,
 			return err
 		}
 	}
-	_, err := p.resumePendingActivation(secret, password)
+	_, err := p.resumePendingActivation(nil, secret, password)
 	return err
 }
 
@@ -651,8 +659,8 @@ func (p *Manager) requestAccountSync() {
 	if p == nil || p.accountDBFailure() != nil {
 		return
 	}
-	p.ensureDKVSManager().schedule(accountManagedStateJobID, func(_ *dkvsStore) error {
-		return p.refreshAccountService(false)
+	p.ensureDKVSManager().schedule(accountManagedStateJobID, func(store *dkvsStore) error {
+		return p.refreshAccountService(store.manager.requestContext(), false)
 	})
 }
 
@@ -661,8 +669,8 @@ func (p *Manager) scheduleAccountManagedStateSync() {
 		return
 	}
 	manager := p.ensureDKVSManager()
-	manager.scheduleCoalesced(accountManagedStateJobID, accountManagedBackupQuiet, accountManagedBackupMaximum, func(_ *dkvsStore) error {
-		return p.refreshAccountService(false)
+	manager.scheduleCoalesced(accountManagedStateJobID, accountManagedBackupQuiet, accountManagedBackupMaximum, func(store *dkvsStore) error {
+		return p.refreshAccountService(store.manager.requestContext(), false)
 	})
 }
 
@@ -864,6 +872,7 @@ func (p *Manager) accountSyncSnapshotCurrentLocked(snapshot *accountManagementSy
 func cloneManagedWallet(value account.ManagedWallet) account.ManagedWallet {
 	value.SubAccounts = append([]account.SubAccount(nil), value.SubAccounts...)
 	value.Secret = append([]byte(nil), value.Secret...)
+	value.SPEnabled = slices.Clone(value.SPEnabled)
 	return value
 }
 
@@ -885,7 +894,7 @@ func managedWalletContentMatches(left account.ManagedWallet, right *account.Mana
 	}
 	if strings.TrimSpace(left.Name) != strings.TrimSpace(right.Name) ||
 		left.Type != right.Type || !bytes.Equal(left.Secret, right.Secret) || left.AccountCount != right.AccountCount ||
-		len(left.SubAccounts) != len(right.SubAccounts) {
+		len(left.SubAccounts) != len(right.SubAccounts) || !slices.Equal(left.SPEnabled, right.SPEnabled) {
 		return false
 	}
 	for index := range left.SubAccounts {

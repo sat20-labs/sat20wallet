@@ -47,8 +47,7 @@
               <span class="text-xs sm:text-sm font-medium text-right break-words">{{ swapDetails.inputAmount }}</span>
             </div>
             <div class="flex items-center justify-between gap-2 py-1">
-              <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.poolReferencePrice')
-              }}</span>
+              <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t(swapDetails.priceLabel) }}</span>
               <span class="text-xs sm:text-sm font-medium text-right break-words">{{ swapDetails.referencePrice }}</span>
             </div>
             <div class="flex items-center justify-between gap-2 py-1">
@@ -228,6 +227,8 @@ const swapDetails = computed(() => {
   const outputAsset = orderType === 1 ? 'sats' : assetName
   const isAssetToSats = orderType === 1
   const outputAmount = isAssetToSats ? metadata.sats : metadata.quantity
+  const template = props.data?.url?.trim().split('_').at(-1)
+  const isLimitOrder = template === 'swap.tc' || template === 'limitorder.tc'
   const formatAmount = (amount: unknown, asset: string) => {
     const text = String(amount ?? '').trim()
     return text && asset ? `${text} ${asset}` : '-'
@@ -237,7 +238,8 @@ const swapDetails = computed(() => {
     orderType,
     assetName: assetName || '-',
     inputAmount: formatAmount(inputAmount, inputAsset),
-    referencePrice: String(metadata.unitPrice ?? '').trim() || '-',
+    priceLabel: isLimitOrder ? 'invokeContractSatsNet.limitPrice' : 'invokeContractSatsNet.poolReferencePrice',
+    referencePrice: String((isLimitOrder ? invokeParam.value.unitPrice : metadata.unitPrice) ?? '').trim() || '-',
     expectedOutput: formatAmount(outputAmount, outputAsset),
   }
 })

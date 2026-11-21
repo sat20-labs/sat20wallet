@@ -212,13 +212,12 @@ export interface Answer {
 
 export interface RecoveryFactors {
   answers: Answer[]
-  user_share: string
   guardian_response: string
 }
 
 export interface ActivationInput {
   password: string
-  saved_locator: string
+  recovery_file: string
   factors: RecoveryFactors
 }
 

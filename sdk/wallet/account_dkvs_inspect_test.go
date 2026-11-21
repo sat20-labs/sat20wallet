@@ -274,11 +274,11 @@ func accountInspectModuleFixture(t *testing.T,
 	defer zeroBytes(secret)
 	index, err := account.OpenManagedIndex(secret, accountID, network, indexValue.Baseline.Value)
 	require.NoError(t, err)
-	moduleKey, err := account.ManagedModuleKey(accountID, provider.ID(), scope)
+	moduleKey, err := account.ManagedModuleKey(secret, accountID, provider.ID(), scope)
 	require.NoError(t, err)
 	foundModule := false
 	keys := []string{indexKey}
-	walletModule, err := accountEntry(accountID, "wallets", AccountManagedDataGlobalScope)
+	walletModule, err := accountEntry(nil, accountID, "wallets", AccountManagedDataGlobalScope)
 	require.NoError(t, err)
 	walletModuleKey := walletModule.Key
 	root, err := manager.accountManagementRootWallet()

@@ -42,7 +42,7 @@ func readAccountE2EModules(t *testing.T, node *testHarness, secret []byte, accou
 			require.NoError(t, err)
 			continue
 		}
-		key, err := account.ManagedModuleKey(accountID, entry.Provider, entry.Scope)
+		key, err := account.ManagedModuleKey(secret, accountID, entry.Provider, entry.Scope)
 		require.NoError(t, err)
 		require.Equal(t, key, entry.Key)
 		blob, err := wallet.DecodeDKVSBlobValue(record.Value)

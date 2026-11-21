@@ -95,7 +95,7 @@ func (p *Manager) accountBlobRequirements() (uint32, error) {
 		if value.Provider == "account" {
 			continue
 		}
-		entry, err := accountEntry(catalog.AccountID, value.Provider, value.Scope)
+		entry, err := accountEntry(p.accountSecret, catalog.AccountID, value.Provider, value.Scope)
 		if err != nil {
 			return 0, err
 		}
@@ -122,7 +122,7 @@ func (p *Manager) accountBlobRequirements() (uint32, error) {
 			continue
 		}
 		if entry.Key == "" {
-			entry, err = accountEntry(catalog.AccountID, entry.Provider, entry.Scope)
+			entry, err = accountEntry(p.accountSecret, catalog.AccountID, entry.Provider, entry.Scope)
 			if err != nil {
 				return 0, err
 			}

@@ -20,6 +20,8 @@ import (
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet"
 	dkvscore "github.com/sat20-labs/sat20wallet/sdk/wallet/dkvs"
+	"github.com/sat20-labs/satoshinet/chaincfg"
+	"github.com/sat20-labs/satoshinet/contract"
 	dkvs "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	"github.com/stretchr/testify/require"
 )
@@ -29,6 +31,92 @@ import (
 func TestSDKAccountPWAEntryPoints(t *testing.T) {
 	network := newDKVSNoPluginUnfundedNetwork(t)
 	waitForDKVSPeerReady(t, network)
+	t.Run("ColdWalletWithoutProfile", func(t *testing.T) {
+		config, _ := accountReviewConfig(t, network)
+		device := newNativeUIInactive(t, config, accountSyncMnemonic(t, 213))
+		catalog := device.mgr.GetWalletCatalog()
+		device.mgr.Close()
+		device.mgr = nil
+		// Model an existing wallet catalog created before account setup.
+		require.NoError(t, device.db.Delete([]byte(wallet.GetDBKeyPrefix()+"account-management-profile-v1")))
+		device.close()
+		device.open(t)
+		device.mgr.Start()
+		_, err := device.mgr.UnlockWallet(device.password)
+		require.NoError(t, err)
+		require.False(t, device.mgr.GetAccountManagementStatus().Active)
+		require.Eventually(t, func() bool {
+			return device.mgr.GetAccountManagementStatus().DiscoveryStatus == "inactive"
+		}, 6*time.Second, 30*time.Millisecond)
+		nativeUILocalBackup(t, device)
+		nativeUICatalog(t, device.mgr, catalog)
+	})
+	t.Run("PaidUpgradeRequiresActiveAccountAndContract", func(t *testing.T) {
+		config, _ := accountReviewConfig(t, network)
+		target, err := url.Parse("http://" + config.IndexerL2.Host)
+		require.NoError(t, err)
+		proxy := httputil.NewSingleHostReverseProxy(target)
+		defaults := dkvs.NetworkDefaultsForParams(&chaincfg.TestNetParams)
+		route := "/v3/contracts/" + defaults.AutopayContract + "/state"
+		var queries, phase atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.URL.Path, route) {
+				queries.Add(1)
+				if state := phase.Load(); state != 0 {
+					status := "funding"
+					if state == 2 {
+						status = "active"
+					}
+					data := dkvs.AutopayContractState{TemplateName: contract.TemplateAutopay,
+						Status: status, CurrentBlock: 1, ServiceName: defaults.AutopayServiceName,
+						Recipient: defaults.AutopayRecipient, FeeAssetName: defaults.AutopayFeeAssetName}
+					_ = json.NewEncoder(w).Encode(map[string]any{"code": 0, "data": data})
+					return
+				}
+			}
+			proxy.ServeHTTP(w, r)
+		}))
+		t.Cleanup(server.Close)
+		config.IndexerL2.Host = strings.TrimPrefix(server.URL, "http://")
+		device := newNativeUIInactive(t, config, accountSyncMnemonic(t, 214))
+		ctx := context.Background()
+		phase.Store(2)
+		nativeUIStorage(t, device.mgr, wallet.AccountStorageTemporary, 0)
+		options, err := device.mgr.GetStorageOptions(ctx, 0)
+		require.NoError(t, err)
+		require.Len(t, options, 1)
+		availability, err := device.mgr.GetStorageAvailability(ctx)
+		require.NoError(t, err)
+		require.Len(t, availability, 1)
+		require.Zero(t, queries.Load())
+		phase.Store(0)
+		nativeUILocalBackup(t, device)
+		for _, state := range []int32{0, 1} {
+			phase.Store(state)
+			options, err = device.mgr.GetStorageOptions(ctx, 0)
+			require.NoError(t, err)
+			require.Len(t, options, 1)
+			require.Equal(t, wallet.AccountStorageTemporary, options[0].ID)
+			availability, err = device.mgr.GetStorageAvailability(ctx)
+			require.NoError(t, err)
+			require.Len(t, availability, 1)
+		}
+		require.Positive(t, queries.Load())
+		phase.Store(2)
+		availability, err = device.mgr.GetStorageAvailability(ctx)
+		require.NoError(t, err)
+		require.Len(t, availability, 2)
+		require.Equal(t, wallet.AccountStoragePaid, availability[1].ID)
+		require.True(t, availability[1].Available)
+		require.Nil(t, availability[1].Payment)
+		paid := nativeUIStorage(t, device.mgr, wallet.AccountStoragePaid, 0)
+		require.NotNil(t, paid.Payment)
+		phase.Store(1)
+		_, err = device.mgr.ConfirmStorage(ctx, paid)
+		require.Error(t, err)
+		_, err = device.mgr.PendingAccountStorageAuthorization()
+		require.ErrorIs(t, err, wallet.ErrAccountStorageAuthorizationMissing)
+	})
 	t.Run("UnavailableDiscoveryCannotAuthorizeNewAccountSecret", func(t *testing.T) {
 		config, _ := accountReviewConfig(t, network)
 		target, err := url.Parse("http://" + config.IndexerL2.Host)

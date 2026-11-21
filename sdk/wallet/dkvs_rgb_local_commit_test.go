@@ -841,7 +841,7 @@ func TestAccountManagedACKFinalizesAfterRemoteAdvance(t *testing.T) {
 				if stateOnly {
 					provider, scope = "wallets", AccountManagedDataGlobalScope
 				}
-				entry, err := accountEntry(accountID, provider, scope)
+				entry, err := accountEntry(manager.accountSecret, accountID, provider, scope)
 				require.NoError(t, err)
 				targetKey = entry.Key
 				readLocal := func(m *Manager) *accountLocalKV {
@@ -1208,7 +1208,7 @@ func TestRGB11RejectedCompactionSurvivesOlderACKAndRestart(t *testing.T) {
 	require.NoError(t, restarted.SyncAccountManagementState(recoveryCtx))
 	require.False(t, rgb11LocalModulePendingForTest(t, restarted))
 	module := rgb11LocalModuleForTest(t, restarted)
-	entry, err := accountEntry(module.AccountID, module.Provider, module.Scope)
+	entry, err := accountEntry(restarted.accountSecret, module.AccountID, module.Provider, module.Scope)
 	require.NoError(t, err)
 	remote.mu.Lock()
 	dataRecord := cloneRGB11DKVSRecord(remote.records[entry.Key])

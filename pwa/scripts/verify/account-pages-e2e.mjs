@@ -58,7 +58,8 @@ export async function runAccountPageCases(t) {
       const [error] = await window.__SAT20_PWA_VERIFY__.useWalletStore().createWallet(credential)
       if (error) throw error
     }, credential)
-    await go(page, '/wallet/setting/account-management')
+    await go(page, '/wallet/setting')
+    await button(page, ui.activateAccount).click()
     await expect(button(section(page, ui.createRecovery), ui.preflight)).toBeVisible()
     return page
   }
@@ -80,7 +81,10 @@ export async function runAccountPageCases(t) {
     return observe(page, 'createRecovery', () => password(page, () => button(scope, ui.createRecovery).click()))
   }
   const download = async (page, file) => {
-    const scope = section(page, ui.createRecovery).locator('div.rounded.border').filter({ has: page.getByText(file.name, { exact: true }) })
+    const settings = section(page, ui.createRecovery)
+    const scope = settings.locator('div.rounded.border').filter({ has: page.getByText(file.name, { exact: true }) })
+    await expect(button(scope, common.copy)).toHaveCount(0)
+    await expect(settings.getByText(ui.keepRecoveryFileSafe, { exact: true })).toBeVisible()
     const event = page.waitForEvent('download')
     await button(scope, common.download).click()
     const saved = await event
@@ -89,20 +93,19 @@ export async function runAccountPageCases(t) {
   }
   const activate = async (page, created) => {
     const scope = section(page, ui.createRecovery)
-    await scope.locator('textarea:not([readonly])').first().fill(created.locator)
     for (const [i, answer] of answers.entries()) await scope.locator('input[type=password]').nth(i).fill(answer)
-    await scope.getByPlaceholder(ui.pasteUserShare).fill(decode(created.files.find(file => file.name === 'user-share.txt')))
+    await scope.getByPlaceholder(ui.pasteRecoveryFile).fill(decode(created.files.find(file => file.name === 'user-share.txt')))
     await observe(page, 'activateRecovery', () => password(page, () => button(scope, ui.rehearsalTitle).click()))
     await expect.poll(async () => (await account(page, 'getAccountView')).backup_state, poll).toBe('backed_up')
     await expect(button(section(page, ui.createRecovery), ui.preflight)).toBeVisible()
+    await expect(button(page, ui.upgradeStorage)).toHaveCount(0)
   }
   const load = async (page, created) => {
-    await page.locator('section textarea').fill(created.locator)
+    await page.getByPlaceholder(ui.pasteRecoveryFile).fill(decode(created.files.find(file => file.name === 'user-share.txt')))
     return observe(page, 'loadRecovery', () => button(page, ui.loadBackup).click())
   }
-  const factors = async (page, created) => {
+  const factors = async page => {
     for (const [i, answer] of answers.entries()) await page.locator('section input[type=password]').nth(i).fill(answer)
-    await page.getByPlaceholder(ui.pasteUserShare).fill(decode(created.files.find(file => file.name === 'user-share.txt')))
     const view = await observe(page, 'previewRecovery', () => button(page, ui.previewRecovery).click())
     assert.equal(view.summary.wallets.length, 1)
     await expect(page.locator('section > div.rounded-lg')).toHaveCount(1)
@@ -110,7 +113,7 @@ export async function runAccountPageCases(t) {
   const restore = async (page, created) => {
     await go(page, '/restore-account')
     await load(page, created)
-    await factors(page, created)
+    await factors(page)
     await page.locator('#restore-local-password').fill(credential)
     await page.locator('#restore-confirm-password').fill('different-password')
     await button(page, ui.restoreAll).click()
@@ -149,28 +152,6 @@ export async function runAccountPageCases(t) {
     assert.equal(view.locator === created.locator, true)
     await page.evaluate(() => sessionStorage.removeItem('page-restore-result'))
   }
-  const paidReview = async (page, scope, option) => {
-    await page.evaluate(() => {
-      window.__pagePayments = 0
-      for (const method of ['confirmStorage', 'fundAutopay']) {
-        const original = window.sat20account_wasm[method]
-        window.sat20account_wasm[method] = async (...args) => { window.__pagePayments++; return original(...args) }
-      }
-    })
-    const card = scope.locator('div').filter({ has: page.getByText(ui.paidStorage, { exact: true }) }).filter({ has: page.getByRole('button', { name: common.confirm, exact: true }) }).last()
-    await button(card, common.confirm).click()
-    const dialog = page.getByRole('dialog', { name: messages.accountManagement.dkvsPay, exact: true })
-    await expect(dialog).toBeVisible()
-    const fields = dialog.locator('dl dd')
-    await expect(fields.nth(0)).toContainText(option.payment.source_address)
-    for (const [index, value] of [[1, option.payment.network], [2, option.payment.contract],
-      [3, `${option.payment.amount.amount} ${option.payment.amount.asset}`], [4, String(option.payment.funding_blocks)],
-      [5, option.payment.rate_per_block], [6, String(option.payment.module_limit)]]) {
-      await expect(fields.nth(index)).toHaveText(value)
-    }
-    await button(dialog, common.cancel).click()
-    assert.equal(await page.evaluate(() => window.__pagePayments), 0, 'cancel must never dispatch a payment or authorization')
-  }
   const cases = [async pages => {
     const page = await fresh(pages)
     await preflight(page)
@@ -188,16 +169,14 @@ export async function runAccountPageCases(t) {
     await activate(page, created)
     await button(page, ui.rehearsalTitle).click()
     await load(page, created)
-    for (const [i, answer] of answers.entries()) await page.locator('section input[type=password]').nth(i).fill(answer)
     await observe(page, 'previewRecovery', () => button(page, ui.previewRecovery).click(), false)
     await expect(page.getByText(ui.insufficientShares, { exact: true })).toBeVisible()
     await expect(page.locator('#restore-local-password')).toHaveCount(0)
-    await page.getByPlaceholder(ui.pasteUserShare).fill(decode(file))
     for (const input of await page.locator('section input[type=password]').all()) await input.fill('incorrect factor')
     await observe(page, 'previewRecovery', () => button(page, ui.previewRecovery).click(), false)
     await expect(page.getByText(ui.recoveryFailed, { exact: true })).toBeVisible()
     await expect(page.locator('#restore-local-password')).toHaveCount(0)
-    await factors(page, created)
+    await factors(page)
     await expect(page.locator('#restore-local-password')).toHaveCount(0)
     await observe(page, 'abortRecovery', () => button(page, ui.finishRehearsal).click())
     await expect(page.getByRole('heading', { name: ui.managementTitle, exact: true })).toBeVisible()
@@ -206,7 +185,7 @@ export async function runAccountPageCases(t) {
     const target = await t.device(); pages.push(target)
     await go(target, '/restore-account')
     const cancelled = await load(target, created)
-    await factors(target, created)
+    await factors(target)
     assert.equal(await target.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().locked), true)
     await observe(target, 'abortRecovery', () => button(target, ui.cancel).click())
     const expiredRestore = await raw(target, 'commitRecovery', { session_id: cancelled.session_id, new_password: credential })
@@ -273,9 +252,8 @@ export async function runAccountPageCases(t) {
     })
     try {
       const scope = section(target, ui.createRecovery)
-      await scope.locator('textarea:not([readonly])').first().fill(replacement.locator)
       for (const [i, answer] of answers.entries()) await scope.locator('input[type=password]').nth(i).fill(answer)
-      await scope.getByPlaceholder(ui.pasteUserShare).fill(decode(replacement.files.find(file => file.name === 'user-share.txt')))
+      await scope.getByPlaceholder(ui.pasteRecoveryFile).fill(decode(replacement.files.find(file => file.name === 'user-share.txt')))
       await password(target, () => button(scope, ui.rehearsalTitle).click())
       await expect.poll(() => hits, poll).toBeGreaterThan(0)
       assert.equal(released, false)
@@ -326,17 +304,10 @@ export async function runAccountPageCases(t) {
     await expect(section(page, ui.guardianService)).toHaveCount(0)
     await preflight(page)
     const scope = section(page, ui.createRecovery)
-    await scope.locator('input[type=number]').fill('200')
-    const options200 = await observe(page, 'getStorageOptions', () => button(scope, common.refresh).click())
-    const quote200 = options200.find(option => option.id === 'paid')
-    assert.equal(quote200.record_count, 200)
-    await paidReview(page, scope, quote200)
-    await scope.locator('input[type=number]').fill('100')
-    const options100 = await observe(page, 'getStorageOptions', () => button(scope, common.refresh).click())
-    const quote100 = options100.find(option => option.id === 'paid')
-    assert.equal(quote100.record_count, 100)
-    assert.notEqual(quote100.payment.amount.amount, quote200.payment.amount.amount)
-    await paidReview(page, scope, quote100)
+    const available = await observe(page, 'getStorageOptions', () => button(scope, common.refresh).click())
+    assert.deepEqual(available.map(option => [option.id, option.available, option.payment]), [['temporary', true, null]])
+    await expect(scope.locator('input[type=number]')).toHaveCount(0)
+    await expect(button(page, ui.upgradeStorage)).toHaveCount(0)
     await chooseTemporary(page)
     await expect(scope.locator('select option')).toHaveCount(1)
     await expect(scope.locator('select')).toHaveValue('2of2')
@@ -370,9 +341,10 @@ export async function runAccountPageCases(t) {
     assert.equal(before.data.wallets.length, 1)
     assert.equal(before.data.root_account_id, '')
     await go(page, '/wallet/setting/account-management')
-    await observe(page, 'preflightRecovery', () => password(page, () =>
-      button(section(page, ui.createRecovery), ui.preflight).click()), false)
     await expect(page.getByRole('alert').filter({ hasText: ui.mnemonicRootRequired })).toHaveText(ui.mnemonicRootRequired)
+    await expect(button(page, ui.preflight)).toHaveCount(0)
+    const refused = await raw(page, 'preflightRecovery', { password: credential, wallet_ids: before.data.wallets.map(item => item.id) })
+    assert.notEqual(refused.code, 0)
     await expect(section(page, ui.createRecovery).locator('select')).toHaveCount(0)
     assert.equal((await account(page, 'getAccountView')).active, false)
     assert.deepEqual(await page.evaluate(() => window.sat20wallet_wasm.getWalletCatalog()), before)

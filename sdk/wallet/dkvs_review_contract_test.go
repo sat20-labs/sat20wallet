@@ -413,7 +413,7 @@ func TestDKVSReviewAccountLoadUsesOneView(t *testing.T) {
 	require.NotNil(t, recovered)
 	require.Equal(t, status.AccountID, locator.AccountID)
 	require.Equal(t, status.RootFingerprint, recovered.State.RootFingerprint)
-	entry, err := accountEntry(status.AccountID, "wallets", AccountManagedDataGlobalScope)
+	entry, err := accountEntry(nil, status.AccountID, "wallets", AccountManagedDataGlobalScope)
 	require.NoError(t, err)
 	var walletEntryFound bool
 	for _, current := range recovered.Index.Entries {
@@ -456,7 +456,7 @@ func TestDKVSReviewAccountSyncAndWrapperUseOneView(t *testing.T) {
 	require.NotNil(t, indexRecord)
 	index, err := account.OpenManagedIndex(secret, accountID, m.cfg.Chain, indexRecord.Value)
 	require.NoError(t, err)
-	walletEntry, err := accountEntry(accountID, "wallets", AccountManagedDataGlobalScope)
+	walletEntry, err := accountEntry(nil, accountID, "wallets", AccountManagedDataGlobalScope)
 	require.NoError(t, err)
 	var indexed bool
 	for _, candidate := range index.Entries {

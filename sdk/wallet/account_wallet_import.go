@@ -2,10 +2,79 @@ package wallet
 
 import (
 	"fmt"
+	"slices"
 
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 )
+
+// A shared SilentPay address remains enabled when an older wallet snapshot
+// omits its opt-in. Keep the subaccount rows needed to scan that address.
+func (p *Manager) keepAccountSilentPay(accountID string, payload []byte) ([]byte, []byte, error) {
+	state, err := account.DecodeManagedState(payload)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() {
+		for _, wallet := range state.Wallets {
+			zeroBytes(wallet.Secret)
+		}
+	}()
+	changed := false
+	p.mutex.RLock()
+	if p.accountProfile == nil || p.accountProfile.AccountID != accountID || len(p.accountSecret) != 32 {
+		p.mutex.RUnlock()
+		return nil, nil, errAccountSnapshotChanged
+	}
+	for i := range state.Wallets {
+		wallet := &state.Wallets[i]
+		info := p.walletInfoByFingerprintLocked(wallet.Fingerprint)
+		if mergeWalletSilentPay(wallet, info) {
+			changed = true
+		}
+	}
+	var secret []byte
+	if changed {
+		secret = slices.Clone(p.accountSecret)
+	}
+	p.mutex.RUnlock()
+	if !changed {
+		return nil, nil, nil
+	}
+	defer zeroBytes(secret)
+	repaired, err := account.EncodeManagedState(state)
+	if err != nil {
+		return nil, nil, err
+	}
+	encoded, err := account.SealManagedState(secret, accountID, state, nil)
+	if err != nil {
+		zeroBytes(repaired)
+		return nil, nil, err
+	}
+	return encoded, repaired, nil
+}
+
+func mergeWalletSilentPay(wallet *account.ManagedWallet, info *WalletInfo) bool {
+	if wallet == nil || info == nil || wallet.Deleted || wallet.Type != account.WalletMnemonic {
+		return false
+	}
+	changed := false
+	for index, enabled := range info.SPEnabled {
+		if !enabled || index >= uint32(info.Accounts) || slices.Contains(wallet.SPEnabled, index) {
+			continue
+		}
+		wallet.SPEnabled = append(wallet.SPEnabled, index)
+		for wallet.AccountCount <= index {
+			sub := wallet.AccountCount
+			wallet.SubAccounts = append(wallet.SubAccounts, account.SubAccount{
+				Index: sub, Name: info.AccountNames[sub], DID: info.AccountDIDs[sub],
+			})
+			wallet.AccountCount++
+		}
+		changed = true
+	}
+	return changed
+}
 
 // Only failed database writes stop account sync. Removal also reads records.
 type accountRemovalBatch struct{ indexer.WriteBatch }
@@ -61,6 +130,10 @@ func (p *Manager) importAccountWallets(state account.ManagedState) error {
 		info.AccountNames, info.AccountDIDs = make(map[uint32]string), make(map[uint32]string)
 		for _, sub := range remote.SubAccounts {
 			info.AccountNames[sub.Index], info.AccountDIDs[sub.Index] = sub.Name, sub.DID
+		}
+		info.SPEnabled = make(map[uint32]bool, len(remote.SPEnabled))
+		for _, index := range remote.SPEnabled {
+			info.SPEnabled[index] = true
 		}
 		encoded, err := EncodeToBytes(&info.WalletInDB)
 		if err != nil {

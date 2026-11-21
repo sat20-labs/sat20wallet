@@ -28,9 +28,46 @@ CORE_NATIVE_RUN='^TestSDKCoreModulesConnectedE2E$/^(dkvs_real_paid_cross_instanc
 if [[ "$TAGS" == guardian ]]; then
   CORE_NATIVE_RUN="${CORE_NATIVE_RUN%')$'}|guardian_two_of_three_and_wrong_knowledge)$"
 fi
-# Only the Core child harness and its explicit convenience wrapper are omitted.
-# All other default-build tests in every package run, including internal packages.
-SKIP_PATTERN='^(TestSDKCoreModulesConnectedE2E|TestSDKCoreModulesValidation)$'
+# Each standalone root below is covered by the named case on a shared chain.
+# Keep the standalone roots selectable by go test for isolated diagnosis.
+shared_cases=(
+  TestRealSatoshiNetTemplateLimitOrder:TestSDKTemplateContractSharedNetwork/TemplateLimitOrder
+  TestTemplateLimitRefundBuy:TestSDKTemplateContractSharedNetwork/TemplateLimitRefundBuy
+  TestRealSatoshiNetTemplateAMMMultiLiquidity:TestSDKTemplateContractSharedNetwork/TemplateAMMMultiLiquidity
+  TestRealSatoshiNetTemplateExchangeGasForSatoshiAndClose:TestSDKTemplateContractSharedNetwork/TemplateExchangeGasForSatoshiAndClose
+  TestTemplateAutopayPaysAndCloses:TestSDKTemplateContractSharedNetwork/TemplateAutopayPaysAndCloses
+  TestTemplateLimitOrderAssetMatrix:TestSDKTemplateContractSharedNetwork/TemplateLimitOrderAssetMatrix
+  TestTemplateAMMAssetMatrix:TestSDKTemplateContractSharedNetwork/TemplateAMMAssetMatrix
+  TestRealSatoshiNetAgentPredictionTenBettors:TestSDKAgentPredictionSharedNetworkGroup/TenBettors
+  TestRealSatoshiNetAgentPredictionPayoutByShare:TestSDKAgentPredictionSharedNetworkGroup/PayoutByShare
+  TestSDKAccountReviewSharedNetworkPilot:TestSDKAccountNoPluginRecoverySharedNetworkGroup/ReviewLifecycleRestoreAndActivation
+  TestSDKDKVSNoPluginSharedNetworkGroup:TestSDKAccountNoPluginRecoverySharedNetworkGroup/DKVSReplicaAndLocalRecovery
+  TestSDKAccountReviewLifecycle:TestSDKAccountNoPluginRecoverySharedNetworkGroup/ReviewLifecycleRestoreAndActivation/ReviewLifecycle
+  TestSDKAccountReviewRestoreValidation:TestSDKAccountNoPluginRecoverySharedNetworkGroup/ReviewLifecycleRestoreAndActivation/ReviewRestoreValidation
+  TestSDKAccountReviewActivationWithoutPrebinding:TestSDKAccountNoPluginRecoverySharedNetworkGroup/ReviewLifecycleRestoreAndActivation/ReviewActivationWithoutPrebinding
+  TestSDKAccountActivationRetry:TestSDKAccountNoPluginRecoverySharedNetworkGroup/ActivationRetry
+  TestSDKAccountBackupKeyRecreatedFromRoot:TestSDKAccountNoPluginRecoverySharedNetworkGroup/BackupKeyRecreatedFromRoot
+  TestSDKAccountDKVSSyncGate:TestSDKAccountNoPluginRecoverySharedNetworkGroup/DKVSSyncGate
+  TestSDKDKVSModuleLocal:TestSDKAccountNoPluginRecoverySharedNetworkGroup/DKVSReplicaAndLocalRecovery/ModuleLocal
+  TestSDKDKVSActiveMailbox:TestSDKDKVSPaidMailboxReleaseSharedNetworkGroup/ActiveMailbox
+  TestSDKDKVSReleaseReviewNetwork:TestSDKDKVSPaidMailboxReleaseSharedNetworkGroup/ReleaseReviewNetwork
+  TestSDKAccountReview:TestSDKUIFlows/AccountReview
+  TestSDKSmartContractsAdditional:TestSDKSmartContractsReviewSharedNetworkGroup/Additional
+  TestSDKSmartContractsTemplates:TestSDKSmartContractsTemplateReviewSharedNetworkGroup/Templates
+  TestSDKSmartContractTemplateReleaseEscrow:TestSDKSmartContractsTemplateReviewSharedNetworkGroup/TemplateReleaseEscrow
+  TestSDKSmartContractReleaseAssetValidation:TestSDKSmartContractsTemplateReviewSharedNetworkGroup/ReleaseAssetValidation
+  TestRealSatoshiNetEVMSignedAssetVault:TestSDKEVMSharedNetworkGroup/SignedAssetVault
+  TestRealSatoshiNetEVMAssetApps:TestSDKEVMSharedNetworkGroup/AssetApps
+  TestRealSatoshiNetEVMStandardApps:TestSDKEVMSharedNetworkGroup/StandardApps
+  TestRealSatoshiNetEVMAMMDefaultInvoke:TestSDKEVMSharedNetworkGroup/AMMDefaultInvoke
+  TestRealSatoshiNetEVMAMMGasAsset:TestSDKEVMSharedNetworkGroup/AMMGasAsset
+  TestRealSatoshiNetEVMInternalERC20:TestSDKEVMSharedNetworkGroup/InternalERC20
+)
+SKIP_PATTERN='^(TestSDKCoreModulesConnectedE2E|TestSDKCoreModulesValidation'
+for entry in "${shared_cases[@]}"; do
+  SKIP_PATTERN+="|${entry%%:*}"
+done
+SKIP_PATTERN+=')$'
 # Never inherit permission to use live or retained acceptance networks. Native
 # real-chain fixtures allocate their own directories/ports inside their group.
 safe_env=(env
@@ -50,6 +87,7 @@ safe_env=(env
   -u SAT20_TEST_MNEMONIC -u SAT20_REMOTE_RECOVERY_READONLY -u SAT20_ACCOUNT_DIAG_SNAPSHOT
   -u SAT20_ACCOUNT_DIAG_ACCOUNT_ID -u SAT20_RGB_DIAGNOSTIC_DIR -u SAT20_PWA_ISOLATION_SHARED_FIXTURE
   -u SAT20_PWA_SKIP_GUARD_CHILD -u SAT20_PWA_DKVS_AB_CHILD -u SAT20_PWA_DKVS_AB_SHARED
+  -u SAT20_PWA_DKVS_AB_ARTIFACT_DIR
   -u SAT20_PWA_COMPLETE_POS_GROUP -u SAT20_PWA_DIAGNOSTIC -u SAT20_PWA_E2E_CASES
   -u SAT20_PWA_E2E_PORT -u SAT20_PWA_E2E_WASM -u SAT20_PWA_E2E_WASM_RUNTIME
   -u SAT20_PWA_RELEASE_CONTINUE -u SAT20_PWA_RGB_CASE -u SAT20_PWA_AUTOPAY_REVIEW
@@ -66,7 +104,7 @@ events_file="$LOG_ROOT/$run_id.events.jsonl"
 packages_file="$LOG_ROOT/$run_id.packages"
 status_file="$LOG_ROOT/$run_id.status"
 cmd=("${safe_env[@]}" "SAT20WALLET_CORE_E2E_CHILD_RUN=$CORE_NATIVE_RUN" SAT20_E2E_REQUIRE_BITCOIND=1
-  "$GO_BIN" test -mod=readonly -json -p=1 -parallel=1 -count=1 -timeout=150m
+  "$GO_BIN" test -mod=readonly -json -p=2 -parallel=1 -count=1 -timeout=150m
   "-tags=$TAGS" -skip "$SKIP_PATTERN" ./...)
 printf -v command_text '%q ' "${cmd[@]}"
 write_status() {
@@ -87,7 +125,7 @@ test_exit=0
 (cd "$WORKDIR" && "${safe_env[@]}" "$GO_BIN" list -mod=readonly "-tags=$TAGS" ./...) > "$packages_file" 2>> "$log_file" || test_exit=125
 if (( test_exit == 0 )); then
   (cd "$WORKDIR" && exec "${cmd[@]}") > "$events_file" 2>&1 || test_exit=1
-  python3 - "$events_file" "$packages_file" <<'PY_PACKAGES' | tee -a "$log_file"
+  python3 - "$events_file" "$packages_file" "${shared_cases[@]}" <<'PY_PACKAGES' | tee -a "$log_file"
 import collections
 import json
 import pathlib
@@ -97,7 +135,7 @@ def check(condition, message):
     if not condition:
         raise SystemExit("[package-coverage] FAILED: " + message)
 
-log, inventory = sys.argv[1:]
+log, inventory, *shared_cases = sys.argv[1:]
 expected = pathlib.Path(inventory).read_text().splitlines()
 check(expected and len(expected) == len(set(expected)), "empty or duplicate package inventory")
 packages = collections.defaultdict(list)
@@ -118,7 +156,8 @@ for line in pathlib.Path(log).read_text().splitlines():
         verdicts[(package, name)].append(action)
     if not name and action in {"pass", "fail", "skip"}:
         packages[package].append(action)
-parents = {(p, n.rsplit("/", 1)[0]) for p, n in runs if "/" in n}
+# A t.Run name can contain slashes without emitting an event for each prefix.
+parents = {(p, n[:i]) for p, n in runs for i, char in enumerate(n) if char == "/"}
 roots = collections.Counter(v[0] for (p,n),v in verdicts.items() if "/" not in n)
 leaves = collections.Counter(v[0] for key,v in verdicts.items() if key not in parents)
 skipped = [p + "/" + n for (p,n),v in verdicts.items() if v == ["skip"]]
@@ -134,6 +173,11 @@ check(runs and all(v == 1 for v in runs.values()), "no tests or duplicate execut
 check(set(runs) == set(verdicts), "test panic/unfinished execution or missing terminal verdict")
 check(all(len(v) == 1 for v in verdicts.values()), "duplicate test verdicts")
 check(not any(v == ["fail"] for v in verdicts.values()), "a test failed")
+e2e = "github.com/sat20-labs/sat20wallet/sdk/e2e"
+for entry in shared_cases:
+    standalone, shared = entry.split(":", 1)
+    check((e2e, standalone) not in runs, "standalone case ran twice: " + standalone)
+    check(verdicts.get((e2e, shared)) == ["pass"], "shared case did not pass: " + shared)
 print("[package-coverage] PASSED: every discovered Go package completed; SKIP is never PASS")
 PY_PACKAGES
   (( $? == 0 )) || test_exit=1

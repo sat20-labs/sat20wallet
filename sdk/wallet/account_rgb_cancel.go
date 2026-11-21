@@ -41,7 +41,7 @@ func (p *Manager) cancelUnpublishedRGB11Transfer(transferID string) error {
 		if err := p.CheckAccountRestore(rgb11AccountManagedProviderID, scopeID); err != nil {
 			return err
 		}
-		module, err := accountEntry(snapshot.profile.AccountID, rgb11AccountManagedProviderID, scopeID)
+		module, err := accountEntry(snapshot.secret, snapshot.profile.AccountID, rgb11AccountManagedProviderID, scopeID)
 		if err != nil {
 			return err
 		}

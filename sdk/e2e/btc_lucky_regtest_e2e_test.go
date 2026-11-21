@@ -956,21 +956,39 @@ func newLuckyIndexer(t *testing.T, core *spRealCoreRPC, pubkey string) *luckyInd
 	return newLuckyIndexerWithFlush(t, core, pubkey, 1)
 }
 
-func newLuckyIndexerWithFlush(t *testing.T, core *spRealCoreRPC, pubkey string, flushPeriod int) *luckyIndexerProc {
+var luckyIndexerBuild struct {
+	sync.Mutex
+	path string
+}
+
+func buildLuckyIndexer(t *testing.T) string {
 	t.Helper()
-	dir := testCaseDirectory(t)
+	luckyIndexerBuild.Lock()
+	defer luckyIndexerBuild.Unlock()
+	if luckyIndexerBuild.path != "" {
+		return luckyIndexerBuild.path
+	}
+	defer e2ePhase(t, "lucky_indexer_build")()
+
 	_, source, _, ok := runtime.Caller(0)
 	require.True(t, ok)
 	workspace := filepath.Clean(filepath.Join(filepath.Dir(source), "../../.."))
 	indexerDir := filepath.Join(workspace, "indexer")
-	binary := filepath.Join(dir, "indexer")
+	binary := filepath.Join(e2eRuntimeDirectory(t), "l1-indexer")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	build := exec.CommandContext(ctx, "go", "build", "-o", binary, ".")
 	build.Dir = indexerDir
 	output, err := build.CombinedOutput()
 	require.NoError(t, err, "build isolated real indexer: %s", strings.TrimSpace(string(output)))
+	luckyIndexerBuild.path = binary
+	return binary
+}
 
+func newLuckyIndexerWithFlush(t *testing.T, core *spRealCoreRPC, pubkey string, flushPeriod int) *luckyIndexerProc {
+	t.Helper()
+	binary := buildLuckyIndexer(t)
+	dir := testCaseDirectory(t)
 	rpcPort, err := strconv.Atoi(strings.TrimPrefix(core.base, "http://127.0.0.1:"))
 	require.NoError(t, err)
 	httpPort, err := strconv.Atoi(spRealFreePort(t))

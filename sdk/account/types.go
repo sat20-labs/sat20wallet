@@ -154,16 +154,16 @@ type Manifest struct {
 	Threshold    uint8              `json:"threshold"`
 	Total        uint8              `json:"total"`
 	EnvelopeHash string             `json:"envelope_hash"`
-	CreatedAt    int64              `json:"created_at"`
 	Guardian     *GuardianReference `json:"guardian,omitempty"`
 }
 
 type RecoveryPackage struct {
 	Envelope         Envelope                `json:"envelope"`
 	Manifest         Manifest                `json:"manifest"`
-	UserShare        RecoveryShare           `json:"user_share"`
+	UserShare        RecoveryShare           `json:"-"`
 	DKVSShareCapsule DKVSShareCapsule        `json:"dkvs_share_capsule"`
-	KnowledgeBundle  KnowledgeRecoveryBundle `json:"knowledge_bundle"`
+	KnowledgeBundle  KnowledgeRecoveryBundle `json:"-"`
+	SealedKnowledge  EncryptedBlob           `json:"sealed_knowledge"`
 	GuardianCapsule  *GuardianShareCapsule   `json:"guardian_capsule,omitempty"`
 }
 

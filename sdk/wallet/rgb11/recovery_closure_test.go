@@ -284,7 +284,7 @@ func TestRecoveryPreservesZeroBalanceContractAlias(t *testing.T) {
 // bound by the existing contract-object reference merely because its hash sorts
 // first. An older device still owns that exact recovery responsibility.
 func TestRecoveryKeepsReferencedContractValidationWhenAnotherReceiptSortsFirst(t *testing.T) {
-	raw, err := os.ReadFile("../../../../rgb11/testvectors/rc1/nia-example.rgba")
+	raw, err := os.ReadFile("../../../../rgb11/testvectors/rc2/nia-example.rgba")
 	if err != nil {
 		t.Fatal(err)
 	}

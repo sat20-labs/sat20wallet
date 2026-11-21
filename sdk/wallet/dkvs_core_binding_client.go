@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 
@@ -101,26 +102,26 @@ func (p *SatsNetDKVSClient) acceptCoreBinding(root common.Wallet,
 	return confirmed, nil
 }
 
-func (p *Manager) commitAccountCoreBinding(root common.Wallet, store *dkvsStore,
+func (p *Manager) commitAccountCoreBinding(ctx context.Context, root common.Wallet, store *dkvsStore,
 	key, coreID, prefix string, value []byte) error {
 	if p == nil || store == nil || store.manager == nil || store.client == nil {
 		return ErrMessageServiceUnavailable
 	}
 	// Authentication bootstrap is not an exception to session write eligibility.
 	// Prepare before acquiring the transport slot; nested acquisition would block.
-	if err := store.manager.prepareManagedWrite(store.client, []string{key}); err != nil {
+	if err := store.manager.prepareManagedWriteContext(ctx, store.client, []string{key}); err != nil {
 		return err
 	}
-	err := store.manager.runTransport(func() error {
+	err := store.manager.runReadTransport(ctx, func() error {
 		if err := store.manager.requireWritePaths(store.client, []string{key}); err != nil {
 			return err
 		}
-		if _, err := store.client.acceptCoreBinding(root, key, coreID, value); err != nil {
+		if _, err := store.client.withRequestContext(ctx).acceptCoreBinding(root, key, coreID, value); err != nil {
 			return err
 		}
 		// A complete source view, not the binding write response, establishes the
 		// local replica/cursor. Other pending business outbox entries are preserved.
-		_, err := store.client.SyncActiveScope(store.client.requestContext(), newDKVSReplicaStore(p.db),
+		_, err := store.client.SyncActiveScope(ctx, newDKVSReplicaStore(p.db),
 			store.client.replicaNamespace, dkvsindexer.ActiveScope{Prefix: prefix}, true)
 		if err != nil {
 			return fmt.Errorf("sync committed account binding: %w", err)
@@ -135,7 +136,7 @@ func (p *Manager) commitAccountCoreBinding(root common.Wallet, store *dkvsStore,
 
 // A background backup may establish a missing binding, but must not move an
 // account that is already bound to a different CoreNode.
-func (p *Manager) ensureAccountCoreBindingForSync() error {
+func (p *Manager) ensureAccountCoreBindingForSync(ctx context.Context) error {
 	root, err := p.accountManagementRootWallet()
 	if err != nil {
 		return err
@@ -144,6 +145,7 @@ func (p *Manager) ensureAccountCoreBindingForSync() error {
 	if err != nil {
 		return err
 	}
+	store.readCtx = ctx
 	bind, err := p.prepareAccountCoreNodeBinding(root, store)
 	if err != nil {
 		return err
@@ -152,7 +154,7 @@ func (p *Manager) ensureAccountCoreBindingForSync() error {
 	if err != nil {
 		return err
 	}
-	current, err := store.client.GetRecordDirect(key)
+	current, err := store.client.GetRecordDirectContext(ctx, key)
 	if err != nil && !errors.Is(err, dkvsindexer.ErrRecordNotFound) {
 		return err
 	}

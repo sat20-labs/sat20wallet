@@ -100,7 +100,7 @@ func prefixStateReady(state *DKVSSubscriptionState, prefixes []string) bool {
 }
 
 func (m *dkvsManager) syncManagedPrefixes(client *SatsNetDKVSClient, store *dkvsReplicaStore, prefixes []string, force bool) (changed []string, err error) {
-	return m.syncPrefixSet(nil, client, store, prefixes, force, true, nil, 0)
+	return m.syncPrefixSet(client.requestCtx, client, store, prefixes, force, true, nil, 0)
 }
 
 // Group receiving retains the existing subscription-wide publication check.

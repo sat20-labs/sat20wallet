@@ -12,6 +12,7 @@ import (
 	indexerdb "github.com/sat20-labs/indexer/indexer/db"
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
+	"github.com/stretchr/testify/require"
 )
 
 func newRGB11AccountScopeRecoveryManager(t *testing.T, remote *rgb11MemoryDKVSHTTP,
@@ -55,6 +56,140 @@ func activateRGB11AccountScopeRecovery(t *testing.T, manager *Manager, mnemonic 
 	}
 	coreWaitPrivateBackup(t, manager)
 	return pkg, auth, secret
+}
+
+func TestRGB11BlobRecoveryBothPaths(t *testing.T) {
+	previousChain := _chain
+	_chain = "testnet"
+	t.Cleanup(func() { _chain = previousChain })
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	const password = "recovery-test-password"
+	const subaccount = uint32(1)
+	remote := newRGB11MemoryDKVSHTTP()
+	chain := newCoreE2EChain()
+	source := newRGB11AccountScopeRecoveryManager(t, remote, chain)
+	root, err := source.ImportWallet(coreE2ESenderMnemonic, password)
+	require.NoError(t, err)
+	require.NoError(t, source.InitializeAccountManagement(password))
+	discoverInactiveAccount(t, source)
+	options, err := source.GetStorageOptions(ctx, 100)
+	require.NoError(t, err)
+	require.Len(t, options, 1)
+	require.Equal(t, AccountStorageTemporary, options[0].ID)
+	storage, err := source.ConfirmStorage(ctx, options[0])
+	require.NoError(t, err)
+	require.Equal(t, "ready", storage.Status)
+
+	setup := RecoverySetup{Password: password, WalletIDs: []int64{root}, Mode: "2of2"}
+	var factors RecoveryFactors
+	for _, q := range coreQuestions() {
+		setup.Questions = append(setup.Questions, QuestionInput{
+			Question: Question{ID: q.Question.ID, Prompt: q.Question.Prompt}, Answer: q.Answer, Confirmation: q.Confirmation,
+		})
+		factors.Answers = append(factors.Answers, Answer{QuestionID: q.Question.ID, Text: q.Answer})
+	}
+	created, err := source.CreateRecovery(ctx, setup)
+	require.NoError(t, err)
+	require.Len(t, created.Files, 1)
+	require.Equal(t, "user-share.txt", created.Files[0].Name)
+	recoveryFile := string(created.Files[0].Data)
+	active, err := source.ActivateRecovery(ctx, created.SessionID,
+		ActivationInput{Password: password, RecoveryFile: recoveryFile, Factors: factors})
+	require.NoError(t, err)
+	require.True(t, active.Active)
+	require.NoError(t, source.SyncAccountManagementState(ctx))
+
+	require.NoError(t, source.EnsureAccount(root, subaccount, "RGB11 recovery", ""))
+	require.NoError(t, source.SwitchAccount(subaccount))
+	chain.fund(t, source.GetWallet().GetAddress(), 6)
+	issued, err := source.IssueRGB11Asset(ctx, RGB11IssueRequest{
+		Schema: "NIA", Ticker: "HMAC", Name: "Shared recovery blob fixture", Amounts: []uint64{100},
+	})
+	require.NoError(t, err)
+	installRGB11PublicContractFixture(t, source, remote, issued.ContractID)
+	scope := coreSelectedRGBScope(source)
+	require.NoError(t, source.SyncAccountManagementState(ctx))
+	require.NoError(t, source.WaitAccountBackup(ctx, rgb11AccountManagedProviderID, scope))
+
+	source.mutex.RLock()
+	secret := bytes.Clone(source.accountSecret)
+	source.mutex.RUnlock()
+	defer zeroBytes(secret)
+	entry, err := accountEntry(secret, active.AccountID, rgb11AccountManagedProviderID, scope)
+	require.NoError(t, err)
+	otherSecret := bytes.Clone(secret)
+	otherSecret[0] ^= 1
+	otherKey, err := account.ManagedModuleKey(otherSecret, active.AccountID, entry.Provider, entry.Scope)
+	zeroBytes(otherSecret)
+	require.NoError(t, err)
+	require.NotEqual(t, entry.Key, otherKey)
+	store, err := source.accountDKVSStore()
+	require.NoError(t, err)
+	published, err := store.GetAuthoritative(entry.Key)
+	require.NoError(t, err)
+	require.NotNil(t, published)
+	require.NotNil(t, published.record)
+	payload, err := openAccountPayload(secret, active.AccountID, _chain, entry, published.Value)
+	require.NoError(t, err)
+	material, err := rgb11wallet.DecodeRecoveryPackage(payload)
+	zeroBytes(payload)
+	require.NoError(t, err)
+	require.Equal(t, subaccount, material.AccountIndex)
+	proofs, err := rgb11wallet.ProofsFromProjectionSnapshot(material.ProjectionRecords)
+	require.NoError(t, err)
+	require.Len(t, proofs, 1)
+	require.Equal(t, issued.AssetName, proofs[0].AssetName)
+	source.Close()
+	require.NoError(t, source.db.Close())
+	source.db = nil
+
+	for _, path := range []string{"root-mnemonic", "questions"} {
+		t.Run(path, func(t *testing.T) {
+			target := newRGB11AccountScopeRecoveryManager(t, remote, chain)
+			require.Empty(t, target.GetWalletCatalog())
+			cached, err := target.readAccountLocal(active.AccountID, entry.Provider, entry.Scope)
+			require.NoError(t, err)
+			require.Nil(t, cached)
+			if path == "root-mnemonic" {
+				restored, err := target.RecoverAccountManagementFromRootMnemonic(ctx, coreE2ESenderMnemonic, password)
+				require.NoError(t, err)
+				require.Len(t, restored, 1)
+			} else {
+				loaded, err := target.LoadRecovery(ctx, recoveryFile, false)
+				require.NoError(t, err)
+				preview, err := target.PreviewRecovery(ctx, loaded.SessionID, factors)
+				require.NoError(t, err)
+				require.True(t, preview.CanCommit)
+				restored, err := target.CommitRecovery(ctx, loaded.SessionID, password)
+				require.NoError(t, err)
+				require.True(t, restored.Complete)
+			}
+
+			target.mutex.RLock()
+			cached, err = target.readAccountLocal(active.AccountID, entry.Provider, entry.Scope)
+			target.mutex.RUnlock()
+			require.NoError(t, err)
+			require.NotNil(t, cached)
+			require.NotNil(t, cached.Baseline)
+			require.Equal(t, entry.Key, cached.Key)
+			require.Equal(t, published.record.Key, cached.Baseline.Key)
+			require.Equal(t, published.Value, cached.Baseline.Value)
+			require.Equal(t, published.Value, cached.Value)
+			require.False(t, cached.Restoring, cached.LastError)
+			require.NoError(t, target.SwitchAccount(subaccount))
+			balance, err := target.GetRGB11AssetBalance(&issued.AssetName)
+			require.NoError(t, err)
+			require.NotNil(t, balance)
+			require.EqualValues(t, 100, balance.Value.Uint64())
+			restoredProofs, err := target.rgbManager.projectionStore.ListProofs()
+			require.NoError(t, err)
+			require.Len(t, restoredProofs, 1)
+			require.Equal(t, proofs[0].OutPoint, restoredProofs[0].OutPoint)
+			require.Equal(t, proofs[0].AssetName, restoredProofs[0].AssetName)
+		})
+	}
 }
 
 // Recovery uses the authenticated account state/blob read through the public

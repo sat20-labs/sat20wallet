@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/sat20-labs/sat20wallet/sdk/account"
@@ -28,7 +29,7 @@ func (p *Manager) accountModuleFailure(entry account.ManagedEntry, cause error, 
 		if p.accountProfile == nil {
 			return errAccountSnapshotChanged
 		}
-		expected, err := accountEntry(p.accountProfile.AccountID, entry.Provider, entry.Scope)
+		expected, err := accountEntry(p.accountSecret, p.accountProfile.AccountID, entry.Provider, entry.Scope)
 		if err != nil || expected.Key != entry.Key {
 			return errAccountSnapshotChanged
 		}
@@ -71,6 +72,16 @@ func (p *Manager) importAccountValue(entry account.ManagedEntry, catalog Account
 			}
 		}()
 	}
+	if entry.Provider == "wallets" {
+		repaired, merged, err := p.keepAccountSilentPay(value.AccountID, payload)
+		if err != nil {
+			return err
+		}
+		if merged != nil {
+			defer zeroBytes(merged)
+			encoded, payload, pending = repaired, merged, true
+		}
+	}
 	if err := p.validateAccountPayload(entry, catalog, payload); err != nil {
 		return err
 	}
@@ -90,6 +101,13 @@ func (p *Manager) importAccountValue(entry account.ManagedEntry, catalog Account
 	}
 	if live == nil {
 		live = value
+	}
+	if pending && live.Generation == live.Confirmed {
+		if live.Generation == ^uint64(0) {
+			p.mutex.Unlock()
+			return fmt.Errorf("account change counter overflow")
+		}
+		live.Generation++
 	}
 	live.Key, live.Codec = entry.Key, entry.Codec
 	live.Value, live.Restoring = bytes.Clone(encoded), true
@@ -126,6 +144,33 @@ func (p *Manager) importAccountValue(entry account.ManagedEntry, catalog Account
 	return err
 }
 
+func (p *Manager) syncAccountImport(store *dkvsStore, snapshot *accountManagementSyncSnapshot,
+	entry account.ManagedEntry, catalog AccountManagedDataCatalog, value *accountLocalKV,
+	remote *dkvsValue, encoded, payload []byte, pending bool) error {
+	if err := p.importAccountValue(entry, catalog, value, remote, encoded, payload, pending); err != nil {
+		return p.accountModuleFailure(entry, err, remote)
+	}
+	if entry.Provider != "wallets" {
+		return nil
+	}
+	p.mutex.RLock()
+	live, err := p.readAccountLocal(value.AccountID, entry.Provider, entry.Scope)
+	p.mutex.RUnlock()
+	if err != nil {
+		return err
+	}
+	// A repaired or merged wallet import is already captured and can be sent
+	// now. An intervening edit is left to the normal backup worker.
+	if live == nil || live.Generation == live.Confirmed || live.Generation != live.Captured {
+		return nil
+	}
+	err = p.publishAccountValue(store, live, snapshot.root, snapshot.profile)
+	if err != nil && !isDKVSNetworkFailure(err) && !accountACKCleanupOnly(err) {
+		return p.accountModuleFailure(entry, err, remote)
+	}
+	return err
+}
+
 func (p *Manager) syncAccountModule(store *dkvsStore, snapshot *accountManagementSyncSnapshot,
 	catalog AccountManagedDataCatalog, entry account.ManagedEntry) error {
 	for attempt := 0; attempt < 3; attempt++ {
@@ -152,7 +197,7 @@ func (p *Manager) syncAccountModuleOnce(store *dkvsStore, snapshot *accountManag
 	if entry.Deleted {
 		return nil
 	}
-	if err := store.rememberAccountModule(snapshot.profile.AccountID, entry); err != nil {
+	if err := store.rememberAccountModule(snapshot.secret, snapshot.profile.AccountID, entry); err != nil {
 		return err
 	}
 	if err := store.WaitReady(entry.Key); err != nil {
@@ -223,10 +268,7 @@ func (p *Manager) syncAccountModuleOnce(store *dkvsStore, snapshot *accountManag
 		if remote == nil {
 			return p.accountModuleFailure(entry, ErrDKVSRecordNotFound, nil)
 		}
-		if err := p.importAccountValue(entry, catalog, value, remote, remote.Value, remotePayload, false); err != nil {
-			return p.accountModuleFailure(entry, err, remote)
-		}
-		return nil
+		return p.syncAccountImport(store, snapshot, entry, catalog, value, remote, remote.Value, remotePayload, false)
 	}
 	if value.Restoring {
 		encoded := value.Value
@@ -259,18 +301,21 @@ func (p *Manager) syncAccountModuleOnce(store *dkvsStore, snapshot *accountManag
 	// A clean local module needs no Export. Only that changed remote module is
 	// imported; other scopes are not included in its provider catalog.
 	if !fresh && value.Generation == value.Confirmed && len(value.Value) != 0 {
+		localPayload, err := openAccountPayload(snapshot.secret, value.AccountID, snapshot.network, entry, value.Value)
+		if err != nil {
+			return p.accountModuleFailure(entry, err, remote)
+		}
+		defer zeroBytes(localPayload)
 		if remote == nil {
+			if err := p.validateAccountPayload(entry, catalog, localPayload); err != nil {
+				return p.accountModuleFailure(entry, err, nil)
+			}
 			value, err = p.setAccountBaseline(value, observed)
 			if err != nil {
 				return err
 			}
 			return p.publishAccountValue(store, value, snapshot.root, snapshot.profile)
 		}
-		localPayload, err := openAccountPayload(snapshot.secret, value.AccountID, snapshot.network, entry, value.Value)
-		if err != nil {
-			return p.accountModuleFailure(entry, err, remote)
-		}
-		defer zeroBytes(localPayload)
 		if bytes.Equal(localPayload, remotePayload) {
 			value, err = p.captureAccountValue(value.AccountID, entry.Provider, entry.Scope, entry.Key, entry.Codec, remote.Value, value.Generation)
 			if err != nil {
@@ -278,10 +323,7 @@ func (p *Manager) syncAccountModuleOnce(store *dkvsStore, snapshot *accountManag
 			}
 			return p.confirmAccountValue(store, snapshot, value, remote)
 		}
-		if err := p.importAccountValue(entry, catalog, value, remote, remote.Value, remotePayload, false); err != nil {
-			return p.accountModuleFailure(entry, err, remote)
-		}
-		return nil
+		return p.syncAccountImport(store, snapshot, entry, catalog, value, remote, remote.Value, remotePayload, false)
 	}
 	localPayload, err := p.exportAccountPayload(entry, catalog)
 	if err != nil {
@@ -305,10 +347,7 @@ func (p *Manager) syncAccountModuleOnce(store *dkvsStore, snapshot *accountManag
 	}
 	if !fresh && remote != nil && !bytes.Equal(remotePayload, basePayload) {
 		if len(newWallets) == 0 && bytes.Equal(localPayload, basePayload) {
-			if err := p.importAccountValue(entry, catalog, value, remote, remote.Value, remotePayload, false); err != nil {
-				return p.accountModuleFailure(entry, err, remote)
-			}
-			return nil
+			return p.syncAccountImport(store, snapshot, entry, catalog, value, remote, remote.Value, remotePayload, false)
 		}
 		var merged []byte
 		if entry.Provider == "wallets" {
@@ -342,6 +381,9 @@ func (p *Manager) syncAccountModuleOnce(store *dkvsStore, snapshot *accountManag
 		encoded, err := sealAccountPayload(snapshot.secret, value.AccountID, snapshot.network, entry, merged)
 		if err != nil {
 			return p.accountModuleFailure(entry, err, remote)
+		}
+		if entry.Provider == "wallets" {
+			return p.syncAccountImport(store, snapshot, entry, catalog, value, remote, encoded, merged, true)
 		}
 		if err := p.importAccountValue(entry, catalog, value, remote, encoded, merged, true); err != nil {
 			return p.accountModuleFailure(entry, err, remote)
@@ -389,6 +431,8 @@ func (p *Manager) syncAccountModules(ctx context.Context) (result error) {
 	defer zeroBytes(snapshot.secret)
 	defer func() { finish(result) }()
 	var failures []error
+	failedKeys := make(map[string]bool)
+	walletsReady := false
 	ordered := make([]account.ManagedEntry, 0, len(index.Entries))
 	for _, entry := range index.Entries {
 		if entry.Provider == "wallets" {
@@ -405,16 +449,16 @@ func (p *Manager) syncAccountModules(ctx context.Context) (result error) {
 			continue
 		}
 		if err := p.syncAccountModule(store, snapshot, catalog, entry); err != nil {
-			if err = p.stopAccountDB(err); errors.Is(err, ErrAccountDBStopped) {
-				return err
-			}
-			if isDKVSNetworkFailure(err) {
+			if err = p.stopAccountDB(err); accountSyncInterrupted(err) {
 				return err
 			}
 			if entry.Provider == "wallets" && needsRestore {
 				return err
 			}
+			failedKeys[entry.Key] = true
 			failures = append(failures, err)
+		} else if entry.Provider == "wallets" {
+			walletsReady = true
 		}
 		catalog, err = p.accountManagedDataCatalog()
 		if err != nil {
@@ -438,27 +482,35 @@ func (p *Manager) syncAccountModules(ctx context.Context) (result error) {
 		if _, ok := known[value.Provider+"\x00"+value.Scope]; ok {
 			continue
 		}
-		entry, err := accountEntry(value.AccountID, value.Provider, value.Scope)
+		entry, err := accountEntry(snapshot.secret, value.AccountID, value.Provider, value.Scope)
 		if err != nil {
 			return err
 		}
 		if err := p.syncAccountModule(store, snapshot, catalog, entry); err != nil {
-			if err = p.stopAccountDB(err); errors.Is(err, ErrAccountDBStopped) {
+			if err = p.stopAccountDB(err); accountSyncInterrupted(err) {
 				return err
 			}
-			if isDKVSNetworkFailure(err) {
-				return err
-			}
+			failedKeys[entry.Key] = true
 			failures = append(failures, err)
+		} else if entry.Provider == "wallets" && !value.Deleted {
+			walletsReady = true
 		}
 	}
-	if err := p.publishAccountIndex(store, snapshot, remoteIndex, index); err != nil {
-		return err
-	}
-	if base.wrapper != nil {
-		if err := p.publishAccountValue(store, base.wrapper, snapshot.root, snapshot.profile); err != nil {
+	if snapshot.profile.StorageMode != AccountStorageTemporary || walletsReady || remoteIndex != nil && base.wrapper == nil {
+		if err := p.publishAccountIndex(store, snapshot, remoteIndex, index, failedKeys); err != nil {
 			return err
 		}
+		if base.wrapper != nil {
+			if err := p.publishAccountValue(store, base.wrapper, snapshot.root, snapshot.profile); err != nil {
+				return err
+			}
+		}
+	}
+	if err := p.renewAccountCache(store, snapshot, failedKeys); err != nil {
+		if accountSyncInterrupted(err) || err == errAccountSnapshotChanged {
+			return err
+		}
+		failures = append(failures, err)
 	}
 	if needsRestore || base.readyLater {
 		finish(nil)
@@ -474,4 +526,10 @@ func (p *Manager) syncAccountModules(ctx context.Context) (result error) {
 		p.scheduleAccountCleanup()
 	}
 	return errors.Join(failures...)
+}
+
+func accountSyncInterrupted(err error) bool {
+	return errors.Is(err, ErrAccountDBStopped) ||
+		errors.Is(err, dkvsindexer.ErrEndpointMismatch) || errors.Is(err, ErrDKVSVerificationHeightRequired) ||
+		isDKVSNetworkFailure(err)
 }

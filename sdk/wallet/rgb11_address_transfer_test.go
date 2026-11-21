@@ -109,7 +109,7 @@ func verifyRGB11ACKUsesDurableLocalRecovery(t *testing.T, manager *Manager,
 	if module.Generation == module.Confirmed {
 		// The async worker may have already confirmed this generation. Prove
 		// that it contains this same complete closure instead of requiring dirty.
-		entry, err := accountEntry(module.AccountID, module.Provider, module.Scope)
+		entry, err := accountEntry(manager.accountSecret, module.AccountID, module.Provider, module.Scope)
 		if err != nil || module.Baseline == nil {
 			return fmt.Errorf("ACK has no confirmed module baseline")
 		}

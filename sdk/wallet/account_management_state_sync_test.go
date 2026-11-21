@@ -264,7 +264,7 @@ func TestAccountManagedPutAckPreservesChangesDuringNetworkWait(t *testing.T) {
 	if len(manager.accountProfile.Pending) != 0 || manager.GetAccountManagementStatus().ManagedDataDirty {
 		t.Fatalf("second serialized PUT did not clear pending: %+v", manager.accountProfile)
 	}
-	walletModule, err := accountEntry(manager.accountProfile.AccountID, "wallets", AccountManagedDataGlobalScope)
+	walletModule, err := accountEntry(nil, manager.accountProfile.AccountID, "wallets", AccountManagedDataGlobalScope)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -548,7 +548,7 @@ func accountTTLWithSeed(t *testing.T, seed func(*Manager, *rgb11MemoryDKVSHTTP),
 
 func accountWalletModuleKey(t *testing.T, manager *Manager) string {
 	t.Helper()
-	entry, err := accountEntry(manager.accountProfile.AccountID, "wallets", AccountManagedDataGlobalScope)
+	entry, err := accountEntry(nil, manager.accountProfile.AccountID, "wallets", AccountManagedDataGlobalScope)
 	require.NoError(t, err)
 	require.NotEmpty(t, entry.Key)
 	return entry.Key
@@ -818,7 +818,7 @@ func TestAccountNoopProfileFailureCanRetry(t *testing.T) {
 	require.NoError(t, manager.UpdateWalletName(id, "A"))
 	before, err := manager.db.Read(accountManagementProfileKey())
 	require.NoError(t, err)
-	entry, err := accountEntry(manager.accountProfile.AccountID, "wallets", AccountManagedDataGlobalScope)
+	entry, err := accountEntry(nil, manager.accountProfile.AccountID, "wallets", AccountManagedDataGlobalScope)
 	require.NoError(t, err)
 	catalog, err := manager.accountManagedDataCatalog()
 	require.NoError(t, err)
@@ -988,7 +988,7 @@ func TestAccountNoopFinalizationWindowPreservesUpdates(t *testing.T) {
 				require.NoError(t, readErr)
 				require.NotNil(t, otherModule)
 				require.Equal(t, otherModule.Generation, otherModule.Confirmed)
-				entry, entryErr := accountEntry(accountID, provider.ID(), AccountManagedDataGlobalScope)
+				entry, entryErr := accountEntry(manager.accountSecret, accountID, provider.ID(), AccountManagedDataGlobalScope)
 				require.NoError(t, entryErr)
 				published, getErr := store.GetAuthoritative(entry.Key)
 				require.NoError(t, getErr)

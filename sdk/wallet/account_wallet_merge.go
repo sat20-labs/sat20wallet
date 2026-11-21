@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"bytes"
+	"slices"
 
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
@@ -109,13 +110,32 @@ func mergeAccountWalletPayload(base, local, remote []byte, newWallets map[string
 			}
 			continue
 		}
-		wallet, err := mergeAccountWallet(findManagedWallet(&b, key), findManagedWallet(&l, key), findManagedWallet(&r, key))
+		localWallet, remoteWallet := findManagedWallet(&l, key), findManagedWallet(&r, key)
+		wallet, err := mergeAccountWallet(findManagedWallet(&b, key), localWallet, remoteWallet)
 		if err != nil {
 			return nil, err
 		}
-		if wallet != nil {
-			result.Wallets = append(result.Wallets, cloneManagedWallet(*wallet))
+		if wallet == nil {
+			continue
 		}
+		merged := *wallet
+		if !merged.Deleted && localWallet != nil && remoteWallet != nil && !localWallet.Deleted && !remoteWallet.Deleted {
+			enabled := slices.Concat(localWallet.SPEnabled, remoteWallet.SPEnabled)
+			slices.Sort(enabled)
+			merged.SPEnabled = slices.Compact(enabled)
+			if len(merged.SPEnabled) != 0 {
+				count := merged.SPEnabled[len(merged.SPEnabled)-1] + 1
+				if count > merged.AccountCount {
+					source := localWallet
+					if remoteWallet.AccountCount > localWallet.AccountCount {
+						source = remoteWallet
+					}
+					merged.SubAccounts = slices.Concat(merged.SubAccounts, source.SubAccounts[merged.AccountCount:count])
+					merged.AccountCount = count
+				}
+			}
+		}
+		result.Wallets = append(result.Wallets, merged)
 	}
 	return account.EncodeManagedState(result)
 }

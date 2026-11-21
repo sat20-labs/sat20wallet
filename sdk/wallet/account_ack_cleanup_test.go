@@ -103,7 +103,7 @@ func TestAccountACKDeleteKeepsWrite(t *testing.T) {
 	require.NoError(t, manager.WaitAccountManagedDataReady(readyCtx))
 	readyCancel()
 	accountID := manager.GetAccountManagementStatus().AccountID
-	entry, err := accountEntry(accountID, "wallets", AccountManagedDataGlobalScope)
+	entry, err := accountEntry(nil, accountID, "wallets", AccountManagedDataGlobalScope)
 	require.NoError(t, err)
 	require.NotEmpty(t, entry.Key, "the actual first backup must publish a canonical wallet module key")
 	module, err := manager.readAccountLocal(accountID, "wallets", AccountManagedDataGlobalScope)

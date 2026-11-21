@@ -86,6 +86,24 @@ func rgb11ReceiveLocalTransferID(request *corewallet.ReceiveRequest,
 	return canonical, nil
 }
 
+func (p *rgb11Manager) validateRGB11ReceiptHistory(ctx context.Context, raw []byte,
+	validator *rgb11wallet.RGB11ConsensusValidator, existing *rgb11wallet.ValidationReceipt) (*rgb11wallet.HistoricalValidation, error) {
+	if existing == nil {
+		return validator.ValidateHistoricalConsignmentReport(ctx, raw, p.rgbManager.evidence)
+	}
+	// A receipt for this same consignment may already contain another local
+	// allocation. Reveal its seal only while revalidating the original history.
+	reveals := rgb11wallet.NewRGB11ValidatorWithReveals(validator.Reveals...)
+	for _, allocation := range existing.Allocations {
+		seal, err := seals.DecodeGraphBlindSeal(allocation.SealDisclosure)
+		if err != nil {
+			return nil, fmt.Errorf("decode existing RGB11 receipt seal: %w", rgb11wallet.ErrValidationReceipt)
+		}
+		reveals.Reveals = append(reveals.Reveals, seal)
+	}
+	return reveals.ValidateHistoricalConsignmentReport(ctx, raw, p.rgbManager.evidence)
+}
+
 // buildRGB11AcceptedConsignmentCandidate performs core/current validation and
 // appends the complete receive closure to records without writing a store.
 func (p *rgb11Manager) buildRGB11AcceptedConsignmentCandidate(ctx context.Context,
@@ -202,18 +220,18 @@ func (p *rgb11Manager) buildRGB11AcceptedConsignmentCandidateWithID(ctx context.
 	if err := p.checkRGB11RejectPolicy(container, checked); err != nil {
 		return nil, nil, nil, err
 	}
-	if history == nil {
-		history, err = validator.ValidateHistoricalConsignmentReport(ctx, raw, p.rgbManager.evidence)
-	}
-	if err != nil || history == nil || history.MaterialReceipt == nil {
-		return nil, nil, nil, fmt.Errorf("validate accepted RGB11 material history: %w",
-			errRGB11ProjectionEvidence(err))
-	}
 	receipts, err := rgb11wallet.ValidationReceiptsFromProjectionSnapshot(snapshot.ProjectionRecords)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("load existing accepted RGB11 receipts: %w", err)
 	}
 	existingReceipt := receipts[receipt.ConsignmentHash]
+	if history == nil || existingReceipt != nil {
+		history, err = p.validateRGB11ReceiptHistory(ctx, raw, validator, existingReceipt)
+	}
+	if err != nil || history == nil || history.MaterialReceipt == nil {
+		return nil, nil, nil, fmt.Errorf("validate accepted RGB11 material history: %w",
+			errRGB11ProjectionEvidence(err))
+	}
 	if existingReceipt != nil && !sameRGB11ValidationReceiptIdentity(existingReceipt, history.MaterialReceipt) {
 		return nil, nil, nil, fmt.Errorf("existing accepted RGB11 receipt identity conflicts with core history: %w",
 			rgb11wallet.ErrValidationReceipt)
@@ -310,6 +328,18 @@ func (p *rgb11Manager) buildRGB11AcceptedConsignmentCandidateWithID(ctx context.
 			previousState.ReceiveRequestID != state.ReceiveRequestID ||
 			previousState.ConsignmentHash != state.ConsignmentHash || previousState.WitnessTxID != state.WitnessTxID {
 			return nil, nil, nil, ErrRGB11InvoiceMismatch
+		}
+		if previousState.Status == "pending" || previousState.Status == "settled" {
+			status, err := p.rgb11ReceiveWitnessStatus(state)
+			if err != nil || !validRGB11ObservedTxStatus(status, state.WitnessTxID) ||
+				(!status.Confirmed && !status.InMempool) {
+				return nil, nil, nil, fmt.Errorf("resolve repeated RGB11 receive witness: %w",
+					errRGB11ProjectionEvidence(err))
+			}
+			state.Status = "pending"
+			if status.Confirmed && status.Confirmations >= max(int64(state.MinConfirmations), 1) {
+				state.Status = "settled"
+			}
 		}
 		// New witness evidence advances the receive lifecycle, but cannot undo
 		// an ACK already sent for this same validated transfer and request.
@@ -585,10 +615,13 @@ func (p *rgb11Manager) addRGB11LocalChangeCandidate(ctx context.Context,
 	if hex.EncodeToString(digest[:]) != pending.LocalObjectHash {
 		return nil, fmt.Errorf("local RGB11 consignment hash mismatch: %w", rgb11wallet.ErrValidationReceipt)
 	}
+	receipts, err := rgb11wallet.ValidationReceiptsFromProjectionSnapshot(projectionRecords)
+	if err != nil {
+		return nil, err
+	}
+	existingReceipt := receipts[pending.LocalObjectHash]
 	validator := rgb11wallet.NewRGB11ValidatorWithReveals(pending.ChangeSeals...)
-	history, err := validator.ValidateHistoricalConsignmentReport(
-		ctx, pending.LocalConsignment, p.rgbManager.evidence,
-	)
+	history, err := p.validateRGB11ReceiptHistory(ctx, pending.LocalConsignment, validator, existingReceipt)
 	if err != nil || history == nil || history.MaterialReceipt == nil {
 		return nil, fmt.Errorf("validate RGB11 local change history: %w", errRGB11ProjectionEvidence(err))
 	}
@@ -596,11 +629,6 @@ func (p *rgb11Manager) addRGB11LocalChangeCandidate(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	receipts, err := rgb11wallet.ValidationReceiptsFromProjectionSnapshot(projectionRecords)
-	if err != nil {
-		return nil, err
-	}
-	existingReceipt := receipts[pending.LocalObjectHash]
 	var existingReceiptHash string
 	if existingReceipt != nil {
 		if !sameRGB11ValidationReceiptIdentity(existingReceipt, history.MaterialReceipt) {
@@ -722,6 +750,30 @@ func (p *rgb11Manager) addRGB11LocalChangeCandidate(ctx context.Context,
 	)
 }
 
+func (p *rgb11Manager) rgb11ReceiveWitnessStatus(state *rgb11wallet.TransferState) (*rgb11wallet.BitcoinTxStatus, error) {
+	status, err := p.rgbManager.evidence.GetTxStatus(state.WitnessTxID)
+	if err != nil || status != nil && (status.InMempool || status.Confirmed) {
+		return status, err
+	}
+	for _, outpoint := range state.OutputOutPoints {
+		// A blind receive can use an older carrier. Its confirmations say
+		// nothing about the transaction that witnessed the RGB transition.
+		if allocationOutpointTxID(outpoint) != state.WitnessTxID {
+			continue
+		}
+		utxo, err := p.rgbManager.evidence.GetUTXO(outpoint)
+		if err != nil {
+			return nil, err
+		}
+		if utxo != nil {
+			return &rgb11wallet.BitcoinTxStatus{TxID: state.WitnessTxID,
+				InMempool: utxo.Confirmations == 0, Confirmed: utxo.Confirmations > 0,
+				Confirmations: utxo.Confirmations}, nil
+		}
+	}
+	return status, nil
+}
+
 func (p *rgb11Manager) buildRGB11RefreshCandidate(ctx context.Context,
 	current *RGB11WalletSnapshot, now int64) (*RGB11WalletSnapshot, *RGB11RefreshResult, error) {
 	if p == nil || current == nil || p.rgbManager == nil || p.rgbManager.evidence == nil {
@@ -836,26 +888,9 @@ func (p *rgb11Manager) buildRGB11RefreshCandidate(ctx context.Context,
 					return nil, nil, err
 				}
 			}
-			status, statusErr := p.rgbManager.evidence.GetTxStatus(state.WitnessTxID)
+			status, statusErr := p.rgb11ReceiveWitnessStatus(state)
 			if statusErr != nil {
 				return nil, nil, fmt.Errorf("RGB11 receive %s witness status is unknown: %w", state.TransferID, statusErr)
-			}
-			if status == nil || (!status.InMempool && !status.Confirmed) {
-				for _, outpoint := range state.OutputOutPoints {
-					if allocationOutpointTxID(outpoint) != state.WitnessTxID {
-						continue
-					}
-					utxo, utxoErr := p.rgbManager.evidence.GetUTXO(outpoint)
-					if utxoErr != nil {
-						return nil, nil, fmt.Errorf("RGB11 receive %s output status is unknown: %w", state.TransferID, utxoErr)
-					}
-					if utxo != nil {
-						status = &rgb11wallet.BitcoinTxStatus{TxID: state.WitnessTxID,
-							InMempool: utxo.Confirmations == 0, Confirmed: utxo.Confirmations > 0,
-							Confirmations: utxo.Confirmations}
-						break
-					}
-				}
 			}
 			if status == nil || (!status.InMempool && !status.Confirmed) {
 				result.Unresolved++

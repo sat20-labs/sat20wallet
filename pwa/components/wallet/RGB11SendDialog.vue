@@ -1,51 +1,111 @@
 <template>
   <Dialog :open="isOpen" @update:open="handleOpenChange">
-    <DialogContent class="max-h-[90vh] w-[380px] overflow-y-auto rounded-lg bg-black"
+    <DialogContent class="max-h-[calc(100dvh_-_2rem)] w-[calc(100%_-_2rem)] grid-cols-[minmax(0,1fr)] gap-4 overflow-y-auto rounded-xl bg-zinc-950"
       @escape-key-down="preventDismiss" @interact-outside="preventDismiss">
-      <DialogHeader>
+      <DialogHeader class="mb-0 pr-8 text-left">
         <DialogTitle>{{ t(inflation ? 'rgb11Transfer.inflate' : 'rgb11Transfer.sendTitle') }}</DialogTitle>
-        <DialogDescription class="break-all font-mono text-xs">{{ asset?.contract_id }}</DialogDescription>
+        <DialogDescription v-if="!transfer && asset?.label" class="break-words">{{ asset.label }}</DialogDescription>
       </DialogHeader>
-      <div class="space-y-3">
+      <div class="min-w-0 space-y-4">
         <template v-if="!transfer">
-          <select v-if="!inflation" v-model="mode" :disabled="loading" class="w-full rounded bg-zinc-900 p-2">
+          <select v-if="!inflation" v-model="mode" :disabled="loading"
+            :aria-label="t('rgb11Transfer.destinationType')"
+            class="h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm">
             <option value="address">{{ t('rgb11Transfer.addressMode') }}</option>
             <option value="invoice">{{ t('rgb11Transfer.invoiceMode') }}</option>
           </select>
-          <Label>{{ t(mode === 'address' && !inflation ? 'rgb11Transfer.receiverAddress' : 'rgb11Transfer.invoice') }}</Label>
-          <Textarea v-model="destination" :disabled="loading" spellcheck="false" class="min-h-24 bg-zinc-900 font-mono text-xs" />
-          <template v-if="mode === 'address' && !inflation">
-            <Label>{{ t('rgb11Invoice.amount') }}</Label>
-            <Input v-model="amount" :disabled="loading" inputmode="decimal" />
-          </template>
-          <p v-else class="text-xs text-muted-foreground">{{ t('rgb11Transfer.batchHint') }}</p>
-          <Button :disabled="loading || !destination.trim() || !account.rgb11WriteAllowed" class="w-full" @click="prepare">{{ t('rgb11Transfer.prepare') }}</Button>
+          <div class="space-y-2">
+            <Label :for="fieldId + '-destination'">{{ t(addressMode ? 'rgb11Transfer.receiverAddress' : 'rgb11Transfer.invoice') }}</Label>
+            <Textarea :id="fieldId + '-destination'" v-model="destination" :disabled="loading" spellcheck="false"
+              :rows="addressMode ? 2 : 3" class="min-h-0 bg-zinc-900 font-mono text-xs" />
+            <p v-if="!addressMode" class="text-xs text-muted-foreground">{{ t('rgb11Transfer.batchHint') }}</p>
+          </div>
+          <div v-if="addressMode" class="space-y-2">
+            <Label :for="fieldId + '-amount'">{{ t('rgb11Invoice.amount') }}</Label>
+            <Input :id="fieldId + '-amount'" v-model="amount" :disabled="loading" inputmode="decimal" />
+          </div>
         </template>
         <template v-else>
-          <p v-if="transfer.status !== 'preview' || uncertain" class="break-all font-mono text-xs">{{ transfer.id }}</p>
-          <p>{{ uncertain ? t('rgb11Transfer.confirmUnverified') : displayStatus(transfer.status) }}</p>
+          <div class="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-zinc-800 bg-zinc-900 p-3">
+            <p role="status" class="min-w-0 flex-1 basis-48 text-sm font-medium">
+              {{ uncertain ? t('rgb11Transfer.confirmUnverified') : displayStatus(transfer.status) }}
+            </p>
+            <p class="shrink-0 text-sm text-muted-foreground">
+              {{ t('common.fee') }} <span class="ml-1 font-medium tabular-nums text-foreground">{{ transfer.fee_sats }} sats</span>
+            </p>
+          </div>
           <p v-for="warning in transfer.warning_codes" :key="warning" class="text-xs text-amber-400">{{ displayWarning(warning) }}</p>
-          <div v-for="(recipient, index) in transfer.recipients" :key="index" class="space-y-2 rounded border p-2">
-            <p class="break-all text-xs">{{ recipient.destination }}</p>
-            <p>{{ recipient.amount.amount }} · {{ recipient.amount.asset }}</p>
-            <Textarea v-if="transfer.needs_receipts" v-model="receipts[index]" :disabled="loading" :placeholder="t('rgb11Transfer.recipientSummary', {number: index + 1})" class="font-mono text-xs" />
+          <ul class="space-y-3">
+            <li v-for="(recipient, index) in transfer.recipients" :key="index"
+              class="min-w-0 space-y-3 rounded-lg border border-zinc-800 p-3">
+              <div class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                <span class="text-sm text-muted-foreground">{{ t('rgb11Transfer.recipientNumber', { number: index + 1 }) }}</span>
+              </div>
+              <dl class="space-y-2 text-sm">
+                <div>
+                  <dt class="text-muted-foreground">{{ t('tools.txConfirm.asset') }}</dt>
+                  <dd class="break-all font-mono">{{ recipient.amount.asset }}</dd>
+                </div>
+                <div>
+                  <dt class="text-muted-foreground">{{ t('rgb11Invoice.amount') }}</dt>
+                  <dd class="break-all font-semibold tabular-nums">{{ recipient.amount.amount }}</dd>
+                </div>
+                <div>
+                  <dt class="text-muted-foreground">{{ t('tools.txConfirm.to') }}</dt>
+                  <dd class="break-all font-mono">{{ recipient.destination }}</dd>
+                </div>
+              </dl>
+              <div v-if="transfer.needs_receipts" class="space-y-2">
+                <Label :for="fieldId + '-receipt-' + index" class="text-xs">
+                  {{ t('rgb11Transfer.recipientSummary', { number: index + 1 }) }}
+                </Label>
+                <Textarea :id="fieldId + '-receipt-' + index" v-model="receipts[index]" :disabled="loading"
+                  spellcheck="false" rows="2" class="min-h-0 bg-zinc-900 font-mono text-xs" />
+              </div>
+            </li>
+          </ul>
+          <div v-if="transfer.can_export || files.length" class="flex flex-wrap gap-2">
+            <Button v-if="transfer.can_export" variant="outline" size="sm" :disabled="loading" @click="exportTransfer">
+              {{ t('rgb11Transfer.downloadConsignment') }}
+            </Button>
+            <Button v-for="item in files" :key="item.recipient_index + '-' + item.file.name" variant="outline" size="sm"
+              :title="item.file.name" @click="saveExportFile(item.file)">
+              {{ t('rgb11Transfer.recipientNumber', { number: item.recipient_index + 1 }) }} · .{{ item.file.name.split('.').at(-1) }}
+            </Button>
           </div>
-          <p>{{ t('common.fee') }}: {{ transfer.fee_sats }} sats</p>
-          <p v-if="transfer.tx_id && transfer.status !== 'preview'" class="break-all font-mono text-xs">{{ transfer.tx_id }}</p>
-          <Button v-if="transfer.can_export" variant="outline" :disabled="loading" @click="exportTransfer">{{ t('rgb11Transfer.downloadConsignment') }}</Button>
-          <div v-for="(item, index) in files" :key="index">
-            <Button variant="outline" @click="saveExportFile(item.file)">{{ item.recipient_index + 1 }} · {{ item.file.name }}</Button>
-          </div>
-          <Button v-if="transfer.can_confirm" :disabled="loading" class="w-full" @click="confirm">{{ t('common.confirm') }}</Button>
-          <Button v-if="transfer.can_cancel && !uncertain" :disabled="loading" variant="outline" @click="cancel">{{ t('common.cancel') }}</Button>
         </template>
-        <p v-if="message" role="alert" class="break-all text-xs text-red-400">{{ message }}</p>
+        <details v-if="(!transfer && asset?.contract_id) || (transfer && (transfer.status !== 'preview' || uncertain))"
+          class="min-w-0 rounded-lg border border-zinc-800 px-3 py-2 text-sm text-muted-foreground">
+          <summary class="cursor-pointer font-medium">{{ t('rgb11Transfer.transferDetails') }}</summary>
+          <dl class="mt-2 space-y-2 text-xs">
+            <div v-if="!transfer && asset?.contract_id">
+              <dt>{{ t('rgb11Transfer.contractId') }}</dt>
+              <dd class="break-all font-mono">{{ asset.contract_id }}</dd>
+            </div>
+            <div v-if="transfer && (transfer.status !== 'preview' || uncertain)">
+              <dt>{{ t('rgb11Transfer.transferId') }}</dt>
+              <dd class="break-all font-mono">{{ transfer.id }}</dd>
+            </div>
+            <div v-if="transfer?.tx_id && transfer.status !== 'preview'">
+              <dt>{{ t('rgb11Transfer.txId') }}</dt>
+              <dd class="break-all font-mono">{{ transfer.tx_id }}</dd>
+            </div>
+          </dl>
+        </details>
+        <p v-if="message" role="alert" class="break-all text-sm text-red-400">{{ message }}</p>
+        <Button v-if="!transfer" :disabled="loading || !destination.trim() || !account.rgb11WriteAllowed"
+          class="w-full" @click="prepare">{{ t('rgb11Transfer.prepare') }}</Button>
+        <div v-else-if="transfer.can_confirm || (transfer.can_cancel && !uncertain)"
+          class="flex justify-end gap-2 border-t border-zinc-800 pt-3">
+          <Button v-if="transfer.can_cancel && !uncertain" variant="outline" :disabled="loading" @click="cancel">{{ t('common.cancel') }}</Button>
+          <Button v-if="transfer.can_confirm" :disabled="loading" class="flex-1 sm:flex-none" @click="confirm">{{ t('common.confirm') }}</Button>
+        </div>
       </div>
     </DialogContent>
   </Dialog>
 </template>
 <script setup lang="ts">
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import walletManager from '@/utils/sat20'
 import { saveExportFile } from '@/utils/accountManagement'
@@ -58,13 +118,15 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-const props = defineProps<{asset: {key?: string; asset?: string; contract_id?: string} | null; resumeTransferId?: string; inflation?: boolean}>()
+const props = defineProps<{asset: {key?: string; asset?: string; contract_id?: string; label?: string} | null; resumeTransferId?: string; inflation?: boolean}>()
 const emit = defineEmits<{(event: 'completed'): void}>()
 const isOpen = defineModel('open', {type: Boolean})
 const {t, te} = useI18n()
 const account = useAccountManagementStore()
 const wallet = useWalletStore()
 const mode = ref('address')
+const addressMode = computed(() => mode.value === 'address' && !props.inflation)
+const fieldId = useId()
 const destination = ref('')
 const amount = ref('')
 const transfer = ref<RGBTransferView | null>(null)

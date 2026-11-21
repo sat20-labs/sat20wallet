@@ -79,8 +79,10 @@ func runImmediateRecoveryCase(t *testing.T, fixture *templateFixture) {
 		require.NoError(t, json.Unmarshal(guardianRaw, &guardian))
 		guardianShare, err := account.DecryptGuardianShare(guardian, guardianPrivate)
 		require.NoError(t, err)
+		questions, err := account.OpenRecoveryKnowledge(*loaded, pkg.UserShare)
+		require.NoError(t, err)
 		dkvsShare, err := account.RecoverDKVSShare(loaded.DKVSShareCapsule,
-			loaded.KnowledgeBundle, e2eKnowledgeAnswers())
+			questions, e2eKnowledgeAnswers())
 		require.NoError(t, err)
 		restored, secret, err := account.RecoverAccount(loaded.Envelope, dkvsShare, guardianShare)
 		require.NoError(t, err)

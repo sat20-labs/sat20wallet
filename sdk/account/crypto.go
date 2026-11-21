@@ -92,6 +92,63 @@ func openSealed(key []byte, nonceText, ciphertextText string, aad []byte) ([]byt
 	return plaintext, nil
 }
 
+func recoveryKnowledgeKey(locator Locator, share RecoveryShare) ([]byte, error) {
+	if err := ValidateLocator(locator); err != nil {
+		return nil, err
+	}
+	raw, err := validateShare(share)
+	if err != nil {
+		return nil, err
+	}
+	defer zero(raw)
+	total := uint8(2)
+	if locator.RecoveryMode == RecoveryMode2Of3 {
+		total = 3
+	}
+	if share.Role != ShareRoleUser || share.PackageID != locator.PackageID || share.Total != total {
+		return nil, ErrInvalidShare
+	}
+	return hkdfSHA256(raw[:accountSecretSize], []byte(locator.PackageID), []byte("sat20-account-recovery-knowledge-v1"), 32), nil
+}
+
+func sealRecoveryKnowledge(locator Locator, share RecoveryShare, knowledge KnowledgeRecoveryBundle, random io.Reader) (EncryptedBlob, error) {
+	key, err := recoveryKnowledgeKey(locator, share)
+	if err != nil {
+		return EncryptedBlob{}, err
+	}
+	defer zero(key)
+	plain, err := encodeRecoveryKnowledge(knowledge)
+	if err != nil {
+		return EncryptedBlob{}, err
+	}
+	defer zero(plain)
+	nonce, ciphertext, err := sealBytes(key, plain, locatorAAD(locator, "sat20-account-recovery-knowledge-aad-v1"), random)
+	if err != nil {
+		return EncryptedBlob{}, err
+	}
+	return EncryptedBlob{Algorithm: "aes-256-gcm", Nonce: nonce, Ciphertext: ciphertext}, nil
+}
+
+// OpenRecoveryKnowledge authenticates the complete question bundle before use.
+func OpenRecoveryKnowledge(pkg RecoveryPackage, share RecoveryShare) (KnowledgeRecoveryBundle, error) {
+	locator := pkg.Envelope.Locator
+	if err := validateEncryptedBlob(pkg.SealedKnowledge); err != nil {
+		return KnowledgeRecoveryBundle{}, err
+	}
+	key, err := recoveryKnowledgeKey(locator, share)
+	if err != nil {
+		return KnowledgeRecoveryBundle{}, err
+	}
+	defer zero(key)
+	plain, err := openSealed(key, pkg.SealedKnowledge.Nonce, pkg.SealedKnowledge.Ciphertext,
+		locatorAAD(locator, "sat20-account-recovery-knowledge-aad-v1"))
+	if err != nil {
+		return KnowledgeRecoveryBundle{}, err
+	}
+	defer zero(plain)
+	return decodeRecoveryKnowledge(locator.PackageID, plain)
+}
+
 func encryptBackup(secret []byte, locator Locator, backup Backup, random io.Reader) (EncryptedBlob, error) {
 	plaintext, err := json.Marshal(backup)
 	if err != nil {

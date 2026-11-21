@@ -62,6 +62,18 @@ func (p *Manager) accountRecoveryConfigured() bool {
 	return p.accountProfile != nil && p.accountProfile.RecoveryConfigured
 }
 
+// An unlocked mnemonic wallet can discover its root before creating a profile.
+func (p *Manager) accountDiscoveryUnlockedLocked() bool {
+	if p.wallet == nil || p.accountPassword == "" {
+		return false
+	}
+	if p.accountProfile != nil {
+		return len(p.accountSecret) == 32
+	}
+	root := p.firstWalletLocked()
+	return root != nil && root.Type == WALLET_TYPE_MNEMONIC && root.Wallet != nil
+}
+
 // Discovery is an explicit entry/retry operation, not an inactive account's
 // ordinary backup worker. It shares the existing cancellable DKVS lifetime.
 func (p *Manager) startAccountDiscovery() error {
@@ -72,8 +84,7 @@ func (p *Manager) startAccountDiscovery() error {
 		return ErrDKVSPathNotSynced
 	}
 	p.mutex.RLock()
-	unlocked := p.wallet != nil && p.accountProfile != nil &&
-		len(p.accountSecret) == 32 && p.accountPassword != ""
+	unlocked := p.accountDiscoveryUnlockedLocked()
 	p.mutex.RUnlock()
 	if !unlocked {
 		return ErrDKVSPathNotSynced
@@ -99,8 +110,7 @@ func (p *Manager) startAccountRuntime(discover bool) {
 		return
 	}
 	p.mutex.RLock()
-	unlocked := p.wallet != nil && p.accountProfile != nil &&
-		len(p.accountSecret) == 32 && p.accountPassword != ""
+	unlocked := p.accountDiscoveryUnlockedLocked()
 	p.mutex.RUnlock()
 	if !unlocked {
 		return

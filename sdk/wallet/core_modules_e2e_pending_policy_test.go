@@ -93,7 +93,7 @@ func coreReadRGBClosure(t *testing.T, manager *Manager, cfg coreE2EConfig) coreR
 		if entry.Provider != rgb11AccountManagedProviderID {
 			continue
 		}
-		moduleKey, err := account.ManagedModuleKey(profileAccountID, entry.Provider, entry.Scope)
+		moduleKey, err := account.ManagedModuleKey(secret, profileAccountID, entry.Provider, entry.Scope)
 		coreRequire(t, "derive stable RGB module key", err)
 		coreAssert(t, moduleKey == entry.Key, "stable RGB entry has an invalid module key")
 		record, err := client.GetRecordDirect(entry.Key)

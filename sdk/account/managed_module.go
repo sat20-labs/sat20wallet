@@ -77,7 +77,7 @@ func decodeManagedModule(value []byte) (ManagedModule, error) {
 }
 
 func SealManagedModule(secret []byte, accountID, network string, value ManagedModule, randomSource io.Reader) ([]byte, error) {
-	key, err := ManagedModuleKey(accountID, value.Provider, value.Scope)
+	key, err := ManagedModuleKey(secret, accountID, value.Provider, value.Scope)
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +99,7 @@ func OpenManagedModule(secret []byte, accountID, network, key string, value []by
 	if err != nil {
 		return ManagedModule{}, err
 	}
-	expected, err := ManagedModuleKey(accountID, result.Provider, result.Scope)
+	expected, err := ManagedModuleKey(secret, accountID, result.Provider, result.Scope)
 	if err != nil || expected != key {
 		return ManagedModule{}, ErrRecoveryFailed
 	}

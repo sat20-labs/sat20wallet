@@ -54,6 +54,14 @@ func (p *Manager) prepareAccountBaseline(ctx context.Context) (base *accountBase
 	if err != nil {
 		return nil, err
 	}
+	if ctx != nil {
+		readCtx, cancel := store.manager.requestScope(ctx)
+		store.readCtx = readCtx
+		defer func() {
+			store.readCtx = nil
+			cancel()
+		}()
+	}
 	wrapperKey, err := accountRootWrapperKey(snapshot.root)
 	if err != nil {
 		return nil, err
@@ -130,6 +138,26 @@ func (p *Manager) prepareAccountBaseline(ctx context.Context) (base *accountBase
 		index, err = account.OpenManagedIndex(snapshot.secret, snapshot.profile.AccountID, snapshot.network, remoteIndex.Value)
 		if err != nil {
 			return nil, err
+		}
+	} else if snapshot.profile.StorageMode == AccountStorageTemporary && !snapshot.profile.InitialBackupPending {
+		p.mutex.RLock()
+		local, readErr := p.readAccountLocal(snapshot.profile.AccountID, "account", indexKey)
+		p.mutex.RUnlock()
+		if readErr != nil {
+			return nil, readErr
+		}
+		if local == nil || local.Captured == 0 || len(local.Value) == 0 {
+			return nil, ErrAccountManagedDataImportIncomplete
+		}
+		// Restart normal backup with the complete local directory. A prior
+		// attempt may already have cleared the expired record's write baseline.
+		index, err = account.OpenManagedIndex(snapshot.secret, snapshot.profile.AccountID, snapshot.network, local.Value)
+		if err != nil {
+			return nil, err
+		}
+		wallets := accountEntryMap(index)["wallets\x00"+AccountManagedDataGlobalScope]
+		if wallets.Key == "" || wallets.Deleted {
+			return nil, ErrAccountManagedDataImportIncomplete
 		}
 	}
 	readyLater := !wasReady && !(remoteIndex == nil && snapshot.profile.InitialBackupPending)

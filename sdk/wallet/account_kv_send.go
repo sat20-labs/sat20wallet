@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"time"
 
@@ -43,11 +44,42 @@ func (p *Manager) captureAccountValue(accountID, provider, scope, key, codec str
 
 func (p *Manager) publishAccountValue(store *dkvsStore, value *accountLocalKV,
 	root common.Wallet, profile accountManagementProfile) error {
+	return p.sendAccountValue(store, value, root, profile, false)
+}
+
+func (p *Manager) sendAccountValue(store *dkvsStore, value *accountLocalKV,
+	root common.Wallet, profile accountManagementProfile, renew bool) error {
 	if value == nil || value.Captured == 0 || value.Key == "" || !value.Deleted && len(value.Value) == 0 {
 		return fmt.Errorf("account snapshot is not captured")
 	}
 	if err := p.pendingAccountSend(store, value.Key); err != nil {
 		return err
+	}
+	ttl := profile.RecordTTL
+	if profile.StorageMode == AccountStorageTemporary && !value.Deleted {
+		ctx := store.readCtx
+		if ctx == nil {
+			ctx = store.client.requestContext()
+		}
+		config, err := store.storageConfig(ctx, store.client)
+		if err != nil {
+			return err
+		}
+		if err := store.manager.validateVerificationEndpoint(store.client, config.EndpointID); err != nil {
+			return err
+		}
+		if !config.FreeLocal.Enabled || config.FreeLocal.MaxTTL == 0 {
+			return dkvsindexer.ErrFreeLocalDisabled
+		}
+		ttl = min(ttl, config.FreeLocal.MaxTTL)
+	}
+	var issueHeight uint64
+	if renew {
+		issueHeight, _ = store.manager.verificationHeight()
+		// A smaller policy or a reorg must never shorten a valid lease.
+		if estimatedDKVSExpiryHeight(issueHeight, ttl) <= dkvsindexer.RecordExpiryHeight(value.Baseline) {
+			return nil
+		}
 	}
 	source := store.manager.sessionKey(store.client, "write")
 	store.manager.mu.Lock()
@@ -115,9 +147,75 @@ func (p *Manager) publishAccountValue(store *dkvsStore, value *accountLocalKV,
 			return nil, err
 		}
 		mutation.Tombstone = value.Deleted
+		mutation.Policy.TTL = ttl
+		mutation.IssueHeight = issueHeight
 		return []dkvsValueMutation{mutation}, nil
 	}, dkvsOutboxOrigin{Key: value.Key, Domain: accountKVOutboxDomain, Generation: value.Captured})
 	return err
+}
+
+// The normal sync has verified the current receipts on the bound node.
+// Renew confirmed live values with the same ciphertext and CAS baseline.
+func (p *Manager) renewAccountCache(store *dkvsStore, snapshot *accountManagementSyncSnapshot, failedKeys map[string]bool) error {
+	if snapshot.profile.StorageMode != AccountStorageTemporary {
+		return nil
+	}
+	height, known := store.manager.verificationHeight()
+	if !known {
+		return ErrDKVSVerificationHeightRequired
+	}
+	p.mutex.RLock()
+	// Sync may already have imported a new wallet catalog. Renewal uses
+	// current confirmed rows and pins the recovery target, not the catalog.
+	profile := p.accountProfile
+	if profile == nil || !profile.RecoveryConfigured || profile.Activation != nil ||
+		p.dkvs != store.manager || _chain != snapshot.network ||
+		profile.AccountID != snapshot.profile.AccountID || profile.RootFingerprint != snapshot.profile.RootFingerprint ||
+		profile.Location != snapshot.profile.Location || profile.PackageID != snapshot.profile.PackageID ||
+		profile.StorageMode != snapshot.profile.StorageMode || profile.RecordTTL != snapshot.profile.RecordTTL ||
+		profile.AutopayContract != snapshot.profile.AutopayContract ||
+		p.accountPassword != snapshot.password || !bytes.Equal(p.accountSecret, snapshot.secret) {
+		p.mutex.RUnlock()
+		return errAccountSnapshotChanged
+	}
+	client, err := store.manager.primaryClient()
+	if err != nil || client != store.client {
+		p.mutex.RUnlock()
+		return errAccountSnapshotChanged
+	}
+	controls, err := p.accountControlKeysLocked()
+	if err != nil {
+		p.mutex.RUnlock()
+		return err
+	}
+	values, err := p.listAccountLocal(snapshot.profile.AccountID)
+	p.mutex.RUnlock()
+	if err != nil {
+		return err
+	}
+	var failures []error
+	for _, value := range values {
+		if failedKeys[value.Key] || value.Deleted || value.Restoring || value.Conflict || value.Generation != value.Confirmed ||
+			value.Provider == "account" && !controls[value.Key] || !accountStorageConfirmed(value, &snapshot.profile) {
+			continue
+		}
+		record := value.Baseline
+		expiry := dkvsindexer.RecordExpiryHeight(record)
+		if !bytes.Equal(value.Value, record.Value) || expiry <= height ||
+			record.IssueHeight >= height || expiry-height > max(uint64(1), record.TTL/4) {
+			continue
+		}
+		if err := p.sendAccountValue(store, value, snapshot.root, snapshot.profile, true); err != nil {
+			if err = p.stopAccountDB(err); accountSyncInterrupted(err) {
+				return err
+			}
+			if value.Provider != "account" {
+				err = &accountModuleError{provider: value.Provider, scope: value.Scope, cause: err}
+			}
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
 }
 
 // Equal content can still need a storage-policy migration. Reuse the exact

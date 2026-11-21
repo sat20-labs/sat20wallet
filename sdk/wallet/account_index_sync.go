@@ -239,14 +239,14 @@ func (p *Manager) primeAccountImports(index account.ManagedIndex) (bool, error) 
 	return needed, accountDBWriteError(batch.Flush())
 }
 
-func accountEntry(accountID, provider, scope string) (account.ManagedEntry, error) {
+func accountEntry(secret []byte, accountID, provider, scope string) (account.ManagedEntry, error) {
 	entry := account.ManagedEntry{Provider: provider, Scope: scope, Codec: "v1"}
 	var err error
 	if provider == "wallets" && scope == AccountManagedDataGlobalScope {
 		entry.Key, err = dkvsindexer.AccountPersonalKey(accountID, accountManagedStatePath)
-		entry.Codec = "wallets-v1"
+		entry.Codec = "wallets-v2"
 	} else {
-		entry.Key, err = account.ManagedModuleKey(accountID, provider, scope)
+		entry.Key, err = account.ManagedModuleKey(secret, accountID, provider, scope)
 	}
 	if err == nil {
 		_, err = dkvsindexer.ParseKey(entry.Key)
@@ -257,11 +257,11 @@ func accountEntry(accountID, provider, scope string) (account.ManagedEntry, erro
 // The account has explicitly learned this key from its validated directory or
 // local provider identity. Remember its canonical collection on the actual
 // store; WaitReady then verifies and persists that source's subscription.
-func (s *dkvsStore) rememberAccountModule(accountID string, entry account.ManagedEntry) error {
+func (s *dkvsStore) rememberAccountModule(secret []byte, accountID string, entry account.ManagedEntry) error {
 	if s == nil || s.manager == nil || s.client == nil {
 		return ErrDKVSPathNotSynced
 	}
-	expected, err := accountEntry(accountID, entry.Provider, entry.Scope)
+	expected, err := accountEntry(secret, accountID, entry.Provider, entry.Scope)
 	if err != nil {
 		return err
 	}
@@ -277,7 +277,7 @@ func (s *dkvsStore) rememberAccountModule(accountID string, entry account.Manage
 }
 
 func (p *Manager) publishAccountIndex(store *dkvsStore, snapshot *accountManagementSyncSnapshot,
-	remote *dkvsValue, index account.ManagedIndex) error {
+	remote *dkvsValue, index account.ManagedIndex, failedKeys map[string]bool) error {
 	key, err := account.ManagedIndexKey(snapshot.profile.AccountID)
 	if err != nil {
 		return err
@@ -314,6 +314,11 @@ func (p *Manager) publishAccountIndex(store *dkvsStore, snapshot *accountManagem
 			}
 		}
 	}
+	if remote == nil && snapshot.profile.StorageMode == AccountStorageTemporary {
+		// Expiry removes the cache entry. It does not delete the entries
+		// from the last verified directory.
+		remoteIndex = base
+	}
 	index, err = mergeAccountIndex(base, localIndex, remoteIndex)
 	if err != nil {
 		return err
@@ -337,6 +342,9 @@ func (p *Manager) publishAccountIndex(store *dkvsStore, snapshot *accountManagem
 		if value.Provider == "account" || value.Key == "" || value.Confirmed == 0 && !value.Deleted {
 			continue
 		}
+		if !value.Deleted && failedKeys[value.Key] {
+			continue
+		}
 		id := value.Provider + "\x00" + value.Scope
 		if existing, ok := entries[id]; ok && existing.Deleted && !newScopes[id] {
 			continue
@@ -348,7 +356,7 @@ func (p *Manager) publishAccountIndex(store *dkvsStore, snapshot *accountManagem
 	for _, entry := range entries {
 		index.Entries = append(index.Entries, entry)
 	}
-	index, err = account.NormalizeManagedIndex(snapshot.profile.AccountID, index)
+	index, err = account.NormalizeManagedIndex(snapshot.secret, snapshot.profile.AccountID, index)
 	if err != nil {
 		return err
 	}

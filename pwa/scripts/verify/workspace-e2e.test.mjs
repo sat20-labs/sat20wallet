@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { createServer } from 'node:net'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { buildCommand, buildGroups, buildPlan, checkSDKNodePorts, configureStages, isLoopbackPeerAddr, parseArguments, parsePort, sdkNodePorts, selectStages, selectTests, shouldStopBatchAfterGroup, spawnStage, stageCatalog, summarizeGoJSON, workspaceRoot } from './workspace-e2e.mjs'
+import { buildCommand, buildGroups, buildPlan, captureGoOverlayInputs, checkSDKNodePorts, configureStages, isLoopbackPeerAddr, parseArguments, parsePort, sdkNodePorts, selectStages, selectTests, shouldStopBatchAfterGroup, spawnStage, stageCatalog, summarizeGoJSON, summarizeGoPhases, workspaceRoot } from './workspace-e2e.mjs'
 
 const wrapperPath = fileURLToPath(new URL('./workspace-e2e.mjs', import.meta.url))
 const makePrivateDir = () => {
@@ -14,6 +14,13 @@ const makePrivateDir = () => {
   chmodSync(dir, 0o700)
   return dir
 }
+
+test('RGB cross-layer accepts a checkout build and requires a valid explicit overlay', () => {
+  assert.equal(captureGoOverlayInputs({ GOFLAGS: '-mod=readonly' }), null)
+  for (const GOFLAGS of ['-overlay', '-overlay=', '-overlay relative.json']) {
+    assert.throws(() => captureGoOverlayInputs({ GOFLAGS }), /overlay path must be absolute/)
+  }
+})
 
 test('stage commands contain one Go test verb before their flags and package', () => {
   for (const stage of stageCatalog) {
@@ -29,8 +36,7 @@ test('stage commands contain one Go test verb before their flags and package', (
     ['TestSDKPWARealRegtestWalletBasicAndBiometricBrowser']))[0]
   assert.ok(basic.steps.filter(step => step.purpose === 'prerequisite').every(step => !flags(step).length))
   assert.deepEqual(flags(basic.steps.at(-1)), ['-tags=pwa'])
-  const guardian = buildGroups(selectStages(['pwa-guardian-2of3']))[0]
-  assert.deepEqual(flags(guardian.steps.at(-1)), ['-tags=pwa,guardian'])
+  assert.deepEqual(flags(selectStages(['pwa-guardian-2of3'])[0]), ['-tags=pwa,guardian'])
 })
 
 test('default catalog contains only real local-chain entry points', () => {
@@ -76,24 +82,22 @@ test('only shared setup errors stop later independent groups', () => {
   assert.equal(shouldStopBatchAfterGroup({ cleanupError: 'environment cleanup failed' }), true)
 })
 
-test('dependent return case includes its send; unrelated cases get distinct preparation groups', () => {
+test('Bitcoin asset cases share one preparation and the return follows its send', () => {
   const stages = selectTests(selectStages(['pwa-canonical']), [
     'TestSDKPWARealRegtestRunesPremineReturnBrowser', 'TestSDKPWARealRegtestBitcoinFundsSendBrowser',
   ])
   const groups = buildGroups(stages)
-  assert.equal(groups.length, 2)
+  assert.equal(groups.length, 1)
   const steps = groups[0].steps.map(step => step.id)
   assert.deepEqual(steps.slice(0, 3), [
     'TestSDKPWARealRegtestNodeReadiness', 'TestSDKPWARealRegtestFreshAccountPreparation',
     'TestSDKPWARealRegtestL1AssetPreparation',
   ])
   assert.deepEqual(steps.slice(3), [
+    'TestSDKPWARealRegtestBitcoinFundsSendBrowser',
     'TestSDKPWARealRegtestRunesDecimalSendBrowser', 'TestSDKPWARealRegtestRunesPremineReturnBrowser',
   ])
-  assert.equal(groups[0].steps.at(-2).purpose, 'prerequisite')
-  assert.equal(groups[0].steps.at(-1).purpose, 'case')
-  assert.notEqual(groups[0].id, groups[1].id)
-  assert.deepEqual(groups[1].steps.slice(0, 3).map(step => step.id), steps.slice(0, 3))
+  assert.deepEqual(groups[0].steps.slice(3).map(step => step.purpose), ['case', 'prerequisite', 'case'])
 })
 
 test('SDK WASM gets channel preparation without consuming the independent PWA channel case', () => {
@@ -117,7 +121,7 @@ test('SDK WASM gets channel preparation without consuming the independent PWA ch
   assert.equal(groups.flatMap(group => group.steps).filter(step => step.id === opening).length, 2)
 })
 
-test('CSV force close uses its own opening and BTC splice preparation group', () => {
+test('CSV force close runs at the end of the BTC channel group', () => {
   const opening = 'TestSDKPWARealRegtestChannelOpeningOrReadyBrowser'
   const splice = 'TestSDKPWARealRegtestChannelSplicingBrowser'
   const forceClose = 'TestSDKPWARealRegtestForceCloseCSVBrowser'
@@ -128,21 +132,20 @@ test('CSV force close uses its own opening and BTC splice preparation group', ()
   assert.deepEqual(steps.slice(-3).map(step => step.id), [opening, splice, forceClose])
   assert.deepEqual(steps.slice(-3).map(step => step.purpose), ['prerequisite', 'prerequisite', 'case'])
   assert.match(groups[0].isolation, /fresh local Bitcoin Core/)
+
+  const all = buildGroups(selectStages(['pwa-canonical', 'pwa-force-close-csv']))
+  const channel = all.find(group => group.selectedTests.includes(splice))
+  assert.equal(channel.steps.at(-1).id, forceClose)
+  assert.deepEqual(channel.steps.filter(step => step.id === opening).map(step => step.purpose), ['case'])
+  assert.deepEqual(channel.steps.filter(step => step.id === splice).map(step => step.purpose), ['case'])
 })
 
-test('Guardian 2-of-3 recovery gets a fresh real-regtest group with temporary-storage preparation', () => {
+test('Guardian 2-of-3 stays listed as blocked without environment preparation', () => {
   const guardian = 'TestSDKPWARealRegtestGuardianRecoveryBrowser'
   const group = buildGroups(selectStages(['pwa-guardian-2of3']))[0]
   assert.deepEqual(group.selectedTests, [guardian])
-  assert.deepEqual(group.steps.slice(0, 3).map(step => step.id), [
-    'TestSDKPWARealRegtestNodeReadiness', 'TestSDKPWARealRegtestFreshAccountPreparation',
-    'TestSDKPWARealRegtestL1AssetPreparation',
-  ])
-  assert.deepEqual(group.steps.slice(0, 3).map(step => step.purpose), ['prerequisite', 'prerequisite', 'prerequisite'])
-  assert.equal(group.steps.at(-1).id, guardian)
-  assert.equal(group.steps.at(-1).purpose, 'case')
-  assert.doesNotMatch(group.steps.map(step => step.id).join(' '), /ChannelOpeningOrReady|FixedAccountManagement/)
-  assert.match(group.isolation, /fresh local Bitcoin Core/)
+  assert.match(group.blockedReason, /Guardian 2-of-3.*disabled/)
+  assert.deepEqual(group.steps, [])
 })
 
 test('private BTC round trip joins the ordered channel journey without swallowing cases', () => {
@@ -202,6 +205,8 @@ test('--only selects exact known stages in dependency order and rejects missing 
   assert.deepEqual(parseArguments(['--only', 'sdk-assets', 'sdk-node-readiness']).stages.map(stage => stage.id), [
     'sdk-node-readiness', 'sdk-assets',
   ])
+  assert.equal(parseArguments([]).reuseCore, true)
+  assert.equal(parseArguments(['--rebuild-core']).reuseCore, false)
 })
 
 test('--tests selects exact cases in catalog order without rerunning their whole stage', () => {
@@ -221,7 +226,8 @@ test('--tests selects exact cases in catalog order without rerunning their whole
 test('retained or attached environment is rejected even when its URL is loopback', () => {
   for (const key of ['SAT20_REAL_SATOSHINET_ATTACH', 'SAT20_REAL_RECOVERY_FIXTURES',
     'SAT20_REAL_SDK_WALLET_DIR', 'SAT20_REAL_PWA_EXISTING_URL', 'SAT20_REAL_REGTEST_RUNTIME',
-    'SAT20_REAL_L1_INDEXER', 'SAT20_REAL_ESPLORA', 'SAT20_REAL_BITCOIN_DATADIR']) {
+    'SAT20_REAL_L1_INDEXER', 'SAT20_REAL_ESPLORA', 'SAT20_REAL_BITCOIN_DATADIR',
+    'SAT20WALLET_E2E_ARTIFACTS', 'SAT20_REAL_PWA_CORE_BUNDLE']) {
     assert.throws(() => configureStages(stageCatalog, { [key]: '/private/old-state' }), /external or retained state/)
   }
   assert.deepEqual(configureStages(stageCatalog, {}), stageCatalog)
@@ -250,6 +256,24 @@ test('Go JSON result validation rejects skips, failures, and zero-hit selectors'
   assert.deepEqual(summarizeGoJSON('', expected).missing, expected)
   const failed = `${JSON.stringify({ Action: 'fail', Test: 'TestTwo' })}`
   assert.deepEqual(summarizeGoJSON(failed, expected).failed, ['TestTwo'])
+})
+
+test('phase timings count builds, node starts and completed lock waits', () => {
+  const log = (...lines) => lines.map(Output => JSON.stringify({ Action: 'output', Output })).join('\n')
+  const wait = 'waiting for the previous SatoshiNet E2E run and its nodes to exit'
+  assert.deepEqual(summarizeGoPhases(log(wait)), { phases: {}, waitingForLock: true })
+  assert.deepEqual(summarizeGoPhases(log(wait,
+    'e2e-phase: name=runtime_lock_wait elapsed_seconds=3.124\n',
+    'test.go:1: e2e-phase: name=node_plugin_build elapsed_seconds=20.125\n',
+    'test.go:2: e2e-phase: name=node_start elapsed_seconds=1.831\n',
+    'test.go:2: e2e-phase: name=node_start elapsed_seconds=1.421\n')), {
+    waitingForLock: false,
+    phases: {
+      runtime_lock_wait: { count: 1, durationMs: 3124 },
+      node_plugin_build: { count: 1, durationMs: 20125 },
+      node_start: { count: 2, durationMs: 3252 },
+    },
+  })
 })
 
 test('browser port validation preserves standalone default and rejects invalid values', () => {
@@ -319,8 +343,29 @@ test('plan subprocess expands prerequisites without contacting services or requi
   assert.equal(result.status, 0, result.stderr)
   const plan = JSON.parse(result.stdout)
   assert.equal(plan.sharedHistoricalState, false)
+  assert.equal(plan.coreBuild, null)
   assert.equal(plan.groups.length, 1)
   assert.equal(plan.groups[0].steps.length, 2)
+
+  const pwaStages = stageCatalog.filter(stage => stage.id.startsWith('pwa-'))
+  const groups = buildGroups(pwaStages)
+  assert.deepEqual(groups.map(group => [group.id, group.selectedTests.length]), [
+    ['wallet-and-dapp', 3], ['account-recovery-and-renewal', 1], ['bitcoin-assets', 7],
+    ['rgb11-onchain', 3], ['satoshinet-and-btc-channel', 7], ['pos-v2', 1],
+    ['rgb11-cross-layer', 1], ['btc-mining', 1], ['guardian-2of3', 1],
+  ])
+  assert.deepEqual(groups.flatMap(group => group.selectedTests).sort(), pwaStages.flatMap(stage => stage.tests).sort())
+  for (const group of groups.filter(group => !group.blockedReason)) {
+    assert.equal(group.steps.filter(step => step.id === 'TestSDKPWARealRegtestNodeReadiness').length, 1)
+    assert.equal(group.reuseCore, group.id !== 'rgb11-cross-layer')
+  }
+  assert.ok(buildGroups(pwaStages, { reuseCore: false }).every(group => !group.reuseCore))
+  const v2 = groups.find(group => group.id === 'pos-v2')
+  assert.deepEqual(v2.steps.slice(-4).map(step => step.id.replace('TestSDKPWARealRegtest', '')), [
+    'ChannelOpeningOrReadyBrowser', 'ChannelActivationBrowser', 'V2AssetPreparation', 'ChannelV2AssetSplicingBrowser',
+  ])
+  assert.deepEqual(v2.steps.slice(-4).map(step => step.purpose), ['prerequisite', 'prerequisite', 'prerequisite', 'case'])
+
   for (const stage of stageCatalog) {
     const command = buildCommand(stage, { GO: '/private/toolchain/go' })
     assert.equal(command[0], '/private/toolchain/go')

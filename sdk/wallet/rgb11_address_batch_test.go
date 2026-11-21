@@ -194,7 +194,7 @@ func newRGB11SendFixture(t *testing.T, rgb11Data bool) (*Manager, *Manager, *RGB
 		}
 		imported = &RGB11ImportResult{ContractID: issued.ContractID, AssetName: issued.AssetName}
 	} else {
-		contract, readErr := os.ReadFile("../../../rgb11/testvectors/rc1/nia-example.rgba")
+		contract, readErr := os.ReadFile("../../../rgb11/testvectors/rc2/nia-example.rgba")
 		if readErr != nil {
 			t.Fatal(readErr)
 		}

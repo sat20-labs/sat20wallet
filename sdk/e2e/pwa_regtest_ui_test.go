@@ -172,6 +172,7 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 				baselineHash, baselineHeight, readErr := network.Bootstrap.Client.GetBestBlock()
 				require.NoError(t, readErr)
 				baselineBlock := blockAtHeight(t, network.Bootstrap, baselineHeight)
+				requireE2EAccountWrite(t, a)
 				submitted := time.Now()
 				tx, sendErr := a.SendAssets_SatsNet(a.GetWallet().GetAddress(), wallet.PLAIN_ASSET.String(), "10000", nil)
 				require.NoError(t, sendErr)
@@ -221,6 +222,7 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 	}
 	if rgbCrossLayer {
 		if os.Getenv("SAT20_E2E_LOCAL_REAL") == "1" && os.Getenv("SAT20_REAL_SATOSHINET_ATTACH") == "" && currentHeight < sdkPWARegtestPOSV2ActivationHeight-1 {
+			attachRGB11RegtestWallet(t, ordinary1, network)
 			_, err := activateSDKPWARegtestPOSV2(t, t.Context(), network, ordinary1, sdkPWARegtestPOSV2ActivationHeight)
 			require.NoError(t, err)
 		}
@@ -234,7 +236,8 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 		currentHeight = height
 		t.Logf("RGB post-activation tip: bootstrap/core height=%d hash=%s", height, tip)
 	}
-	if feature == "account-usage" && os.Getenv("SAT20_REAL_PWA_USAGE_CASE") != sdkPWARegtestGuardianRecoveryCase {
+	usageCase := os.Getenv("SAT20_REAL_PWA_USAGE_CASE")
+	if feature == "account-usage" && (usageCase == "" || usageCase == sdkPWARegtestPaidAccountUsageCase) {
 		prepareSDKPWARegtestAccountUsageFunding(t, ordinary1, network, mine)
 	}
 	baselineHash, baselineHeight, err := network.Bootstrap.Client.GetBestBlock()
@@ -510,13 +513,17 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 	}
 	var rgbSender, rgbReceiver map[string]string
 	var directSender, directReceiver map[string]string
-	if feature == "rgb" {
-		// Keep old account-0 intents intact. Independent RGB journeys use
-		// fixed authorized scopes; an unresolved scope fails instead of rotating.
+	rgbManual := feature == "rgb" || feature == "rgb-ifa-inflation"
+	rgbDirect := feature == "rgb" || feature == "rgb-address"
+	if rgbManual || rgbDirect {
 		for i, manager := range []*wallet.Manager{ordinary1, ordinary2} {
 			_, err := manager.RecoverAccountManagementFromRootMnemonic(ctx, seeds[[]string{"ordinary-1", "ordinary-2"}[i]], "regtest-acceptance-only")
 			require.NoError(t, err, "synchronize existing RGB account scopes before selecting acceptance actors")
 		}
+	}
+	if rgbManual {
+		// Keep old account-0 intents intact. Independent RGB journeys use
+		// fixed authorized scopes; an unresolved scope fails instead of rotating.
 		original := make([]*rgb11wallet.RGB11State, 2)
 		for i, manager := range []*wallet.Manager{ordinary1, ordinary2} {
 			original[i], err = manager.GetRGB11State()
@@ -554,7 +561,7 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 			require.Equal(t, original[i].Reservations, preserved.Reservations, "account-0 reservations must remain intact")
 		}
 	}
-	if feature == "rgb" {
+	if rgbDirect {
 		// Direct is root-only. Do not reuse account 0 with unfinished history.
 		runID := fmt.Sprintf("pwa-direct-%d", time.Now().UnixNano())
 		directSender = sdkPWARegtestSyntheticIdentity(t, runID+"-sender")
@@ -728,6 +735,8 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 		waitRGB11RegtestPeerChannelReady(t, ordinary2, network, privateChannelID)
 	}
 	if feature == "l1-brc-balance" && os.Getenv("SAT20_E2E_LOCAL_REAL") == "1" {
+		attachRGB11RegtestWallet(t, ordinary1, network)
+		requireE2EAccountWrite(t, ordinary1)
 		prepareSDKPWARegtestBRC20BalanceAsset(t, ordinary1, mine)
 	}
 	// Capture the browser baseline after this case has prepared its real funds.
@@ -856,7 +865,11 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 		fixture["walletFixture"].(map[string]any)["recipient"] = actorB
 		if feature == "rgb" {
 			fixture["walletFixture"].(map[string]any)["rgbProxy"] = startPwaRGBProxy(t)
+		}
+		if rgbManual {
 			fixture["walletFixture"].(map[string]any)["rgbWallets"] = map[string]any{"sender": rgbSender, "recipient": rgbReceiver}
+		}
+		if rgbDirect {
 			fixture["walletFixture"].(map[string]any)["directWallets"] = map[string]any{"sender": directSender, "recipient": directReceiver}
 		}
 		fixture["walletFixture"].(map[string]any)["control_url"] = controller
@@ -1132,8 +1145,13 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 		if feature == "rgb-cancel-diagnostic" {
 			cases = cases[7:8]
 		}
+		const ifa = "RGB PWA: IFA issue and inflation through actual forms"
+		const direct = "RGB PWA: UDA direct transfer pending status and confirmed receipt"
+		if feature == "rgb" {
+			cases = []string{"RGB PWA: NIA manual batch review receipt cancellation and pending resume", ifa, direct}
+		}
 		if feature == "rgb-ifa-inflation" {
-			cases = []string{"RGB PWA: consume IFA inflation rights and confirm the added supply"}
+			cases = []string{ifa}
 		}
 		if feature == "rgb-cross-layer" {
 			cases = []string{
@@ -1142,7 +1160,7 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 			}
 		}
 		if feature == "rgb-address" {
-			cases = []string{"RGB PWA: direct-address transfer waits for ACK and confirms conserved balances"}
+			cases = []string{direct}
 		}
 		runSDKPWARegtestBrowserGroup(t, pwa, configPath, fixturePath, evidenceDir, "wallet-rgb", cases)
 		return
@@ -1335,7 +1353,9 @@ func runSDKPWARegtestBrowserGroup(t *testing.T, pwa, configPath, fixturePath, ev
 	command.Dir = pwa
 	command.Stdout = logFile
 	command.Stderr = logFile
+	browserDone := e2ePhase(t, "pwa_browser")
 	err = command.Run()
+	browserDone()
 	require.NoError(t, logFile.Close())
 	require.NoError(t, err, "regtest %s PWA runner failed; private JSON log: %s", group, logPath)
 	t.Logf("regtest %s PWA runner exit=0; private JSON log: %s", group, logPath)

@@ -94,7 +94,7 @@ type dkvsValueMutation struct {
 }
 type dkvsUpdateBuilder func(current map[string]*dkvsValue, nextSequence map[string]uint64) ([]dkvsValueMutation, error)
 type dkvsStore struct {
-	readCtx context.Context // set only on the foreground import's private store
+	readCtx context.Context // set only on an operation's private store
 	manager *dkvsManager
 	client  *SatsNetDKVSClient
 }
@@ -689,19 +689,19 @@ func (s *dkvsStore) Update(keys []string, builder dkvsUpdateBuilder) ([]*dkvsVal
 	if s == nil || s.manager == nil || s.client == nil {
 		return nil, ErrDKVSPathNotSynced
 	}
-	return s.manager.updateValues(s.client, keys, builder)
+	return s.manager.updateValues(s.readCtx, s.client, keys, builder)
 }
 func (s *dkvsStore) updateWithOutboxOrigin(keys []string, builder dkvsUpdateBuilder, origin dkvsOutboxOrigin) ([]*dkvsValue, error) {
 	if s == nil || s.manager == nil || s.client == nil {
 		return nil, ErrDKVSPathNotSynced
 	}
-	return s.manager.updateValuesWithOrigin(s.client, keys, builder, origin, false)
+	return s.manager.updateValuesWithOrigin(nil, s.client, keys, builder, origin, false)
 }
 func (s *dkvsStore) updateAuthoritativeWithOutboxOrigin(keys []string, builder dkvsUpdateBuilder, origin dkvsOutboxOrigin) ([]*dkvsValue, error) {
 	if s == nil || s.manager == nil || s.client == nil {
 		return nil, ErrDKVSPathNotSynced
 	}
-	return s.manager.updateValuesWithOrigin(s.client, keys, builder, origin, true)
+	return s.manager.updateValuesWithOrigin(nil, s.client, keys, builder, origin, true)
 }
 func (s *dkvsStore) Config() (*AccountFreeLocalPolicy, error) {
 	if s == nil || s.client == nil {
@@ -1096,13 +1096,13 @@ func (m *dkvsManager) putValues(client *SatsNetDKVSClient, values []dkvsValueMut
 		}
 		keys = append(keys, value.Key)
 	}
-	return m.updateValues(client, keys, func(_ map[string]*dkvsValue, _ map[string]uint64) ([]dkvsValueMutation, error) { return values, nil })
+	return m.updateValues(nil, client, keys, func(_ map[string]*dkvsValue, _ map[string]uint64) ([]dkvsValueMutation, error) { return values, nil })
 }
-func (m *dkvsManager) updateValues(client *SatsNetDKVSClient, keys []string, builder dkvsUpdateBuilder) ([]*dkvsValue, error) {
+func (m *dkvsManager) updateValues(ctx context.Context, client *SatsNetDKVSClient, keys []string, builder dkvsUpdateBuilder) ([]*dkvsValue, error) {
 	if len(keys) == 0 {
 		return nil, ErrDKVSPathNotSynced
 	}
-	return m.updateValuesWithOrigin(client, keys, builder, dkvsOutboxOrigin{Key: keys[0]}, false)
+	return m.updateValuesWithOrigin(ctx, client, keys, builder, dkvsOutboxOrigin{Key: keys[0]}, false)
 }
 
 type accountCASGrant struct {
@@ -1140,21 +1140,21 @@ func (m *dkvsManager) accountCASGrant(client *SatsNetDKVSClient) accountCASGrant
 		account: m.ready[accountScope], write: m.ready[scope]}
 }
 
-func (m *dkvsManager) updateValuesWithOrigin(client *SatsNetDKVSClient, keys []string, builder dkvsUpdateBuilder, origin dkvsOutboxOrigin, authoritativeFirst bool) ([]*dkvsValue, error) {
+func (m *dkvsManager) updateValuesWithOrigin(ctx context.Context, client *SatsNetDKVSClient, keys []string, builder dkvsUpdateBuilder, origin dkvsOutboxOrigin, authoritativeFirst bool) ([]*dkvsValue, error) {
 	if m == nil || client == nil || len(keys) == 0 || builder == nil {
 		return nil, ErrDKVSPathNotSynced
 	}
-	if err := m.prepareManagedWrite(client, keys); err != nil {
+	if err := m.prepareManagedWriteContext(ctx, client, keys); err != nil {
 		return nil, err
 	}
 	if authoritativeFirst {
-		if err := m.ensureCurrentSubscription(client); err != nil {
+		if err := m.ensureSubscription(ctx, client); err != nil {
 			return nil, err
 		}
 	}
 	var result []*dkvsValue
 	var pendingReply *DKVSRequestPendingError
-	err := m.runTransport(func() error {
+	err := m.runReadTransport(ctx, func() error {
 		if err := m.requireWritePaths(client, keys); err != nil {
 			return err
 		}
@@ -1163,7 +1163,7 @@ func (m *dkvsManager) updateValuesWithOrigin(client *SatsNetDKVSClient, keys []s
 			grant = m.accountCASGrant(client)
 		}
 		var err error
-		result, err = m.updateValuesCoordinated(client, keys, builder, origin)
+		result, err = m.updateValuesCoordinated(client.withRequestContext(ctx), keys, builder, origin)
 		if pending, ok := err.(*DKVSRequestPendingError); ok && !pending.Committed && !pending.Durable &&
 			pending.RequestID != "" && grant.write != nil && grant.account != nil {
 			if _, direct := pending.Cause.(*freeCASUnavailable); direct && m.accountCASGrant(client) == grant {
@@ -1821,19 +1821,15 @@ func (m *dkvsManager) startWorkerLocked(discover, allowRecheck bool) bool {
 	}
 	m.recheckOnOnline = false
 	stop, done, wake := make(chan struct{}), make(chan struct{}), make(chan struct{}, 1)
-	var requestCtx context.Context
-	var cancelRequests context.CancelFunc
 	if discover {
 		// A new discovery run must verify an earlier root miss against the node.
 		m.rootOnline = nil
-		requestCtx, cancelRequests = context.WithTimeout(context.Background(), accountManagedDataReadyTimeout)
-	} else {
-		requestCtx, cancelRequests = context.WithCancel(context.Background())
 	}
 	m.ready = make(map[string]*byte)
-	m.stop, m.done, m.wake, m.requestCtx, m.cancelRequests, m.stopping = stop, done, wake, requestCtx, cancelRequests, false
+	m.stop, m.done, m.wake, m.stopping = stop, done, wake, false
+	requestCtx := m.requestContextLocked()
 	if discover {
-		go m.runDiscovery(stop, done, wake, m.onlineEpoch, allowRecheck)
+		go m.runDiscovery(requestCtx, stop, done, wake, m.onlineEpoch, allowRecheck)
 	} else {
 		go m.run(stop, done, wake)
 	}
@@ -1842,8 +1838,11 @@ func (m *dkvsManager) startWorkerLocked(discover, allowRecheck bool) bool {
 
 // Each attempt ends its worker. Only a connectivity event can trigger the
 // single follow-up to a cold check that failed while the network was down.
-func (m *dkvsManager) runDiscovery(stop, done, wake chan struct{}, onlineEpoch uint64, allowRecheck bool) {
-	err := m.owner.refreshAccountService(true)
+func (m *dkvsManager) runDiscovery(session context.Context, stop, done, wake chan struct{}, onlineEpoch uint64, allowRecheck bool) {
+	ctx, cancel := context.WithTimeout(session, accountManagedDataReadyTimeout)
+	err := m.owner.refreshAccountService(ctx, true)
+	timedOut := errors.Is(ctx.Err(), context.DeadlineExceeded)
+	cancel()
 	m.setLastSyncError(err)
 	m.notifyStatusCallback()
 	// Pair the activation check with completion: an activation racing this
@@ -1852,15 +1851,10 @@ func (m *dkvsManager) runDiscovery(stop, done, wake chan struct{}, onlineEpoch u
 	m.mu.Lock()
 	profile := m.owner.accountProfile
 	configured := profile != nil && profile.RecoveryConfigured
-	recheck := allowRecheck && !m.stopping && profile != nil && !configured && profile.Activation == nil &&
+	recheck := allowRecheck && !m.stopping && !configured && (profile == nil || profile.Activation == nil) &&
 		errors.Is(err, ErrRootAccountDiscoveryPending) &&
-		(isDKVSNetworkFailure(err) || errors.Is(m.requestCtx.Err(), context.DeadlineExceeded))
-	if m.cancelRequests != nil {
-		m.cancelRequests()
-	}
+		(isDKVSNetworkFailure(err) || timedOut)
 	if configured && !m.stopping && m.done == done && m.owner.accountDBFailure() == nil {
-		// The finite discovery deadline must not expire the activated worker.
-		m.requestCtx, m.cancelRequests = context.WithCancel(context.Background())
 		m.mu.Unlock()
 		m.owner.mutex.RUnlock()
 		m.owner.requestAccountSync()
@@ -1868,7 +1862,7 @@ func (m *dkvsManager) runDiscovery(stop, done, wake chan struct{}, onlineEpoch u
 		return
 	}
 	if m.done == done && !m.stopping {
-		m.stop, m.done, m.wake, m.requestCtx, m.cancelRequests, m.stopping = nil, nil, nil, nil, nil, false
+		m.stop, m.done, m.wake = nil, nil, nil
 		if recheck {
 			if m.onlineEpoch != onlineEpoch {
 				m.startWorkerLocked(true, false)
@@ -1890,17 +1884,18 @@ func (m *dkvsManager) stopAndWait() {
 	}
 	m.mu.Lock()
 	m.recheckOnOnline = false
-	stop, done, cancelRequests := m.stop, m.done, m.cancelRequests
+	stop, done := m.stop, m.done
+	if m.cancelRequests != nil {
+		m.cancelRequests()
+	}
 	if stop == nil {
+		m.requestCtx, m.cancelRequests = nil, nil
 		releaseDKVSManagerRuntime(m)
 		m.mu.Unlock()
 		return
 	}
 	if !m.stopping {
 		m.stopping = true
-		if cancelRequests != nil {
-			cancelRequests()
-		}
 		close(stop)
 	}
 	m.mu.Unlock()
@@ -1932,12 +1927,31 @@ func (m *dkvsManager) requestContext() context.Context {
 		return context.Background()
 	}
 	m.mu.Lock()
-	ctx := m.requestCtx
-	m.mu.Unlock()
-	if ctx == nil {
-		return context.Background()
+	defer m.mu.Unlock()
+	return m.requestContextLocked()
+}
+
+func (m *dkvsManager) requestContextLocked() context.Context {
+	if m.requestCtx == nil {
+		m.requestCtx, m.cancelRequests = context.WithCancel(context.Background())
 	}
-	return ctx
+	return m.requestCtx
+}
+
+func (m *dkvsManager) requestScope(caller context.Context) (context.Context, context.CancelFunc) {
+	session := m.requestContext()
+	if caller == nil {
+		return context.WithCancel(session)
+	}
+	ctx, cancel := context.WithCancel(caller)
+	stop := context.AfterFunc(session, cancel)
+	if session.Err() != nil {
+		cancel()
+	}
+	return ctx, func() {
+		stop()
+		cancel()
+	}
 }
 func (p *Manager) markDKVSStateDirty() {
 	if manager := p.ensureDKVSManager(); manager != nil {
@@ -1952,6 +1966,10 @@ func (m *dkvsManager) sessionKey(client *SatsNetDKVSClient, kind string) string 
 	return kind + "\x00" + client.replicaNamespace + "\x00" + client.Scheme + "://" + client.Host + "/" + client.Proxy + "\x00" + endpoint
 }
 func (m *dkvsManager) prepareManagedWrite(client *SatsNetDKVSClient, keys []string) error {
+	return m.prepareManagedWriteContext(nil, client, keys)
+}
+
+func (m *dkvsManager) prepareManagedWriteContext(ctx context.Context, client *SatsNetDKVSClient, keys []string) error {
 	m.rememberPaths(keys)
 	if err := m.requirePathsReady(client, keys); err != nil && !errors.Is(err, ErrDKVSPathNotSynced) {
 		return err
@@ -1960,7 +1978,7 @@ func (m *dkvsManager) prepareManagedWrite(client *SatsNetDKVSClient, keys []stri
 		return ErrDKVSPathNotSynced
 	}
 	if !m.scopeReady(m.sessionKey(client, "write")) || m.requirePathsReady(client, keys) != nil {
-		if err := m.ensureCurrentSubscription(client); err != nil {
+		if err := m.ensureSubscription(ctx, client); err != nil {
 			return err
 		}
 	}

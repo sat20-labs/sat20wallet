@@ -247,7 +247,7 @@ func NewDKVSDeleteCommand(signer common.Wallet, current *wire.DKVSRecord, issueH
 func (p *SatsNetDKVSClient) DeleteCurrentRecord(signer common.Wallet, key string, issueHeight uint64) (*wire.DKVSRecord, error) {
 	if p != nil && p.manager != nil {
 		writer := p.WithWriteSigner(signer)
-		values, err := p.manager.updateValues(writer, []string{key}, func(current map[string]*dkvsValue, _ map[string]uint64) ([]dkvsValueMutation, error) {
+		values, err := p.manager.updateValues(nil, writer, []string{key}, func(current map[string]*dkvsValue, _ map[string]uint64) ([]dkvsValueMutation, error) {
 			if current[key] == nil || current[key].record == nil {
 				return nil, ErrDKVSRecordNotFound
 			}

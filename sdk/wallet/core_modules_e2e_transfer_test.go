@@ -861,16 +861,19 @@ func coreDirectTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 func coreProxySafetyE2E(t *testing.T, chain *coreE2EChain, sender, receiver *Manager) bool {
 	controlled, ok := sender.l1IndexerClient.getActiveIndexer().(*coreE2EL1Indexer)
 	coreAssert(t, ok && controlled.chain == chain, "proxy safety fixture is not using its controlled Bitcoin indexer")
+	// Each case uses a fresh proxy, invoice and reservation for the same public contract.
+	issued, err := sender.IssueRGB11Asset(context.Background(), RGB11IssueRequest{
+		Schema: "NIA", Ticker: "SAFE", Name: "Proxy safety", Amounts: []uint64{10},
+	})
+	coreRequire(t, "issue proxy safety asset", err)
+	coreWaitPrivateBackup(t, sender)
+
 	for _, name := range []string{"proxy_no_ack_cancel", "proxy_expired_cancel", "proxy_expired_nack", "proxy_first_ack_retry", "proxy_prepared_expiry"} {
 		if !t.Run(name, func(t *testing.T) {
 			proxy := &rgb11ProxyTestServer{}
 			server := httptest.NewServer(http.HandlerFunc(proxy.serveHTTP))
 			defer server.Close()
 			endpoint := "rpc://" + strings.TrimPrefix(server.URL, "http://")
-			issued, err := sender.IssueRGB11Asset(context.Background(), RGB11IssueRequest{
-				Schema: "NIA", Ticker: "SAFE", Name: name, Amounts: []uint64{10},
-			})
-			coreRequire(t, "issue proxy safety asset", err)
 			expiry := time.Now().Add(time.Hour).Unix()
 			if strings.HasPrefix(name, "proxy_expired_") || name == "proxy_prepared_expiry" {
 				expiry = time.Now().Add(10 * time.Second).Unix()

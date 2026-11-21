@@ -24,7 +24,7 @@ func accountRecordMatchesStorage(value *dkvsValue, profile *accountManagementPro
 	switch profile.StorageMode {
 	case AccountStorageTemporary:
 		return proof.Mode == dkvsindexer.FeeModeFreeLocal &&
-			value.record.TTL == profile.RecordTTL && profile.RecordTTL != 0
+			value.record.TTL != 0 && value.record.TTL <= profile.RecordTTL
 	case AccountStoragePaid:
 		return proof.Mode == dkvsindexer.FeeModeAutopay && value.record.TTL == 0 &&
 			strings.EqualFold(strings.TrimSpace(proof.PoolContract),

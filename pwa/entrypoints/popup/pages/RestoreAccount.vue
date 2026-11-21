@@ -11,9 +11,10 @@
       </div>
 
       <section v-if="step === 1" class="space-y-3">
-        <label class="font-medium">{{ t('accountManagement.ui.recoveryCode') }}</label>
-        <Textarea v-model="locator" rows="6" :placeholder="t('accountManagement.ui.pasteLocator')" />
-        <Button class="w-full" :disabled="busy || !locator" @click="loadRecovery">
+        <label class="font-medium">{{ t('accountManagement.ui.recoveryFile') }}</label>
+        <Textarea v-model="recoveryFile" rows="6" spellcheck="false" autocomplete="off" autocapitalize="off"
+          :placeholder="t('accountManagement.ui.pasteRecoveryFile')" />
+        <Button class="w-full" :disabled="busy || !recoveryFile" @click="loadRecovery">
           <Icon v-if="busy" icon="lucide:loader-2" class="mr-2 h-4 w-4 animate-spin" />
           {{ t('accountManagement.ui.loadBackup') }}
         </Button>
@@ -24,7 +25,6 @@
         <div v-for="(question,index) in loaded.questions" :key="question.id" class="space-y-1">
           <label class="text-sm">{{ question.prompt }}</label><Input v-model="answers[index]" type="password" autocomplete="off" />
         </div>
-        <Textarea v-model="userShare" rows="5" :placeholder="t('accountManagement.ui.pasteUserShare')" />
         <Button class="w-full" :disabled="busy" @click="previewRecovery">{{ t('accountManagement.ui.previewRecovery') }}</Button>
       </section>
 
@@ -99,15 +99,13 @@ const { t } = useI18n()
 const router = useRouter()
 const route = useRoute()
 const rehearsalOnly = route.query.mode === 'rehearsal'
-const expectedAccountId = ref('')
 const busy = ref(false)
 const error = ref('')
 const failedModules = ref<ModuleView[]>([])
 const step = ref(1)
-const locator = ref('')
+const recoveryFile = ref('')
 const loaded = ref<RecoveryView | null>(null)
 const answers = ref<string[]>([])
-const userShare = ref('')
 const preview = ref<RecoverySummary | null>(null)
 const password = ref('')
 const confirmPassword = ref('')
@@ -121,7 +119,7 @@ const clearRecovery = () => {
   loaded.value = null
   preview.value = null
   answers.value = []
-  userShare.value = password.value = confirmPassword.value = ''
+  recoveryFile.value = password.value = confirmPassword.value = ''
   if (id) return accountSDK.abortRecovery(id).catch(() => undefined)
 }
 const cancelRecovery = async () => {
@@ -137,9 +135,7 @@ onMounted(async () => {
   try {
     const status = await accountSDK.getAccountView()
     if (disposed) return
-    expectedAccountId.value = status.account_id || ''
-    locator.value = status.locator || ''
-    if (!expectedAccountId.value || !locator.value) error.value = t('accountManagement.ui.recoveryNotConfigured')
+    if (!status.account_id || !status.locator) error.value = t('accountManagement.ui.recoveryNotConfigured')
   } catch (e: any) { if (!disposed) error.value = accountDisplayMessage(t, e?.message) || t('accountManagement.ui.readRecoveryFailed') }
 })
 
@@ -157,7 +153,8 @@ const run = async (task: () => Promise<void>) => {
 }
 
 const loadRecovery = () => run(async () => {
-  const result = await accountSDK.loadRecovery(locator.value.trim(), rehearsalOnly)
+  const result = await accountSDK.loadRecovery(recoveryFile.value, rehearsalOnly)
+  recoveryFile.value = ''
   if (disposed) {
     await accountSDK.abortRecovery(result.session_id)
     return
@@ -171,7 +168,7 @@ const previewRecovery = () => run(async () => {
   if (!loaded.value) return
   const value = await accountSDK.previewRecovery(sessionId.value, {
     answers: loaded.value.questions.map((question,index) => ({question_id: question.id, text: answers.value[index] || ''})).filter(item => item.text),
-    user_share: userShare.value, guardian_response: '',
+    guardian_response: '',
   })
   if (!value.summary) throw new Error(t('accountManagement.ui.recoveryFailed'))
   loaded.value = value; preview.value = value.summary; step.value = 4
@@ -186,7 +183,7 @@ const commitRecovery = () => run(async () => {
   step.value = 6
   loaded.value = null
   answers.value = []
-  userShare.value = password.value = confirmPassword.value = ''
+  password.value = confirmPassword.value = ''
   if (!result.complete) {
     if (!result.failed_modules.length) {
       reloadWallet()

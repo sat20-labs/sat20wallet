@@ -9,7 +9,7 @@ import (
 
 func TestManagedIndexRoundTrip(t *testing.T) {
 	id := strings.Repeat("a", 64)
-	moduleKey, err := ManagedModuleKey(id, "rgb11", "testnet/abc/0")
+	moduleKey, err := ManagedModuleKey(testAccountSecret(), id, "rgb11", "testnet/abc/0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -17,7 +17,7 @@ func TestManagedIndexRoundTrip(t *testing.T) {
 		{Provider: "wallets", Scope: "global", Key: "/personal/" + id + "/account/state", Codec: "wallet-state-v1"},
 		{Provider: "rgb11", Scope: "testnet/abc/0", Key: moduleKey, Codec: "rgb11-v1", Deleted: true},
 	}}
-	want, err := NormalizeManagedIndex(id, value)
+	want, err := NormalizeManagedIndex(testAccountSecret(), id, value)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestManagedIndexRoundTrip(t *testing.T) {
 
 func TestManagedIndexReferences(t *testing.T) {
 	id := strings.Repeat("a", 64)
-	key, err := ManagedModuleKey(id, "notes", "global")
+	key, err := ManagedModuleKey(testAccountSecret(), id, "notes", "global")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestManagedIndexReferences(t *testing.T) {
 			}
 		})
 	}
-	if _, err := NormalizeManagedIndex(id, ManagedIndex{Version: ManagedIndexVersion, Entries: []ManagedEntry{entry, entry}}); err == nil {
+	if _, err := NormalizeManagedIndex(testAccountSecret(), id, ManagedIndex{Version: ManagedIndexVersion, Entries: []ManagedEntry{entry, entry}}); err == nil {
 		t.Fatal("duplicate module identity was accepted")
 	}
 	for _, value := range []struct {
@@ -81,26 +81,26 @@ func TestManagedIndexReferences(t *testing.T) {
 		t.Run(value.name, func(t *testing.T) {
 			changed := ManagedEntry{Provider: value.provider, Scope: value.scope,
 				Key: "/personal/" + id + "/account/state", Codec: "wallet-state-v1"}
-			if _, err := NormalizeManagedIndex(id, ManagedIndex{Version: ManagedIndexVersion, Entries: []ManagedEntry{changed}}); err == nil {
+			if _, err := NormalizeManagedIndex(testAccountSecret(), id, ManagedIndex{Version: ManagedIndexVersion, Entries: []ManagedEntry{changed}}); err == nil {
 				t.Fatal("core state reference accepted another provider or scope")
 			}
 		})
 	}
 	for _, provider := range []string{"notes/local", "notes:local"} {
 		t.Run(provider, func(t *testing.T) {
-			if _, err := ManagedEntryID(provider, "global"); err == nil {
+			if _, err := ManagedEntryID(testAccountSecret(), id, provider, "global"); err == nil {
 				t.Fatal("provider accepted a scope separator")
 			}
 		})
 	}
-	if _, err := ManagedEntryID("notes.local-1_test", "testnet:wallet/0"); err != nil {
+	if _, err := ManagedEntryID(testAccountSecret(), id, "notes.local-1_test", "testnet:wallet/0"); err != nil {
 		t.Fatal("valid provider and separated scope were rejected", err)
 	}
-	left, err := ManagedEntryID("ab", "c")
+	left, err := ManagedEntryID(testAccountSecret(), id, "ab", "c")
 	if err != nil {
 		t.Fatal(err)
 	}
-	right, err := ManagedEntryID("a", "bc")
+	right, err := ManagedEntryID(testAccountSecret(), id, "a", "bc")
 	if err != nil || len(left) != 64 || len(right) != 64 || left == right {
 		t.Fatal("entry identity lost field boundaries", err)
 	}

@@ -35,7 +35,7 @@ func runNativeTwoFactor(t *testing.T, cfg *sdkcommon.Config) {
 	require.NoError(t, err)
 	require.NoError(t, owner.mgr.AbortRecovery(abandoned.SessionID))
 	_, err = owner.mgr.ActivateRecovery(ctx, abandoned.SessionID, wallet.ActivationInput{
-		Password: owner.password, SavedLocator: abandoned.Locator, Factors: nativeUIFactors(t, abandoned)})
+		Password: owner.password, RecoveryFile: nativeUIRecoveryFile(t, abandoned), Factors: nativeUIFactors()})
 	require.EqualError(t, err, "activation session expired")
 	created := nativeUILocalBackup(t, owner)
 	view, err = owner.mgr.GetAccountView(ctx)
@@ -96,12 +96,12 @@ func runNativeTwoFactor(t *testing.T, cfg *sdkcommon.Config) {
 	target := newNativeUIDevice(t, cfg, "")
 	_, err = target.mgr.LoadRecovery(ctx, "invalid recovery package", false)
 	require.Error(t, err)
-	loaded, err := target.mgr.LoadRecovery(ctx, created.Locator, false)
+	loaded, err := target.mgr.LoadRecovery(ctx, nativeUIRecoveryFile(t, created), false)
 	require.NoError(t, err)
 	_, err = target.mgr.CommitRecovery(ctx, loaded.SessionID, target.password)
 	require.EqualError(t, err, "account recovery preview is required")
-	factors := nativeUIFactors(t, created)
-	bad := nativeUIFactors(t, created)
+	factors := nativeUIFactors()
+	bad := nativeUIFactors()
 	for i := range bad.Answers {
 		bad.Answers[i].Text = "wrong answer"
 	}
@@ -115,7 +115,7 @@ func runNativeTwoFactor(t *testing.T, cfg *sdkcommon.Config) {
 	require.NoError(t, target.mgr.AbortRecovery(loaded.SessionID))
 	_, err = target.mgr.CommitRecovery(ctx, loaded.SessionID, target.password)
 	require.EqualError(t, err, "recovery session expired")
-	loaded, err = target.mgr.LoadRecovery(ctx, created.Locator, false)
+	loaded, err = target.mgr.LoadRecovery(ctx, nativeUIRecoveryFile(t, created), false)
 	require.NoError(t, err)
 	_, err = target.mgr.PreviewRecovery(ctx, loaded.SessionID, factors)
 	require.NoError(t, err)

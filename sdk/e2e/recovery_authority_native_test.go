@@ -50,8 +50,10 @@ func runImmediateRecoveryCase(t *testing.T, fixture *templateFixture) {
 
 		loaded, err := manager.LoadAccountRecoveryPackage(location, pkg.Envelope.Locator)
 		require.NoError(t, err, "recovery read must not wait for the local active replica")
+		questions, err := account.OpenRecoveryKnowledge(*loaded, pkg.UserShare)
+		require.NoError(t, err)
 		dkvsShare, err := account.RecoverDKVSShare(loaded.DKVSShareCapsule,
-			loaded.KnowledgeBundle, e2eKnowledgeAnswers())
+			questions, e2eKnowledgeAnswers())
 		require.NoError(t, err)
 		restored, secret, err := account.RecoverAccount(loaded.Envelope, pkg.UserShare, dkvsShare)
 		require.NoError(t, err)

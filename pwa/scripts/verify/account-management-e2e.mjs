@@ -12,7 +12,7 @@ import { createServer as createTcpServer } from 'node:net'
 import { Transaction } from 'bitcoinjs-lib'
 import { createServer } from 'vite'
 import {
-  runtimeAccountCases,
+  runtimeAccountCases, fixedRegtestUsageCases,
   installWalletStartProbe,
   runPwaUsageCases,
   runRgbPwaCases,
@@ -290,7 +290,7 @@ if (regtestMode) {
     assert.ok(fixed?.owner?.mnemonic && fixed?.owner?.password &&
       fixed?.guardian?.mnemonic && fixed?.guardian?.password,
     'fixed-root account cases require the existing ordinary-1 owner and ordinary-2 Guardian fixture')
-    assert.ok(focusedUsageCases.every(name => runtimeAccountCases.includes(name)),
+    assert.ok(focusedUsageCases.every(name => runtimeAccountCases.includes(name) || fixedRegtestUsageCases.includes(name)),
       'real regtest account management accepts only exact reviewed UI cases')
   } else {
     assert.ok(focusedWalletCases,
@@ -629,7 +629,9 @@ if (focusedWalletCases) {
 if (focusedUsageCases) {
   assert.ok(focusedUsageCases.length > 0, 'focused rerun needs at least one case')
   assert.equal(new Set(focusedUsageCases).size, focusedUsageCases.length)
-  assert.ok(focusedUsageCases.every(name => (name === rootImportCase || name.startsWith('usage: ') || requiredPwaBiometricCases.includes(name)) && requiredAccountCases.includes(name)), 'unknown usage case')
+  assert.ok(focusedUsageCases.every(name => name === rootImportCase || runtimeAccountCases.includes(name) ||
+    (regtestMode && fixedRegtestUsageCases.includes(name)) ||
+    accountPageCases.includes(name) || requiredPwaBiometricCases.includes(name)), 'unknown usage case')
   if (focusedUsageCases.some(name => requiredPwaBiometricCases.includes(name))) {
     assert.ok(requiredPwaBiometricCases.every(name => focusedUsageCases.includes(name)),
       'biometric reruns require the original PRF creation and reload prerequisites')
@@ -706,9 +708,9 @@ async function check(name, action) {
     ...(metrics ? { metrics } : {}) }))
 }
 async function ready(page) {
-  await page.waitForFunction(accountOnly => Boolean(window.__SAT20_PWA_VERIFY__) ||
-    (accountOnly && document.querySelector('[data-testid=wallet-startup-shell][data-state=error]')), sdkUIOnly, { timeout: 90000 })
-  if (sdkUIOnly && !await page.evaluate(() => Boolean(window.__SAT20_PWA_VERIFY__))) {
+  await page.waitForFunction(() => Boolean(window.__SAT20_PWA_VERIFY__) ||
+    document.querySelector('[data-testid=wallet-startup-shell][data-state=error]'), undefined, { timeout: 90000 })
+  if (!await page.evaluate(() => Boolean(window.__SAT20_PWA_VERIFY__))) {
     throw new Error(`PWA startup failed: ${await page.locator('[data-testid=wallet-startup-status]').textContent()}`)
   }
   await page.evaluate(async ({ expectedNetwork, expectedConfig, regtestMode }) => {
@@ -957,7 +959,7 @@ async function device(sharedContext, waitForReady = true, beforeGoto, diagnostic
   page.on('console', message => {
     const text = message.text()
     const observed_at = new Date().toISOString()
-    if (sdkUIOnly && /^(Wallet entry failed while holding the instance lock:|Wallet instance lock request failed:|SAT20 Wallet startup failed:)/.test(text)) {
+    if (/^(Wallet entry failed while holding the instance lock:|Wallet instance lock request failed:|SAT20 Wallet startup failed:)/.test(text)) {
       console.error(JSON.stringify({ event: 'account-startup-error', message: text.slice(0, 800) }))
     }
     if (text.startsWith('{"event":"test-wasm-runtime-error"')) {
@@ -1611,6 +1613,9 @@ try {
       password, newPassword, questions, answers, nodeAPIOrigins, regtestMode, preserveBrowserFailureState,
       focusedUsageCases,
       fixedAccountManagement: regtestMode ? regtestWalletFixture?.fixedAccountManagement : undefined })
+    if (focusedUsageCases.some(name => accountPageCases.includes(name))) {
+      await runAccountPageCases({ check, device, preserveBrowserFailureState, selectedCases: focusedUsageCases })
+    }
     assert.deepEqual(pageErrors, [], 'focused account rerun must not produce unhandled page errors')
   }
   else await runAccountGate()
