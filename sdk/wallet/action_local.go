@@ -72,8 +72,10 @@ func CompleteLocalActionAfterTxConfirmed(action string) (ResvStatus, error) {
 
 func (p *Manager) PerformLocalAction(action string, actionParam any,
 	feeRate int64) (string, int64, error) {
-	if gateErr := p.CheckAccountWrite("wallets", AccountManagedDataGlobalScope); gateErr != nil {
-		return "", -1, gateErr
+	if action != LOCAL_ACTION_CONFIRM_TX && action != LOCAL_ACTION_CONFIRM_TX_L2 {
+		if gateErr := p.CheckAccountWrite("wallets", AccountManagedDataGlobalScope); gateErr != nil {
+			return "", -1, gateErr
+		}
 	}
 
 	Log.Infof("PerformLocalAction %s", action)

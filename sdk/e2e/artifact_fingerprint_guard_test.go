@@ -53,6 +53,10 @@ func TestSDKPWARealRegtestArtifactFingerprintGuard(t *testing.T) {
 
 	after, err := captureBuildInputs(includeTests)
 	require.NoError(t, err, "capture build inputs after Core/plugin build")
+	revisions := after.revisions
+	if bundleDir != "" {
+		before, after = before.filesOnly(), after.filesOnly()
+	}
 	changes := changedPWABuildInputs(before, after)
 	if len(changes) != 0 {
 		shown := changes
@@ -97,7 +101,7 @@ func TestSDKPWARealRegtestArtifactFingerprintGuard(t *testing.T) {
 	if bundleDir != "" {
 		bundle := e2eArtifactBundle{
 			GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
-			CoreInputs: inputs, Files: make(map[string]string),
+			CoreInputs: inputs, CoreRevisions: revisions, Files: make(map[string]string),
 		}
 		for _, path := range []string{artifacts.coreExecutable, artifacts.corePlugin} {
 			info, err := buildinfo.ReadFile(path)
@@ -124,6 +128,24 @@ func TestPWACoreInputScope(t *testing.T) {
 	require.NotContains(t, core.files, testFile)
 	require.Contains(t, core.files, "satoshinet/pos_config_rpctest.go")
 	require.Contains(t, core.files, "transcend/plugin/main.go")
+
+	before := pwaBuildInputSnapshot{
+		revisions: map[string]string{"indexer": "before"},
+		files:     map[string]string{"indexer/main.go": "source", "indexer/rpcserver/ord/static/script.js": "asset"},
+	}
+	after := pwaBuildInputSnapshot{
+		revisions: map[string]string{"indexer": "after"},
+		files:     map[string]string{"indexer/main.go": "source", "indexer/rpcserver/ord/static/script.js": "asset"},
+	}
+	require.NotEqual(t, fingerprintPWABuildInputs(before), fingerprintPWABuildInputs(after))
+	require.Equal(t, fingerprintPWABuildInputs(before.filesOnly()), fingerprintPWABuildInputs(after.filesOnly()))
+	require.Empty(t, changedPWABuildInputs(before.filesOnly(), after.filesOnly()))
+	for path, digest := range before.files {
+		after.files[path] = "changed"
+		require.Equal(t, []string{path}, changedPWABuildInputs(before.filesOnly(), after.filesOnly()))
+		require.NotEqual(t, fingerprintPWABuildInputs(before.filesOnly()), fingerprintPWABuildInputs(after.filesOnly()))
+		after.files[path] = digest
+	}
 }
 
 func capturePWABuildInputs() (pwaBuildInputSnapshot, error) {
@@ -144,7 +166,6 @@ func captureBuildInputs(includeTests bool) (pwaBuildInputSnapshot, error) {
 		{name: "satoshinet"},
 		{name: "indexer"},
 		{name: "transcend"},
-		{name: "xaplib", prefix: "chainindex"},
 	}
 	snapshot := pwaBuildInputSnapshot{revisions: make(map[string]string), files: make(map[string]string)}
 	for _, repository := range repositories {
@@ -338,6 +359,12 @@ func fileSHA256(path string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+// Commit IDs are provenance for ordinary Core reuse. File paths and their
+// contents determine whether those binaries still match the local inputs.
+func (snapshot pwaBuildInputSnapshot) filesOnly() pwaBuildInputSnapshot {
+	return pwaBuildInputSnapshot{files: snapshot.files}
 }
 
 func fingerprintPWABuildInputs(snapshot pwaBuildInputSnapshot) string {

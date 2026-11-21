@@ -1158,7 +1158,9 @@ func (n *realSatoshiNet) waitForTx(t *testing.T, tx *wire.MsgTx, minHeight int32
 		} else {
 			lastStatus = fmt.Sprintf("confirmations=%d block=%s", verbose.Confirmations, verbose.BlockHash)
 		}
-		if !n.scheduledOnly {
+		// A successful lookup without a block hash means the transaction has
+		// reached Bootstrap's mempool and can trigger manual block production.
+		if err == nil && verbose.BlockHash == "" && !n.scheduledOnly {
 			scheduled, err := n.Bootstrap.Client.GetGenerate()
 			require.NoError(t, err)
 			if !scheduled {

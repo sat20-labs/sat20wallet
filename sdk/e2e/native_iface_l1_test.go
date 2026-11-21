@@ -16,6 +16,7 @@ import (
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	indexercommon "github.com/sat20-labs/indexer/common"
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet"
 	"github.com/stretchr/testify/require"
 )
@@ -164,7 +165,18 @@ func runNativeIfaceL1(t *testing.T, f *nativeIfaceChain) {
 			require.NoError(t, err)
 			require.Equal(t, spRealTxHex(t, final), extracted)
 		}
+		require.NoError(t, d.mgr.LockUtxo(address, outputs[0].OutPoint, sdkcommon.UtxoLockRGB))
+		_, err = d.mgr.SignPsbt(encoded, false)
+		require.ErrorContains(t, err, "is protected")
+		_, err = d.mgr.SignPsbts([]string{encoded}, false)
+		require.ErrorContains(t, err, "is protected")
+		require.NoError(t, d.mgr.UnlockUtxo(address, outputs[0].OutPoint))
 		require.Equal(t, before, f.snapshot(t), "PSBT signing alone must not broadcast")
+		tracked, id, err := d.mgr.PerformLocalAction(wallet.LOCAL_ACTION_CONFIRM_TX, hash.String(), 2)
+		require.NoError(t, err)
+		require.Equal(t, hash.String(), tracked)
+		require.NotNil(t, d.mgr.GetLocalAction(id))
+		require.Equal(t, before, f.snapshot(t), "tracking the existing transaction must not broadcast")
 	})
 
 	t.Run("08_l1_owner_lock_cold", func(t *testing.T) {

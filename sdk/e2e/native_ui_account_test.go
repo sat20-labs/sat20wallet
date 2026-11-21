@@ -79,10 +79,10 @@ func runNativeTwoFactor(t *testing.T, cfg *sdkcommon.Config) {
 	view, err = owner.mgr.GetAccountView(ctx)
 	require.NoError(t, err)
 	require.False(t, view.Modules[0].CanWrite, "first receive is required on a cold runtime")
-	nativeUIGate(t, owner)
+	nativeUIColdChecks(t, owner)
 	nativeUIGateError(t, owner.mgr.EnsureAccount(root, 4, "After initial sync", ""))
-	_, err = owner.mgr.BatchSendAssets_SatsNet(owner.mgr.GetWallet().GetAddress(), "::", "1000", 1)
-	nativeUIGateError(t, err)
+	_, err = owner.mgr.BatchSendAssets_SatsNet(owner.mgr.GetWallet().GetAddress(), "::", "0", 1)
+	require.EqualError(t, err, "invalid amt")
 	nativeUILocalViews(t, owner.mgr)
 	owner.http.dkvsOffline.Store(false)
 	nativeUIReady(t, owner.mgr)
@@ -135,16 +135,16 @@ func runNativeTwoFactor(t *testing.T, cfg *sdkcommon.Config) {
 	require.Equal(t, accountID, view.AccountID)
 }
 
-func nativeUIGate(t *testing.T, d *nativeUIDevice) {
+func nativeUIColdChecks(t *testing.T, d *nativeUIDevice) {
 	t.Helper()
 	before := d.http.broadcasts.Load()
-	_, _, err := d.mgr.BatchSendPlainSats(d.mgr.GetWallet().GetAddress(), 1000, 1, 2, nil)
-	nativeUIGateError(t, err)
-	_, err = d.mgr.DeployTicker_brc20("gate", 10000, 100, 0, 2)
-	nativeUIGateError(t, err)
+	_, _, err := d.mgr.BatchSendPlainSats(d.mgr.GetWallet().GetAddress(), 100, 1, 2, nil)
+	require.EqualError(t, err, "amount too small")
+	_, err = d.mgr.DeployTicker_brc20("gate", 10000, 100, -1, 2)
+	require.EqualError(t, err, "invalid decimal -1")
 	_, err = d.mgr.RefreshRGBState(context.Background())
 	nativeUIGateError(t, err)
-	require.Equal(t, before, d.http.broadcasts.Load(), "write gates must not call the broadcast backend")
+	require.Equal(t, before, d.http.broadcasts.Load(), "rejected operations must not reach the broadcast backend")
 }
 func nativeUIGateError(t *testing.T, err error) {
 	t.Helper()

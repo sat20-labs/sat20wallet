@@ -112,7 +112,7 @@ func (p *Manager) inscribeV2(srcUtxoMgr *UtxoMgr, destAddr string,
 }
 
 func (p *Manager) DeployTicker_brc20(ticker string, max, lim int64, decimal int64, feeRate int64) (opValue0 *InscribeResv, opErr error) {
-	release, gateErr := p.beginAccountWrite(rgb11AccountManagedProviderID, nil)
+	release, gateErr := p.beginL1Send(p.wallet)
 	if gateErr != nil {
 		return nil, gateErr
 	}
@@ -168,7 +168,7 @@ func (p *Manager) MintAsset_brc20(destAddr string, assetName *indexer.AssetName,
 // 需要调用方确保amt<=limit
 func (p *Manager) MintAssetV2_brc20(destAddr string, assetName *indexer.AssetName,
 	amt *Decimal, defaultUtxos []*TxOutput, feeRate int64) (*InscribeResv, error) {
-	release, gateErr := p.beginAccountWrite(rgb11AccountManagedProviderID, nil)
+	release, gateErr := p.beginL1Send(p.wallet)
 	if gateErr != nil {
 		return nil, gateErr
 	}

@@ -13,10 +13,10 @@ umask 077
 # Usage:
 #   scripts/verify/install-real-regtest-tools.sh /private/tmp/sat20-real-tools
 
-CORE_VERSION=31.0
+CORE_VERSION=31.3
 CORE_ARCHIVE="bitcoin-${CORE_VERSION}-x86_64-apple-darwin.tar.gz"
 CORE_BASE="https://bitcoincore.org/bin/bitcoin-core-${CORE_VERSION}"
-CORE_ARCHIVE_SHA256=56824dd705bc2a3b22d42e8aa02ed53498d491ff7c2c8aa96831333871887ead
+CORE_ARCHIVE_SHA256=8b1a32bc5aa1cf37ee12ee5417b367fd34c420aadcf934994aa96396adab6187
 ELECTRS_REPOSITORY=https://github.com/Blockstream/electrs.git
 ELECTRS_COMMIT=63edb614d67f530ac725718ec0c3e42e96bb7d54
 

@@ -1261,7 +1261,7 @@ func (p *Manager) SignPsbts(psbtsHex []string, bExtract bool) (opValue0 []string
 	if err != nil {
 		return nil, err
 	}
-	release, gateErr := p.beginAccountWrite(rgb11AccountManagedProviderID, wallet)
+	release, gateErr := p.beginL1Send(wallet)
 	if gateErr != nil {
 		return nil, gateErr
 	}
@@ -1269,7 +1269,7 @@ func (p *Manager) SignPsbts(psbtsHex []string, bExtract bool) (opValue0 []string
 
 	result := make([]string, 0, len(psbtsHex))
 	for i, psbt := range psbtsHex {
-		signed, err := signPsbtWithWallet(wallet, psbt, bExtract)
+		signed, err := p.signPsbtWithWallet(wallet, psbt, bExtract)
 		if err != nil {
 			Log.Errorf("SignPsbt %d failed, %v", i, err)
 			return nil, err
@@ -1287,16 +1287,16 @@ func (p *Manager) SignPsbt(psbtHex string, bExtract bool) (opValue0 string, opEr
 	if err != nil {
 		return "", err
 	}
-	release, gateErr := p.beginAccountWrite(rgb11AccountManagedProviderID, wallet)
+	release, gateErr := p.beginL1Send(wallet)
 	if gateErr != nil {
 		return "", gateErr
 	}
 	defer release()
 
-	return signPsbtWithWallet(wallet, psbtHex, bExtract)
+	return p.signPsbtWithWallet(wallet, psbtHex, bExtract)
 }
 
-func signPsbtWithWallet(wallet common.Wallet, psbtHex string, bExtract bool) (string, error) {
+func (p *Manager) signPsbtWithWallet(wallet common.Wallet, psbtHex string, bExtract bool) (string, error) {
 	hexBytes, err := hex.DecodeString(psbtHex)
 	if err != nil {
 		return "", err
@@ -1305,6 +1305,12 @@ func signPsbtWithWallet(wallet common.Wallet, psbtHex string, bExtract bool) (st
 	if err != nil {
 		Log.Errorf("NewFromRawBytes failed, %v", err)
 		return "", err
+	}
+	p.utxoLockerL1.Reload(wallet.GetAddress())
+	for _, input := range packet.UnsignedTx.TxIn {
+		if point := input.PreviousOutPoint.String(); p.isL1RGBInputProtected(point) {
+			return "", fmt.Errorf("PSBT input %s is protected", point)
+		}
 	}
 
 	// for _, input := range packet.Inputs {
@@ -1353,12 +1359,6 @@ func (p *Manager) SignPsbts_SatsNet(psbtsHex []string, bExtract bool) ([]string,
 	if err != nil {
 		return nil, err
 	}
-	release, gateErr := p.beginAccountWrite("wallets", wallet)
-	if gateErr != nil {
-		return nil, gateErr
-	}
-	defer release()
-
 	result := make([]string, 0, len(psbtsHex))
 	for i, psbt := range psbtsHex {
 		signed, err := signPsbtSatsNetWithWallet(wallet, psbt, bExtract)
@@ -1379,12 +1379,6 @@ func (p *Manager) SignPsbt_SatsNet(psbtHex string, bExtract bool) (opValue0 stri
 	if err != nil {
 		return "", err
 	}
-	release, gateErr := p.beginAccountWrite("wallets", wallet)
-	if gateErr != nil {
-		return "", gateErr
-	}
-	defer release()
-
 	return signPsbtSatsNetWithWallet(wallet, psbtHex, bExtract)
 }
 

@@ -558,7 +558,7 @@ func TestSPBitcoinCoreRegtestIndexerE2E(t *testing.T) {
 	}
 	spending1.TxIn[0].Witness = wire.TxWitness{signature1.Serialize()}
 	if err := core.call("sendrawtransaction", []any{spRealTxHex(t, spending1)}, nil); err != nil {
-		t.Fatalf("Bitcoin Core 31.0 refused recovered k=1 Taproot spend: %v", err)
+		t.Fatalf("Bitcoin Core 31.3 refused recovered k=1 Taproot spend: %v", err)
 	}
 	mine()
 	if h := base.SyncToChainTip(make(chan struct{})); h != 0 {

@@ -109,22 +109,22 @@ jobs:
         env:
           GOFLAGS: '-mod=mod'
         run: go test ./e2e -run '^$' -count=1 -timeout=10m
-      - name: Install Bitcoin Core 31.0 for real regtest E2E
+      - name: Install Bitcoin Core 31.3 for real regtest E2E
         shell: bash
         run: |
           set -euo pipefail
           cd "${RUNNER_TEMP}"
-          curl --fail --location --retry 3 --silent --show-error https://bitcoincore.org/bin/bitcoin-core-31.0/SHA256SUMS --output SHA256SUMS
-          curl --fail --location --retry 3 --silent --show-error https://bitcoincore.org/bin/bitcoin-core-31.0/bitcoin-31.0-x86_64-linux-gnu.tar.gz --output bitcoin-31.0-x86_64-linux-gnu.tar.gz
-          grep ' bitcoin-31.0-x86_64-linux-gnu.tar.gz$' SHA256SUMS | sha256sum --check
-          tar -xzf bitcoin-31.0-x86_64-linux-gnu.tar.gz
-          echo "${RUNNER_TEMP}/bitcoin-31.0/bin" >> "${GITHUB_PATH}"
+          curl --fail --location --retry 3 --silent --show-error https://bitcoincore.org/bin/bitcoin-core-31.3/SHA256SUMS --output SHA256SUMS
+          curl --fail --location --retry 3 --silent --show-error https://bitcoincore.org/bin/bitcoin-core-31.3/bitcoin-31.3-x86_64-linux-gnu.tar.gz --output bitcoin-31.3-x86_64-linux-gnu.tar.gz
+          grep ' bitcoin-31.3-x86_64-linux-gnu.tar.gz$' SHA256SUMS | sha256sum --check
+          tar -xzf bitcoin-31.3-x86_64-linux-gnu.tar.gz
+          echo "${RUNNER_TEMP}/bitcoin-31.3/bin" >> "${GITHUB_PATH}"
       - name: Check exact Bitcoin Core release
         shell: bash
         run: |
           set -euo pipefail
-          bitcoind -version | head -n 1 | grep -F '31.0'
-      - name: Real Bitcoin Core 31.0, BaseIndexer and SP SDK E2E
+          bitcoind -nosettings -version | sed -n '1p' | grep -E ' version v31\.3(\.0)?([[:space:]]|$)'
+      - name: Real Bitcoin Core 31.3, BaseIndexer and SP SDK E2E
         working-directory: sat20wallet/sdk
         env:
           SAT20_E2E_REQUIRE_BITCOIND: '1'

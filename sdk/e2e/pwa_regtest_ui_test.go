@@ -990,7 +990,7 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 		fixture["walletFixture"].(map[string]any)["control_url"] = startSDKPWARegtestBitcoinController(t, confirmationAddress, mine)
 		fixture["walletFixture"].(map[string]any)["realBitcoinControl"] = true
 		fixture["walletFixture"].(map[string]any)["protocolWallets"] = map[string]any{
-			"runes": map[string]any{"sender": actorA, "recipient": actorB, "asset": runeAsset, "precision": 2, "label": "Runes", "balance": runeBalances[0], "recipient_balance": runeBalances[1], "amount": "12.34"},
+			"runes": map[string]any{"sender": actorA, "recipient": actorB, "asset": runeAsset, "precision": 2, "label": "Runes", "balance": runeBalances[0], "recipient_balance": runeBalances[1], "amount": "12.34", "require_syncing": feature == "l1-runes"},
 		}
 		if strings.HasSuffix(feature, "-return") {
 			fixture["walletFixture"].(map[string]any)["protocolWallets"].(map[string]any)["runes"] = map[string]any{

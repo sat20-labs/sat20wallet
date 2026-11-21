@@ -150,12 +150,6 @@ func (p *Manager) QueryContract(req *ContractQueryRequest) (string, error) {
 }
 
 func (p *Manager) DeployUnifiedContract(req *ContractDeployRequest) (opValue0 *ContractTxResult, opErr error) {
-	release, gateErr := p.beginAccountWrite("wallets", nil)
-	if gateErr != nil {
-		return nil, gateErr
-	}
-	defer release()
-
 	opLogID := p.beginWalletLog("contract", "deploy_unified_contract", "Deploy contract")
 	defer func() { p.finishWalletLog(opLogID, opErr, opValue0) }()
 
@@ -197,12 +191,6 @@ func (p *Manager) EstimateDeployUnifiedContract(req *ContractDeployRequest) (*Co
 }
 
 func (p *Manager) InvokeUnifiedContract(req *ContractInvokeRequest) (opValue0 *ContractTxResult, opErr error) {
-	release, gateErr := p.beginAccountWrite("wallets", nil)
-	if gateErr != nil {
-		return nil, gateErr
-	}
-	defer release()
-
 	opLogID := p.beginWalletLog("contract", "invoke_unified_contract", "Invoke contract")
 	defer func() { p.finishWalletLog(opLogID, opErr, opValue0) }()
 

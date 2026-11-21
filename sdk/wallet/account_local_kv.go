@@ -292,3 +292,30 @@ func (p *Manager) beginAccountWrite(provider string, wallet common.Wallet) (func
 	}
 	return p.rgbManagedExecutionMu.RUnlock, nil
 }
+
+// Ordinary L1 sends rely on local carrier protection. Keep a recovery import
+// from changing that protection while inputs are selected, signed and sent.
+func (p *Manager) beginL1Send(wallet common.Wallet) (func(), error) {
+	if wallet == nil {
+		return nil, fmt.Errorf("wallet is not created/unlocked")
+	}
+	if !p.rgbManagedExecutionMu.TryRLock() {
+		return nil, ErrAccountManagedDataImportIncomplete
+	}
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	scope := (AccountManagedDataScope{Network: p.cfg.Chain,
+		WalletFingerprint: walletFingerprint(wallet), AccountIndex: wallet.GetSubAccount()}).ID()
+	err := p.accountDBFailure()
+	if err == nil {
+		err = p.checkAccountRestore("wallets", AccountManagedDataGlobalScope)
+	}
+	if err == nil {
+		err = p.checkAccountRestore(rgb11AccountManagedProviderID, scope)
+	}
+	if err != nil {
+		p.rgbManagedExecutionMu.RUnlock()
+		return nil, err
+	}
+	return p.rgbManagedExecutionMu.RUnlock, nil
+}

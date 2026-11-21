@@ -81,6 +81,29 @@ export async function runPwaL1ProtocolCases(t, fixture) {
     if (result.code !== 0) throw new Error(result.msg)
     return result.data
   })
+  const runeWriteState = async (page, phase) => {
+    const started = Date.now()
+    let timer
+    const state = await Promise.race([
+      page.evaluate(async () => {
+        const result = await window.sat20account_wasm.getAccountView('{}')
+        if (result.code !== 0) return { read_code: result.code }
+        const view = result.data
+        const rgb = view.modules?.find(module => module.name === 'rgb11')
+        return {
+          state: view.state,
+          active: view.active,
+          discovery_status: view.discovery_status,
+          error_code: view.error_code,
+          can_write: rgb?.can_write,
+          module_error_code: rgb?.error_code,
+        }
+      }).catch(() => ({ unavailable: 'read failed' })),
+      new Promise(resolve => { timer = setTimeout(() => resolve({ unavailable: 'timeout' }), 1000) }),
+    ]).finally(() => clearTimeout(timer))
+    console.log(JSON.stringify({ event: 'runes-account-write-state', phase, elapsed_ms: Date.now() - started, ...state }))
+    return state
+  }
   const importActor = async (page, actor) => {
     if (fixture.realBitcoinControl) page.context().on('request', request => {
       if (request.method() !== 'POST' || !['/btc/tx', '/btc/txs', '/v3/bitcoin/tx/broadcast'].some(path => request.url() === base + path)) return
@@ -117,11 +140,28 @@ export async function runPwaL1ProtocolCases(t, fixture) {
     const name = requiredPwaL1ProtocolCases[index]
     if (t.selectedCases && !t.selectedCases.includes(name)) continue
     const contexts = []
+    let releaseSync
     try {
       await check(name, async () => {
         const spec = fixture.protocolWallets[id], { sender, recipient, asset, precision, label } = spec
         const page = await device(); contexts.push(page.context())
+        let syncHeld = false
+        if (spec.require_syncing) {
+          const held = new Promise(resolve => { releaseSync = resolve })
+          await page.context().route('**/dkvs/active/sync*', async route => {
+            const request = route.request()
+            const scope = request.method() === 'POST' && request.postDataJSON()?.scope
+            // The mailbox subscription starts after local restore. Keep the
+            // background receive in flight without delaying recovery reads.
+            if (scope?.prefix?.startsWith('/mail/')) {
+              syncHeld = true
+              await held
+            }
+            await route.fallback()
+          })
+        }
         await importActor(page, sender)
+        if (id === 'runes') await runeWriteState(page, 'after_import')
         const amount = atoms(spec.amount, precision), initial = atoms(spec.balance, precision)
         const recipientInitial = atoms(spec.recipient_balance ?? '0', precision)
         if (spec.resume) {
@@ -251,15 +291,27 @@ export async function runPwaL1ProtocolCases(t, fixture) {
         await expect(dialog.getByText(recipient.address, { exact: true })).toBeVisible()
         const rateText = await dialog.locator('dd').filter({ hasText: /^\d+ sats\/vB$/ }).textContent()
         const rate = BigInt(rateText.trim().split(' ')[0])
+        if (id === 'runes') {
+          if (spec.require_syncing) await expect.poll(() => syncHeld, poll).toBe(true)
+          const state = await runeWriteState(page, 'before_confirm')
+          if (spec.require_syncing) {
+            assert.equal(state.state, 'syncing', 'exercise Runes confirmation during account synchronization')
+            assert.equal(state.can_write, false, 'managed writes must still be unavailable at Runes confirmation')
+          }
+        }
         await dialog.getByRole('button', { name: 'Confirm', exact: true }).click()
         let receipt
         await expect.poll(async () => {
           const added = (await logs(page)).filter(log => !oldLogs.has(log.id) && log.kind === 'send_asset_l1')
           assert.ok(added.length <= 1)
           receipt = added[0]
-          if (receipt?.status === 'failed') throw new Error(JSON.stringify(receipt))
+          if (receipt?.status === 'failed') {
+            if (id === 'runes') await runeWriteState(page, 'send_failed')
+            throw new Error(JSON.stringify(receipt))
+          }
           return receipt?.status === 'succeeded'
         }, poll).toBe(true)
+        releaseSync?.()
         assert.match(receipt.tx_ids[0], /^[0-9a-f]{64}$/)
         const submitted = (await control('snapshot')).l1
         const ids = Object.keys(submitted.broadcast_count).filter(txid => !Object.hasOwn(before.broadcast_count, txid))
@@ -317,6 +369,9 @@ export async function runPwaL1ProtocolCases(t, fixture) {
         await control('confirm-l1')
         assert.equal(await balance(sender, asset, precision), initial - amount)
         assert.equal(await balance(recipient, asset, precision), recipientInitial + amount)
+        if (id === 'runes') console.log(JSON.stringify({ event: 'runes-confirmed-send', precision,
+          broadcast_count: submitted.broadcast_count[payment.getId()], received_atoms: amount.toString(),
+          sender_remaining_atoms: (initial - amount).toString() }))
         const paidSats = paid.reduce((sum, out) => sum + BigInt(out.value), 0n)
         assert.equal(await balance(sender, '*'), senderSats - paidSats - fees)
         assert.equal(await balance(recipient, '*'), recipientSats + paidSats)
@@ -367,7 +422,10 @@ export async function runPwaL1ProtocolCases(t, fixture) {
       failures.push(error)
       if (t.selectedCases) throw error
     }
-    finally { for (const context of contexts.reverse()) await context.close().catch(() => {}) }
+    finally {
+      releaseSync?.()
+      for (const context of contexts.reverse()) await context.close().catch(() => {})
+    }
   }
   if (failures.length) throw new AggregateError(failures, failures.map(error => error.message).join('\n'))
 }

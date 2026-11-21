@@ -57,7 +57,7 @@ func prepareSDKPWARegtestNodes(t *testing.T) *realSatoshiNet {
 	portBase := sdkPWARegtestSatoshiNetPortBase(t)
 	raw := os.Getenv("SAT20_REAL_L1_INDEXER")
 	if raw == "" {
-		t.Skip("requires the existing Bitcoin Core 31.0 and real regtest indexer")
+		t.Skip("requires the existing Bitcoin Core 31.3 and real regtest indexer")
 	}
 	l1, err := url.Parse(raw)
 	require.NoError(t, err)

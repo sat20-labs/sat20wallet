@@ -28,7 +28,7 @@ def source_snapshot():
     records = {}
     revisions = {}
     for name, prefix in (("sat20wallet", "sdk"), ("satoshinet", ""),
-                         ("indexer", ""), ("transcend", ""), ("xaplib", "chainindex")):
+                         ("indexer", ""), ("transcend", "")):
         root = WORKSPACE / name
         revisions[name] = subprocess.check_output(
             ["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()

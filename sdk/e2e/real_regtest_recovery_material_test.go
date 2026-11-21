@@ -204,7 +204,7 @@ func TestSDKPWARegtestRecoveryAnswersUseExactPackagePrompts(t *testing.T) {
 // the current remote package before running asset preparation or transfers.
 func TestSDKPWARegtestExistingRecoveryMaterialReadback(t *testing.T) {
 	if os.Getenv("SAT20_REAL_L1_INDEXER") == "" {
-		t.Skip("requires the existing Bitcoin Core 31.0 and real regtest indexer")
+		t.Skip("requires the existing Bitcoin Core 31.3 and real regtest indexer")
 	}
 	path := os.Getenv("SAT20_REAL_RECOVERY_FIXTURES")
 	if path == "" {

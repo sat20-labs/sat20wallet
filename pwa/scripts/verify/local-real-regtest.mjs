@@ -111,8 +111,8 @@ function ensureWorkspace(workspaceRoot) {
   return { root, indexerRoot, configTemplate, walletFixture: fixture, initialMiningAddress: ordinaryWallet.mining_address }
 }
 
-function isBitcoinCore31(versionOutput) {
-  return /Bitcoin Core(?: daemon| RPC client)? version v?31\.0(?:\.0)?(?:\s|$)/m.test(versionOutput)
+function isBitcoinCoreRelease(versionOutput) {
+  return /Bitcoin Core(?: daemon| RPC client)? version v?31\.3(?:\.0)?(?:\s|$)/m.test(versionOutput)
 }
 
 function requireElectrsHTTPCLI(helpText) {
@@ -141,8 +141,8 @@ export function checkLocalRealDependencies({ env = process.env, workspaceRoot })
   } finally {
     rmSync(versionDataDir, { recursive: true, force: true })
   }
-  assert.ok(isBitcoinCore31(bitcoindVersion), 'bitcoind must be Bitcoin Core 31.0')
-  assert.ok(isBitcoinCore31(bitcoinCliVersion), 'bitcoin-cli must be Bitcoin Core 31.0')
+  assert.ok(isBitcoinCoreRelease(bitcoindVersion), 'bitcoind must be Bitcoin Core 31.3')
+  assert.ok(isBitcoinCoreRelease(bitcoinCliVersion), 'bitcoin-cli must be Bitcoin Core 31.3')
   const electrsHelp = runAsText(electrs, ['--help'], env)
   requireElectrsHTTPCLI(electrsHelp)
 
@@ -155,7 +155,7 @@ export function checkLocalRealDependencies({ env = process.env, workspaceRoot })
     bitcoinCli,
     electrs,
     go,
-    bitcoinCoreVersion: '31.0',
+    bitcoinCoreVersion: '31.3',
     electrsHTTP: true,
   }
 }
@@ -340,7 +340,7 @@ async function waitCore(dependencies, dataDir, rpcPort, logPath) {
   }, logPath)
   assert.equal(blockchainInfo.blocks, 0, 'fresh local Bitcoin Core regtest must start at height zero')
   const version = parseRPCJSON(bitcoinCLI(dependencies, dataDir, rpcPort, ['getnetworkinfo']), 'getnetworkinfo').version
-  assert.equal(version, 310000, 'local Bitcoin Core must be version 31.0')
+  assert.equal(version, 310300, 'local Bitcoin Core must be version 31.3')
   const peers = parseRPCJSON(bitcoinCLI(dependencies, dataDir, rpcPort, ['getpeerinfo']), 'getpeerinfo')
   assert.ok(Array.isArray(peers) && peers.every(peer => isLoopbackPeerAddr(peer.addr)),
     'local Bitcoin Core may only have loopback peers')

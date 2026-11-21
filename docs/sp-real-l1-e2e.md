@@ -23,7 +23,7 @@
 
     SAT20_E2E_REQUIRE_BITCOIND=1 go test ./e2e -run '^TestSPBitcoinCoreRegtestIndexerE2E$' -v -count=1 -timeout=15m
 
-默认 go test ./e2e 会包含测试；本地缺少 bitcoind 时明确 Skip，CI 则以环境变量强制必须有真实 Core，不能静默跳过。CI 固定下载发行版 Bitcoin Core 31.0 Linux x86_64 包并核对官方 SHA256SUMS，另验证 bitcoind --version 显示 31.0。没有主网接入或主网广播；所有数据只存在测试临时目录。全局 Bitcoin RPC singleton 在测试结束后恢复，此用例不并行。
+默认 go test ./e2e 会包含测试；本地缺少 bitcoind 时明确 Skip，CI 则以环境变量强制必须有真实 Core，不能静默跳过。CI 固定下载发行版 Bitcoin Core 31.3 Linux x86_64 包并核对官方 SHA256SUMS，另验证 bitcoind --version 显示 31.3。没有主网接入或主网广播；所有数据只存在测试临时目录。全局 Bitcoin RPC singleton 在测试结束后恢复，此用例不并行。
 
 当前构建使用的是生产 BaseIndexer 在 E2E 测试进程内运行，**不是完整 IndexerMgr 的独立服务进程**。这避免为了一个 SP 用例改动所有协议的 regtest 高度/参数处理。
 

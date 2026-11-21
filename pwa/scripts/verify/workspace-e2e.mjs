@@ -435,7 +435,7 @@ async function checkSDKEnvironment(env, port) {
   const chain = checkedBitcoinJSON(env, 'getblockchaininfo')
   const network = checkedBitcoinJSON(env, 'getnetworkinfo')
   assert.equal(chain.chain, 'regtest', 'configured Bitcoin Core is not regtest')
-  assert.equal(network.version, 310000, 'configured Bitcoin Core is not version 31.0')
+  assert.equal(network.version, 310300, 'configured Bitcoin Core is not version 31.3')
   const peers = checkedBitcoinJSON(env, 'getpeerinfo')
   assert.ok(Array.isArray(peers), 'Bitcoin Core getpeerinfo did not return a peer list')
   assert.equal(peers.every(peer => isLoopbackPeerAddr(peer?.addr)), true,
@@ -462,7 +462,7 @@ async function checkSDKEnvironment(env, port) {
   } else {
     sdkNodePortState = await checkSDKNodePorts(env)
   }
-  return { core: `Bitcoin Core 31.0 regtest; ${peers.length} loopback peer(s)`, l1: 'loopback /btc/regtest healthy',
+  return { core: `Bitcoin Core 31.3 regtest; ${peers.length} loopback peer(s)`, l1: 'loopback /btc/regtest healthy',
     walletFixture: 'private and required roles present', pwaPort: port,
     pwaService: env.SAT20_REAL_PWA_EXISTING_URL ? 'existing service; isolated browser context' : 'test-owned Vite',
     sdkNodePorts: sdkNodePortState }

@@ -559,10 +559,6 @@ func (p *Manager) ValidateBTCLuckyClaim(tx *swire.MsgTx, witness, user, service 
 }
 
 func (p *Manager) ClaimBTCLuckyReward(utxo string) (opValue0 string, opErr error) {
-	if gateErr := p.CheckAccountWrite("wallets", AccountManagedDataGlobalScope); gateErr != nil {
-		return "", gateErr
-	}
-
 	opLogID := p.beginWalletLog("mining", "claim_lucky_reward", "提取挖矿奖励")
 	defer func() { p.finishWalletLog(opLogID, opErr, opValue0) }()
 

@@ -22,6 +22,7 @@ type e2eArtifactBundle struct {
 	GOARCH          string            `json:"goarch"`
 	Files           map[string]string `json:"files"`
 	CoreInputs      string            `json:"core_build_inputs_sha256,omitempty"`
+	CoreRevisions   map[string]string `json:"core_build_revisions,omitempty"`
 	SoliditySources map[string]string `json:"solidity_sources"`
 	root            string
 }

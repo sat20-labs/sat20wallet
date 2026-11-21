@@ -64,7 +64,7 @@ func stagePrebuiltSatoshiNetArtifacts(t *testing.T, variant string, coreOnly boo
 	if bundle.CoreInputs != "" {
 		inputs, err := captureBuildInputs(false)
 		require.NoError(t, err)
-		require.Equal(t, bundle.CoreInputs, fingerprintPWABuildInputs(inputs), "PWA Core build inputs changed during this run")
+		require.Equal(t, bundle.CoreInputs, fingerprintPWABuildInputs(inputs.filesOnly()), "PWA Core build inputs changed during this run")
 	}
 	output := filepath.Join(e2eRuntimeDirectory(t), variant)
 	require.NoError(t, os.MkdirAll(output, 0700))

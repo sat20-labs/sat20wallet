@@ -3,7 +3,7 @@
 ### 本机真实链公共准备（2026-10-23）
 
 当前真实 E2E 入口为 `pwa/scripts/verify/workspace-e2e.mjs`。每个独立业务组
-在空目录启动本机 Bitcoin Core 31.0、实际 L1 indexer、提供 Esplora HTTP 的
+在空目录启动本机 Bitcoin Core 31.3、实际 L1 indexer、提供 Esplora HTTP 的
 Blockstream Electrs，以及既有 Go helper 管理的 SatoshiNet/STP 节点；浏览器
 也在本机运行。旧 attach、SSH 转发、历史钱包和恢复材料配置会被拒绝。
 

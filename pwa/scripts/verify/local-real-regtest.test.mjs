@@ -19,15 +19,15 @@ function writeExecutable(path, body) {
   chmodSync(path, 0o700)
 }
 
-test('dependency check accepts Bitcoin Core 31.0 and Blockstream Electrs HTTP CLI', t => {
+test('dependency check accepts Bitcoin Core 31.3 and Blockstream Electrs HTTP CLI', t => {
   const directory = privateDir()
   t.after(() => rmSync(directory, { recursive: true, force: true }))
   const bitcoind = join(directory, 'bitcoind')
   const bitcoinCli = join(directory, 'bitcoin-cli')
   const electrs = join(directory, 'electrs')
   const go = join(directory, 'go')
-  writeExecutable(bitcoind, "printf 'Bitcoin Core version v31.0.0\\n'")
-  writeExecutable(bitcoinCli, "printf 'Bitcoin Core RPC client version v31.0.0\\n'")
+  writeExecutable(bitcoind, "printf 'Bitcoin Core version v31.3.0\\n'")
+  writeExecutable(bitcoinCli, "printf 'Bitcoin Core RPC client version v31.3.0\\n'")
   writeExecutable(electrs, "printf '%s\\n' '--network --jsonrpc-import --daemon-dir --daemon-rpc-addr --db-dir --http-addr --electrum-rpc-addr --monitoring-addr'")
   writeExecutable(go, "printf 'go version go1.24.0\\n'")
 
@@ -38,7 +38,7 @@ test('dependency check accepts Bitcoin Core 31.0 and Blockstream Electrs HTTP CL
       SAT20_REAL_BITCOIN_CLI: bitcoinCli, SAT20_REAL_ELECTRS: electrs,
     },
   })
-  assert.equal(dependencies.bitcoinCoreVersion, '31.0')
+  assert.equal(dependencies.bitcoinCoreVersion, '31.3')
   assert.equal(dependencies.electrsHTTP, true)
   assert.equal(dependencies.bitcoind, realpathSync(bitcoind))
   assert.equal(dependencies.bitcoinCli, realpathSync(bitcoinCli))
@@ -57,8 +57,8 @@ test('dependency check rejects vanilla Electrs without the Esplora HTTP option',
   const bitcoinCli = join(directory, 'bitcoin-cli')
   const electrs = join(directory, 'electrs')
   const go = join(directory, 'go')
-  writeExecutable(bitcoind, "printf 'Bitcoin Core version v31.0.0\\n'")
-  writeExecutable(bitcoinCli, "printf 'Bitcoin Core RPC client version v31.0.0\\n'")
+  writeExecutable(bitcoind, "printf 'Bitcoin Core version v31.3.0\\n'")
+  writeExecutable(bitcoinCli, "printf 'Bitcoin Core RPC client version v31.3.0\\n'")
   writeExecutable(electrs, "printf '%s\\n' '--network --jsonrpc-import --daemon-dir --daemon-rpc-addr --db-dir --electrum-rpc-addr --monitoring-addr'")
   writeExecutable(go, "printf 'go version go1.24.0\\n'")
 

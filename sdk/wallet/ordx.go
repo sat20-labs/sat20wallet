@@ -76,7 +76,7 @@ func (p *Manager) inscribe(req *InscriptionRequest) (*InscribeResv, error) {
 }
 
 func (p *Manager) DeployTicker_ordx(ticker string, max, lim int64, n int, feeRate int64) (opValue0 *InscribeResv, opErr error) {
-	release, gateErr := p.beginAccountWrite(rgb11AccountManagedProviderID, nil)
+	release, gateErr := p.beginL1Send(p.wallet)
 	if gateErr != nil {
 		return nil, gateErr
 	}
@@ -176,7 +176,7 @@ func EstimatedMintFee(inputLen int, feeRate, revealOutValue int64) int64 {
 // 需要调用方确保amt<=limit
 func (p *Manager) MintAsset_ordx(destAddr string, tickInfo *indexer.TickerInfo,
 	amt int64, defaultUtxos []string, feeRate int64) (opValue0 *InscribeResv, opErr error) {
-	release, gateErr := p.beginAccountWrite(rgb11AccountManagedProviderID, nil)
+	release, gateErr := p.beginL1Send(p.wallet)
 	if gateErr != nil {
 		return nil, gateErr
 	}
@@ -362,7 +362,7 @@ func (p *Manager) GetOrgAssetName(lpt *AssetName) *AssetName {
 }
 
 func (p *Manager) InscribeKeyValueInName(name string, key string, value string, feeRate int64) (*InscribeResv, error) {
-	release, gateErr := p.beginAccountWrite(rgb11AccountManagedProviderID, nil)
+	release, gateErr := p.beginL1Send(p.wallet)
 	if gateErr != nil {
 		return nil, gateErr
 	}
@@ -483,7 +483,7 @@ func (p *Manager) InscribeMultiKeyValueInName(name string, kv map[string]string,
 }
 
 func (p *Manager) InscribeName(name string, feeRate int64) (opValue0 *InscribeResv, opErr error) {
-	release, gateErr := p.beginAccountWrite(rgb11AccountManagedProviderID, nil)
+	release, gateErr := p.beginL1Send(p.wallet)
 	if gateErr != nil {
 		return nil, gateErr
 	}

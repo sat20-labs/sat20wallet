@@ -150,7 +150,7 @@ func (p *Manager) BuildSilentPayment(address string, amount, feeRate int64) (*wi
 }
 
 func (p *Manager) SendSilentPayment(address string, amount, feeRate int64) (string, error) {
-	release, gateErr := p.beginAccountWrite(rgb11AccountManagedProviderID, nil)
+	release, gateErr := p.beginL1Send(p.wallet)
 	if gateErr != nil {
 		return "", gateErr
 	}

@@ -289,7 +289,7 @@ func prepareSDKPWARegtestAssetsInternal(t *testing.T, existingOnly ...bool) (*wa
 		Version int `json:"version"`
 	}
 	require.NoError(t, json.Unmarshal(rpc("getnetworkinfo"), &info))
-	require.Equal(t, 310000, info.Version)
+	require.Equal(t, 310300, info.Version)
 	var peerInfo []struct {
 		Addr string `json:"addr"`
 	}
