@@ -1,11 +1,11 @@
 <template>
-  <div class="flex h-screen w-full flex-col bg-background text-foreground">
+  <div class="flex h-full min-h-0 w-full flex-col bg-background text-foreground">
     <header class="flex h-14 shrink-0 items-center gap-2 border-b border-border px-3">
       <Button size="icon" variant="ghost" :aria-label="$t('pwaUi.market.back')" @click="goBack">
         <Icon icon="lucide:chevron-left" class="text-lg" />
       </Button>
       <div class="min-w-0 flex-1">
-        <p class="truncate text-sm font-medium">SAT20 Market</p>
+        <h1 class="truncate text-sm font-semibold">SAT20 Market</h1>
         <p class="truncate text-xs text-muted-foreground">{{ displayUrl }}</p>
       </div>
       <Button size="icon" variant="ghost" :aria-label="$t('pwaUi.market.reload')" @click="reload">

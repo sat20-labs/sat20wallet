@@ -1,9 +1,9 @@
 <template>
-  <TableRow :data-outpoint="utxo.utxo">
+  <TableRow :data-outpoint="utxo.utxo" class="grid grid-cols-2 rounded-lg border border-border bg-background/50 px-2 md:table-row md:rounded-none md:border-x-0 md:bg-transparent md:p-0">
     <TableCell v-if="showCheckbox && !readOnly">
-      <Checkbox :checked="isSelected" @update:checked="() => handleToggleSelect()" />
+      <Checkbox :checked="isSelected" :aria-label="displayUtxo" @update:checked="() => handleToggleSelect()" />
     </TableCell>
-    <TableCell class="truncate">
+    <TableCell class="col-span-2 min-w-0 whitespace-normal">
       <a v-if="explorerUrl && !readOnly" :href="explorerUrl" target="_blank" class="text-blue-400 underline">
         {{ displayUtxo }}
       </a>
@@ -14,9 +14,15 @@
         <div v-for="asset in utxo.assets || []" :key="asset.asset" class="break-all">{{ asset.amount }} {{ asset.asset }}</div>
       </div>
     </TableCell>
-    <TableCell class="truncate">{{ utxo.reason === 'manual' ? t('settingsUi.manualLock') : utxo.reason || '-' }}</TableCell>
-    <TableCell class="truncate">{{ formattedLockedTime }}</TableCell>
-    <TableCell>
+    <TableCell class="min-w-0 break-words text-sm">
+      <span class="block text-xs text-muted-foreground md:hidden">{{ t(showCheckbox ? 'utxoManager.asset' : 'utxoManager.reason') }}</span>
+      {{ utxo.reason === 'manual' ? t('settingsUi.manualLock') : utxo.reason || '-' }}
+    </TableCell>
+    <TableCell class="min-w-0 whitespace-normal text-sm">
+      <span class="block text-xs text-muted-foreground md:hidden">{{ t('utxoManager.lockedTime') }}</span>
+      {{ formattedLockedTime }}
+    </TableCell>
+    <TableCell class="col-span-2 min-w-0 whitespace-normal">
       <Button v-if="!showCheckbox && !readOnly" size="sm" variant="default" :loading="isUnlocking" @click="handleUnlock">
         {{ t('utxoManager.unlockBtn') }}
       </Button>

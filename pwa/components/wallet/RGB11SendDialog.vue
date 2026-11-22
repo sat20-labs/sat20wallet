@@ -1,6 +1,6 @@
 <template>
   <Dialog :open="isOpen" @update:open="handleOpenChange">
-    <DialogContent class="max-h-[calc(100dvh_-_2rem)] w-[calc(100%_-_2rem)] grid-cols-[minmax(0,1fr)] gap-4 overflow-y-auto rounded-xl bg-zinc-950"
+    <DialogContent class="max-h-[calc(100dvh_-_2rem)] w-[calc(100%_-_2rem)] max-w-md grid-cols-[minmax(0,1fr)] gap-4 overflow-y-auto rounded-xl bg-background"
       @escape-key-down="preventDismiss" @interact-outside="preventDismiss">
       <DialogHeader class="mb-0 pr-8 text-left">
         <DialogTitle>{{ t(inflation ? 'rgb11Transfer.inflate' : 'rgb11Transfer.sendTitle') }}</DialogTitle>
@@ -26,6 +26,7 @@
           </div>
         </template>
         <template v-else>
+          <p class="text-sm text-muted-foreground">{{ t('tools.txConfirm.network') }} <span class="ml-1 text-foreground">Bitcoin / {{ wallet.network }}</span></p>
           <div class="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-zinc-800 bg-zinc-900 p-3">
             <p role="status" class="min-w-0 flex-1 basis-48 text-sm font-medium">
               {{ uncertain ? t('rgb11Transfer.confirmUnverified') : displayStatus(transfer.status) }}
@@ -43,16 +44,18 @@
               </div>
               <dl class="space-y-2 text-sm">
                 <div>
-                  <dt class="text-muted-foreground">{{ t('tools.txConfirm.asset') }}</dt>
-                  <dd class="break-all font-mono">{{ recipient.amount.asset }}</dd>
-                </div>
-                <div>
-                  <dt class="text-muted-foreground">{{ t('rgb11Invoice.amount') }}</dt>
-                  <dd class="break-all font-semibold tabular-nums">{{ recipient.amount.amount }}</dd>
-                </div>
-                <div>
                   <dt class="text-muted-foreground">{{ t('tools.txConfirm.to') }}</dt>
                   <dd class="break-all font-mono">{{ recipient.destination }}</dd>
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                  <div>
+                    <dt class="text-muted-foreground">{{ t('rgb11Invoice.amount') }}</dt>
+                    <dd class="break-all font-semibold tabular-nums">{{ recipient.amount.amount }}</dd>
+                  </div>
+                  <div>
+                    <dt class="text-muted-foreground">{{ t('tools.txConfirm.asset') }}</dt>
+                    <dd class="break-all font-mono">{{ recipient.amount.asset }}</dd>
+                  </div>
                 </div>
               </dl>
               <div v-if="transfer.needs_receipts" class="space-y-2">
@@ -96,9 +99,9 @@
         <Button v-if="!transfer" :disabled="loading || !destination.trim() || !account.rgb11WriteAllowed"
           class="w-full" @click="prepare">{{ t('rgb11Transfer.prepare') }}</Button>
         <div v-else-if="transfer.can_confirm || (transfer.can_cancel && !uncertain)"
-          class="flex justify-end gap-2 border-t border-zinc-800 pt-3">
-          <Button v-if="transfer.can_cancel && !uncertain" variant="outline" :disabled="loading" @click="cancel">{{ t('common.cancel') }}</Button>
-          <Button v-if="transfer.can_confirm" :disabled="loading" class="flex-1 sm:flex-none" @click="confirm">{{ t('common.confirm') }}</Button>
+          class="sticky bottom-0 flex justify-end gap-2 border-t border-border bg-background py-3">
+          <Button v-if="transfer.can_cancel && !uncertain" variant="outline" :disabled="loading" class="h-11" @click="cancel">{{ t('common.cancel') }}</Button>
+          <Button v-if="transfer.can_confirm" :disabled="loading" class="h-11 flex-1 sm:flex-none" @click="confirm">{{ t('common.confirm') }}</Button>
         </div>
       </div>
     </DialogContent>

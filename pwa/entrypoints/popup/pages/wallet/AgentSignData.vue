@@ -1,15 +1,14 @@
 <template>
-  <main class="min-h-screen bg-background p-4 text-foreground">
-    <h1 class="mb-4 text-xl font-semibold">{{ $t('pwaUi.agentSign.title') }}</h1>
-    <p class="mb-3 text-sm text-muted-foreground">{{ $t('pwaUi.agentSign.reviewHint') }}</p>
-    <textarea
-      v-model="message"
-      class="mb-3 h-36 w-full rounded border border-border bg-background p-2 text-sm"
-      :placeholder="$t('pwaUi.agentSign.rawJson')"
-    />
-    <Button class="mb-3" :disabled="!message.trim() || signing" @click="reviewSignature">{{ $t('pwaUi.agentSign.review') }}</Button>
+  <LayoutSecond :title="$t('pwaUi.agentSign.title')">
+    <div class="space-y-4">
+    <section class="space-y-3 rounded-xl border border-border bg-card p-4">
+      <p class="text-sm text-muted-foreground">{{ $t('pwaUi.agentSign.reviewHint') }}</p>
+      <label for="agent-payload" class="block text-sm font-medium">{{ $t('pwaUi.agentSign.payload') }}</label>
+      <Textarea id="agent-payload" v-model="message" rows="5" spellcheck="false" :placeholder="$t('pwaUi.agentSign.rawJson')" />
+      <Button class="min-h-11 w-full sm:w-auto" :disabled="!message.trim() || signing" @click="reviewSignature">{{ $t('pwaUi.agentSign.review') }}</Button>
+    </section>
 
-    <section v-if="review" class="mb-3 space-y-3 rounded border border-border p-3" :aria-label="$t('pwaUi.agentSign.confirmation')">
+    <section v-if="review" class="space-y-4 rounded-xl border border-border bg-card p-4" :aria-label="$t('pwaUi.agentSign.confirmation')">
       <div>
         <h2 class="font-medium">{{ $t('pwaUi.agentSign.activeAccount') }}</h2>
         <dl class="mt-2 grid gap-2 text-xs">
@@ -31,25 +30,31 @@
         </dl>
       </div>
 
-      <div>
-        <h2 class="font-medium">{{ $t('pwaUi.agentSign.payload') }}</h2>
+      <details class="rounded-md border border-border p-3">
+        <summary class="cursor-pointer text-sm font-medium">{{ $t('pwaUi.agentSign.payload') }}</summary>
         <pre class="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/40 p-2 text-xs">{{ review.message }}</pre>
-      </div>
+      </details>
 
-      <div class="flex gap-2">
+      <div class="grid grid-cols-2 gap-2">
         <Button variant="outline" :disabled="signing" @click="cancelReview">{{ $t('pwaUi.agentSign.cancel') }}</Button>
         <Button :disabled="signing" @click="confirmSignature">{{ signing ? $t('pwaUi.agentSign.signing') : $t('pwaUi.agentSign.sign') }}</Button>
       </div>
     </section>
 
-    <pre v-if="output" class="whitespace-pre-wrap break-all rounded border border-border p-3 text-xs">{{ output }}</pre>
-  </main>
+    <details v-if="output" open class="rounded-xl border border-border bg-card p-4">
+      <summary class="cursor-pointer text-sm font-medium">{{ $t('pwaUi.design.signatureResult') }}</summary>
+      <pre class="mt-2 whitespace-pre-wrap break-all text-xs">{{ output }}</pre>
+    </details>
+    </div>
+  </LayoutSecond>
 </template>
 
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 import { ref } from 'vue'
+import LayoutSecond from '@/components/layout/LayoutSecond.vue'
 import { Button } from '@/components/ui/button'
+import { Textarea } from '@/components/ui/textarea'
 import { useWalletStore } from '@/store'
 import { summarizeSignaturePayload, type AgentSignatureSummary } from '@/composables/usePwaAgentRiskPolicy'
 import walletManager from '@/utils/sat20'

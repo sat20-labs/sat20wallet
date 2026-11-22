@@ -72,8 +72,8 @@
                 <button
                   type="button"
                   @click="showPassword = !showPassword"
-                  size="sm"
-                  class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  :aria-label="$t(showPassword ? 'pwaUi.design.hidePassword' : 'pwaUi.design.showPassword')"
+                  class="absolute right-1 top-1/2 grid size-10 -translate-y-1/2 place-items-center rounded text-muted-foreground hover:text-foreground"
                 >
                   <Icon
                     v-if="showPassword"

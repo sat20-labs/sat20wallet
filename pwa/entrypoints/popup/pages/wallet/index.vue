@@ -1,6 +1,6 @@
 <template>
   <LayoutHome class="">
-    <WalletHeader />
+    <WalletHeader show-sync-status />
 
     <AccountAutopayReminder />
     <ClosedChannelRecovery />

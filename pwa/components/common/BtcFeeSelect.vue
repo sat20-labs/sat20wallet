@@ -3,11 +3,12 @@
     <Button
       @click="isModalOpen = true"
       variant="outline"
-      size="xs"
-      class="rounded-md text-gray-300 text-xs font-normal ml-2"
+      size="sm"
+      class="min-h-10 gap-1 px-2 text-xs tabular-nums"
+      :aria-label="`${$t('pwaUi.design.btcFee')} ${displayedRate}`"
     >
-      <Icon icon="lucide:fuel" class="w-1 h-1 mr-[0.5px] text-gray-500" />
-      <span class="mr-2">{{ displayedRate }}</span>
+      <span class="text-muted-foreground">BTC</span>
+      <span>{{ displayedRate }}</span>
     </Button>
 
     <Dialog v-model:open="isModalOpen">

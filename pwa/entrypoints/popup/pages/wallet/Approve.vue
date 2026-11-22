@@ -1,13 +1,13 @@
 <template>
   <Dialog v-model:open="isVisible">
-    <DialogScrollContent class="max-w-md mx-4">
-      <DialogHeader class="mb-4 pr-10">
-        <DialogTitle class="text-lg">{{ title }}</DialogTitle>
+    <DialogScrollContent class="my-3 w-[calc(100%_-_1.5rem)] max-w-md rounded-xl px-4 pb-0 pt-4 sm:px-5">
+      <DialogHeader class="border-b border-border pb-3 text-left">
+        <DialogTitle class="break-words text-lg">{{ title }}</DialogTitle>
       </DialogHeader>
       <div
-        class="max-h-[65vh] overflow-y-auto overscroll-y-contain touch-pan-y"
+        class="min-w-0 max-h-[calc(100dvh_-_7rem)] overflow-y-auto overscroll-y-contain touch-pan-y"
       >
-        <div class="px-2 py-1">
+        <div class="min-w-0 pb-1">
           <component
             :is="componentName"
             :key="currentRequest?.id"

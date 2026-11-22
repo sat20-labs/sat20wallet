@@ -42,7 +42,7 @@
       <AssetOperationDialog v-model:open="showDialog" :title="translatedOperationTitle"
         :description="operationDescription" :amount="operationAmount" :address="operationAddress" :chain="selectedChain"
         :max-amount="maxAmount" :operation-type="operationType" :asset-type="selectedAsset?.type"
-        :asset-ticker="selectedAsset?.label" :asset-key="selectedAsset?.key" :network-fee="sendNetworkFee"
+        :asset-ticker="selectedAsset?.label" :asset-key="selectedAsset?.key ?? '::'" :network-fee="sendNetworkFee"
         :total-spend="sendTotalSpend" @update:amount="operationAmount = $event"
         @update:address="operationAddress = $event" @confirm="handleOperationConfirm" />
       <LockWithExpandConfirmDialog v-if="pendingLockExpand" v-model:open="showLockExpandDialog"

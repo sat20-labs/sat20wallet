@@ -11,7 +11,7 @@
 
       <form @submit="onSubmit">
         <Tabs v-model="tab" class="space-y-4">
-          <TabsList class="grid w-full grid-cols-2">
+          <TabsList class="grid w-full grid-cols-1">
             <TabsTrigger value="mnemonic">{{ $t('import.recoveryPhraseTab') }}</TabsTrigger>
             <!-- <TabsTrigger value="private-key">{{ $t('import.privateKeyTab') }}</TabsTrigger> -->
           </TabsList>
@@ -93,7 +93,7 @@
         </Tabs>
 
         <div class="flex justify-between mt-8 gap-2">
-          <Button variant="outline" type="button" class="w-full h-11">
+          <Button variant="outline" as-child class="w-full h-11">
             <RouterLink to="/">{{ $t('import.cancelButton') }}</RouterLink>
           </Button>
           <Button type="submit" :disabled="loading || importCommitted" class="w-full h-11">

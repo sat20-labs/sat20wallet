@@ -10,6 +10,10 @@
       <div class="space-y-2 sm:space-y-3">
         <!-- Basic Info Section -->
         <div class="bg-muted/50 rounded-lg p-2 sm:p-3">
+          <div class="flex items-start justify-between gap-2 py-1">
+            <span class="text-xs text-muted-foreground">{{ $t('tools.txConfirm.network') }}</span>
+            <span class="break-words text-right text-xs font-medium">SatoshiNet / {{ wallet.network }}</span>
+          </div>
           <div class="flex items-center justify-between gap-2 py-1">
             <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.action')
             }}</span>
@@ -142,6 +146,7 @@ import { Alert, AlertTitle } from '@/components/ui/alert'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { useToast } from '@/components/ui/toast-new'
 import sat20 from '@/utils/sat20'
+import { useWalletStore } from '@/store/wallet'
 interface Props {
   data: {
     url: string;
@@ -157,6 +162,7 @@ interface Props {
 const props = defineProps<Props>()
 const emit = defineEmits(['confirm', 'cancel'])
 const toast = useToast()
+const wallet = useWalletStore()
 
 const isLoading = ref(false)
 const invokeError = ref('')

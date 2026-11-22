@@ -1,27 +1,21 @@
 <template>
   <LayoutSecond :title="t('settingsUi.nodeTitle')">
-    <div class="max-w-xl mx-auto my-8">
+    <div class="mx-auto max-w-xl">
       <Card>
         <CardHeader>
           <CardTitle class="text-lg">{{ $t('nodeSetting.selectNodeType') }}</CardTitle>
-          <CardDescription>
-            <Accordion type="single" collapsible>
+          <p class="text-sm text-muted-foreground">SatoshiNet / {{ network }}</p>
+          <Accordion type="single" collapsible>
               <AccordionItem value="guide">
                 <AccordionTrigger>
-                  <p class="flex justify-start items-center text-sm text-muted-foreground">
-                    <!-- <Icon icon="lucide:message-circle-warning" class="w-6 h-6 mr-1 text-green-500" /> -->
-                    <span class="text-green-500 mr-1">
-                      <Icon icon="lucide:link" class="w-5 h-5 mr-1 text-green-500" />
-                    </span>
-                    <a :href="guideUrl" target="_blank" class="text-sky-500">{{ $t('nodeSetting.guideTitle') }} -></a>
-                  </p>
+                  <span>{{ $t('nodeSetting.guideTitle') }}</span>
                 </AccordionTrigger>
                 <AccordionContent>
                   <div class="text-sm whitespace-pre-line" v-html="$t('nodeSetting.guideText')"></div>
+                  <a :href="guideUrl" target="_blank" rel="noopener noreferrer" class="mt-3 inline-block text-sm text-primary underline">{{ $t('nodeSetting.guideTitle') }}</a>
                 </AccordionContent>
               </AccordionItem>
-            </Accordion>
-          </CardDescription>
+          </Accordion>
         </CardHeader>
         <CardContent>
           <div v-if="minerInfoLoading" class="text-sm text-muted-foreground">{{ $t('loading') }}</div>
@@ -73,7 +67,7 @@
         </CardFooter>
       </Card>
       <Dialog v-model:open="showConfirm">
-        <DialogContent class="w-[95%]">
+        <DialogContent class="w-[calc(100%_-_1.5rem)] max-w-md rounded-xl">
           <DialogHeader>
             <DialogTitle><span class="flex justify-center items-center text-zinc-300 text-lg">
                 <Icon icon="lucide:message-circle-question-mark" class="w-8 h-8 mr-1 text-green-500" /> {{ pendingAction === 'unstake' ? $t('nodeSetting.confirmUnstake') : isCore ?
@@ -87,10 +81,10 @@
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <div class="flex justify-end gap-3">
-              <Button @click="pendingAction === 'unstake' ? confirmUnstake() : confirmStake()" :disabled="isLoading" :loading="isLoading" class="w-36">{{ $t('nodeSetting.confirm') }}</Button>
-              <Button variant="secondary" @click="showConfirm = false" class="w-36">{{ $t('nodeSetting.cancel')
+            <div class="grid w-full grid-cols-2 gap-2">
+              <Button variant="outline" @click="showConfirm = false" class="h-11">{{ $t('nodeSetting.cancel')
               }}</Button>
+              <Button @click="pendingAction === 'unstake' ? confirmUnstake() : confirmStake()" :disabled="isLoading" :loading="isLoading" class="h-11" :variant="pendingAction === 'unstake' ? 'destructive' : 'default'">{{ $t('nodeSetting.confirm') }}</Button>
             </div>
           </DialogFooter>
         </DialogContent>
@@ -107,7 +101,7 @@ import { useQuery } from '@tanstack/vue-query'
 import { satnetApi } from '@/apis'
 import walletManager from '@/utils/sat20'
 import LayoutSecond from '@/components/layout/LayoutSecond.vue'
-import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card'
+import { Card, CardHeader, CardTitle, CardContent, CardFooter } from '@/components/ui/card'
 import { Icon } from '@iconify/vue'
 
 import { Button } from '@/components/ui/button'

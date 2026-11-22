@@ -1,18 +1,26 @@
 <template>
   <LayoutScroll>
-    <div class="p-4 space-y-5 max-w-xl mx-auto">
-      <div class="text-center space-y-1">
+    <div class="mx-auto max-w-xl space-y-4 pb-6 pt-3 sm:pt-8">
+      <header class="space-y-2">
         <h1 class="text-2xl font-semibold">{{ rehearsalOnly ? t('accountManagement.ui.rehearsalTitle') : t('accountManagement.ui.restoreTitle') }}</h1>
         <p v-if="rehearsalOnly" class="text-sm text-muted-foreground">{{ t('accountManagement.ui.rehearsalIntro') }}</p>
         <template v-else>
           <p class="text-sm text-muted-foreground">{{ t('accountManagement.ui.restoreIntro') }}</p>
           <p class="text-sm text-muted-foreground">{{ t('accountManagement.ui.resumeHint') }}</p>
         </template>
-      </div>
+      </header>
+      <ol v-if="step < 5" class="grid grid-cols-3 gap-1.5 text-xs" :aria-label="t('pwaUi.design.progress')">
+        <li v-for="(key, index) in recoverySteps" :key="key"
+          class="min-w-0 border-t-2 px-1 pt-2"
+          :class="index === recoveryStep ? 'border-primary font-semibold text-foreground' : 'border-border text-muted-foreground'"
+          :aria-current="index === recoveryStep ? 'step' : undefined">
+          {{ t(key) }}
+        </li>
+      </ol>
 
-      <section v-if="step === 1" class="space-y-3">
-        <label class="font-medium">{{ t('accountManagement.ui.recoveryFile') }}</label>
-        <Textarea v-model="recoveryFile" rows="6" spellcheck="false" autocomplete="off" autocapitalize="off"
+      <section v-if="step === 1" class="space-y-3 rounded-xl border border-border bg-card p-4">
+        <label for="restore-file" class="block text-sm font-medium">{{ t('accountManagement.ui.recoveryFile') }}</label>
+        <Textarea id="restore-file" v-model="recoveryFile" rows="5" spellcheck="false" autocomplete="off" autocapitalize="off"
           :placeholder="t('accountManagement.ui.pasteRecoveryFile')" />
         <Button class="w-full" :disabled="busy || !recoveryFile" @click="loadRecovery">
           <Icon v-if="busy" icon="lucide:loader-2" class="mr-2 h-4 w-4 animate-spin" />
@@ -20,15 +28,16 @@
         </Button>
       </section>
 
-      <section v-else-if="step === 2 && loaded" class="space-y-4">
+      <section v-else-if="step === 2 && loaded" class="space-y-4 rounded-xl border border-border bg-card p-4">
         <h2 class="font-medium">{{ t('accountManagement.ui.provideFactors') }}</h2>
         <div v-for="(question,index) in loaded.questions" :key="question.id" class="space-y-1">
-          <label class="text-sm">{{ question.prompt }}</label><Input v-model="answers[index]" type="password" autocomplete="off" />
+          <label :for="`restore-answer-${index}`" class="text-sm">{{ question.prompt }}</label>
+          <Input :id="`restore-answer-${index}`" v-model="answers[index]" type="password" autocomplete="off" />
         </div>
         <Button class="w-full" :disabled="busy" @click="previewRecovery">{{ t('accountManagement.ui.previewRecovery') }}</Button>
       </section>
 
-      <section v-else-if="step === 4 && preview" class="space-y-4">
+      <section v-else-if="step === 4 && preview" class="space-y-4 rounded-xl border border-border bg-card p-4">
         <h2 class="font-medium">{{ rehearsalOnly ? t('accountManagement.ui.factorsVerified') : t('accountManagement.ui.confirmRecovery') }}</h2>
         <div v-for="wallet in preview.wallets" :key="wallet.name" class="rounded-lg border p-3">
           <div class="font-medium">{{ wallet.name }}</div>
@@ -103,6 +112,8 @@ const busy = ref(false)
 const error = ref('')
 const failedModules = ref<ModuleView[]>([])
 const step = ref(1)
+const recoverySteps = ['pwaUi.design.recoveryFile', 'pwaUi.design.recoveryVerify', 'pwaUi.design.recoveryReview']
+const recoveryStep = computed(() => step.value === 1 ? 0 : step.value === 2 ? 1 : 2)
 const recoveryFile = ref('')
 const loaded = ref<RecoveryView | null>(null)
 const answers = ref<string[]>([])

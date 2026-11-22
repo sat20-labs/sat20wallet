@@ -181,9 +181,7 @@ export async function runPwaPosCases(t, fixture) {
     await expect(activePanel()).toHaveCount(1)
   }
   const selectMode = async mode => {
-    // HomeHeader's last button opens its Transcending Mode chooser. All choices
-    // and business actions use actual rendered controls; no mode store mutation.
-    await page.locator('header.mb-6').getByRole('button').last().click()
+    await page.getByRole('button', { name: 'Transcending mode', exact: true }).click()
     await expect(page.getByRole('heading', { name: 'Transcending Mode', exact: true })).toBeVisible()
     await page.getByRole('button', { name: mode === 'lightning' ? 'Lightning' : 'Poolswap', exact: true }).click()
     await expect(page.getByRole('heading', { name: 'Transcending Mode', exact: true })).toBeHidden()

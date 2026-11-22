@@ -173,14 +173,32 @@ export const useAccountManagementStore = defineStore('accountManagement', () => 
   const quotaActionKey = computed(() => quotaNeedsActivation.value ? 'accountManagement.quota.activateAction' : 'accountManagement.quota.reviewAction')
   const quotaMessageKeyForCode = (code: unknown) => code === 'DKVS_QUOTA_EXCEEDED' ? quotaGuidanceKey.value : ''
 
-  const shouldShowBanner = computed(() => sessionReady.value && (
-    loading.value && status.value === null || statusReadFailed.value || retryFailed.value ||
-    status.value?.state === 'local' || status.value?.state === 'locked' || status.value?.state === 'syncing' ||
-    status.value?.state === 'error' ||
-    status.value?.backup_state === 'pending' || status.value?.backup_state === 'uploading' ||
-    status.value?.backup_state === 'cleanup' || moduleIssues.value.length > 0 ||
-    hasQuotaIssue.value
-  ))
+  const discoveryIssue = computed(() => !hasDatabaseIssue.value && !hasQuotaIssue.value && !statusReadFailed.value &&
+    status.value?.discovery_status === 'unknown' && status.value.backup_risk === 'notConfigured' &&
+    Boolean(status.value.error_code) && status.value.state !== 'locked')
+  const readinessError = computed(() => hasDatabaseIssue.value || statusReadFailed.value || retryFailed.value ||
+    status.value?.state === 'error' || hasQuotaIssue.value || discoveryIssue.value)
+  const readinessKey = computed(() => {
+    if (hasDatabaseIssue.value) return 'accountManagement.readiness.databaseFailed'
+    if (quotaNoticeKey.value) return quotaNoticeKey.value
+    if (statusReadFailed.value) return 'accountManagement.readiness.readFailed'
+    if (discoveryIssue.value) return 'accountManagement.readiness.discoveryUnverified'
+    if (retryFailed.value) return 'accountManagement.readiness.retryFailed'
+    if (loading.value && !status.value) return 'accountManagement.readiness.syncing'
+    switch (status.value?.state) {
+      case 'local': return 'accountManagement.readiness.local'
+      case 'locked': return 'accountManagement.readiness.locked'
+      case 'syncing': return 'accountManagement.readiness.syncing'
+      case 'error': return 'accountManagement.readiness.error'
+      case 'ready':
+        if (moduleIssues.value.length) return 'accountManagement.readiness.moduleIssue'
+        if (status.value.backup_state === 'pending') return 'accountManagement.readiness.backupPending'
+        if (status.value.backup_state === 'uploading') return 'accountManagement.readiness.backupUploading'
+        if (status.value.backup_state === 'cleanup') return 'accountManagement.readiness.cleanup'
+    }
+    return ''
+  })
+  const shouldShowBanner = computed(() => sessionReady.value && Boolean(readinessKey.value))
 
   return {
     status,
@@ -192,6 +210,9 @@ export const useAccountManagementStore = defineStore('accountManagement', () => 
     sessionReady,
     identityKey,
     shouldShowBanner,
+    discoveryIssue,
+    readinessError,
+    readinessKey,
     moduleIssues,
     hasDatabaseIssue,
     canRetryBackup,

@@ -4,11 +4,11 @@
 
     <div class="space-y-4 px-1 pb-4">
       <div class="flex items-center justify-between">
-        <Button variant="ghost" size="sm" @click="router.back()">
+        <Button variant="ghost" size="icon" class="size-11" :aria-label="$t('common.back')" @click="router.back()">
           <Icon icon="lucide:arrow-left" class="h-4 w-4" />
         </Button>
-        <div class="text-base font-medium">{{ $t('pwaUi.mining.title') }}</div>
-        <Button variant="ghost" size="icon" :disabled="loading" :aria-label="$t('pwaUi.mining.refresh')" data-testid="mining-refresh" @click="refreshPage">
+        <h1 class="text-center text-lg font-semibold">{{ $t('pwaUi.mining.title') }}</h1>
+        <Button variant="ghost" size="icon" class="size-11" :disabled="loading" :aria-label="$t('pwaUi.mining.refresh')" data-testid="mining-refresh" @click="refreshPage">
           <Icon icon="lucide:refresh-cw" class="h-4 w-4" :class="{ 'animate-spin': loading }" />
         </Button>
       </div>
@@ -22,7 +22,7 @@
       >
         <template #controls>
           <div class="rounded-xl border border-border bg-card p-4">
-            <div class="grid grid-cols-3 gap-2" :aria-label="$t('pwaUi.mining.presets')">
+            <div class="grid gap-2 min-[385px]:grid-cols-3" role="group" :aria-label="$t('pwaUi.mining.presets')">
               <button
                 v-for="preset in presets"
                 :key="preset.key"

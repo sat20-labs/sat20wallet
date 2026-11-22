@@ -604,6 +604,7 @@
     "error": "Error loading transaction details. Please check the console."
   },
   "splitAsset": {
+    "title": "Split asset",
     "review": "Review split",
     "sameDestination": "Each output sends the same amount to the destination below. This does not configure different recipients.",
     "amountPerOutput": "Requested amount per output",
@@ -1335,6 +1336,14 @@
     "unitPrice": "Unit price"
   },
   "accountManagement": {
+    "syncLabel": "Account sync: {status}",
+    "syncBadge": {
+      "local": "Local",
+      "locked": "Locked",
+      "syncing": "Syncing",
+      "synced": "Synced",
+      "error": "Error"
+    },
     "accountState": {
       "local": "Local to this device",
       "locked": "Locked",
@@ -1375,7 +1384,7 @@
       "restoreAccount": "Restore account",
       "locked": "The account is locked. Unlock it to continue.",
       "syncing": "The account is syncing and being verified. Related new business is temporarily unavailable; existing operations and local browsing remain available.",
-      "error": "Account sync hit a network error. Related new business is temporarily unavailable.",
+      "error": "Account sync failed. Some new operations are temporarily unavailable.",
       "backupPending": "The account backup is still pending. Business on this device is available.",
       "backupUploading": "The account backup is uploading. Business on this device is available.",
       "cleanup": "Confirmed sync requests are being cleaned up. Business on this device is available.",
@@ -1388,7 +1397,7 @@
       "retryNow": "Retry now",
       "retrying": "Requesting…",
       "manage": "Account status",
-      "moduleBlocked": "Related new operations are temporarily unavailable. See the account status above."
+      "moduleBlocked": "Related new operations are temporarily unavailable. Check Settings → Account management."
     },
     "quota": {
       "activation": "A DKVS quota limit was reached. Open account management to activate recovery and review storage options. Temporary storage remains subject to the free quota; choose paid storage if appropriate. After changing the setup, choose Retry now to resubmit the pending backup.",
@@ -1437,6 +1446,8 @@
       "createRecovery": "Configure account recovery",
       "createGuardianResponse": "Create recovery response",
       "copyRecoveryCode": "Copy recovery code",
+      "recoveryCodeCopied": "Recovery code copied",
+      "syncDetails": "Sync diagnostics",
       "annualCost": "Estimated annual cost: {value}",
       "acceptGuardianSetup": "Accept guardian setup",
       "title": "Self-custodial account recovery",
@@ -1694,6 +1705,26 @@
     }
   },
   "pwaUi": {
+    "design": {
+      "account": "Account and recovery",
+      "security": "Security",
+      "network": "Network and nodes",
+      "advanced": "Advanced tools",
+      "details": "Technical details",
+      "progress": "Recovery progress",
+      "recoveryFile": "Recovery file",
+      "recoveryVerify": "Verification",
+      "recoveryReview": "Review",
+      "showPassword": "Show password",
+      "hidePassword": "Hide password",
+      "showPhrase": "Show recovery phrase",
+      "hidePhrase": "Hide recovery phrase",
+      "btcFee": "Bitcoin fee rate",
+      "satsnetFee": "SatoshiNet fee",
+      "transcendMode": "Transcending mode",
+      "rootWallet": "Account root",
+      "signatureResult": "Signature result"
+    },
     "install": {
       "title": "Install SAT20 Wallet",
       "install": "Install",

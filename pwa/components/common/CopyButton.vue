@@ -1,5 +1,5 @@
 <template>
-  <Button variant="ghost" size="icon" @click="copyHandler">
+  <Button variant="ghost" size="icon" class="min-h-10 min-w-10 shrink-0" :aria-label="$t('common.copy')" @click="copyHandler">
     <Icon v-if="!copied" icon="solar:copy-linear"/>
     <Icon v-else icon="solar:check-read-linear"  />
   </Button>
@@ -15,7 +15,6 @@ interface Props {
 }
 
 const props = defineProps<Props>();
-console.log(' props.text', props.text);
 
 const { copy, copied, isSupported } = useClipboard();
 

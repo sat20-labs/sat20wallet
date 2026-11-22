@@ -1,21 +1,42 @@
 <template>
-  <LayoutScroll>
-    <div class="mx-auto max-w-2xl space-y-5 p-4">
-      <div class="flex items-center gap-2"><Button variant="ghost" @click="router.back()">{{ t('common.back') }}</Button><h1 class="text-xl font-semibold">{{ t('accountManagement.ui.managementTitle') }}</h1></div>
-      <section v-if="state" class="space-y-2 rounded border p-3">
-        <p>{{ t('accountManagement.ui.accountStatus', {value: t(`accountManagement.accountState.${state.state}`)}) }}</p>
-        <p>{{ t('accountManagement.ui.backupState', {value: t(`accountManagement.backupState.${state.backup_state}`)}) }}</p>
-        <p v-if="state.storage">{{ t(state.storage.option.id === 'paid' ? 'accountManagement.ui.paidStorage' : 'accountManagement.ui.temporaryStorage') }}</p>
-        <p v-if="state.last_rehearsal_at">{{ t('accountManagement.ui.lastRehearsal', {value: new Date(state.last_rehearsal_at).toLocaleString()}) }}</p>
-        <p v-if="state.error_code" role="alert">{{ state.error_code }}</p>
-        <p v-for="module in state.modules.filter(item => item.error_code)" :key="module.name">{{ module.name }}: {{ module.error_code }}</p>
-        <Button v-if="accountState.canRetryBackup" variant="outline" :disabled="busy" @click="run(async () => { await accountState.retryNow() })">{{ t('accountManagement.readiness.retryNow') }}</Button>
-        <Button v-if="state.backup_risk === 'notConfigured' && state.discovery_status === 'active-waiting-backup'" variant="outline" @click="router.push('/restore-account')">{{ t('accountManagement.ui.restoreExisting') }}</Button>
-        <template v-if="state.locator">
-          <Textarea :model-value="state.locator" readonly />
-          <Button variant="outline" @click="copy(state.locator)">{{ t('accountManagement.ui.copyRecoveryCode') }}</Button>
-          <Button variant="outline" @click="router.push('/restore-account?mode=rehearsal')">{{ t('accountManagement.ui.rehearsalTitle') }}</Button>
-        </template>
+  <LayoutSecond :title="t('accountManagement.ui.managementTitle')" hide-nav>
+    <div class="mx-auto max-w-2xl space-y-4 pb-6">
+      <AccountReadinessBanner v-if="!state" />
+      <section v-if="state" class="space-y-4 rounded-xl border border-border bg-card p-4 text-sm">
+        <span v-if="state.storage" class="inline-flex rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-foreground">
+          {{ t(state.storage.option.id === 'paid' ? 'accountManagement.ui.paidStorage' : 'accountManagement.ui.temporaryStorage') }}
+        </span>
+        <div class="space-y-1.5">
+          <p class="font-medium">{{ t('accountManagement.ui.accountStatus', {value: t(`accountManagement.accountState.${state.state}`)}) }}</p>
+          <p class="text-muted-foreground">{{ t('accountManagement.ui.backupState', {value: t(`accountManagement.backupState.${state.backup_state}`)}) }}</p>
+        </div>
+        <AccountReadinessBanner />
+        <details v-if="state.error_code || accountState.moduleIssues.length" class="rounded-md bg-muted/50 px-3 py-2 text-xs">
+          <summary class="cursor-pointer font-medium">{{ t('accountManagement.ui.syncDetails') }}</summary>
+          <div class="mt-2 space-y-1 break-all font-mono text-muted-foreground">
+            <p v-if="state.error_code">{{ state.error_code }}</p>
+            <p v-for="module in accountState.moduleIssues" :key="module.name">{{ module.name }}: {{ module.error_code }}</p>
+          </div>
+        </details>
+        <div v-if="(accountState.canRetryBackup && !accountState.shouldShowBanner) || canRestoreExisting" class="flex flex-wrap gap-2">
+          <Button v-if="accountState.canRetryBackup && !accountState.shouldShowBanner" size="sm" variant="outline" :disabled="busy || accountState.retrying" @click="run(async () => { await accountState.retryNow() })">
+            {{ accountState.retrying ? t('accountManagement.readiness.retrying') : t('accountManagement.readiness.retryNow') }}
+          </Button>
+          <Button v-if="canRestoreExisting" size="sm" variant="outline" @click="router.push('/restore-account')">
+            {{ t('accountManagement.ui.restoreExisting') }}
+          </Button>
+        </div>
+      </section>
+      <section v-if="state?.locator" class="space-y-3 rounded-xl border border-border bg-card p-4">
+        <h2 class="text-sm font-semibold">{{ t('accountManagement.ui.recoveryCode') }}</h2>
+        <p v-if="state.last_rehearsal_at" class="text-sm text-muted-foreground">
+          {{ t('accountManagement.ui.lastRehearsal', {value: new Date(state.last_rehearsal_at).toLocaleString()}) }}
+        </p>
+        <div class="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+          <Button size="sm" variant="outline" @click="copy(state.locator)">{{ t('accountManagement.ui.copyRecoveryCode') }}</Button>
+          <Button size="sm" variant="outline" @click="router.push('/restore-account?mode=rehearsal')">{{ t('accountManagement.ui.rehearsalTitle') }}</Button>
+        </div>
+        <p v-if="copied" class="text-xs text-muted-foreground" role="status">{{ t('accountManagement.ui.recoveryCodeCopied') }}</p>
       </section>
       <section v-if="state?.autopay && state.backup_risk !== 'notConfigured'" class="space-y-2 rounded border p-3">
         <h2>{{ t('accountManagement.dkvsPaymentDetails') }}</h2>
@@ -98,14 +119,15 @@
         </DialogContent>
       </Dialog>
     </div>
-  </LayoutScroll>
+  </LayoutSecond>
 </template>
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useClipboard, useDocumentVisibility } from '@vueuse/core'
-import LayoutScroll from '@/components/layout/LayoutScroll.vue'
+import LayoutSecond from '@/components/layout/LayoutSecond.vue'
+import AccountReadinessBanner from '@/components/account/AccountReadinessBanner.vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -116,9 +138,13 @@ import { useAccountManagementStore } from '@/store/accountManagement'
 import { withWalletPassword } from '@/lib/walletPasswordPrompt'
 import accountSDK, { accountDisplayMessage, saveExportFile } from '@/utils/accountManagement'
 import type { PaymentQuote, StorageOption, StorageView, RecoverySummary, RecoverySetupView, QuestionInput } from '@/utils/walletViews'
-const {t} = useI18n(); const {copy} = useClipboard(); const router = useRouter()
+const { t } = useI18n()
+const { copy, copied } = useClipboard()
+const router = useRouter()
 const wallet = useWalletStore(); const accountState = useAccountManagementStore()
 const state = computed(() => accountState.status)
+const canRestoreExisting = computed(() => state.value?.backup_risk === 'notConfigured' &&
+  state.value.discovery_status === 'active-waiting-backup')
 const autopay = computed(() => state.value?.autopay)
 const visibility = useDocumentVisibility()
 const pendingFundingTx = ref('')

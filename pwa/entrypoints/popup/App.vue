@@ -5,9 +5,6 @@
         {{ isUpdating ? $t('setting.updateWaitingOperations') : $t('setting.versionWriteBlocked') }}
         <button v-if="!isUpdating" class="underline ml-2" @click="checkAndUpdate">{{ $t('setting.checkAndUpdate') }}</button>
       </div>
-      <AccountReadinessBanner
-        v-if="walletStore.hasWallet && !walletStore.locked && !walletSetupPaths.includes(router.currentRoute.value.path)"
-      />
       <div class="min-h-0 flex-1 overflow-hidden">
         <RouterView />
       </div>
@@ -86,7 +83,7 @@ import Approve from "@/entrypoints/popup/pages/wallet/Approve.vue";
 import WalletPasswordDialog from "@/components/common/WalletPasswordDialog.vue";
 import { useGlobalStore, useWalletStore } from "@/store";
 import { useAccountManagementStore } from "@/store/accountManagement";
-import AccountReadinessBanner from "@/components/account/AccountReadinessBanner.vue";
+import { toast } from "vue-sonner";
 import { useAppVersion } from "@/composables/useAppVersion";
 import { storeToRefs } from "pinia";
 import { Button } from "@/components/ui/button";
@@ -109,6 +106,26 @@ let autoLockTimer: ReturnType<typeof setTimeout> | undefined;
 const installPromptEvent = ref<BeforeInstallPromptEvent | undefined>();
 const showInstallPanel = ref(false);
 const walletSetupPaths = ["/", "/import", "/create", "/restore-account"];
+
+const accountToastId = "account-readiness";
+let lastNotice = "";
+watch(() => accountManagementStore.identityKey, () => {
+  lastNotice = "";
+  toast.dismiss(accountToastId);
+});
+watch(() => {
+  const store = accountManagementStore;
+  if (!store.sessionReady || store.loading) return "";
+  return store.readinessKey || (store.status ? `accountManagement.accountState.${store.status.state}` : "");
+}, (key) => {
+  if (!key || key === lastNotice) return;
+  const firstStatus = !lastNotice;
+  lastNotice = key;
+  const isError = accountManagementStore.readinessError;
+  if (firstStatus && !isError) return;
+  const notify = isError ? toast.error : toast.info;
+  notify(t(key), { id: accountToastId, duration: 4500 });
+});
 
 const shouldAutoLock = () => {
   const path = router.currentRoute.value.path;

@@ -1,69 +1,37 @@
 <template>
-  <nav class="border-t border-border h-16">
-    <div class="flex justify-around items-center h-full">
+  <nav class="shrink-0 border-t border-border bg-background pb-[env(safe-area-inset-bottom)]">
+    <div class="mx-auto grid min-h-16 max-w-3xl grid-cols-4 gap-1 px-2 py-1">
       <button
         v-for="item in navItems"
         :key="item.to"
         type="button"
         :aria-label="$t(item.label)"
-        :title="$t(item.label)"
-        class="inline-flex h-10 w-10 items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
-        @click.prevent.stop="setActiveItem(item)"
+        :aria-current="isActive(item.to) ? 'page' : undefined"
+        class="flex min-h-11 min-w-0 flex-col items-center justify-center gap-1 rounded-lg px-1 py-1 text-center text-[11px] font-medium leading-tight transition-colors hover:bg-accent"
+        :class="isActive(item.to) ? 'bg-accent text-foreground' : 'text-muted-foreground'"
+        @click.prevent.stop="router.push(item.to)"
       >
-        <Icon :icon="item.icon" aria-hidden="true" class="text-lg text-muted-foreground" />
+        <component :is="item.icon" aria-hidden="true" class="size-4 shrink-0" />
+        <span class="break-words">{{ $t(item.label) }}</span>
       </button>
     </div>
   </nav>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
-import { useRouter } from 'vue-router';
-import { Icon } from '@iconify/vue';
-import { openLink } from '@/utils/browser';
+import { useRoute, useRouter } from 'vue-router'
+import { Globe, House, Settings, Wrench } from 'lucide-vue-next'
 
-interface NavItem {
-  icon: any;
-  label: string;
-  to?: string; // to 属性变为可选
-  external?: boolean; // 是否是外部链接
-  action?: () => void; // 自定义操作
-}
+const router = useRouter()
+const route = useRoute()
 
-const router = useRouter();
+const navItems = [
+  { icon: House, label: 'navigation.home', to: '/wallet' },
+  { icon: Globe, label: 'navigation.dapp', to: '/wallet/dapp' },
+  { icon: Wrench, label: 'tools.title', to: '/wallet/tools' },
+  { icon: Settings, label: 'setting.title', to: '/wallet/setting' },
+]
 
-const navItems: NavItem[] = [
-  { icon: 'lucide:house', label: 'navigation.home', to: '/wallet' },
-  {
-    icon: 'lucide:globe',
-    label: 'navigation.dapp',
-    action: () => {
-      router.push('/wallet/dapp');
-    }
-  },
-  { icon: 'lucide:wrench', label: 'tools.title', to: '/wallet/tools' },
-  { icon: 'lucide:settings', label: 'setting.title', to: '/wallet/setting' },
-];
-
-const activeItem = ref(navItems[0]);
-
-const setActiveItem = (item: NavItem) => {
-  activeItem.value = item;
-  // 如果有自定义操作，执行操作而不是导航
-  if (item.action) {
-    item.action();
-  } else if (item.external && item.to) {
-    openWindow(item.to);
-  } else if (item.to) {
-    router.push(item.to);
-  }
-};
-
-const openWindow = async (url: string) => {
-  try {
-    await openLink(url); // 使用统一的链接打开函数
-  } catch (error) {
-    console.error('打开链接失败:', error)
-  }
-};
+const isActive = (path: string) => route.path === path ||
+  (path === '/wallet/setting' && route.path.startsWith(`${path}/`))
 </script>

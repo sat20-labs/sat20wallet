@@ -1,15 +1,14 @@
 <template>
   <LayoutSecond :title="t('utxoManager.title')">
-    <div class="w-full max-w-2xl mx-auto bg-zinc-700/40 rounded-lg p-4">
+    <div class="space-y-4 rounded-xl border border-border bg-card p-3 sm:p-4">
       <Tabs v-model="tab" class="mb-4">
-        <TabsList class="border border-zinc-700 rounded-lg">
-          <TabsTrigger value="btc" class="bg-zinc-800 data-[state=active]:bg-purple-700 data-[state=active]:text-zinc-200">BTC</TabsTrigger>
-          <TabsTrigger value="satsnet" class="bg-zinc-800 data-[state=active]:bg-purple-700 data-[state=active]:text-zinc-200">SatoshiNet</TabsTrigger>
-          <TabsTrigger value="rgb" class="bg-zinc-800 data-[state=active]:bg-purple-700 data-[state=active]:text-zinc-200">RGB</TabsTrigger>
-          <TabsTrigger value="ordinals" class="bg-zinc-800 data-[state=active]:bg-purple-700 data-[state=active]:text-zinc-200">Ordinals</TabsTrigger>
+        <TabsList class="grid h-auto w-full grid-cols-2 gap-1 sm:grid-cols-4">
+          <TabsTrigger value="btc" class="min-h-11">BTC</TabsTrigger>
+          <TabsTrigger value="satsnet" class="min-h-11">SatoshiNet</TabsTrigger>
+          <TabsTrigger value="rgb" class="min-h-11">RGB</TabsTrigger>
+          <TabsTrigger value="ordinals" class="min-h-11">Ordinals</TabsTrigger>
         </TabsList>
       </Tabs>
-      <hr class="my-4 border-zinc-900" />
 
       <!-- Manual UTXO Lock Section (for BTC and SatoshiNet) -->
       <ManualLockSection
@@ -25,8 +24,8 @@
         @unlock-selected="unlockSelectedOrdinals"
       />
 
-      <p v-if="tab !== 'ordinals'" class="text-sm text-zinc-300 mb-3">{{ t('utxoManager.networkScope', { network: lockNetwork }) }}</p>
-      <p v-if="tab === 'rgb'" class="text-sm text-zinc-300 mb-3">{{ t('utxoManager.rgbReadOnly') }}</p>
+      <p v-if="tab !== 'ordinals'" class="text-sm text-muted-foreground">{{ t('utxoManager.networkScope', { network: lockNetwork }) }}</p>
+      <p v-if="tab === 'rgb'" class="text-sm text-muted-foreground">{{ t('utxoManager.rgbReadOnly') }}</p>
       <p v-if="loadError" role="alert" class="text-sm text-red-400 break-all">{{ loadError }}</p>
       <!-- UTXO Table -->
       <UtxoTable v-if="!loadError"

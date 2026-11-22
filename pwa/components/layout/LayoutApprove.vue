@@ -1,16 +1,16 @@
 <template>
-  <div class="flex flex-col gap-3 sm:gap-4 h-full">
-    <div class="flex-1">
+  <div class="flex min-w-0 flex-col gap-4">
+    <div class="min-w-0 break-words">
       <slot name="default" />
     </div>
-    <div class="h-14 sm:h-16 px-3 sm:px-4 flex-shrink-0">
-      <div class="h-full">
+    <div class="sticky bottom-0 z-10 shrink-0 border-t border-border bg-background py-3">
+      <div>
         <slot name="footer">
-          <div class="h-full grid grid-cols-2 gap-2 sm:gap-4">
-            <Button variant="outline" @click="$emit('cancel')" :disabled="loading" class="text-sm sm:text-base h-full min-h-[44px] touch-manipulation">
+          <div class="grid grid-cols-2 gap-2 sm:gap-3">
+            <Button variant="outline" @click="$emit('cancel')" :disabled="loading" class="min-h-11 touch-manipulation">
               {{ $t('common.cancel', 'Cancel') }}
             </Button>
-            <Button @click="$emit('confirm')" :disabled="loading || confirmDisabled" class="text-sm sm:text-base h-full min-h-[44px] touch-manipulation">
+            <Button @click="$emit('confirm')" :disabled="loading || confirmDisabled" class="min-h-11 touch-manipulation">
               {{ $t('common.confirm', 'Confirm') }}
             </Button>
           </div>

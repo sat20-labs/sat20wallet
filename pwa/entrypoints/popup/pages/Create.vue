@@ -1,5 +1,6 @@
 <template>
-  <div class="pt-10 p-4">
+  <LayoutScroll>
+  <div class="mx-auto max-w-md pb-6 pt-6 sm:pt-10">
     <div class="mb-4 text-center">
       <div class="flex flex-col items-center justify-center gap-2 mb-4">
         <img src="@/assets/sat20-logo.svg" alt="ORDX" class="w-14 h-14 mb-2" />
@@ -17,7 +18,7 @@
       </p>
     </div>
     <form @submit.prevent="onSubmit">
-      <div v-if="step === 1" class="space-y-4">
+      <div v-if="step === 1" class="space-y-4 rounded-xl border border-border bg-card p-4">
         <FormField v-slot="{ componentField }" name="password">
           <FormItem>
             <FormLabel>{{ $t('create.passwordLabel') }}</FormLabel>
@@ -70,10 +71,11 @@
               }}</span>
             </div>
           </div>
-          <Button
+          <Button type="button"
             variant="ghost"
             size="icon"
             class="absolute top-2 right-2"
+            :aria-label="$t(showMnemonic ? 'pwaUi.design.hidePhrase' : 'pwaUi.design.showPhrase')"
             @click="toggleShowMnemonic"
           >
             <EyeOff v-if="showMnemonic" class="h-4 w-4" />
@@ -81,15 +83,15 @@
           </Button>
         </div>
         <div class="flex justify-center">
-          <Button variant="outline" @click="handleCopyMnemonic" class="w-full">
+          <Button type="button" variant="outline" @click="handleCopyMnemonic" class="w-full">
             <Copy class="mr-2 h-4 w-4" />
             {{ $t('create.copyButton') }}
           </Button>
         </div>
       </div>
 
-      <div class="flex justify-between mt-16 gap-2">
-        <Button variant="outline" type="button" class="w-full">
+      <div class="mt-5 grid grid-cols-2 gap-2">
+        <Button variant="outline" as-child class="min-h-11 w-full">
           <RouterLink to="/">{{ $t('create.cancelButton') }}</RouterLink>
         </Button>
         <Button v-if="step === 1" type="submit" :disabled="loading" class="w-full">
@@ -97,17 +99,19 @@
           {{ loading ? $t('create.creatingButton') : $t('create.continueButton') }}
         </Button>
         <Button v-else-if="committedReadError" type="button" @click="reloadCommittedWallet">{{ $t('pwaUi.create.reload') }}</Button>
-        <Button v-else @click="handleConfirmSaved" as-child>
+        <Button v-else as-child class="min-h-11">
           <RouterLink to="/wallet">{{ $t('create.savedButton') }}</RouterLink>
         </Button>
       </div>
     </form>
   </div>
+  </LayoutScroll>
 </template>
 
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 import { ref } from 'vue'
+import LayoutScroll from '@/components/layout/LayoutScroll.vue'
 import { useForm } from 'vee-validate'
 import { toTypedSchema } from '@vee-validate/zod'
 import * as z from 'zod'
@@ -203,11 +207,4 @@ const toggleShowMnemonic = () => {
   showMnemonic.value = !showMnemonic.value
 }
 
-const handleConfirmSaved = () => {
-  toast({
-    variant: 'info',
-    title: t('pwaUi.create.proceeding'),
-    description: t('pwaUi.create.welcome'),
-  })
-}
 </script>

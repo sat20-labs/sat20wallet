@@ -604,6 +604,7 @@
     "error": "加载交易详情时出错。请检查控制台。"
   },
   "splitAsset": {
+    "title": "拆分资产",
     "review": "预览拆分",
     "sameDestination": "每份输出都向下方同一地址发送相同金额，不用于配置不同收款人。",
     "amountPerOutput": "每份请求金额",
@@ -1335,6 +1336,14 @@
     "unitPrice": "单价"
   },
   "accountManagement": {
+    "syncLabel": "账户同步：{status}",
+    "syncBadge": {
+      "local": "本地",
+      "locked": "已锁定",
+      "syncing": "同步中",
+      "synced": "已同步",
+      "error": "异常"
+    },
     "accountState": {
       "local": "本机本地账户",
       "locked": "已锁定",
@@ -1375,7 +1384,7 @@
       "restoreAccount": "恢复账户",
       "locked": "账户当前已锁定；请解锁后继续。",
       "syncing": "正在同步并核对账户状态；相关新业务暂不可用，现有操作和本地浏览仍可继续。",
-      "error": "账户同步遇到网络错误；相关新业务暂不可用。",
+      "error": "账户同步失败，部分新操作暂不可用。",
       "backupPending": "账户备份仍待完成；本机业务已可用。",
       "backupUploading": "账户备份正在上传；本机业务已可用。",
       "cleanup": "正在清理已确认的同步请求；本机业务已可用。",
@@ -1388,7 +1397,7 @@
       "retryNow": "马上重试",
       "retrying": "正在请求…",
       "manage": "账户状态",
-      "moduleBlocked": "相关新业务暂不可用，请查看上方账户状态。"
+      "moduleBlocked": "相关新业务暂不可用。请在设置中查看账户管理。"
     },
     "quota": {
       "activation": "遇到 DKVS 配额限制。可前往账户管理启用恢复并查看存储方式。临时存储仍受免费额度限制；如适用，可选择付费存储。更改设置后点“马上重试”重新提交待备份数据。",
@@ -1437,6 +1446,8 @@
       "createRecovery": "配置账户恢复",
       "createGuardianResponse": "生成恢复回复",
       "copyRecoveryCode": "复制恢复码",
+      "recoveryCodeCopied": "已复制恢复码",
+      "syncDetails": "同步诊断信息",
       "annualCost": "预计年费用：{value}",
       "acceptGuardianSetup": "接受监护人设置",
       "title": "自托管账户恢复",
@@ -1694,6 +1705,26 @@
     }
   },
   "pwaUi": {
+    "design": {
+      "account": "账户与恢复",
+      "security": "安全",
+      "network": "网络与节点",
+      "advanced": "高级工具",
+      "details": "技术详情",
+      "progress": "恢复进度",
+      "recoveryFile": "恢复文件",
+      "recoveryVerify": "身份验证",
+      "recoveryReview": "预览确认",
+      "showPassword": "显示密码",
+      "hidePassword": "隐藏密码",
+      "showPhrase": "显示助记词",
+      "hidePhrase": "隐藏助记词",
+      "btcFee": "比特币费率",
+      "satsnetFee": "聪网手续费",
+      "transcendMode": "跨层模式",
+      "rootWallet": "根钱包",
+      "signatureResult": "签名结果"
+    },
     "install": {
       "title": "安装 SAT20 钱包",
       "install": "安装",

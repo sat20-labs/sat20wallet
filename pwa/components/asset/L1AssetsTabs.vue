@@ -2,9 +2,10 @@
   <div class="space-y-4">
     <!-- Asset Type Tabs -->
     <div class="flex justify-between border-b border-zinc-700 mb-4">
-      <nav class="flex -mb-px gap-4">
+      <nav class="-mb-px flex min-w-0 flex-wrap gap-x-2 sm:gap-x-4">
         <button v-for="(type, index) in assetTypes" :key="index" @click="selectedType = type"
-          class="pb-2 px-1 font-mono font-semibold text-sm relative" :class="{
+          :aria-pressed="selectedType === type"
+          class="relative min-h-11 px-1 font-mono text-sm font-semibold" :class="{
             'text-foreground/90': selectedType === type,
             'text-muted-foreground': selectedType !== type
           }">
@@ -16,8 +17,8 @@
         </button>
       </nav>
       <div class="flex items-center">
-        <Button size="icon" variant="ghost" @click="handlerRefresh">
-          <Icon icon="lets-icons:refresh-2-light" class="text-zinc-300 mb-[1px]" />
+        <Button size="icon" variant="ghost" class="size-11" :aria-label="$t('common.refresh')" @click="handlerRefresh">
+          <Icon icon="lets-icons:refresh-2-light" aria-hidden="true" class="text-muted-foreground" />
         </Button>
         <Button v-if="mempoolUrl" size="icon" variant="ghost" as-child>
           <a :href="mempoolUrl" target="_blank" class="mb-[1px] hover:text-primary"
@@ -88,7 +89,7 @@
           </div>
 
           <!-- 第二行：操作按钮 -->
-          <div class="flex justify-end gap-2 mt-2">
+          <div class="mt-2 flex flex-wrap justify-end gap-2">
             <!-- Lightning 模式按钮 -->
             <template v-if="mode === 'lightning'">
               <Button v-if="asset.protocol !== 'rgb11'" size="sm" variant="outline" @click="handleSend(asset)"

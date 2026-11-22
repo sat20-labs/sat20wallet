@@ -3,7 +3,7 @@
     <!-- Header -->
     <header class="flex-none z-40 flex items-center justify-between p-4 border-b">
       <div class="flex items-center gap-2">
-        <Button variant="ghost" size="icon" @click="router.back()">
+        <Button variant="ghost" size="icon" class="size-11" :aria-label="$t('common.back')" @click="router.back()">
           <Icon icon="lucide:arrow-left" class="w-5 h-5" />
         </Button>
         <h1 class="text-lg font-semibold">{{ $t('walletManager.title') }}</h1>
@@ -12,17 +12,17 @@
 
     <!-- Scrollable Content -->
     <main class="flex-1 overflow-y-auto">
-      <div class="container max-w-2xl mx-auto p-4 space-y-6">
+      <div class="mx-auto max-w-3xl space-y-4 px-4 py-5 sm:px-6">
         <div class="space-y-4">
 
           <!-- Wallet List -->
           <div class="space-y-2">
             <div v-for="wallet in wallets" :key="wallet.id"
-              class="flex items-center justify-between p-3 rounded-lg border hover:bg-accent/50 transition-colors"
+              class="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-card p-3"
               :class="{ 'border-primary/50': wallet.id === currentWalletId }">
-              <div class="flex items-center gap-3">
+              <div class="flex min-w-0 items-center gap-3">
                 <Button variant="ghost" size="icon" class="w-10 h-10 p-0 rounded-full overflow-hidden"
-                  @click="isAvatarDialogOpen = true" v-if="wallet.id === currentWalletId">
+                  :aria-label="$t('walletManager.changeAvatar')" @click="isAvatarDialogOpen = true" v-if="wallet.id === currentWalletId">
                   <img v-if="wallet.avatar" :src="wallet.avatar" :alt="wallet.name"
                     class="w-full h-full object-cover" />
                   <div v-else class="w-full h-full flex items-center justify-center bg-muted/80">
@@ -37,13 +37,15 @@
                   </div>
                 </div>
                 <div>
-                  <div class="font-medium flex items-center gap-2 text-white/60">
-                    {{ wallet.name }}
-                    <Button v-if="wallet.id === currentWalletId" variant="ghost" size="icon" class="h-2 w-2"
+                  <div class="flex min-w-0 items-center gap-1 font-medium">
+                    <span class="break-words">{{ wallet.name }}</span>
+                    <Button v-if="wallet.id === currentWalletId" variant="ghost" size="icon" class="size-10 shrink-0"
+                      :aria-label="$t('walletManager.editWalletName')"
                       @click="showEditNameDialog(wallet)">
-                      <Icon icon="lucide:pencil" class="w-2 h-2" />
+                      <Icon icon="lucide:pencil" class="size-4" />
                     </Button>
                   </div>
+                  <p v-if="isRootWallet(wallet)" class="text-xs text-muted-foreground">{{ $t('pwaUi.design.rootWallet') }}</p>
                 </div>
               </div>
               <div class="flex items-center gap-2">
@@ -56,11 +58,11 @@
                 <Button v-else variant="outline" size="sm" disabled>
                   {{ $t('walletManager.current') }}
                 </Button>
-                <Button variant="ghost" size="icon" @click="showMnemonicDialog(wallet)">
+                <Button variant="ghost" size="icon" class="size-10" :aria-label="$t('walletManager.showRecoveryPhrase')" @click="showMnemonicDialog(wallet)">
                   <Icon icon="lucide:key" class="w-4 h-4" />
                 </Button>
                 <Button v-if="wallet.id !== currentWalletId && !isRootWallet(wallet)" variant="ghost" size="icon"
-                  class="text-destructive hover:text-destructive" @click="confirmDeleteWallet(wallet)">
+                  class="size-10 text-destructive hover:text-destructive" :aria-label="$t('walletManager.deleteWallet')" @click="confirmDeleteWallet(wallet)">
                   <Icon icon="lucide:trash-2" class="w-4 h-4" />
                 </Button>
               </div>
@@ -200,7 +202,7 @@
           <Button variant="secondary" @click="isDeleteDialogOpen = false" class="h-11 mt-2">
             {{ $t('walletManager.cancel') }}
           </Button>
-          <Button variant="default" :disabled="isDeleting" @click="deleteWallet" class="h-11 mt-2">
+          <Button variant="destructive" :disabled="isDeleting" @click="deleteWallet" class="h-11 mt-2">
             <Icon v-if="isDeleting" icon="lucide:loader-2" class="w-4 h-4 mr-2 animate-spin" />
             {{ isDeleting ? $t('walletManager.deleting') : $t('walletManager.delete') }}
           </Button>

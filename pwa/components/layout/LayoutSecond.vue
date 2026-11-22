@@ -1,17 +1,21 @@
 <template>
-  <div class="h-full flex flex-col w-full safe-area-top">
-    <div class="flex items-center px-4 py-3 border-b">
-      <Button variant="ghost" size="icon" @click="router.back()">
-        <Icon icon="solar:alt-arrow-left-line-duotone" />
-      </Button>
-      <h1 class="ml-4 text-lg font-medium">{{ title }}</h1>
-    </div>
-    <div class="flex-1 w-full overflow-hidden">
-      <ScrollArea class="h-full p-4">
-        <slot />
+  <div class="flex h-full min-h-0 w-full flex-col pt-[env(safe-area-inset-top)]">
+    <header class="shrink-0 border-b border-border bg-background">
+      <div class="mx-auto flex min-h-14 max-w-3xl items-center gap-3 px-4 py-2">
+        <Button variant="ghost" size="icon" class="size-11 shrink-0" :aria-label="$t('common.back')" @click="router.back()">
+          <ChevronLeft aria-hidden="true" class="size-5" />
+        </Button>
+        <h1 class="min-w-0 break-words text-lg font-semibold leading-snug">{{ title }}</h1>
+      </div>
+    </header>
+    <div class="min-h-0 flex-1 overflow-hidden">
+      <ScrollArea class="h-full">
+        <div class="mx-auto max-w-3xl px-4 py-4 sm:px-6 sm:py-6">
+          <slot />
+        </div>
       </ScrollArea>
     </div>
-    <NavFooter />
+    <NavFooter v-if="!hideNav" />
   </div>
 </template>
 
@@ -20,44 +24,11 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Button } from '@/components/ui/button'
 import NavFooter from '@/components/layout/NavFooter.vue'
 import { useRouter } from 'vue-router'
-import { Icon } from '@iconify/vue'
+import { ChevronLeft } from 'lucide-vue-next'
 const router = useRouter()
 
-// Define props
 defineProps<{
   title?: string
+  hideNav?: boolean
 }>()
 </script>
-
-<style scoped>
-.safe-area-top {
-  /* 固定边距作为后备方案 */
-  padding-top: 24px;
-
-  /* iOS 11.0-11.2 使用 constant() */
-  padding-top: constant(safe-area-inset-top);
-
-  /* iOS 11.2+ 使用 env() */
-  padding-top: env(safe-area-inset-top);
-
-  /* 确保在不同设备上都有最小边距 */
-  min-height: calc(100vh - 24px);
-}
-
-/* 针对特定设备的媒体查询 */
-@media screen and (min-height: 800px) {
-  .safe-area-top {
-    padding-top: 32px;
-    padding-top: constant(safe-area-inset-top);
-    padding-top: env(safe-area-inset-top);
-  }
-}
-
-@media screen and (max-width: 380px) {
-  .safe-area-top {
-    padding-top: 20px;
-    padding-top: constant(safe-area-inset-top);
-    padding-top: env(safe-area-inset-top);
-  }
-}
-</style>

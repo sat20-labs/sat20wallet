@@ -1,9 +1,7 @@
 <template>
-  <div class="flex justify-center mb-2">
-    <Icon icon="material-symbols:content-cut" color="green" class="w-6 h-6 mr-1" />
-    <span class= "text-zinc-400 text-base">{{ $t('splitAsset.description') }}</span>
-  </div>
-  <div>
+  <component :is="props.embedded ? 'div' : LayoutSecond" v-bind="props.embedded ? {} : { title: $t('splitAsset.title') }">
+  <div class="mx-auto max-w-lg space-y-4">
+    <p class="text-sm leading-5 text-muted-foreground">{{ $t('splitAsset.description') }}</p>
     <form v-if="!review" @submit="onSubmit">
       <fieldset :disabled="loading || validating" class="space-y-1">
         <!-- Asset Name (Hidden) -->
@@ -25,7 +23,7 @@
         <!-- Amount -->
         <FormField v-slot="{ componentField }" name="amt">
           <FormItem>
-            <FormLabel>{{ $t('assetOperationDialog.amount') }} :</FormLabel>
+            <FormLabel>{{ $t('assetOperationDialog.amount') }}</FormLabel>
             <FormControl>
               <Input
                 type="number"
@@ -41,7 +39,7 @@
         <!-- Repeat Count -->
         <FormField v-slot="{ componentField }" name="n">
           <FormItem class="pt-2">
-            <FormLabel>{{ $t('splitAsset.repeat') }} :</FormLabel>
+            <FormLabel>{{ $t('splitAsset.repeat') }}</FormLabel>
             <FormControl>
               <div class="flex items-center gap-2">
                 <!-- Slider -->
@@ -50,6 +48,7 @@
                   min="1"
                   max="100"
                   step="1"
+                  :aria-label="$t('splitAsset.repeat')"
                   v-model="form.values.n"
                  @input="(e: Event) => form.setFieldValue('n', Number((e.target as HTMLInputElement).value))"
                   class="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer"
@@ -104,7 +103,7 @@
     <section v-else class="space-y-3" aria-live="polite">
       <h3 class="font-medium">{{ $t('splitAsset.confirmTitle') }}</h3>
       <p class="text-sm text-muted-foreground">{{ $t('splitAsset.sameDestination') }}</p>
-      <dl class="space-y-2 rounded border border-border p-3 text-sm">
+      <dl class="space-y-3 rounded-xl border border-border bg-card p-4 text-sm [&_dt]:text-xs [&_dt]:text-muted-foreground">
         <div><dt>{{ $t('tools.txConfirm.wallet') }}</dt><dd class="break-all">{{ review.wallet }}</dd></div>
         <div><dt>{{ $t('tools.txConfirm.account') }}</dt><dd>{{ review.accountIndex }}</dd></div>
         <div><dt>{{ $t('tools.txConfirm.sourceAddress') }}</dt><dd class="break-all">{{ review.sourceAddress }}</dd></div>
@@ -124,6 +123,7 @@
       </div>
     </section>
   </div>
+  </component>
 </template>
 
 <script lang="ts" setup>
@@ -138,7 +138,7 @@ import { useToast } from '@/components/ui/toast-new';
 import walletManager from '@/utils/sat20';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Icon } from '@iconify/vue';
+import LayoutSecond from '@/components/layout/LayoutSecond.vue';
 import { Form, FormItem, FormLabel, FormControl, FormField } from '@/components/ui/form';
 import { useForm } from 'vee-validate';
 import { toTypedSchema } from '@vee-validate/zod';

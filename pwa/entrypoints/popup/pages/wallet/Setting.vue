@@ -1,41 +1,47 @@
 <template>
   <LayoutHome>
     <WalletHeader />
-    <h2 class="px-4 text-2xl font-medium text-zinc-600/90">{{ $t('setting.title') }}</h2>
-    <div class="space-y-2 py-4 px-0">
-      <Button variant="secondary" class="w-full h-10 mt-2 border-gray-600/50 bg-zinc-700/40" @click="$router.push({ path: '/wallet/setting/operation-logs' })">
-        <Icon icon="lucide:list-checks" class="w-10 h-10 mr-1 text-blue-500 font-bold"/> {{ $t('pwaUi.settings.logs') }}
-      </Button>
-      <Separator />
-      <Button variant="secondary" class="w-full h-10 mt-2 border-gray-600/50 bg-zinc-700/40" @click="$router.push({ path: '/wallet/setting/utxo' })">
-        <Icon icon="lucide:lock-keyhole-open" class="w-10 h-10 mr-1 text-green-500 font-bold"/> {{$t('utxoManager.title')}}
-      </Button>
-      <Separator />
-      <EscapeHatch v-if="transcendingModeStore.selectedTranscendingMode !== 'poolswap'" />
-      <Separator />
-      <SecuritySetting />
-      <Separator />
-      <AccountManagementSetting />
-      <Separator />
-      <Button variant="secondary" class="w-full" @click="$router.push('/wallet/name-select')">{{ $t('pwaUi.settings.did') }}</Button>
-      <Separator />
-      <NodeSetting />
-      <Separator />
-      <ReferrerSetting />
-      <Separator />
-      <NetworkSetting />
+    <div class="mx-auto max-w-3xl space-y-5 pb-6">
+      <h1 class="text-2xl font-semibold">{{ $t('setting.title') }}</h1>
+      <section class="space-y-2" aria-labelledby="settings-account">
+        <h2 id="settings-account" class="text-sm font-semibold text-muted-foreground">{{ $t('pwaUi.design.account') }}</h2>
+        <AccountManagementSetting />
+        <Button variant="outline" class="min-h-11 w-full justify-between" @click="$router.push('/wallet/name-select')">
+          {{ $t('pwaUi.settings.did') }} <ChevronRight class="size-4" aria-hidden="true" />
+        </Button>
+      </section>
+      <section class="space-y-2" aria-labelledby="settings-security">
+        <h2 id="settings-security" class="text-sm font-semibold text-muted-foreground">{{ $t('pwaUi.design.security') }}</h2>
+        <SecuritySetting />
+        <EscapeHatch v-if="transcendingModeStore.selectedTranscendingMode !== 'poolswap'" />
+      </section>
+      <section class="space-y-2" aria-labelledby="settings-network">
+        <h2 id="settings-network" class="text-sm font-semibold text-muted-foreground">{{ $t('pwaUi.design.network') }}</h2>
+        <NetworkSetting />
+        <NodeSetting />
+        <ReferrerSetting />
+      </section>
+      <section class="space-y-2" aria-labelledby="settings-advanced">
+        <h2 id="settings-advanced" class="text-sm font-semibold text-muted-foreground">{{ $t('pwaUi.design.advanced') }}</h2>
+        <Button variant="outline" class="min-h-11 w-full justify-between" @click="$router.push('/wallet/setting/operation-logs')">
+          {{ $t('pwaUi.settings.logs') }} <ChevronRight class="size-4" aria-hidden="true" />
+        </Button>
+        <Button variant="outline" class="min-h-11 w-full justify-between" @click="$router.push('/wallet/setting/utxo')">
+          {{ $t('utxoManager.title') }} <ChevronRight class="size-4" aria-hidden="true" />
+        </Button>
+      </section>
     </div>
 
     <div class="flex flex-col items-center gap-4 pb-4">
       <div class="flex items-center gap-4">
-        <a href="https://twitter.com/sat20labs" target="_blank" class="text-muted-foreground hover:text-primary">
+        <a href="https://twitter.com/sat20labs" target="_blank" rel="noopener noreferrer" aria-label="SAT20 Labs on X" class="text-muted-foreground hover:text-primary">
           <Icon icon="bi:twitter-x" class="w-4 h-4" />
         </a>
-        <a href="https://github.com/sat20-labs/" target="_blank" class="text-muted-foreground hover:text-primary">
+        <a href="https://github.com/sat20-labs/" target="_blank" rel="noopener noreferrer" aria-label="SAT20 Labs on GitHub" class="text-muted-foreground hover:text-primary">
           <Icon icon="bi:github" class="w-4 h-4" />
         </a>
       </div>
-      <div class="flex items-center gap-2 text-sm text-muted-foreground">
+      <div class="flex flex-wrap items-center justify-center gap-2 text-sm text-muted-foreground">
         <span>{{ $t('setting.version') }}: {{ versionDisplay }}</span>
         <Button
           variant="ghost"
@@ -70,7 +76,7 @@ import NetworkSetting from '@/components/setting/NetworkSetting.vue'
 import NodeSetting from '@/components/setting/NodeSetting.vue'
 import ReferrerSetting from '@/components/setting/ReferrerSetting.vue'
 import { Button } from '@/components/ui/button'
-import { Separator } from '@/components/ui/separator'
+import { ChevronRight } from 'lucide-vue-next'
 import { Icon } from '@iconify/vue'
 import { computed, onMounted, ref } from 'vue'
 import { useTranscendingModeStore } from '@/store'

@@ -1,6 +1,6 @@
 <template>
   <Dialog :open="isOpen" @update:open="isOpen = $event">
-    <DialogContent class="w-[330px] max-h-[90dvh] overflow-y-auto rounded-lg bg-black">
+    <DialogContent class="max-h-[calc(100dvh_-_1.5rem)] w-[calc(100%_-_1.5rem)] max-w-md grid-cols-[minmax(0,1fr)] overflow-y-auto rounded-xl bg-background">
       <DialogHeader v-if="dialogStage === 'form'" class="flex flex-row items-center justify-between">
         <div>
           <DialogTitle>{{ title }}</DialogTitle>
@@ -75,9 +75,9 @@
           <!-- 普通发送内容 -->
           <div class="space-y-4">
             <div class="space-y-2">
-              <Label>{{ $t('assetOperationDialog.amount') }}</Label>
+              <Label :for="fieldId + '-amount'">{{ $t('assetOperationDialog.amount') }}</Label>
               <div class="flex items-center gap-2">
-                <Input :model-value="amount" :type="preciseAmount ? 'text' : 'number'" :inputmode="preciseAmount ? 'decimal' : undefined" :placeholder="$t('assetOperationDialog.enterAmount')"
+                <Input :id="fieldId + '-amount'" :model-value="amount" :type="preciseAmount ? 'text' : 'number'" :inputmode="preciseAmount ? 'decimal' : undefined" :placeholder="$t('assetOperationDialog.enterAmount')"
                   class="h-12 bg-zinc-800" @update:modelValue="handleAmountUpdate" />
                 <Button variant="outline" class="h-12 px-4 text-sm border border-zinc-600 hover:bg-zinc-700"
                   @click="setMaxAmount">
@@ -87,8 +87,8 @@
             </div>
             <p v-if="sendAmountError" role="alert" class="text-sm text-red-400">{{ $t(`assetOperationDialog.amountErrors.${sendAmountError}`) }}</p>
             <div v-if="needsAddress" class="space-y-2">
-              <Label>{{ $t('assetOperationDialog.address') }}</Label>
-              <Input :model-value="address" type="text" :placeholder="$t('assetOperationDialog.enterAddress')"
+              <Label :for="fieldId + '-address'">{{ $t('assetOperationDialog.address') }}</Label>
+              <Input :id="fieldId + '-address'" :model-value="address" type="text" :placeholder="$t('assetOperationDialog.enterAddress')"
                 class="h-12 bg-zinc-800" @update:modelValue="handleAddressUpdate" />
               <!-- 域名解析失败错误提示 -->
               <div v-if="resolvedInfo && resolvedInfo.isDomain && !resolvedInfo.resolvedAddress"
@@ -120,12 +120,7 @@
       </DialogFooter>
 
       <template v-if="dialogStage === 'confirm'">
-      <DialogTitle class="gap-2 flex flex-col items-center">
-        <span class="text-lg font-semibold">{{ $t('assetOperationDialog.pleaseConfirm') }}</span>
-        <span class="mt-2 w-full">
-          <Separator />
-        </span>
-      </DialogTitle>
+      <DialogTitle class="pr-7 text-lg font-semibold">{{ $t('assetOperationDialog.pleaseConfirm') }}</DialogTitle>
       <!-- 域名解析状态显示 -->
       <div v-if="isResolving" class="flex justify-center items-center py-4">
         <div class="text-sm text-blue-400 flex items-center gap-2">
@@ -134,19 +129,20 @@
         </div>
       </div>
 
-      <DialogDescription v-if="!isResolving" class="flex justify-center">
-        <Icon icon="prime:check-circle" class="w-12 h-12 mr-2 text-green-600" />
-        {{ $t('assetOperationDialog.confirmOperation') }}
+      <DialogDescription v-if="!isResolving" class="text-left">
+        {{ title }} · {{ $t('assetOperationDialog.confirmOperation') }}
       </DialogDescription>
 
-      <dl v-if="review" class="space-y-3 rounded-lg border border-zinc-700 bg-zinc-800 p-3 text-sm">
-        <div><dt class="text-zinc-400">{{ $t('assetOperationDialog.amount') }}</dt><dd class="break-all text-zinc-100">{{ review.amount }} {{ review.unit }}</dd></div>
-        <div><dt class="text-zinc-400">{{ $t('assetOperationDialog.address') }}</dt><dd class="break-all select-text text-zinc-100">{{ review.address }}</dd></div>
-        <div><dt class="text-zinc-400">{{ $t('assetOperationDialog.reviewChain') }}</dt><dd class="text-zinc-100">{{ review.chain }}</dd></div>
-        <div><dt class="text-zinc-400">{{ $t('assetOperationDialog.reviewNetwork') }}</dt><dd class="text-zinc-100">{{ review.network }}</dd></div>
-        <div v-if="review.feeRate !== null"><dt class="text-zinc-400">{{ $t('assetOperationDialog.reviewFeeRate') }}</dt><dd class="text-zinc-100">{{ review.feeRate }} sats/vB</dd></div>
-        <div v-if="review.networkFee !== null"><dt class="text-zinc-400">{{ $t('assetOperationDialog.reviewNetworkFee') }}</dt><dd class="text-zinc-100">{{ review.networkFee }} sats</dd></div>
-        <div v-if="review.totalSpend !== null"><dt class="text-zinc-400">{{ $t('assetOperationDialog.reviewTotalSpend') }}</dt><dd class="text-zinc-100">{{ review.totalSpend }} sats</dd></div>
+      <dl class="space-y-3 rounded-xl border border-border bg-card p-4 text-sm">
+        <div class="grid grid-cols-2 gap-3">
+          <div><dt class="text-xs text-muted-foreground">{{ $t('assetOperationDialog.reviewNetwork') }}</dt><dd>{{ review?.network ?? network }}</dd></div>
+          <div><dt class="text-xs text-muted-foreground">{{ $t('assetOperationDialog.reviewChain') }}</dt><dd class="break-words">{{ review?.chain || operationChain }}</dd></div>
+        </div>
+        <div v-if="review?.address || address"><dt class="text-xs text-muted-foreground">{{ $t('assetOperationDialog.address') }}</dt><dd class="break-all font-mono text-xs">{{ review?.address || address }}</dd></div>
+        <div><dt class="text-xs text-muted-foreground">{{ $t('assetOperationDialog.amount') }}</dt><dd class="break-words text-base font-semibold tabular-nums">{{ review?.amount ?? amount }} {{ review?.unit ?? (isBTCAsset ? 'sats' : getAssetDisplayName()) }}</dd></div>
+        <div v-if="review?.feeRate || (!review && needsBtcFeeRate)"><dt class="text-xs text-muted-foreground">{{ $t('assetOperationDialog.reviewFeeRate') }}</dt><dd>{{ review?.feeRate ?? btcFeeRate }} sats/vB</dd></div>
+        <div v-if="review && review.networkFee !== null"><dt class="text-xs text-muted-foreground">{{ $t('assetOperationDialog.reviewNetworkFee') }}</dt><dd>{{ review.networkFee }} sats</dd></div>
+        <div v-if="review && review.totalSpend !== null" class="border-t border-border pt-3"><dt class="text-xs text-muted-foreground">{{ $t('assetOperationDialog.reviewTotalSpend') }}</dt><dd class="font-semibold tabular-nums">{{ review.totalSpend }} sats</dd></div>
       </dl>
 
       <!-- 显示域名和地址信息 -->
@@ -173,13 +169,6 @@
         </div>
       </div>
 
-      <!-- 显示 btcFeeRate 信息 -->
-      <div v-if="!isResolving && needsBtcFeeRate && !review" class="mt-4 p-3 bg-zinc-800 rounded-lg border border-zinc-700">
-        <div class="flex items-center justify-between text-sm">
-          <span class="text-zinc-300">{{ $t('walletComponents.btcFeeRate') }}</span>
-          <span class="text-primary font-semibold">{{ btcFeeRate }} sats/vB</span>
-        </div>
-      </div>
       <div v-if="!isResolving && props.operationType === 'splicing_out'"
         class="flex items-center justify-between text-sm mt-2">
         <span class="text-zinc-300">{{ $t('assetOperationDialog.fixedFee') }}:</span>
@@ -204,10 +193,10 @@
         </div>
       </div>
 
-      <DialogFooter class="my-4 gap-2">
-        <Button variant="outline" @click="cancelReview" :disabled="isResolving">{{ $t('assetOperationDialog.cancel')
+      <DialogFooter class="sticky bottom-0 grid grid-cols-2 gap-2 border-t border-border bg-background py-3">
+        <Button variant="outline" class="min-h-11" @click="cancelReview" :disabled="isResolving">{{ $t('assetOperationDialog.cancel')
         }}</Button>
-        <Button @click="handleConfirm"
+        <Button class="min-h-11" @click="handleConfirm"
           :disabled="!!sendAmountError || isResolving || (resolvedInfo && resolvedInfo.isDomain && !resolvedInfo.resolvedAddress)">
           {{ isResolving ? $t('assetOperationDialog.resolvingDomain') : $t('assetOperationDialog.confirm') }}
         </Button>
@@ -220,9 +209,8 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
-import { computed, ref, watch, toRefs, nextTick } from 'vue'
+import { computed, ref, watch, toRefs, nextTick, useId } from 'vue'
 import { storeToRefs } from 'pinia'
-import { Separator } from '@/components/ui/separator'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -256,6 +244,7 @@ const props = withDefaults(defineProps<Props>(), {
   chain: 'bitcoin'
 })
 const { maxAmount } = toRefs(props)
+const fieldId = useId()
 console.log('assetType: ', props.assetType)
 console.log('props', props);
 
@@ -412,7 +401,7 @@ const confirmOperation = async () => {
       fingerprint: reviewFingerprint(), amount: props.amount,
       unit: nativeSats.value ? 'sats' : getAssetDisplayName(),
       address: props.address,
-      chain: getOperationHint() || (isSatoshiNetSend.value ? 'SatoshiNet' : 'Bitcoin'),
+      chain: operationChain.value,
       network: String(network.value),
       feeRate: needsBtcFeeRate.value ? String(btcFeeRate.value) : null,
       networkFee: props.networkFee ?? null,
@@ -511,6 +500,13 @@ const getOperationHint = () => {
   if (props.operationType === 'splicing_out') return `${t('walletComponents.channel')} → Bitcoin`
   return null
 }
+
+const operationChain = computed(() => {
+  const hint = getOperationHint()
+  if (hint) return hint
+  if (props.chain === 'channel') return t('walletComponents.channel')
+  return isSatoshiNetSend.value ? 'SatoshiNet' : 'Bitcoin'
+})
 
 // const goSplitAsset = () => {
 //   router.push(`/wallet/split-asset?assetName=${props.assetKey}`)

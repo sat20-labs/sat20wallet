@@ -1,13 +1,13 @@
 <template>
   <div>
-    <Button size="xs" variant="outline" :disabled="switching" @click="isOpen = true" class="px-2 rounded-md">
-      <!-- <Icon :icon="showNetwork?.icon" :class="showNetwork?.iconColor" />{{ showNetwork?.name }} -->
-      <Icon :icon="switching ? 'lucide:loader-2' : (showNetwork?.icon || '')" :class="switching ? 'animate-spin' : showNetwork?.iconColor" class="w-5 h-5" />
+    <Button size="sm" variant="outline" :disabled="switching" @click="isOpen = true" class="min-h-10 gap-1 px-2" :aria-label="$t('networkSelect.selectNetwork')">
+      <Icon v-if="switching" icon="lucide:loader-2" class="size-4 animate-spin" aria-hidden="true" />
+      <span v-if="showNetwork" class="text-xs">{{ $t(`networkSelect.${showNetwork.name}`) }}</span>
       <ChevronDown class="h-4 w-4" />
     </Button>
 
     <Dialog v-model:open="isOpen">
-      <DialogContent class="w-[330px]">
+      <DialogContent class="w-[calc(100%_-_2rem)] max-w-sm rounded-xl">
         <DialogHeader>
           <DialogTitle class="text-gray-300 text-xl font-semibold">{{ $t('networkSelect.selectNetwork') }}</DialogTitle>
         </DialogHeader>

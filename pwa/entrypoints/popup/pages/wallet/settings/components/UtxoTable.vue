@@ -8,27 +8,28 @@
     </div>
 
     <!-- Empty State -->
-    <div v-else-if="lockedUtxos.length === 0" class="text-center py-8 text-muted-foreground">
+    <div v-else-if="lockedUtxos.length === 0" class="rounded-lg border border-dashed border-border py-8 text-center text-sm text-muted-foreground">
       {{ t('utxoManager.empty') }}
     </div>
 
     <!-- Table -->
     <Table v-else>
-      <TableHeader>
+      <TableHeader :class="showCheckbox ? '' : 'hidden md:table-header-group'">
         <TableRow>
           <TableHead v-if="showCheckbox">
             <Checkbox
               :checked="isAllSelected"
+              :aria-label="t('utxoManager.lockedList')"
               @update:checked="() => handleToggleSelectAll()"
             />
           </TableHead>
-          <TableHead>UTXO</TableHead>
-          <TableHead>{{ showCheckbox ? t('utxoManager.asset') : t('utxoManager.reason') }}</TableHead>
-          <TableHead>{{ t('utxoManager.lockedTime') }}</TableHead>
-          <TableHead>{{ t('utxoManager.action') }}</TableHead>
+          <TableHead class="hidden md:table-cell">UTXO</TableHead>
+          <TableHead class="hidden md:table-cell">{{ showCheckbox ? t('utxoManager.asset') : t('utxoManager.reason') }}</TableHead>
+          <TableHead class="hidden md:table-cell">{{ t('utxoManager.lockedTime') }}</TableHead>
+          <TableHead class="hidden md:table-cell">{{ t('utxoManager.action') }}</TableHead>
         </TableRow>
       </TableHeader>
-      <TableBody>
+      <TableBody class="block space-y-2 md:table-row-group md:space-y-0">
         <UtxoRow
           v-for="(utxo, idx) in lockedUtxos"
           :key="`${utxo.chain || chain}:${utxo.utxo}`"

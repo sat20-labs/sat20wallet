@@ -1,13 +1,16 @@
 <template>
   <LayoutSecond :title="$t('pwaUi.receive.title')">
-    <div class="flex flex-col gap-5 items-center">
+    <div class="mx-auto flex max-w-lg flex-col items-center gap-5 rounded-xl border border-border bg-card p-4">
+      <p class="rounded-full bg-muted px-3 py-1 text-xs font-medium">
+        {{ $t('common.network') }} · {{ network }} · {{ isBitcoin ? 'Bitcoin' : 'SatoshiNet' }}
+      </p>
       <div v-if="isBitcoin" class="w-full flex gap-2" role="group" :aria-label="$t('pwaUi.receive.btcMethod')">
         <button class="flex-1 px-3 py-2 rounded-lg border text-sm"
           :class="mode === 'normal' ? 'border-primary text-primary' : 'border-zinc-700'"
-          type="button" @click="mode = 'normal'">{{ $t('pwaUi.receive.ordinary') }}</button>
+          type="button" :aria-pressed="mode === 'normal'" @click="mode = 'normal'">{{ $t('pwaUi.receive.ordinary') }}</button>
         <button class="flex-1 px-3 py-2 rounded-lg border text-sm"
           :class="mode === 'silent' ? 'border-primary text-primary' : 'border-zinc-700'"
-          type="button" @click="mode = 'silent'">{{ $t('pwaUi.receive.private') }}</button>
+          type="button" :aria-pressed="mode === 'silent'" @click="mode = 'silent'">{{ $t('pwaUi.receive.private') }}</button>
       </div>
 
       <template v-if="mode === 'normal' || !isBitcoin">
@@ -64,7 +67,7 @@ import { useWalletStore } from '@/store'
 const { t } = useI18n()
 
 const walletStore = useWalletStore()
-const { address, walletId, accountIndex, chain } = storeToRefs(walletStore)
+const { address, walletId, accountIndex, chain, network } = storeToRefs(walletStore)
 const isBitcoin = computed(() => String(chain.value).toLowerCase() === 'btc')
 const mode = ref<'normal' | 'silent'>('normal')
 const loading = ref(false)

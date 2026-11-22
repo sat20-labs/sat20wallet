@@ -1,20 +1,20 @@
 <template>
   <LayoutHome>
     <WalletHeader />
-    <div class="space-y-4 px-1 pb-4">
-      <header class="space-y-2">
-        <h2 class="text-2xl font-medium text-zinc-600/90">{{ t('tools.title') }}</h2>
-        <p class="text-xs leading-5 text-muted-foreground">
+    <div class="mx-auto max-w-3xl space-y-4 pb-6">
+      <header class="space-y-1">
+        <h1 class="text-2xl font-semibold">{{ t('tools.title') }}</h1>
+        <p class="text-sm leading-5 text-muted-foreground">
           {{ t('tools.subtitle') }}
         </p>
       </header>
 
       <Tabs v-model="activeTab" class="w-full">
-        <TabsList class="grid w-full grid-cols-4">
-          <TabsTrigger value="faucet">{{ t('tools.tabs.faucet') }}</TabsTrigger>
-          <TabsTrigger value="contracts">{{ t('tools.tabs.contracts') }}</TabsTrigger>
-          <TabsTrigger value="mint">{{ t('tools.tabs.mint') }}</TabsTrigger>
-          <TabsTrigger value="mining">{{ $t('pwaUi.tools.mining') }}</TabsTrigger>
+        <TabsList class="grid h-auto w-full grid-cols-2 gap-1 sm:grid-cols-4 [&_[role=tab]>span]:whitespace-normal">
+          <TabsTrigger value="faucet" class="min-h-11 whitespace-normal">{{ t('tools.tabs.faucet') }}</TabsTrigger>
+          <TabsTrigger value="contracts" class="min-h-11 whitespace-normal">{{ t('tools.tabs.contracts') }}</TabsTrigger>
+          <TabsTrigger value="mint" class="min-h-11 whitespace-normal">{{ t('tools.tabs.mint') }}</TabsTrigger>
+          <TabsTrigger value="mining" class="min-h-11 whitespace-normal">{{ $t('pwaUi.tools.mining') }}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="faucet" class="mt-4">
@@ -26,7 +26,7 @@
               </CardDescription>
             </CardHeader>
             <CardContent class="space-y-3">
-              <p v-if="faucetListState !== 'ready' || !faucetContracts.length" role="status" class="text-xs text-muted-foreground">
+              <p v-if="faucetListState !== 'ready' || !faucetContracts.length" role="status" class="rounded-md border border-border bg-muted/30 p-3 text-sm text-muted-foreground">
                 {{ t(faucetListState === 'loading' ? 'tools.faucet.loadingContracts'
                   : faucetListState === 'error' ? 'tools.faucet.loadContractsFailed' : 'tools.faucet.noContracts') }}
               </p>
@@ -52,14 +52,17 @@
                 <p class="text-xs leading-5 text-muted-foreground">{{ t('tools.faucet.addressHint') }}</p>
               </div>
               <div class="space-y-1">
-                <Label>{{ t('tools.faucet.amount') }}</Label>
-                <Input v-model="faucetAmount" type="number" min="1" :disabled="isFaucetSending" />
+                <Label for="faucet-amount">{{ t('tools.faucet.amount') }}</Label>
+                <Input id="faucet-amount" v-model="faucetAmount" type="number" min="1" :disabled="isFaucetSending" />
               </div>
               <Button class="w-full" :disabled="isFaucetSending || faucetListState === 'loading'" @click="sendFaucetSats">
                 <Icon :icon="isFaucetSending ? 'lucide:loader' : 'lucide:send'" class="h-4 w-4" :class="{ 'animate-spin': isFaucetSending }" />
                 {{ t('tools.faucet.send') }}
               </Button>
-              <p v-if="faucetResult" class="break-all text-xs text-muted-foreground">txid: {{ faucetResult }}</p>
+              <details v-if="faucetResult" class="rounded-md border border-border p-3 text-sm">
+                <summary class="cursor-pointer font-medium">{{ t('settingsUi.transactionId') }}</summary>
+                <p class="mt-2 break-all font-mono text-xs text-muted-foreground">{{ faucetResult }}</p>
+              </details>
             </CardContent>
           </Card>
         </TabsContent>
