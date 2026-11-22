@@ -28,7 +28,7 @@ require (
 	github.com/gin-gonic/gin v1.10.0
 	github.com/lestrrat-go/file-rotatelogs v2.4.0+incompatible
 	github.com/sat20-labs/indexer v0.3.0-20240926
-	github.com/sat20-labs/rgb11 v1.0.1-0.20261120161554-b2db359450c0
+	github.com/sat20-labs/rgb11 v1.0.1-0.20261122044538-d71d2bf3142e
 	github.com/stretchr/testify v1.11.1
 	github.com/tyler-smith/go-bip39 v1.1.0
 	golang.org/x/crypto v0.44.0

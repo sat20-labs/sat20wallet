@@ -129,11 +129,13 @@ func (p *Manager) DiagnoseRGB11Consistency(ctx context.Context) (*RGB11Consisten
 				TransferID: state.TransferID, Error: "local consignment is absent"})
 			continue
 		}
-		validator := rgb11wallet.NewRGB11ValidatorWithReveals(pending.ChangeSeals...)
-		if _, validateErr := rgb11wallet.ValidateWith(ctx, validator,
-			pending.LocalConsignment, p.rgbManager.evidence); validateErr != nil {
-			add(RGB11ConsistencyIssue{Severity: "broken", Check: "local_consignment",
-				TransferID: state.TransferID, Error: validateErr.Error()})
+		for _, change := range pending.LocalChanges() {
+			validator := rgb11wallet.NewRGB11ValidatorWithReveals(change.Seals...)
+			if _, validateErr := rgb11wallet.ValidateWith(ctx, validator,
+				change.Consignment, p.rgbManager.evidence); validateErr != nil {
+				add(RGB11ConsistencyIssue{Severity: "broken", Check: "local_consignment",
+					TransferID: state.TransferID, Error: validateErr.Error()})
+			}
 		}
 	}
 

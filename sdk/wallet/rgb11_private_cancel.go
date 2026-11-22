@@ -54,7 +54,9 @@ func unpublishedRGB11Batch(local, base *rgb11wallet.RecoveryPackage, transferID 
 		}
 		allowed["pending-"+id] = true
 		allowed["object-"+pending.RecipientObjectHash] = true
-		allowed["object-"+pending.LocalObjectHash] = true
+		for _, change := range pending.LocalChanges() {
+			allowed["object-"+change.ObjectHash] = true
+		}
 		batch = append(batch, pending)
 	}
 	if !allowed["pending-"+transferID] {

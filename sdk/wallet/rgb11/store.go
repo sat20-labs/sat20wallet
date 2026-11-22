@@ -582,6 +582,19 @@ func (s *ProjectionStore) SavePendingTransfers(pendingList []*PendingTransfer) e
 		localHash := sha256.Sum256(pending.LocalConsignment)
 		pending.RecipientObjectHash = hex.EncodeToString(recipientHash[:])
 		pending.LocalObjectHash = hex.EncodeToString(localHash[:])
+		for i := range pending.PreservedChanges {
+			change := &pending.PreservedChanges[i]
+			if err := change.bindObject(); err != nil {
+				return err
+			}
+			key, err := s.objectKey(change.ObjectHash)
+			if err != nil {
+				return err
+			}
+			if err := batch.Put(key, append([]byte(nil), change.Consignment...)); err != nil {
+				return err
+			}
+		}
 		encodedPending, err := encode(pending)
 		if err != nil {
 			return err
@@ -622,6 +635,9 @@ func (s *ProjectionStore) LoadPendingTransfer(transferID string) (*PendingTransf
 	}
 	var pending PendingTransfer
 	if err := decode(raw, &pending); err != nil {
+		return nil, err
+	}
+	if err := pending.LoadPreservedChanges(s.LoadObject); err != nil {
 		return nil, err
 	}
 	state, err := s.reservationState(&pending.State)
@@ -801,6 +817,9 @@ func (s *ProjectionStore) CompactRejectedTransfers(transferIDs []string) error {
 				objectHashes[hex.EncodeToString(hash[:])] = struct{}{}
 			}
 		}
+		for _, change := range pending.PreservedChanges {
+			objectHashes[change.ObjectHash] = struct{}{}
+		}
 		pending.RecipientConsignment = nil
 		pending.LocalConsignment = nil
 		pending.RecipientObjectHash = ""
@@ -808,6 +827,7 @@ func (s *ProjectionStore) CompactRejectedTransfers(transferIDs []string) error {
 		pending.SignedTx = nil
 		pending.SignedPSBT = nil
 		pending.ChangeSeals = nil
+		pending.PreservedChanges = nil
 		pendingList = append(pendingList, pending)
 	}
 	references, err := s.objectReferences()
@@ -882,6 +902,24 @@ func (s *ProjectionStore) objectReferences() (map[string]struct{}, error) {
 		if proof != nil && proof.ConsignmentHash != "" {
 			references[proof.ConsignmentHash] = struct{}{}
 		}
+	}
+	pendingPrefix, err := s.scopedPrefix("pending-")
+	if err != nil {
+		return nil, err
+	}
+	if err := s.db.BatchRead(pendingPrefix, false, func(_, value []byte) error {
+		var pending PendingTransfer
+		if err := decode(value, &pending); err != nil {
+			return err
+		}
+		if pending.State.Status != "rejected" {
+			for _, change := range pending.PreservedChanges {
+				references[change.ObjectHash] = struct{}{}
+			}
+		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	contractPrefix, err := s.scopedPrefix("contract-object-")
 	if err != nil {

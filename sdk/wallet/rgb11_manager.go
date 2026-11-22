@@ -28,7 +28,6 @@ import (
 	"github.com/sat20-labs/rgb11/invoicing"
 	coreissuance "github.com/sat20-labs/rgb11/issuance"
 	"github.com/sat20-labs/rgb11/operations"
-	corepsbt "github.com/sat20-labs/rgb11/psbt"
 	"github.com/sat20-labs/rgb11/rejectlist"
 	"github.com/sat20-labs/rgb11/schemas"
 	"github.com/sat20-labs/rgb11/seals"
@@ -248,8 +247,7 @@ func (p *rgb11Manager) rgb11ExpectedChangeOutpoints() (map[string]string, error)
 		if err := validateRGB11PendingTransaction(pending); err != nil {
 			return nil, err
 		}
-		for _, seal := range pending.ChangeSeals {
-			outpoint := fmt.Sprintf("%s:%d", state.WitnessTxID, seal.Vout)
+		for _, outpoint := range rgb11PendingChangeOutpoints(pending) {
 			if txid := expected[outpoint]; txid != "" && txid != state.WitnessTxID {
 				return nil, fmt.Errorf("%w: RGB11 change output %s is reserved by multiple transactions",
 					ErrRGB11Inconsistent, outpoint)
@@ -319,9 +317,15 @@ func rgb11PendingChangeOutpoints(pending *rgb11wallet.PendingTransfer) []string 
 	if pending == nil {
 		return nil
 	}
-	result := make([]string, 0, len(pending.ChangeSeals))
-	for _, seal := range pending.ChangeSeals {
-		result = append(result, fmt.Sprintf("%s:%d", pending.State.WitnessTxID, seal.Vout))
+	var result []string
+	seen := make(map[uint32]bool)
+	for _, change := range pending.LocalChanges() {
+		for _, seal := range change.Seals {
+			if !seen[seal.Vout] {
+				result = append(result, fmt.Sprintf("%s:%d", pending.State.WitnessTxID, seal.Vout))
+				seen[seal.Vout] = true
+			}
+		}
 	}
 	return result
 }
@@ -3034,12 +3038,28 @@ type rgb11SendRecipient struct {
 }
 
 type rgb11SpendAllocation struct {
-	proof  *rgb11wallet.AllocationProof
-	asset  *indexer.AssetInfo
-	target bool
+	proof      *rgb11wallet.AllocationProof
+	asset      *indexer.AssetInfo
+	contractID consensus.ContractID
+	target     bool
 }
 
-// PrepareRGB11Transfer builds one client-side state transition for one asset.
+func groupRGB11Spends(selected []rgb11SpendAllocation, target consensus.ContractID) (
+	map[consensus.ContractID][]rgb11SpendAllocation, []consensus.ContractID) {
+	groups := make(map[consensus.ContractID][]rgb11SpendAllocation)
+	var others []consensus.ContractID
+	for _, allocation := range selected {
+		id := allocation.contractID
+		if id != target && len(groups[id]) == 0 {
+			others = append(others, id)
+		}
+		groups[id] = append(groups[id], allocation)
+	}
+	sort.Slice(others, func(i, j int) bool { return bytes.Compare(others[i][:], others[j][:]) < 0 })
+	return groups, append([]consensus.ContractID{target}, others...)
+}
+
+// PrepareRGB11Transfer sends one asset and preserves other RGB state on its inputs.
 // A request may contain multiple witness invoices; all recipients share one
 // Bitcoin transaction and one official RGB consignment, while transport and
 // ACK state remains recipient-specific. It intentionally does not relay or
@@ -3200,7 +3220,8 @@ func (p *rgb11Manager) prepareRGB11TransferForEndpointsMode(ctx context.Context,
 	if len(recipients) > 1 && targetClass != "fungible" {
 		return nil, fmt.Errorf("RGB11 batch send supports fungible state only")
 	}
-	base, parentStateHash, err := p.mergeRGB11SpendHistories(selected)
+	spendGroups, contracts := groupRGB11Spends(selected, contractID)
+	base, parentStateHash, err := p.mergeRGB11SpendHistories(spendGroups[contractID])
 	if err != nil {
 		return nil, err
 	}
@@ -3208,44 +3229,9 @@ func (p *rgb11Manager) prepareRGB11TransferForEndpointsMode(ctx context.Context,
 		return nil, fmt.Errorf("RGB11 inflation requires an IFA contract")
 	}
 
-	reveals := make([]seals.GraphBlindSeal, 0, len(selected))
-	inputs := make([]operations.TransitionInput, 0, len(selected))
-	primaryInputs := make([]operations.TransitionInput, 0, len(selected))
-	preservationInputs := make([]operations.TransitionInput, 0, len(selected))
-	for _, allocation := range selected {
-		operationID, err := hex.DecodeString(allocation.proof.OperationID)
-		if err != nil || len(operationID) != 32 || allocation.proof.AssignmentType > 0xffff || allocation.proof.AssignmentIndex > 0xffff {
-			return nil, rgb11wallet.ErrInvalidProof
-		}
-		var operation [32]byte
-		copy(operation[:], operationID)
-		input := operations.TransitionInput{
-			OperationID: operation, AssignmentType: uint16(allocation.proof.AssignmentType),
-			Index: uint16(allocation.proof.AssignmentIndex),
-		}
-		inputs = append(inputs, input)
-		if allocation.target {
-			primaryInputs = append(primaryInputs, input)
-		} else {
-			preservationInputs = append(preservationInputs, input)
-		}
-		graph, err := seals.DecodeGraphBlindSeal(allocation.proof.SealDisclosure)
-		if err != nil {
-			return nil, rgb11wallet.ErrInvalidProof
-		}
-		reveals = append(reveals, graph)
-	}
-	if len(reveals) > 0 {
-		if _, err := base.RevealGraphSeals(reveals); err != nil {
-			return nil, err
-		}
-	}
-
-	changeSeals := make([]seals.GraphBlindSeal, 0)
-	changeSecrets := make([][32]byte, 0)
+	var targetChange []rgb11ChangeSecret
 	recipientSecrets := make([][32]byte, 0, 1)
 	outputs := make([]operations.TransitionOutput, 0, len(recipients)+1)
-	preservationOutputs := make([]operations.TransitionOutput, 0)
 	var structuredData []byte
 	if targetClass == "structured" {
 		for _, allocation := range selected {
@@ -3289,125 +3275,40 @@ func (p *rgb11Manager) prepareRGB11TransferForEndpointsMode(ctx context.Context,
 			return nil, err
 		}
 		outputs = append(outputs, change)
-		changeSeals = append(changeSeals, secret.seal)
-		changeSecrets = append(changeSecrets, secret.secret)
-	}
-	for _, allocation := range selected {
-		if allocation.target {
-			continue
-		}
-		stateAmount, err := decimalUint64(&allocation.asset.Amount)
-		if err != nil {
-			return nil, err
-		}
-		// One carrier and AssetName have one projection key. Preserve several
-		// compatible fungible inputs as one output rather than creating distinct
-		// seals that would overwrite that key during refresh.
-		merged := false
-		for index := range preservationOutputs {
-			previous := &preservationOutputs[index]
-			if previous.AssignmentType != uint16(allocation.proof.AssignmentType) {
-				continue
-			}
-			if previous.Class != "fungible" || allocation.proof.StateClass != "fungible" ||
-				!bytes.Equal(previous.Data, allocation.proof.StateData) {
-				return nil, fmt.Errorf("%w: same-asset local change requires distinct carrier outputs", rgb11wallet.ErrInvalidProof)
-			}
-			if ^uint64(0)-previous.Amount < stateAmount {
-				return nil, rgb11wallet.ErrInvalidProof
-			}
-			previous.Amount += stateAmount
-			merged = true
-			break
-		}
-		if merged {
-			continue
-		}
-		change, secret, err := newRGB11ChangeOutput(
-			changeVout, uint16(allocation.proof.AssignmentType), allocation.proof.StateClass,
-			stateAmount, allocation.proof.StateData,
-		)
-		if err != nil {
-			return nil, err
-		}
-		preservationOutputs = append(preservationOutputs, change)
-		changeSeals = append(changeSeals, secret.seal)
-		changeSecrets = append(changeSecrets, secret.secret)
+		targetChange = append(targetChange, secret)
 	}
 
-	separateSibling := base.GenesisReport.Kind == schemas.IFA && len(preservationInputs) > 0
-	transitionInputs := inputs
-	if separateSibling {
-		transitionInputs = primaryInputs
-	}
-	transitionType := uint16(10_000)
-	var metadata map[uint16][]byte
-	var globals map[uint16][][]byte
+	targetSpec := &operations.TransitionSpec{TransitionType: 10_000, Outputs: outputs}
 	if inflation {
-		transitionType = 8000
+		targetSpec.TransitionType = 8000
 		remaining := make([]byte, 8)
 		issued := make([]byte, 8)
 		binary.LittleEndian.PutUint64(remaining, targetTotal-totalAmount)
 		binary.LittleEndian.PutUint64(issued, totalAmount)
-		metadata = map[uint16][]byte{1000: remaining}
-		globals = map[uint16][][]byte{2010: [][]byte{issued}}
+		targetSpec.Metadata = map[uint16][]byte{1000: remaining}
+		targetSpec.Globals = map[uint16][][]byte{2010: {issued}}
 	}
-	if !separateSibling {
-		outputs = append(outputs, preservationOutputs...)
-	}
-	transition, transitionCommitment, err := operations.BuildTransition(operations.TransitionSpec{
-		ContractID: [32]byte(contractID), Nonce: uint64(time.Now().UnixNano()),
-		TransitionType: transitionType, Inputs: transitionInputs, Outputs: outputs,
-		Metadata: metadata, Globals: globals,
-	})
+	primary, err := buildRGB11SendBundle(contractID, base, spendGroups[contractID], targetSpec, changeVout, targetChange)
 	if err != nil {
 		return nil, err
 	}
-	var bundleValue strict_types.Value
-	var bundleCommitment operations.BundleCommitment
-	var psbtTransitions []rgb11PSBTTransition
-	if separateSibling {
-		// The rc.2 IFA schema moves each assignment type in its own
-		// transition. The wallet projects one control state per carrier.
-		if len(preservationOutputs) != 1 {
-			return nil, ErrRGB11AssetPreservation
+	bundles := []rgb11SendBundle{primary}
+	for _, id := range contracts[1:] {
+		history, _, err := p.mergeRGB11SpendHistories(spendGroups[id])
+		if err != nil {
+			return nil, err
 		}
-		var preserveType uint16
-		switch preservationOutputs[0].AssignmentType {
-		case 4000:
-			preserveType = 10_000
-		case 4010:
-			preserveType = 8015
-		case 4012:
-			preserveType = 8016
-		default:
-			return nil, ErrRGB11AssetPreservation
+		preserved, err := buildRGB11SendBundle(id, history, spendGroups[id], nil, changeVout, nil)
+		if err != nil {
+			return nil, err
 		}
-		preservation, preservationCommit, buildErr := operations.BuildTransition(operations.TransitionSpec{
-			ContractID: [32]byte(contractID), Nonce: uint64(time.Now().UnixNano()) + 1,
-			TransitionType: preserveType, Inputs: preservationInputs, Outputs: preservationOutputs,
-		})
-		if buildErr != nil {
-			return nil, buildErr
-		}
-		bundleValue, bundleCommitment, err = buildRGB11TwoTransitionBundle(
-			transitionInputs, transition, transitionCommitment,
-			preservationInputs, preservation, preservationCommit,
-		)
-		psbtTransitions = append(psbtTransitions, rgb11PSBTTransition{
-			ID: preservationCommit.OperationID, Encoded: preservation.Encoded,
-		})
-	} else {
-		bundleValue, bundleCommitment, err = operations.BuildBundle(transitionInputs, transition)
+		bundles = append(bundles, preserved)
 	}
-	if err != nil {
-		return nil, err
+	messages := make(map[[32]byte][32]byte, len(bundles))
+	for _, bundle := range bundles {
+		messages[bundle.contractID] = bundle.commitment.BundleID
 	}
-	mpcProof, err := anchors.NewMPCProof([32]byte(contractID), 3)
-	if err != nil {
-		return nil, err
-	}
-	mpcCommitment, err := anchors.ConvolveMPC(mpcProof, [32]byte(contractID), bundleCommitment.BundleID)
+	tree, err := anchors.NewMPCTree(messages, anchors.MPCMinDepth, psbt.MaxPsbtValueLength)
 	if err != nil {
 		return nil, err
 	}
@@ -3426,7 +3327,7 @@ func (p *rgb11Manager) prepareRGB11TransferForEndpointsMode(ctx context.Context,
 		changeScript = p.channelSend.pkScript
 	}
 	tx, prevFetcher, inputOutpoints, _, _, err := p.buildRGB11WitnessTx(
-		selected, recipientScripts, changeScript, anchors.OpretScript(mpcCommitment), request.FeeRate,
+		selected, recipientScripts, changeScript, anchors.OpretScript(tree.Commitment()), request.FeeRate,
 	)
 	if err != nil {
 		return nil, err
@@ -3447,11 +3348,7 @@ func (p *rgb11Manager) prepareRGB11TransferForEndpointsMode(ctx context.Context,
 			_ = p.utxoLockerL1.ReleaseReservation(reserved, reservationID)
 		}
 	}()
-	packet, signedTx, signedPSBT, err := p.buildRGB11PSBT(
-		tx, prevFetcher, [32]byte(contractID), transitionCommitment.OperationID,
-		transition.Encoded, bundleCommitment.BundleID, mpcProof, mpcCommitment, inputs,
-		psbtTransitions...,
-	)
+	packet, signedTx, signedPSBT, err := buildRGB11PSBT(tx, prevFetcher, bundles, tree)
 	if err != nil {
 		return nil, err
 	}
@@ -3460,7 +3357,7 @@ func (p *rgb11Manager) prepareRGB11TransferForEndpointsMode(ctx context.Context,
 	if packet == nil || packet.UnsignedTx == nil || packet.UnsignedTx.TxID() != signedTx.TxID() {
 		return nil, ErrRGB11Inconsistent
 	}
-	witnessBundle, err := operations.BuildOpretWitnessBundleWithTx(packet.UnsignedTx, bundleValue, mpcProof)
+	witnessBundle, err := primary.witness(packet.UnsignedTx, tree)
 	if err != nil {
 		return nil, err
 	}
@@ -3468,17 +3365,33 @@ func (p *rgb11Manager) prepareRGB11TransferForEndpointsMode(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	localContainer, err := coreconsignment.BuildTransfer(base, witnessBundle, changeSecrets)
-	if err != nil {
-		return nil, err
-	}
 	recipientArmor, err := coreconsignment.EncodeArmor(recipientContainer.Value)
 	if err != nil {
 		return nil, err
 	}
-	localArmor, err := coreconsignment.EncodeArmor(localContainer.Value)
+	local, err := primary.localChange(witnessBundle)
 	if err != nil {
 		return nil, err
+	}
+	if len(bundles) > 1 && len(local.Seals) != 0 {
+		if err := p.checkRGB11PreparedChange(ctx, tx.TxID(), local); err != nil {
+			return nil, fmt.Errorf("%w: validate RGB11 change for %s: %w", ErrRGB11AssetPreservation, contractID, err)
+		}
+	}
+	var preservedChanges []rgb11wallet.LocalChange
+	for _, bundle := range bundles[1:] {
+		witness, err := bundle.witness(packet.UnsignedTx, tree)
+		if err != nil {
+			return nil, err
+		}
+		change, err := bundle.localChange(witness)
+		if err != nil {
+			return nil, err
+		}
+		if err := p.checkRGB11PreparedChange(ctx, tx.TxID(), change); err != nil {
+			return nil, fmt.Errorf("%w: validate returned RGB11 contract %s: %w", ErrRGB11AssetPreservation, bundle.contractID, err)
+		}
+		preservedChanges = append(preservedChanges, change)
 	}
 	recipientDecoded, err := coreconsignment.DecodeArmor(recipientArmor)
 	if err != nil {
@@ -3537,9 +3450,9 @@ func (p *rgb11Manager) prepareRGB11TransferForEndpointsMode(ctx context.Context,
 			}
 		}
 		pending := &rgb11wallet.PendingTransfer{
-			State: state, RecipientConsignment: []byte(recipientArmor), LocalConsignment: []byte(localArmor),
+			State: state, RecipientConsignment: []byte(recipientArmor), LocalConsignment: local.Consignment,
 			SignedTx: append([]byte(nil), signedRaw.Bytes()...), SignedPSBT: append([]byte(nil), signedPSBT...),
-			ChangeSeals:   append([]seals.GraphBlindSeal(nil), changeSeals...),
+			ChangeSeals: local.Seals, PreservedChanges: preservedChanges,
 			ReservationID: reservationID, CreatedAt: time.Now().Unix(),
 		}
 		if p.channelSend != nil {
@@ -3549,10 +3462,7 @@ func (p *rgb11Manager) prepareRGB11TransferForEndpointsMode(ctx context.Context,
 		pendingList = append(pendingList, pending)
 		states = append(states, &pending.State)
 	}
-	changeOutpoints := make([]string, 0, len(changeSeals))
-	for _, seal := range changeSeals {
-		changeOutpoints = append(changeOutpoints, fmt.Sprintf("%s:%d", signedTx.TxID(), seal.Vout))
-	}
+	changeOutpoints := rgb11PendingChangeOutpoints(pendingList[0])
 	if p.preview == nil && len(changeOutpoints) != 0 {
 		if err := p.utxoLockerL1.TryReserve(changeOutpoints, sdkcommon.UtxoLockRGBPending, reservationID); err != nil {
 			return nil, err
@@ -3597,7 +3507,7 @@ func (p *rgb11Manager) prepareRGB11TransferForEndpointsMode(ctx context.Context,
 		return nil, err
 	}
 	reservationCommitted = true
-	// Persist only after signed transaction, both consignments, pending state,
+	// Persist only after the transaction, all consignments, pending state,
 	// and the reservation have formed a complete resumable transfer closure in
 	// one projection/lock publication.
 	p.accountManagementOwner().NotifyAccountChanged()
@@ -3695,6 +3605,10 @@ func (p *rgb11Manager) selectRGB11AllocationsForAssignment(contractID string, am
 	minConfirmations uint8, assignmentType uint32) (
 	[]rgb11SpendAllocation, string, indexer.AssetName, string, uint32, uint64, error,
 ) {
+	targetContract, err := consensus.ParseContractID(contractID)
+	if err != nil {
+		return nil, "", indexer.AssetName{}, "", 0, 0, err
+	}
 	excluded := make(map[string]struct{})
 	for {
 		selected, baseHash, targetAsset, targetClass, targetType, total, err :=
@@ -3702,57 +3616,65 @@ func (p *rgb11Manager) selectRGB11AllocationsForAssignment(contractID string, am
 		if err != nil {
 			return nil, "", indexer.AssetName{}, "", 0, total, err
 		}
-		base, _, err := p.mergeRGB11SpendHistories(selected)
-		if err != nil {
-			return nil, "", indexer.AssetName{}, "", 0, 0, err
-		}
-		checked := make([]operations.Opout, 0, len(selected))
-		byOpout := make(map[operations.Opout]*rgb11wallet.AllocationProof)
-		for _, allocation := range selected {
-			if !allocation.target {
-				continue
-			}
-			opout, err := rgb11ProofOpout(allocation.proof)
+		groups, contracts := groupRGB11Spends(selected, targetContract)
+		var rejected string
+		for _, id := range contracts {
+			rejected, err = p.rejectedRGB11Carrier(groups[id])
 			if err != nil {
 				return nil, "", indexer.AssetName{}, "", 0, 0, err
 			}
-			checked = append(checked, opout)
-			byOpout[opout] = allocation.proof
-		}
-		err = p.checkRGB11RejectPolicy(base, checked)
-		var violation *RGB11RejectListViolation
-		if errors.As(err, &violation) {
-			proof := byOpout[violation.Checked]
-			if proof == nil {
-				return nil, "", indexer.AssetName{}, "", 0, 0, err
-			}
-			proof.PolicyStatus = "rejected"
-			proof.PolicyReason = violation.Rejected.String()
-			if p.preview == nil {
-				_ = p.rgbManager.projectionStore.SaveProofState(proof)
-			}
-			excluded[proof.OutPoint] = struct{}{}
-			continue
-		}
-		if err != nil {
-			for _, proof := range byOpout {
-				proof.PolicyStatus = "unknown"
-				proof.PolicyReason = err.Error()
-				if p.preview == nil {
-					_ = p.rgbManager.projectionStore.SaveProofState(proof)
-				}
-			}
-			return nil, "", indexer.AssetName{}, "", 0, 0, err
-		}
-		for _, proof := range byOpout {
-			proof.PolicyStatus = "allowed"
-			proof.PolicyReason = ""
-			if p.preview == nil {
-				_ = p.rgbManager.projectionStore.SaveProofState(proof)
+			if rejected != "" {
+				break
 			}
 		}
-		return selected, baseHash, targetAsset, targetClass, targetType, total, nil
+		if rejected == "" {
+			return selected, baseHash, targetAsset, targetClass, targetType, total, nil
+		}
+		excluded[rejected] = struct{}{}
 	}
+}
+
+// Every allocation on a selected Bitcoin input is consumed, including those
+// returned as change. Check each against its own contract's policy and DAG.
+func (p *rgb11Manager) rejectedRGB11Carrier(group []rgb11SpendAllocation) (string, error) {
+	base, _, err := p.mergeRGB11SpendHistories(group)
+	if err != nil {
+		return "", err
+	}
+	checked := make([]operations.Opout, 0, len(group))
+	byOpout := make(map[operations.Opout]*rgb11wallet.AllocationProof, len(group))
+	for _, allocation := range group {
+		opout, err := rgb11ProofOpout(allocation.proof)
+		if err != nil {
+			return "", err
+		}
+		checked = append(checked, opout)
+		byOpout[opout] = allocation.proof
+	}
+	err = p.checkRGB11RejectPolicy(base, checked)
+	var violation *RGB11RejectListViolation
+	if errors.As(err, &violation) {
+		proof := byOpout[violation.Checked]
+		if proof == nil {
+			return "", err
+		}
+		proof.PolicyStatus, proof.PolicyReason = "rejected", violation.Rejected.String()
+		if p.preview == nil {
+			_ = p.rgbManager.projectionStore.SaveProofState(proof)
+		}
+		return proof.OutPoint, nil
+	}
+	status, reason := "allowed", ""
+	if err != nil {
+		status, reason = "unknown", err.Error()
+	}
+	for _, proof := range byOpout {
+		proof.PolicyStatus, proof.PolicyReason = status, reason
+		if p.preview == nil {
+			_ = p.rgbManager.projectionStore.SaveProofState(proof)
+		}
+	}
+	return "", err
 }
 
 func (p *rgb11Manager) selectRGB11AllocationsOnce(contractID string, amount uint64, minConfirmations uint8,
@@ -3822,7 +3744,11 @@ func (p *rgb11Manager) selectRGB11AllocationsOnceForAssignment(contractID string
 					ErrRGB11AssetPreservation, target.OutPoint, proof.Status, proof.AssetName.String())
 			}
 			official, err := p.rgb11ContractIDForAssetName(proof.AssetName)
-			if err != nil || official != contractID {
+			if err != nil || (official != contractID && (p.channelSend != nil || assignmentType != 4000)) {
+				return nil, "", indexer.AssetName{}, "", 0, 0, ErrRGB11HistoryMerge
+			}
+			id, err := consensus.ParseContractID(official)
+			if err != nil {
 				return nil, "", indexer.AssetName{}, "", 0, 0, ErrRGB11HistoryMerge
 			}
 			if baseHash == "" {
@@ -3837,8 +3763,8 @@ func (p *rgb11Manager) selectRGB11AllocationsOnceForAssignment(contractID string
 				return nil, "", indexer.AssetName{}, "", 0, 0, rgb11wallet.ErrInvalidProof
 			}
 			asset := &indexer.AssetInfo{Name: proof.AssetName, Amount: *amount.Clone(), BindingSat: 0}
-			isTarget := proof.AssetName == target.AssetName && proof.AssignmentType == target.AssignmentType
-			selected = append(selected, rgb11SpendAllocation{proof: proof, asset: asset, target: isTarget})
+			isTarget := official == contractID && proof.AssetName == target.AssetName && proof.AssignmentType == target.AssignmentType
+			selected = append(selected, rgb11SpendAllocation{proof: proof, asset: asset, contractID: id, target: isTarget})
 			if isTarget {
 				value, err := decimalUint64(&asset.Amount)
 				if err != nil || ^uint64(0)-total < value {
@@ -3976,6 +3902,14 @@ func (p *rgb11Manager) buildRGB11WitnessTx(selected []rgb11SpendAllocation, reci
 	if err != nil {
 		return nil, nil, nil, nil, 0, err
 	}
+	selectedAssets := make(map[string]map[indexer.AssetName]bool)
+	for _, allocation := range selected {
+		outpoint := allocation.proof.OutPoint
+		if selectedAssets[outpoint] == nil {
+			selectedAssets[outpoint] = make(map[indexer.AssetName]bool)
+		}
+		selectedAssets[outpoint][allocation.proof.AssetName] = true
+	}
 	for _, allocation := range selected {
 		view, err := p.getL1TxOutput(allocation.proof.OutPoint)
 		if err != nil {
@@ -3986,7 +3920,7 @@ func (p *rgb11Manager) buildRGB11WitnessTx(selected []rgb11SpendAllocation, reci
 		}
 		for index := range view.Assets {
 			assetName := &view.Assets[index].Name
-			if assetName.Protocol == rgb11wallet.Protocol || indexer.IsPlainAsset(assetName) {
+			if selectedAssets[allocation.proof.OutPoint][*assetName] || indexer.IsPlainAsset(assetName) {
 				continue
 			}
 			return nil, nil, nil, nil, 0, fmt.Errorf("%w: %s carries %s", ErrRGB11AssetPreservation,
@@ -4119,105 +4053,6 @@ func (p *rgb11Manager) buildRGB11WitnessTx(selected []rgb11SpendAllocation, reci
 			return nil, nil, nil, nil, 0, fmt.Errorf("insufficient plain sats for RGB11 fee")
 		}
 	}
-}
-
-type rgb11PSBTTransition struct {
-	ID      [32]byte
-	Encoded []byte
-}
-
-func (p *rgb11Manager) buildRGB11PSBT(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher,
-	contractID, transitionID [32]byte, transition []byte, bundleID [32]byte,
-	mpcProof anchors.MPCProof, mpcCommitment [32]byte,
-	inputs []operations.TransitionInput, additional ...rgb11PSBTTransition) (*psbt.Packet, *wire.MsgTx, []byte, error) {
-	packet, err := CreatePsbt(tx, prevFetcher, nil)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	transitionKey, err := corepsbt.RGBTransition(transitionID).RawKey()
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	closeKey, err := corepsbt.RGBCloseMethod().RawKey()
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	packet.Unknowns = append(packet.Unknowns,
-		&psbt.Unknown{Key: transitionKey, Value: append([]byte(nil), transition...)},
-		&psbt.Unknown{Key: closeKey, Value: []byte{2}},
-	)
-	for _, item := range additional {
-		if len(item.Encoded) == 0 {
-			continue
-		}
-		key, err := corepsbt.RGBTransition(item.ID).RawKey()
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		packet.Unknowns = append(packet.Unknowns, &psbt.Unknown{
-			Key: key, Value: append([]byte(nil), item.Encoded...),
-		})
-	}
-	consumedKey, err := corepsbt.RGBConsumedBy(contractID).RawKey()
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	consumed := make([]byte, 2+36*len(inputs))
-	binary.LittleEndian.PutUint16(consumed[:2], uint16(len(inputs)))
-	for index, input := range inputs {
-		offset := 2 + index*36
-		copy(consumed[offset:offset+32], input.OperationID[:])
-		binary.LittleEndian.PutUint16(consumed[offset+32:offset+34], input.AssignmentType)
-		binary.LittleEndian.PutUint16(consumed[offset+34:offset+36], input.Index)
-	}
-	packet.Unknowns = append(packet.Unknowns, &psbt.Unknown{Key: consumedKey, Value: consumed})
-	if len(packet.Outputs) == 0 {
-		return nil, nil, nil, fmt.Errorf("RGB11 PSBT has no commitment output")
-	}
-	messageKey, err := corepsbt.MPCMessage(contractID).RawKey()
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	depthKey, err := corepsbt.MPCMinTreeDepth().RawKey()
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	commitmentKey, err := corepsbt.MPCCommitment().RawKey()
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	proofKey, err := corepsbt.MPCProof().RawKey()
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	opretHostKey, err := corepsbt.OpretHost().RawKey()
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	opretCommitmentKey, err := corepsbt.OpretCommitment().RawKey()
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	proofValue := make([]byte, 7+32*len(mpcProof.Path))
-	binary.LittleEndian.PutUint32(proofValue[:4], mpcProof.Position)
-	binary.LittleEndian.PutUint16(proofValue[4:6], mpcProof.Cofactor)
-	proofValue[6] = byte(len(mpcProof.Path))
-	for index, node := range mpcProof.Path {
-		copy(proofValue[7+index*32:], node[:])
-	}
-	packet.Outputs[0].Unknowns = append(packet.Outputs[0].Unknowns,
-		&psbt.Unknown{Key: messageKey, Value: append([]byte(nil), bundleID[:]...)},
-		&psbt.Unknown{Key: depthKey, Value: []byte{byte(len(mpcProof.Path))}},
-		&psbt.Unknown{Key: commitmentKey, Value: append([]byte(nil), mpcCommitment[:]...)},
-		&psbt.Unknown{Key: proofKey, Value: proofValue},
-		&psbt.Unknown{Key: opretHostKey, Value: []byte{1}},
-		&psbt.Unknown{Key: opretCommitmentKey, Value: append([]byte(nil), mpcCommitment[:]...)},
-	)
-	var encoded bytes.Buffer
-	if err := packet.Serialize(&encoded); err != nil {
-		return nil, nil, nil, err
-	}
-	return packet, tx.Copy(), encoded.Bytes(), nil
 }
 
 func queryValue(invoice *invoicing.Invoice, key string) string {

@@ -2,6 +2,7 @@ package rgb11wallet
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"math/big"
@@ -27,6 +28,7 @@ const (
 	rgb11RecordReceiveKey         = uint8(6)
 	rgb11RecordReceiveReservation = uint8(7)
 	rgb11RecordChannelPending     = uint8(8)
+	rgb11RecordMultiPending       = uint8(9)
 )
 
 func encode(value any) ([]byte, error) {
@@ -41,7 +43,18 @@ func encode(value any) ([]byte, error) {
 		kind, write = rgb11RecordProof, func(e *strict.Encoder) error { return encodeAllocationProof(e, item) }
 	case *PendingTransfer:
 		kind, write = rgb11RecordPending, func(e *strict.Encoder) error { return encodePendingTransfer(e, item) }
-		if item != nil && item.ChannelSend != nil {
+		if item != nil && len(item.PreservedChanges) > 0 {
+			if item.ChannelSend != nil {
+				return nil, ErrValidationReceipt
+			}
+			kind = rgb11RecordMultiPending
+			write = func(e *strict.Encoder) error {
+				if err := encodePendingTransfer(e, item); err != nil {
+					return err
+				}
+				return encodePreservedChanges(e, item.PreservedChanges)
+			}
+		} else if item != nil && item.ChannelSend != nil {
 			kind = rgb11RecordChannelPending
 			write = func(e *strict.Encoder) error {
 				if err := encodePendingTransfer(e, item); err != nil {
@@ -114,17 +127,22 @@ func decode(data []byte, target any) error {
 		}
 		read = func(d *strict.Decoder) error { return decodeAllocationProof(d, item) }
 	case *PendingTransfer:
-		if kind != rgb11RecordPending && kind != rgb11RecordChannelPending {
+		if kind != rgb11RecordPending && kind != rgb11RecordChannelPending && kind != rgb11RecordMultiPending {
 			return ErrRGB11Inconsistent
 		}
 		read = func(d *strict.Decoder) error {
 			item.ChannelSend = nil
+			item.PreservedChanges = nil
 			if err := decodePendingTransfer(d, item); err != nil {
 				return err
 			}
 			if kind == rgb11RecordChannelPending {
 				item.ChannelSend = &ChannelSendData{}
 				return decodeChannelSend(d, item.ChannelSend)
+			}
+			if kind == rgb11RecordMultiPending {
+				item.PreservedChanges, err = decodePreservedChanges(d)
+				return err
 			}
 			return nil
 		}
@@ -1107,17 +1125,8 @@ func encodePendingTransfer(e *strict.Encoder, pending *PendingTransfer) error {
 			return err
 		}
 	}
-	if err := e.Length(uint64(len(pending.ChangeSeals)), rgb11StoreMaxRecords); err != nil {
+	if err := encodeChangeSeals(e, pending.ChangeSeals); err != nil {
 		return err
-	}
-	for _, seal := range pending.ChangeSeals {
-		encoded, err := seal.StrictBytes()
-		if err != nil {
-			return err
-		}
-		if err := e.Bytes(encoded, 13, 45); err != nil {
-			return err
-		}
 	}
 	if err := encodeText(e, pending.ReservationID); err != nil {
 		return err
@@ -1144,19 +1153,8 @@ func decodePendingTransfer(d *strict.Decoder, pending *PendingTransfer) error {
 			return err
 		}
 	}
-	count, err := d.Length(rgb11StoreMaxRecords)
-	if err != nil {
+	if pending.ChangeSeals, err = decodeChangeSeals(d); err != nil {
 		return err
-	}
-	pending.ChangeSeals = make([]seals.GraphBlindSeal, count)
-	for index := range pending.ChangeSeals {
-		encoded, err := d.Bytes(13, 45)
-		if err != nil {
-			return err
-		}
-		if pending.ChangeSeals[index], err = seals.DecodeGraphBlindSeal(encoded); err != nil {
-			return err
-		}
 	}
 	if pending.ReservationID, err = decodeText(d); err != nil {
 		return err
@@ -1167,4 +1165,77 @@ func decodePendingTransfer(d *strict.Decoder, pending *PendingTransfer) error {
 	}
 	pending.CreatedAt = int64(createdAt)
 	return nil
+}
+
+func encodeChangeSeals(e *strict.Encoder, reveals []seals.GraphBlindSeal) error {
+	if err := e.Length(uint64(len(reveals)), rgb11StoreMaxRecords); err != nil {
+		return err
+	}
+	for _, seal := range reveals {
+		encoded, err := seal.StrictBytes()
+		if err != nil {
+			return err
+		}
+		if err := e.Bytes(encoded, 13, 45); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func decodeChangeSeals(d *strict.Decoder) ([]seals.GraphBlindSeal, error) {
+	count, err := d.Length(rgb11StoreMaxRecords)
+	if err != nil {
+		return nil, err
+	}
+	reveals := make([]seals.GraphBlindSeal, count)
+	for i := range reveals {
+		encoded, err := d.Bytes(13, 45)
+		if err != nil {
+			return nil, err
+		}
+		if reveals[i], err = seals.DecodeGraphBlindSeal(encoded); err != nil {
+			return nil, err
+		}
+	}
+	return reveals, nil
+}
+
+func encodePreservedChanges(e *strict.Encoder, changes []LocalChange) error {
+	if err := e.Length(uint64(len(changes)), rgb11StoreMaxRecords); err != nil {
+		return err
+	}
+	for _, change := range changes {
+		hash, err := hex.DecodeString(change.ObjectHash)
+		if err != nil || len(hash) != 32 || len(change.Seals) == 0 {
+			return ErrValidationReceipt
+		}
+		if err := e.Raw(hash); err != nil {
+			return err
+		}
+		if err := encodeChangeSeals(e, change.Seals); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func decodePreservedChanges(d *strict.Decoder) ([]LocalChange, error) {
+	count, err := d.Length(rgb11StoreMaxRecords)
+	if err != nil || count == 0 {
+		return nil, ErrValidationReceipt
+	}
+	changes := make([]LocalChange, count)
+	for i := range changes {
+		hash, err := d.Raw(32)
+		if err != nil {
+			return nil, err
+		}
+		reveals, err := decodeChangeSeals(d)
+		if err != nil || len(reveals) == 0 {
+			return nil, ErrValidationReceipt
+		}
+		changes[i] = LocalChange{ObjectHash: hex.EncodeToString(hash), Seals: reveals}
+	}
+	return changes, nil
 }

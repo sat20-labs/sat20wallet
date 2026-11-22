@@ -148,6 +148,7 @@ func sameRGB11BroadcastOperation(left, right *rgb11wallet.PendingTransfer) bool 
 		left.ReservationID == right.ReservationID &&
 		left.RecipientObjectHash == right.RecipientObjectHash &&
 		left.LocalObjectHash == right.LocalObjectHash &&
+		left.SamePreservedChanges(right) &&
 		sameRGB11ChannelSendIntent(left.ChannelSend, right.ChannelSend)
 }
 
@@ -171,6 +172,7 @@ func cloneRGB11BroadcastIntent(pending *rgb11wallet.PendingTransfer) *rgb11walle
 	cloned.State.OutputOutPoints = append([]string(nil), pending.State.OutputOutPoints...)
 	cloned.SignedTx = append([]byte(nil), pending.SignedTx...)
 	cloned.SignedPSBT = append([]byte(nil), pending.SignedPSBT...)
+	cloned.PreservedChanges = slices.Clone(pending.PreservedChanges)
 	if pending.ChannelSend != nil {
 		channel := *pending.ChannelSend
 		channel.WitnessScript = append([]byte(nil), pending.ChannelSend.WitnessScript...)

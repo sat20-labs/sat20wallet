@@ -347,6 +347,20 @@ func UpsertProjectionSnapshotPending(records []SnapshotRecord, pending *PendingT
 		}
 		copyPending.LocalObjectHash = objectHash
 	}
+	copyPending.PreservedChanges = append([]LocalChange(nil), pending.PreservedChanges...)
+	for i := range copyPending.PreservedChanges {
+		change := &copyPending.PreservedChanges[i]
+		if len(change.Consignment) == 0 {
+			continue
+		}
+		if err := change.bindObject(); err != nil {
+			return nil, err
+		}
+		if err := addSnapshotObject(byKey, change.ObjectHash, change.Consignment); err != nil {
+			return nil, err
+		}
+		change.Consignment = nil
+	}
 	copyPending.RecipientConsignment = nil
 	copyPending.LocalConsignment = nil
 	key := "pending-" + copyPending.State.TransferID

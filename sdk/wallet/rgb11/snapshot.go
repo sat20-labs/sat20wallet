@@ -526,8 +526,15 @@ func validateProjectionSnapshot(records []SnapshotRecord) error {
 		}
 	}
 	for _, pending := range pendings {
-		if pending.LocalObjectHash != "" && objects[pending.LocalObjectHash] == nil {
-			return ErrValidationReceipt
+		seen := make(map[string]bool)
+		for _, change := range pending.LocalChanges() {
+			if change.ObjectHash == "" {
+				continue
+			}
+			if seen[change.ObjectHash] || objects[change.ObjectHash] == nil {
+				return ErrValidationReceipt
+			}
+			seen[change.ObjectHash] = true
 		}
 		if pending.RecipientObjectHash != "" && objects[pending.RecipientObjectHash] == nil {
 			return ErrValidationReceipt

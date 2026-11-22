@@ -545,14 +545,14 @@ func (p *rgb11Manager) buildRGB11PreparedReceiveCandidate(ctx context.Context,
 	return &candidate, receipt, nil
 }
 
-func rgb11LocalChangeAllocations(allocations []rgb11wallet.ValidatedAllocation,
-	pending *rgb11wallet.PendingTransfer) (map[string]rgb11wallet.ValidatedAllocation, error) {
-	if pending == nil || pending.State.WitnessTxID == "" || len(pending.ChangeSeals) == 0 {
+func matchRGB11ChangeSeals(allocations []rgb11wallet.ValidatedAllocation,
+	txid string, reveals []seals.GraphBlindSeal) (map[string]rgb11wallet.ValidatedAllocation, error) {
+	if txid == "" || len(reveals) == 0 {
 		return nil, rgb11wallet.ErrInvalidProof
 	}
-	wanted := make(map[string]seals.GraphBlindSeal, len(pending.ChangeSeals))
-	changeOutpoints := make(map[string]struct{}, len(pending.ChangeSeals))
-	for _, seal := range pending.ChangeSeals {
+	wanted := make(map[string]seals.GraphBlindSeal, len(reveals))
+	changeOutpoints := make(map[string]struct{}, len(reveals))
+	for _, seal := range reveals {
 		strict, err := seal.StrictBytes()
 		if err != nil {
 			return nil, rgb11wallet.ErrInvalidProof
@@ -561,7 +561,7 @@ func rgb11LocalChangeAllocations(allocations []rgb11wallet.ValidatedAllocation,
 			return nil, fmt.Errorf("%w: duplicate local change seal", rgb11wallet.ErrInvalidProof)
 		}
 		wanted[string(strict)] = seal
-		changeOutpoints[fmt.Sprintf("%s:%d", pending.State.WitnessTxID, seal.Vout)] = struct{}{}
+		changeOutpoints[fmt.Sprintf("%s:%d", txid, seal.Vout)] = struct{}{}
 	}
 	matched := make(map[string]rgb11wallet.ValidatedAllocation, len(wanted))
 	matchedSeals := make(map[string]bool, len(wanted))
@@ -577,9 +577,9 @@ func rgb11LocalChangeAllocations(allocations []rgb11wallet.ValidatedAllocation,
 			}
 			continue
 		}
-		expectedOutpoint := fmt.Sprintf("%s:%d", pending.State.WitnessTxID, seal.Vout)
+		expectedOutpoint := fmt.Sprintf("%s:%d", txid, seal.Vout)
 		if allocation.OutPoint != expectedOutpoint || !allocation.WitnessTxPtr ||
-			allocation.WitnessTxID != pending.State.WitnessTxID || allocation.SealBlinding != seal.Blinding {
+			allocation.WitnessTxID != txid || allocation.SealBlinding != seal.Blinding {
 			return nil, fmt.Errorf("RGB11 local change %s does not match its exact seal: %w",
 				allocation.OutPoint, rgb11wallet.ErrInvalidProof)
 		}
@@ -602,30 +602,50 @@ func rgb11LocalChangeAllocations(allocations []rgb11wallet.ValidatedAllocation,
 
 func (p *rgb11Manager) addRGB11LocalChangeCandidate(ctx context.Context,
 	projectionRecords []rgb11wallet.SnapshotRecord, pending *rgb11wallet.PendingTransfer) ([]rgb11wallet.SnapshotRecord, error) {
-	if pending == nil || len(pending.ChangeSeals) == 0 || len(pending.LocalConsignment) == 0 {
+	if pending == nil {
 		return projectionRecords, nil
 	}
+	err := pending.LoadPreservedChanges(func(hash string) ([]byte, error) {
+		return rgb11SnapshotObject(projectionRecords, hash), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, change := range pending.LocalChanges() {
+		if len(change.Seals) == 0 {
+			continue
+		}
+		projectionRecords, err = p.addRGB11Change(ctx, projectionRecords, pending.State.WitnessTxID, change)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return projectionRecords, nil
+}
+
+func (p *rgb11Manager) addRGB11Change(ctx context.Context, projectionRecords []rgb11wallet.SnapshotRecord,
+	txid string, change rgb11wallet.LocalChange) ([]rgb11wallet.SnapshotRecord, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if pending.LocalObjectHash == "" {
+	if change.ObjectHash == "" {
 		return nil, rgb11wallet.ErrValidationReceipt
 	}
-	digest := sha256.Sum256(pending.LocalConsignment)
-	if hex.EncodeToString(digest[:]) != pending.LocalObjectHash {
+	digest := sha256.Sum256(change.Consignment)
+	if hex.EncodeToString(digest[:]) != change.ObjectHash {
 		return nil, fmt.Errorf("local RGB11 consignment hash mismatch: %w", rgb11wallet.ErrValidationReceipt)
 	}
 	receipts, err := rgb11wallet.ValidationReceiptsFromProjectionSnapshot(projectionRecords)
 	if err != nil {
 		return nil, err
 	}
-	existingReceipt := receipts[pending.LocalObjectHash]
-	validator := rgb11wallet.NewRGB11ValidatorWithReveals(pending.ChangeSeals...)
-	history, err := p.validateRGB11ReceiptHistory(ctx, pending.LocalConsignment, validator, existingReceipt)
+	existingReceipt := receipts[change.ObjectHash]
+	validator := rgb11wallet.NewRGB11ValidatorWithReveals(change.Seals...)
+	history, err := p.validateRGB11ReceiptHistory(ctx, change.Consignment, validator, existingReceipt)
 	if err != nil || history == nil || history.MaterialReceipt == nil {
 		return nil, fmt.Errorf("validate RGB11 local change history: %w", errRGB11ProjectionEvidence(err))
 	}
-	allocations, err := rgb11LocalChangeAllocations(history.MaterialReceipt.Allocations, pending)
+	allocations, err := matchRGB11ChangeSeals(history.MaterialReceipt.Allocations, txid, change.Seals)
 	if err != nil {
 		return nil, err
 	}
@@ -675,7 +695,7 @@ func (p *rgb11Manager) addRGB11LocalChangeCandidate(ctx context.Context,
 	for key, allocation := range allocations {
 		proof := existing[key]
 		if proof != nil {
-			if existingReceipt == nil || proof.ConsignmentHash != pending.LocalObjectHash ||
+			if existingReceipt == nil || proof.ConsignmentHash != change.ObjectHash ||
 				proof.ValidationHash != existingReceiptHash ||
 				!rgb11ProofMatchesHistoricalReceipt(proof, existingReceipt, outputs[proof.OutPoint], history) {
 				return nil, fmt.Errorf("%w: existing local-change proof conflicts with core history %s",
@@ -746,7 +766,7 @@ func (p *rgb11Manager) addRGB11LocalChangeCandidate(ctx context.Context,
 		replacements = append(replacements, rgb11wallet.ProjectionReplacement{Output: output, Asset: asset, Proof: newProof})
 	}
 	return rgb11wallet.AddLocalConsignment(
-		projectionRecords, pending.LocalConsignment, selectedReceipt, replacements,
+		projectionRecords, change.Consignment, selectedReceipt, replacements,
 	)
 }
 

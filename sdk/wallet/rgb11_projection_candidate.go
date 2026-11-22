@@ -1466,7 +1466,7 @@ func (p *rgb11Manager) resolveRGB11Recovery(ctx context.Context, snapshot *RGB11
 		bound := false
 		for _, proofState := range proofStates {
 			if proofState.prepared && proofState.producerTxID == pending.State.WitnessTxID &&
-				proofState.proof.ConsignmentHash == pending.LocalObjectHash &&
+				pending.HasLocalObject(proofState.proof.ConsignmentHash) &&
 				containsString(pending.State.OutputOutPoints, proofState.proof.OutPoint) &&
 				containsString(rgb11PendingChangeOutpoints(pending), proofState.proof.OutPoint) {
 				bound = true

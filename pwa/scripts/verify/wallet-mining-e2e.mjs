@@ -183,7 +183,12 @@ export async function runPwaMiningCases(t, fixture) {
         assert.ok(l1Evidence.foundBlocks.some(record => record.blockHash === found.blockHash &&
           record.coinbaseTxid === found.coinbaseTxid && record.rewardAddress === rewardAddress && record.submitted),
         'WASM success lacks independently checked L1 proof-of-work evidence')
-        await expect(page.getByText(found.blockHash, { exact: true })).toBeVisible()
+        const foundBlocks = page.getByRole('heading', { name: 'Found blocks', exact: true }).locator('../..')
+        const blockHash = foundBlocks.getByText(found.blockHash, { exact: true })
+        await expect(blockHash).toBeVisible()
+        const record = blockHash.locator('..')
+        await expect(record.getByText('Submitted', { exact: true })).toBeVisible()
+        await expect(record.getByText('accepted', { exact: true })).toBeVisible()
       } else {
         await verifyStoppedReload(l1Evidence)
       }

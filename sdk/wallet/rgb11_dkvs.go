@@ -1899,7 +1899,7 @@ func (p *rgb11Manager) loadExpiredRGB11Batch(transferID string, now int64) (
 				len(pending.SignedTx) != 0 || len(pending.SignedPSBT) != 0 ||
 				len(pending.RecipientConsignment) != 0 || len(pending.LocalConsignment) != 0 ||
 				pending.RecipientObjectHash != "" || pending.LocalObjectHash != "" ||
-				len(pending.ChangeSeals) != 0 {
+				len(pending.ChangeSeals) != 0 || len(pending.PreservedChanges) != 0 {
 				return nil, false, fmt.Errorf("%w: expired batch tombstone mismatch", ErrRGB11Inconsistent)
 			}
 			for _, lock := range locks {
@@ -1950,7 +1950,7 @@ func (p *rgb11Manager) loadExpiredRGB11Batch(transferID string, now int64) (
 			!bytes.Equal(pending.SignedTx, first.SignedTx) || !bytes.Equal(pending.SignedPSBT, first.SignedPSBT) ||
 			!equalRGB11StringSet(state.InputOutPoints, actualInputs) ||
 			!bytes.Equal(pending.RecipientConsignment, first.RecipientConsignment) ||
-			!bytes.Equal(pending.LocalConsignment, first.LocalConsignment) {
+			!bytes.Equal(pending.LocalConsignment, first.LocalConsignment) || !pending.SamePreservedChanges(first) {
 			return nil, false, fmt.Errorf("%w: expired batch metadata mismatch", ErrRGB11Inconsistent)
 		}
 		if len(pending.RecipientConsignment) == 0 || len(pending.LocalConsignment) == 0 ||

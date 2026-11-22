@@ -3,8 +3,11 @@
 package rgb11wallet
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"reflect"
+	"slices"
 	"strings"
 
 	indexer "github.com/sat20-labs/indexer/common"
@@ -209,12 +212,77 @@ type PendingTransfer struct {
 	// SignedTx holds the fixed unsigned transaction until the broadcast boundary.
 	// SignedPSBT retains its original unsigned PSBT, including previous outputs.
 	// ChannelSend.Signed additionally tracks the existing joint-signing phase.
-	SignedTx      []byte                 `json:"-"`
-	SignedPSBT    []byte                 `json:"-"`
-	ChangeSeals   []seals.GraphBlindSeal `json:"-"`
-	ReservationID string                 `json:"reservation_id,omitempty"`
-	CreatedAt     int64                  `json:"created_at"`
-	ChannelSend   *ChannelSendData       `json:"-"`
+	SignedTx         []byte                 `json:"-"`
+	SignedPSBT       []byte                 `json:"-"`
+	ChangeSeals      []seals.GraphBlindSeal `json:"-"`
+	PreservedChanges []LocalChange          `json:"-"`
+	ReservationID    string                 `json:"reservation_id,omitempty"`
+	CreatedAt        int64                  `json:"created_at"`
+	ChannelSend      *ChannelSendData       `json:"-"`
+}
+
+// LocalChange is the private consignment and seal disclosures of one contract.
+// A preserved contract's bytes are kept in the content-addressed object store.
+type LocalChange struct {
+	ObjectHash  string
+	Consignment []byte
+	Seals       []seals.GraphBlindSeal
+}
+
+func (c *LocalChange) bindObject() error {
+	if len(c.Consignment) == 0 {
+		return ErrValidationReceipt
+	}
+	hash := sha256.Sum256(c.Consignment)
+	object := hex.EncodeToString(hash[:])
+	if c.ObjectHash != "" && c.ObjectHash != object {
+		return ErrValidationReceipt
+	}
+	c.ObjectHash = object
+	return nil
+}
+
+func (p *PendingTransfer) LocalChanges() []LocalChange {
+	changes := []LocalChange{{
+		ObjectHash: p.LocalObjectHash, Consignment: p.LocalConsignment, Seals: p.ChangeSeals,
+	}}
+	return append(changes, p.PreservedChanges...)
+}
+
+func (p *PendingTransfer) HasLocalObject(hash string) bool {
+	if hash == "" {
+		return false
+	}
+	if p.LocalObjectHash == hash {
+		return true
+	}
+	for _, change := range p.PreservedChanges {
+		if change.ObjectHash == hash {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *PendingTransfer) LoadPreservedChanges(load func(string) ([]byte, error)) error {
+	for i := range p.PreservedChanges {
+		change := &p.PreservedChanges[i]
+		raw, err := load(change.ObjectHash)
+		if err != nil {
+			return err
+		}
+		change.Consignment = raw
+		if err := change.bindObject(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *PendingTransfer) SamePreservedChanges(other *PendingTransfer) bool {
+	return slices.EqualFunc(p.PreservedChanges, other.PreservedChanges, func(a, b LocalChange) bool {
+		return a.ObjectHash == b.ObjectHash && reflect.DeepEqual(a.Seals, b.Seals)
+	})
 }
 
 // ChannelSendData keeps the existing STP signing request private until every

@@ -371,10 +371,11 @@ const nodeAPIOrigins = [...new Set([
 for (const origin of nodeAPIOrigins) {
   assert.ok(['127.0.0.1', 'localhost'].includes(new URL(origin).hostname), 'fixture endpoints must be loopback')
 }
-const executable = process.env.SAT20_BROWSER_EXECUTABLE || [
+const localRegtest = regtestMode && process.env.SAT20_E2E_LOCAL_REAL === '1'
+const executable = process.env.SAT20_BROWSER_EXECUTABLE || (localRegtest ? undefined : [
   '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-].find(existsSync)
+].find(existsSync))
 if (regtestMode && focusedWalletCases) {
   const currentlyRegtestReadyCases = new Set([...requiredPwaWalletBasicCases, ...requiredPwaBiometricCases,
     ...(regtestWalletFixture?.realBitcoinControl ? requiredPwaIntegrationCases.filter(name => name.startsWith("RGB PWA:")) : []),

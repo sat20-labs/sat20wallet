@@ -541,7 +541,7 @@ func TestRGB11SendDoesNotUseAnotherRGBAssetForFees(t *testing.T) {
 	}
 }
 
-func TestRGB11SendPreservesOtherContractOnSameCarrier(t *testing.T) {
+func TestRGB11SharedAssetFault(t *testing.T) {
 	sender, recipient, imported, evidence, _ := newRGB11GenericSendFixture(t)
 	source := rgb11GenericFixtureSource(t, sender, imported)
 	allocations, err := rgb11IssueAllocations([]string{source}, []uint64{7})
@@ -563,23 +563,21 @@ func TestRGB11SendPreservesOtherContractOnSameCarrier(t *testing.T) {
 		t.Fatalf("import shared carrier: %+v %v", other, err)
 	}
 	request := RGB11AddressSendRequest{ReceiverAddress: recipient.wallet.GetAddress(), AssetName: imported.AssetName, AmountRaw: "20000", FeeRate: 2, MinConfirmations: 1}
-	for _, status := range []string{"settled", "inconsistent"} {
-		proof, err := sender.rgbManager.projectionStore.LoadProof(source, other.AssetName)
-		if err != nil {
-			t.Fatal(err)
-		}
-		proof.Status = status
-		if err := sender.rgbManager.projectionStore.SaveProofState(proof); err != nil {
-			t.Fatal(err)
-		}
-		_, _, err = sender.rgbManager.PrepareConfiguredRGB11AddressTransfer(context.Background(), request, dkvsindexer.RecordVerificationOptions{})
-		if !errors.Is(err, ErrRGB11HistoryMerge) && !errors.Is(err, ErrRGB11AssetPreservation) {
-			t.Fatalf("other contract status=%s did not prevent spending shared carrier: %v", status, err)
-		}
-		transfers, err := sender.rgbManager.projectionStore.ListTransfers()
-		if err != nil || len(transfers) != 0 {
-			t.Fatalf("failed preservation check persisted transfer: %v %v", transfers, err)
-		}
+	proof, err := sender.rgbManager.projectionStore.LoadProof(source, other.AssetName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof.Status = "inconsistent"
+	if err := sender.rgbManager.projectionStore.SaveProofState(proof); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = sender.rgbManager.PrepareConfiguredRGB11AddressTransfer(context.Background(), request, dkvsindexer.RecordVerificationOptions{})
+	if !errors.Is(err, ErrRGB11AssetPreservation) {
+		t.Fatalf("invalid proof did not prevent spending shared carrier: %v", err)
+	}
+	transfers, err := sender.rgbManager.projectionStore.ListTransfers()
+	if err != nil || len(transfers) != 0 {
+		t.Fatalf("failed preservation check persisted transfer: %v %v", transfers, err)
 	}
 	evidence.mu.Lock()
 	sent := len(evidence.broadcasted) != 0

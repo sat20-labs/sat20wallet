@@ -29,7 +29,7 @@ func TestRGB11LocalChangeAllocationsAllowsDistinctSealsOnMixedCarrier(t *testing
 		{OutPoint: txid + ":1", AssetName: indexer.AssetName{Protocol: "rgb11", Type: indexer.ASSET_TYPE_FT, Ticker: "contract"},
 			WitnessTxPtr: true, WitnessTxID: txid, SealBlinding: fungible.Blinding, SealDisclosure: fungibleStrict},
 	}
-	matched, err := rgb11LocalChangeAllocations(allocations, pending)
+	matched, err := matchRGB11ChangeSeals(allocations, pending.State.WitnessTxID, pending.ChangeSeals)
 	require.NoError(t, err)
 	require.Len(t, matched, 2)
 	unknown, err := seals.RandomWitnessBlindSeal(1)
@@ -40,17 +40,17 @@ func TestRGB11LocalChangeAllocationsAllowsDistinctSealsOnMixedCarrier(t *testing
 		OutPoint: txid + ":1", AssetName: indexer.AssetName{Protocol: "rgb11", Type: "f", Ticker: "other"},
 		WitnessTxPtr: true, WitnessTxID: txid, SealBlinding: unknown.Blinding, SealDisclosure: unknownStrict,
 	}
-	_, err = rgb11LocalChangeAllocations(append(append([]rgb11wallet.ValidatedAllocation(nil), allocations...), extra), pending)
+	_, err = matchRGB11ChangeSeals(append(append([]rgb11wallet.ValidatedAllocation(nil), allocations...), extra), pending.State.WitnessTxID, pending.ChangeSeals)
 	require.ErrorIs(t, err, rgb11wallet.ErrInvalidProof, "an unknown seal on a declared change carrier cannot be ignored")
 	extra.OutPoint = txid + ":2"
-	otherCarrier, err := rgb11LocalChangeAllocations(append(append([]rgb11wallet.ValidatedAllocation(nil), allocations...), extra), pending)
+	otherCarrier, err := matchRGB11ChangeSeals(append(append([]rgb11wallet.ValidatedAllocation(nil), allocations...), extra), pending.State.WitnessTxID, pending.ChangeSeals)
 	require.NoError(t, err, "unrelated carriers are outside this transfer's local change")
 	require.Len(t, otherCarrier, 2)
 	allocations[1].AssetName = allocations[0].AssetName
-	_, err = rgb11LocalChangeAllocations(allocations, pending)
+	_, err = matchRGB11ChangeSeals(allocations, pending.State.WitnessTxID, pending.ChangeSeals)
 	require.Error(t, err, "same-asset Opouts cannot overwrite one projection key")
 	allocations[1].AssetName.Type = indexer.ASSET_TYPE_FT
 	allocations[1].SealDisclosure = controlStrict
-	_, err = rgb11LocalChangeAllocations(allocations, pending)
+	_, err = matchRGB11ChangeSeals(allocations, pending.State.WitnessTxID, pending.ChangeSeals)
 	require.Error(t, err, "one reveal must not satisfy two allocations")
 }

@@ -166,7 +166,9 @@ func recoveryClosureKeys(snapshot *RGB11WalletSnapshot,
 				pending.State.ConsignmentHash != pending.RecipientObjectHash {
 				return nil, nil, ErrValidationReceipt
 			}
-			addObject(pending.LocalObjectHash)
+			for _, change := range pending.LocalChanges() {
+				addObject(change.ObjectHash)
+			}
 			if pending.RecipientObjectHash != "" {
 				key := "object-" + pending.RecipientObjectHash
 				if _, exists := projection[key]; !exists {
@@ -761,7 +763,7 @@ func selectedMayOmitCompactedRejectedObject(current, selected *RGB11WalletSnapsh
 			if decode(record.Value, &left) != nil {
 				return false
 			}
-			if left.RecipientObjectHash != hash && left.LocalObjectHash != hash {
+			if left.RecipientObjectHash != hash && !left.HasLocalObject(hash) {
 				continue
 			}
 			foundOwner = true
@@ -769,7 +771,7 @@ func selectedMayOmitCompactedRejectedObject(current, selected *RGB11WalletSnapsh
 			var right PendingTransfer
 			if !ok || decode(incoming.Value, &right) != nil || right.State.Status != "rejected" ||
 				!samePendingIntent(left, right) || right.RecipientObjectHash == hash ||
-				right.LocalObjectHash == hash {
+				right.HasLocalObject(hash) {
 				return false
 			}
 		}
@@ -939,6 +941,7 @@ func samePendingIntent(left, right PendingTransfer) bool {
 			!(right.RecipientObjectHash == "" && right.State.Status == "rejected") ||
 		!sameOptionalString(left.LocalObjectHash, right.LocalObjectHash) &&
 			!(right.LocalObjectHash == "" && right.State.Status == "rejected") ||
+		!left.SamePreservedChanges(&right) && !(len(right.PreservedChanges) == 0 && right.State.Status == "rejected") ||
 		!sameOptionalString(leftMetadata.ReservationID, right.ReservationID) ||
 		!sameOptionalInt64(leftMetadata.CreatedAt, right.CreatedAt) ||
 		!samePendingSigningIntent(left, right) ||

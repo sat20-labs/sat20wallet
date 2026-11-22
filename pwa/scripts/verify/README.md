@@ -9,6 +9,9 @@ These scripts exercise the SAT20 PWA wallet.
 不连接远程节点，也不复用历史钱包或链数据。工具安装、路径配置和覆盖边界见
 [公共环境说明](../../../docs/sdk-e2e-test-cases.md#本机真实链公共准备2026-10-23)。
 
+本机真实 regtest 默认使用 Playwright 配套的 Chromium。可在 `pwa/` 下运行
+`npx playwright install chromium` 安装，或用 `SAT20_BROWSER_EXECUTABLE` 显式指定浏览器。
+
 每组通过后立即删除生成的链、钱包和恢复材料；失败保留现场。完整测试输出、
 节点和浏览器日志、`manifest.json`、`summary.json` 始终保留。
 下文使用模拟 L1 的历史入口仅作为组件集成测试，不计作本轮真实双链 E2E 通过。
