@@ -1,8 +1,8 @@
 <template>
   <Dialog :open="isOpen" @update:open="handleOpenChange">
-    <DialogContent class="max-h-[90vh] w-[380px] overflow-y-auto rounded-lg bg-black"
+    <DialogContent class="max-h-[calc(100dvh_-_2rem)] w-[calc(100%_-_2rem)] max-w-md grid-cols-[minmax(0,1fr)] gap-4 overflow-y-auto rounded-xl bg-background"
       @escape-key-down="preventDismiss" @interact-outside="preventDismiss">
-      <DialogHeader><DialogTitle>{{ t('rgb11Invoice.title') }}</DialogTitle><DialogDescription>{{ asset?.label || asset?.contract_id }}</DialogDescription></DialogHeader>
+      <DialogHeader><DialogTitle>{{ t('rgb11Invoice.title') }}</DialogTitle><DialogDescription class="break-words">{{ asset?.label || asset?.contract_id }}</DialogDescription></DialogHeader>
       <div class="space-y-3">
         <select v-if="requests.length" :value="receive?.id || ''" :disabled="loading" @change="selectRequest(($event.target as HTMLSelectElement).value)" class="w-full rounded bg-zinc-900 p-2">
           <option value="">{{ t('rgb11Transfer.startNewRequest') }}</option>
@@ -22,7 +22,7 @@
           <Textarea :model-value="receive.invoice" readonly class="font-mono text-xs" /><Button variant="outline" @click="copy(receive.invoice)">{{ t('rgb11Invoice.copy') }}</Button>
           <template v-if="receive.can_import">
             <Textarea v-model="packageText" :disabled="loading" :placeholder="t('rgb11Transfer.package')" class="font-mono text-xs" />
-            <input type="file" accept=".asc,.rgb,.rgbc,.txt,.json" :disabled="loading" @change="selectFile" />
+            <input type="file" accept=".asc,.rgb,.rgbc,.txt,.json" class="max-w-full" :disabled="loading" @change="selectFile" />
             <Button :disabled="loading || (!packageText && !fileData)" @click="prepare">{{ t('rgb11Transfer.prepareReceive') }}</Button>
           </template>
           <template v-if="receive.receipt">

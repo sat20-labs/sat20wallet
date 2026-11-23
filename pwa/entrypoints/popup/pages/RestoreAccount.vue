@@ -1,6 +1,6 @@
 <template>
   <LayoutScroll>
-    <div class="mx-auto max-w-xl space-y-4 pb-6 pt-3 sm:pt-8">
+    <div class="mx-auto max-w-md space-y-4 pb-6 pt-6 sm:pt-10">
       <header class="space-y-2">
         <h1 class="text-2xl font-semibold">{{ rehearsalOnly ? t('accountManagement.ui.rehearsalTitle') : t('accountManagement.ui.restoreTitle') }}</h1>
         <p v-if="rehearsalOnly" class="text-sm text-muted-foreground">{{ t('accountManagement.ui.rehearsalIntro') }}</p>

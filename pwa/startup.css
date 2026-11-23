@@ -1,3 +1,7 @@
+html {
+  background: #09090b;
+}
+
 * {
   -webkit-touch-callout: none;
   -webkit-user-select: none;

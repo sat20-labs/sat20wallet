@@ -359,6 +359,9 @@ func (p *Manager) resumePendingActivation(ctx context.Context, secret []byte, pa
 			return err
 		}
 		updated := *p.accountProfile
+		if target.PackageID != "" && updated.PackageID != target.PackageID {
+			updated.LastRehearsalAt = time.Now().UnixMilli()
+		}
 		applyActivationTarget(&updated, &target)
 		updated.RecoveryConfigured, updated.ManagedEntered = true, true
 		updated.InitialBackupPending = updated.InitialBackupPending || target.Initial
@@ -366,7 +369,6 @@ func (p *Manager) resumePendingActivation(ctx context.Context, secret []byte, pa
 			updated.InitWrapperHash = accountStateDigest(target.Wrapper)
 		}
 		updated.Activation = nil
-		updated.LastRehearsalAt = time.Now().UnixMilli()
 		encoded, err := EncodeToBytes(&updated)
 		if err != nil {
 			return err

@@ -19,9 +19,16 @@
     <p class="text-center text-sm text-muted-foreground/80 mt-6">
       {{ $t('index.agreement') }}
     </p>
+    <footer class="mt-4 text-center text-xs tabular-nums text-muted-foreground">
+      {{ $t('setting.version') }} {{ versionDisplay }}
+    </footer>
   </div>
 </template>
 
 <script setup lang="ts">
 import { Button } from '@/components/ui/button'
+import { versionPolicy } from '@/utils/pwaVersionPolicy'
+
+const { local, build } = versionPolicy
+const versionDisplay = build ? `${local}+${build}` : local
 </script>

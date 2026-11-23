@@ -2,6 +2,7 @@ import walletManager from '@/utils/sat20'
 import { getConfig, logLevel } from '@/config/wasm'
 import { Network } from '@/types'
 import { walletStorage } from '@/lib/walletStorage'
+import { migrateWallet038 } from '@/lib/wallet-upgrade-038'
 import { isRegtestBuild } from '@/utils/networkMode'
 import { WASM_INTEGRITY_MANIFEST } from '@/generated/wasm-integrity'
 import { noteWasmOperation, snapshotWasmRuntimeDiagnostics } from '@/utils/wasmRuntimeDiagnostics'
@@ -169,8 +170,15 @@ let loadTask: Promise<void> | undefined
 const loadRuntime = () => runtimeTask ??= instantiateGoWasm()
 
 const loadWalletWasm = async () => {
-  const config = await getRuntimeConfig()
   const { runtimeFailure } = await loadRuntime()
+  if (!isRegtestBuild) {
+    const network = await migrateWallet038()
+    if (network) {
+      await walletStorage.initializeState()
+      await walletStorage.setValue('network', network)
+    }
+  }
+  const config = await getRuntimeConfig()
   const [initError] = await Promise.race([
     walletManager.init(config, logLevel),
     runtimeFailure,

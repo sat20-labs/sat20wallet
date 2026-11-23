@@ -140,6 +140,8 @@ func (p *Manager) bumpAccountGenerationLocked() {
 	}
 }
 
+var errAccountManagementDisabled = errors.New("account management is disabled for STP service wallets")
+
 type AccountManagementStatus struct {
 	AccountState       string                `json:"account_state"`
 	WriteAllowed       bool                  `json:"write_allowed"`
@@ -226,6 +228,11 @@ func (p *Manager) accountLocalOnlyLocked(service string) bool {
 func (p *Manager) GetAccountManagementStatus() AccountManagementStatus {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
+	if p.IsServerMode() {
+		status := AccountManagementStatus{LocalOnly: true, DiscoveryStatus: "inactive"}
+		p.fillAccountStatus(&status)
+		return status
+	}
 	service, _ := p.accountServiceStateLocked()
 	localOnly := p.accountLocalOnlyLocked(service)
 	if p.accountProfile == nil {
@@ -468,6 +475,9 @@ func (p *Manager) prepareInitialAccountManagementLocked(password string, rootInf
 // unlocked mnemonic wallet. First-wallet create/import already use the same
 // atomic activation path; this entry point remains for pre-existing catalogs.
 func (p *Manager) InitializeAccountManagement(password string) error {
+	if p.IsServerMode() {
+		return errAccountManagementDisabled
+	}
 	if p == nil {
 		return fmt.Errorf("wallet manager is unavailable")
 	}
@@ -656,7 +666,7 @@ func randomAccountMutationID() (string, error) {
 // Explicit retry and backup waits use the existing worker without the normal
 // business-change quiet interval. The worker owns its own request context.
 func (p *Manager) requestAccountSync() {
-	if p == nil || p.accountDBFailure() != nil {
+	if p == nil || p.IsServerMode() || p.accountDBFailure() != nil {
 		return
 	}
 	p.ensureDKVSManager().schedule(accountManagedStateJobID, func(store *dkvsStore) error {
@@ -665,7 +675,7 @@ func (p *Manager) requestAccountSync() {
 }
 
 func (p *Manager) scheduleAccountManagedStateSync() {
-	if p == nil || p.accountDBFailure() != nil {
+	if p == nil || p.IsServerMode() || p.accountDBFailure() != nil {
 		return
 	}
 	manager := p.ensureDKVSManager()
@@ -1085,6 +1095,9 @@ func (p *Manager) requireAccountManagedWriteLocked() error {
 	}
 	if err := p.checkAccountRestore("wallets", AccountManagedDataGlobalScope); err != nil {
 		return err
+	}
+	if p.IsServerMode() {
+		return nil
 	}
 	if p.accountProfile != nil && p.accountProfile.Activation != nil &&
 		(!p.accountProfile.RecoveryConfigured || p.accountProfile.Activation.Initial) {

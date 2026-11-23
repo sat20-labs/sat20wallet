@@ -23,13 +23,7 @@ const (
 )
 
 func (p *Manager) accountManagedRecoveryConfigured() bool {
-	if p == nil {
-		return false
-	}
-	p.mutex.RLock()
-	configured := p.accountProfile != nil && p.accountProfile.RecoveryConfigured
-	p.mutex.RUnlock()
-	return configured
+	return p.accountRecoveryConfigured()
 }
 
 // Refresh may receive proofs and change managed balances, so it has the same

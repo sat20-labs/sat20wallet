@@ -1077,6 +1077,7 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 		}
 		if selected := os.Getenv("SAT20_REAL_PWA_USAGE_CASE"); selected != "" {
 			available := append(append([]string(nil), cases...), sdkPWARegtestGuardianRecoveryCase)
+			available = append(available, "usage: SDK creation page delivers mnemonic without redundant PWA persistence")
 			require.Contains(t, available, selected, "incremental usage selection must name an exact existing UI case")
 			cases = []string{selected}
 			t.Logf("incremental account-management UI case: %s; other usage cases not executed", selected)

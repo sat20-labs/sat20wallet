@@ -72,25 +72,24 @@ func (p *Manager) loadAccountCopies(store *dkvsStore, root common.Wallet,
 	if err != nil {
 		return nil, err
 	}
-	packageKey, err := dkvsindexer.AccountPersonalKey(accountID, accountPackagePath(locator.PackageID))
-	if err != nil {
-		return nil, err
+	result := &RecoveredAccountManagementState{
+		Index:  index,
+		Copies: []AccountKVCopy{accountControlCopy(wrapperKey, wrapper), accountControlCopy(indexKey, indexValue)},
 	}
-	pkgValue, err := readRootLinkedPackage(store, packageKey)
-	if err != nil {
-		return nil, err
-	}
-	pkg, err := account.DecodeRecoveryPackageStorage(pkgValue.Value)
-	if err != nil || pkg.Envelope.Locator != locator {
-		return nil, ErrRootAccountWrapperInvalid
-	}
-	result := &RecoveredAccountManagementState{Index: index}
-	for _, control := range []struct {
-		key   string
-		value *dkvsValue
-	}{{wrapperKey, wrapper}, {indexKey, indexValue}, {packageKey, pkgValue}} {
-		result.Copies = append(result.Copies, AccountKVCopy{Entry: account.ManagedEntry{Provider: "account", Scope: control.key, Key: control.key, Codec: "v1"},
-			Value: bytes.Clone(control.value.Value), Record: cloneDKVSRecord(control.value.record)})
+	if locator.PackageID != "" {
+		packageKey, err := dkvsindexer.AccountPersonalKey(accountID, accountPackagePath(locator.PackageID))
+		if err != nil {
+			return nil, err
+		}
+		pkgValue, err := readRootLinkedPackage(store, packageKey)
+		if err != nil {
+			return nil, err
+		}
+		pkg, err := account.DecodeRecoveryPackageStorage(pkgValue.Value)
+		if err != nil || pkg.Envelope.Locator != locator {
+			return nil, ErrRootAccountWrapperInvalid
+		}
+		result.Copies = append(result.Copies, accountControlCopy(packageKey, pkgValue))
 	}
 	for _, entry := range index.Entries {
 		if entry.Deleted {
@@ -129,6 +128,11 @@ func (p *Manager) loadAccountCopies(store *dkvsStore, root common.Wallet,
 	return result, nil
 }
 
+func accountControlCopy(key string, value *dkvsValue) AccountKVCopy {
+	return AccountKVCopy{Entry: account.ManagedEntry{Provider: "account", Scope: key, Key: key, Codec: "v1"},
+		Value: bytes.Clone(value.Value), Record: cloneDKVSRecord(value.record)}
+}
+
 func validateAccountCopies(value RecoveredAccountManagementState, secret []byte,
 	locator account.Locator) (RecoveredAccountManagementState, error) {
 	if len(secret) != 32 || value.Seq == 0 || len(value.Envelope) == 0 {
@@ -163,16 +167,21 @@ func validateAccountCopies(value RecoveredAccountManagementState, secret []byte,
 	if err != nil {
 		return value, err
 	}
-	packageKey, err := dkvsindexer.AccountPersonalKey(locator.AccountID, accountPackagePath(locator.PackageID))
-	if err != nil {
-		return value, err
-	}
 	stateKey, err := dkvsindexer.AccountPersonalKey(locator.AccountID, accountManagedStatePath)
 	if err != nil {
 		return value, err
 	}
 	allowed := map[string]account.ManagedEntry{}
-	for _, key := range []string{indexKey, wrapperKey, packageKey} {
+	controlKeys := []string{indexKey, wrapperKey}
+	var packageKey string
+	if locator.PackageID != "" {
+		packageKey, err = dkvsindexer.AccountPersonalKey(locator.AccountID, accountPackagePath(locator.PackageID))
+		if err != nil {
+			return value, err
+		}
+		controlKeys = append(controlKeys, packageKey)
+	}
+	for _, key := range controlKeys {
 		allowed[key] = account.ManagedEntry{Provider: "account", Scope: key, Key: key, Codec: "v1"}
 	}
 	for _, entry := range index.Entries {
@@ -216,7 +225,7 @@ func validateAccountCopies(value RecoveredAccountManagementState, secret []byte,
 			return value, account.ErrInvalidBackup
 		}
 	}
-	if !seen[indexKey] || !seen[wrapperKey] || !seen[packageKey] || !seen[stateKey] {
+	if !seen[indexKey] || !seen[wrapperKey] || !seen[stateKey] || (packageKey != "" && !seen[packageKey]) {
 		return value, account.ErrInvalidBackup
 	}
 	for _, entry := range index.Entries {

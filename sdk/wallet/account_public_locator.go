@@ -53,6 +53,12 @@ func buildAccountPublicLocator(root common.Wallet, network string, location Acco
 	if config.PackageID != locator.PackageID {
 		return "", ErrRootAccountWrapperInvalid
 	}
+	if config.PackageID == "" {
+		if config.GuardianLocation != nil || locator.RecoveryMode != "" {
+			return "", ErrRootAccountWrapperInvalid
+		}
+		return "", nil
+	}
 	public := AccountPublicLocator{Version: account.Version, Network: network,
 		StorageLocation: location, StorageMode: config.StorageMode, RecordTTL: config.RecordTTL,
 		AutopayContract: config.AutopayContract, GuardianLocation: config.GuardianLocation, Locator: locator}

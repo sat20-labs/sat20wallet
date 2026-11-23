@@ -107,9 +107,9 @@ const finishStartupShell = () => {
   startupSlowTimer = undefined
 }
 
-// Render before awaiting WASM/network initialization. Retry uses a fresh page,
+// Show delayed or failed initialization. Retry uses a fresh page,
 // never a second WASM instance or a cache/database reset in the current page.
-const renderStartupStatus = (state: 'loading' | 'slow' | 'error') => {
+const renderStartupStatus = (state: 'slow' | 'error') => {
   const root = document.getElementById('app')
   if (!root) return
   const shell = document.createElement('main')
@@ -134,7 +134,6 @@ const renderStartupError = (error: unknown) => {
   renderStartupStatus('error')
 }
 
-renderStartupStatus('loading')
 // This changes feedback only; it does not mark a pending runtime ready/failed.
 startupSlowTimer = setTimeout(() => renderStartupStatus('slow'), 10000)
 

@@ -736,9 +736,44 @@ export async function runPwaUsageCases(t) {
       assert.equal(localView.backup_state,'none')
       assert.equal(localView.backup_risk,'notConfigured')
       // A cold device retains its catalog. Editing requires a successful root check.
+      await page.evaluate(() => { location.hash = '#/wallet' })
+      await page.waitForURL('**/#/wallet')
       await page.context().route(faultPath, failDiscovery)
-      await page.reload(); await ready(page); await unlock(page)
+      await page.reload()
+      await ready(page)
+      await page.locator('input[type=password]').fill(password)
+      const message = accountMessages.readiness.discoveryUnverified
+      const notice = page.locator('[data-sonner-toast]').filter({hasText: message})
+      await page.evaluate(message => {
+        const timing = window.__noticeTiming = { shownAt: null, removedAt: null }
+        new MutationObserver(() => {
+          const shown = [...document.querySelectorAll('[data-sonner-toast]')]
+            .some(item => item.textContent.includes(message))
+          if (shown && timing.shownAt === null) timing.shownAt = performance.now()
+          if (!shown && timing.shownAt !== null && timing.removedAt === null) timing.removedAt = performance.now()
+        }).observe(document.body, {childList: true, characterData: true, subtree: true})
+      }, message)
+      const errorLabel = accountMessages.syncBadge.error
+      const badge = page.getByRole('link', {
+        name: accountMessages.syncLabel.replace('{status}', errorLabel), exact: true,
+      })
+      const warning = page.locator('aside[role=alert]').filter({hasText: message})
       try {
+        // Begin observing before unlock: the failed request can return while
+        // the wallet is still switching to the home page.
+        await Promise.all([
+          page.getByRole('button', { name: 'Unlock', exact: true }).click(),
+          expect(notice).toBeVisible({timeout: 15000}),
+          expect(badge).toHaveText(errorLabel, {timeout: 15000}),
+        ])
+        await page.waitForURL('**/#/wallet')
+        await expect(warning).toHaveCount(0)
+        await expect(notice).toBeHidden({timeout: 12000})
+        const duration = await page.evaluate(() => {
+          const { shownAt, removedAt } = window.__noticeTiming
+          return shownAt !== null && removedAt !== null ? removedAt - shownAt : 0
+        })
+        assert.ok(duration >= 4000, 'the 4.5-second account warning must remain readable after unlock')
         await expect.poll(async () => {
           const probe = await page.evaluate(() => ({...window.__dkvsEntryProbe}))
           const view = await accountCall(page, 'getAccountView')
@@ -754,12 +789,16 @@ export async function runPwaUsageCases(t) {
       }
       assert.deepEqual(await catalog(page), localCatalog, 'failed discovery must retain the local catalog')
       assert.equal(watchCount,0)
-      assert.equal((await accountCall(page,'getAccountView')).discovery_status,'unknown')
-      const warning = page.locator('aside').filter({hasText:'Remote backup has not been verified'})
+      const failedView = await accountCall(page,'getAccountView')
+      assert.equal(failedView.discovery_status,'unknown')
+      await badge.click()
+      await page.waitForURL('**/#/wallet/setting/account-management')
       await expect(warning).toBeVisible()
-      await expect(warning.getByRole('button',{name:'Restore account',exact:true})).toBeVisible()
+      await expect(warning.getByRole('button',{name:accountMessages.readiness.restoreAccount,exact:true})).toBeVisible()
       await expect(warning.getByRole('button',{name:accountMessages.readiness.retryNow,exact:true})).toHaveCount(0)
       await expect(warning.getByRole('button',{name:'Continue locally',exact:true})).toHaveCount(0)
+      await page.getByText(accountMessages.ui.syncDetails, {exact: true}).click()
+      await expect(page.getByText(failedView.error_code, {exact: true})).toBeVisible()
       await page.evaluate(() => { location.hash = '#/wallet/manager' })
       const walletText = JSON.parse(readFileSync(new URL('../../locales/en.json', import.meta.url),'utf8')).walletManager
       await expect(page.getByRole('heading',{name:walletText.title,exact:true})).toBeVisible()
@@ -799,7 +838,7 @@ export async function runPwaUsageCases(t) {
       const verifiedLocal = await accountCall(page,'getAccountView')
       assert.equal(verifiedLocal.error_code || '', '')
       assert.equal(verifiedLocal.discovery_status,'inactive')
-      await expect(page.locator('aside').filter({hasText:'Remote backup has not been verified'})).toHaveCount(0)
+      await expect(warning).toHaveCount(0)
       await page.evaluate(() => { location.hash = '#/wallet/manager' })
       await page.locator('div.font-medium').filter({hasText:localCatalog[0].name}).getByRole('button').click()
       await renameDialog.locator('#walletName').fill('Renamed after reconnect')
@@ -820,14 +859,30 @@ export async function runPwaUsageCases(t) {
       assert.equal(watchCount,0)
       // Existing public SDK setup performs real temporary-storage activation;
       // this positive control does not synthesize profile or transport state.
-      await setup(page)
+      const options = await accountCall(page, 'getStorageOptions', 100)
+      const temporary = options.find(option => option.id === 'temporary')
+      assert.equal(temporary?.available, true)
+      await accountCall(page, 'confirmStorage', temporary)
+      await accountCall(page, 'activateRootAccount', password, [localCatalog[0].id])
+      await settled(page)
       const activated = await accountCall(page,'getAccountView')
       assert.equal(activated.backup_state,'backed_up')
-      assert.ok(activated.locator)
+      assert.equal(activated.locator, '')
       await expect.poll(() => watchCount-beforeActivationWatchCount,{timeout:90000}).toBeGreaterThan(0)
       console.log(JSON.stringify({dkvsActivationWatchEvidence:{
         phase:'after-activation',watchCount,backupState:activated.backup_state,
         locatorPresent:Boolean(activated.locator)}}))
+    } catch (error) {
+      const ui = await page.evaluate(async () => {
+        const { useAccountManagementStore } = await import('/store/accountManagement.ts')
+        const store = useAccountManagementStore()
+        return {route: location.hash.split('?')[0], sessionReady: store.sessionReady,
+          readinessKey: store.readinessKey, state: store.status?.state,
+          discovery: store.status?.discovery_status, errorCode: store.status?.error_code,
+          probe: window.__dkvsEntryProbe, noticeTiming: window.__noticeTiming}
+      }).catch(() => null)
+      console.error(JSON.stringify({coldEntryFailure: {faultHits, watchCount, ui}}))
+      throw error
     } finally {
       await page.context().unroute(faultPath, failDiscovery)
       page.context().off('request', observeWatch)

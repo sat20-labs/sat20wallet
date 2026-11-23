@@ -198,6 +198,67 @@ func recoveryAnswers(values []Answer) []account.AnswerAttempt {
 	return result
 }
 
+// ActivateRootAccount opens account backup using the confirmed storage grant.
+// A new account needs only the root wrapper. Storage upgrades retain any
+// recovery package the account already has.
+func (p *Manager) ActivateRootAccount(ctx context.Context, password string, ids []int64) (view *AccountView, err error) {
+	opLogID := p.beginWalletLog("account", "account_root_activate", "Activate account backup")
+	defer func() { p.finishWalletLog(opLogID, err, nil) }()
+
+	if err := p.checkRecoveryWallets(ids); err != nil {
+		return nil, err
+	}
+	err = p.UseAccountStorageAuthorization(AccountStoragePurposeRecovery, func(auth *AccountStorageAuthorization) error {
+		return p.runAccountOperation(ctx, func() error {
+			if err := p.InitializeAccountManagement(password); err != nil {
+				return err
+			}
+			p.mutex.RLock()
+			if p.accountProfile == nil || p.accountPassword != password || len(p.accountSecret) != 32 {
+				p.mutex.RUnlock()
+				return ErrAccountManagementSecretConflict
+			}
+			profile := *p.accountProfile
+			root, rootErr := p.accountManagementRootWalletLocked()
+			secret := bytes.Clone(p.accountSecret)
+			p.mutex.RUnlock()
+			defer zeroBytes(secret)
+			if rootErr != nil {
+				return rootErr
+			}
+			if profile.RecoveryConfigured && profile.StorageMode == auth.Mode &&
+				profile.Location == auth.Location && profile.Activation == nil {
+				return nil
+			}
+
+			locator := account.Locator{AccountID: profile.AccountID}
+			publicLocator := ""
+			if profile.PackageID != "" {
+				current, err := p.decodeAccountLocator(profile.PublicLocator)
+				if err != nil {
+					return err
+				}
+				locator = current.Locator
+				config := accountRootWrapperPayload{PackageID: profile.PackageID, StorageMode: auth.Mode,
+					RecordTTL: auth.RecordOptions.TTL, GuardianLocation: current.GuardianLocation}
+				if auth.Autopay != nil {
+					config.AutopayContract = auth.Autopay.PoolContract
+				}
+				publicLocator, err = buildAccountPublicLocator(cloneWalletAtAccountZero(root.Wallet),
+					p.GetChain(), auth.Location, config, locator)
+				if err != nil {
+					return err
+				}
+			}
+			return p.activateAccountManagement(secret, password, *auth, locator, publicLocator)
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return p.GetAccountView(ctx)
+}
+
 func (p *Manager) CreateRecovery(ctx context.Context, request RecoverySetup) (opValue0 *RecoverySetupView, opErr error) {
 	if request.Mode == string(account.RecoveryMode2Of3) || request.GuardianContact != "" {
 		return nil, ErrGuardianDisabled

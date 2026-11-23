@@ -12,9 +12,9 @@
       <Approve />
       <WalletPasswordDialog />
     </main>
-    <main v-else class="min-h-screen flex flex-col items-center justify-center gap-4 bg-background text-foreground p-6 text-center">
+    <main v-else-if="startupSlow || startupError" class="min-h-screen flex flex-col items-center justify-center gap-4 bg-background text-foreground p-6 text-center">
       <h1 class="text-lg font-semibold">{{ $t('startup.title') }}</h1>
-      <p :role="startupError ? 'alert' : 'status'">{{ $t(startupError ? 'startup.error' : 'startup.loading') }}</p>
+      <p :role="startupError ? 'alert' : 'status'">{{ $t(startupError ? 'startup.error' : 'startup.slow') }}</p>
       <Button variant="outline" @click="retryStartup">{{ $t('startup.retry') }}</Button>
     </main>
     <div
@@ -94,6 +94,7 @@ type BeforeInstallPromptEvent = Event & {
 };
 
 const loading = ref(true);
+const startupSlow = ref(false);
 const startupError = ref(false);
 const retryStartup = () => window.location.reload();
 const walletStore = useWalletStore();
@@ -107,11 +108,14 @@ const installPromptEvent = ref<BeforeInstallPromptEvent | undefined>();
 const showInstallPanel = ref(false);
 const walletSetupPaths = ["/", "/import", "/create", "/restore-account"];
 
-const accountToastId = "account-readiness";
+let accountToastId: string | number | undefined;
 let lastNotice = "";
 watch(() => accountManagementStore.identityKey, () => {
   lastNotice = "";
-  toast.dismiss(accountToastId);
+  if (accountToastId !== undefined) {
+    toast.dismiss(accountToastId);
+    accountToastId = undefined;
+  }
 });
 watch(() => {
   const store = accountManagementStore;
@@ -124,7 +128,7 @@ watch(() => {
   const isError = accountManagementStore.readinessError;
   if (firstStatus && !isError) return;
   const notify = isError ? toast.error : toast.info;
-  notify(t(key), { id: accountToastId, duration: 4500 });
+  accountToastId = notify(t(key), { id: accountToastId, duration: 4500 });
 });
 
 const shouldAutoLock = () => {
@@ -298,6 +302,7 @@ const getWalletStatus = async () => {
 };
 
 onBeforeMount(async () => {
+  const slowTimer = setTimeout(() => { startupSlow.value = true; }, 10000);
   try {
     await getWalletStatus();
     accountManagementStore.start();
@@ -305,6 +310,8 @@ onBeforeMount(async () => {
   } catch (error) {
     console.error("Wallet startup status could not be loaded:", error);
     startupError.value = true;
+  } finally {
+    clearTimeout(slowTimer);
   }
 });
 

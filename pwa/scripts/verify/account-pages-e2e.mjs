@@ -6,8 +6,8 @@ const messages = JSON.parse(readFileSync(new URL('../../locales/en.json', import
 const ui = messages.accountManagement.ui
 const common = messages.common
 export const accountPageCases = [
-  'PWA account: two-factor setup downloads rehearsal abort and cold restore',
-  'PWA account: Guardian is unavailable and own storage quotes remain usable',
+  'PWA account: existing recovery file rehearsal abort and cold restore',
+  'PWA account: root-only backup activates with temporary storage',
   'PWA account: private-key cold unlock and activation refusal',
 ]
 const poll = { timeout: 180000, intervals: [500, 1000, 2000] }
@@ -60,46 +60,33 @@ export async function runAccountPageCases(t) {
     }, credential)
     await go(page, '/wallet/setting')
     await button(page, ui.activateAccount).click()
-    await expect(button(section(page, ui.createRecovery), ui.preflight)).toBeVisible()
+    await expect(button(section(page, ui.backupSetupTitle), ui.startBackupSetup)).toBeVisible()
     return page
   }
-  const preflight = async page => observe(page, 'preflightRecovery', () => password(page, () =>
-    button(section(page, ui.createRecovery), ui.preflight).click()))
-  const chooseTemporary = async page => {
-    const scope = section(page, ui.createRecovery)
-    const option = scope.locator('div.rounded.border').filter({ has: page.getByText(ui.temporaryStorage, { exact: true }) })
-    await observe(page, 'confirmStorage', () => button(option, common.confirm).click())
-    await expect(scope.locator('select')).toBeVisible()
+  const preflight = page => observe(page, 'preflightRecovery', () => password(page, () =>
+    button(section(page, ui.backupSetupTitle), ui.startBackupSetup).click()))
+  // Existing recovery files can still be imported. Create one through the SDK
+  // as a fixture for the retained file-restore page.
+  const createLegacy = async page => {
+    const options = await account(page, 'getStorageOptions', { availability_only: true })
+    await account(page, 'confirmStorage', options.find(option => option.id === 'temporary'))
+    const catalog = await page.evaluate(() => window.sat20wallet_wasm.getWalletCatalog())
+    assert.equal(catalog.code, 0)
+    return account(page, 'createRecovery', {
+      password: credential,
+      wallet_ids: catalog.data.wallets.map(wallet => wallet.id),
+      mode: '2of2',
+      questions: answers.map((answer, i) => ({
+        question: { id: 'fixture-' + i, prompt: 'Fixture recovery question ' + (i + 1) },
+        answer, confirmation: answer,
+      })),
+    })
   }
-  const create = async page => {
-    const scope = section(page, ui.createRecovery)
-    await scope.locator('select').selectOption('2of2')
-    for (const [i, answer] of answers.entries()) {
-      await scope.getByPlaceholder(ui.answer, { exact: true }).nth(i).fill(answer)
-      await scope.getByPlaceholder(ui.repeatAnswer, { exact: true }).nth(i).fill(answer)
-    }
-    return observe(page, 'createRecovery', () => password(page, () => button(scope, ui.createRecovery).click()))
-  }
-  const download = async (page, file) => {
-    const settings = section(page, ui.createRecovery)
-    const scope = settings.locator('div.rounded.border').filter({ has: page.getByText(file.name, { exact: true }) })
-    await expect(button(scope, common.copy)).toHaveCount(0)
-    await expect(settings.getByText(ui.keepRecoveryFileSafe, { exact: true })).toBeVisible()
-    const event = page.waitForEvent('download')
-    await button(scope, common.download).click()
-    const saved = await event
-    assert.equal(saved.suggestedFilename(), file.name)
-    assert.equal(readFileSync(await saved.path()).equals(Buffer.from(file.data, 'base64')), true, 'download must contain SDK bytes')
-  }
-  const activate = async (page, created) => {
-    const scope = section(page, ui.createRecovery)
-    for (const [i, answer] of answers.entries()) await scope.locator('input[type=password]').nth(i).fill(answer)
-    await scope.getByPlaceholder(ui.pasteRecoveryFile).fill(decode(created.files.find(file => file.name === 'user-share.txt')))
-    await observe(page, 'activateRecovery', () => password(page, () => button(scope, ui.rehearsalTitle).click()))
-    await expect.poll(async () => (await account(page, 'getAccountView')).backup_state, poll).toBe('backed_up')
-    await expect(button(section(page, ui.createRecovery), ui.preflight)).toBeVisible()
-    await expect(button(page, ui.upgradeStorage)).toHaveCount(0)
-  }
+  const legacyActivation = created => ({ session_id: created.session_id, input: {
+    password: credential,
+    recovery_file: decode(created.files.find(file => file.name === 'user-share.txt')),
+    factors: { answers: created.questions.map((item, i) => ({ question_id: item.id, text: answers[i] })) },
+  } })
   const load = async (page, created) => {
     await page.getByPlaceholder(ui.pasteRecoveryFile).fill(decode(created.files.find(file => file.name === 'user-share.txt')))
     return observe(page, 'loadRecovery', () => button(page, ui.loadBackup).click())
@@ -154,19 +141,16 @@ export async function runAccountPageCases(t) {
   }
   const cases = [async pages => {
     const page = await fresh(pages)
-    await preflight(page)
-    await chooseTemporary(page)
-    const discarded = await create(page)
-    await observe(page, 'abortRecovery', () => go(page, '/wallet'))
+    const discarded = await createLegacy(page)
+    await account(page, 'abortRecovery', { session_id: discarded.session_id })
     const expired = await raw(page, 'activateRecovery', { session_id: discarded.session_id, input: {} })
-    assert.notEqual(expired.code, 0, 'leaving the page must consume the SDK session')
+    assert.notEqual(expired.code, 0)
     assert.equal(expired.msg, 'activation session expired')
+    const created = await createLegacy(page)
+    await account(page, 'activateRecovery', legacyActivation(created))
+    await expect.poll(async () => (await account(page, 'getAccountView')).backup_state, poll).toBe('backed_up')
+    await go(page, '/wallet')
     await go(page, '/wallet/setting/account-management')
-    await preflight(page); await chooseTemporary(page)
-    const created = await create(page)
-    const file = created.files.find(file => file.name === 'user-share.txt')
-    await download(page, file)
-    await activate(page, created)
     await button(page, ui.rehearsalTitle).click()
     await load(page, created)
     await observe(page, 'previewRecovery', () => button(page, ui.previewRecovery).click(), false)
@@ -195,7 +179,7 @@ export async function runAccountPageCases(t) {
     assert.equal(emptyCatalog.code, 0)
     assert.equal(emptyCatalog.data.wallets.length, 0)
     await restore(target, created)
-    // Reconfigure an already healthy account through the same public forms.
+    // Reconfigure an already healthy account through the existing SDK API.
     // Only this device's real wrapper CAS is held; no SDK response is fabricated.
     await page.context().close()
     // This case exercises online healthy reconfiguration: durable backup alone
@@ -208,8 +192,7 @@ export async function runAccountPageCases(t) {
     assert.equal(baseline.locator, created.locator)
     await go(target, '/wallet')
     await go(target, '/wallet/setting/account-management')
-    await preflight(target); await chooseTemporary(target)
-    const replacement = await create(target)
+    const replacement = await createLegacy(target)
     assert.notEqual(replacement.locator, created.locator)
     const before = await target.evaluate(() => window.sat20wallet_wasm.getWalletCatalog())
     assert.equal(before.code, 0)
@@ -250,11 +233,8 @@ export async function runAccountPageCases(t) {
         window.sat20wallet_wasm.updateWalletName = rename
       }
     })
+    const activation = raw(target, 'activateRecovery', legacyActivation(replacement))
     try {
-      const scope = section(target, ui.createRecovery)
-      for (const [i, answer] of answers.entries()) await scope.locator('input[type=password]').nth(i).fill(answer)
-      await scope.getByPlaceholder(ui.pasteRecoveryFile).fill(decode(replacement.files.find(file => file.name === 'user-share.txt')))
-      await password(target, () => button(scope, ui.rehearsalTitle).click())
       await expect.poll(() => hits, poll).toBeGreaterThan(0)
       assert.equal(released, false)
       assert.equal(await target.evaluate(() => window.__reconfigProbe.done), false)
@@ -287,7 +267,7 @@ export async function runAccountPageCases(t) {
         await target.evaluate(() => window.__restoreReconfig())
       }
     }
-    assert.equal(await target.evaluate(() => window.__reconfigProbe.code), 0)
+    assert.equal((await activation).code, 0)
     await expect.poll(async () => (await account(target, 'getAccountView')).backup_state, poll).toBe('backed_up')
     await target.reload()
     await target.waitForFunction(() => Boolean(window.__SAT20_PWA_VERIFY__))
@@ -303,23 +283,25 @@ export async function runAccountPageCases(t) {
     const page = await fresh(pages)
     await expect(section(page, ui.guardianService)).toHaveCount(0)
     await preflight(page)
-    const scope = section(page, ui.createRecovery)
+    const scope = section(page, ui.backupSetupTitle)
     const available = await observe(page, 'getStorageOptions', () => button(scope, common.refresh).click())
     assert.deepEqual(available.map(option => [option.id, option.available, option.payment]), [['temporary', true, null]])
     await expect(scope.locator('input[type=number]')).toHaveCount(0)
     await expect(button(page, ui.upgradeStorage)).toHaveCount(0)
-    await chooseTemporary(page)
-    await expect(scope.locator('select option')).toHaveCount(1)
-    await expect(scope.locator('select')).toHaveValue('2of2')
+    await expect(scope.locator('select')).toHaveCount(0)
+    await expect(scope.getByPlaceholder(ui.answer, { exact: true })).toHaveCount(0)
     for (const method of ['getGuardianContact', 'acceptGuardianSetup', 'confirmGuardianSetup',
       'createGuardianRequest', 'createGuardianResponse']) {
       const result = await raw(page, method, { password: credential })
       assert.notEqual(result.code, 0)
       assert.equal(result.msg, 'guardian recovery is disabled')
     }
-    const created = await create(page)
-    assert.equal(created.can_activate, true)
-    await observe(page, 'abortRecovery', () => button(scope, common.cancel).click())
+    const view = await observe(page, 'activateRootAccount', () => password(page, () => button(scope, ui.enableBackup).click()))
+    assert.equal(view.locator, '')
+    assert.equal(view.recovery_mode, '')
+    assert.equal(view.last_rehearsal_at, 0)
+    await expect.poll(async () => (await account(page, 'getAccountView')).backup_state, poll).toBe('backed_up')
+    await expect(page.getByText(ui.rootRestoreHint, { exact: true })).toBeVisible()
   }, async pages => {
     const page = await t.device(); pages.push(page)
     // The PWA has no private-key import tab. Prepare this supported SDK wallet,
@@ -342,10 +324,11 @@ export async function runAccountPageCases(t) {
     assert.equal(before.data.root_account_id, '')
     await go(page, '/wallet/setting/account-management')
     await expect(page.getByRole('alert').filter({ hasText: ui.mnemonicRootRequired })).toHaveText(ui.mnemonicRootRequired)
-    await expect(button(page, ui.preflight)).toHaveCount(0)
+    await expect(button(page, ui.startBackupSetup)).toHaveCount(0)
+    await expect(button(page, ui.enableBackup)).toHaveCount(0)
     const refused = await raw(page, 'preflightRecovery', { password: credential, wallet_ids: before.data.wallets.map(item => item.id) })
     assert.notEqual(refused.code, 0)
-    await expect(section(page, ui.createRecovery).locator('select')).toHaveCount(0)
+    await expect(section(page, ui.backupSetupTitle)).toHaveCount(0)
     assert.equal((await account(page, 'getAccountView')).active, false)
     assert.deepEqual(await page.evaluate(() => window.sat20wallet_wasm.getWalletCatalog()), before)
     await go(page, '/wallet')

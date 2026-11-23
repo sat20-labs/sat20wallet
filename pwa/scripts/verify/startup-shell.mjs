@@ -22,39 +22,49 @@ const context = {
   i18n: { global: { t: key => key } },
   setTimeout(fn) { timer = fn; return 1 }, clearTimeout() { cleared++; timer = null },
 }
-vm.runInNewContext(js + '\nglobalThis.fail = renderStartupError; globalThis.finish = finishStartupShell;', context)
+const bootShell = () => vm.runInNewContext(js + '\n({ fail: renderStartupError, finish: finishStartupShell });', { ...context })
 const state = () => root.children[0].children[1]
 const retry = () => root.children[0].children[2]
-assert.equal(state().textContent, 'startup.loading', 'shell is visible before runtime resolves')
+const fastBoot = bootShell()
+assert.equal(root.children.length, 0, 'normal startup begins without an intermediate page')
+fastBoot.finish()
+assert.equal(timer, null, 'normal startup cancels delayed feedback')
+assert.equal(root.children.length, 0, 'normal startup shows no intermediate page')
+const slowBoot = bootShell()
+timer(); assert.equal(state().textContent, 'startup.slow', 'pending initialization remains visible')
 assert.equal(state().attrs.role, 'status')
 retry().listeners.click(); assert.equal(reloads, 1)
-timer(); assert.equal(state().textContent, 'startup.slow', 'pending initialization remains visible')
-context.fail(new Error('fetch failed'))
+slowBoot.fail(new Error('fetch failed'))
 assert.equal(state().textContent, 'startup.error'); assert.equal(state().attrs.role, 'alert')
-assert.equal(cleared, 1)
+assert.equal(cleared, 2)
 retry().listeners.click(); assert.equal(reloads, 2, 'failed startup supports a fresh-page retry')
-context.finish(); assert.equal(cleared, 1)
+slowBoot.finish(); assert.equal(cleared, 2)
 assert.ok(!shellCode.includes('caches.delete') && !shellCode.includes('unregister') && !shellCode.includes('setValue'))
-assert.ok(main.indexOf("renderStartupStatus('loading')") < main.indexOf('return loadWasm()'))
 assert.ok(main.includes("finishStartupShell()\n  app.mount('#app')"), 'successful mount clears pending feedback timer')
 
 // Execute the App's actual async status lifecycle: only successful readiness
 // reveals RouterView; failure remains in its interactive fallback.
 const app = readFileSync('entrypoints/popup/App.vue', 'utf8')
-assert.ok(app.includes('<main v-else') && app.includes('@click="retryStartup"'))
+assert.ok(app.includes('v-else-if="startupSlow || startupError"') && app.includes('@click="retryStartup"'))
 const hook = app.slice(app.indexOf('onBeforeMount(async () => {'), app.indexOf('\nonMounted(() => {'))
-for (const fail of [false, true]) {
-  let hookFn
-  const loading = { value: true }, startupError = { value: false }
+for (const { fail, slow } of [{ fail: false, slow: false }, { fail: false, slow: true }, { fail: true, slow: false }]) {
+  let hookFn, showSlow
+  const loading = { value: true }, startupError = { value: false }, startupSlow = { value: false }
   vm.runInNewContext(hook, {
-    onBeforeMount: fn => { hookFn = fn }, loading, startupError,
+    onBeforeMount: fn => { hookFn = fn }, loading, startupError, startupSlow,
+    setTimeout: fn => { showSlow = fn; return 1 }, clearTimeout: () => { showSlow = null },
     getWalletStatus: async () => { if (fail) throw new Error('status unavailable') },
     accountManagementStore: { start() {} },
     console: { error() {} },
   })
   assert.equal(loading.value, true)
-  await hookFn()
+  const boot = hookFn()
+  assert.equal(startupSlow.value, false)
+  if (slow) showSlow()
+  assert.equal(startupSlow.value, slow)
+  await boot
+  assert.equal(showSlow, null)
   assert.equal(loading.value, fail)
   assert.equal(startupError.value, fail)
 }
-console.log('startup shell: PASS (initial/pending/error/retry, no storage reset, successful mount cleanup, App readiness/error)')
+console.log('startup shell: PASS (fast startup, delayed feedback, immediate error, retry, App readiness)')

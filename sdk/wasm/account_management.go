@@ -137,6 +137,22 @@ func accountFundAutopay(_ js.Value, args []js.Value) any {
 	}))
 }
 
+func accountActivateRoot(_ js.Value, args []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	var request struct {
+		Password  string  `json:"password"`
+		WalletIDs []int64 `json:"wallet_ids"`
+	}
+	if err := accountParseJSON(args, &request); err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
+		return accountViewResult(_mgr.ActivateRootAccount(context.Background(), request.Password, request.WalletIDs))
+	}))
+}
+
 func accountGetGuardianContact(_ js.Value, args []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
@@ -319,6 +335,7 @@ func init() {
 	obj.Set("getStorageOptions", js.FuncOf(accountGetStorageOptions))
 
 	obj.Set("confirmStorage", js.FuncOf(accountConfirmStorage))
+	obj.Set("activateRootAccount", js.FuncOf(accountActivateRoot))
 
 	obj.Set("cancelStorageSetup", js.FuncOf(accountCancelStorageSetup))
 

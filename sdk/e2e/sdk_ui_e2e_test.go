@@ -18,6 +18,7 @@ func TestSDKUIFlows(t *testing.T) {
 		name string
 		run  func(*testing.T, *nativeIfaceChain)
 	}{
+		{"ServiceWalletProfile", runServiceWalletProfile},
 		{"RGBManual", runNativeRGBManual},
 		{"RGBDirectOffline", runNativeRGBDirect},
 		{"RGBBlindSelfReceiveFirst", runNativeRGBBlindSelf},
@@ -28,6 +29,39 @@ func TestSDKUIFlows(t *testing.T) {
 		t.Run(item.name, func(t *testing.T) { item.run(t, chain) })
 	}
 	t.Run("AccountReview", func(t *testing.T) { runNativeAccountReview(t, chain) })
+}
+
+func runServiceWalletProfile(t *testing.T, chain *nativeIfaceChain) {
+	for _, mode := range []string{wallet.SERVER_NODE, wallet.BOOTSTRAP_NODE} {
+		t.Run(mode, func(t *testing.T) {
+			cfg := *chain.cfg
+			cfg.Mode = mode
+			device := newNativeUIDevice(t, &cfg, "")
+			id, _, err := device.mgr.CreateWallet(device.password)
+			require.NoError(t, err)
+			address := device.mgr.GetWallet().GetAddress()
+			key := []byte(wallet.GetDBKeyPrefix() + "account-management-profile-v1")
+			obsolete := []byte("incompatible account profile")
+			require.NoError(t, device.db.Write(key, obsolete))
+
+			device.reopen(t)
+			require.Equal(t, address, device.mgr.GetWallet().GetAddress())
+			status := device.mgr.GetAccountManagementStatus()
+			require.True(t, status.LocalOnly)
+			require.False(t, status.Active)
+			require.Equal(t, "inactive", status.DiscoveryStatus)
+			require.EqualError(t, device.mgr.InitializeAccountManagement(device.password),
+				"account management is disabled for STP service wallets")
+			require.NoError(t, device.mgr.UpdateWalletName(id, "Local service wallet"))
+			device.reopen(t)
+			catalog := device.mgr.GetWalletCatalog()
+			require.Len(t, catalog, 1)
+			require.Equal(t, "Local service wallet", catalog[0].Name)
+			raw, err := device.db.Read(key)
+			require.NoError(t, err)
+			require.Equal(t, obsolete, raw)
+		})
+	}
 }
 
 func prepareSDKUIActors(t *testing.T, source *wallet.Manager, network *realSatoshiNet,

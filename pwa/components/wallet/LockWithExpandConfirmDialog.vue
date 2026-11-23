@@ -1,6 +1,6 @@
 <template>
   <AlertDialog v-model:open="isOpen">
-    <AlertDialogContent class="w-[350px] rounded-lg bg-zinc-900">
+    <AlertDialogContent class="max-h-[calc(100dvh_-_2rem)] w-[calc(100%_-_2rem)] max-w-md grid-cols-[minmax(0,1fr)] overflow-y-auto rounded-xl">
       <AlertDialogHeader>
         <AlertDialogTitle>{{ $t('assetOperationDialog.lockExpandTitle') }}</AlertDialogTitle>
         <AlertDialogDescription>

@@ -1,16 +1,54 @@
 <template>
   <LayoutSecond :title="t('accountManagement.ui.managementTitle')" hide-nav>
-    <div class="mx-auto max-w-2xl space-y-4 pb-6">
+    <div class="min-w-0 space-y-4">
       <AccountReadinessBanner v-if="!state" />
-      <section v-if="state" class="space-y-4 rounded-xl border border-border bg-card p-4 text-sm">
-        <span v-if="state.storage" class="inline-flex rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-foreground">
-          {{ t(state.storage.option.id === 'paid' ? 'accountManagement.ui.paidStorage' : 'accountManagement.ui.temporaryStorage') }}
-        </span>
-        <div class="space-y-1.5">
-          <p class="font-medium">{{ t('accountManagement.ui.accountStatus', {value: t(`accountManagement.accountState.${state.state}`)}) }}</p>
-          <p class="text-muted-foreground">{{ t('accountManagement.ui.backupState', {value: t(`accountManagement.backupState.${state.backup_state}`)}) }}</p>
+      <section v-if="startSetup" class="space-y-4 rounded-xl border border-primary/30 bg-card p-3 sm:p-4">
+        <div class="flex items-start gap-3">
+          <div class="flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <CloudUpload class="size-5" aria-hidden="true" />
+          </div>
+          <div class="min-w-0 space-y-1">
+            <h2 class="text-base font-semibold">{{ t('accountManagement.ui.backupSetupTitle') }}</h2>
+            <p class="text-sm leading-relaxed text-muted-foreground">{{ t('accountManagement.ui.backupSetupHint') }}</p>
+          </div>
         </div>
-        <AccountReadinessBanner />
+        <div class="space-y-2">
+          <Button class="w-full sm:w-auto" :disabled="busy" @click="preflight('temporary')">
+            {{ t('accountManagement.ui.startBackupSetup') }}
+            <ArrowRight class="size-4" aria-hidden="true" />
+          </Button>
+          <p class="text-sm leading-relaxed text-muted-foreground">{{ t('accountManagement.ui.recoverySetupHint') }}</p>
+          <p v-if="error" class="break-words text-sm text-destructive" role="alert">{{ error }}</p>
+        </div>
+      </section>
+      <section v-if="state" class="space-y-4 rounded-xl border border-border bg-card p-3 text-sm sm:p-4">
+        <div class="flex items-start gap-3">
+          <div class="flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <ShieldCheck v-if="state.backup_state === 'backed_up'" class="size-5" aria-hidden="true" />
+            <Shield v-else class="size-5" aria-hidden="true" />
+          </div>
+          <div class="min-w-0 space-y-1">
+            <h2 class="text-base font-semibold">{{ t('accountManagement.ui.backupOverview') }}</h2>
+            <p v-if="localOnly" class="leading-relaxed text-muted-foreground">{{ t('accountManagement.ui.localWalletHint') }}</p>
+            <p v-else-if="state.backup_state === 'backed_up'" class="leading-relaxed text-muted-foreground">{{ t('accountManagement.ui.backupConfirmedHint') }}</p>
+            <p v-if="state.backup_state === 'backed_up' && !state.locator" class="leading-relaxed text-muted-foreground">{{ t('accountManagement.ui.rootRestoreHint') }}</p>
+          </div>
+        </div>
+        <dl class="grid grid-cols-1 gap-px overflow-hidden rounded-lg bg-border min-[360px]:grid-cols-2">
+          <div class="min-w-0 space-y-1 bg-muted px-3 py-2.5">
+            <dt class="text-xs text-muted-foreground">{{ t('accountManagement.ui.accountStatusLabel') }}</dt>
+            <dd class="break-words font-medium">{{ t(`accountManagement.accountState.${state.state}`) }}</dd>
+          </div>
+          <div class="min-w-0 space-y-1 bg-muted px-3 py-2.5">
+            <dt class="text-xs text-muted-foreground">{{ t('accountManagement.ui.backupStatusLabel') }}</dt>
+            <dd class="break-words font-medium">{{ t(`accountManagement.backupState.${state.backup_state}`) }}</dd>
+          </div>
+          <div v-if="state.backup_risk !== 'notConfigured' && state.storage" class="space-y-1 bg-muted px-3 py-2.5 min-[360px]:col-span-2">
+            <dt class="text-xs text-muted-foreground">{{ t('accountManagement.ui.backupStorageLabel') }}</dt>
+            <dd class="break-words font-medium">{{ t(state.storage.option.id === 'paid' ? 'accountManagement.ui.paidStorage' : 'accountManagement.ui.temporaryStorage') }}</dd>
+          </div>
+        </dl>
+        <AccountReadinessBanner v-if="!localOnly" />
         <details v-if="state.error_code || accountState.moduleIssues.length" class="rounded-md bg-muted/50 px-3 py-2 text-xs">
           <summary class="cursor-pointer font-medium">{{ t('accountManagement.ui.syncDetails') }}</summary>
           <div class="mt-2 space-y-1 break-all font-mono text-muted-foreground">
@@ -18,17 +56,18 @@
             <p v-for="module in accountState.moduleIssues" :key="module.name">{{ module.name }}: {{ module.error_code }}</p>
           </div>
         </details>
-        <div v-if="(accountState.canRetryBackup && !accountState.shouldShowBanner) || canRestoreExisting" class="flex flex-wrap gap-2">
-          <Button v-if="accountState.canRetryBackup && !accountState.shouldShowBanner" size="sm" variant="outline" :disabled="busy || accountState.retrying" @click="run(async () => { await accountState.retryNow() })">
-            {{ accountState.retrying ? t('accountManagement.readiness.retrying') : t('accountManagement.readiness.retryNow') }}
-          </Button>
-          <Button v-if="canRestoreExisting" size="sm" variant="outline" @click="router.push('/restore-account')">
-            {{ t('accountManagement.ui.restoreExisting') }}
-          </Button>
-        </div>
+        <p v-if="waitingForBackup" class="leading-relaxed text-muted-foreground">{{ t('accountManagement.ui.waitingForBackup') }}</p>
+        <Button v-if="accountState.canRetryBackup && !accountState.shouldShowBanner" size="sm" variant="outline" :disabled="busy || accountState.retrying"
+          @click="run(() => accountState.retryNow())">
+          {{ accountState.retrying ? t('accountManagement.readiness.retrying') : t('accountManagement.readiness.retryNow') }}
+        </Button>
       </section>
-      <section v-if="state?.locator" class="space-y-3 rounded-xl border border-border bg-card p-4">
-        <h2 class="text-sm font-semibold">{{ t('accountManagement.ui.recoveryCode') }}</h2>
+      <section v-if="state?.locator" class="space-y-3 rounded-xl border border-border bg-card p-3 sm:p-4">
+        <div class="space-y-1">
+          <h2 class="text-base font-semibold">{{ t('accountManagement.ui.recoveryCode') }}</h2>
+          <p class="text-sm leading-relaxed text-muted-foreground">{{ t('accountManagement.ui.recoveryCodeHint') }}</p>
+          <p v-if="state.storage?.option.id === 'temporary'" class="text-sm leading-relaxed text-muted-foreground">{{ t('accountManagement.ui.temporaryRecoveryHint') }}</p>
+        </div>
         <p v-if="state.last_rehearsal_at" class="text-sm text-muted-foreground">
           {{ t('accountManagement.ui.lastRehearsal', {value: new Date(state.last_rehearsal_at).toLocaleString()}) }}
         </p>
@@ -38,7 +77,7 @@
         </div>
         <p v-if="copied" class="text-xs text-muted-foreground" role="status">{{ t('accountManagement.ui.recoveryCodeCopied') }}</p>
       </section>
-      <section v-if="state?.autopay && state.backup_risk !== 'notConfigured'" class="space-y-2 rounded border p-3">
+      <section v-if="state?.autopay && state.backup_risk !== 'notConfigured'" class="space-y-2 rounded-xl border border-border bg-card p-3 sm:p-4">
         <h2>{{ t('accountManagement.dkvsPaymentDetails') }}</h2>
         <p>{{ state.autopay.status }} · {{ state.autopay.balance }}</p>
         <p v-if="state.autopay.error_code" class="text-sm text-destructive" role="alert">{{ accountDisplayMessage(t, state.autopay.error_code) }}</p>
@@ -46,23 +85,39 @@
         <p v-if="state.autopay.tx_id" class="break-all font-mono text-xs">{{ state.autopay.tx_id }}</p>
         <Button v-if="state.autopay.can_fund && state.autopay.quote" :disabled="busy" @click="askFunding">{{ t('accountManagement.dkvsPay') }}</Button>
       </section>
-      <p v-if="accountState.storagePhase === 'activate' && accountState.storageOffers && !accountState.canActivate" role="status">{{ t('accountManagement.ui.temporaryUnavailable') }}</p>
-      <p v-if="state?.state === 'local' && state.discovery_status === 'unknown'" role="alert">{{ t('accountManagement.ui.mnemonicRootRequired') }}</p>
-      <div v-if="accountState.storageReadFailed" class="space-y-2">
-        <p role="status">{{ t('accountManagement.ui.configReadFailed') }}</p>
-        <Button variant="outline" :disabled="busy" @click="run(() => accountState.refreshStorageOffers())">{{ t('common.refresh') }}</Button>
-      </div>
-      <section v-if="accountState.canActivate || state?.state === 'ready' || summary || creation" class="space-y-3 rounded border p-3">
-        <h2 class="font-medium">{{ t('accountManagement.ui.createRecovery') }}</h2>
-        <p v-if="accountState.canActivate && !summary && !creation">{{ t('accountManagement.ui.activateCacheHint') }}</p>
-        <template v-if="!summary && !creation">
-          <Button :disabled="busy" @click="preflight(state?.state === 'ready' && state.storage?.option.id === 'paid' ? 'paid' : 'temporary')">{{ t('accountManagement.ui.preflight') }}</Button>
-          <Button v-if="accountState.canUpgrade" variant="outline" :disabled="busy" @click="preflight('paid')">{{ t('accountManagement.ui.upgradeStorage') }}</Button>
-        </template>
-        <div v-if="summary" class="space-y-1">
-          <p v-for="wallet in summary.wallets" :key="wallet.name">{{ wallet.name }} · {{ t('accountManagement.ui.subaccountCount', {value: wallet.account_count}) }}</p>
+      <section v-if="(accountState.storagePhase === 'activate' && !accountState.canActivate) || accountState.storageReadFailed"
+        class="space-y-3 rounded-xl border border-border bg-card p-3 sm:p-4">
+        <div class="flex items-start gap-3">
+          <div class="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+            <Cloud aria-hidden="true" class="size-5" />
+          </div>
+          <div class="min-w-0 space-y-1" role="status">
+            <h2 class="text-base font-semibold">{{ t(storageNotice.title) }}</h2>
+            <p v-if="storageNotice.body" class="text-sm leading-relaxed text-muted-foreground">{{ t(storageNotice.body) }}</p>
+          </div>
         </div>
-        <template v-if="summary && !creation">
+        <Button v-if="accountState.storageOffers || accountState.storageReadFailed" size="sm" variant="outline" :disabled="busy"
+          @click="run(() => accountState.refreshStorageOffers())">{{ t('accountManagement.ui.recheckStorage') }}</Button>
+      </section>
+      <section v-if="state?.state === 'local' && state.discovery_status === 'unknown' && !accountState.discoveryIssue"
+        class="rounded-xl border border-border bg-card p-3 text-sm leading-relaxed text-muted-foreground sm:p-4">
+        <p role="alert">{{ t('accountManagement.ui.mnemonicRootRequired') }}</p>
+      </section>
+      <section v-if="summary || accountState.canUpgrade" class="space-y-3 rounded-xl border border-border bg-card p-3 sm:p-4">
+        <h2 ref="recoveryHeading" tabindex="-1" class="text-base font-semibold">
+          {{ t(summary && setupMode === 'temporary' ? 'accountManagement.ui.backupSetupTitle' : 'accountManagement.ui.upgradeStorage') }}
+        </h2>
+        <Button v-if="!summary" variant="outline" :disabled="busy" @click="preflight('paid')">{{ t('accountManagement.ui.upgradeStorage') }}</Button>
+        <div v-if="summary" class="space-y-2 rounded-lg bg-muted/60 p-3 text-sm">
+          <h3 class="font-medium">{{ t('accountManagement.ui.backupWallets') }}</h3>
+          <ul class="divide-y divide-border">
+            <li v-for="wallet in summary.wallets" :key="wallet.name" class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 py-1.5">
+              <span class="min-w-0 break-words">{{ wallet.name }}</span>
+              <span class="text-xs text-muted-foreground">{{ t('accountManagement.ui.subaccountCount', {value: wallet.account_count}) }}</span>
+            </li>
+          </ul>
+        </div>
+        <template v-if="summary">
           <template v-if="setupMode === 'paid'">
             <Label>{{ t('accountManagement.ui.recordCount') }}</Label><Input v-model.number="recordCount" type="number" min="1" :disabled="busy || storage?.status === 'ready'" />
           </template>
@@ -74,36 +129,18 @@
             <p v-if="option.annual_cost">{{ t('accountManagement.ui.annualCost', {value: option.annual_cost}) }}</p>
             <p v-for="warning in option.warning_codes" :key="warning" class="text-xs text-amber-500">{{ storageWarning(warning) }}</p>
             <p v-if="option.unavailable_code">{{ option.unavailable_code }}</p>
-            <Button :disabled="busy || !option.available || storage?.status === 'ready'" @click="selectStorage(option)">{{ t('common.confirm') }}</Button>
+            <Button v-if="setupMode === 'paid'" :disabled="busy || !option.available || storage?.status === 'ready'" @click="selectStorage(option)">{{ t('common.confirm') }}</Button>
+            <Button v-else :disabled="busy || !option.available" @click="activate(option)">{{ t('accountManagement.ui.enableBackup') }}</Button>
           </div>
           <p v-if="storage">{{ storage.status }} <span class="break-all">{{ storage.tx_id }}</span></p>
-          <Button v-if="storage?.can_cancel" variant="outline" :disabled="busy" @click="cancelStorage">{{ t('common.cancel') }}</Button>
-          <template v-if="storage?.status === 'ready'">
-            <select v-model="mode" :disabled="busy" class="w-full rounded bg-muted p-2"><option value="2of2">{{ t('accountManagement.ui.modeSecure') }}</option></select>
-            <div v-for="(item, index) in questions" :key="item.question.id" class="space-y-2">
-              <Input v-model="item.question.prompt" :aria-label="String(index + 1)" />
-              <Input v-model="item.answer" type="password" autocomplete="off" :placeholder="t('accountManagement.ui.answer')" />
-              <Input v-model="item.confirmation" type="password" autocomplete="off" :placeholder="t('accountManagement.ui.repeatAnswer')" />
-            </div>
-            <Button :disabled="busy" @click="createRecovery">{{ t('accountManagement.ui.createRecovery') }}</Button>
-          </template>
-        </template>
-        <template v-if="creation">
-          <div v-for="file in creation.files" :key="file.name" class="space-y-2 rounded border p-2">
-            <p>{{ file.name }}</p><Button variant="outline" @click="saveExportFile(file)">{{ t('common.download') }}</Button>
-          </div>
-          <p class="text-sm text-muted-foreground">{{ t('accountManagement.ui.keepRecoveryFileSafe') }}</p>
-          <Label>{{ t('accountManagement.ui.recoveryFile') }}</Label>
-          <Textarea v-model="recoveryFile" spellcheck="false" autocomplete="off" autocapitalize="off"
-            :placeholder="t('accountManagement.ui.pasteRecoveryFile')" />
-          <div v-for="(question, index) in creation.questions" :key="question.id"><Label>{{ question.prompt }}</Label><Input v-model="answers[index]" type="password" autocomplete="off" /></div>
-          <Button :disabled="busy" @click="activate">{{ t('accountManagement.ui.rehearsalTitle') }}</Button>
-          <Button variant="outline" :disabled="busy" @click="abort">{{ t('common.cancel') }}</Button>
+          <Button v-if="setupMode === 'paid' && storage?.status === 'ready'" :disabled="busy" @click="activate()">{{ t('accountManagement.ui.upgradeStorage') }}</Button>
+          <Button variant="outline" :disabled="busy" @click="cancelStorage">{{ t('common.cancel') }}</Button>
         </template>
       </section>
-      <p v-if="error" class="break-all text-sm text-destructive" role="alert">{{ error }}</p>
+      <p v-if="error && !startSetup" class="break-all text-sm text-destructive" role="alert">{{ error }}</p>
       <Dialog :open="!!payment" @update:open="value => { if (!value) cancelPayment() }">
-        <DialogContent><DialogHeader><DialogTitle>{{ t('accountManagement.dkvsPay') }}</DialogTitle><DialogDescription>{{ t('accountManagement.ui.paidWarning') }}</DialogDescription></DialogHeader>
+        <DialogContent class="max-h-[calc(100dvh_-_2rem)] w-[calc(100%_-_2rem)] max-w-md overflow-y-auto rounded-xl bg-background">
+          <DialogHeader><DialogTitle>{{ t('accountManagement.dkvsPay') }}</DialogTitle><DialogDescription>{{ t('accountManagement.ui.paidWarning') }}</DialogDescription></DialogHeader>
           <dl v-if="payment" class="space-y-2 break-all text-sm">
             <dt>{{ t('accountManagement.ui.paymentSource') }}</dt><dd>{{ payment.source_wallet }} / {{ payment.source_account }} / {{ payment.source_address }}</dd>
             <dt>{{ t('common.network') }}</dt><dd>{{ payment.network }}</dd>
@@ -122,28 +159,41 @@
   </LayoutSecond>
 </template>
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useClipboard, useDocumentVisibility } from '@vueuse/core'
+import { ArrowRight, Cloud, CloudUpload, Shield, ShieldCheck } from 'lucide-vue-next'
 import LayoutSecond from '@/components/layout/LayoutSecond.vue'
 import AccountReadinessBanner from '@/components/account/AccountReadinessBanner.vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useWalletStore } from '@/store/wallet'
 import { useAccountManagementStore } from '@/store/accountManagement'
 import { withWalletPassword } from '@/lib/walletPasswordPrompt'
-import accountSDK, { accountDisplayMessage, saveExportFile } from '@/utils/accountManagement'
-import type { PaymentQuote, StorageOption, StorageView, RecoverySummary, RecoverySetupView, QuestionInput } from '@/utils/walletViews'
+import accountSDK, { accountDisplayMessage } from '@/utils/accountManagement'
+import type { PaymentQuote, StorageOption, StorageView, RecoverySummary } from '@/utils/walletViews'
 const { t } = useI18n()
 const { copy, copied } = useClipboard()
 const router = useRouter()
 const wallet = useWalletStore(); const accountState = useAccountManagementStore()
 const state = computed(() => accountState.status)
-const canRestoreExisting = computed(() => state.value?.backup_risk === 'notConfigured' &&
+const localOnly = computed(() => state.value?.state === 'local' && !accountState.readinessError &&
+  state.value.discovery_status === 'inactive')
+const storageNotice = computed(() => {
+  if (accountState.storageReadFailed) return {
+    title: 'accountManagement.ui.storageCheckFailed',
+    body: 'accountManagement.ui.configReadFailed',
+  }
+  if (accountState.storageOffers) return {
+    title: 'accountManagement.ui.temporaryUnavailableTitle',
+    body: 'accountManagement.ui.temporaryUnavailable',
+  }
+  return { title: 'accountManagement.ui.checkingStorage', body: '' }
+})
+const waitingForBackup = computed(() => state.value?.backup_risk === 'notConfigured' &&
   state.value.discovery_status === 'active-waiting-backup')
 const autopay = computed(() => state.value?.autopay)
 const visibility = useDocumentVisibility()
@@ -154,9 +204,8 @@ const busy = ref(false); const error = ref(''); let disposed = false
 const summary = ref<RecoverySummary | null>(null); const storage = ref<StorageView | null>(null)
 const options = ref<StorageOption[]>([]); const recordCount = ref(100)
 const setupMode = ref<'temporary' | 'paid'>('temporary')
-const mode = ref('2of2'); const creation = ref<RecoverySetupView | null>(null)
-const recoveryFile = ref(''); const answers = ref<string[]>([])
-const questions = ref<QuestionInput[]>(['bookQuestion', 'phraseQuestion', 'noteQuestion'].map((key, index) => ({question: {id: `question-${index + 1}`, prompt: t(`accountManagement.ui.${key}`), case_sensitive: false, ignore_punctuation: true}, answer: '', confirmation: ''})))
+const startSetup = computed(() => accountState.canActivate && !summary.value)
+const recoveryHeading = ref<HTMLElement | null>(null)
 const payment = ref<PaymentQuote | null>(null); let paymentAction: (() => Promise<void>) | undefined
 const storageWarning = (code: string) => t(`accountManagement.ui.${({temporary_storage: 'temporaryWarning', same_node_required: 'sameNodeWarning', continuous_payment_required: 'paidWarning'} as Record<string,string>)[code] || code}`)
 const run = async (action: () => Promise<void>) => {
@@ -185,6 +234,8 @@ const preflight = (selected: 'temporary' | 'paid') => withPassword(async passwor
   const existing = (await accountSDK.getAccountView()).storage
   storage.value = existing?.can_cancel && existing.option.id === selected ? existing : null
   summary.value = backup
+  await nextTick()
+  recoveryHeading.value?.focus()
 })
 const loadOptions = () => run(readOptions)
 const requestPayment = (quote: PaymentQuote | null, action: () => Promise<void>) => {
@@ -192,7 +243,7 @@ const requestPayment = (quote: PaymentQuote | null, action: () => Promise<void>)
 }
 const cancelPayment = () => { payment.value = null; paymentAction = undefined }
 const confirmPayment = () => run(async () => { const action = paymentAction; cancelPayment(); if (action) await action(); await accountState.refresh() })
-const selectStorage = (option: StorageOption) => requestPayment(option.payment, async () => {
+const confirmStorage = async (option: StorageOption) => {
   try {
     storage.value = await accountSDK.confirmStorage(option)
   } catch (cause) {
@@ -202,6 +253,9 @@ const selectStorage = (option: StorageOption) => requestPayment(option.payment, 
     }
     throw cause
   }
+}
+const selectStorage = (option: StorageOption) => requestPayment(option.payment, async () => {
+  await confirmStorage(option)
   await accountState.refresh()
 })
 const cancelStorage = () => run(async () => {
@@ -260,20 +314,18 @@ watch(visibleFundingTx, (txID, _previous, onCleanup) => {
   timer = window.setTimeout(poll, 3000)
 }, { immediate: true })
 
-const createRecovery = () => withPassword(async password => {
-  const value = await accountSDK.createRecovery({password, wallet_ids: walletIDs(), mode: mode.value, questions: questions.value, guardian_contact: ''})
-  if (disposed) { await accountSDK.abortRecovery(value.session_id); return }
-  creation.value = value; answers.value = value.questions.map(() => '')
-  questions.value.forEach(item => { item.answer = ''; item.confirmation = '' })
+const activate = (option?: StorageOption) => withPassword(async password => {
+  try {
+    if (option) await confirmStorage(option)
+    if (storage.value?.status !== 'ready') return
+    await accountSDK.activateRootAccount(password, walletIDs())
+    summary.value = null
+    storage.value = null
+  } finally {
+    await accountState.refresh()
+  }
 })
-const clearInputs = () => { creation.value = null; recoveryFile.value = ''; answers.value = []; }
-const activate = () => withPassword(async password => {
-  if (!creation.value) return
-  await accountSDK.activateRecovery(creation.value.session_id, {password, recovery_file: recoveryFile.value, factors: {answers: creation.value.questions.map((item,index) => ({question_id: item.id, text: answers.value[index] || ''})).filter(item => item.text), guardian_response: ''}})
-  clearInputs(); summary.value = null; storage.value = null; await accountState.refresh()
-})
-const abort = () => run(async () => { if (creation.value) await accountSDK.abortRecovery(creation.value.session_id); clearInputs() })
 onMounted(() => { void run(() => accountState.refresh()) })
 watch(() => accountState.storagePhase, () => { void accountState.refreshStorageOffers() }, {immediate: true})
-onBeforeUnmount(() => { disposed = true; cancelPayment(); if (creation.value) void accountSDK.abortRecovery(creation.value.session_id).catch(() => undefined); clearInputs() })
+onBeforeUnmount(() => { disposed = true; cancelPayment() })
 </script>

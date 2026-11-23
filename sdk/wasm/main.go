@@ -5306,6 +5306,8 @@ func main() {
 	obj := js.Global().Get("Object").New()
 	// input: cfg, loglevel; return: ok
 	obj.Set("init", js.FuncOf(initManager))
+	obj.Set("preparePwa038", js.FuncOf(preparePwa038))
+	obj.Set("upgradePwa038Password", js.FuncOf(upgradePwa038Password))
 	// input: none
 	obj.Set("release", js.FuncOf(releaseManager))
 	// input: none; return: true or false

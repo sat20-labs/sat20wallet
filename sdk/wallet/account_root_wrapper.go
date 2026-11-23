@@ -1260,17 +1260,21 @@ func (p *Manager) restoreRootRecord(ctx context.Context, root common.Wallet, acc
 		return nil, err
 	}
 	store.manager.rememberPaths([]string{key})
-	packageKey, err := dkvsindexer.AccountPersonalKey(accountID, accountPackagePath(config.PackageID))
-	if err != nil {
-		return nil, err
-	}
-	packageValue, err := readRootLinkedPackage(store, packageKey)
-	if err != nil {
-		return nil, rootDiscoveryError(err)
-	}
-	pkg, err := account.DecodeRecoveryPackageStorage(packageValue.Value)
-	if err != nil || pkg.Envelope.Locator.AccountID != accountID {
-		return nil, ErrRootAccountWrapperInvalid
+	locator := account.Locator{AccountID: accountID}
+	if config.PackageID != "" {
+		packageKey, err := dkvsindexer.AccountPersonalKey(accountID, accountPackagePath(config.PackageID))
+		if err != nil {
+			return nil, err
+		}
+		packageValue, err := readRootLinkedPackage(store, packageKey)
+		if err != nil {
+			return nil, rootDiscoveryError(err)
+		}
+		pkg, err := account.DecodeRecoveryPackageStorage(packageValue.Value)
+		if err != nil || pkg.Envelope.Locator.AccountID != accountID || pkg.Envelope.Locator.PackageID != config.PackageID {
+			return nil, ErrRootAccountWrapperInvalid
+		}
+		locator = pkg.Envelope.Locator
 	}
 	existing, err := p.authenticateAccountRestore(accountID, walletFingerprint(root), config.Secret, password)
 	if err != nil {
@@ -1288,11 +1292,11 @@ func (p *Manager) restoreRootRecord(ctx context.Context, root common.Wallet, acc
 		}
 		return p.restoredCatalogResults(), nil
 	}
-	recovered, err := p.loadAccountCopies(store, root, pkg.Envelope.Locator, config.Secret)
+	recovered, err := p.loadAccountCopies(store, root, locator, config.Secret)
 	if err != nil {
 		return nil, err
 	}
-	return p.restoreAccountCopies(*recovered, config.Secret, password, pkg.Envelope.Locator,
+	return p.restoreAccountCopies(*recovered, config.Secret, password, locator,
 		AccountManagementRestoreOptions{Location: location, StorageMode: config.StorageMode,
 			RecordTTL: config.RecordTTL, AutopayContract: config.AutopayContract}, walletFingerprint(root), beforeCommit)
 }

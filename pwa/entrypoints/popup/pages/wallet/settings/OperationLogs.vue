@@ -1,6 +1,6 @@
 <template>
   <LayoutSecond :title="t('pwaUi.logs.title')">
-    <div class="space-y-4">
+    <div class="min-w-0 space-y-4 break-words">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <p class="text-sm text-muted-foreground">{{ t('pwaUi.logs.description') }}</p>
         <Button variant="outline" size="sm" :disabled="busy" @click="refresh">{{ t('common.refresh') }}</Button>
@@ -25,7 +25,7 @@
       <Button v-if="records.length" variant="ghost" class="text-destructive hover:text-destructive" :disabled="busy" @click="confirmClear = true">{{ t('pwaUi.logs.deleteAll') }}</Button>
     </div>
     <AlertDialog v-model:open="confirmClear">
-      <AlertDialogContent>
+    <AlertDialogContent class="w-[calc(100%_-_2rem)] max-w-md rounded-xl">
         <AlertDialogHeader>
           <AlertDialogTitle>{{ t('pwaUi.logs.deleteAll') }}</AlertDialogTitle>
           <AlertDialogDescription>{{ t('pwaUi.logs.deleteConfirm') }}</AlertDialogDescription>

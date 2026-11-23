@@ -57,6 +57,9 @@ func (p *Manager) accountDiscoveryRootLocked() (common.Wallet, error) {
 // Caller owns the profile gate. Only the verified dependency-group replica is
 // read here. Network work belongs to the existing background account task.
 func (p *Manager) accountServiceStateLocked() (string, error) {
+	if p.IsServerMode() {
+		return "inactive", nil
+	}
 	if p.dkvs == nil {
 		return "unknown", ErrDKVSPathNotSynced
 	}
@@ -111,9 +114,6 @@ func (p *Manager) accountServiceStateLocked() (string, error) {
 		return "unknown", err
 	}
 	defer zeroBytes(payload.Secret)
-	if payload.PackageID == "" {
-		return "unknown", ErrRootAccountWrapperInvalid
-	}
 	// A verified, bound wrapper is durable evidence of activation even when
 	// this device has not restored the backup or reopened an online session.
 	if p.accountProfile == nil || !p.accountProfile.RecoveryConfigured {

@@ -79,13 +79,15 @@ const lockManager = (navigator as Navigator & { locks?: LockManager }).locks
 if (!lockManager) {
   renderShell(copy.unsupportedTitle, copy.unsupportedMessage, false, true, 'error')
 } else {
-  renderShell(copy.busyTitle, copy.busyMessage, true, true, 'waiting')
+  const busyTimer = setTimeout(() => renderShell(copy.busyTitle, copy.busyMessage, true, true, 'waiting'), 1000)
   void lockManager.request(lockName, { mode: 'exclusive' }, async lock => {
+    clearTimeout(busyTimer)
     if (!lock) {
       renderShell(copy.lockErrorTitle, copy.lockErrorMessage, false, true, 'error')
       return
     }
     ownsLock = true
+    if (statusNode) root?.replaceChildren()
     try {
       await import('./main')
     } catch (error) {
@@ -94,6 +96,7 @@ if (!lockManager) {
     }
     await holdLock()
   }).catch(error => {
+    clearTimeout(busyTimer)
     console.error('Wallet instance lock request failed:', error)
     try { renderShell(copy.lockErrorTitle, copy.lockErrorMessage, false, true, 'error') } catch {}
   })

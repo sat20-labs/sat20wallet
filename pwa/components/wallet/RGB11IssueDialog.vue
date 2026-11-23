@@ -1,6 +1,6 @@
 <template>
   <Dialog :open="isOpen" @update:open="handleOpenChange">
-    <DialogContent class="max-h-[90vh] w-[390px] overflow-y-auto rounded-lg bg-black"
+    <DialogContent class="max-h-[calc(100dvh_-_2rem)] w-[calc(100%_-_2rem)] max-w-md grid-cols-[minmax(0,1fr)] gap-4 overflow-y-auto rounded-xl bg-background"
       @pointer-down-outside="preventDismiss" @escape-key-down="preventDismiss">
       <DialogHeader>
         <DialogTitle>{{ $t('rgb11Transfer.issueTitle') }}</DialogTitle>

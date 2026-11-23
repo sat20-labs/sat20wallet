@@ -31,6 +31,41 @@ import (
 func TestSDKAccountPWAEntryPoints(t *testing.T) {
 	network := newDKVSNoPluginUnfundedNetwork(t)
 	waitForDKVSPeerReady(t, network)
+	t.Run("RootOnlyActivationAndRestore", func(t *testing.T) {
+		ctx := context.Background()
+		config, _ := accountReviewConfig(t, network)
+		mnemonic := accountSyncMnemonic(t, 215)
+		source := newNativeUIInactive(t, config, mnemonic)
+		id := source.mgr.GetWalletCatalog()[0].ID
+		require.NoError(t, source.mgr.UpdateWalletName(id, "Root-only backup"))
+		require.NoError(t, source.mgr.EnsureAccount(id, 1, "Restored account", ""))
+		before := source.mgr.GetWalletCatalog()
+		_, err := source.mgr.ActivateRootAccount(ctx, source.password, []int64{id})
+		require.ErrorIs(t, err, wallet.ErrAccountStorageAuthorizationMissing)
+		nativeUIConfirm(t, source.mgr, nativeUIStorage(t, source.mgr, wallet.AccountStorageTemporary, 0))
+		_, err = source.mgr.ActivateRootAccount(ctx, "wrong-password", []int64{id})
+		require.Error(t, err)
+		view, err := source.mgr.ActivateRootAccount(ctx, source.password, []int64{id})
+		require.NoError(t, err)
+		require.Empty(t, view.Locator)
+		require.Empty(t, view.RecoveryMode)
+		require.Zero(t, view.LastRehearsalAt)
+		nativeUIReady(t, source.mgr)
+		require.Eventually(t, func() bool {
+			view, err := source.mgr.GetAccountView(ctx)
+			return err == nil && view.BackupState == "backed_up" && view.BackupRisk == ""
+		}, 30*time.Second, 100*time.Millisecond)
+		source.close()
+
+		target := newNativeUIDevice(t, config, "")
+		requireAccountPWARootRecovery(t, target.mgr, mnemonic, target.password)
+		nativeUICatalog(t, target.mgr, before)
+		nativeUIReady(t, target.mgr)
+		view, err = target.mgr.GetAccountView(ctx)
+		require.NoError(t, err)
+		require.Equal(t, "backed_up", view.BackupState)
+		require.Empty(t, view.Locator)
+	})
 	t.Run("ColdWalletWithoutProfile", func(t *testing.T) {
 		config, _ := accountReviewConfig(t, network)
 		device := newNativeUIInactive(t, config, accountSyncMnemonic(t, 213))

@@ -53,7 +53,7 @@ func (p *Manager) saveAccountReceipt(value *accountLocalKV) error {
 	}
 	// Receipt and first-backup completion use the same confirmed deletion fact
 	// as Wait/status. A blob awaiting reclamation does not make its deletion dirty.
-	complete := profile.RecoveryConfigured && profile.Activation == nil && len(controls) == 3
+	complete := profile.RecoveryConfigured && profile.Activation == nil
 	seenControls, seenModules := make(map[string]bool), make(map[string]bool)
 	for _, item := range values {
 		if item.Provider == "account" && !controls[item.Key] {

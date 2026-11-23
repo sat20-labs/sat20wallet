@@ -1274,8 +1274,7 @@ func (p *Manager) IsBootstrapMode() bool {
 }
 
 func (p *Manager) IsServerMode() bool {
-	// TODO 需要检查钱包公钥和资产 ?
-	return p.cfg.Mode == SERVER_NODE || p.cfg.Mode == BOOTSTRAP_NODE
+	return p != nil && p.cfg != nil && (p.cfg.Mode == SERVER_NODE || p.cfg.Mode == BOOTSTRAP_NODE)
 }
 
 func (p *Manager) IsBootstrapNode() bool {

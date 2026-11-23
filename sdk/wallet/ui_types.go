@@ -182,6 +182,7 @@ type AccountAPI interface {
 	GetStorageOptions(ctx context.Context, recordCount uint64) ([]StorageOption, error)
 	// 只执行用户确认的报价。已有同一存储授权时继续/复用，不再付款。
 	ConfirmStorage(ctx context.Context, confirmed StorageOption) (*StorageView, error)
+	ActivateRootAccount(ctx context.Context, password string, ids []int64) (*AccountView, error)
 	CancelStorageSetup() error // 放弃未使用的设置授权，不撤销已支付的交易
 	FundAutopay(ctx context.Context, confirmed PaymentQuote) (*PaymentView, error)
 

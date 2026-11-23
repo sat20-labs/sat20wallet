@@ -26,9 +26,16 @@ func TestSDKAccountPWAConnectedBrowser(t *testing.T) {
 func TestPWADKVSActivationWatch(t *testing.T) {
 	runAccountPWABrowser(t,
 		"usage: SDK creation page delivers mnemonic without redundant PWA persistence",
-		"PWA account: two-factor setup downloads rehearsal abort and cold restore",
-		"PWA account: Guardian is unavailable and own storage quotes remain usable",
+		"PWA account: existing recovery file rehearsal abort and cold restore",
+		"PWA account: root-only backup activates with temporary storage",
 		"PWA account: private-key cold unlock and activation refusal",
+	)
+}
+
+func TestPWARootBackup(t *testing.T) {
+	runAccountPWABrowser(t,
+		"PWA account: root-only backup activates with temporary storage",
+		"PWA account: existing recovery file rehearsal abort and cold restore",
 	)
 }
 

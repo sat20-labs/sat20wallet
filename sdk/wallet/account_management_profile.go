@@ -79,6 +79,10 @@ func accountManagementProfileKey() []byte {
 }
 
 func (p *Manager) loadAccountManagementProfileLocked() error {
+	if p.IsServerMode() {
+		p.accountProfile = nil
+		return nil
+	}
 	encoded, err := p.db.Read(accountManagementProfileKey())
 	if errors.Is(err, indexercommon.ErrKeyNotFound) {
 		p.accountProfile = nil

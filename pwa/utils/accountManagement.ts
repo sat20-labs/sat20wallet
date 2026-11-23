@@ -31,6 +31,9 @@ class AccountManagementSDK {
   getStorageOptions(recordCount = 0) { return this.request<StorageOption[]>('getStorageOptions', { record_count: recordCount }) }
   getStorageAvailability() { return this.request<StorageOption[]>('getStorageOptions', { availability_only: true }) }
   confirmStorage(confirmed: StorageOption) { return this.request<StorageView>('confirmStorage', confirmed) }
+  activateRootAccount(password: string, walletIDs: number[]) {
+    return this.request<AccountView>('activateRootAccount', { password, wallet_ids: walletIDs })
+  }
   cancelStorageSetup() { return this.request<void>('cancelStorageSetup') }
   fundAutopay(confirmed: PaymentQuote) { return this.request<PaymentView>('fundAutopay', confirmed) }
   createRecovery(input: RecoverySetup) { return this.request<RecoverySetupView>('createRecovery', input) }

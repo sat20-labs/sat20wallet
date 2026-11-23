@@ -1,6 +1,6 @@
 <template>
   <Dialog :open="isOpen" @update:open="isOpen = $event">
-    <DialogContent class="max-h-[90vh] w-[380px] overflow-y-auto rounded-lg bg-black">
+    <DialogContent class="max-h-[calc(100dvh_-_2rem)] w-[calc(100%_-_2rem)] max-w-md grid-cols-[minmax(0,1fr)] gap-4 overflow-y-auto rounded-xl bg-background">
       <DialogHeader>
         <DialogTitle>{{ $t('rgb11Transfer.importTitle') }}</DialogTitle>
         <DialogDescription>{{ $t('rgb11Transfer.importDescription') }}</DialogDescription>

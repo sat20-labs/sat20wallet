@@ -245,7 +245,7 @@ func (p *Manager) CreateWallet(password string) (opValue0 int64, opValue1 string
 		return -1, "", err
 	}
 
-	first = p.firstRootEmptyLocked()
+	first = !p.IsServerMode() && p.firstRootEmptyLocked()
 	if first {
 		if err := p.activateFirstMnemonicWalletLocked(nil, wallet, mnemonic, password); err != nil {
 			p.mutex.Unlock()
@@ -311,6 +311,9 @@ func (p *Manager) ImportWallet(mnemonic string, password string) (int64, error) 
 // ImportVerifiedRoot commits the foreground import only while the exact
 // negative lookup still belongs to this account session and endpoint.
 func (p *Manager) ImportVerifiedRoot(ctx context.Context, mnemonic, password string) (int64, error) {
+	if p.IsServerMode() {
+		return -1, errAccountManagementDisabled
+	}
 	if p == nil || ctx == nil {
 		return -1, ErrRootAccountDiscoveryPending
 	}
@@ -378,7 +381,7 @@ func (p *Manager) importWallet(ctx context.Context, mnemonic, password string) (
 		return -1, err
 	}
 
-	first = p.firstRootEmptyLocked()
+	first = !p.IsServerMode() && p.firstRootEmptyLocked()
 	if first {
 		if err := p.activateFirstMnemonicWalletLocked(ctx, wallet, mnemonic, password); err != nil {
 			p.mutex.Unlock()
@@ -583,6 +586,10 @@ func (p *Manager) ChangePassword(oldPS, newPS string) (opErr error) {
 		return err
 	}
 
+	return p.changePasswordLocked(oldPS, newPS)
+}
+
+func (p *Manager) changePasswordLocked(oldPS, newPS string) error {
 	if p.accountProfile != nil && len(p.accountSecret) != 32 {
 		return fmt.Errorf("account management is locked")
 	}

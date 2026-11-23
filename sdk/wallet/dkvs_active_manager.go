@@ -59,12 +59,12 @@ func (p *Manager) accountRecoveryConfigured() bool {
 	}
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
-	return p.accountProfile != nil && p.accountProfile.RecoveryConfigured
+	return !p.IsServerMode() && p.accountProfile != nil && p.accountProfile.RecoveryConfigured
 }
 
 // An unlocked mnemonic wallet can discover its root before creating a profile.
 func (p *Manager) accountDiscoveryUnlockedLocked() bool {
-	if p.wallet == nil || p.accountPassword == "" {
+	if p.IsServerMode() || p.wallet == nil || p.accountPassword == "" {
 		return false
 	}
 	if p.accountProfile != nil {

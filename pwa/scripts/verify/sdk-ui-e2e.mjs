@@ -599,7 +599,7 @@ export async function runSDKUICases(helpers, fixture) {
     await account(owner, 'preflightRecovery', { password: 'wrong-password', wallet_ids: walletIDs }, true)
     const exports = await owner.evaluate(() => Object.keys(window.sat20account_wasm).sort())
     assert.deepEqual(exports, ['getAccountView', 'refreshAccount', 'preflightRecovery',
-      'getStorageOptions', 'confirmStorage', 'cancelStorageSetup', 'fundAutopay',
+      'getStorageOptions', 'confirmStorage', 'activateRootAccount', 'cancelStorageSetup', 'fundAutopay',
       'getGuardianContact', 'createRecovery', 'acceptGuardianSetup', 'confirmGuardianSetup',
       'activateRecovery', 'loadRecovery', 'previewRecovery', 'createGuardianRequest',
       'createGuardianResponse', 'commitRecovery', 'abortRecovery'].sort())

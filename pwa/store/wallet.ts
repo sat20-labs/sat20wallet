@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { walletStorage, type AccountRecoveryState } from '@/lib/walletStorage'
+import { finishWallet038, upgradeWallet038Password } from '@/lib/wallet-upgrade-038'
 import { Network, Chain, WalletData, WalletAccount } from '@/types'
 import walletManager, { type MnemonicValidation } from '@/utils/sat20'
 import satsnetStp from '@/utils/stp'
@@ -675,7 +676,17 @@ export const useWalletStore = defineStore('wallet', () => {
   const unlockWallet = async (password: string) => {
     const runtimeRunning = isWalletRuntimeUnlocked()
     const checkSession = walletRequestSessionGuard('unlockWallet')
-    const [err, result] = await walletManager.unlockWallet(password)
+    let [err, result] = await walletManager.unlockWallet(password)
+    if (err) {
+      try {
+        if (await upgradeWallet038Password(password, err)) {
+          checkSession()
+          ;[err, result] = await walletManager.unlockWallet(password)
+        }
+      } catch (error) {
+        return [error, undefined]
+      }
+    }
 
     if (!err && result) {
       try {
@@ -695,6 +706,8 @@ export const useWalletStore = defineStore('wallet', () => {
           completeWalletIdentityTransition(getWalletIdentityState().generation)
         }
         refreshCurrentChannelInBackground('unlockWallet')
+        await finishWallet038().catch(() => console.warn('Legacy wallet cleanup can be retried after unlock'))
+        checkSession()
         return [undefined, result]
       } catch (error) {
         // A lock may have happened while the unlocked flag was being stored.

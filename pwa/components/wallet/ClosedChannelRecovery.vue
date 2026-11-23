@@ -10,7 +10,7 @@
   </section>
   <p v-if="!matchingNotice && !channel && localCapabilityError" class="text-sm my-3">{{ localCapabilityError }}</p>
   <Dialog :open="showDialog" @update:open="(open) => { if (!open) cancelClosedTopup() }">
-    <DialogContent data-testid="closed-recovery-dialog" class="sm:max-w-md">
+    <DialogContent data-testid="closed-recovery-dialog" class="max-h-[calc(100dvh_-_2rem)] w-[calc(100%_-_2rem)] max-w-md grid-cols-[minmax(0,1fr)] overflow-y-auto rounded-xl bg-background">
       <DialogHeader>
         <DialogTitle>{{ $t(withdrawalReview ? 'walletComponents.confirmWithdrawal' : 'walletComponents.chooseRecovery') }}</DialogTitle>
         <DialogDescription>{{ $t('walletComponents.recoveryAccountHelp') }}</DialogDescription>

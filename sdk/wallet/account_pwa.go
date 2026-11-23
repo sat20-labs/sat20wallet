@@ -222,12 +222,18 @@ func (p *Manager) accountDKVSStore() (*dkvsStore, error) {
 	if p == nil {
 		return nil, fmt.Errorf("DKVS manager is unavailable")
 	}
+	if p.IsServerMode() {
+		return nil, errAccountManagementDisabled
+	}
 	return p.ensureDKVSManager().primaryStore()
 }
 
 func (p *Manager) accountDKVSStoreForLocation(location AccountIndexerLocation) (*dkvsStore, error) {
 	if p == nil {
 		return nil, fmt.Errorf("DKVS manager is unavailable")
+	}
+	if p.IsServerMode() {
+		return nil, errAccountManagementDisabled
 	}
 	return p.ensureDKVSManager().storeFor(
 		location.Scheme, location.Host, location.Proxy, p.http,

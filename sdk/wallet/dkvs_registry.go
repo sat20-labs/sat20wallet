@@ -33,7 +33,7 @@ func (p *Manager) ensureOwnedDKVSPrefix(prefix string) error {
 // prefixes in the durable Wallet prefix registry. Ordinary Get/Put operations
 // never remember a prefix implicitly.
 func (p *Manager) refreshDKVSRegistrations() error {
-	if p == nil || p.ensureDKVSManager() == nil {
+	if p == nil || p.IsServerMode() || p.ensureDKVSManager() == nil {
 		return nil
 	}
 	p.mutex.RLock()

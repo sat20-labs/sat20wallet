@@ -357,8 +357,19 @@ func runNativeRGBManual(t *testing.T, f *nativeIfaceChain) {
 
 	// Recovering the root on a completely empty device restores actual remote
 	// allocations and inflation authority; no database or proof file is copied.
+	owner.mgr.Start()
+	nativeUIReady(t, owner.mgr)
 	catalog := owner.mgr.GetWalletCatalog()
-	nativeUILocalBackup(t, owner)
+	nativeUIConfirm(t, owner.mgr, nativeUIStorage(t, owner.mgr, wallet.AccountStorageTemporary, 0))
+	ids := make([]int64, 0, len(catalog))
+	for _, entry := range catalog {
+		ids = append(ids, entry.ID)
+	}
+	activated, err := owner.mgr.ActivateRootAccount(ctx, owner.password, ids)
+	require.NoError(t, err)
+	require.Empty(t, activated.Locator)
+	require.Empty(t, activated.RecoveryMode)
+	requireE2EFirstBackup(t, owner.mgr)
 	state, err := owner.mgr.GetRGBView()
 	require.NoError(t, err)
 	sort.Slice(state.Assets, func(i, j int) bool { return state.Assets[i].Asset < state.Assets[j].Asset })
@@ -367,17 +378,19 @@ func runNativeRGBManual(t *testing.T, f *nativeIfaceChain) {
 	source := owner.mgr.GetAccountManagementStatus()
 	require.True(t, source.RecoveryConfigured)
 	require.NotEmpty(t, source.AccountID)
-	require.NotEmpty(t, source.PackageID)
+	require.Empty(t, source.PackageID)
+	require.Equal(t, wallet.AccountStorageTemporary, source.StorageMode)
 	owner.close()
 	recovered := newNativeUIDevice(t, f.cfg, "")
 	require.Empty(t, recovered.mgr.GetWalletCatalog())
 	// Do not create a fresh local profile or request a backup before the
-	// authenticated recovery has installed this exact remote package.
+	// authenticated recovery has restored the existing account backup.
 	requireAccountPWARootRecovery(t, recovered.mgr, mnemonic, recovered.password)
 	account := recovered.mgr.GetAccountManagementStatus()
 	require.True(t, account.RecoveryConfigured)
 	require.Equal(t, source.AccountID, account.AccountID)
 	require.Equal(t, source.PackageID, account.PackageID)
+	require.Equal(t, source.StorageMode, account.StorageMode)
 	nativeUIReady(t, recovered.mgr)
 	nativeUIBackup(t, recovered.mgr)
 	require.Equal(t, source.AccountID, recovered.mgr.GetAccountManagementStatus().AccountID)
@@ -386,6 +399,8 @@ func runNativeRGBManual(t *testing.T, f *nativeIfaceChain) {
 	require.NoError(t, err)
 	sort.Slice(restored.Assets, func(i, j int) bool { return restored.Assets[i].Asset < restored.Assets[j].Asset })
 	require.Equal(t, state.Assets, restored.Assets, "remote state must restore allocations and IFA authority")
+	t.Logf("root-only regtest restore: schema=%s contract=%s balance_before=86 balance_after=86 inflation_authority=%t storage=%s",
+		asset.Kind, asset.ContractID, asset.CanInflate, account.StorageMode)
 	resent := nativeUISend(t, f, recovered, receiver, asset, "1.25", "witness", ".asc", false)
 	require.NotEqual(t, sent.TxID, resent.TxID)
 	nativeUIBalance(t, recovered, asset, "84.75")
