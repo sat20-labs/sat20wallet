@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -534,10 +535,10 @@ func prepareSDKPWARegtestCoreDogcoinStake(t *testing.T, issuer *wallet.Manager,
 	// The Core process must release its DB before this test opens that same DB.
 	coreRestored := false
 	restartAttempted := false
-	coreDBCloseFailed := false
+	stakeChildFailed := false
 	defer func() {
-		if coreDBCloseFailed {
-			t.Errorf("leave the original Core stopped: its wallet DB failed to close; inspect the retained DB state")
+		if stakeChildFailed {
+			t.Log("leave the original Core stopped after the failed stake child; inspect the retained DB state")
 			return
 		}
 		if coreRestored || network.Core.Client != nil || restartAttempted || network.Core.cmd == nil {
@@ -562,109 +563,20 @@ func prepareSDKPWARegtestCoreDogcoinStake(t *testing.T, issuer *wallet.Manager,
 	require.NoError(t, err)
 	bootstrapIndexer, err := url.Parse(bootstrapIndexerURL)
 	require.NoError(t, err)
-	coreDBDir := filepath.Join(network.Core.nodeDir, "data", "db", "stp", "regtest")
-	info, statErr := os.Stat(coreDBDir)
-	require.NoError(t, statErr, "open only the original Core STP wallet DB")
-	require.True(t, info.IsDir())
-	database := indexerdb.NewKVDB(coreDBDir)
-	require.NotNil(t, database)
-	databaseClosed := false
-	defer func() {
-		if databaseClosed {
-			return
-		}
-		if closeErr := database.Close(); closeErr != nil {
-			coreDBCloseFailed = true
-			t.Errorf("close original Core wallet DB: %v", closeErr)
-		}
-	}()
-	coreCfg := &sdkcommon.Config{Env: "dev", Chain: "regtest", Mode: "client",
+	coreCfg := sdkcommon.Config{Env: "dev", Chain: "regtest", Mode: wallet.SERVER_NODE,
 		Peers:     []string{fmt.Sprintf("b@%s@http://127.0.0.1:%d/regtest", hex.EncodeToString(bootstrapPub), portBase+3)},
 		IndexerL1: &sdkcommon.Indexer{Scheme: l1URL.Scheme, Host: l1URL.Host, Proxy: "btc/regtest"},
 		// The original Core indexer is offline during this exclusive session.
-		// Read the already-verified canonical L2 state from Bootstrap instead.
 		IndexerL2: &sdkcommon.Indexer{Scheme: bootstrapIndexer.Scheme, Host: bootstrapIndexer.Host, Proxy: "regtest"}}
-	coreManager := wallet.NewManager(coreCfg, database)
-	require.NotNil(t, coreManager)
-	coreManagerClosed := false
-	defer func() {
-		if coreManagerClosed {
-			return
-		}
-		coreManager.Close()
-	}()
-	require.NotEmpty(t, coreManager.GetWalletCatalog(),
-		"original Core wallet must exist; never import or replace the fixed Core identity")
-	_, err = coreManager.UnlockWallet("rpctest")
-	require.NoError(t, err, "unlock the existing Core account")
-	require.NoError(t, coreManager.SwitchAccount(0), "select the fixed Core account-0 identity")
-	require.Equal(t, uint32(0), coreManager.GetCurrentAccountId())
-	actualCorePub := coreManager.GetWallet().GetPubKey().SerializeCompressed()
-	require.Equal(t, corePub, actualCorePub, "exclusive Core Manager must use original account 0")
-	require.Equal(t, coreAddress, coreManager.GetWallet().GetAddress())
-	coreManager.Start()
-	require.Eventually(t, coreManager.IsReady, rpcReadyTimeout, 200*time.Millisecond,
-		"Core's original SDK Manager must be ready against the Bootstrap peer")
-	require.True(t, coreManager.ServerIsBootstrapNode(), "StakeToBeMinner(true) must target Bootstrap")
-	require.GreaterOrEqual(t, coreManager.GetSyncHeightL1(), issuer.GetSyncHeightL1(),
-		"exclusive Core Manager must sync the confirmed DOGCOIN issuance")
-	coreManagerFeeAvailable, coreManagerFeeLocked := coreManager.GetAssetAmount(coreAddress, plain, nil)
-	require.NotNil(t, coreManagerFeeAvailable)
-	require.GreaterOrEqual(t, coreManagerFeeAvailable.Int64(), stakeFeeQuote,
-		"the original Core account must independently pass the real stake fee preflight")
-	if coreManagerFeeLocked != nil {
-		require.Zero(t, coreManagerFeeLocked.Sign())
-	}
-
-	for id, reservation := range coreManager.GetRemoteActionReservations() {
-		action, ok := reservation.(*wallet.RemoteActionPerformReservation)
-		if ok && action.Action == wallet.REMOTE_ACTION_ASCEND {
-			require.FailNow(t, fmt.Sprintf("refusing to repeat active Core ASCEND reservation %d (id=%d status=%d)",
-				action.Id, id, action.GetStatus()))
-		}
-	}
-	require.False(t, coreManager.HasStaked(corePub),
-		"Core must be genuinely unstaked before the one SDK stake action")
-	coreStakeBalance, coreStakeLocked := coreManager.GetAssetAmount(coreAddress, asset, nil)
-	require.NotNil(t, coreStakeBalance)
-	require.Equal(t, assetAmount, coreStakeBalance.Int64(), "Core account 0 must spend exactly its real DOGCOIN")
-	if coreStakeLocked != nil {
-		require.Zero(t, coreStakeLocked.Sign())
-	}
-	stakeOutputsBefore = coreManager.GetIndexerClient().GetUtxoListWithTicker(stakeAddress, asset)
-	require.Empty(t, stakeOutputsBefore,
-		"no earlier Core/Bootstrap DOGCOIN stake output may be reused or double-registered")
-	coreStakeHeight := coreManager.GetSyncHeightL1()
-	require.Equal(t, assetText, indexercommon.GetStakeAssetName(coreStakeHeight),
-		"preflight the current staking era immediately before the one paid SDK action")
-	require.Equal(t, assetAmount, indexercommon.GetStakeAssetAmt(coreStakeHeight))
-	coreStakeFeeRate := coreManager.GetFeeRate()
-	require.Positive(t, coreStakeFeeRate)
-	require.Equal(t, feeRate, coreStakeFeeRate,
-		"the exact stake fee preflight and submitted action must use the same live Bitcoin fee rate")
-
-	// One invocation only. If this request has an uncertain result, fail and
-	// inspect its records; never repeat it from this fixture.
-	stakeTxID, reservationID, stakeErr := coreManager.StakeToBeMinner(true, coreStakeFeeRate)
-	require.NoError(t, stakeErr, "fixed Core account 0 must stake through the real SDK Bootstrap path")
-	require.Len(t, stakeTxID, 64)
-	require.Greater(t, reservationID, int64(0), "Core stake action must persist its real reservation id")
-	active, ok := coreManager.GetRemoteActionReservation(reservationID)
-	require.True(t, ok, "the original Core DB must retain the one ASCEND reservation")
-	action, actionOK := active.(*wallet.RemoteActionPerformReservation)
-	require.True(t, actionOK)
-	require.Equal(t, wallet.REMOTE_ACTION_ASCEND, action.Action)
-	require.True(t, action.SendTxInL1)
-	require.True(t, action.SendToBootstrapNode)
-	require.Equal(t, stakeTxID, action.FeeTxId)
-	coreManager.Close()
-	coreManagerClosed = true
-	err = database.Close()
-	databaseClosed = true
-	if err != nil {
-		coreDBCloseFailed = true
-	}
-	require.NoError(t, err)
+	stakeChildFailed = true
+	stake := runCoreStakeChild(t, coreStakeRequest{
+		Config: coreCfg, DBDir: filepath.Join(network.Core.nodeDir, "data", "db", "stp", "regtest"),
+		CorePub: corePub, CoreAddress: coreAddress, StakeAddress: stakeAddress,
+		AssetName: assetText, AssetAmount: assetAmount, MinL1Height: issuer.GetSyncHeightL1(),
+		FeeQuote: stakeFeeQuote, FeeRate: feeRate,
+	})
+	stakeChildFailed = false
+	stakeTxID, reservationID := stake.TxID, stake.ReservationID
 
 	restartCtx, restartCancel := context.WithTimeout(context.Background(), rpcReadyTimeout)
 	restartAttempted = true
@@ -859,6 +771,167 @@ func prepareSDKPWARegtestCoreDogcoinStake(t *testing.T, issuer *wallet.Manager,
 		assetText, assetAmount, coreAddress, stakeAddress, stakeTxID, fundingOutpoint, l1Height, coreBlockHash,
 		anchorTxID, bootstrapAscend.Height, anchorBlockHash)
 	return evidence
+}
+
+const (
+	coreStakeChildEnv = "SAT20_PWA_CORE_STAKE_CHILD"
+	coreStakeSelector = "^TestPWACoreStakeChild$"
+)
+
+type coreStakeRequest struct {
+	Config       sdkcommon.Config
+	DBDir        string
+	ResultPath   string
+	CorePub      []byte
+	CoreAddress  string
+	StakeAddress string
+	AssetName    string
+	AssetAmount  int64
+	MinL1Height  int
+	FeeQuote     int64
+	FeeRate      int64
+}
+
+type coreStakeResult struct {
+	TxID          string
+	ReservationID int64
+}
+
+// NewManager sets the process-wide SDK mode. Run the Core wallet alone so its
+// server mode cannot affect the ordinary wallet managers in the parent.
+func runCoreStakeChild(t *testing.T, request coreStakeRequest) coreStakeResult {
+	t.Helper()
+	dir := testCaseDirectory(t)
+	request.ResultPath = filepath.Join(dir, "stake-result.json")
+	data, err := json.Marshal(request)
+	require.NoError(t, err)
+	logPath := filepath.Join(dir, "core-stake.log")
+	log, err := os.OpenFile(logPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*rpcReadyTimeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, os.Args[0], "-test.run="+coreStakeSelector, "-test.v")
+	command.Env = append(os.Environ(), coreStakeChildEnv+"=1")
+	command.ExtraFiles = satoshinetRuntimeLocks
+	command.Stdin = bytes.NewReader(data)
+	command.Stdout, command.Stderr = log, log
+	runErr := command.Run()
+	require.NoError(t, log.Close())
+	require.NoError(t, runErr, "Core stake child failed; inspect %s", logPath)
+	data, err = os.ReadFile(request.ResultPath)
+	require.NoError(t, err, "child must publish its result after closing the original DB")
+	var result coreStakeResult
+	require.NoError(t, json.Unmarshal(data, &result))
+	require.Len(t, result.TxID, 64)
+	require.Positive(t, result.ReservationID)
+	return result
+}
+
+func TestPWACoreStakeChild(t *testing.T) {
+	if os.Getenv(coreStakeChildEnv) != "1" {
+		t.Skip("run by the RGB11 cross-layer fixture")
+	}
+	var request coreStakeRequest
+	require.NoError(t, json.NewDecoder(os.Stdin).Decode(&request))
+	require.Equal(t, "regtest", request.Config.Chain)
+	require.Equal(t, wallet.SERVER_NODE, request.Config.Mode)
+	info, err := os.Stat(request.DBDir)
+	require.NoError(t, err, "open only the original Core STP wallet DB")
+	require.True(t, info.IsDir())
+	database := indexerdb.NewKVDB(request.DBDir)
+	require.NotNil(t, database)
+	databaseClosed := false
+	defer func() {
+		if !databaseClosed {
+			require.NoError(t, database.Close(), "close original Core wallet DB")
+		}
+	}()
+	plain := wallet.ParseAssetString(wallet.PLAIN_ASSET.String())
+	asset := wallet.ParseAssetString(request.AssetName)
+	require.NotNil(t, asset)
+	coreManager := wallet.NewManager(&request.Config, database)
+	require.NotNil(t, coreManager)
+	coreManagerClosed := false
+	defer func() {
+		if coreManagerClosed {
+			return
+		}
+		coreManager.Close()
+	}()
+	require.NotEmpty(t, coreManager.GetWalletCatalog(),
+		"original Core wallet must exist; never import or replace the fixed Core identity")
+	_, err = coreManager.UnlockWallet("rpctest")
+	require.NoError(t, err, "unlock the existing Core account")
+	require.NoError(t, coreManager.SwitchAccount(0), "select the fixed Core account-0 identity")
+	require.Equal(t, uint32(0), coreManager.GetCurrentAccountId())
+	require.True(t, coreManager.IsServerMode(), "Core must use its node wallet role")
+	actualCorePub := coreManager.GetWallet().GetPubKey().SerializeCompressed()
+	require.Equal(t, request.CorePub, actualCorePub, "exclusive Core Manager must use original account 0")
+	require.Equal(t, request.CoreAddress, coreManager.GetWallet().GetAddress())
+	coreManager.Start()
+	require.Eventually(t, coreManager.IsReady, rpcReadyTimeout, 200*time.Millisecond,
+		"Core's original SDK Manager must be ready against the Bootstrap peer")
+	require.True(t, coreManager.ServerIsBootstrapNode(), "StakeToBeMinner(true) must target Bootstrap")
+	require.GreaterOrEqual(t, coreManager.GetSyncHeightL1(), request.MinL1Height,
+		"exclusive Core Manager must sync the confirmed DOGCOIN issuance")
+	coreManagerFeeAvailable, coreManagerFeeLocked := coreManager.GetAssetAmount(request.CoreAddress, plain, nil)
+	require.NotNil(t, coreManagerFeeAvailable)
+	require.GreaterOrEqual(t, coreManagerFeeAvailable.Int64(), request.FeeQuote,
+		"the original Core account must independently pass the real stake fee preflight")
+	if coreManagerFeeLocked != nil {
+		require.Zero(t, coreManagerFeeLocked.Sign())
+	}
+
+	for id, reservation := range coreManager.GetRemoteActionReservations() {
+		action, ok := reservation.(*wallet.RemoteActionPerformReservation)
+		if ok && action.Action == wallet.REMOTE_ACTION_ASCEND {
+			require.FailNow(t, fmt.Sprintf("refusing to repeat active Core ASCEND reservation %d (id=%d status=%d)",
+				action.Id, id, action.GetStatus()))
+		}
+	}
+	require.False(t, coreManager.HasStaked(request.CorePub),
+		"Core must be genuinely unstaked before the one SDK stake action")
+	coreStakeBalance, coreStakeLocked := coreManager.GetAssetAmount(request.CoreAddress, asset, nil)
+	require.NotNil(t, coreStakeBalance)
+	require.Equal(t, request.AssetAmount, coreStakeBalance.Int64(), "Core account 0 must spend exactly its real DOGCOIN")
+	if coreStakeLocked != nil {
+		require.Zero(t, coreStakeLocked.Sign())
+	}
+	stakeOutputsBefore := coreManager.GetIndexerClient().GetUtxoListWithTicker(request.StakeAddress, asset)
+	require.Empty(t, stakeOutputsBefore,
+		"no earlier Core/Bootstrap DOGCOIN stake output may be reused or double-registered")
+	coreStakeHeight := coreManager.GetSyncHeightL1()
+	require.Equal(t, request.AssetName, indexercommon.GetStakeAssetName(coreStakeHeight),
+		"preflight the current staking era immediately before the one paid SDK action")
+	require.Equal(t, request.AssetAmount, indexercommon.GetStakeAssetAmt(coreStakeHeight))
+	coreStakeFeeRate := coreManager.GetFeeRate()
+	require.Positive(t, coreStakeFeeRate)
+	require.Equal(t, request.FeeRate, coreStakeFeeRate,
+		"the exact stake fee preflight and submitted action must use the same live Bitcoin fee rate")
+
+	// One invocation only. If this request has an uncertain result, fail and
+	// inspect its records; never repeat it from this fixture.
+	stakeTxID, reservationID, stakeErr := coreManager.StakeToBeMinner(true, coreStakeFeeRate)
+	require.NoError(t, stakeErr, "fixed Core account 0 must stake through the real SDK Bootstrap path")
+	require.Len(t, stakeTxID, 64)
+	require.Greater(t, reservationID, int64(0), "Core stake action must persist its real reservation id")
+	active, err := wallet.LoadReservation(database, coreManager, wallet.RESV_TYPE_REMOTEACTION, reservationID)
+	require.NoError(t, err, "the original Core DB must retain the one ASCEND reservation")
+	action, actionOK := active.(*wallet.RemoteActionPerformReservation)
+	require.True(t, actionOK)
+	require.Equal(t, wallet.REMOTE_ACTION_ASCEND, action.Action)
+	require.True(t, action.SendTxInL1)
+	require.True(t, action.SendToBootstrapNode)
+	require.Equal(t, stakeTxID, action.FeeTxId)
+	coreManager.Close()
+	coreManagerClosed = true
+
+	err = database.Close()
+	databaseClosed = true
+	require.NoError(t, err, "close original Core wallet DB")
+	result, err := json.Marshal(coreStakeResult{TxID: stakeTxID, ReservationID: reservationID})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(request.ResultPath, result, 0600))
 }
 
 func confirmSDKPWARegtestL1Transactions(t *testing.T, manager *wallet.Manager, txids []string,
@@ -1279,7 +1352,8 @@ func bitcoinUnspentAt(t *testing.T, txid string, vout uint32) (int64, []byte, bo
 		} `json:"scriptPubKey"`
 	}
 	raw := realRegtestBitcoinCLI(t, "gettxout", txid, strconv.FormatUint(uint64(vout), 10), "true")
-	if strings.TrimSpace(string(raw)) == "null" {
+	// bitcoin-cli renders a successful JSON-RPC null result as empty stdout.
+	if result := strings.TrimSpace(string(raw)); result == "" || result == "null" {
 		return 0, nil, false
 	}
 	require.NoError(t, json.Unmarshal(raw, &output), "decode Bitcoin Core gettxout response")

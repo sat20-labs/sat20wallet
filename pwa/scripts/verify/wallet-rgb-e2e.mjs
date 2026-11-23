@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { expect } from '@playwright/test'
+import { loadEnv } from 'vite'
 import { setupAccount } from './account-fixture-e2e.mjs'
 import { waitForAccountWrite } from './account-management-usage-e2e.mjs'
 
 const messages = JSON.parse(readFileSync(new URL('../../locales/en.json', import.meta.url), 'utf8'))
 const tr = messages.rgb11Transfer
 const inv = messages.rgb11Invoice
+const pwaRoot = fileURLToPath(new URL('../../', import.meta.url))
+const explorerBase = loadEnv('regtest', pwaRoot, 'VITE_').VITE_SAT20_REGTEST_L1_MEMPOOL_URL
 export const requiredPwaRgbCases = [
   'RGB PWA: NIA manual batch review receipt cancellation and pending resume',
   'RGB PWA: IFA issue and inflation through actual forms',
@@ -20,7 +24,16 @@ export async function runPwaRgbCases(t, fixture) {
   const pages = []
   const button = (scope, name) => scope.getByRole('button', { name, exact: true })
   const dialog = (page, name) => page.getByRole('dialog', { name, exact: true })
-  const card = (page, asset) => page.locator('div.flex.min-w-0.overflow-hidden').filter({ has: page.locator(`[title=${JSON.stringify(asset.asset)}]`) })
+  const card = (page, asset) => page.locator(`[data-asset-key=${JSON.stringify(asset.asset)}]`)
+  const checkBitcoinReference = async (scope, reference) => {
+    await expect(scope.getByText(reference, { exact: true })).toBeVisible()
+    const link = scope.getByRole('link', { name: reference, exact: true })
+    if (explorerBase) {
+      await expect(link).toHaveAttribute('href', `${explorerBase.replace(/\/+$/, '')}/tx/${reference.split(':')[0]}`)
+    } else {
+      await expect(link).toHaveCount(0)
+    }
+  }
   const view = page => walletCall(page, 'getRGB11View')
   const observe = async (page, method, action, success = true) => {
     await page.evaluate(method => {
@@ -143,10 +156,12 @@ export async function runPwaRgbCases(t, fixture) {
     const form = dialog(page, inv.title)
     await form.locator('select:has(option[value=' + JSON.stringify(request.id) + '])').selectOption(request.id)
     await expect(form.locator('textarea[readonly]').first()).toHaveValue(request.invoice)
+    await expect(form.getByText(inv.validateFilesHelp, { exact: true })).toBeVisible()
     await form.locator('input[type=file]').setInputFiles({ name: 'pwa-transfer.asc', mimeType: 'text/plain', buffer: Buffer.from(data, 'base64') })
     const result = await observe(page, 'prepareRGB11Consignment', () => button(form, tr.prepareReceive).click())
     assert.equal(Boolean(result.receipt), true)
     await expect(form.locator('textarea[readonly]').last()).toHaveValue(result.receipt)
+    await expect(form.getByText(inv.shareReceiptHelp, { exact: true })).toBeVisible()
     if (!keepOpen) await close(form)
     return result
   }
@@ -161,7 +176,13 @@ export async function runPwaRgbCases(t, fixture) {
   const prepare = async (owner, asset, requests, inflate = false) => {
     await button(card(owner, asset), inflate ? tr.inflate : messages.l1AssetsTabs.send).click()
     const form = dialog(owner, inflate ? tr.inflate : tr.sendTitle)
-    if (!inflate) await form.locator('select').selectOption('invoice')
+    if (!inflate) {
+      await form.locator('select').selectOption('invoice')
+      const guide = form.getByText(inv.guide.title, { exact: true })
+      await guide.click()
+      await expect(form.getByText(inv.guide.step3, { exact: true })).toBeVisible()
+      await guide.click()
+    }
     await form.locator('textarea').fill(requests.map(item => item.invoice).join('\n'))
     const prepared = await observe(owner, inflate ? 'prepareRGB11Inflation' : 'prepareRGB11Transfer', () => button(form, tr.prepare).click())
     await checkRecipients(form, prepared)
@@ -189,6 +210,7 @@ export async function runPwaRgbCases(t, fixture) {
     await expect(form).not.toBeVisible()
     await refreshed(owner)
     const pending = owner.locator('div.rounded.border.border-zinc-700').filter({ has: owner.getByText(prepared.id, { exact: true }) })
+    await expect(pending.getByText(tr.taskReceiptHint, { exact: true })).toBeVisible()
     await button(pending, tr.retryTask).click()
     form = dialog(owner, tr.sendTitle)
     await form.getByText(tr.transferDetails, { exact: true }).click()
@@ -201,39 +223,47 @@ export async function runPwaRgbCases(t, fixture) {
       assert.ok(file, 'each recipient needs its own consignment')
       receipts.push((await receivePackage(recipient, asset, request, file.file.data, index === requests.length - 1)).receipt)
     }
-    await expect(button(form, messages.common.confirm)).toBeDisabled()
+    const broadcastButton = button(form, inv.confirmAndBroadcast)
+    await expect(broadcastButton).toBeDisabled()
     for (const [index, receipt] of receipts.entries()) await form.locator('textarea').nth(index).fill(receipt)
     await form.locator('textarea').first().fill('invalid receipt')
-    await observe(owner, 'confirmRGB11Transfer', () => button(form, messages.common.confirm).click(), false)
+    await observe(owner, 'confirmRGB11Transfer', () => broadcastButton.click(), false)
     await expect(form.getByRole('alert')).toHaveText(tr.summaryMismatch)
     await form.locator('textarea').first().fill(receipts[0])
-    const broadcast = await observe(owner, 'confirmRGB11Transfer', () => button(form, messages.common.confirm).click())
+    const broadcast = await observe(owner, 'confirmRGB11Transfer', () => broadcastButton.click())
     assert.match(broadcast.tx_id, /^[0-9a-f]{64}$/)
     assert.notEqual(broadcast.status, 'completed', 'broadcast is not confirmed receipt')
     await close(form)
     await mine()
-    // The last prepared receipt remains open across broadcast/confirmation,
-    // so this journey always exercises the actual Accept button once.
+    // Keep the last invoice open to verify that the SDK's chain update reaches
+    // the dialog without a user action.
     const openReceive = dialog(recipient, inv.title)
-    await observe(recipient, 'acceptRGB11Consignment', () => button(openReceive, tr.acceptAfterBroadcast).click())
+    const completed = messages.walletComponents.states_completed
+    await expect(openReceive.getByRole('status').filter({ hasText: completed })).toBeVisible({ timeout: poll.timeout })
     await close(openReceive)
     for (const request of requests) {
       await button(card(recipient, asset), messages.l1AssetsTabs.receive).click()
       const receiveForm = dialog(recipient, inv.title)
       await receiveForm.locator('select:has(option[value=' + JSON.stringify(request.id) + '])').selectOption(request.id)
       await expect(receiveForm.locator('textarea[readonly]').first()).toHaveValue(request.invoice)
-      const checked = await observe(recipient, 'refreshRGB11State', () => button(receiveForm, tr.checkRequestState).click())
-      assert.equal(checked.receives.find(item => item.id === request.id)?.status, 'completed')
-      await expect(receiveForm.getByText(messages.walletComponents.states_completed, { exact: true })).toBeVisible()
-      await expect(button(receiveForm, tr.acceptAfterBroadcast)).toHaveCount(0)
+      await expect(receiveForm.getByRole('status').filter({ hasText: completed })).toBeVisible()
       await close(receiveForm)
     }
+    return broadcast
   }
   let sender, receiver
   try {
     sender = await fresh(actors.sender); receiver = await fresh(actors.recipient)
     const cases = [async () => {
       const issued = await issue(sender, 'NIA', 'PWANIA')
+      const details = dialog(sender, messages.rgb11Contract.title)
+      const metadata = await observe(sender, 'getTickerInfo', () =>
+        button(card(sender, issued.asset), `${tr.contractId}: ${issued.asset.contract_id}`).click())
+      const { genesis_outpoint: outpoint } = JSON.parse(Buffer.from(JSON.parse(metadata.ticker).content, 'base64').toString())
+      assert.match(outpoint, /^[0-9a-f]{64}:\d+$/)
+      await expect(details.getByText(messages.rgb11Contract.genesisOutput, { exact: true })).toBeVisible()
+      await checkBitcoinReference(details, outpoint)
+      await close(details)
       await importContract(receiver, issued)
       await receive(receiver, issued.asset, '1', 'blind', 'proxy')
       const request = await receive(receiver, issued.asset, '1')
@@ -243,9 +273,25 @@ export async function runPwaRgbCases(t, fixture) {
       await expect(canceled.form.getByText(other.asset.contract_id, { exact: true })).toHaveCount(0)
       await expect(canceled.form.getByText(/PWAOTHER/i)).toHaveCount(0)
       await cancel(sender, canceled.form)
-      await manual(sender, receiver, issued.asset, ['1', '2'])
+      const sent = await manual(sender, receiver, issued.asset, ['1', '2'])
       await balance(receiver, issued.asset, '3')
       await balance(sender, issued.asset, '97')
+      await sender.evaluate(() => { location.hash = '#/wallet/setting/operation-logs' })
+      const logRow = sender.locator('details').filter({ has: sender.getByText(sent.id, { exact: true }) })
+      await expect(logRow.locator('summary')).toContainText(messages.walletComponents.states_completed)
+      const deleteAll = messages.pwaUi.logs.deleteAll
+      await button(sender, deleteAll).click()
+      await button(sender.getByRole('alertdialog'), deleteAll).click()
+      await expect(logRow).toHaveCount(0)
+      await sender.evaluate(() => { location.hash = '#/wallet' })
+      await button(sender, 'RGB').click()
+      await sender.getByText(tr.completedFiles, { exact: true }).click()
+      const archiveRow = sender.locator('div.rounded.border.border-zinc-700').filter({ has: sender.getByText(sent.tx_id, { exact: true }) })
+      await button(archiveRow, tr.viewTransfer).click()
+      const saved = dialog(sender, tr.sendTitle)
+      const files = await observe(sender, 'exportRGB11Transfer', () => button(saved, tr.downloadConsignment).click())
+      assert.deepEqual(files.filter(item => item.file.name.endsWith('.rgb') && item.file.data).map(item => item.recipient_index), [0, 1])
+      await close(saved)
     }, async () => {
       const issued = await issue(sender, 'IFA', 'PWAIFA')
       await importContract(receiver, issued)
@@ -333,12 +379,20 @@ export async function runPwaRgbCases(t, fixture) {
       await sender.evaluate(() => { location.hash = '#/wallet' })
       await button(sender, 'RGB').click()
       const task = sender.locator('div.rounded.border.border-zinc-700').filter({ has: sender.getByText(prepared.id, { exact: true }) })
-      // Reopen the original pending action while the recipient is still offline.
-      await button(task, tr.retryTask).click()
-      const pendingForm = dialog(sender, tr.sendTitle)
-      await pendingForm.getByText(tr.transferDetails, { exact: true }).click()
-      await expect(pendingForm.getByText(prepared.id, { exact: true })).toBeVisible()
-      await close(pendingForm)
+      await expect(task).toHaveCount(0)
+      await sender.evaluate(() => { location.hash = '#/wallet/setting/operation-logs' })
+      const operation = sender.locator('details').filter({ has: sender.getByText(prepared.id, { exact: true }) })
+      await expect(operation.locator('summary')).toContainText(messages.walletComponents[`states_${delivered.status}`])
+      await operation.locator('summary').click()
+      await expect(operation.getByText(prepared.id, { exact: true })).toBeVisible()
+      await expect(button(operation, messages.common.confirm)).toHaveCount(0)
+      const broadcastRoute = '**/v3/bitcoin/tx/broadcast'
+      let broadcastRejected = false
+      const denyBroadcast = async route => {
+        await route.fulfill({ status: 503, body: 'Bitcoin broadcast unavailable' })
+        broadcastRejected = true
+      }
+      await sender.route(broadcastRoute, denyBroadcast)
       await receiver.context().setOffline(false)
       // Restoring browser transport does not restore the SDK's online grant.
       // Observe its real background recovery before the original RGB refresh.
@@ -353,7 +407,24 @@ export async function runPwaRgbCases(t, fixture) {
         console.error(JSON.stringify({ rgbRecipientReconnect: reconnected }))
         throw error
       }
-      await refreshed(receiver)
+      try {
+        await refreshed(receiver)
+        await expect.poll(() => broadcastRejected, poll).toBe(true)
+        await expect.poll(async () => (await view(sender)).transfers.find(item => item.id === prepared.id)?.status, poll)
+          .toBe('broadcast-attempted')
+        await button(sender, messages.common.refresh).click()
+        await expect(operation.locator('summary')).toContainText(messages.walletComponents.states_broadcast_attempted)
+        if (await operation.getAttribute('open') === null) await operation.locator('summary').click()
+        await button(operation, tr.viewTransfer).click()
+        const original = dialog(sender, tr.sendTitle)
+        await expect(original.getByRole('status')).toHaveText(messages.walletComponents.states_broadcast_attempted)
+        await original.getByText(tr.transferDetails, { exact: true }).click()
+        await expect(original.getByText(prepared.id, { exact: true })).toBeVisible()
+        await close(original)
+      } finally {
+        await sender.unroute(broadcastRoute, denyBroadcast)
+      }
+      await refreshed(sender)
       let transfer
       // ACK persistence lets the SDK advance the already approved transaction.
       // The UI observes that original action; it must not confirm a second time.
@@ -362,11 +433,18 @@ export async function runPwaRgbCases(t, fixture) {
         return transfer?.status
       }, poll).toBe('pending_chain')
       assert.equal(transfer.tx_id, prepared.tx_id)
-      await sender.evaluate(() => window.dispatchEvent(new Event('sat20:wallet-data-updated')))
-      await expect(task.getByText(messages.walletComponents.states_pending_chain, { exact: true })).toBeVisible()
-      await expect(task.getByText(prepared.tx_id, { exact: true })).toBeVisible()
-      await expect(button(task, tr.retryTask)).toHaveCount(0)
+      await button(sender, messages.common.refresh).click()
+      await expect(operation).toHaveCount(1)
+      await expect(operation.locator('summary')).toContainText(messages.walletComponents.states_pending_chain)
+      if (await operation.getAttribute('open') === null) await operation.locator('summary').click()
+      await expect(operation.getByText(tr.taskChainHint, { exact: true })).toBeVisible()
+      await checkBitcoinReference(operation, prepared.tx_id)
       await mine()
+      await expect.poll(async () => {
+        await refreshed(sender)
+        await button(sender, messages.common.refresh).click()
+        return operation.locator('summary').textContent()
+      }, poll).toContain(messages.walletComponents.states_completed)
       await balance(receiver, issued.asset, '1'); await balance(sender, issued.asset, '0')
     }]
     for (const [index, run] of cases.entries()) {

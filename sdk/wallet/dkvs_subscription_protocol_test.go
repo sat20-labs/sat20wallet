@@ -586,10 +586,17 @@ func TestDKVSFinalAccountActivationRegistersReceiveAndMailboxPrefixes(t *testing
 	require.NoError(t, err)
 	require.Contains(t, prefixes, mailboxPrefix)
 	require.Contains(t, prefixes, mappingPrefix)
+	// Make the next idle poll due even if discovery already read the mailbox.
 	manager.dkvs.mu.Lock()
-	_, scheduled := manager.dkvs.jobs[dkvsAccountServiceJobPrefix+accountID]
+	manager.dkvs.mailboxPollAt = time.Time{}
 	manager.dkvs.mu.Unlock()
-	require.True(t, scheduled)
+	_, err = manager.syncDKVSOnce()
+	require.NoError(t, err)
+	manager.dkvs.mu.Lock()
+	polledAccount, polledAt := manager.dkvs.mailboxPollAccount, manager.dkvs.mailboxPollAt
+	manager.dkvs.mu.Unlock()
+	require.Equal(t, accountID, polledAccount)
+	require.False(t, polledAt.IsZero())
 	require.NoError(t, manager.SwitchAccount(1))
 	prefixes, err = manager.ListSubscribedDKVSPrefixes()
 	require.NoError(t, err)

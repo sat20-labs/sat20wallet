@@ -165,9 +165,8 @@ func TestAccountStorageFirstPublicationBindsCurrentCore(t *testing.T) {
 			require.NoError(t, err)
 			store, err := manager.accountDKVSStore()
 			require.NoError(t, err)
-			_, err = store.client.GetRecordDirect(bindingKey)
-			require.ErrorIs(t, err, dkvsindexer.ErrRecordNotFound)
-			err = nil
+			before, err := store.client.GetRecordDirect(bindingKey)
+			require.NoError(t, err)
 			if guardian {
 				// This manager is the Guardian receiving an independent friend's
 				// capsule, rather than the owner using itself as its Guardian.
@@ -193,6 +192,7 @@ func TestAccountStorageFirstPublicationBindsCurrentCore(t *testing.T) {
 			_, _, descriptor, err := dkvsindexer.ValidateAccountMappingBindingRecord(binding)
 			require.NoError(t, err)
 			require.Equal(t, client.CoreNodeID(), descriptor.CoreNodeID)
+			require.Equal(t, dkvsindexer.RecordHash(before), dkvsindexer.RecordHash(binding))
 			auth.Location.Host = "foreign.test"
 			_, err = manager.NewAccountRepositoryForStorage(auth)
 			require.Error(t, err)
@@ -201,23 +201,15 @@ func TestAccountStorageFirstPublicationBindsCurrentCore(t *testing.T) {
 }
 
 func TestAccountStorageBindingDoesNotHoldLocalScope(t *testing.T) {
-	oldChain, oldIndexerChain := _chain, indexer.CHAIN
-	_chain, indexer.CHAIN = "testnet", "testnet"
-	t.Cleanup(func() { _chain, indexer.CHAIN = oldChain, oldIndexerChain })
-	manager := newAccountManagementAutoTestManager(t)
-	gate := &accountActivationNetworkGate{phase: "BindingCAS", started: make(chan struct{}), release: make(chan struct{})}
+	manager, remote, _ := newInactiveAccountGroup(t, "", "password")
+	id := manager.GetCurrentWalletId()
+	location, err := manager.AccountIndexerLocation()
+	require.NoError(t, err)
+	gate := &accountActivationNetworkGate{phase: "BindingRead", started: make(chan struct{}), release: make(chan struct{})}
 	var once sync.Once
 	release := func() { once.Do(func() { close(gate.release) }) }
 	defer release()
-	remote := &accountActivationGateHTTP{rgb11MemoryDKVSHTTP: newRGB11MemoryDKVSHTTP(), gate: gate}
-	manager.http = remote
-	client := newRGB11MessageNodeClient(remote.rgb11MemoryDKVSHTTP)
-	manager.serverNode = NewNode(client, "message.test", SERVER_NODE, client.CoreNodePubKey(), client.CoreNodePubKey())
-	id, _, err := manager.CreateWallet("password")
-	require.NoError(t, err)
-	discoverInactiveAccount(t, manager)
-	location, err := manager.AccountIndexerLocation()
-	require.NoError(t, err)
+	setActivationTestHTTP(t, manager, &accountActivationGateHTTP{rgb11MemoryDKVSHTTP: remote, gate: gate})
 	done := make(chan error, 1)
 	go func() {
 		_, err := manager.NewAccountRepositoryForStorage(AccountStorageAuthorization{

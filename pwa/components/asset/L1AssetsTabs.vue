@@ -36,15 +36,32 @@
         <p v-if="rgb11State.error_code || rgb11Error" class="text-red-400">{{ rgb11State.error_code || rgb11Error }}</p>
         <Button size="sm" variant="outline" @click="emit('issue-rgb11')">{{ $t('rgb11Transfer.issue') }}</Button>
         <Button size="sm" variant="outline" @click="emit('import-rgb11')">{{ $t('rgb11Transfer.import') }}</Button>
-        <div v-for="task in rgb11State.transfers" :key="task.id" class="space-y-2 rounded border border-zinc-700 p-2">
-          <p class="break-all font-mono">{{ task.id }}</p><p>{{ displayRGB11State(task.status) }}</p>
-          <p v-for="(recipient, index) in task.recipients" :key="index" class="break-all">{{ recipient.amount.amount }} · {{ recipient.amount.asset }}</p>
-          <p v-if="task.tx_id" class="break-all font-mono">{{ task.tx_id }}</p>
-          <p v-if="task.error_code" class="text-red-400">{{ task.error_code }}</p>
-          <Button v-if="task.can_confirm || task.can_cancel || task.can_export" size="sm" variant="outline" @click="resumeRGB11Task(task)">{{ $t('rgb11Transfer.retryTask') }}</Button>
-        </div>
+        <section v-if="actionTransfers.length" class="space-y-2">
+          <h3 class="font-medium">{{ $t('rgb11Transfer.actionTransfers') }}</h3>
+          <div v-for="task in actionTransfers" :key="task.id" class="space-y-2 rounded border border-zinc-700 p-2">
+            <p class="font-medium">{{ $t(task.needs_receipts ? 'walletComponents.states_awaiting_receipts' : 'walletComponents.states_prepared') }}</p>
+            <p class="leading-relaxed text-amber-300">
+              {{ $t(task.needs_receipts ? 'rgb11Transfer.taskReceiptHint' : 'rgb11Transfer.taskResumeHint') }}
+            </p>
+            <p class="break-all font-mono text-muted-foreground">{{ task.id }}</p>
+            <p v-for="(recipient, index) in task.recipients" :key="index" class="break-all">{{ recipient.amount.amount }} · {{ recipient.amount.asset }}</p>
+            <p v-if="task.tx_id" class="break-all font-mono text-muted-foreground">{{ task.tx_id }}</p>
+            <p v-if="task.error_code" class="break-words text-red-400">{{ task.error_code }}</p>
+            <Button size="sm" variant="outline" @click="resumeRGB11Task(task)">
+              {{ $t('rgb11Transfer.retryTask') }}
+            </Button>
+          </div>
+        </section>
+        <details v-if="exportableTransfers.length" class="space-y-2">
+          <summary class="cursor-pointer font-medium">{{ $t('rgb11Transfer.completedFiles') }}</summary>
+          <div v-for="task in exportableTransfers" :key="task.id" class="space-y-2 rounded border border-zinc-700 p-2">
+            <p v-for="(recipient, index) in task.recipients" :key="index" class="break-all">{{ recipient.amount.amount }} · {{ recipient.amount.asset }}</p>
+            <p class="break-all font-mono text-muted-foreground">{{ task.tx_id || task.id }}</p>
+            <Button size="sm" variant="outline" @click="resumeRGB11Task(task)">{{ $t('rgb11Transfer.viewTransfer') }}</Button>
+          </div>
+        </details>
       </div>
-      <div v-for="asset in filteredAssets" :key="asset.id"
+      <div v-for="asset in filteredAssets" :key="asset.id" :data-asset-key="asset.key"
         class="flex min-w-0 overflow-hidden pl-1 pr-3 py-3 rounded-lg bg-muted border hover:border-primary/40 transition-colors">
         <!-- 圆形背景 + 居中 Icon -->
         <div
@@ -64,18 +81,14 @@
                 class="truncate text-xs text-zinc-400" :title="asset.display_name">
                 {{ asset.display_name }}
               </div>
-              <div v-if="asset.protocol === 'rgb11'" class="break-all font-mono text-[10px] leading-4 text-zinc-500"
-                :title="asset.canonical_name || asset.key || `rgb11:${asset.type || 'f'}:${asset.ticker}`">
-                {{ $t('rgb11Transfer.assetId') }}: {{ asset.canonical_name || asset.key || `rgb11:${asset.type || 'f'}:${asset.ticker}` }}
+              <div v-if="asset.protocol === 'rgb11' && asset.canonical_name" class="break-all font-mono text-[10px] leading-4 text-zinc-500">
+                {{ $t('rgb11Transfer.assetId') }}: {{ asset.canonical_name }}
               </div>
-              <div v-if="asset.protocol === 'rgb11' && asset.contract_id" class="break-all font-mono text-[10px] leading-4 text-zinc-500"
-                :title="asset.contract_id">
+              <button v-if="asset.protocol === 'rgb11' && asset.contract_id" type="button" aria-haspopup="dialog"
+                class="rounded-sm py-1 text-left font-mono text-[11px] leading-4 text-primary underline underline-offset-2 break-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
+                :title="asset.contract_id" @click="detailAsset = rgbAsset(asset) || null">
                 {{ $t('rgb11Transfer.contractId') }}: {{ asset.contract_id }}
-              </div>
-              <div v-if="asset.protocol === 'rgb11'" class="text-[10px] leading-4 text-zinc-500">
-                {{ $t('rgb11Transfer.fingerprint') }}: {{ asset.fingerprint || $t('rgb11Transfer.legacyFingerprint') }} ·
-                {{ $t('rgb11Transfer.certification') }}: {{ $t(asset.verified ? 'rgb11Transfer.verified' : 'rgb11Transfer.unverified') }}
-              </div>
+              </button>
             </div>
             <div class="shrink-0 text-right text-sm font-semibold text-zinc-300">
               {{ formatAmount(asset) }}
@@ -143,31 +156,12 @@
                 {{ $t('l1AssetsTabs.deposit') }}
               </Button>
             </template>
-            <Button v-if="asset.protocol === 'rgb11' && asset.contract_id" size="sm" variant="outline"
-              :disabled="!!rgb11Exporting" @click="exportRGB11Contract(asset, 'copy')"
-              class="text-zinc-400 border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]">
-              <Icon icon="lucide:copy" class="w-4 h-4 mr-1" />
-              {{ $t('rgb11Transfer.copyContractArmor') }}
-            </Button>
-            <Button v-if="asset.protocol === 'rgb11' && asset.contract_id" size="sm" variant="outline"
-              :disabled="!!rgb11Exporting" @click="exportRGB11Contract(asset, 'save')"
-              class="text-zinc-400 border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]">
-              <Icon icon="lucide:download" class="w-4 h-4 mr-1" />
-              {{ $t('rgb11Transfer.downloadContract') }}
-            </Button>
             <Button v-if="asset.protocol === 'rgb11' && asset.type === 'f' && hasIFAControl(asset)"
               size="sm" variant="outline" :disabled="!rgb11State.can_write || !!rgb11Error"
               @click="inflationAsset = asset; showInflation = true">
               {{ $t('rgb11Transfer.inflate') }}
             </Button>
           </div>
-          <div v-if="asset.protocol === 'rgb11' && rgb11ExportMessages[asset.contract_id || '']"
-            class="mt-1 break-words text-right text-[11px]"
-            :role="rgb11ExportMessages[asset.contract_id || ''].success ? 'status' : 'alert'"
-            :class="rgb11ExportMessages[asset.contract_id || ''].success ? 'text-emerald-400' : 'text-red-400'">
-            {{ rgb11ExportMessages[asset.contract_id || ''].text }}
-          </div>
-
         </div>
       </div>
       <div v-if="selectedType === 'RGB11' && !filteredAssets.length"
@@ -179,7 +173,8 @@
         {{ $t('l1AssetsTabs.noAssets', { type: $t(`l1AssetsTabs.assetType.${selectedType}`), network }) }}
       </div>
     </div>
-    <RGB11SendDialog v-if="resumeTaskAsset" :key="resumeTaskId" v-model:open="showResumeTask"
+    <RGB11ContractDialog v-if="detailAsset" :key="detailAsset.asset" :asset="detailAsset" @close="detailAsset = null" />
+    <RGB11SendDialog v-if="resumeTaskId" :key="resumeTaskId" v-model:open="showResumeTask"
       :asset="resumeTaskAsset" :resume-transfer-id="resumeTaskId" @completed="refreshRGB11TaskState" />
     <RGB11SendDialog v-if="inflationAsset" :key="inflationAsset.id" v-model:open="showInflation"
       :asset="inflationAsset" inflation @completed="refreshRGB11TaskState" />
@@ -188,6 +183,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onUnmounted } from 'vue'
+import RGB11ContractDialog from '@/components/wallet/RGB11ContractDialog.vue'
 import RGB11SendDialog from '@/components/wallet/RGB11SendDialog.vue'
 import RGBVersion from '@/components/asset/RGBVersion.vue'
 import { Button } from '@/components/ui/button'
@@ -198,10 +194,7 @@ import { Chain } from '@/types/index'
 import { generateMempoolUrl, formatLargeNumber } from '@/utils'
 import { useGlobalStore } from '@/store/global'
 import walletManager from '@/utils/sat20'
-import { exportFileText } from '@/utils/accountManagement'
-import { downloadRGB11ContractFile } from '@/utils/rgb11ContractFile'
-import type { RGBTransferView } from '@/utils/walletViews'
-import { walletRequestSessionGuard } from '@/lib/walletSession'
+import type { RGBAssetView, RGBTransferView } from '@/utils/walletViews'
 import { useI18n } from 'vue-i18n'
 // 类型定义
 interface Asset {
@@ -218,8 +211,6 @@ interface Asset {
   contract_id?: string
   display_name?: string
   symbol?: string
-  fingerprint?: string
-  verified?: boolean
   available_amount?: string
   pending_amount?: string
 }
@@ -248,12 +239,13 @@ const globalStore = useGlobalStore()
 const { address, network } = storeToRefs(walletStore)
 const { env, hideBalance } = storeToRefs(globalStore)
 const { state: rgb11State, error: rgb11Error } = storeToRefs(rgb11Store)
-const { t, te } = useI18n()
-const displayRGB11State = (value: unknown) => {
-  const raw = String(value ?? '')
-  const key = `walletComponents.states_${raw.replace(/-/g, '_')}`
-  return te(key) ? t(key) : raw
-}
+const { t } = useI18n()
+const actionTransfers = computed(() => rgb11State.value.transfers.filter(task =>
+  task.can_confirm && (task.needs_receipts || task.status === 'prepared')
+))
+const exportableTransfers = computed(() => rgb11State.value.transfers.filter(task =>
+  task.status === 'completed' && task.can_export
+))
 
 const mempoolUrl = computed(() => {
   return generateMempoolUrl({
@@ -311,46 +303,9 @@ const resumeTaskId = ref('')
 const resumeTaskAsset = ref<Asset | null>(null)
 const showInflation = ref(false)
 const inflationAsset = ref<Asset | null>(null)
-const rgb11Exporting = ref('')
-const rgb11ExportMessages = ref<Record<string, {success: boolean; text: string}>>({})
+const detailAsset = ref<RGBAssetView | null>(null)
 const rgbAsset = (asset: Asset) => rgb11State.value.assets.find(item => item.asset === (asset.key || asset.id))
 const hasIFAControl = (asset: Asset) => rgbAsset(asset)?.can_inflate === true
-const exportRGB11Contract = async (asset: Asset, action: 'copy' | 'save') => {
-  const id = asset.contract_id || ''
-  if (!id || rgb11Exporting.value) return
-  rgb11Exporting.value = id
-  delete rgb11ExportMessages.value[id]
-  try {
-    const checkSession = walletRequestSessionGuard('exportRGB11Contract')
-    const readFile = async (extension: '.rgb' | '.asc') => {
-      checkSession()
-      const [error, files] = await walletManager.exportRGB11Contract(asset.key || asset.id)
-      if (error) throw error
-      const file = files?.find(file => file.name.endsWith(extension))
-      if (!file?.data) throw new Error(t('rgb11Transfer.exportContractFailed'))
-      return file
-    }
-    if (action === 'copy') {
-      if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
-        throw new Error(t('rgb11Transfer.contractArmorCopyFailed'))
-      }
-      // Write from the click while the clipboard still has user activation.
-      const armor = readFile('.asc').then(file => new Blob([exportFileText(file)], { type: 'text/plain' }))
-      await Promise.all([navigator.clipboard.write([new ClipboardItem({ 'text/plain': armor })]), armor])
-      rgb11ExportMessages.value[id] = { success: true, text: t('rgb11Transfer.contractArmorCopied') }
-      return
-    }
-    const filename = downloadRGB11ContractFile(id, (await readFile('.rgb')).data)
-    rgb11ExportMessages.value[id] = { success: true, text: t('common.fileDownloadStarted', { filename }) }
-  } catch (error) {
-    const text = action === 'copy' && error instanceof DOMException && error.name === 'NotAllowedError'
-      ? t('rgb11Transfer.contractArmorCopyFailed')
-      : error instanceof Error ? error.message : String(error)
-    rgb11ExportMessages.value[id] = { success: false, text }
-  } finally {
-    rgb11Exporting.value = ''
-  }
-}
 const resumeRGB11Task = (task: RGBTransferView) => {
   resumeTaskId.value = task.id
   resumeTaskAsset.value = props.assets.find(asset => (asset.key || asset.id) === task.recipients[0]?.amount.asset) || null
@@ -363,6 +318,7 @@ const refreshRGB11TaskState = async () => {
 }
 watch(selectedType, value => emit('update:modelValue', value), {immediate: true})
 watch(() => [walletStore.walletId, walletStore.accountIndex, walletStore.network], () => {
+  detailAsset.value = null
   showResumeTask.value = false; resumeTaskAsset.value = null
   showInflation.value = false; inflationAsset.value = null
 })

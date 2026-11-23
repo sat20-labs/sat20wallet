@@ -6,12 +6,31 @@
         <Button variant="outline" size="sm" :disabled="busy" @click="refresh">{{ t('common.refresh') }}</Button>
       </div>
       <p v-if="error" role="alert" class="break-words rounded-lg border border-destructive/50 p-3 text-sm text-destructive">{{ error }}</p>
-      <p v-else-if="busy && !records.length" role="status" class="py-6 text-center text-sm text-muted-foreground">{{ t('loading') }}</p>
-      <p v-else-if="!records.length" class="rounded-xl border border-dashed border-border p-6 text-center text-sm text-muted-foreground">{{ t('pwaUi.logs.empty') }}</p>
-      <details v-for="{ record, result } in rows" :key="record.id" class="rounded-xl border border-border bg-card p-3"
+      <p v-else-if="busy && !records.length && !rgbInFlight.length" role="status" class="py-6 text-center text-sm text-muted-foreground">{{ t('loading') }}</p>
+      <p v-else-if="!records.length && !rgbInFlight.length" class="rounded-xl border border-dashed border-border p-6 text-center text-sm text-muted-foreground">{{ t('pwaUi.logs.empty') }}</p>
+      <details v-for="transfer in rgbInFlight" :key="transfer.id" class="rounded-xl border border-border bg-card p-3">
+        <summary class="cursor-pointer text-sm font-medium">
+          {{ t('pwaUi.logs.rgbSend') }} · {{ rgbStatus(transfer) }}
+        </summary>
+        <div class="mt-3 space-y-2 border-t border-border pt-3 text-sm">
+          <p v-for="(recipient, index) in transfer.recipients" :key="index">{{ recipient.amount.amount }} {{ recipient.amount.asset }}</p>
+          <p class="break-all font-mono text-xs">{{ transfer.id }}</p>
+          <p v-if="transfer.error_code" class="break-words text-destructive">{{ transfer.error_code }}</p>
+          <p v-if="transfer.status === 'pending_chain'" class="text-xs text-muted-foreground">{{ t('rgb11Transfer.taskChainHint') }}</p>
+          <p v-if="transfer.status === 'pending_chain' && transfer.tx_id" class="break-all font-mono text-xs">
+            <a v-if="txLink(transfer.tx_id, Chain.BTC)" :href="txLink(transfer.tx_id, Chain.BTC)"
+              class="text-primary underline" target="_blank" rel="noopener noreferrer">{{ transfer.tx_id }}</a>
+            <span v-else>{{ transfer.tx_id }}</span>
+          </p>
+          <Button v-if="canOpenRgb(transfer)" variant="outline" size="sm" @click="openTransfer(transfer.id)">
+            {{ t('rgb11Transfer.viewTransfer') }}
+          </Button>
+        </div>
+      </details>
+      <details v-for="{ record, result, transfer } in rows" :key="record.id" class="rounded-xl border border-border bg-card p-3"
         @toggle="toggleDetails(record, $event)">
         <summary class="cursor-pointer text-sm font-medium">
-          {{ record.contract ? contractTitle(record.contract) : kindLabel(record.kind) }} · {{ operationStatus(record, record.status) }}
+          {{ record.contract ? contractTitle(record.contract) : kindLabel(record.kind) }} · {{ transfer ? rgbStatus(transfer) : operationStatus(record, record.status) }}
           <span class="mt-1 block text-xs font-normal text-muted-foreground">{{ new Date(record.updated_at).toLocaleString() }}</span>
         </summary>
         <div class="mt-3 space-y-2 border-t border-border pt-3 text-sm">
@@ -45,6 +64,18 @@
               <dd v-else class="text-sm">{{ t(`pwaUi.logs.contractResult.${result?.status || 'loading'}`) }}</dd>
             </div>
           </dl>
+          <template v-else-if="transfer">
+            <p class="break-all font-mono text-xs">{{ transfer.id }}</p>
+            <p v-if="transfer.status === 'pending_chain'" class="text-xs text-muted-foreground">{{ t('rgb11Transfer.taskChainHint') }}</p>
+            <p v-if="transfer.tx_id" class="break-all font-mono text-xs">
+              <a v-if="['pending_chain', 'completed'].includes(transfer.status) && txLink(transfer.tx_id, Chain.BTC)"
+                :href="txLink(transfer.tx_id, Chain.BTC)" class="text-primary underline" target="_blank" rel="noopener noreferrer">{{ transfer.tx_id }}</a>
+              <span v-else>{{ transfer.tx_id }}</span>
+            </p>
+            <Button v-if="canOpenRgb(transfer)" variant="outline" size="sm" @click="openTransfer(transfer.id)">
+              {{ t('rgb11Transfer.viewTransfer') }}
+            </Button>
+          </template>
           <template v-else>
             <p v-for="tx in record.tx_ids" :key="tx" class="break-all font-mono text-xs">{{ tx }}</p>
           </template>
@@ -56,6 +87,7 @@
       </details>
       <Button v-if="records.length" variant="ghost" class="text-destructive hover:text-destructive" :disabled="busy" @click="confirmClear = true">{{ t('pwaUi.logs.deleteAll') }}</Button>
     </div>
+    <RGB11SendDialog v-if="transferId" :key="transferId" v-model:open="showTransfer" :asset="null" :resume-transfer-id="transferId" />
     <AlertDialog v-model:open="confirmClear">
     <AlertDialogContent class="w-[calc(100%_-_2rem)] max-w-md rounded-xl">
         <AlertDialogHeader>
@@ -74,26 +106,59 @@
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import LayoutSecond from '@/components/layout/LayoutSecond.vue'
+import RGB11SendDialog from '@/components/wallet/RGB11SendDialog.vue'
 import { Button } from '@/components/ui/button'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { getOperationLogs, deleteOperationHistory, getContractLogResult } from '@/utils/operationLog'
+import walletManager from '@/utils/sat20'
 import { generateMempoolUrl } from '@/utils'
 import { useGlobalStore, useWalletStore } from '@/store'
 import { Chain, Network } from '@/types/index'
-import type { ContractLogResult, OperationView } from '@/utils/walletViews'
+import type { ContractLogResult, OperationView, RGBTransferView } from '@/utils/walletViews'
 const {t, te} = useI18n()
 const walletStore = useWalletStore()
 const globalStore = useGlobalStore()
 const records = ref<OperationView[]>([])
+const transfers = ref<RGBTransferView[]>([])
 const results = ref<Partial<Record<string, ContractLogResult | { status: 'loading' }>>>({})
-const rows = computed(() => records.value.map(record => ({ record, result: results.value[record.id] })))
+const rows = computed(() => records.value.map(record => {
+  const matching = record.kind === 'rgb_send' || record.kind === 'rgb_inflate'
+    ? transfers.value.filter(transfer => transfer.tx_id && transfer.tx_id === record.tx_ids[0]) : []
+  return { record, result: results.value[record.id], transfer: matching.length === 1 ? matching[0] : undefined }
+}))
+const canResumeRgb = (transfer: RGBTransferView) =>
+  transfer.can_confirm && !transfer.needs_receipts && transfer.status !== 'prepared'
+const rgbInFlight = computed(() => {
+  // Direct sends can advance before the SDK creates their broadcast log.
+  const logged = new Set(rows.value.map(row => row.transfer?.id))
+  return transfers.value.filter(transfer => !logged.has(transfer.id) && (
+    transfer.status === 'pending_chain' || canResumeRgb(transfer)
+  ))
+})
 const openRows = new Set<string>()
 const confirmClear = ref(false)
 const busy = ref(false); const error = ref('')
-const kindLabel = (value: string) => te(`pwaUi.logs.actions.${value}`) ? t(`pwaUi.logs.actions.${value}`) : value
+const transferId = ref('')
+const showTransfer = ref(false)
+const openTransfer = (id: string) => {
+  transferId.value = id
+  showTransfer.value = true
+}
+const canOpenRgb = (transfer: RGBTransferView) =>
+  (transfer.status === 'completed' && transfer.can_export) || canResumeRgb(transfer)
+const rgbStatus = (transfer: RGBTransferView) => {
+  if (transfer.status === 'awaiting_receipts' && !transfer.needs_receipts) return t('rgb11Transfer.broadcastUnknown')
+  const key = `walletComponents.states_${transfer.status.replace(/-/g, '_')}`
+  return te(key) ? t(key) : transfer.status
+}
+const kindLabel = (value: string) => {
+  if (value === 'rgb_send') return t('pwaUi.logs.rgbSend')
+  if (value === 'rgb_inflate') return t('rgb11Transfer.inflate')
+  return te(`pwaUi.logs.actions.${value}`) ? t(`pwaUi.logs.actions.${value}`) : value
+}
 const statusLabel = (value: string) => te(`pwaUi.logs.states.${value}`) ? t(`pwaUi.logs.states.${value}`) : value
 const operationStatus = (record: OperationView, status: string) =>
   record.contract && status === 'succeeded' ? t('pwaUi.logs.submitted') : statusLabel(status)
@@ -137,7 +202,9 @@ const toggleDetails = (record: OperationView, event: Event) => {
 }
 const run = async (action: () => Promise<void>) => { busy.value = true; error.value = ''; try { await action() } catch (cause) { error.value = String(cause) } finally { busy.value = false } }
 const loadRecords = async () => {
-  records.value = (await getOperationLogs()).filter(record => record.kind !== 'unlock_wallet' && record.kind !== 'lock_wallet')
+  const [logs, rgb] = await Promise.all([getOperationLogs(), walletManager.getRGB11View().catch(() => undefined)])
+  records.value = logs.filter(record => !['unlock_wallet', 'lock_wallet', 'switch_account'].includes(record.kind))
+  transfers.value = rgb?.[1]?.transfers || []
   results.value = {}
   for (const record of records.value) {
     if (openRows.has(record.id)) void readResult(record)

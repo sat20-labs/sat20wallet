@@ -4,35 +4,75 @@
       @escape-key-down="preventDismiss" @interact-outside="preventDismiss">
       <DialogHeader><DialogTitle>{{ t('rgb11Invoice.title') }}</DialogTitle><DialogDescription class="break-words">{{ asset?.label || asset?.contract_id }}</DialogDescription></DialogHeader>
       <div class="space-y-3">
-        <select v-if="requests.length" :value="receive?.id || ''" :disabled="loading" @change="selectRequest(($event.target as HTMLSelectElement).value)" class="w-full rounded bg-zinc-900 p-2">
+        <RGB11InvoiceGuide v-if="(receive?.transport || transport) === 'manual'" />
+        <Label v-if="requests.length" :for="fieldId + '-saved'">{{ t('rgb11Invoice.savedRequests') }}</Label>
+        <select v-if="requests.length" :id="fieldId + '-saved'" :value="receive?.id || ''" :disabled="loading"
+          @change="selectRequest(($event.target as HTMLSelectElement).value)" class="w-full rounded bg-zinc-900 p-2">
           <option value="">{{ t('rgb11Transfer.startNewRequest') }}</option>
-          <option v-for="item in requests" :key="item.id" :value="item.id">{{ item.id }} · {{ item.status }}</option>
+          <option v-for="item in requests" :key="item.id" :value="item.id">
+            {{ t('rgb11Invoice.savedRequest', { amount: item.amount.amount, status: displayStatus(item.status), reference: item.id.slice(-8) }) }}
+          </option>
         </select>
         <template v-if="!receive">
-          <Label>{{ t('rgb11Invoice.amount') }}</Label><Input v-model="amount" :disabled="loading" inputmode="decimal" />
-          <Label>{{ t('rgb11Invoice.receiveMode') }}</Label>
-          <select v-model="receiveMode" :disabled="loading" class="w-full rounded bg-zinc-900 p-2"><option value="witness">{{ t('rgb11Invoice.witnessMode') }}</option><option value="blind">{{ t('rgb11Invoice.blindMode') }}</option></select>
-          <Label>{{ t('rgb11Invoice.transport') }}</Label>
-          <select v-model="transport" :disabled="loading" class="w-full rounded bg-zinc-900 p-2"><option value="manual">{{ t('rgb11Invoice.outOfBandTransport') }}</option><option value="proxy">{{ t('rgb11Invoice.standardTransport') }}</option></select>
-          <template v-if="transport === 'proxy'"><Label>{{ t('rgb11Invoice.proxyEndpoint') }}</Label><Input v-model="proxyEndpoint" :disabled="loading" /></template>
+          <Label :for="fieldId + '-amount'">{{ t('rgb11Invoice.amount') }}</Label>
+          <Input :id="fieldId + '-amount'" v-model="amount" :disabled="loading" inputmode="decimal" />
+          <Label :for="fieldId + '-mode'">{{ t('rgb11Invoice.receiveMode') }}</Label>
+          <select :id="fieldId + '-mode'" v-model="receiveMode" :disabled="loading" class="w-full rounded bg-zinc-900 p-2">
+            <option value="witness">{{ t('rgb11Invoice.witnessMode') }}</option>
+            <option value="blind">{{ t('rgb11Invoice.blindMode') }}</option>
+          </select>
+          <p class="text-xs leading-relaxed text-muted-foreground">
+            {{ t(receiveMode === 'witness' ? 'rgb11Invoice.witnessModeHelp' : 'rgb11Invoice.blindModeHelp') }}
+          </p>
+          <Label :for="fieldId + '-transport'">{{ t('rgb11Invoice.transport') }}</Label>
+          <select :id="fieldId + '-transport'" v-model="transport" :disabled="loading" class="w-full rounded bg-zinc-900 p-2">
+            <option value="manual">{{ t('rgb11Invoice.outOfBandTransport') }}</option>
+            <option value="proxy">{{ t('rgb11Invoice.standardTransport') }}</option>
+          </select>
+          <p class="text-xs leading-relaxed text-muted-foreground">
+            {{ t(transport === 'manual' ? 'rgb11Invoice.outOfBandTransportHelp' : 'rgb11Invoice.standardTransportHelp') }}
+          </p>
+          <template v-if="transport === 'proxy'">
+            <Label :for="fieldId + '-proxy'">{{ t('rgb11Invoice.proxyEndpoint') }}</Label>
+            <Input :id="fieldId + '-proxy'" v-model="proxyEndpoint" :disabled="loading" />
+          </template>
           <Button :disabled="loading || createPending || !account.rgb11WriteAllowed" @click="generate">{{ t(createPending ? 'rgb11Invoice.generating' : 'rgb11Invoice.generate') }}</Button>
         </template>
         <template v-else>
-          <p class="break-all font-mono text-xs">{{ receive.id }}</p><p>{{ displayStatus(receive.status) }}</p>
-          <Textarea :model-value="receive.invoice" readonly class="font-mono text-xs" />
-          <Button variant="outline" :disabled="!receive.invoice" @click="copyInvoice(receive.invoice)">
+          <div class="flex flex-wrap justify-between gap-2 text-sm">
+            <p role="status">{{ displayStatus(receive.status) }}</p>
+            <p>{{ t('rgb11Invoice.amount') }} {{ receive.amount.amount }}</p>
+          </div>
+          <p v-if="receive.status === 'waiting'" class="text-xs leading-relaxed text-muted-foreground">
+            {{ t(receive.transport === 'manual' ? 'rgb11Invoice.shareInvoiceHelp' : 'rgb11Invoice.shareProxyInvoiceHelp') }}
+          </p>
+          <Label :for="fieldId + '-invoice'">{{ t('rgb11Invoice.invoice') }}</Label>
+          <Textarea :id="fieldId + '-invoice'" :model-value="receive.invoice" readonly class="font-mono text-xs" />
+          <Button variant="outline" :disabled="!receive.invoice" @click="copyText(receive.invoice, 'invoice')">
             {{ t('rgb11Invoice.copy') }}
           </Button>
-          <template v-if="receive.can_import">
-            <Textarea v-model="packageText" :disabled="loading" :placeholder="t('rgb11Transfer.package')" class="font-mono text-xs" />
-            <input type="file" accept=".asc,.rgb,.rgbc,.txt,.json" class="max-w-full" :disabled="loading" @change="selectFile" />
+          <div v-if="receive.can_import" class="space-y-2 border-t border-border pt-3">
+            <p class="text-xs leading-relaxed text-muted-foreground">{{ t('rgb11Invoice.validateFilesHelp') }}</p>
+            <Label :for="fieldId + '-package'">{{ t('rgb11Transfer.package') }}</Label>
+            <Textarea :id="fieldId + '-package'" v-model="packageText" :disabled="loading" spellcheck="false"
+              @input="clearFile" class="font-mono text-xs" />
+            <input :id="fieldId + '-file'" type="file" accept=".asc,.rgb,.rgbc,.txt,.json" :disabled="loading"
+              class="peer sr-only" @change="selectFile" />
+            <label :for="fieldId + '-file'"
+              class="flex min-h-10 cursor-pointer items-center justify-center rounded-md border border-input px-3 text-sm peer-focus-visible:ring-1 peer-focus-visible:ring-ring peer-disabled:opacity-50">
+              {{ t('rgb11Invoice.selectTransferFile') }}
+            </label>
+            <p v-if="fileName" class="break-words text-xs text-muted-foreground">{{ fileName }}</p>
             <Button :disabled="loading || (!packageText && !fileData)" @click="prepare">{{ t('rgb11Transfer.prepareReceive') }}</Button>
-          </template>
-          <template v-if="receive.receipt">
-            <Textarea :model-value="receive.receipt" readonly class="font-mono text-xs" />
-            <Button variant="outline" @click="copy(receive.receipt)">{{ t('rgb11Transfer.copySummary') }}</Button>
-          </template>
-          <Button v-if="receive.can_accept" :disabled="loading" @click="accept">{{ t('rgb11Transfer.acceptAfterBroadcast') }}</Button>
+          </div>
+          <div v-if="receive.receipt" class="space-y-2 border-t border-border pt-3">
+            <Label :for="fieldId + '-receipt'">{{ t('rgb11Invoice.receipt') }}</Label>
+            <p class="text-xs leading-relaxed text-muted-foreground">{{ t('rgb11Invoice.shareReceiptHelp') }}</p>
+            <Textarea :id="fieldId + '-receipt'" :model-value="receive.receipt" readonly class="font-mono text-xs" />
+            <Button variant="outline" @click="copyText(receive.receipt, 'receipt')">{{ t('rgb11Transfer.copySummary') }}</Button>
+          </div>
+          <p v-if="receive.status === 'awaiting_confirmation'" class="text-xs leading-relaxed text-muted-foreground">{{ t('rgb11Invoice.autoReceiveHelp') }}</p>
+          <p v-else-if="receive.status === 'pending_chain'" class="text-xs leading-relaxed text-muted-foreground">{{ t('rgb11Invoice.waitForBitcoin') }}</p>
           <Button :disabled="loading" variant="outline" @click="refresh">{{ t('rgb11Transfer.checkRequestState') }}</Button>
           <p v-if="receive.error_code" class="text-xs text-red-400">{{ receive.error_code }}</p>
         </template>
@@ -48,12 +88,14 @@ import { shallowRef } from 'vue'
 const invoiceCreationPending = shallowRef(false)
 </script>
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useClipboard } from '@vueuse/core'
 import walletManager from '@/utils/sat20'
+import RGB11InvoiceGuide from './RGB11InvoiceGuide.vue'
 import type { RGBReceiveView } from '@/utils/walletViews'
 import { useAccountManagementStore } from '@/store/accountManagement'
+import { useRGB11Store } from '@/store/rgb11'
+import { useWalletStore } from '@/store/wallet'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -62,13 +104,17 @@ import { useToast } from '@/components/ui/toast-new'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 const props = defineProps<{asset: {key?: string; asset?: string; ticker: string; contract_id?: string; label?: string} | null}>()
 const isOpen = defineModel('open', {type: Boolean})
-const {t, te, locale} = useI18n(); const {copy} = useClipboard()
+const {t, te, locale} = useI18n()
+const fieldId = useId()
 const { toast } = useToast()
 const account = useAccountManagementStore()
+const rgb11 = useRGB11Store()
+const wallet = useWalletStore()
 const assetKey = computed(() => props.asset?.key || props.asset?.asset || '')
 const amount = ref(''); const receiveMode = ref('witness'); const transport = ref('manual'); const proxyEndpoint = ref('')
 const receive = ref<RGBReceiveView | null>(null); const requests = ref<RGBReceiveView[]>([])
 const packageText = ref(''); const fileData = ref(''); const loading = ref(false); const message = ref('')
+const fileName = ref('')
 const createPending = invoiceCreationPending
 const createWaiting = ref(false); const createTimedOut = ref(false)
 const createNotice = computed(() => locale.value.startsWith('zh')
@@ -85,12 +131,12 @@ const clearCreateWait = () => {
 const handleOpenChange = (open: boolean) => { if (open || !createWaiting.value) isOpen.value = open }
 const preventDismiss = (event: Event) => { if (createWaiting.value) event.preventDefault() }
 const displayStatus = (value: string) => te(`walletComponents.states_${value}`) ? t(`walletComponents.states_${value}`) : value
-const copyInvoice = async (invoice: string) => {
+const copyText = async (text: string, kind: 'invoice' | 'receipt') => {
   try {
-    await navigator.clipboard.writeText(invoice)
-    toast({ variant: 'success', title: t('rgb11Invoice.copied') })
+    await navigator.clipboard.writeText(text)
+    toast({ variant: 'success', title: t(kind === 'invoice' ? 'rgb11Invoice.copied' : 'rgb11Invoice.receiptCopied') })
   } catch {
-    toast({ variant: 'destructive', title: t('rgb11Invoice.copyFailed') })
+    toast({ variant: 'destructive', title: t(kind === 'invoice' ? 'rgb11Invoice.copyFailed' : 'rgb11Invoice.receiptCopyFailed') })
   }
 }
 const base64 = (data: Uint8Array) => { let text = ''; for (const byte of data) text += String.fromCharCode(byte); return btoa(text) }
@@ -101,13 +147,18 @@ const run = async (action: (context: RequestContext) => Promise<void>) => {
   try { await action(context) } catch (error) { if (isCurrent(context)) message.value = error instanceof Error ? error.message : String(error) }
   finally { if (isCurrent(context)) loading.value = false }
 }
-const selectRequest = (id: string) => { receive.value = requests.value.find(item => item.id === id) || null; packageText.value = ''; fileData.value = '' }
+const clearFile = () => { fileData.value = ''; fileName.value = '' }
+const selectRequest = (id: string) => { receive.value = requests.value.find(item => item.id === id) || null; packageText.value = ''; clearFile() }
+const updateRequests = (items: RGBReceiveView[]) => {
+  requests.value = items.filter(item => item.amount.asset === assetKey.value)
+  const selected = receive.value
+  if (selected) receive.value = requests.value.find(item => item.id === selected.id) || selected
+}
 const load = async (context: RequestContext, refresh = false) => {
   const [error, value] = refresh ? await walletManager.refreshRGB11State() : await walletManager.getRGB11View()
   if (!isCurrent(context)) return
   if (error) throw error
-  requests.value = (value?.receives || []).filter(item => item.amount.asset === context.asset)
-  if (receive.value) receive.value = requests.value.find(item => item.id === receive.value?.id) || (receive.value.amount.asset === context.asset ? receive.value : null)
+  updateRequests(value?.receives || [])
 }
 const generate = () => {
   if (createPending.value) return
@@ -135,7 +186,7 @@ const selectFile = async (event: Event) => {
   if (file) {
     const data = await file.arrayBuffer()
     if (!isCurrent(context) || receive.value?.id !== requestID) return
-    fileData.value = base64(new Uint8Array(data)); packageText.value = ''
+    fileData.value = base64(new Uint8Array(data)); fileName.value = file.name; packageText.value = ''
   }
 }
 const prepare = () => run(async context => {
@@ -145,18 +196,16 @@ const prepare = () => run(async context => {
   if (error || !value || value.amount.asset !== context.asset) throw error || new Error(t('rgb11Transfer.prepareFailed'))
   receive.value = value
 })
-const accept = () => run(async context => {
-  if (!receive.value) return
-  const [error, value] = await walletManager.acceptRGB11Consignment(receive.value.id)
-  if (!isCurrent(context)) return
-  if (error || !value || value.amount.asset !== context.asset) throw error || new Error(t('rgb11Transfer.receiveFailed'))
-  receive.value = value; window.dispatchEvent(new Event('sat20:wallet-data-updated'))
-})
 const refresh = () => run(context => load(context, true))
+watch(() => rgb11.state, ({ lock_scope: scope, receives }) => {
+  if (!isOpen.value || loading.value || scope.network !== wallet.network ||
+      String(scope.wallet_id) !== String(wallet.walletId) || scope.account_index !== Number(wallet.accountIndex)) return
+  updateRequests(receives)
+})
 onBeforeUnmount(() => { generation++; clearCreateWait() })
 watch([isOpen, assetKey], ([open]) => {
   generation++; clearCreateWait(); loading.value = false; createTimedOut.value = false
-  receive.value = null; requests.value = []; packageText.value = ''; fileData.value = ''; message.value = ''
+  receive.value = null; requests.value = []; packageText.value = ''; clearFile(); message.value = ''
   if (open) void run(context => load(context))
 }, {immediate: true})
 </script>

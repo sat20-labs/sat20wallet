@@ -31,8 +31,8 @@ func syncTestWallet(fingerprint, name string) account.ManagedWallet {
 func activateSyncFixture(t *testing.T, manager *Manager, remote *rgb11MemoryDKVSHTTP, password string) {
 	t.Helper()
 	client := newRGB11MessageNodeClient(remote)
-	manager.serverNode = NewNode(client, "message.test", SERVER_NODE,
-		client.CoreNodePubKey(), client.CoreNodePubKey())
+	node := NewNode(client, "message.test", SERVER_NODE, client.CoreNodePubKey(), client.CoreNodePubKey())
+	require.NoError(t, manager.SetAccountServiceNode(node))
 	pkg, auth, secret := rereviewRecoveryPackage(t, manager, password)
 	require.NoError(t, manager.ActivateAccountManagement(secret, password, *auth,
 		pkg.Envelope.Locator, "account://"+pkg.Envelope.Locator.PackageID))

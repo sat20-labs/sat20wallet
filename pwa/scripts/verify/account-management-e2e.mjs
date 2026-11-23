@@ -22,7 +22,7 @@ import { requiredPwaBiometricCases, runPwaBiometricCases } from './wallet-biomet
 import { requiredPwaPosCases, requiredPwaRgbCrossLayerCases, optionalPwaRgbContinuationCases, optionalPwaEscapeCases, runPwaPosCases } from './pos-pwa-e2e.mjs'
 import { requiredPwaL1ProtocolCases, runPwaL1ProtocolCases } from './wallet-l1-assets-e2e.mjs'
 import { requiredPwaWalletBasicCases, runPwaWalletBasicCases } from './wallet-basic-e2e.mjs'
-import { requiredPwaSilentPayCases, runPwaSilentPayCases } from './silentpay-e2e.mjs'
+import { requiredPwaRegtestSPCases, requiredPwaSilentPayCases, runPwaSilentPayCases } from './silentpay-e2e.mjs'
 import { createPwaIntegrationDapp, requiredPwaIntegrationCases, runPwaIntegrationCases } from './wallet-integrations-e2e.mjs'
 import { regtestCorePubKey } from './local-real-regtest.mjs'
 import { requiredPwaMiningCases, requiredPwaRegtestMiningCases, runPwaMiningCases } from './wallet-mining-e2e.mjs'
@@ -381,6 +381,8 @@ if (regtestMode && focusedWalletCases) {
     ...(regtestWalletFixture?.realBitcoinControl ? requiredPwaIntegrationCases.filter(name => name.startsWith("RGB PWA:")) : []),
     ...(regtestWalletFixture?.dappWallet ? requiredPwaIntegrationCases.filter(name => name.startsWith("DApp PWA:")) : []),
     ...requiredPwaRegtestMiningCases,
+    ...(regtestWalletFixture?.silentPay && regtestWalletFixture?.realBitcoinControl &&
+      regtestWalletFixture?.control_url ? requiredPwaRegtestSPCases : []),
     ...(regtestWalletFixture?.realBitcoinControl ? requiredPwaMintCases : []),
     ...(regtestWalletFixture?.protocolWallets ? requiredPwaL1ProtocolCases : []),
     ...(regtestWalletFixture?.realBitcoinFunds ? [requiredPwaPosCases[9], requiredPwaPosCases[10], requiredPwaPosCases[11], requiredPwaPosCases[24]] : []),

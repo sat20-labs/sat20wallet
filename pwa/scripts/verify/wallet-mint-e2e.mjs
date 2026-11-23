@@ -174,6 +174,19 @@ export async function runPwaMintCases(t, fixture) {
     return records.map(record => ({ id: record.id, kind: record.kind, status: record.status }))
       .sort((a, b) => a.id.localeCompare(b.id))
   })
+  const clearOperationHistory = async page => {
+    await visit(page, '/wallet/setting/operation-logs')
+    await expect(page.getByRole('heading', { name: 'Operation logs', exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Delete all', exact: true }).click()
+    const confirmation = page.getByRole('alertdialog', { name: 'Delete all', exact: true })
+    await expect(confirmation.getByText(
+      'Delete all operation logs? This does not delete wallet, channel, contract, or transaction data.',
+      { exact: true },
+    )).toBeVisible()
+    await confirmation.getByRole('button', { name: 'Delete all', exact: true }).click()
+    await expect(confirmation).toBeHidden()
+    await expect(page.getByRole('button', { name: 'Refresh', exact: true })).toBeEnabled()
+  }
   const evidence = async page => ({
     l1: (await snapshot()).l1,
     amount: await walletCall(page, 'getAssetAmount', actor.address, '::'),
@@ -673,18 +686,7 @@ export async function runPwaMintCases(t, fixture) {
         await expect(did.getByText(/^txid: [0-9a-f]{64}$/)).toHaveText(`txid: ${didTx.revealTxId}`)
         // Clearing display history must not forget an already-broadcast DID.
         // Exercise the actual page and confirmation before any block is mined.
-        await visit(page, '/wallet/setting/operation-logs')
-        await expect(page.getByRole('heading', { name: 'Operation logs', exact: true })).toBeVisible()
-        const clearButton = page.getByRole('button', { name: 'Delete all', exact: true })
-        await expect(clearButton).toBeEnabled()
-        const confirmationPending = page.waitForEvent('dialog')
-        const clearing = clearButton.click()
-        const confirmation = await confirmationPending
-        assert.equal(confirmation.type(), 'confirm')
-        assert.equal(confirmation.message(), 'Delete all operation logs? This does not delete wallet, channel, contract, or transaction data.')
-        await confirmation.accept()
-        await clearing
-        await expect(clearButton).toBeEnabled()
+        await clearOperationHistory(page)
         const afterClear = await evidence(page)
         assert.deepEqual(afterClear.l1.pending_txids.slice().sort(), [didTx.commitTxId, didTx.revealTxId].sort())
         // The existing observer still forwards to the real SDK; clear only its
@@ -714,13 +716,7 @@ export async function runPwaMintCases(t, fixture) {
         await unchanged(page, afterClear)
         const confirmed = await confirmPendingL1([didTx.commitTxId, didTx.revealTxId])
         assert.ok(confirmed.l1.confirmed_txids.includes(didTx.revealTxId))
-        await visit(page, '/wallet/setting/operation-logs')
-        await expect(clearButton).toBeEnabled()
-        const confirmedClear = page.waitForEvent('dialog')
-        const clearingConfirmed = clearButton.click()
-        await (await confirmedClear).accept()
-        await clearingConfirmed
-        await expect(clearButton).toBeEnabled()
+        await clearOperationHistory(page)
         assert.equal((await logs(page)).some(record => record.kind === 'inscribe_name'), false,
           'a confirmed DID operation must remain removable')
       }

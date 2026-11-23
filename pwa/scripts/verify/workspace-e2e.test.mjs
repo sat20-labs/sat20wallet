@@ -85,6 +85,7 @@ test('only shared setup errors stop later independent groups', () => {
 test('Bitcoin asset cases share one preparation and the return follows its send', () => {
   const stages = selectTests(selectStages(['pwa-canonical']), [
     'TestSDKPWARealRegtestRunesPremineReturnBrowser', 'TestSDKPWARealRegtestBitcoinFundsSendBrowser',
+    'TestSDKPWARealRegtestSPBrowser',
   ])
   const groups = buildGroups(stages)
   assert.equal(groups.length, 1)
@@ -96,8 +97,9 @@ test('Bitcoin asset cases share one preparation and the return follows its send'
   assert.deepEqual(steps.slice(3), [
     'TestSDKPWARealRegtestBitcoinFundsSendBrowser',
     'TestSDKPWARealRegtestRunesDecimalSendBrowser', 'TestSDKPWARealRegtestRunesPremineReturnBrowser',
+    'TestSDKPWARealRegtestSPBrowser',
   ])
-  assert.deepEqual(groups[0].steps.slice(3).map(step => step.purpose), ['case', 'prerequisite', 'case'])
+  assert.deepEqual(groups[0].steps.slice(3).map(step => step.purpose), ['case', 'prerequisite', 'case', 'case'])
 })
 
 test('SDK WASM gets channel preparation without consuming the independent PWA channel case', () => {
@@ -350,7 +352,7 @@ test('plan subprocess expands prerequisites without contacting services or requi
   const pwaStages = stageCatalog.filter(stage => stage.id.startsWith('pwa-'))
   const groups = buildGroups(pwaStages)
   assert.deepEqual(groups.map(group => [group.id, group.selectedTests.length]), [
-    ['wallet-and-dapp', 3], ['account-recovery-and-renewal', 1], ['bitcoin-assets', 7],
+    ['wallet-and-dapp', 3], ['account-recovery-and-renewal', 1], ['bitcoin-assets', 8],
     ['rgb11-onchain', 3], ['satoshinet-and-btc-channel', 7], ['pos-v2', 1],
     ['rgb11-cross-layer', 1], ['btc-mining', 1], ['guardian-2of3', 1],
   ])

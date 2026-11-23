@@ -48,6 +48,7 @@ const pwaGroups = [
     runeSendCase,
     runeReturnCase,
     'TestSDKPWARealRegtestRunesOpenMintSendBrowser',
+    'TestSDKPWARealRegtestSPBrowser',
   ] },
   { id: 'rgb11-onchain', cases: [
     rgbFullCase,

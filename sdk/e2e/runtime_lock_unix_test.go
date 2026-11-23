@@ -24,6 +24,10 @@ func TestMain(m *testing.M) {
 	if isOwnedProcessTestHelper() {
 		os.Exit(m.Run())
 	}
+	// The parent holds the lock and has stopped the Core that owns this DB.
+	if os.Getenv(coreStakeChildEnv) == "1" && flag.Lookup("test.run").Value.String() == coreStakeSelector {
+		os.Exit(m.Run())
+	}
 	if err := flag.Set("test.parallel", "1"); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

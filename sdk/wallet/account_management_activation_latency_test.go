@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,19 +22,16 @@ type accountActivationNetworkGate struct {
 	phase            string
 	started, release chan struct{}
 	once             sync.Once
-	stack            string
 }
 
-func (g *accountActivationNetworkGate) wait(phase string) {
-	if g.phase != phase {
-		return
+func (g *accountActivationNetworkGate) wait(ctx context.Context) error {
+	g.once.Do(func() { close(g.started) })
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-g.release:
+		return nil
 	}
-	g.once.Do(func() {
-		stack := make([]byte, 16<<10)
-		g.stack = string(stack[:runtime.Stack(stack, false)])
-		close(g.started)
-	})
-	<-g.release
 }
 
 type accountActivationGateHTTP struct {
@@ -43,41 +39,35 @@ type accountActivationGateHTTP struct {
 	gate *accountActivationNetworkGate
 }
 
-func (h *accountActivationGateHTTP) SendDKVSPost(path string, body []byte) ([]byte, error) {
-	switch path {
-	case "/v3/dkvs/active/sync":
-		// WaitReady now uses the shared active-state protocol. Binding and
-		// explicit refresh use that protocol too; pause only readiness here.
-		stack := make([]byte, 16<<10)
-		if strings.Contains(string(stack[:runtime.Stack(stack, false)]), ".WaitReady(") {
-			h.gate.wait("WaitReady")
+func (h *accountActivationGateHTTP) SendDKVSGetContext(ctx context.Context, path string, query map[string]string) ([]byte, error) {
+	if h.gate.phase == "BindingRead" && path == "/v3/dkvs/record" && dkvsindexer.IsAccountMappingBindingKey(query["key"]) {
+		if err := h.gate.wait(ctx); err != nil {
+			return nil, err
 		}
-	case "/v3/dkvs/records/batch-cas":
+	}
+	return h.rgb11MemoryDKVSHTTP.SendDKVSGetContext(ctx, path, query)
+}
+
+func (h *accountActivationGateHTTP) SendDKVSPostContext(ctx context.Context, path string, body []byte) ([]byte, error) {
+	if h.gate.phase == "CAS" && path == "/v3/dkvs/records/batch-cas" {
 		var req DKVSBatchCASRequest
 		if err := json.Unmarshal(body, &req); err != nil {
 			return nil, err
 		}
-		if len(req.Mutations) == 1 && req.Mutations[0].Record != nil && dkvsindexer.IsAccountMappingBindingKey(req.Mutations[0].Record.Key) {
-			h.gate.wait("BindingCAS")
-		} else {
-			h.gate.wait("CAS")
+		if len(req.Mutations) == 1 && req.Mutations[0].Record != nil && strings.HasSuffix(req.Mutations[0].Record.Key, "/"+accountRootWrapperPath) {
+			if err := h.gate.wait(ctx); err != nil {
+				return nil, err
+			}
 		}
 	}
-	return h.rgb11MemoryDKVSHTTP.SendDKVSPost(path, body)
-}
-
-func (h *accountActivationGateHTTP) SendDKVSPostContext(ctx context.Context, path string, body []byte) ([]byte, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return h.SendDKVSPost(path, body)
+	return h.rgb11MemoryDKVSHTTP.SendDKVSPostContext(ctx, path, body)
 }
 
 func TestAccountPaidActivationNetworkWaitDoesNotBlockLocalState(t *testing.T) {
 	old := _chain
 	_chain = "testnet"
 	defer func() { _chain = old }()
-	for _, phase := range []string{"CAS", "BindingCAS"} {
+	for _, phase := range []string{"CAS", "BindingRead"} {
 		t.Run(phase, func(t *testing.T) {
 			manager, endpoint, _, _, secret := newLocalActivationFixture(t)
 			defer zeroBytes(secret)
@@ -124,7 +114,6 @@ func startGatedPaidActivation(t *testing.T, manager *Manager, secret []byte, pha
 		endpoint = existing[0]
 	}
 	remote := &accountActivationGateHTTP{rgb11MemoryDKVSHTTP: endpoint, gate: gate}
-	setActivationTestHTTP(t, manager, remote)
 	client := newRGB11MessageNodeClient(endpoint)
 	manager.serverNode = NewNode(client, "message.test", SERVER_NODE, client.CoreNodePubKey(), client.CoreNodePubKey())
 	defaults := dkvsindexer.NetworkDefaultsForParams(GetChainParam_SatsNet())
@@ -136,6 +125,7 @@ func startGatedPaidActivation(t *testing.T, manager *Manager, secret []byte, pha
 	zeroBytes(packageSecret)
 	authorization := AccountStorageAuthorization{Mode: AccountStoragePaid, Location: location,
 		Autopay: &DKVSAutopayOptions{AddressParams: GetChainParam_SatsNet(), PoolContract: defaults.AutopayContract}}
+	setActivationTestHTTP(t, manager, remote)
 	locator := pkg.Envelope.Locator
 	done := make(chan error, 1)
 	go func() { done <- manager.ActivateAccountManagement(secret, "password", authorization, locator, "") }()

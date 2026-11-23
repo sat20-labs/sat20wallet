@@ -220,9 +220,9 @@ export async function runPwaPosCases(t, fixture) {
     assert.equal(asset.ticker, fixture.asset.ticker, 'display labels must not replace the canonical RGB ticker')
     const label = tab === 'Channel' ? channelLabel : asset.label
     assert.ok(typeof label === 'string' && label.trim(), 'the selected RGB asset must have a display label')
-    const row = rows.filter({ has: tab === 'Bitcoin'
-      ? page.locator(`[title=${JSON.stringify(asset.key)}]`)
-      : page.getByText(label, { exact: true }) })
+    const row = tab === 'Bitcoin'
+      ? rows.and(page.locator(`[data-asset-key=${JSON.stringify(asset.key)}]`))
+      : rows.filter({ has: page.getByText(label, { exact: true }) })
     await expect(row).toHaveCount(1)
     await expect(row.locator('div.font-medium.text-zinc-400').first()).toHaveText(label)
     return { row, label }

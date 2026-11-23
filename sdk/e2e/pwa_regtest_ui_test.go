@@ -77,6 +77,10 @@ func TestSDKPWARealRegtestBitcoinFundsSendBrowser(t *testing.T) {
 	runSDKPWARealRegtestBrowser(t, "l1-funds")
 }
 
+func TestSDKPWARealRegtestSPBrowser(t *testing.T) {
+	runSDKPWARealRegtestBrowser(t, "l1-silentpay")
+}
+
 func TestSDKPWARealRegtestSatoshiNetPlainSendBrowser(t *testing.T) {
 	runSDKPWARealRegtestBrowser(t, "l2-plain-send")
 }
@@ -509,6 +513,14 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 			ordinary1, ordinary2, mine, config)
 	}
 	confirmationAddress := ordinary1.GetWallet().GetAddressByIndex(1)
+	var spSecondSender map[string]string
+	if feature == "l1-silentpay" {
+		require.Empty(t, os.Getenv("SAT20_REAL_SATOSHINET_ATTACH"), "fund the second sender only on the runner-owned chain")
+		spSecondSender = sdkPWARegtestSyntheticIdentity(t, "silentpay-second-payer")
+		txid, _, err := ordinary1.BatchSendPlainSats(spSecondSender["address"], 100_000, 1, 2, nil)
+		require.NoError(t, err, "fund the second sender from an existing regtest wallet")
+		confirmSDKPWARegtestL1SDKTransaction(t, ordinary1, txid, mine)
+	}
 	if posResume {
 		confirmationAddress = ordinary2.GetWallet().GetAddressByIndex(1)
 	}
@@ -811,6 +823,18 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 			},
 			"wasmPath": wasmPath, "wasmRuntimePath": wasmRuntimePath,
 		},
+	}
+	if feature == "l1-silentpay" {
+		prepared := fixture["walletFixture"].(map[string]any)
+		receiver, ok := ordinary2.GetWallet().(*wallet.InternalWallet)
+		require.True(t, ok, "Silent Pay receiver must be the existing ordinary-2 wallet")
+		address, err := receiver.GetSilentPayAddress(ordinary2.GetCurrentAccountId())
+		require.NoError(t, err)
+		prepared["silentPay"] = map[string]any{
+			"sender": actorA, "secondSender": spSecondSender, "receiver": actorB, "address": address, "amount": 2000,
+		}
+		prepared["control_url"] = startSDKPWARegtestBitcoinController(t, confirmationAddress, mine)
+		prepared["realBitcoinControl"] = true
 	}
 	if sdkWASM {
 		prepared := fixture["walletFixture"].(map[string]any)
@@ -1211,6 +1235,18 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 		runSDKPWARegtestBrowserGroup(t, pwa, configPath, fixturePath, evidenceDir, "bitcoin-funds", cases)
 		return
 	}
+	if feature == "l1-silentpay" {
+		cases := []string{
+			"SP PWA: home receive exposes the private receiving method",
+			"SP PWA: reviewed BTC send confirms once and receiver refresh discovers exact funds",
+			"SP PWA: two wallets pay the same shared address and both outputs are found",
+		}
+		logPath := runSDKPWARegtestBrowserGroup(t, pwa, configPath, fixturePath, evidenceDir, "silentpay", cases)
+		t.Run("spend_both_private_outputs", func(t *testing.T) {
+			spSweepSharedPayments(t, ordinary2, actorB, actorA["address"], confirmationAddress, logPath, mine)
+		})
+		return
+	}
 	if feature == "l2-plain-send" {
 		cases := []string{"Funds PWA: SatoshiNet Send confirms the requested BTC at the recipient"}
 		runSDKPWARegtestBrowserGroup(t, pwa, configPath, fixturePath, evidenceDir, "satoshinet-funds", cases)
@@ -1324,7 +1360,7 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 	})
 }
 
-func runSDKPWARegtestBrowserGroup(t *testing.T, pwa, configPath, fixturePath, evidenceDir, group string, cases []string, selector ...string) {
+func runSDKPWARegtestBrowserGroup(t *testing.T, pwa, configPath, fixturePath, evidenceDir, group string, cases []string, selector ...string) string {
 	t.Helper()
 	node, err := exec.LookPath("node")
 	require.NoError(t, err)
@@ -1365,4 +1401,5 @@ func runSDKPWARegtestBrowserGroup(t *testing.T, pwa, configPath, fixturePath, ev
 	require.NoError(t, logFile.Close())
 	require.NoError(t, err, "regtest %s PWA runner failed; private JSON log: %s", group, logPath)
 	t.Logf("regtest %s PWA runner exit=0; private JSON log: %s", group, logPath)
+	return logPath
 }
