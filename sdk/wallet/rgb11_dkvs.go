@@ -133,6 +133,17 @@ func (p *rgb11Manager) markRGB11AddressMessageProcessed(kind, messageID string) 
 // Processed cursors are device-local cache and are not included in recovery.
 func (p *rgb11Manager) SyncConfiguredRGB11AddressMailbox(ctx context.Context,
 	verify dkvsindexer.RecordVerificationOptions) (*RGB11AddressMailboxSyncResult, error) {
+	return p.syncRGBMailbox(ctx, verify, true)
+}
+
+// The existing device-local message marker also records failed ACK delivery.
+// An explicit mailbox refresh can retry it after an automatic scan has stopped.
+const rgbACKNeedsRetry byte = 2
+
+var errRGBACKSend = errors.New("RGB Direct ACK delivery failed")
+
+func (p *rgb11Manager) syncRGBMailbox(ctx context.Context,
+	verify dkvsindexer.RecordVerificationOptions, retryACK bool) (*RGB11AddressMailboxSyncResult, error) {
 	if p == nil || p.wallet == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil {
 		return nil, ErrRGB11Inconsistent
 	}
@@ -140,7 +151,13 @@ func (p *rgb11Manager) SyncConfiguredRGB11AddressMailbox(ctx context.Context,
 		return nil, err
 	}
 	result := &RGB11AddressMailboxSyncResult{}
-	messages, err := p.accountManagementOwner().readAccountMessages(p.wallet, verify)
+	owner := p.accountManagementOwner()
+	owner.rgbMailboxMu.Lock()
+	defer owner.rgbMailboxMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	messages, err := owner.readAccountMessages(p.wallet, verify)
 	if err != nil {
 		return nil, err
 	}
@@ -168,11 +185,22 @@ func (p *rgb11Manager) SyncConfiguredRGB11AddressMailbox(ctx context.Context,
 			}
 			result.ACKs++
 		case AccountMessageKindRGB11Consignment:
-			if p.rgb11AddressMessageProcessed("consignment", messageID) {
+			key := rgb11AddressProcessedMetadata("consignment", messageID)
+			marker, err := p.projectionStore.LoadLocalMetadata(key)
+			if err != nil && !errors.Is(err, indexer.ErrKeyNotFound) {
+				return result, err
+			}
+			if len(marker) == 1 && marker[0] == 1 {
 				result.AlreadyDone++
 				continue
 			}
+			if len(marker) == 1 && marker[0] == rgbACKNeedsRetry && !retryACK {
+				continue
+			}
 			receipt, ackRecord, err := p.acceptRGB11AddressDirect(ctx, direct)
+			if errors.Is(err, errRGBACKSend) {
+				return result, errors.Join(err, p.projectionStore.SaveLocalMetadata(key, []byte{rgbACKNeedsRetry}))
+			}
 			if err != nil {
 				result.Invalid++
 				result.ErrorDetails = append(result.ErrorDetails, fmt.Sprintf("consignment %s: %v", messageID, err))
@@ -1114,7 +1142,11 @@ func (p *rgb11Manager) sendRGB11AddressACKDirect(senderAccountID, messageID stri
 	if err != nil {
 		return nil, err
 	}
-	return p.accountManagementOwner().sendAccountMessage(p.wallet, messageID, AccountMessageKindRGB11ACK, senderAccountID, body, false)
+	receipt, err := p.accountManagementOwner().sendAccountMessage(p.wallet, messageID, AccountMessageKindRGB11ACK, senderAccountID, body, false)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", errRGBACKSend, err)
+	}
+	return receipt, nil
 }
 
 func (p *rgb11Manager) acceptRGB11AddressACKDirect(item *accountMessage) (*RGB11AddressACK, error) {

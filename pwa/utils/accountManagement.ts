@@ -55,13 +55,6 @@ export default new AccountManagementSDK()
 export function exportFileText(file: ExportFile): string {
   return new TextDecoder().decode(Uint8Array.from(atob(file.data), ch => ch.charCodeAt(0)))
 }
-export function saveExportFile(file: ExportFile): void {
-  const data = Uint8Array.from(atob(file.data), ch => ch.charCodeAt(0))
-  const url = URL.createObjectURL(new Blob([data], { type: file.mime }))
-  const link = document.createElement('a')
-  link.href = url; link.download = file.name; link.click()
-  URL.revokeObjectURL(url)
-}
 
 // Translate known SDK display messages at the UI boundary; retain unknown diagnostics.
 const accountDisplayMessageKeys: Record<string, string> = {

@@ -22,7 +22,8 @@ import (
 )
 
 const (
-	RGB11EngineBuildID = "rgb11-go-0.11.2-rc.2+sat20.1"
+	RGB11ProtocolVersion = "0.11.2-rc.2"
+	RGB11EngineBuildID   = "rgb11-go-" + RGB11ProtocolVersion + "+sat20.1"
 )
 
 // RGB11ConsensusValidator is the production Go validator checked against the

@@ -1166,8 +1166,9 @@ func (m *dkvsManager) updateValuesWithOrigin(ctx context.Context, client *SatsNe
 		result, err = m.updateValuesCoordinated(client.withRequestContext(ctx), keys, builder, origin)
 		if pending, ok := err.(*DKVSRequestPendingError); ok && !pending.Committed && !pending.Durable &&
 			pending.RequestID != "" && grant.write != nil && grant.account != nil {
-			if _, direct := pending.Cause.(*freeCASUnavailable); direct && m.accountCASGrant(client) == grant {
-				// A single pending POST leaves the verified session available for unrelated edits.
+			if _, backup := pending.Cause.(*backupSubmitError); backup && m.accountCASGrant(client) == grant {
+				// Account sync retains the pending upload. Its refusal does not
+				// revoke the previously verified session used by local business.
 				pendingReply = pending
 				return nil
 			}
@@ -1841,34 +1842,37 @@ func (m *dkvsManager) startWorkerLocked(discover, allowRecheck bool) bool {
 func (m *dkvsManager) runDiscovery(session context.Context, stop, done, wake chan struct{}, onlineEpoch uint64, allowRecheck bool) {
 	ctx, cancel := context.WithTimeout(session, accountManagedDataReadyTimeout)
 	err := m.owner.refreshAccountService(ctx, true)
+	if err == nil {
+		err = m.owner.ensureAccountCoreBindingForSync(ctx)
+	}
 	timedOut := errors.Is(ctx.Err(), context.DeadlineExceeded)
 	cancel()
 	m.setLastSyncError(err)
 	m.notifyStatusCallback()
 	// Pair the activation check with completion: an activation racing this
 	// boundary either continues this owned lifetime or starts after its release.
+	m.owner.actionMonitorLock.Lock()
+	running := m.owner.actionMonitorRunning
+	m.owner.actionMonitorLock.Unlock()
 	m.owner.mutex.RLock()
 	m.mu.Lock()
 	profile := m.owner.accountProfile
 	configured := profile != nil && profile.RecoveryConfigured
 	recheck := allowRecheck && !m.stopping && !configured && (profile == nil || profile.Activation == nil) &&
-		errors.Is(err, ErrRootAccountDiscoveryPending) &&
 		(isDKVSNetworkFailure(err) || timedOut)
-	if configured && !m.stopping && m.done == done && m.owner.accountDBFailure() == nil {
+	if (configured || running && err == nil) && !m.stopping && m.done == done && m.owner.accountDBFailure() == nil {
 		m.mu.Unlock()
 		m.owner.mutex.RUnlock()
-		m.owner.requestAccountSync()
+		if configured {
+			m.owner.requestAccountSync()
+		}
 		m.run(stop, done, wake)
 		return
 	}
 	if m.done == done && !m.stopping {
 		m.stop, m.done, m.wake = nil, nil, nil
 		if recheck {
-			if m.onlineEpoch != onlineEpoch {
-				m.startWorkerLocked(true, false)
-			} else {
-				m.recheckOnOnline = true
-			}
+			m.recheckAfterOnlineLocked(onlineEpoch)
 		}
 		// The Manager remains usable after discovery. Its per-key mutex
 		// identities must survive concurrent explicit activation/recovery.
@@ -1876,6 +1880,14 @@ func (m *dkvsManager) runDiscovery(session context.Context, stop, done, wake cha
 	close(done)
 	m.mu.Unlock()
 	m.owner.mutex.RUnlock()
+}
+
+func (m *dkvsManager) recheckAfterOnlineLocked(epoch uint64) {
+	if m.onlineEpoch != epoch {
+		m.startWorkerLocked(true, false)
+	} else {
+		m.recheckOnOnline = true
+	}
 }
 
 func (m *dkvsManager) stopAndWait() {

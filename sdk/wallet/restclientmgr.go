@@ -3,6 +3,7 @@ package wallet
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -407,6 +408,47 @@ func (p *IndexerRPCClientMgr) GetUtxosWithAddress(address string) (map[string]*w
 	}
 	return result, err
 }
+
+func (p *IndexerRPCClientMgr) getCoinbaseCandidates(address string) ([]string, error) {
+	points, err := coinbaseCandidates(p.getActiveIndexer(), address)
+	if shouldSwitchIndexer(err) {
+		if client := p.selector(); client != nil {
+			return coinbaseCandidates(client, address)
+		}
+	}
+	return points, err
+}
+
+func coinbaseCandidates(client IndexerRPCClient, address string) ([]string, error) {
+	if rest, ok := client.(*IndexerClient); ok {
+		plain, other, err := rest.getAllUtxosWithAddress(address)
+		if err != nil {
+			return nil, err
+		}
+		var points []string
+		for _, outputs := range [][]*indexerwire.PlainUtxo{plain, other} {
+			for _, output := range outputs {
+				// A confirmed coinbase is always the first transaction in its block.
+				if output.Height <= 0 || output.Index <= 0 {
+					points = append(points, output.Txid+":"+strconv.Itoa(output.Vout))
+				}
+			}
+		}
+		return points, nil
+	}
+
+	// Indexer adapters that expose no block position require raw transaction checks.
+	outputs, err := client.GetUtxosWithAddress(address)
+	if err != nil {
+		return nil, err
+	}
+	points := make([]string, 0, len(outputs))
+	for point := range outputs {
+		points = append(points, point)
+	}
+	return points, nil
+}
+
 func (p *IndexerRPCClientMgr) GetUnusableUtxosWithAddress(address string) ([]*TxOutput, error) {
 	return p.getActiveIndexer().GetUnusableUtxosWithAddress(address)
 }

@@ -1,7 +1,7 @@
 <template>
   <div>
     <main class="w-full h-screen overflow-hidden flex flex-col" v-if="!loading">
-      <div v-if="isForceUpdate || isUpdating" role="alert" class="fixed top-0 inset-x-0 z-[2000] bg-amber-950 text-white p-2 text-sm">
+      <div v-if="isForceUpdate || isUpdating" role="alert" class="fixed inset-x-0 top-0 z-[2000] border-b border-border bg-popover p-2 text-sm text-popover-foreground">
         {{ isUpdating ? $t('setting.updateWaitingOperations') : $t('setting.versionWriteBlocked') }}
         <button v-if="!isUpdating" class="underline ml-2" @click="checkAndUpdate">{{ $t('setting.checkAndUpdate') }}</button>
       </div>

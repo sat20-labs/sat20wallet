@@ -125,7 +125,10 @@ func TestMessageTopicSDKCreateAndPublishUsesSharedSenderSequence(t *testing.T) {
 		}},
 		http: remote,
 	}
-	manager.serverNode = NewNode(client, "topic.test", SERVER_NODE, client.CoreNodePubKey(), client.CoreNodePubKey())
+	node := NewNode(client, "topic.test", SERVER_NODE, client.CoreNodePubKey(), client.CoreNodePubKey())
+	if err := manager.SetAccountServiceNode(node); err != nil {
+		t.Fatal(err)
+	}
 	accountID, err := dkvsAccountID(wallet)
 	if err != nil {
 		t.Fatal(err)

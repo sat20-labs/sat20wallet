@@ -156,9 +156,10 @@ func TestRGB11DirectLifecycleAuthorityIsSDKOwned(t *testing.T) {
 	requireSteps("confirm facade", facade, "async confirmRGB11Transfer(", "this._handleRequest('confirmRGB11Transfer'")
 	requireSteps("refresh bridge", wasm, "func refreshRGB11State(", "_mgr.RefreshRGBState(")
 	requireSteps("confirm bridge", wasm, "func confirmRGB11Transfer(", "_mgr.ConfirmRGBTransfer(")
-	requireSteps("SDK refresh", view, "func (p *Manager) RefreshRGBState(", "p.syncRootRGB11AddressMailbox(")
+	requireSteps("SDK refresh", view, "func (p *Manager) RefreshRGBState(", "p.SyncConfiguredRGB11AddressMailbox(")
 	requireSteps("SDK confirmation", view, "func (p *Manager) ConfirmRGBTransfer(", "case first.AddressMode:", "p.DeliverAndBroadcastConfiguredRGB11AddressTransfer(first.TransferID)")
-	requireSteps("account mailbox", readRepoTextForTest(t, "account_rgb_messages.go"), "mailboxSubscriptionTarget(id)", "p.SubscribeDKVSPrefix(target)", "p.watchAccountMailbox(wallet)", "store.ListMailboxVerified(id, verify)")
+	requireSteps("account mailbox", readRepoTextForTest(t, "account_rgb_messages.go"), "mailboxSubscriptionTarget(id)", "p.ensureOwnedDKVSPrefix(target)", "p.watchAccountMailbox(wallet)", "store.ListMailboxVerified(id, verify)")
+	requireSteps("mailbox registration", readRepoTextForTest(t, "dkvs_registry.go"), "func (p *Manager) ensureOwnedDKVSPrefix(", "p.SubscribeDKVSPrefix(prefix)")
 	requireSteps("SDK Direct recovery", readRepoTextForTest(t, "rgb11_dkvs.go"),
 		"readAccountMessages(p.wallet, verify)", "p.resumeReadyRGB11AddressTransfers()", "p.continueRGB11AddressSend(state.TransferID)",
 		"p.scopeStates.sendFlights.Do(key,", "p.readRGB11AddressBatch(transferID)", "for _, item := range batch", "!rgbDeliveryReady(item)",

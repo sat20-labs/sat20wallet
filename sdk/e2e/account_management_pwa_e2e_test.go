@@ -79,7 +79,11 @@ func TestSDKAccountPWAEntryPoints(t *testing.T) {
 		device.mgr.Start()
 		_, err := device.mgr.UnlockWallet(device.password)
 		require.NoError(t, err)
-		require.False(t, device.mgr.GetAccountManagementStatus().Active)
+		status := device.mgr.GetAccountManagementStatus()
+		require.True(t, status.Active)
+		require.Equal(t, catalog[0].ID, status.RootWalletID)
+		require.NotEmpty(t, status.AccountID)
+		require.False(t, status.RecoveryConfigured)
 		require.Eventually(t, func() bool {
 			return device.mgr.GetAccountManagementStatus().DiscoveryStatus == "inactive"
 		}, 6*time.Second, 30*time.Millisecond)
@@ -162,10 +166,25 @@ func TestSDKAccountPWAEntryPoints(t *testing.T) {
 		unavailable.Store(true)
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if strings.HasSuffix(r.URL.Path, "/active/sync") {
-				requests.Add(1)
-				if unavailable.Load() {
-					http.Error(w, "controlled first discovery unavailable", http.StatusServiceUnavailable)
+				body, err := io.ReadAll(r.Body)
+				_ = r.Body.Close()
+				var request dkvs.ActiveSyncRequest
+				if err != nil || json.Unmarshal(body, &request) != nil {
+					http.Error(w, "invalid active sync", http.StatusBadRequest)
 					return
+				}
+				r.Body = io.NopCloser(bytes.NewReader(body))
+				// The service mapping has its own subscription. Count only
+				// the scoped root query that can authorize this import.
+				for _, key := range request.Scope.Keys {
+					if strings.HasSuffix(key, "/account/root") {
+						requests.Add(1)
+						if unavailable.Load() {
+							http.Error(w, "controlled first discovery unavailable", http.StatusServiceUnavailable)
+							return
+						}
+						break
+					}
 				}
 			}
 			proxy.ServeHTTP(w, r)

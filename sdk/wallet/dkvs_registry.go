@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	indexercommon "github.com/sat20-labs/indexer/common"
-	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
 // Registering the same root-owned prefix is a local no-op. In particular a
@@ -36,17 +35,13 @@ func (p *Manager) refreshDKVSRegistrations() error {
 	if p == nil || p.IsServerMode() || p.ensureDKVSManager() == nil {
 		return nil
 	}
-	p.mutex.RLock()
-	configured := p.accountProfile != nil && p.accountProfile.RecoveryConfigured
-	p.mutex.RUnlock()
 	if p.cfg == nil || p.cfg.IndexerL2 == nil || strings.TrimSpace(p.cfg.IndexerL2.Host) == "" {
 		return nil
 	}
 	keys := make([]string, 0, 4)
 	p.mutex.RLock()
 	accountActive := p.accountProfile != nil && len(p.accountSecret) == 32
-	p.mutex.RUnlock()
-	p.mutex.RLock()
+	configured := p.accountProfile != nil && p.accountProfile.RecoveryConfigured
 	root, rootErr := p.accountDiscoveryRootLocked()
 	p.mutex.RUnlock()
 	if rootErr != nil {
@@ -59,22 +54,19 @@ func (p *Manager) refreshDKVSRegistrations() error {
 	if err != nil {
 		return err
 	}
-	address := root.GetAddress()
-	if root != nil {
-		stateKey, err := p.accountManagedStateKey(root)
-		if err != nil {
-			return err
-		}
-		dataKey, err := account.ManagedIndexKey(accountID)
-		if err != nil {
-			return err
-		}
-		wrapperKey, err := accountRootWrapperKey(root)
-		if err != nil {
-			return err
-		}
-		keys = append(keys, stateKey, dataKey, wrapperKey)
+	stateKey, err := p.accountManagedStateKey(root)
+	if err != nil {
+		return err
 	}
+	dataKey, err := account.ManagedIndexKey(accountID)
+	if err != nil {
+		return err
+	}
+	wrapperKey, err := accountRootWrapperKey(root)
+	if err != nil {
+		return err
+	}
+	keys = append(keys, stateKey, dataKey, wrapperKey)
 	seen := make(map[string]struct{}, len(keys)+1)
 	for _, key := range keys {
 		prefix, _, err := dkvsManagedPathForKey(key)
@@ -89,36 +81,8 @@ func (p *Manager) refreshDKVSRegistrations() error {
 			return err
 		}
 	}
-	if !configured {
-		return nil
-	}
-	if accountID != "" {
-		mailboxPrefix, err := mailboxSubscriptionTarget(accountID)
-		if err != nil {
-			return err
-		}
-		if err := p.ensureOwnedDKVSPrefix(mailboxPrefix); err != nil {
-			return err
-		}
-		// The one root-owned account service record carries both the public
-		// address mapping and small service capabilities.
-		if address != "" {
-			mappingKey, err := dkvsindexer.AccountMappingKey(GetChainParam().Name, address)
-			if err != nil {
-				return err
-			}
-			prefix, _, err := dkvsManagedPathForKey(mappingKey)
-			if err != nil {
-				return err
-			}
-			if _, exists := seen[prefix]; !exists {
-				seen[prefix] = struct{}{}
-				if err := p.ensureOwnedDKVSPrefix(prefix); err != nil {
-					return err
-				}
-			}
-		}
-		p.scheduleRootAccountDKVSServices(accountID)
+	if configured {
+		return p.registerRootMailbox(root)
 	}
 	return nil
 }

@@ -62,7 +62,10 @@ func TestTopicKeyRecreatedOnColdDevice(t *testing.T) {
 		}}
 		manager.cfg = &sdkcommon.Config{Env: "test", Chain: "testnet", IndexerL2: &sdkcommon.Indexer{Scheme: "http", Host: "dkvs.test", Proxy: "testnet"}}
 		manager.http = remote
-		manager.serverNode = NewNode(client, "topic.test", SERVER_NODE, client.CoreNodePubKey(), client.CoreNodePubKey())
+		node := NewNode(client, "topic.test", SERVER_NODE, client.CoreNodePubKey(), client.CoreNodePubKey())
+		if err := manager.SetAccountServiceNode(node); err != nil {
+			t.Fatal(err)
+		}
 		_, err := crypto.LoadTopicKey("developers", 1)
 		require.Error(t, err, "a fresh device must start with no stored topic key")
 		snapshot, err := manager.CreateMessageTopic("developers", "Developers", 16)

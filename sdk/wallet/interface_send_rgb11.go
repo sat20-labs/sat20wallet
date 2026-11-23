@@ -246,7 +246,7 @@ func (p *Manager) resumeRGB11Send(ctx context.Context, transferID string) (*wire
 				}
 			}
 			if needsWalletACK {
-				if _, err := manager.SyncConfiguredRGB11AddressMailbox(ctx, dkvsindexer.RecordVerificationOptions{}); err != nil {
+				if _, err := manager.syncRGBMailbox(ctx, dkvsindexer.RecordVerificationOptions{}, false); err != nil {
 					return result, err
 				}
 			}

@@ -1,20 +1,86 @@
 package wallet
 
-import "testing"
+import (
+	"encoding/hex"
+	"encoding/json"
+	"testing"
+
+	"github.com/btcsuite/btcd/btcutil"
+	"github.com/btcsuite/btcd/wire"
+	indexer "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
+	"github.com/stretchr/testify/require"
+)
+
+type depositLogNode struct {
+	NodeRPCClient
+	contract string
+	item     InvokeItem
+	status   string
+	deposit  RGB11ContractDeposit
+}
+
+func (n *depositLogNode) GetContractStatusReq(url string) (string, error) {
+	if url != n.contract {
+		return "", errOperationLogTestFailure{}
+	}
+	return n.status, nil
+}
+
+func (n *depositLogNode) SendActionResultNfty(_ common.Wallet, _ int64, action string, _ int, data string) error {
+	switch action {
+	case "":
+		return nil // Peer availability probe.
+	case RGB11DepositPrepareAction:
+		return json.Unmarshal([]byte(data), &n.deposit)
+	default:
+		return errOperationLogTestFailure{}
+	}
+}
+
+func (n *depositLogNode) GetContractInvokeItemByInUtxoReq(url, point string) (string, error) {
+	if url != n.contract {
+		return "", errOperationLogTestFailure{}
+	}
+	if point != n.item.InUtxo {
+		return "", indexer.ErrKeyNotFound
+	}
+	raw, err := json.Marshal(n.item)
+	return string(raw), err
+}
 
 func TestContractInvokeOperationLogIsSimpleExplicitAction(t *testing.T) {
 	mgr := &Manager{db: newMemoryKVDB()}
+	address, err := btcutil.NewAddressWitnessScriptHash(make([]byte, 32), GetChainParam())
+	require.NoError(t, err)
+	script, err := GetPkScriptFromAddress(address.EncodeAddress())
+	require.NoError(t, err)
+	tx := wire.NewMsgTx(2)
+	tx.AddTxIn(&wire.TxIn{})
+	tx.AddTxOut(wire.NewTxOut(0, []byte{0x6a}))
+	tx.AddTxOut(wire.NewTxOut(546, script))
+	tx.AddTxOut(wire.NewTxOut(700, script))
+	raw, err := EncodeMsgTx(tx)
+	require.NoError(t, err)
+	txID := tx.TxID()
+	mgr.l1IndexerClient = &IndexerRPCClientMgr{active: &recoveryRPC{raw: map[string]string{txID: raw}}}
+	url := GenerateContractURl(address.EncodeAddress(), "rgb11:f:test", TEMPLATE_CONTRACT_TRANSCEND)
+	node := &depositLogNode{contract: url, item: InvokeItem{InUtxo: txID + ":1", OutTxId: "payout"}}
+	mgr.serverNode = &Node{client: node}
 	logID := mgr.beginContractInvokeOperationLog(
-		"channel:asset:transcend.tc",
+		url,
 		`{"Action":"deposit","Param":"{}"}`,
 		"Bitcoin",
-		"ordx:f:test",
+		"rgb11:f:test",
 		"100",
 	)
 	if logID == "" {
 		t.Fatal("contract invoke log was not explicitly created")
 	}
-	mgr.completeContractInvokeOperationLog(logID, "tx-contract-1")
+	mgr.completeContractInvokeOperationLog(logID, txID)
+	result, err := mgr.GetContractLogResult(logID)
+	require.NoError(t, err)
+	require.Equal(t, ContractLogResult{Status: "ready", TxID: "payout", Chain: "satnet"}, result)
 
 	logs, err := mgr.GetOperationLogs()
 	if err != nil {
@@ -27,18 +93,50 @@ func TestContractInvokeOperationLogIsSimpleExplicitAction(t *testing.T) {
 	if log.Action != "invoke_contract" || log.Status != OperationLogSucceeded {
 		t.Fatalf("unexpected contract invoke log: %+v", log)
 	}
-	if log.Parameters["contract"] != "channel:asset:transcend.tc" ||
+	if log.Parameters["contract"] != url ||
 		log.Parameters["network"] != "Bitcoin" ||
-		log.Parameters["asset"] != "ordx:f:test" ||
+		log.Parameters["asset"] != "rgb11:f:test" ||
 		log.Parameters["amount"] != "100" {
 		t.Fatalf("contract invoke parameters are incomplete: %+v", log.Parameters)
 	}
-	if log.Result["txid"] != "tx-contract-1" || log.TxID != "tx-contract-1" {
+	if log.Result["txid"] != txID || log.TxID != txID {
 		t.Fatalf("contract invoke result is incomplete: %+v", log)
 	}
 	if len(log.History) != 2 || log.History[1].Message != "Contract invocation submitted" {
 		t.Fatalf("unexpected contract invoke history: %+v", log.History)
 	}
+
+	t.Run("addliq-multiple-outputs", func(t *testing.T) {
+		add := mgr.beginContractActionLog(url, INVOKE_API_ADDLIQUIDITY, "Bitcoin", "ordx:f:test", "200")
+		mgr.completeContractInvokeOperationLog(add, txID)
+		node.item = InvokeItem{}
+		result, err := mgr.GetContractLogResult(add)
+		require.NoError(t, err)
+		require.Equal(t, ContractLogResult{Status: "pending"}, result)
+		node.item = InvokeItem{InUtxo: txID + ":2", OutTxId: "settlement"}
+		result, err = mgr.GetContractLogResult(add)
+		require.NoError(t, err)
+		require.Equal(t, ContractLogResult{Status: "ready", TxID: "settlement", Chain: "satnet"}, result)
+	})
+	t.Run("satsnet-withdraw", func(t *testing.T) {
+		withdraw := mgr.beginContractActionLog(url, INVOKE_API_WITHDRAW, "SatoshiNet", "rgb11:f:test", "100")
+		mgr.completeContractInvokeOperationLog(withdraw, txID)
+		node.item = InvokeItem{InUtxo: txID + ":0", OutTxId: "btc-payout", ToL1: true}
+		result, err := mgr.GetContractLogResult(withdraw)
+		require.NoError(t, err)
+		require.Equal(t, ContractLogResult{Status: "ready", TxID: "btc-payout", Chain: "btc"}, result)
+	})
+	t.Run("enable-has-no-result-tx", func(t *testing.T) {
+		enable := mgr.beginContractActionLog(url, INVOKE_API_ENABLE, "SatoshiNet", "", "")
+		mgr.completeContractInvokeOperationLog(enable, txID)
+		mgr.serverNode = nil
+		result, err := mgr.GetContractLogResult(enable)
+		require.NoError(t, err)
+		require.Equal(t, ContractLogResult{Status: "none"}, result)
+		record, err := mgr.GetOperationLog(enable)
+		require.NoError(t, err)
+		require.Equal(t, txID, record.TxID)
+	})
 }
 
 func TestContractInvokeOperationLogRecordsFailureWithoutReservation(t *testing.T) {
@@ -65,6 +163,64 @@ func TestContractInvokeOperationLogRecordsFailureWithoutReservation(t *testing.T
 	if logs[0].History[len(logs[0].History)-1].Message != "contract invoke failed" {
 		t.Fatalf("failure message missing: %+v", logs[0].History)
 	}
+}
+
+func TestRGB11DepositLog(t *testing.T) {
+	mgr, recipient, issued, evidence, rpc := newRGB11GenericSendFixture(t)
+	mgr.rgbManager.evidence = newRGB11AcceptedEvidence(evidence, rpc)
+	mgr.l2IndexerClient = &IndexerRPCClientMgr{active: rpc}
+	node := &depositLogNode{NodeRPCClient: mgr.serverNode.client}
+	mgr.serverNode.client = node
+	bridge := NewTranscendContractRuntime(mgr)
+	*bridge.GetAssetName() = issued.AssetName
+	bridge.ChannelAddr = mgr.GetCoreChannelAddr()
+	bridge.LocalPubKey = mgr.serverNode.Pubkey.SerializeCompressed()
+	var err error
+	bridge.RemotePubKey, err = hex.DecodeString(indexer.GetBootstrapPubKey())
+	require.NoError(t, err)
+	bridge.Status, bridge.EnableBlockL1 = CONTRACT_STATUS_READY, 0
+	node.contract = bridge.URL()
+	status, err := json.Marshal(bridge)
+	require.NoError(t, err)
+	node.status = string(status)
+
+	asset, dest := issued.AssetName.String(), recipient.wallet.GetAddress()
+	_, err = mgr.DepositWithContract(dest, asset, "-1", 2)
+	require.EqualError(t, err, "invalid RGB11 deposit quantity")
+	txID, err := mgr.DepositWithContract(dest, asset, "100", 2)
+	require.NoError(t, err)
+	require.NotEmpty(t, txID)
+	require.Equal(t, dest, node.deposit.Intent.Recipient)
+	logs, err := mgr.GetOperationLogs()
+	require.NoError(t, err)
+	deposits := make(map[string]*OperationLogRecord)
+	for _, record := range logs {
+		if record.Action == "invoke_contract" {
+			amount := record.Parameters["amount"]
+			require.NotContains(t, deposits, amount)
+			deposits[amount] = record
+		}
+	}
+	require.Len(t, deposits, 2)
+	for _, record := range deposits {
+		require.Equal(t, node.contract, record.Parameters["contract"])
+		require.Equal(t, INVOKE_API_DEPOSIT, record.Parameters["action"])
+		require.Equal(t, "Bitcoin", record.Parameters["network"])
+		require.Equal(t, asset, record.Parameters["asset"])
+	}
+	require.Contains(t, deposits, "-1")
+	require.Equal(t, OperationLogFailed, deposits["-1"].Status)
+	require.Empty(t, deposits["-1"].TxID)
+	require.Contains(t, deposits, "100")
+	require.Equal(t, OperationLogSucceeded, deposits["100"].Status)
+	require.Equal(t, txID, deposits["100"].TxID)
+	raw, err := evidence.GetRawTx(txID)
+	require.NoError(t, err)
+	mgr.l1IndexerClient = &IndexerRPCClientMgr{active: &recoveryRPC{raw: map[string]string{txID: hex.EncodeToString(raw)}}}
+	node.item = InvokeItem{InUtxo: node.deposit.Source.Output.OutPointStr, OutTxId: "settlement"}
+	result, err := mgr.GetContractLogResult(deposits["100"].ID)
+	require.NoError(t, err)
+	require.Equal(t, ContractLogResult{Status: "ready", TxID: "settlement", Chain: "satnet"}, result)
 }
 
 type errOperationLogTestFailure struct{}

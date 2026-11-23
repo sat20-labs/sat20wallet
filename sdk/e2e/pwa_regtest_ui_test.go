@@ -155,6 +155,7 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 	sdkUI := sdkWASM && os.Getenv("SAT20_SDK_UI_E2E") == "1"
 	rgbCrossLayer := feature == "rgb-cross-layer"
 	v2AssetSplice := feature == "l2-channel-v2-asset-splice" || feature == "l2-channel-v2-asset-splice-diagnostic"
+	closeAfterSplice := feature == "l2-channel-v2-asset-splice" && os.Getenv("SAT20_PWA_CLOSE_AFTER_SPLICE") == "1"
 	var rgbCrossLayerFunding map[string]string
 	var rgbCoreStakeEvidence map[string]string
 
@@ -730,7 +731,7 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 		require.NoError(t, err)
 		require.NotEmpty(t, privateChannelID)
 	}
-	if feature == "l2-channel-private-btc" && os.Getenv("SAT20_E2E_LOCAL_REAL") == "1" {
+	if (feature == "l2-channel-private-btc" || closeAfterSplice) && os.Getenv("SAT20_E2E_LOCAL_REAL") == "1" {
 		prepareSDKPWARegtestL2PlainFunding(t, ordinary1, ordinary2, network, requireE2EFirstBackup)
 		waitRGB11RegtestPeerChannelReady(t, ordinary2, network, privateChannelID)
 	}
@@ -1241,6 +1242,9 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 	}
 	if feature == "l2-channel-v2-asset-splice" {
 		cases := []string{"POS PWA: v2 asset splicing-in preserves quantities and signed outpoints"}
+		if closeAfterSplice {
+			cases = append(cases, "Escape PWA: cooperative close returns confirmed BTC and ORDX to Bitcoin")
+		}
 		runSDKPWARegtestBrowserGroup(t, pwa, configPath, fixturePath, evidenceDir, "channel-v2-asset-splice", cases)
 		return
 	}
@@ -1302,6 +1306,7 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 			"DApp PWA: disconnect revokes the grant and notifies the client",
 			"DApp PWA: authorized Bitcoin PSBT signing preserves exact outputs without broadcasting",
 			"DApp PWA: separately authorized broadcast confirms the same signed transaction exactly once",
+			"DApp PWA: switching subaccounts and locking invalidate pending signatures",
 		}
 		if feature == "dapp-resume" {
 			cases = cases[7:]

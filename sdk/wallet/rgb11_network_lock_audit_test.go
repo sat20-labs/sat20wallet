@@ -110,7 +110,7 @@ func (e *rgbNetworkAuditEvidence) Broadcast([]byte) (string, error) {
 // fixtures can start readiness workers that read the same manager mutex; those
 // workers are not part of the transport operation being checked.
 func TestRGBNetworkBoundariesHoldNoWalletLocks(t *testing.T) {
-	for _, entry := range []string{"public-refresh-bitcoin", "background-mailbox-dkvs", "background-enable-dkvs", "read-only-resolve-dkvs"} {
+	for _, entry := range []string{"public-refresh-bitcoin", "background-mailbox-dkvs", "root-registration-dkvs", "read-only-resolve-dkvs"} {
 		t.Run(entry, func(t *testing.T) {
 			old := _chain
 			_chain = "testnet"
@@ -141,10 +141,10 @@ func TestRGBNetworkBoundariesHoldNoWalletLocks(t *testing.T) {
 				_, _ = manager.RefreshRGB11State(context.Background())
 			case "background-mailbox-dkvs":
 				_, _ = manager.syncRootRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{})
-			case "background-enable-dkvs":
+			case "root-registration-dkvs":
 				client := newRGB11MessageNodeClient(remote)
 				manager.serverNode = NewNode(client, "message.test", SERVER_NODE, client.CoreNodePubKey(), client.CoreNodePubKey())
-				_, _ = manager.enableRootRGB11AddressReceive(RGB11ReceiveCapabilityOptions{})
+				_ = manager.ensureAccountCoreBindingForSync(context.Background())
 			case "read-only-resolve-dkvs":
 				// A warm mapping is intentionally local-only; audit the cold
 				// source-validation request instead of demanding redundant I/O.

@@ -65,7 +65,7 @@ func (p *Manager) watchAccountMailbox(wallet common.Wallet) error {
 	if err != nil {
 		return err
 	}
-	return p.SubscribeDKVSPrefix(target)
+	return p.ensureOwnedDKVSPrefix(target)
 }
 
 func (p *Manager) readAccountMessages(wallet common.Wallet, verify dkvsindexer.RecordVerificationOptions) ([]*accountMessage, error) {
@@ -73,7 +73,7 @@ func (p *Manager) readAccountMessages(wallet common.Wallet, verify dkvsindexer.R
 	if err != nil {
 		return nil, err
 	}
-	store, err := p.accountDKVSStore()
+	store, err := p.ensureDKVSManager().primaryStore()
 	if err != nil {
 		return nil, err
 	}
@@ -121,11 +121,8 @@ func (p *Manager) readAccountMessages(wallet common.Wallet, verify dkvsindexer.R
 
 func (p *Manager) sendAccountMessage(wallet common.Wallet, id, kind, recipient string,
 	body []byte, payout bool) (*accountMessageReceipt, error) {
-	node := p.getAccountServiceNode()
-	if payout {
-		node = p.payoutMessageNode()
-	}
-	message, err := p.sendWalletMessageOnNode(wallet, id, kind, recipient, body, node, payout)
+	node := p.rootMessageNode(wallet)
+	message, err := p.ensureDKVSManager().sendWalletMessageOnNode(wallet, id, kind, recipient, body, node, payout)
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +139,7 @@ func (p *Manager) sendAccountMessage(wallet common.Wallet, id, kind, recipient s
 }
 
 func (p *Manager) resolveRGBAddress(address string, verify dkvsindexer.RecordVerificationOptions) (*RGB11AddressEndpoint, error) {
-	store, err := p.accountDKVSStore()
+	store, err := p.ensureDKVSManager().primaryStore()
 	if err != nil {
 		return nil, err
 	}
@@ -179,7 +176,7 @@ func (p *Manager) forgetAccountMessage(wallet common.Wallet, id string) error {
 	return p.deleteWalletMessageOutbox(sender, id)
 }
 func (p *Manager) hasAccountMessageEvidence(keys ...string) (bool, error) {
-	store, err := p.accountDKVSStore()
+	store, err := p.ensureDKVSManager().primaryStore()
 	if err != nil {
 		return false, err
 	}
@@ -192,9 +189,6 @@ func (p *Manager) enableRGBAddress(wallet common.Wallet, flags uint8) (*RGB11Add
 	}
 	if flags != 0 && flags&RGB11ReceiveCapabilityAddress == 0 {
 		return nil, ErrRGB11TraditionalReceiveRequired
-	}
-	if err := p.bindAccountToCurrentCoreNode(wallet); err != nil {
-		return nil, fmt.Errorf("bind RGB11 receive account to current CoreNode: %w", err)
 	}
 	return p.resolveRGBAddress(wallet.GetAddress(), dkvsindexer.RecordVerificationOptions{})
 }

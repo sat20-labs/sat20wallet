@@ -256,17 +256,6 @@ func (p *Manager) EnableConfiguredRGB11AddressReceive(options RGB11ReceiveCapabi
 		})
 }
 
-// enableRootRGB11AddressReceive is the internal lifecycle helper used while
-// bringing up account services. Its caller already owns that lifecycle; keep
-// it out of runAccountOperation to avoid recursively entering the account gate.
-func (p *Manager) enableRootRGB11AddressReceive(options RGB11ReceiveCapabilityOptions) (*RGB11AddressEndpoint, error) {
-	manager, err := p.captureRGB11NetworkScope(true)
-	if err != nil {
-		return nil, err
-	}
-	return manager.EnableConfiguredRGB11AddressReceive(options)
-}
-
 func (p *Manager) GetRGB11AssetBalance(name *indexer.AssetName) (*Decimal, error) {
 	releaseRGB11Observation := p.beginRGB11ReadObservation()
 	defer releaseRGB11Observation()
@@ -526,15 +515,9 @@ func (p *Manager) syncRootRGB11AddressMailbox(ctx context.Context,
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	// Generic DKVS polling also reaches this private background adapter. A
-	// wallet without RGB recovery must not consume RGB messages, but its
-	// ordinary mailbox synchronization remains usable.
-	if !p.accountManagedRecoveryConfigured() {
-		return &RGB11AddressMailboxSyncResult{}, nil
-	}
 	return runRootRGB11ManagedOperation(p, ctx, rgb11ManagedOperationContinue,
 		func(manager *rgb11Manager) (*RGB11AddressMailboxSyncResult, error) {
-			return manager.SyncConfiguredRGB11AddressMailbox(ctx, verify)
+			return manager.syncRGBMailbox(ctx, verify, false)
 		})
 }
 

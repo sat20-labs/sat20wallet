@@ -27,9 +27,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Initial activation uses the real PWA recovery workflow. A controlled 503
-// blocks its binding, then an explicit retry completes service activation
-// and the independent private backup. Import itself performs no remote CAS.
+// Import registers the service identity. A controlled 503 leaves the root
+// local, and backup activation must wait for the service binding to recover.
 func TestSDKAccountActivationRetry(t *testing.T) {
 	network := newDKVSNoPluginTemplateFixtureWithArgs(t, map[string]int64{}, nil, nil, dkvsMinerArgs(t)).Network
 	waitForDKVSPeerReady(t, network)
@@ -116,6 +115,7 @@ func runSDKAccountActivationRetry(t *testing.T, network *realSatoshiNet, mnemoni
 	db := indexerdb.NewKVDB(t.TempDir())
 	require.NotNil(t, db)
 	manager := wallet.NewManager(config, db)
+	manager.Start()
 	t.Cleanup(func() {
 		audit.blockBinding.Store(false)
 		audit.blockReceive.Store(false)
@@ -141,7 +141,7 @@ func runSDKAccountActivationRetry(t *testing.T, network *realSatoshiNet, mnemoni
 	require.False(t, identity.RecoveryConfigured)
 	require.False(t, identity.ActivationPending)
 	blocked, forwarded, unexpected, _ := audit.safeCounts()
-	require.Zero(t, blocked)
+	require.Equal(t, 1, blocked, "only the root import registers the service")
 	require.Zero(t, forwarded)
 	require.Zero(t, unexpected, "inactive discovery must not publish")
 	grant, err := manager.ConfirmAccountStorage(wallet.AccountStorageTemporary, 0)
@@ -181,11 +181,10 @@ func runSDKAccountActivationRetry(t *testing.T, network *realSatoshiNet, mnemoni
 		}
 		return err
 	}
-	require.Error(t, activate(), "the explicit activation must expose the controlled binding failure")
 	select {
 	case <-audit.firstBlockedBinding:
 	case <-time.After(20 * time.Second):
-		t.Fatal("activation did not reach the real binding CAS")
+		t.Fatal("root import did not reach the real binding CAS")
 	}
 	require.False(t, manager.GetAccountManagementStatus().RecoveryConfigured)
 	root := manager.GetWallet()
@@ -197,7 +196,7 @@ func runSDKAccountActivationRetry(t *testing.T, network *realSatoshiNet, mnemoni
 	_, err = client.GetRecord(expectedKey)
 	require.ErrorIs(t, err, wallet.ErrDKVSRecordNotFound, "503 must not reach the backend")
 	blocked, forwarded, unexpected, rows := audit.safeCounts()
-	require.Positive(t, blocked)
+	require.Equal(t, 1, blocked, "activation must never write the binding")
 	require.Zero(t, forwarded)
 	require.Zero(t, unexpected)
 	for _, row := range rows {
@@ -222,6 +221,8 @@ func runSDKAccountActivationRetry(t *testing.T, network *realSatoshiNet, mnemoni
 	require.Equal(t, grant.ID, retryGrant.ID, "retry must retain the original storage authorization")
 	audit.trackReceive.Store(true)
 	audit.blockReceive.Store(true)
+	// The failed registration revoked write readiness. Keep receiving offline
+	// for the first activation attempt; it must preserve the original grant.
 	retryErr := activate()
 	var responseErr *wallet.HTTPResponseError
 	require.ErrorAs(t, retryErr, &responseErr, "retry must reach real online receiving, not reuse an offline grant")
@@ -259,11 +260,16 @@ func runSDKAccountActivationRetry(t *testing.T, network *realSatoshiNet, mnemoni
 	require.NoError(t, err)
 	require.Equal(t, beforePrefixes, afterPrefixes)
 	require.Equal(t, beforeRequests, requests.Load())
-	// The raw binding has no outbox. Resume its unfinished explicit workflow
-	// once after the service returns, without reconfirming a known root state
-	// or purchasing another storage authorization.
-	require.NoError(t, activate())
+	// The approved retry reopens the verified session but still cannot
+	// publish a recovery package until root registration succeeds.
+	require.ErrorIs(t, activate(), dkvs.ErrRecordNotFound)
 	receives := audit.takeReceives()
+	manager.NotifyNetworkOnline()
+	require.Eventually(t, func() bool {
+		record, err := client.GetRecord(expectedKey)
+		return err == nil && record != nil
+	}, 20*time.Second, 50*time.Millisecond, "online event must finish initial Core registration")
+	require.NoError(t, activate())
 	require.NoError(t, manager.StartDKVSSync())
 	var committed *wire.DKVSRecord
 	committed, err = client.GetRecord(expectedKey)

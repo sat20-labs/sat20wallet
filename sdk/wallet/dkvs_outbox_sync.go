@@ -413,6 +413,10 @@ func isDKVSNetworkFailure(err error) bool {
 // A response for one request can fail while the authority still serves other
 // independent keys. Only loss of the transport itself revokes the session.
 func isDKVSOutboxGlobalTransportFailure(err error) bool {
+	// A timeout on a backup POST says nothing about the active receiver.
+	if _, backup := err.(*backupSubmitError); backup {
+		return false
+	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}

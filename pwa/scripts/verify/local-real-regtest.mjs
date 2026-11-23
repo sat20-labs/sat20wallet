@@ -205,11 +205,11 @@ async function unusedLoopbackPort() {
   return port
 }
 
-async function requirePortFree(port, label) {
+async function requirePortFree(port, label, host = '127.0.0.1') {
   const server = createServer()
   await new Promise((resolvePromise, reject) => {
     server.once('error', error => reject(new Error(`${label} port ${port} is unavailable (${error.code})`)))
-    server.listen(port, '127.0.0.1', () => server.close(error => error ? reject(error) : resolvePromise()))
+    server.listen(port, host, () => server.close(error => error ? reject(error) : resolvePromise()))
   })
 }
 
@@ -287,13 +287,13 @@ function quoteYaml(value) {
   return JSON.stringify(String(value))
 }
 
-function renderIndexerConfig({ dataDir, logDir, host, rpcPort, user, password, apiPort, indexerPubKey }) {
+function renderIndexerConfig({ dataDir, logDir, host, bitcoinHost = host, rpcPort, user, password, apiPort, indexerPubKey }) {
   return `chain: regtest\n` +
     (indexerPubKey ? `pubkey: ${quoteYaml(indexerPubKey)}\n` : '') +
     `db:\n  path: ${quoteYaml(join(dataDir, 'db'))}\n` +
     `  badger_block_cache_total_mb: 64\n  badger_index_cache_total_mb: 16\n` +
     `  badger_num_compactors: 2\n  badger_flatten_workers: 1\n` +
-    `share_rpc:\n  bitcoin:\n    host: ${quoteYaml(host)}\n    port: ${rpcPort}\n` +
+    `share_rpc:\n  bitcoin:\n    host: ${quoteYaml(bitcoinHost)}\n    port: ${rpcPort}\n` +
     `    user: ${quoteYaml(user)}\n    password: ${quoteYaml(password)}\n` +
     `log:\n  level: info\n  path: ${quoteYaml(logDir)}\n` +
     `basic_index:\n  max_index_height: 0\n  period_flush_to_db: 12\n` +
@@ -399,11 +399,11 @@ async function waitIndexer(url, logPath) {
   }, logPath)
 }
 
-async function waitIndexerPeer(rpc, logPath) {
+async function waitIndexerPeer(rpc, logPath, bitcoinHost = '127.0.0.1') {
   return waitFor('L1 indexer P2P peer on owned Bitcoin Core', INDEXER_READY_TIMEOUT_MS, () => {
     const peers = parseRPCJSON(rpc(['getpeerinfo']), 'getpeerinfo')
     assert.ok(peers.every(peer => isLoopbackPeerAddr(peer.addr)), 'Bitcoin Core may only have loopback peers')
-    return peers.find(peer => peer.inbound && peer.addrbind === `127.0.0.1:${CORE_P2P_PORT}` &&
+    return peers.find(peer => peer.inbound && peer.addrbind === `${bitcoinHost}:${CORE_P2P_PORT}` &&
       /(?:^|\/)MempoolSync:[^/]+\//.test(peer.subver ?? ''))
   }, logPath)
 }
@@ -489,7 +489,11 @@ export async function startLocalRealRegtest({ directory, workspaceRoot, env = pr
   copyFileSync(dependencies.walletFixture, copiedWalletFixture, fsConstants.COPYFILE_EXCL)
   chmodSync(copiedWalletFixture, 0o600)
 
-  await requirePortFree(CORE_P2P_PORT, 'Bitcoin Core regtest P2P')
+  // The indexer requires the regtest P2P port. IPv6 keeps a concurrent
+  // isolated IPv4 test run separate while the browser endpoints stay IPv4.
+  const useIPv6 = env.SAT20_REGTEST_P2P_IPV6 === '1'
+  const bitcoinHost = useIPv6 ? '[::1]' : '127.0.0.1'
+  await requirePortFree(CORE_P2P_PORT, 'Bitcoin Core regtest P2P', useIPv6 ? '::1' : bitcoinHost)
   const rpcPort = await unusedLoopbackPort()
   const apiPort = await unusedLoopbackPort()
   const electrsHTTPPort = await unusedLoopbackPort()
@@ -507,8 +511,9 @@ export async function startLocalRealRegtest({ directory, workspaceRoot, env = pr
     '[regtest]',
     'rest=1', 'txindex=1', 'prune=0',
     'dnsseed=0', 'discover=0', 'upnp=0', 'natpmp=0', 'listen=1',
-    `bind=127.0.0.1:${CORE_P2P_PORT}`, `port=${CORE_P2P_PORT}`,
+    `bind=${bitcoinHost}:${CORE_P2P_PORT}`, `port=${CORE_P2P_PORT}`,
     'rpcbind=127.0.0.1', 'rpcallowip=127.0.0.1', `rpcport=${rpcPort}`,
+    ...(useIPv6 ? ['rpcbind=::1', 'rpcallowip=::1/128'] : []),
     'fallbackfee=0.0001', 'daemon=0', 'printtoconsole=1',
   ].join('\n') + '\n'
   writePrivate(coreConfigPath, coreConfig)
@@ -635,6 +640,7 @@ export async function startLocalRealRegtest({ directory, workspaceRoot, env = pr
       dataDir: indexerDataDir,
       logDir: indexerLogDir,
       host: '127.0.0.1',
+      bitcoinHost,
       rpcPort,
       user: cookie.username,
       password: cookie.password,
@@ -652,7 +658,7 @@ export async function startLocalRealRegtest({ directory, workspaceRoot, env = pr
     })
     const indexerURL = `http://127.0.0.1:${apiPort}/btc/regtest`
     await waitIndexer(indexerURL, indexer.entry.logPath)
-    const indexerPeer = await waitIndexerPeer(args => bitcoinCLI(dependencies, coreDir, rpcPort, args), indexer.entry.logPath)
+    const indexerPeer = await waitIndexerPeer(args => bitcoinCLI(dependencies, coreDir, rpcPort, args), indexer.entry.logPath, bitcoinHost)
     manifest.indexerPeer = { addr: indexerPeer.addr, addrbind: indexerPeer.addrbind, subver: indexerPeer.subver }
     persist()
     assert.equal(indexer.child.exitCode, null, 'owned L1 indexer exited before readiness')

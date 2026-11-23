@@ -81,7 +81,7 @@ func TestCoreBindingNoop(t *testing.T) {
 			if name == "wrong_endpoint" {
 				target = hex.EncodeToString(exampleDKVSPriv(44).PubKey().SerializeCompressed())
 			}
-			result, err := client.acceptCoreBinding(root, key, target, value)
+			result, err := client.acceptCoreBinding(root, key, target, value, moveCoreBinding)
 			if name == "read_failure" || name == "bad_signature" || name == "wrong_endpoint" {
 				require.Error(t, err)
 				require.Nil(t, result)
@@ -135,7 +135,7 @@ func TestCoreBindingNoop(t *testing.T) {
 				require.Equal(t, []dkvs.AccountServiceExtension{{Type: 7, Value: []byte("preserved")}}, descriptor.Extensions)
 			}
 			priorGets, priorPosts := gets, posts
-			again, err := client.acceptCoreBinding(root, key, coreID, value)
+			again, err := client.acceptCoreBinding(root, key, coreID, value, moveCoreBinding)
 			require.NoError(t, err)
 			require.Equal(t, priorGets+1, gets, "repeat must read the endpoint, not a cached binding")
 			require.Equal(t, priorPosts, posts, "repeat must not publish an unchanged record")

@@ -1121,7 +1121,7 @@ export async function runPwaPosCases(t, fixture) {
     await page.getByRole('button', { name: 'Issue RGB Asset', exact: true }).click()
     const form = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Issue RGB Asset', exact: true }) })
     await form.locator('select').selectOption('NIA')
-    await form.getByPlaceholder('USDT', { exact: true }).fill(ticker)
+    await form.getByRole('textbox', { name: /^Asset symbol\b/ }).fill(ticker)
     await form.getByRole('textbox', { name: /^Display name\b/ }).fill('PWA RGB cross-layer test')
     await form.locator('input[type="number"]').fill('0')
     await form.getByPlaceholder('1000', { exact: true }).fill('1000')
@@ -2105,6 +2105,9 @@ export async function runPwaPosCases(t, fixture) {
     await check(requiredPwaPosCases[23], async () => {
       await openEscape()
       const current = await readChannel()
+      const safety = await safetySnapshot()
+      assert.equal(safety.status, 'READY_SAFE')
+      assert.equal(safety.commit_height, current.commitHeight)
       const feeRate = asInteger(await page.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().btcFeeRate))
       assert.ok(Array.isArray(current.remotebalanceL1))
       assert.ok(current.remotebalanceL1.every(allocation => asInteger(allocation.Amount) === 0n),
@@ -2128,6 +2131,9 @@ export async function runPwaPosCases(t, fixture) {
       const l1SatsBefore = await addressAmount('Bitcoin', fixture.address, '::')
       const l1AssetBefore = await addressAmount('Bitcoin', fixture.address, fixture.asset.key)
       const l2SatsBefore = await readL2Total()
+      assert.ok(l2SatsBefore > 0n, 'the fixture must have a confirmed balance outside the private channel')
+      const channelAsset = channelAmount(current, fixture.asset.key)
+      assert.ok(channelAsset > 0n, 'the cooperative close fixture must hold real ORDX')
       const dialog = await requestCooperativeClose(current)
       await dialog.getByRole('button', { name: 'Confirm Close', exact: true }).click()
       await expect(dialog).toBeHidden()
@@ -2150,14 +2156,22 @@ export async function runPwaPosCases(t, fixture) {
       await expect.poll(() => stpRead('getChannelStatus', channelId), pollOptions).toBe(0)
       await expect.poll(() => addressAmount('Bitcoin', fixture.address, '::'), pollOptions).toBe(l1SatsBefore + expectedReturn)
       await expect.poll(() => addressAmount('Bitcoin', fixture.address, fixture.asset.key), pollOptions)
-        .toBe(l1AssetBefore + channelAmount(current, fixture.asset.key))
+        .toBe(l1AssetBefore + channelAsset)
       // Existing spendable L2 deposits are independent of the private channel.
       assert.equal(await readL2Total(), l2SatsBefore)
       await page.evaluate(() => { location.hash = '#/wallet' })
       await showTab('Channel')
       await expect(activePanel().getByRole('button', { name: 'Open', exact: true })).toBeVisible()
       await assertWalletBalanceUI('Bitcoin', true)
-      console.log(JSON.stringify({ pwaCooperativeClose: closing.txid, returnedSats: String(returnedSats), inputs: [...spent] }))
+      const confirmed = await control('snapshot')
+      await reopen(false)
+      await assertWalletBalanceUI('Bitcoin')
+      await expect.poll(() => addressAmount('Bitcoin', fixture.address, fixture.asset.key), pollOptions)
+        .toBe(l1AssetBefore + channelAsset)
+      assertL1TransactionDelta(confirmed, await control('snapshot'), [], 0,
+        'reopening the wallet must not replay the completed cooperative close')
+      console.log(JSON.stringify({ pwaCooperativeClose: closing.txid, returnedSats: String(returnedSats),
+        returnedAsset: String(channelAsset), fee: String(expectedGross - returnedSats), inputs: [...spent] }))
     })
 
     // Keep the known ORDX Advanced availability regression last. Its happy path

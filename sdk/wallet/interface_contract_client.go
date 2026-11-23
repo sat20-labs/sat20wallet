@@ -357,14 +357,12 @@ func (p *Manager) InvokeContractV2_Satsnet(contractURL string, jsonInvokeParam s
 		return "", fmt.Errorf("wallet is not created/unlocked")
 	}
 	logID := p.beginContractInvokeOperationLog(contractURL, jsonInvokeParam, "SatoshiNet", assetName, amt)
-	defer func() {
-		if err != nil {
-			p.failContractInvokeOperationLog(logID, err)
-		} else if txID != "" {
-			p.completeContractInvokeOperationLog(logID, txID)
-		}
-	}()
+	txID, err = p.invokeSatsnetContract(contractURL, jsonInvokeParam, assetName, amt)
+	p.finishContractInvokeLog(logID, txID, err, nil)
+	return txID, err
+}
 
+func (p *Manager) invokeSatsnetContract(contractURL, jsonInvokeParam, assetName, amt string) (txID string, err error) {
 	channelAddr, _, _, err := ParseContractURL(contractURL)
 	if err != nil {
 		return "", err
@@ -464,11 +462,7 @@ func (p *Manager) InvokeContractV2(contractURL string, jsonInvokeParam string,
 		if json.Unmarshal([]byte(jsonInvokeParam), &invoke) != nil || invoke.Action != INVOKE_API_DEPOSIT {
 			return "", fmt.Errorf("RGB11 L1 contract funding requires an authenticated deposit intent")
 		}
-		prepared, err := p.PrepareRGB11ContractDeposit(context.Background(), contractURL, p.GetWallet().GetAddress(), assetName, amt, feeRate)
-		if err != nil {
-			return "", err
-		}
-		return p.ResumeRGB11ContractDeposit(context.Background(), prepared.TransferID)
+		return p.submitRGB11Deposit(contractURL, p.GetWallet().GetAddress(), assetName, amt, feeRate)
 	}
 
 	var nullDataScript []byte
@@ -639,11 +633,10 @@ func (p *Manager) DepositWithContract(destAddr string, assetName string, amt str
 		return "", fmt.Errorf("contract not active")
 	}
 	if name := ParseAssetString(assetName); name != nil && name.Protocol == "rgb11" {
-		prepared, err := p.PrepareRGB11ContractDeposit(context.Background(), url, destAddr, assetName, amt, feeRate)
-		if err != nil {
-			return "", err
-		}
-		return p.ResumeRGB11ContractDeposit(context.Background(), prepared.TransferID)
+		logID := p.beginContractActionLog(url, INVOKE_API_DEPOSIT, "Bitcoin", assetName, amt)
+		txID, err := p.submitRGB11Deposit(url, destAddr, assetName, amt, feeRate)
+		p.finishContractInvokeLog(logID, txID, err, nil)
+		return txID, err
 	}
 
 	depositPara := DepositInvokeParam{
@@ -679,6 +672,15 @@ func (p *Manager) DepositWithContract(destAddr string, assetName string, amt str
 	return txId, nil
 }
 
+func (p *Manager) submitRGB11Deposit(url, recipient, asset, amount string, feeRate int64) (string, error) {
+	ctx := context.Background()
+	deposit, err := p.PrepareRGB11ContractDeposit(ctx, url, recipient, asset, amount, feeRate)
+	if err != nil {
+		return "", err
+	}
+	return p.ResumeRGB11ContractDeposit(ctx, deposit.TransferID)
+}
+
 // TODO 提取时，需要增加收费，除了固定的  DEFAULT_SERVICE_FEE_WITHDRAW 之外，
 // 还需要支付提取资产的 DEFAULT_FEE_RATIO_WITHDRAW_WITH_CONTRACT
 // 取款（提现）：在聪网将资产转入流动性池子，流动性池子在主网将对应的资产转给destAddr
@@ -693,11 +695,16 @@ func (p *Manager) WithdrawWithContract(destAddr string, assetName string, amt st
 // that already selected a contract (for example channel expansion) must pass
 // it explicitly so a same-asset AMM cannot be selected accidentally.
 func (p *Manager) withdrawWithContract(destAddr string, assetName string, amt string,
-	feeRate int64, contractURL string) (string, error) {
+	feeRate int64, contractURL string) (txID string, err error) {
 	Log.Infof("WithdrawWithContract %s %s", assetName, amt)
 	if p.wallet == nil {
 		return "", fmt.Errorf("wallet is not created/unlocked")
 	}
+	logID := p.beginContractActionLog(contractURL, INVOKE_API_WITHDRAW, "SatoshiNet", assetName, amt)
+	url := contractURL
+	defer func() {
+		p.finishContractInvokeLog(logID, txID, err, map[string]string{"contract": url, "amount": amt})
+	}()
 	// if !p.IsReady() {
 	// 	return "", fmt.Errorf("not ready")
 	// }
@@ -749,7 +756,6 @@ func (p *Manager) withdrawWithContract(destAddr string, assetName string, amt st
 			assetName, coreChannelId, amt, total.String())
 	}
 
-	url := contractURL
 	var r ContractRuntime
 	if url != "" {
 		r = p.getRemoteDeployedContract(url)
@@ -762,6 +768,7 @@ func (p *Manager) withdrawWithContract(destAddr string, assetName string, amt st
 		}
 	}
 	if r == nil {
+		url = contractURL
 		return "", fmt.Errorf("can't find a correct contract")
 	}
 	if !r.GetRuntimeBase().IsActive_SatsNet() {
@@ -815,11 +822,11 @@ func (p *Manager) withdrawWithContract(destAddr string, assetName string, amt st
 		}
 	}
 
-	txId, err := p.InvokeContractV2_Satsnet(url, string(invokeJson), assetName, amt, 0)
+	txID, err = p.invokeSatsnetContract(url, string(invokeJson), assetName, amt)
 	if err != nil {
 		Log.Errorf("InvokeContractV2_Satsnet %s failed, %v", url, err)
 		return "", err
 	}
-	Log.Infof("WithdrawWithContract succeed. %s", txId)
-	return txId, nil
+	Log.Infof("WithdrawWithContract succeed. %s", txID)
+	return txID, nil
 }

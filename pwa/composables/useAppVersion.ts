@@ -78,7 +78,7 @@ export function useAppVersion() {
 
     if (isForceUpdate.value) {
       toast({
-        variant: 'destructive',
+        variant: 'info',
         title: t('setting.forceUpdateTitle'),
         description: t('setting.forceUpdateDescription', { releaseNotes: info.releaseNotes }),
         duration: 10000,
@@ -175,6 +175,7 @@ export function useAppVersion() {
         }),
         duration: 3000,
       })
+      isChecking.value = false
       await reloadApp()
       return true
     } catch (error) {

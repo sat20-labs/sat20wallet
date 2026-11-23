@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -130,7 +131,15 @@ func accountServiceCoreNodeID(node *Node) (string, error) {
 func (p *Manager) messageServiceClient() (MessageServiceRPCClient, string, error) {
 	// Capture the client and identity together. Account routing can be configured
 	// independently of the channel's bootstrap/co-signing peer.
-	return messageClientForNode(p.getAccountServiceNode())
+	node := p.getAccountServiceNode()
+	if _, err := accountServiceCoreNodeID(node); err != nil && p.IsServerMode() {
+		root, err := p.accountManagementRootWallet()
+		if err != nil {
+			return nil, "", err
+		}
+		node = p.rootMessageNode(root)
+	}
+	return messageClientForNode(node)
 }
 
 func messageClientForNode(node *Node) (MessageServiceRPCClient, string, error) {
@@ -151,15 +160,15 @@ func messageClientForNode(node *Node) (MessageServiceRPCClient, string, error) {
 // The connected CoreNode must explicitly accept the root's signed binding
 // before any generic wallet KV write is permitted.
 func (p *Manager) bindAccountToCurrentCoreNode(root common.Wallet) error {
-	return p.bindAccountOnNode(root, p.getAccountServiceNode())
+	return p.bindAccountOnNode(root, p.rootMessageNode(root))
 }
 
 func (p *Manager) bindAccountOnNode(root common.Wallet, node *Node) error {
-	store, err := p.accountDKVSStore()
+	store, err := p.ensureDKVSManager().primaryStore()
 	if err != nil {
 		return err
 	}
-	bind, err := p.prepareBindingOnNode(root, store, node)
+	bind, err := p.prepareBindingOnNode(root, store, node, moveCoreBinding)
 	if err != nil {
 		return err
 	}
@@ -170,9 +179,9 @@ func (p *Manager) bindAccountOnNode(root common.Wallet, node *Node) error {
 // closure after releasing its short local scope gate. Binding itself uses the
 // wallet KV RPC bootstrap exception; it does not depend on MessageService.
 func (p *Manager) prepareAccountCoreNodeBinding(root common.Wallet, store *dkvsStore) (func() error, error) {
-	return p.prepareBindingOnNode(root, store, p.getAccountServiceNode())
+	return p.prepareBindingOnNode(root, store, p.rootMessageNode(root), verifyCoreBinding)
 }
-func (p *Manager) prepareBindingOnNode(root common.Wallet, store *dkvsStore, node *Node) (func() error, error) {
+func (p *Manager) prepareBindingOnNode(root common.Wallet, store *dkvsStore, node *Node, mode coreBindingMode) (func() error, error) {
 	if p == nil || root == nil || store == nil || store.client == nil {
 		return nil, ErrMessageServiceUnavailable
 	}
@@ -209,11 +218,11 @@ func (p *Manager) prepareBindingOnNode(root common.Wallet, store *dkvsStore, nod
 	if err != nil {
 		return nil, err
 	}
-	if err := p.SubscribeDKVSPrefix(prefix); err != nil {
+	if err := p.ensureOwnedDKVSPrefix(prefix); err != nil {
 		return nil, err
 	}
 	return func() error {
-		return p.commitAccountCoreBinding(ctx, root, store, key, coreID, prefix, value)
+		return p.commitAccountCoreBinding(ctx, root, store, key, coreID, prefix, value, mode)
 	}, nil
 }
 
@@ -300,9 +309,6 @@ func (p *Manager) SendAccountDirectMessage(applicationID, kind, recipientAccount
 	root, err := p.accountManagementRootWallet()
 	if err != nil {
 		return nil, err
-	}
-	if err := p.bindAccountToCurrentCoreNode(root); err != nil {
-		return nil, fmt.Errorf("bind sender account to current CoreNode: %w", err)
 	}
 	internal, ok := root.(*InternalWallet)
 	if !ok {
@@ -423,7 +429,7 @@ func (p *Manager) ReadAccountDirectMessages(start, limit int) ([]*AccountDirectM
 	if err != nil {
 		return nil, 0, err
 	}
-	store, err := p.accountDKVSStore()
+	store, err := p.ensureDKVSManager().primaryStore()
 	if err != nil {
 		return nil, 0, err
 	}
@@ -489,7 +495,38 @@ func (p *Manager) deleteWalletMessageOutbox(senderAccount, applicationID string)
 	}
 	return p.db.Delete(accountMessageOutboxKeyForSender(senderAccount, applicationID))
 }
-func (p *Manager) sendPersistedWalletMessage(senderAccount string, outbox *accountMessageOutboxRecord, node *Node, requireCommit bool) (*swire.DirectMessage, error) {
+
+// The Core reports got/want only for an unaccepted message. A bare sequence
+// error can also mean that an accepted message ID was reused with different bytes.
+func staleDirectSequence(resp *swire.MessageServiceResponse, old uint64) (uint64, bool) {
+	if resp == nil || resp.Code == 0 {
+		return 0, false
+	}
+	want, ok := strings.CutPrefix(resp.Msg, fmt.Sprintf("invalid message sequence: got=%d want=", old))
+	if !ok {
+		return 0, false
+	}
+	next, err := strconv.ParseUint(want, 10, 64)
+	return next, err == nil && next > old
+}
+
+func (p *Manager) signAndSaveDirect(sender common.Wallet, outbox *accountMessageOutboxRecord) error {
+	hash, err := swire.DirectMessageSigningHash(&outbox.Direct)
+	if err != nil {
+		return err
+	}
+	signer, ok := sender.(dkvsAccountSchnorrSigner)
+	if !ok {
+		return fmt.Errorf("account wallet cannot sign message")
+	}
+	outbox.Direct.SenderSignature, err = signer.SignSchnorrMessage(hash[:])
+	if err != nil {
+		return err
+	}
+	return p.saveWalletMessageOutbox(outbox.Direct.SenderAccount, outbox)
+}
+
+func (p *Manager) sendPersistedWalletMessage(sender common.Wallet, outbox *accountMessageOutboxRecord, node *Node, requireCommit, retrySequence bool) (*swire.DirectMessage, error) {
 	client, coreID, err := messageClientForNode(node)
 	if err != nil {
 		return nil, err
@@ -497,32 +534,43 @@ func (p *Manager) sendPersistedWalletMessage(senderAccount string, outbox *accou
 	if outbox == nil || outbox.SourceCoreNode != coreID {
 		return nil, fmt.Errorf("message outbox belongs to a different CoreNode")
 	}
-	message := outbox.Direct
-	resp, err := client.SendMessageServiceReq(&swire.MessageServiceRequest{Action: swire.MessageServiceActionSendDirect, Direct: &message})
+	message := &outbox.Direct
+	request := &swire.MessageServiceRequest{Action: swire.MessageServiceActionSendDirect, Direct: message}
+	resp, err := client.SendMessageServiceReq(request)
+	if err != nil && retrySequence {
+		if next, stale := staleDirectSequence(resp, message.SenderMsgID); stale {
+			message.SenderMsgID = next
+			if err := p.signAndSaveDirect(sender, outbox); err != nil {
+				return nil, err
+			}
+			resp, err = client.SendMessageServiceReq(request)
+		}
+	}
 	if err != nil {
-		return &message, err
+		return message, err
 	}
 	if requireCommit {
 		if resp == nil || resp.Code != 0 || !resp.MailboxCommitted {
-			return &message, errRGBMailboxPending
+			return message, errRGBMailboxPending
 		}
 		// Keep this exact signed message until the RGB receipt has been saved.
-		return &message, nil
+		return message, nil
 	}
-	if err := p.deleteWalletMessageOutbox(senderAccount, outbox.ApplicationID); err != nil {
-		Log.Warnf("delete accepted wallet message outbox %s/%s failed: %v", senderAccount, outbox.ApplicationID, err)
+	if err := p.deleteWalletMessageOutbox(message.SenderAccount, outbox.ApplicationID); err != nil {
+		Log.Warnf("delete accepted wallet message outbox %s/%s failed: %v", message.SenderAccount, outbox.ApplicationID, err)
 	}
-	return &message, nil
+	return message, nil
 }
 
 // Account-management, RGB11 and other wallet protocols share this transport.
 func (p *Manager) sendWalletDirectMessage(sender common.Wallet, applicationID, kind, recipientAccount string, body []byte) (*swire.DirectMessage, error) {
-	return p.sendWalletMessageOnNode(sender, applicationID, kind, recipientAccount, body, p.getAccountServiceNode(), false)
+	return p.ensureDKVSManager().sendWalletMessageOnNode(sender, applicationID, kind, recipientAccount, body, p.rootMessageNode(sender), false)
 }
-func (p *Manager) sendWalletMessageOnNode(sender common.Wallet, applicationID, kind, recipientAccount string, body []byte, node *Node, requireCommit bool) (*swire.DirectMessage, error) {
-	if p == nil || sender == nil || !validMessageApplicationID(applicationID) || strings.TrimSpace(kind) == "" || len(body) == 0 {
+func (m *dkvsManager) sendWalletMessageOnNode(sender common.Wallet, applicationID, kind, recipientAccount string, body []byte, node *Node, requireCommit bool) (*swire.DirectMessage, error) {
+	if m == nil || m.owner == nil || sender == nil || !validMessageApplicationID(applicationID) || strings.TrimSpace(kind) == "" || len(body) == 0 {
 		return nil, fmt.Errorf("invalid wallet direct message")
 	}
+	p := m.owner
 	p.messageSendMu.Lock()
 	defer p.messageSendMu.Unlock()
 	senderID, err := dkvsAccountID(sender)
@@ -540,9 +588,6 @@ func (p *Manager) sendWalletMessageOnNode(sender common.Wallet, applicationID, k
 	if senderID != rootID {
 		return nil, dkvsindexer.ErrPermissionDenied
 	}
-	if err := p.bindAccountOnNode(sender, node); err != nil {
-		return nil, fmt.Errorf("bind sender account to current CoreNode: %w", err)
-	}
 	existing, err := p.loadWalletMessageOutbox(senderID, applicationID)
 	if err != nil {
 		return nil, err
@@ -551,7 +596,8 @@ func (p *Manager) sendWalletMessageOnNode(sender common.Wallet, applicationID, k
 		if existing.Recipient != recipientAccount || existing.Kind != kind {
 			return nil, fmt.Errorf("message application id already used")
 		}
-		return p.sendPersistedWalletMessage(senderID, existing, node, requireCommit)
+		retrySequence := kind == AccountMessageKindRGB11ACK || kind == AccountMessageKindRGB11Consignment
+		return p.sendPersistedWalletMessage(sender, existing, node, requireCommit, retrySequence)
 	}
 	internal, ok := sender.(*InternalWallet)
 	if !ok {
@@ -582,23 +628,11 @@ func (p *Manager) sendWalletMessageOnNode(sender common.Wallet, applicationID, k
 		return nil, err
 	}
 	message := swire.DirectMessage{SenderAccount: senderID, SenderMsgID: next.NextSenderMsgID, MessageID: messageID, RecipientAccount: recipientAccount, Ciphertext: ciphertext}
-	hash, err := swire.DirectMessageSigningHash(&message)
-	if err != nil {
-		return nil, err
-	}
-	signer, ok := sender.(dkvsAccountSchnorrSigner)
-	if !ok {
-		return nil, fmt.Errorf("account wallet cannot sign message")
-	}
-	message.SenderSignature, err = signer.SignSchnorrMessage(hash[:])
-	if err != nil {
-		return nil, err
-	}
 	outbox := &accountMessageOutboxRecord{Version: accountMessageOutboxVersion, ApplicationID: applicationID, SourceCoreNode: coreID, Recipient: recipientAccount, Kind: kind, Direct: message}
-	if err := p.saveWalletMessageOutbox(senderID, outbox); err != nil {
+	if err := p.signAndSaveDirect(sender, outbox); err != nil {
 		return nil, err
 	}
-	return p.sendPersistedWalletMessage(senderID, outbox, node, requireCommit)
+	return p.sendPersistedWalletMessage(sender, outbox, node, requireCommit, false)
 }
 
 func decodeWalletDirectRecord(wallet common.Wallet, record *swire.DKVSRecord) (*AccountDirectMessage, error) {
@@ -635,7 +669,7 @@ func (p *Manager) readWalletDirectMessages(wallet common.Wallet) ([]*AccountDire
 	if err != nil {
 		return nil, err
 	}
-	store, err := p.accountDKVSStore()
+	store, err := p.ensureDKVSManager().primaryStore()
 	if err != nil {
 		return nil, err
 	}
@@ -697,7 +731,7 @@ func (p *Manager) ReadOfflineMessages(recipientWallet common.Wallet, start, limi
 	if accountID != rootID {
 		return nil, nil, 0, dkvsindexer.ErrPermissionDenied
 	}
-	store, err := p.accountDKVSStore()
+	store, err := p.ensureDKVSManager().primaryStore()
 	if err != nil {
 		return nil, nil, 0, err
 	}
@@ -751,10 +785,7 @@ func (p *Manager) DeleteMailboxMessage(mailboxWallet common.Wallet, key string) 
 	if err != nil || parsed.Namespace != "mail" || len(parsed.Segments) == 0 || parsed.Segments[0] != accountID {
 		return dkvsindexer.ErrPermissionDenied
 	}
-	if err := p.bindAccountToCurrentCoreNode(mailboxWallet); err != nil {
-		return err
-	}
-	store, err := p.accountDKVSStore()
+	store, err := p.ensureDKVSManager().primaryStore()
 	if err != nil {
 		return err
 	}

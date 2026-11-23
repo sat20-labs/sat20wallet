@@ -86,11 +86,23 @@ func updateOperationLog(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(handler)
 }
 
-func getOperationLogs(_ js.Value, _ []js.Value) any {
+func getOperationLogs(_ js.Value, args []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
-	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) { return accountViewResult(_mgr.GetOperationViews()) }))
+	manager := _mgr
+	if len(args) == 0 {
+		return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
+			return accountViewResult(manager.GetOperationViews())
+		}))
+	}
+	if len(args) != 1 || args[0].Type() != js.TypeString || strings.TrimSpace(args[0].String()) == "" {
+		return createJsRet(nil, -1, "operation log id is required")
+	}
+	id := args[0].String()
+	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
+		return accountViewResult(manager.GetContractLogResult(id))
+	}))
 }
 func deleteOperationHistory(_ js.Value, _ []js.Value) any {
 	if _mgr == nil {

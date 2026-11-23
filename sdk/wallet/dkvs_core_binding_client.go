@@ -11,12 +11,20 @@ import (
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
+type coreBindingMode uint8
+
+const (
+	verifyCoreBinding coreBindingMode = iota
+	registerCoreBinding
+	moveCoreBinding
+)
+
 // acceptCoreBinding publishes the account mapping through the wallet KV RPC.
 // That signed control record establishes the binding used by subsequent writes.
 // The server verifies that the descriptor targets its own node, commits the CAS,
 // and relays the binding update by P2P; no separate acceptance record is stored.
 func (p *SatsNetDKVSClient) acceptCoreBinding(root common.Wallet,
-	key, coreID string, initialValue []byte) (*swire.DKVSRecord, error) {
+	key, coreID string, initialValue []byte, mode coreBindingMode) (*swire.DKVSRecord, error) {
 	if p == nil || root == nil {
 		return nil, ErrMessageServiceUnavailable
 	}
@@ -35,12 +43,21 @@ func (p *SatsNetDKVSClient) acceptCoreBinding(root common.Wallet,
 	if err != nil && !errors.Is(err, dkvsindexer.ErrRecordNotFound) {
 		return nil, fmt.Errorf("read current account binding: %w", err)
 	}
+	if current == nil && mode == verifyCoreBinding {
+		return nil, dkvsindexer.ErrRecordNotFound
+	}
 	value := append([]byte(nil), initialValue...)
 	seq := uint64(1)
 	if current != nil {
 		_, _, descriptor, err := dkvsindexer.ValidateAccountMappingBindingRecord(current)
 		if err != nil || descriptor.AccountID != accountID {
 			return nil, dkvsindexer.ErrInvalidRecord
+		}
+		if mode != moveCoreBinding {
+			if descriptor.CoreNodeID != coreID {
+				return nil, dkvsindexer.ErrEndpointMismatch
+			}
+			return current, nil
 		}
 		descriptor.CoreNodeID = coreID
 		descriptor.Capabilities |= accountServiceCapabilityRGB11Direct
@@ -103,7 +120,7 @@ func (p *SatsNetDKVSClient) acceptCoreBinding(root common.Wallet,
 }
 
 func (p *Manager) commitAccountCoreBinding(ctx context.Context, root common.Wallet, store *dkvsStore,
-	key, coreID, prefix string, value []byte) error {
+	key, coreID, prefix string, value []byte, mode coreBindingMode) error {
 	if p == nil || store == nil || store.manager == nil || store.client == nil {
 		return ErrMessageServiceUnavailable
 	}
@@ -116,8 +133,11 @@ func (p *Manager) commitAccountCoreBinding(ctx context.Context, root common.Wall
 		if err := store.manager.requireWritePaths(store.client, []string{key}); err != nil {
 			return err
 		}
-		if _, err := store.client.withRequestContext(ctx).acceptCoreBinding(root, key, coreID, value); err != nil {
+		if _, err := store.client.withRequestContext(ctx).acceptCoreBinding(root, key, coreID, value, mode); err != nil {
 			return err
+		}
+		if mode == verifyCoreBinding {
+			return nil
 		}
 		// A complete source view, not the binding write response, establishes the
 		// local replica/cursor. Other pending business outbox entries are preserved.
@@ -128,40 +148,45 @@ func (p *Manager) commitAccountCoreBinding(ctx context.Context, root common.Wall
 		}
 		return nil
 	})
-	if err == nil {
+	if err == nil && mode != verifyCoreBinding {
 		store.manager.wakeSync()
 	}
 	return err
 }
 
-// A background backup may establish a missing binding, but must not move an
-// account that is already bound to a different CoreNode.
+// The root lifecycle may create an absent mapping. Restoring a wallet on
+// another endpoint can never replace its signed service binding.
 func (p *Manager) ensureAccountCoreBindingForSync(ctx context.Context) error {
 	root, err := p.accountManagementRootWallet()
 	if err != nil {
 		return err
 	}
-	store, err := p.accountDKVSStore()
+	return p.ensureDKVSManager().registerRootService(ctx, root, p.rootMessageNode(root))
+}
+
+func (m *dkvsManager) registerRootService(ctx context.Context, root common.Wallet, node *Node) error {
+	store, err := m.primaryStore()
 	if err != nil {
 		return err
 	}
-	store.readCtx = ctx
-	bind, err := p.prepareAccountCoreNodeBinding(root, store)
-	if err != nil {
+	err = verifyBindingOnNode(ctx, store, root, node)
+	if errors.Is(err, dkvsindexer.ErrRecordNotFound) {
+		store.readCtx = ctx
+		bind, err := m.owner.prepareBindingOnNode(root, store, node, registerCoreBinding)
+		if err != nil {
+			return err
+		}
+		if err := bind(); err != nil {
+			return err
+		}
+	} else if err != nil {
 		return err
 	}
-	key, err := dkvsindexer.AccountMappingKey(GetChainParam().Name, root.GetAddress())
-	if err != nil {
-		return err
-	}
-	current, err := store.client.GetRecordDirectContext(ctx, key)
-	if err != nil && !errors.Is(err, dkvsindexer.ErrRecordNotFound) {
-		return err
-	}
-	if current == nil {
-		return bind()
-	}
-	_, _, descriptor, err := dkvsindexer.ValidateAccountMappingBindingRecord(current)
+	return m.owner.registerRootMailbox(root)
+}
+
+func verifyBindingOnNode(ctx context.Context, store *dkvsStore, root common.Wallet, node *Node) error {
+	coreID, err := accountServiceCoreNodeID(node)
 	if err != nil {
 		return err
 	}
@@ -169,14 +194,35 @@ func (p *Manager) ensureAccountCoreBindingForSync(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	coreID, err := p.currentCoreNodeID()
+	config, err := store.client.getDKVSClientConfigContext(ctx)
 	if err != nil {
 		return err
 	}
-	if descriptor.AccountID != accountID {
+	if config == nil || config.EndpointID != coreID {
+		return dkvsindexer.ErrEndpointMismatch
+	}
+	return readRootBinding(ctx, store, root, GetChainParam().Name, accountID, coreID)
+}
+
+func readRootBinding(ctx context.Context, store *dkvsStore, root common.Wallet, network, accountID, endpoint string) error {
+	key, err := dkvsindexer.AccountMappingKey(network, root.GetAddress())
+	if err != nil {
+		return err
+	}
+	if ctx == nil {
+		ctx = store.client.requestContext()
+	}
+	readCtx, cancel := context.WithTimeout(ctx, rootQueryTimeout)
+	defer cancel()
+	record, err := store.client.GetRecordDirectContext(readCtx, key)
+	if err != nil {
+		return err
+	}
+	_, _, descriptor, err := dkvsindexer.ValidateAccountMappingBindingRecord(record)
+	if err != nil || descriptor.AccountID != accountID {
 		return dkvsindexer.ErrInvalidRecord
 	}
-	if descriptor.CoreNodeID != coreID {
+	if descriptor.CoreNodeID != endpoint {
 		return dkvsindexer.ErrEndpointMismatch
 	}
 	return nil

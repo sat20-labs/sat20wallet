@@ -1166,30 +1166,11 @@ func (p *Manager) recoverManagedRoot(ctx context.Context, mnemonic, password str
 }
 
 func checkRootBinding(ctx context.Context, store *dkvsStore, root common.Wallet, network, accountID, endpoint string) error {
-	key, err := dkvsindexer.AccountMappingKey(network, root.GetAddress())
-	if err != nil {
-		return err
-	}
-	if ctx == nil {
-		ctx = store.client.requestContext()
-	}
-	readCtx, cancel := context.WithTimeout(ctx, rootQueryTimeout)
-	defer cancel()
-	record, err := store.client.GetRecordDirectContext(readCtx, key)
-	if errors.Is(err, dkvsindexer.ErrRecordNotFound) {
+	err := readRootBinding(ctx, store, root, network, accountID, endpoint)
+	if err == nil || errors.Is(err, dkvsindexer.ErrRecordNotFound) {
 		return nil
 	}
-	if err != nil {
-		return rootReadError(err)
-	}
-	_, _, descriptor, err := dkvsindexer.ValidateAccountMappingBindingRecord(record)
-	if err != nil || descriptor.AccountID != accountID {
-		return dkvsindexer.ErrInvalidRecord
-	}
-	if descriptor.CoreNodeID != endpoint {
-		return dkvsindexer.ErrEndpointMismatch
-	}
-	return nil
+	return rootReadError(err)
 }
 
 func (p *Manager) readObservedRoot(ctx context.Context, store *dkvsStore, seen *accountRootCheck,

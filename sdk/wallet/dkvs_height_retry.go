@@ -12,7 +12,8 @@ import (
 func (p *SatsNetDKVSClient) submitDKVSBatch(mutations []dkvs.CASMutation, endpointID, requestID string,
 	authorization *dkvs.WalletWriteAuthorization, entry *DKVSBatchOutboxEntry) (*dkvs.WriteResult, error) {
 	for attempt := 0; ; attempt++ {
-		result, err := p.sendDKVSBatch(mutations, endpointID, requestID, authorization, attempt == 0)
+		backup := entry != nil && entry.OriginDomain == accountKVOutboxDomain
+		result, err := p.sendDKVSBatch(mutations, endpointID, requestID, authorization, backup)
 		if !IsDKVSErrorCode(err, dkvs.ErrorCodeHeightTooLow) {
 			return result, err
 		}

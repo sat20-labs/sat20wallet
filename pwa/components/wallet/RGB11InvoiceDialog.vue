@@ -19,7 +19,10 @@
         </template>
         <template v-else>
           <p class="break-all font-mono text-xs">{{ receive.id }}</p><p>{{ displayStatus(receive.status) }}</p>
-          <Textarea :model-value="receive.invoice" readonly class="font-mono text-xs" /><Button variant="outline" @click="copy(receive.invoice)">{{ t('rgb11Invoice.copy') }}</Button>
+          <Textarea :model-value="receive.invoice" readonly class="font-mono text-xs" />
+          <Button variant="outline" :disabled="!receive.invoice" @click="copyInvoice(receive.invoice)">
+            {{ t('rgb11Invoice.copy') }}
+          </Button>
           <template v-if="receive.can_import">
             <Textarea v-model="packageText" :disabled="loading" :placeholder="t('rgb11Transfer.package')" class="font-mono text-xs" />
             <input type="file" accept=".asc,.rgb,.rgbc,.txt,.json" class="max-w-full" :disabled="loading" @change="selectFile" />
@@ -55,10 +58,12 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { useToast } from '@/components/ui/toast-new'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 const props = defineProps<{asset: {key?: string; asset?: string; ticker: string; contract_id?: string; label?: string} | null}>()
 const isOpen = defineModel('open', {type: Boolean})
 const {t, te, locale} = useI18n(); const {copy} = useClipboard()
+const { toast } = useToast()
 const account = useAccountManagementStore()
 const assetKey = computed(() => props.asset?.key || props.asset?.asset || '')
 const amount = ref(''); const receiveMode = ref('witness'); const transport = ref('manual'); const proxyEndpoint = ref('')
@@ -80,6 +85,14 @@ const clearCreateWait = () => {
 const handleOpenChange = (open: boolean) => { if (open || !createWaiting.value) isOpen.value = open }
 const preventDismiss = (event: Event) => { if (createWaiting.value) event.preventDefault() }
 const displayStatus = (value: string) => te(`walletComponents.states_${value}`) ? t(`walletComponents.states_${value}`) : value
+const copyInvoice = async (invoice: string) => {
+  try {
+    await navigator.clipboard.writeText(invoice)
+    toast({ variant: 'success', title: t('rgb11Invoice.copied') })
+  } catch {
+    toast({ variant: 'destructive', title: t('rgb11Invoice.copyFailed') })
+  }
+}
 const base64 = (data: Uint8Array) => { let text = ''; for (const byte of data) text += String.fromCharCode(byte); return btoa(text) }
 const run = async (action: (context: RequestContext) => Promise<void>) => {
   if (loading.value || !isOpen.value) return

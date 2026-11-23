@@ -161,7 +161,15 @@ func (p *Manager) refreshAccountService(ctx context.Context, discover bool) (res
 		}
 		return err
 	}
-	if err := p.ensureAccountCoreBindingForSync(ctx); err != nil {
+	root, err := p.accountManagementRootWallet()
+	if err != nil {
+		return err
+	}
+	store, err := p.ensureDKVSManager().primaryStore()
+	if err != nil {
+		return err
+	}
+	if err := verifyBindingOnNode(ctx, store, root, p.rootMessageNode(root)); err != nil {
 		return err
 	}
 	return p.SyncAccountManagementState(ctx)

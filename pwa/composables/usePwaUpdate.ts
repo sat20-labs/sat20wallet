@@ -4,6 +4,34 @@ import { versionPolicy, policyRevision } from '@/utils/pwaVersionPolicy'
 import { useToast } from '@/components/ui/toast-new/use-toast'
 
 const APP_CACHE_PREFIX = 'sat20-wallet-pwa-'
+const UPDATE_TIMEOUT_MS = 60000
+
+const untilAbort = async <T>(work: Promise<T>, signal: AbortSignal): Promise<T> => {
+  let abort: () => void = () => {}
+  const deadline = new Promise<never>((_, reject) => {
+    abort = () => reject(signal.reason)
+    if (signal.aborted) abort()
+    else signal.addEventListener('abort', abort, { once: true })
+  })
+  try {
+    return await Promise.race([work, deadline])
+  } finally {
+    signal.removeEventListener('abort', abort)
+  }
+}
+
+const readWorkerRelease = async (worker: ServiceWorker, signal: AbortSignal) => {
+  const channel = new MessageChannel()
+  try {
+    const response = new Promise<string | undefined>(resolve => {
+      channel.port1.onmessage = ({ data }) => resolve(data?.releaseId)
+      worker.postMessage({ type: 'GET_RELEASE_STATE' }, [channel.port2])
+    })
+    return await untilAbort(response, signal)
+  } finally {
+    channel.port1.close()
+  }
+}
 
 const showRestartRequiredScreen = (title: string, description: string) => {
   document.title = title
@@ -39,54 +67,42 @@ export function usePwaUpdate() {
     )
   }
 
-  const waitForWaitingWorker = async (registration: ServiceWorkerRegistration) => {
-    const installing = registration.installing
-    if (!installing) {
-      if (registration.waiting) {
-        return registration.waiting
-      }
-      throw new Error(t('pwaUi.update.noWorker'))
-    }
-    await new Promise<void>((resolve, reject) => {
-      const finish = (error?: Error) => {
-        installing.removeEventListener('statechange', onStateChange)
-        if (error) reject(error)
-        else resolve()
-      }
-      const onStateChange = () => {
-        if (installing.state === 'installed' || installing.state === 'activated') finish()
-        else if (installing.state === 'redundant') finish(new Error(t('pwaUi.update.redundant')))
-      }
-      installing.addEventListener('statechange', onStateChange)
-      onStateChange()
-    })
-    return installing
-  }
-
-  const prepareUpdateForRestart = async (registration: ServiceWorkerRegistration) => {
-    const worker = await waitForWaitingWorker(registration)
-    await new Promise<void>((resolve, reject) => {
-      const finish = (error?: Error) => {
-        worker.removeEventListener('statechange', onStateChange)
-        if (error) reject(error)
-        else resolve()
-      }
-      const onStateChange = () => {
-        if (worker.state === 'activated') finish()
-        else if (worker.state === 'redundant') finish(new Error(t('pwaUi.update.redundant')))
-      }
-      // Observe the selected worker before requesting activation, including
-      // the case where it has already activated while installation settled.
-      worker.addEventListener('statechange', onStateChange)
-      onStateChange()
-      if (worker.state === 'installed') {
-        try {
-          worker.postMessage({ type: 'SAT20_ACTIVATE_UPDATE' })
-        } catch (error) {
-          finish(error instanceof Error ? error : new Error(String(error)))
+  const awaitActivation = async (worker: ServiceWorker, signal: AbortSignal) => {
+    let onStateChange: () => void = () => {}
+    let requested = false
+    const activated = new Promise<void>((resolve, reject) => {
+      onStateChange = () => {
+        if (worker.state === 'activated') resolve()
+        else if (worker.state === 'redundant') reject(new Error(t('pwaUi.update.redundant')))
+        else if (worker.state === 'installed' && !requested && !signal.aborted) {
+          requested = true
+          try { worker.postMessage({ type: 'SAT20_ACTIVATE_UPDATE' }) }
+          catch (error) { reject(error) }
         }
       }
+      worker.addEventListener('statechange', onStateChange)
+      onStateChange()
     })
+    try {
+      await untilAbort(activated, signal)
+    } finally {
+      worker.removeEventListener('statechange', onStateChange)
+    }
+  }
+
+  const prepareUpdateForRestart = async (registration: ServiceWorkerRegistration, signal: AbortSignal) => {
+    const worker = registration.installing || registration.waiting
+    if (worker) {
+      await awaitActivation(worker, signal)
+      return
+    }
+    const active = registration.active
+    const release = versionPolicy.remote
+    // Another client can activate the new worker while this page still runs the old release.
+    if (!active || !release ||
+        await readWorkerRelease(active, signal) !== `${release.version}-${release.buildId || ''}`) {
+      throw new Error(t('pwaUi.update.noWorker'))
+    }
   }
 
   const reloadApp = async () => {
@@ -94,23 +110,24 @@ export function usePwaUpdate() {
       return
     }
 
-    const drained = versionPolicy.waitForUpdate()
+    const signal = AbortSignal.timeout(UPDATE_TIMEOUT_MS)
     try {
-      await drained
+      await versionPolicy.waitForUpdate(signal)
       if (!('serviceWorker' in navigator)) {
         throw new Error(t('pwaUi.update.unavailable'))
       }
 
-      const registration = await navigator.serviceWorker.getRegistration()
+      const registration = await untilAbort(navigator.serviceWorker.getRegistration(), signal)
       if (!registration) {
         throw new Error(t('pwaUi.update.unregistered'))
       }
 
-      await registration.update()
-      await prepareUpdateForRestart(registration)
+      await untilAbort(registration.update(), signal)
+      await prepareUpdateForRestart(registration, signal)
       showRestartRequiredScreen(t('pwaUi.update.ready'), t('pwaUi.update.restartHint'))
     } catch (error) {
       versionPolicy.updateFailed()
+      if (signal.aborted) throw new Error(t('pwaUi.update.timedOut'))
       throw error
     }
   }
@@ -126,6 +143,7 @@ export function usePwaUpdate() {
         onClick: () => {
           void reloadApp().catch((error) => {
             console.warn('PWA update failed:', error)
+            toast({ variant: 'destructive', title: t('setting.updateFailed'), description: error.message })
           })
         },
       },

@@ -18,6 +18,7 @@ const dappCases = [
   'DApp PWA: disconnect revokes the grant and notifies the client',
   'DApp PWA: authorized Bitcoin PSBT signing preserves exact outputs without broadcasting',
   'DApp PWA: separately authorized broadcast confirms the same signed transaction exactly once',
+  'DApp PWA: switching subaccounts and locking invalidate pending signatures',
 ]
 export const requiredPwaDappCases = dappCases
 export const requiredPwaIntegrationCases = [...dappCases, ...requiredPwaRgbCases, ...requiredPwaBiometricCases]
@@ -558,6 +559,36 @@ export async function runPwaDappCases(t, fixture) {
       assert.deepEqual(afterReplay.pending_txids, beforeReplay.pending_txids)
       assert.deepEqual(afterReplay.confirmed_txids, beforeReplay.confirmed_txids)
       assert.deepEqual(Object.keys(afterReplay.broadcast_count).sort(), Object.keys(beforeReplay.broadcast_count).sort())
+    })
+    await check(dappCases[8], async () => {
+      await page.evaluate(async () => {
+        const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
+        await store.addAccount('Approval isolation', 1)
+        await store.switchToAccount(0)
+      })
+      const before = (await control('snapshot')).l1
+      for (const transition of ['switch', 'lock']) {
+        await approveConnection([...permissions, 'transaction:sign'])
+        const request = await begin('signMessage', { message: `Pending approval before ${transition}` })
+        const approval = dialog('Sign Message')
+        await expect(approval).toBeVisible()
+        await page.evaluate(async transition => {
+          const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
+          if (transition === 'switch') await store.switchToAccount(1)
+          else await store.lockWallet()
+        }, transition)
+        if (await approval.isVisible()) {
+          const confirm = approval.getByRole('button', { name: 'Confirm', exact: true })
+          if (await confirm.isEnabled()) await confirm.click()
+        }
+        denied(await response(request))
+        await expect(approval).toBeHidden()
+        if (transition === 'switch') {
+          assert.notEqual((await walletCall(page, 'getWalletAddress', 1)).address, actor.address)
+          await page.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().switchToAccount(0))
+        }
+      }
+      assert.deepEqual((await control('snapshot')).l1, before)
     })
   } finally { await context.close() }
 }

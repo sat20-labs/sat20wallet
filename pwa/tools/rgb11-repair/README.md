@@ -46,7 +46,8 @@ Stop on the first failure.
    selected `pending/transfer/proof/validation/object` keys; no secret or other
    wallet key values are read. It exports those RGB records, which are private
    proof material, to a local file. Keep downloads mode0600; never paste payloads
-   into chat/logs. It displays only the fingerprint.
+   into chat/logs. The page shows the filename and fingerprint and directs
+   you to the browser’s downloads.
 4. Create the separate reviewed target JSON (not derived blindly from input):
 
 ```

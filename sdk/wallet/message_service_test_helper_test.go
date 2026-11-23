@@ -3,6 +3,7 @@ package wallet
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -161,9 +162,10 @@ func (c *rgb11MessageNodeClient) SendMessageServiceReq(req *swire.MessageService
 			c.state.mu.Unlock()
 			return &swire.MessageServiceResponse{}, nil
 		}
-		if req.Direct.SenderMsgID != c.state.next[req.Direct.SenderAccount] {
+		if want := c.state.next[req.Direct.SenderAccount]; req.Direct.SenderMsgID != want {
 			c.state.mu.Unlock()
-			return nil, fmt.Errorf("unexpected sender message id")
+			msg := fmt.Sprintf("invalid message sequence: got=%d want=%d", req.Direct.SenderMsgID, want)
+			return &swire.MessageServiceResponse{Code: -1, Msg: msg}, errors.New(msg)
 		}
 		c.state.accepted[identity] = append([]byte(nil), encoded...)
 		c.state.next[req.Direct.SenderAccount]++

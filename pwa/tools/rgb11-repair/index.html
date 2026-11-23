@@ -34,8 +34,29 @@ async function guard(){if(!(await lockReady))throw Error('The wallet is active o
  if(!s.rootAccountId||!s.pubkey||identity!==el('identity').value)throw Error('reviewed identity differs from current public scope');
  if(el('prefix').value!==`rgb11-wallet-${s.walletId}-account-${s.accountIndex}-rgb11v2-`)throw Error('prefix differs from selected wallet/account');return identity;
  }finally{db.close();}}
-function download(text){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type:'application/json'}));a.download='rgb11-scope-private.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);}
-el('export').onclick=async()=>{try{const identity=await guard();const data=capture(localStorage,identity,el('prefix').value);const text=JSON.stringify(data);download(text);el('status').textContent='Export fingerprint: '+await hashText(text);}catch(e){el('status').textContent=e.message;}};
+el('export').onclick=async()=>{
+  const button=el('export');
+  const status=el('status');
+  const filename='rgb11-scope-private.json';
+  const mime='application/json';
+  button.disabled=true;
+  status.textContent='';
+  try {
+    const identity=await guard();
+    const text=JSON.stringify(capture(localStorage,identity,el('prefix').value));
+    const fingerprint=await hashText(text);
+    const link=document.createElement('a');
+    link.href=URL.createObjectURL(new Blob([text],{type:mime}));
+    link.download=filename;
+    link.click();
+    setTimeout(()=>URL.revokeObjectURL(link.href),1000);
+    status.textContent=`Download started for ${filename}. Check your browser’s downloads.\nExport fingerprint: ${fingerprint}`;
+  } catch (error) {
+    status.textContent=error.message;
+  } finally {
+    button.disabled=false;
+  }
+};
 el('apply').onclick=async()=>{try{const identity=await guard();const file=el('patch').files[0];if(!file)throw Error('patch required');const raw=await file.text();if(await hashText(raw)!==el('patchHash').value)throw Error('approved patch hash mismatch');const patch=JSON.parse(raw);if(patch.target.prefix!==el('prefix').value)throw Error('patch scope mismatch');el('status').textContent=await applyPatch(localStorage,patch,identity,el('fingerprint').value);}catch(e){el('status').textContent=e.message;}};
 async function orphanInputs(){
   const identity=await guard(), sourceFile=el('orphanSource').files[0], candidateFile=el('orphanCandidate').files[0], planFile=el('orphanPlan').files[0];

@@ -1,12 +1,17 @@
 package wallet
 
 import (
+	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
-	"github.com/btcsuite/btcd/wire"
-	swire "github.com/sat20-labs/satoshinet/wire"
+	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/btcsuite/btcd/wire"
+	db "github.com/sat20-labs/indexer/common"
+	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
 // These records describe commands, not confirmation of an on-chain transaction.
@@ -118,6 +123,13 @@ func operationView(record *OperationLogRecord) OperationView {
 	if amount := record.Parameters["amount"]; amount != "" {
 		view.Amounts = append(view.Amounts, AssetAmount{Asset: record.Parameters["asset"], Amount: amount})
 	}
+	if record.Action == "invoke_contract" && record.Parameters["action"] != "" {
+		chain := "satnet"
+		if record.Parameters["network"] == "Bitcoin" {
+			chain = "btc"
+		}
+		view.Contract = &ContractLogView{URL: record.Parameters["contract"], Action: record.Parameters["action"], Chain: chain}
+	}
 	for _, h := range record.History {
 		code := h.Details["error_code"]
 		if code == "" {
@@ -128,6 +140,84 @@ func operationView(record *OperationLogRecord) OperationView {
 	}
 	return view
 }
+
+func (p *Manager) GetContractLogResult(id string) (ContractLogResult, error) {
+	record, err := p.GetOperationLog(id)
+	if err != nil {
+		return ContractLogResult{}, err
+	}
+	if record == nil || record.Action != "invoke_contract" || record.TxID == "" {
+		return ContractLogResult{}, errors.New("contract invocation log not found")
+	}
+	if record.Parameters["action"] == INVOKE_API_ENABLE {
+		return ContractLogResult{Status: "none"}, nil
+	}
+	url := record.Parameters["contract"]
+	if !IsValidContractURL(url) || p.serverNode == nil || p.serverNode.client == nil {
+		return ContractLogResult{Status: "unavailable"}, nil
+	}
+
+	points := []string{record.TxID + ":0"}
+	if record.Parameters["network"] == "Bitcoin" {
+		points, err = p.contractLogL1Points(record.TxID, ExtractChannelId(url))
+		if err != nil || len(points) == 0 {
+			return ContractLogResult{Status: "unavailable"}, nil
+		}
+	}
+	for _, point := range points {
+		raw, err := p.GetInvokeItemByInUtxoInContract(url, point)
+		// The current STP API returns the history store's missing-key message.
+		if err != nil {
+			if err.Error() == db.ErrKeyNotFound.Error() {
+				continue
+			}
+			return ContractLogResult{Status: "unavailable"}, nil
+		}
+		var item InvokeItem
+		if err := json.Unmarshal([]byte(raw), &item); err != nil || item.InUtxo != point {
+			return ContractLogResult{Status: "unavailable"}, nil
+		}
+		if item.OutTxId != "" {
+			chain := "satnet"
+			if item.ToL1 {
+				chain = "btc"
+			}
+			return ContractLogResult{Status: "ready", TxID: item.OutTxId, Chain: chain}, nil
+		}
+		if item.Done > ITEM_STATUS_INIT {
+			return ContractLogResult{Status: "none"}, nil
+		}
+		break
+	}
+	return ContractLogResult{Status: "pending"}, nil
+}
+
+func (p *Manager) contractLogL1Points(txID, address string) ([]string, error) {
+	script, err := GetPkScriptFromAddress(address)
+	if err != nil {
+		return nil, err
+	}
+	if p.l1IndexerClient == nil {
+		return nil, errors.New("Bitcoin indexer unavailable")
+	}
+	raw, err := p.GetIndexerClient().GetRawTx(txID)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := DecodeMsgTx(raw)
+	if err != nil {
+		return nil, err
+	}
+	var points []string
+	// STP scans outputs in order and retains the last eligible contract output.
+	for i := len(tx.TxOut) - 1; i >= 0; i-- {
+		if bytes.Equal(tx.TxOut[i].PkScript, script) {
+			points = append(points, fmt.Sprintf("%s:%d", txID, i))
+		}
+	}
+	return points, nil
+}
+
 func (p *Manager) visibleOperationLogs() ([]*OperationLogRecord, error) {
 	manager := p.operationLogManager()
 	if manager == nil {

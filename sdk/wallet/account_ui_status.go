@@ -87,6 +87,9 @@ func (p *Manager) GetAccountView(ctx context.Context) (*AccountView, error) {
 	return view, nil
 }
 func (p *Manager) RefreshAccount(ctx context.Context) (*AccountView, error) {
+	if p.IsServerMode() {
+		return p.GetAccountView(ctx)
+	}
 	if !p.accountRecoveryConfigured() {
 		if err := p.startAccountDiscovery(); err != nil {
 			return nil, err

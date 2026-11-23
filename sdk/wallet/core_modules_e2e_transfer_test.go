@@ -53,7 +53,7 @@ func coreInvoiceTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain
 	coreRequire(t, "identify receiver scope before invoice backup fault", err)
 	beforeInvoice, _, err := receiver.rgbManager.exportRGB11WalletSnapshot(walletID)
 	coreRequire(t, "snapshot receiver before invoice backup fault", err)
-	finishInvoiceBackup := coreRGBBackupOutage(t, receiver, cfg, issued.ContractID)
+	finishInvoiceBackup := coreRGBBackupOutage(t, receiver, cfg, issued.ContractID, true)
 	localInvoice, err := receiver.CreateRGB11Invoice(RGB11InvoiceRequest{
 		Mode: "witness", TransportMode: RGB11ProxyTransport,
 		TransportEndpoints: []string{proxyEndpoint}, ContractID: issued.ContractID,
@@ -166,7 +166,7 @@ func coreInvoiceTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain
 	// The positive Standard ACK requires complete local recovery material;
 	// remote backup failure is observed separately and cannot undo that ACK.
 	localBeforeStandardACKFault := coreLocalRGBBundleDigests(t, receiver)
-	finishStandardACK := coreRGBBackupOutage(t, receiver, cfg, issued.ContractID)
+	finishStandardACK := coreRGBBackupOutage(t, receiver, cfg, issued.ContractID, false)
 	proxy.mu.Lock()
 	proxy.ackPostHTTPStatus = http.StatusBadGateway // persist the first ACK, then lose its response
 	proxy.mu.Unlock()
@@ -216,7 +216,7 @@ func coreInvoiceTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain
 
 	// The exact signed transaction and intent are local before broadcast;
 	// a subsequent asynchronous backup outage cannot turn that result unknown.
-	finishStandardBroadcast := coreRGBBackupOutage(t, sender, cfg, issued.ContractID)
+	finishStandardBroadcast := coreRGBBackupOutage(t, sender, cfg, issued.ContractID, false)
 	firstBroadcast, err := sender.DeliverAndBroadcastRGB11ProxyTransfer(
 		context.Background(), []string{prepared.State.TransferID})
 	coreRequire(t, "broadcast the locally committed Standard transaction", err)
@@ -463,6 +463,7 @@ type coreRejectDirtyManagedCASHTTP struct {
 	requestID      string
 	recordHash     string
 	changedRequest bool
+	timeout        bool
 }
 
 // Gate export before it acquires local RGB read gates or enters the transport
@@ -528,6 +529,9 @@ func (h *coreRejectDirtyManagedCASHTTP) SendPostRequestContext(ctx context.Conte
 			case h.failed <- struct{}{}:
 			default:
 			}
+			if h.timeout {
+				return nil, context.DeadlineExceeded
+			}
 			return nil, &HTTPResponseError{
 				StatusCode: http.StatusServiceUnavailable,
 				Body:       []byte("intentional CoreModules account-data CAS outage"),
@@ -540,7 +544,7 @@ func (h *coreRejectDirtyManagedCASHTTP) SendPostRequestContext(ctx context.Conte
 // Keep one real account module outage across the local business operation and
 // the existing worker's attempted publication. Neither this fixture nor its
 // assertions replace the node, signer, local transaction or backup payload.
-func coreRGBBackupOutage(t *testing.T, manager *Manager, cfg coreE2EConfig, contractID string) func() {
+func coreRGBBackupOutage(t *testing.T, manager *Manager, cfg coreE2EConfig, contractID string, timeout bool) func() {
 	t.Helper()
 	// A device can resume through a foreground operation before its automatic
 	// receiver starts. Establish real account qualification without polling RGB.
@@ -577,7 +581,7 @@ func coreRGBBackupOutage(t *testing.T, manager *Manager, cfg coreE2EConfig, cont
 			manager.managedDataMu.Unlock()
 		})
 	}
-	fault := &coreRejectDirtyManagedCASHTTP{HttpClient: oldHTTP, owner: manager, key: before.Key, failed: make(chan struct{}, 1)}
+	fault := &coreRejectDirtyManagedCASHTTP{HttpClient: oldHTTP, owner: manager, key: before.Key, failed: make(chan struct{}, 1), timeout: timeout}
 	store.client.Http = fault
 	t.Cleanup(func() {
 		releaseExport()
@@ -633,7 +637,12 @@ func coreRGBBackupOutage(t *testing.T, manager *Manager, cfg coreE2EConfig, cont
 				backupErr, isPending, errors.Is(backupErr, context.DeadlineExceeded), asHTTP, httpStatus, asPending, sameRequest, changedRequest, hits)
 		}
 		coreAssert(t, sameRequest && isPending && hits > 0 && !changedRequest,
-			"controlled HTTP503 did not retain its exact request as a pending backup")
+			"failed backup did not retain its exact request as pending")
+		if timeout {
+			_, sendErr, receiveErr := manager.syncDKVSOnceResult()
+			coreRequire(t, "receiver stays online during backup replay", receiveErr)
+			coreAssert(t, errors.Is(sendErr, context.DeadlineExceeded), "backup replay must report the POST timeout")
+		}
 		pending, err := manager.readAccountLocal(accountID, rgb11AccountManagedProviderID, scope)
 		coreRequire(t, "read durable pending RGB module", err)
 		coreAssert(t, pending != nil && pending.Generation > before.Generation && pending.Generation > pending.Confirmed &&
@@ -662,8 +671,16 @@ func coreRGBBackupOutage(t *testing.T, manager *Manager, cfg coreE2EConfig, cont
 		frozenSeq := mutations[0].Record.Seq
 		coreAssertManagedRemoteEqual(t, "failed asynchronous RGB backup", remote, coreManagedRemoteRecords(t, manager, cfg))
 		local := coreLocalRGBBundleDigests(t, manager)
-		coreRequire(t, "upload failure keeps local RGB writable",
-			manager.CheckAccountWrite(rgb11AccountManagedProviderID, scope))
+		err = manager.CheckAccountWrite(rgb11AccountManagedProviderID, scope)
+		if err != nil {
+			manager.mutex.RLock()
+			accountScope := manager.accountWriteScopeLocked()
+			manager.mutex.RUnlock()
+			t.Logf("backup outage: worker_already_running=%t account_ready=%t read_ready=%t write_ready=%t restoring=%t conflict=%t",
+				running, manager.dkvs.scopeReady(accountScope), manager.dkvs.scopeReady(manager.dkvs.sessionKey(store.client, "read")),
+				manager.dkvs.scopeReady(manager.dkvs.sessionKey(store.client, "write")), pending.Restoring, pending.Conflict)
+		}
+		coreRequire(t, "upload failure keeps local RGB writable", err)
 		nextInvoice, err := manager.CreateRGB11Invoice(RGB11InvoiceRequest{
 			Mode: "witness", TransportMode: "out-of-band", ContractID: contractID,
 			AmountRaw: "1", WitnessVout: 1, Expiry: time.Now().Add(time.Hour).Unix(),
@@ -746,7 +763,7 @@ func coreDirectTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 
 	// Direct receive has the same local commit/ACK boundary as Standard.
 	localBeforeDirectACKFault := coreLocalRGBBundleDigests(t, receiver)
-	finishDirectACK := coreRGBBackupOutage(t, receiver, cfg, issued.ContractID)
+	finishDirectACK := coreRGBBackupOutage(t, receiver, cfg, issued.ContractID, false)
 	directACK, err := receiver.SyncConfiguredRGB11AddressMailbox(context.Background(),
 		dkvsindexer.RecordVerificationOptions{})
 	coreRequire(t, "locally accept and ACK Direct consignment", err)
@@ -791,7 +808,7 @@ func coreDirectTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 	// the same reservation and transaction across its controlled outage.
 	senderRootView, err := sender.captureRGB11NetworkScope(true)
 	coreRequire(t, "capture Direct sender scope", err)
-	finishDirectBroadcast := coreRGBBackupOutage(t, sender, cfg, issued.ContractID)
+	finishDirectBroadcast := coreRGBBackupOutage(t, sender, cfg, issued.ContractID, false)
 	_, err = sender.SyncConfiguredRGB11AddressMailbox(context.Background(),
 		dkvsindexer.RecordVerificationOptions{})
 	coreRequire(t, "consume Direct ACK and broadcast local transaction", err)

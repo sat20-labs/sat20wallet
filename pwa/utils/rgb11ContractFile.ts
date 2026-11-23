@@ -1,19 +1,15 @@
-const contractMagic = [0x52, 0x47, 0x42, 0x00, 0x43, 0x4f, 0x4e]
+import { downloadFile } from './fileSave'
 
-export function downloadRGB11ContractFile(fileBase64: string, contractId: string): void {
+const contractMagic = [0x52, 0x47, 0x42, 0x00, 0x43, 0x4f, 0x4e]
+const mime = 'application/octet-stream'
+
+export function downloadRGB11ContractFile(contractId: string, fileBase64: string): string {
+  const id = contractId.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 24) || 'contract'
+  const filename = `rgb11-contract-${id}.rgb`
   if (!fileBase64) throw new Error('RGB contract file is empty')
   const bytes = Uint8Array.from(atob(fileBase64), value => value.charCodeAt(0))
   if (bytes.length < contractMagic.length || contractMagic.some((value, index) => bytes[index] !== value)) {
     throw new Error('RGB contract file does not use the standard RGB\\0CON envelope')
   }
-  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }))
-  try {
-    const link = document.createElement('a')
-    const id = contractId.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 24) || 'contract'
-    link.href = url
-    link.download = `rgb11-contract-${id}.rgb`
-    link.click()
-  } finally {
-    URL.revokeObjectURL(url)
-  }
+  return downloadFile(filename, new Blob([bytes], { type: mime }))
 }

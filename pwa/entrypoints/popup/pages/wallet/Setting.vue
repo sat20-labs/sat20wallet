@@ -1,8 +1,8 @@
 <template>
   <LayoutHome>
     <WalletHeader />
-    <div class="mx-auto max-w-3xl space-y-5 pb-6">
-      <h1 class="text-2xl font-semibold">{{ $t('setting.title') }}</h1>
+    <div class="mx-auto flex max-w-3xl flex-col gap-2 pb-6">
+      <h1 class="mb-3 text-2xl font-semibold">{{ $t('setting.title') }}</h1>
       <section class="space-y-2" aria-labelledby="settings-account">
         <h2 id="settings-account" class="text-sm font-semibold text-muted-foreground">{{ $t('pwaUi.design.account') }}</h2>
         <AccountManagementSetting />
@@ -10,26 +10,23 @@
           {{ $t('pwaUi.settings.did') }} <ChevronRight class="size-4" aria-hidden="true" />
         </Button>
       </section>
-      <section class="space-y-2" aria-labelledby="settings-security">
+      <section class="mt-3 space-y-2" aria-labelledby="settings-security">
         <h2 id="settings-security" class="text-sm font-semibold text-muted-foreground">{{ $t('pwaUi.design.security') }}</h2>
         <SecuritySetting />
         <EscapeHatch v-if="transcendingModeStore.selectedTranscendingMode !== 'poolswap'" />
       </section>
-      <section class="space-y-2" aria-labelledby="settings-network">
+      <section class="mt-3 space-y-2" aria-labelledby="settings-network">
         <h2 id="settings-network" class="text-sm font-semibold text-muted-foreground">{{ $t('pwaUi.design.network') }}</h2>
         <NetworkSetting />
         <NodeSetting />
         <ReferrerSetting />
       </section>
-      <section class="space-y-2" aria-labelledby="settings-advanced">
-        <h2 id="settings-advanced" class="text-sm font-semibold text-muted-foreground">{{ $t('pwaUi.design.advanced') }}</h2>
-        <Button variant="outline" class="min-h-11 w-full justify-between" @click="$router.push('/wallet/setting/operation-logs')">
-          {{ $t('pwaUi.settings.logs') }} <ChevronRight class="size-4" aria-hidden="true" />
-        </Button>
-        <Button variant="outline" class="min-h-11 w-full justify-between" @click="$router.push('/wallet/setting/utxo')">
-          {{ $t('utxoManager.title') }} <ChevronRight class="size-4" aria-hidden="true" />
-        </Button>
-      </section>
+      <Button variant="outline" class="min-h-11 w-full justify-between" @click="$router.push('/wallet/setting/operation-logs')">
+        {{ $t('pwaUi.settings.logs') }} <ChevronRight class="size-4" aria-hidden="true" />
+      </Button>
+      <Button variant="outline" class="min-h-11 w-full justify-between" @click="$router.push('/wallet/setting/utxo')">
+        {{ $t('utxoManager.title') }} <ChevronRight class="size-4" aria-hidden="true" />
+      </Button>
     </div>
 
     <div class="flex flex-col items-center gap-4 pb-4">
@@ -41,12 +38,16 @@
           <Icon icon="bi:github" class="w-4 h-4" />
         </a>
       </div>
-      <div class="flex flex-wrap items-center justify-center gap-2 text-sm text-muted-foreground">
-        <span>{{ $t('setting.version') }}: {{ versionDisplay }}</span>
+      <div class="flex w-full flex-col items-center gap-1 text-center text-sm text-muted-foreground">
+        <p class="break-words">{{ $t('setting.version') }}: {{ versionDisplay }}</p>
+        <p v-if="isForceUpdate" id="settings-update-status" class="max-w-sm pb-1 text-xs leading-relaxed">
+          {{ $t('setting.versionWriteBlocked') }}
+        </p>
         <Button
           variant="ghost"
           size="sm"
-          class="h-7 px-2 text-xs text-muted-foreground"
+          class="min-h-11 px-3 text-xs text-muted-foreground"
+          :aria-describedby="isForceUpdate ? 'settings-update-status' : undefined"
           :disabled="isChecking || isUpdating"
           @click="checkAndUpdate"
         >
@@ -55,7 +56,6 @@
             class="h-3.5 w-3.5"
             :class="{ 'animate-spin': isChecking || isUpdating }"
           />
-          {{ isForceUpdate ? $t('setting.versionWriteBlocked') : '' }}
           {{ isChecking ? $t('setting.checking') : (isUpdating ? $t('setting.updating') : $t('setting.checkAndUpdate')) }}
         </Button>
       </div>

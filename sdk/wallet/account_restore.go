@@ -275,6 +275,9 @@ func (p *Manager) authenticateAccountRestore(accountID, fingerprint string,
 func (p *Manager) restoreAccountCopies(value RecoveredAccountManagementState, secret []byte,
 	password string, locator account.Locator, options AccountManagementRestoreOptions,
 	allowedRoot string, beforeCommit func() error) ([]RestoredWalletResult, error) {
+	if p.IsServerMode() {
+		return nil, errAccountManagementDisabled
+	}
 	validated, err := validateAccountCopies(value, secret, locator)
 	if err != nil {
 		return nil, err

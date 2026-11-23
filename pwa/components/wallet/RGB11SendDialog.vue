@@ -21,8 +21,15 @@
             <p v-if="!addressMode" class="text-xs text-muted-foreground">{{ t('rgb11Transfer.batchHint') }}</p>
           </div>
           <div v-if="addressMode" class="space-y-2">
-            <Label :for="fieldId + '-amount'">{{ t('rgb11Invoice.amount') }}</Label>
-            <Input :id="fieldId + '-amount'" v-model="amount" :disabled="loading" inputmode="decimal" />
+            <div class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+              <Label :for="fieldId + '-amount'">{{ t('rgb11Invoice.amount') }}</Label>
+              <p :id="fieldId + '-amount-limit'" class="min-w-0 break-words text-xs tabular-nums text-muted-foreground">
+                {{ maxSendAmount === undefined ? t('rgb11Transfer.maxSendUnavailable')
+                  : t('rgb11Transfer.maxSendAmount', { amount: maxSendAmount }) }}
+              </p>
+            </div>
+            <Input :id="fieldId + '-amount'" v-model="amount" :disabled="loading" inputmode="decimal"
+              :aria-describedby="fieldId + '-amount-limit'" />
           </div>
         </template>
         <template v-else>
@@ -63,6 +70,7 @@
                   {{ t('rgb11Transfer.recipientSummary', { number: index + 1 }) }}
                 </Label>
                 <Textarea :id="fieldId + '-receipt-' + index" v-model="receipts[index]" :disabled="loading"
+                  :placeholder="t('rgb11Transfer.pasteRecipientSummary')"
                   spellcheck="false" rows="2" class="min-h-0 bg-zinc-900 font-mono text-xs" />
               </div>
             </li>
@@ -72,10 +80,14 @@
               {{ t('rgb11Transfer.downloadConsignment') }}
             </Button>
             <Button v-for="item in files" :key="item.recipient_index + '-' + item.file.name" variant="outline" size="sm"
-              :title="item.file.name" @click="saveExportFile(item.file)">
-              {{ t('rgb11Transfer.recipientNumber', { number: item.recipient_index + 1 }) }} · .{{ item.file.name.split('.').at(-1) }}
+              :disabled="loading" @click="downloadTransferFile(item.file)">
+              {{ t('rgb11Transfer.downloadRecipientFile', {
+                number: item.recipient_index + 1,
+                extension: item.file.name.slice(item.file.name.lastIndexOf('.')),
+              }) }}
             </Button>
           </div>
+          <p v-if="saveNotice" role="status" class="break-words text-xs text-emerald-400">{{ saveNotice }}</p>
         </template>
         <details v-if="(!transfer && asset?.contract_id) || (transfer && (transfer.status !== 'preview' || uncertain))"
           class="min-w-0 rounded-lg border border-zinc-800 px-3 py-2 text-sm text-muted-foreground">
@@ -95,13 +107,25 @@
             </div>
           </dl>
         </details>
-        <p v-if="message" role="alert" class="break-all text-sm text-red-400">{{ message }}</p>
+        <p v-if="!transfer && message" role="alert" class="break-words text-sm text-red-400">{{ message }}</p>
         <Button v-if="!transfer" :disabled="loading || !destination.trim() || !account.rgb11WriteAllowed"
           class="w-full" @click="prepare">{{ t('rgb11Transfer.prepare') }}</Button>
-        <div v-else-if="transfer.can_confirm || (transfer.can_cancel && !uncertain)"
-          class="sticky bottom-0 flex justify-end gap-2 border-t border-border bg-background py-3">
-          <Button v-if="transfer.can_cancel && !uncertain" variant="outline" :disabled="loading" class="h-11" @click="cancel">{{ t('common.cancel') }}</Button>
-          <Button v-if="transfer.can_confirm" :disabled="loading" class="h-11 flex-1 sm:flex-none" @click="confirm">{{ t('common.confirm') }}</Button>
+        <div v-else
+          class="sticky bottom-0 space-y-2 border-t border-border bg-background py-3">
+          <p v-if="message" role="alert" class="break-words text-sm text-red-400">{{ message }}</p>
+          <p v-if="cancelReview" role="status" class="text-sm">{{ t('rgb11Transfer.taskCancelConfirm') }}</p>
+          <p v-else-if="receiptsMissing" class="text-xs text-muted-foreground">{{ t('rgb11Transfer.recipientSummaryHelp') }}</p>
+          <div class="flex flex-wrap justify-end gap-2">
+            <Button variant="outline" class="h-11" @click="handleOpenChange(false)">{{ t('rgb11Transfer.close') }}</Button>
+            <template v-if="cancelReview">
+              <Button variant="outline" :disabled="loading" class="h-11" @click="cancelReview = false">{{ t('rgb11Transfer.keepTransfer') }}</Button>
+              <Button variant="destructive" :disabled="loading" class="h-11" @click="cancel">{{ t('rgb11Transfer.confirmCancel') }}</Button>
+            </template>
+            <template v-else>
+              <Button v-if="canCancelTransfer" variant="outline" :disabled="loading" class="h-11" @click="requestCancel">{{ t('rgb11Transfer.cancelTransfer') }}</Button>
+              <Button v-if="transfer.can_confirm" :disabled="loading || receiptsMissing" class="h-11 flex-1 sm:flex-none" @click="confirm">{{ t('common.confirm') }}</Button>
+            </template>
+          </div>
         </div>
       </div>
     </DialogContent>
@@ -111,22 +135,26 @@
 import { computed, onBeforeUnmount, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import walletManager from '@/utils/sat20'
-import { saveExportFile } from '@/utils/accountManagement'
-import type { RGBTransferView, RGBTransferFile } from '@/utils/walletViews'
+import { downloadExportFile } from '@/utils/fileSave'
+import type { ExportFile, RGBTransferView, RGBTransferFile } from '@/utils/walletViews'
 import { useWalletStore } from '@/store/wallet'
+import { useRGB11Store } from '@/store/rgb11'
 import { useAccountManagementStore } from '@/store/accountManagement'
 import { subscribeWalletIdentity } from '@/lib/identity-boundary'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { useToast } from '@/components/ui/toast-new'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 const props = defineProps<{asset: {key?: string; asset?: string; contract_id?: string; label?: string} | null; resumeTransferId?: string; inflation?: boolean}>()
 const emit = defineEmits<{(event: 'completed'): void}>()
 const isOpen = defineModel('open', {type: Boolean})
 const {t, te} = useI18n()
+const { toast } = useToast()
 const account = useAccountManagementStore()
 const wallet = useWalletStore()
+const rgb11 = useRGB11Store()
 const mode = ref('address')
 const addressMode = computed(() => mode.value === 'address' && !props.inflation)
 const fieldId = useId()
@@ -134,12 +162,25 @@ const destination = ref('')
 const amount = ref('')
 const transfer = ref<RGBTransferView | null>(null)
 const receipts = ref<string[]>([])
+const receiptsMissing = computed(() => !!transfer.value?.needs_receipts &&
+  transfer.value.recipients.some((_, index) => !receipts.value[index]?.trim()))
 const files = ref<RGBTransferFile[]>([])
 const loading = ref(false)
 const preparing = ref(false)
 const message = ref('')
+const saveNotice = ref('')
 const uncertain = ref(false)
+const cancelReview = ref(false)
+const canCancelTransfer = computed(() => !!transfer.value?.can_cancel && transfer.value.status !== 'preview' && !uncertain.value)
 const assetKey = () => props.asset?.key || props.asset?.asset || props.asset?.contract_id || ''
+const maxSendAmount = computed(() => {
+  const { lock_scope: scope, assets, can_write: canWrite, error_code: errorCode } = rgb11.state
+  if (!canWrite || errorCode || rgb11.error || scope.network !== wallet.network ||
+      String(scope.wallet_id) !== String(wallet.walletId) || scope.account_index !== Number(wallet.accountIndex)) {
+    return undefined
+  }
+  return assets.find(asset => asset.asset === assetKey())?.available
+})
 const handleOpenChange = (open: boolean) => {
   if (!open && preparing.value) return
   isOpen.value = open
@@ -150,7 +191,7 @@ const preventDismiss = (event: Event) => {
 const displayStatus = (value: string) => value === 'preview' ? t('rgb11Transfer.preview') : te(`walletComponents.states_${value}`) ? t(`walletComponents.states_${value}`) : value
 const displayWarning = (value: string) => value === 'rgb_address_carrier' ? t('rgb11Transfer.carrierWarning') : value
 let generation = 0
-const run = async (action: () => Promise<void>) => {
+const run = async (action: () => void | Promise<void>) => {
   if (loading.value) return
   const actionGeneration = generation
   loading.value = true; message.value = ''
@@ -187,7 +228,7 @@ const prepare = () => run(async () => {
   }
 })
 const confirm = () => run(async () => {
-  if (!transfer.value) return
+  if (!transfer.value || receiptsMissing.value) return
   const confirmedGeneration = generation
   const id = transfer.value.id
   const preview = transfer.value.status === 'preview'
@@ -208,6 +249,9 @@ const confirm = () => run(async () => {
         else confirming.delete(id)
       }
     }
+    if (error?.message === 'RGB recipient receipt does not match the transfer') {
+      throw new Error(t('rgb11Transfer.summaryMismatch'))
+    }
     throw error || new Error(t('rgb11Transfer.broadcastFailed'))
   }
   confirming.delete(id)
@@ -216,24 +260,34 @@ const confirm = () => run(async () => {
   }
   emit('completed')
 })
+const requestCancel = () => {
+  message.value = ''
+  cancelReview.value = true
+}
 const cancel = () => run(async () => {
-  if (!transfer.value) return
-  const preview = transfer.value.status === 'preview'
-  if (!preview && !window.confirm(t('rgb11Transfer.taskCancelConfirm'))) return
-  const [error, value] = await walletManager.cancelRGB11Transfer(transfer.value.id)
+  if (!transfer.value || !canCancelTransfer.value) return
+  const { id } = transfer.value
+  const cancelGeneration = generation
+  const [error, value] = await walletManager.cancelRGB11Transfer(id)
   if (error || !value) throw error || new Error(t('rgb11Transfer.taskCancelFailed'))
-  uncertain.value = false
-  if (preview) {
-    transfer.value = null; receipts.value = []; files.value = []
-  } else {
-    transfer.value = value; emit('completed')
+  if (cancelGeneration === generation && isOpen.value && transfer.value?.id === id) {
+    transfer.value = null
+    isOpen.value = false
+    toast({ variant: 'success', title: t('rgb11Transfer.taskCancelled') })
   }
+  emit('completed')
 })
 const exportTransfer = () => run(async () => {
   if (!transfer.value) return
+  const exportGeneration = generation
   const [error, value] = await walletManager.exportRGB11Transfer(transfer.value.id)
   if (error) throw error
-  files.value = value || []
+  if (exportGeneration === generation && isOpen.value) files.value = value || []
+})
+const downloadTransferFile = (file: ExportFile) => run(() => {
+  saveNotice.value = ''
+  const filename = downloadExportFile(file)
+  saveNotice.value = t('common.fileDownloadStarted', { filename })
 })
 const unsubscribe = subscribeWalletIdentity(identity => {
   if (identity.phase === 'QUIESCING') isOpen.value = false
@@ -245,13 +299,14 @@ onBeforeUnmount(() => {
 })
 watch([isOpen, assetKey], ([open]) => {
   generation++
+  cancelReview.value = false
   if (!open) {
     discardPreview(transfer.value)
     if (transfer.value?.status === 'preview') transfer.value = null
     return
   }
   discardPreview(transfer.value)
-  message.value = ''; files.value = []; receipts.value = []; transfer.value = null; uncertain.value = false
+  message.value = ''; saveNotice.value = ''; files.value = []; receipts.value = []; transfer.value = null; uncertain.value = false
   destination.value = ''; amount.value = ''; mode.value = props.inflation ? 'invoice' : 'address'
   if (props.resumeTransferId) void run(async () => {
     const [error, value] = await walletManager.getRGB11View()

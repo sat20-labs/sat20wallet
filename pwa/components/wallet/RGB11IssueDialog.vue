@@ -17,35 +17,34 @@
           <span class="block text-xs text-zinc-500">{{ $t(`rgb11Transfer.schemaHelp.${schema}`) }}</span>
         </label>
         <label class="block space-y-1">
-          <span class="text-xs text-zinc-400">{{ $t('rgb11Transfer.ticker') }}</span>
-          <Input v-model="ticker" maxlength="8" autocomplete="off" placeholder="USDT" />
-          <span class="block text-xs text-zinc-500">{{ $t('rgb11Transfer.tickerHelp') }}</span>
+          <span :id="`${inputId('ticker')}-label`" class="text-xs text-zinc-400">{{ $t('rgb11Transfer.ticker') }}</span>
+          <Input v-model="ticker" v-bind="fieldAttrs('ticker')" maxlength="8" autocomplete="off"
+            :placeholder="$t('rgb11Transfer.tickerExample')" />
+          <span v-bind="hintAttrs('ticker')">{{ fieldHint('ticker', 'tickerHelp') }}</span>
         </label>
         <label class="block space-y-1">
-          <span class="text-xs text-zinc-400">{{ $t('rgb11Transfer.name') }}</span>
-          <Input v-model="name" maxlength="40" autocomplete="off" :placeholder="$t('walletComponents.nameExample')" />
-          <span class="block text-xs text-zinc-500">{{ $t('rgb11Transfer.nameHelp') }}</span>
+          <span :id="`${inputId('name')}-label`" class="text-xs text-zinc-400">{{ $t('rgb11Transfer.name') }}</span>
+          <Input v-model="name" v-bind="fieldAttrs('name')" maxlength="40" autocomplete="off" :placeholder="$t('walletComponents.nameExample')" />
+          <span v-bind="hintAttrs('name')">{{ fieldHint('name', 'nameHelp') }}</span>
         </label>
         <label class="block space-y-1">
-          <span class="text-xs text-zinc-400">{{ $t('rgb11Transfer.details') }}</span>
-          <Input v-model="details" maxlength="255" autocomplete="off" />
-          <span class="block text-xs text-zinc-500">{{ $t('rgb11Transfer.detailsHelp') }}</span>
+          <span :id="`${inputId('details')}-label`" class="text-xs text-zinc-400">{{ $t('rgb11Transfer.details') }}</span>
+          <Input v-model="details" v-bind="fieldAttrs('details')" maxlength="255" autocomplete="off" />
+          <span v-bind="hintAttrs('details')">{{ fieldHint('details', 'detailsHelp') }}</span>
         </label>
         <label class="block space-y-1">
-          <span class="text-xs text-zinc-400">{{ $t('rgb11Transfer.precision') }}</span>
-          <Input v-model="precision" type="number" min="0" max="18" />
-          <span class="block text-xs text-zinc-500">{{ $t('rgb11Transfer.precisionHelp') }}</span>
+          <span :id="`${inputId('precision')}-label`" class="text-xs text-zinc-400">{{ $t('rgb11Transfer.precision') }}</span>
+          <Input v-model="precision" v-bind="fieldAttrs('precision')" type="number" min="0" max="18" />
+          <span v-bind="hintAttrs('precision')">{{ fieldHint('precision', 'precisionHelp') }}</span>
         </label>
         <template v-if="schema !== 'UDA'">
           <label class="block space-y-1">
-            <span class="text-xs text-zinc-400">
-              {{ $t(advancedAllocations ? 'rgb11Transfer.initialAllocations' : 'rgb11Transfer.initialSupply') }}
+            <span :id="`${inputId('amounts')}-label`" class="text-xs text-zinc-400">
+              {{ $t(`rgb11Transfer.${supplyField}`) }}
             </span>
-            <Input v-model="amounts" inputmode="decimal"
+            <Input v-model="amounts" v-bind="fieldAttrs('amounts')" inputmode="decimal"
               :placeholder="advancedAllocations ? '1000, 2000' : '1000'" />
-            <span class="block text-xs text-zinc-500">
-              {{ $t(advancedAllocations ? 'rgb11Transfer.initialAllocationsHelp' : 'rgb11Transfer.initialSupplyHelp') }}
-            </span>
+            <span v-bind="hintAttrs('amounts')">{{ fieldHint('amounts', `${supplyField}Help`) }}</span>
           </label>
           <label class="flex items-center gap-2 text-xs text-zinc-400">
             <Checkbox :checked="advancedAllocations" @update:checked="setAdvancedAllocations" />
@@ -54,25 +53,21 @@
         </template>
         <template v-if="schema === 'IFA'">
           <label class="block space-y-1">
-            <span class="text-xs text-zinc-400">{{ $t('rgb11Transfer.inflationAmounts') }}</span>
-            <Input v-model="inflationAmounts" inputmode="decimal"
+            <span :id="`${inputId('inflation')}-label`" class="text-xs text-zinc-400">{{ $t('rgb11Transfer.inflationAmounts') }}</span>
+            <Input v-model="inflationAmounts" v-bind="fieldAttrs('inflation')" inputmode="decimal"
               :placeholder="advancedAllocations ? '9000, 1000' : '9000'" />
-            <span class="block text-xs text-zinc-500">{{ $t('rgb11Transfer.inflationAmountsHelp') }}</span>
+            <span v-bind="hintAttrs('inflation')">{{ fieldHint('inflation', 'inflationAmountsHelp') }}</span>
           </label>
           <label class="block space-y-1">
-            <span class="text-xs text-zinc-400">{{ $t('rgb11Transfer.rejectListUrl') }}</span>
-            <Input v-model="rejectListUrl" autocomplete="off" />
-            <span class="block text-xs text-zinc-500">{{ $t('rgb11Transfer.rejectListUrlHelp') }}</span>
+            <span :id="`${inputId('rejectUrl')}-label`" class="text-xs text-zinc-400">{{ $t('rgb11Transfer.rejectListUrl') }}</span>
+            <Input v-model="rejectListUrl" v-bind="fieldAttrs('rejectUrl')" autocomplete="off" />
+            <span v-bind="hintAttrs('rejectUrl')">{{ fieldHint('rejectUrl', 'rejectListUrlHelp') }}</span>
           </label>
         </template>
         <p class="text-xs text-zinc-500">
           {{ allocationCount > 0
             ? $t('rgb11Transfer.utxoUsage', { count: allocationCount })
             : $t('rgb11Transfer.utxoUsagePending') }}
-        </p>
-        <p v-if="message" class="break-all text-xs"
-          :class="warning ? 'text-amber-500' : success ? 'text-emerald-400' : 'text-red-400'">
-          {{ message }}
         </p>
         <p v-if="!issuedSummary && !rgb11WriteAllowed" class="text-xs text-amber-400" role="status">
           {{ t('accountManagement.readiness.moduleBlocked') }}
@@ -107,6 +102,10 @@
             {{ $t('rgb11Transfer.copyContract') }}
           </Button>
         </div>
+        <p v-if="message" :role="success ? 'status' : 'alert'" class="break-words text-xs"
+          :class="warning ? 'text-amber-500' : success ? 'text-emerald-400' : 'text-red-400'">
+          {{ message }}
+        </p>
         <Button class="w-full" :disabled="loading || (!issuedSummary && !rgb11WriteAllowed)" @click="handlePrimaryAction">
           {{ loading
             ? $t('rgb11Transfer.issuing')
@@ -123,7 +122,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { storeToRefs } from 'pinia'
 import { useClipboard } from '@vueuse/core'
@@ -131,6 +130,7 @@ import walletManager from '@/utils/sat20'
 import { useAccountManagementStore } from '@/store/accountManagement'
 import { downloadRGB11ContractFile } from '@/utils/rgb11ContractFile'
 import { exportFileText } from '@/utils/accountManagement'
+import { validateSendAmount } from '@/utils/sendAmount'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -144,7 +144,8 @@ const ticker = ref('')
 const name = ref('')
 const details = ref('')
 const precision = ref('0')
-const amounts = ref('')
+const defaultNIASupply = '100000000'
+const amounts = ref(defaultNIASupply)
 const inflationAmounts = ref('')
 const advancedAllocations = ref(false)
 const rejectListUrl = ref('')
@@ -160,6 +161,8 @@ const issuedSummary = ref<{
   contractId: string
   assetName: string
 } | null>(null)
+const formId = useId()
+const submitted = ref(false)
 const { t } = useI18n()
 const { copy } = useClipboard()
 const accountManagementState = useAccountManagementStore()
@@ -201,16 +204,66 @@ const formatAssetName = (value: any) => {
 }
 
 const parsedPrecision = computed(() => Number(precision.value))
+const supplyField = computed(() => {
+  if (advancedAllocations.value) return 'initialAllocations'
+  return schema.value === 'NIA' ? 'fixedSupply' : 'initialSupply'
+})
 const parsedIssueAmounts = computed(() => schema.value === 'UDA'
   ? ['1']
   : decimalAmounts(amounts.value))
 const parsedInflationAmounts = computed(() => schema.value === 'IFA'
   ? decimalAmounts(inflationAmounts.value)
   : [])
+const parsedRejectUrl = computed(() => schema.value === 'IFA' ? rejectListUrl.value.trim() : '')
 const allocationCount = computed(() => {
   if (schema.value === 'UDA') return 1
   return (parsedIssueAmounts.value?.length || 0) + (parsedInflationAmounts.value?.length || 0)
 })
+
+type IssueField = 'ticker' | 'name' | 'details' | 'precision' | 'amounts' | 'inflation' | 'rejectUrl'
+
+const fieldErrors = computed<Partial<Record<IssueField, string>>>(() => {
+  const errors: Partial<Record<IssueField, string>> = {}
+  if (!submitted.value) return errors
+  const symbol = ticker.value.trim()
+  const displayName = name.value.trim()
+  const description = details.value.trim()
+  const digits = parsedPrecision.value
+  const issue = parsedIssueAmounts.value
+  const inflation = parsedInflationAmounts.value
+  const rejectUrl = parsedRejectUrl.value
+  if (!validTicker(symbol)) errors.ticker = symbol ? 'tickerInvalid' : 'tickerRequired'
+  if (!validPrintableASCII(displayName, 1, 40)) errors.name = displayName ? 'nameInvalid' : 'nameRequired'
+  if (description && !validPrintableASCII(description, 1, 255)) errors.details = 'detailsInvalid'
+  const validPrecision = String(precision.value).trim() !== '' && Number.isInteger(digits) && digits >= 0 && digits <= 18
+  if (!validPrecision) errors.precision = 'precisionInvalid'
+  if (schema.value !== 'UDA') {
+    if (!issue.length && !inflation.length) errors.amounts = schema.value === 'IFA' ? 'supplyEither' : 'supplyRequired'
+    if (validPrecision) {
+      // RGB stores each allocation as an unsigned 64-bit amount in atomic units.
+      const limit = '18446744073709551615'
+      const maximum = digits === 0 ? limit : `${limit.slice(0, -digits)}.${limit.slice(-digits)}`
+      const invalidAmount = (value: string) => !!validateSendAmount(value.replace(/^\+/, ''), digits, maximum)
+      if (issue.some(invalidAmount)) errors.amounts = 'supplyInvalid'
+      if (inflation.some(invalidAmount)) errors.inflation = 'supplyInvalid'
+    }
+  }
+  if (rejectUrl && !validPrintableASCII(rejectUrl, 1, 8000)) errors.rejectUrl = 'rejectUrlInvalid'
+  return errors
+})
+
+const inputId = (field: IssueField) => `${formId}-${field}`
+const fieldAttrs = (field: IssueField) => ({
+  id: inputId(field),
+  'aria-labelledby': `${inputId(field)}-label`,
+  'aria-invalid': Boolean(fieldErrors.value[field]),
+  'aria-describedby': `${inputId(field)}-hint`,
+})
+const hintAttrs = (field: IssueField) => ({
+  id: `${inputId(field)}-hint`,
+  class: fieldErrors.value[field] ? 'block text-xs text-red-400' : 'block text-xs text-zinc-500',
+})
+const fieldHint = (field: IssueField, help: string) => t(`rgb11Transfer.${fieldErrors.value[field] || help}`)
 
 const setAdvancedAllocations = (enabled: boolean) => {
   advancedAllocations.value = enabled
@@ -233,18 +286,14 @@ const runIssue = async () => {
   const normalizedTicker = ticker.value.trim()
   const normalizedName = name.value.trim()
   const normalizedDetails = details.value.trim()
-  const normalizedRejectListURL = rejectListUrl.value.trim()
-  const hasRequiredSupply = schema.value === 'UDA' ||
-    (schema.value === 'NIA' && !!issueAmounts?.length) ||
-    (schema.value === 'IFA' && !!(issueAmounts?.length || inflation?.length))
-  if (!validTicker(normalizedTicker) || !validPrintableASCII(normalizedName, 1, 40) ||
-    (normalizedDetails && !validPrintableASCII(normalizedDetails, 1, 255)) ||
-    (normalizedRejectListURL && !validPrintableASCII(normalizedRejectListURL, 1, 8000)) ||
-    issueAmounts === null || inflation === null || !hasRequiredSupply ||
-    !Number.isInteger(issuePrecision) || issuePrecision < 0 || issuePrecision > 18) {
-    message.value = t('rgb11Transfer.issueInvalid')
+  submitted.value = true
+  const [invalidField] = Object.keys(fieldErrors.value) as IssueField[]
+  if (invalidField) {
+    message.value = ''
     success.value = false
     warning.value = false
+    await nextTick()
+    document.getElementById(inputId(invalidField))?.focus()
     return
   }
   loading.value = true
@@ -263,7 +312,7 @@ const runIssue = async () => {
       precision: issuePrecision,
       amounts: issueAmounts,
       inflation: inflation,
-      reject_url: normalizedRejectListURL,
+      reject_url: parsedRejectUrl.value,
     })
     if (err || !result) throw err || new Error(t('rgb11Transfer.issueFailed'))
     issuedSummary.value = { ticker: result.ticker, displayName: result.name, contractId: result.contract_id, assetName: result.asset }
@@ -291,8 +340,19 @@ const copyContract = async () => {
 }
 
 const downloadContract = () => {
-  if (!contractConsignmentBase64.value) return
-  downloadRGB11ContractFile(contractConsignmentBase64.value, issuedSummary.value?.contractId || '')
+  const data = contractConsignmentBase64.value
+  const id = issuedSummary.value?.contractId
+  if (!data || !id) return
+  try {
+    const filename = downloadRGB11ContractFile(id, data)
+    message.value = t('common.fileDownloadStarted', { filename })
+    success.value = true
+    warning.value = false
+  } catch (error) {
+    message.value = displayOperationError(error, 'rgb11Transfer.exportContractFailed')
+    success.value = false
+    warning.value = false
+  }
 }
 
 const copyAssetName = async () => {
@@ -303,6 +363,11 @@ const copyAssetName = async () => {
   warning.value = false
 }
 
+watch(schema, (current, previous) => {
+  if (previous === 'NIA' && amounts.value === defaultNIASupply) amounts.value = ''
+  if (current === 'NIA' && !amounts.value.trim()) amounts.value = defaultNIASupply
+})
+
 watch(isOpen, (open) => {
   if (!open) {
     schema.value = 'NIA'
@@ -310,9 +375,10 @@ watch(isOpen, (open) => {
     name.value = ''
     details.value = ''
     precision.value = '0'
-    amounts.value = ''
+    amounts.value = defaultNIASupply
     inflationAmounts.value = ''
     advancedAllocations.value = false
+    submitted.value = false
     rejectListUrl.value = ''
     loading.value = false
     message.value = ''

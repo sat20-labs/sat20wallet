@@ -421,7 +421,7 @@ const updateWorker = (state) => {
   return { worker, observed, requested, change, listeners }
 }
 
-const loadUpdater = async (registration) => {
+const loadUpdater = async (registration, { remote, signal } = {}) => {
   const en = JSON.parse(await readFile(new URL('../../locales/en.json', import.meta.url), 'utf8'))
   const i18n = createI18n({ legacy: false, locale: 'en', messages: { en } })
   const source = await readFile(new URL('../../composables/usePwaUpdate.ts', import.meta.url), 'utf8')
@@ -437,6 +437,7 @@ const loadUpdater = async (registration) => {
   }).outputText, { exports: policyExports })
   const policyRevision = { value: 0 }
   const versionPolicy = new policyExports.VersionPolicy('0.1.38', '20260912T083628Z', () => { policyRevision.value++ })
+  if (remote) versionPolicy.accept(remote)
   const document = { title: '', body: { innerHTML: '' } }
   let closeCalls = 0
   vm.runInNewContext(outputText, {
@@ -452,8 +453,10 @@ const loadUpdater = async (registration) => {
     window: { close: () => { closeCalls++ } },
     document,
     console,
+    MessageChannel,
+    AbortSignal: signal ? { timeout: () => signal } : AbortSignal,
   })
-  return { updater: exports.usePwaUpdate(), document, closeCalls: () => closeCalls }
+  return { updater: exports.usePwaUpdate(), document, versionPolicy, closeCalls: () => closeCalls }
 }
 
 test('update waits for the selected installing worker to activate before showing restart', { timeout: 5000 }, async () => {
@@ -526,4 +529,38 @@ test('update observes activation before posting the activation request', { timeo
   await ui.updater.reloadApp()
   assert.equal(ui.closeCalls(), 1)
   assert.equal(selected.listeners.size, 0)
+})
+
+test('an already activated update can restart the old page only for the expected release', { timeout: 5000 }, async () => {
+  const remote = { version: '0.1.39', buildId: '20260912T090000Z', minVersion: '0.1.0', forceUpdate: false }
+  const active = {
+    postMessage(message, [reply]) {
+      assert.equal(message.type, 'GET_RELEASE_STATE')
+      reply.postMessage({ releaseId: active.releaseId })
+      reply.close()
+    },
+    releaseId: '0.1.38-20260912T083628Z',
+  }
+  const { updater, closeCalls } = await loadUpdater({ active, update: async () => {} }, { remote })
+  await assert.rejects(updater.reloadApp(), /No new PWA update worker/)
+  assert.equal(closeCalls(), 0)
+  active.releaseId = '0.1.39-20260912T090000Z'
+  await updater.reloadApp()
+  assert.equal(closeCalls(), 1)
+})
+
+test('update timeout releases the write gate while a dispatched operation can still finish', { timeout: 5000 }, async () => {
+  const controller = new AbortController()
+  const { updater, versionPolicy, closeCalls } = await loadUpdater({}, { signal: controller.signal })
+  const finish = versionPolicy.begin(false)
+  const failed = assert.rejects(updater.reloadApp(), /did not finish in time/)
+  assert.equal(updater.isUpdating.value, true)
+  controller.abort()
+  await failed
+  assert.equal(updater.isUpdating.value, false)
+  assert.equal(versionPolicy.active, 1)
+  versionPolicy.begin(false)()
+  finish()
+  assert.equal(versionPolicy.active, 0)
+  assert.equal(closeCalls(), 0)
 })

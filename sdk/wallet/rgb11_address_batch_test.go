@@ -23,6 +23,7 @@ func newRGB11ActivatedFlowAccount(t *testing.T, mnemonic string, remote *rgb11Me
 	t.Helper()
 	manager := newAccountManagementAutoTestManager(t)
 	configureRGB11DKVSTestManager(manager, remote)
+	useRGB11TestCoreAuthority(t, manager)
 	manager.serverNode = NewNode(client, "message.test", SERVER_NODE, client.CoreNodePubKey(), client.CoreNodePubKey())
 	manager.rgbManager.evidence = evidence
 	manager.l1IndexerClient = NewIndexerRPCClientMgr()

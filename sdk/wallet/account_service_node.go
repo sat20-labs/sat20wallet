@@ -1,12 +1,16 @@
 package wallet
 
-import "net"
+import (
+	"net"
+
+	"github.com/sat20-labs/sat20wallet/sdk/common"
+)
 
 // A Core may co-sign with a bootstrap peer, which cannot host an account inbox.
-// Select the local mailbox RPC only for a public RGB payout.
-func (p *Manager) payoutMessageNode() *Node {
+// Use the service wallet root for its local mailbox RPC.
+func (p *Manager) rootMessageNode(root common.Wallet) *Node {
 	node := p.getAccountServiceNode()
-	if _, err := accountServiceCoreNodeID(node); err == nil || p == nil || p.cfg == nil || p.cfg.Mode != SERVER_NODE || p.wallet == nil {
+	if _, err := accountServiceCoreNodeID(node); err == nil || p == nil || p.cfg == nil || p.cfg.Mode != SERVER_NODE || root == nil {
 		return node
 	}
 	rpc := p.cfg.RPC
@@ -23,15 +27,14 @@ func (p *Manager) payoutMessageNode() *Node {
 			host = net.JoinHostPort(loop, port)
 		}
 	}
-	key := p.wallet.GetPaymentPubKey()
+	key := root.GetPaymentPubKey()
 	return NewNode(NewNodeClient(rpc.Scheme, host, rpc.Proxy, p.http), host, SERVER_NODE, key, key)
 }
 
 // SetAccountServiceNode selects the account mailbox transport without changing
 // the channel peer. Core nodes also own accounts, while their channel peer may
 // be a bootstrap signer that deliberately does not provide account storage.
-// This does not bind or migrate an account: the existing signed binding and
-// DKVS endpoint identity checks still run before account writes.
+// When a root already exists, initialize its binding on the selected route.
 func (p *Manager) SetAccountServiceNode(node *Node) error {
 	if p == nil {
 		return ErrMessageServiceUnavailable
@@ -43,6 +46,12 @@ func (p *Manager) SetAccountServiceNode(node *Node) error {
 		return ErrMessageServiceUnavailable
 	}
 	copy := *node
+	if root, err := p.accountManagementRootWallet(); err == nil {
+		m := p.ensureDKVSManager()
+		if err := m.registerRootService(m.requestContext(), root, &copy); err != nil {
+			return err
+		}
+	}
 	p.accountServiceMu.Lock()
 	p.accountServiceNode = &copy
 	p.accountServiceMu.Unlock()

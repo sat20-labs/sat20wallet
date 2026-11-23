@@ -64,9 +64,6 @@ func (p *Manager) CreateMessageTopic(topicName, displayName string, maxMembers u
 	if err != nil {
 		return nil, err
 	}
-	if err := p.bindAccountToCurrentCoreNode(wallet); err != nil {
-		return nil, err
-	}
 	client, coreID, err := p.messageServiceClient()
 	if err != nil {
 		return nil, err
@@ -129,9 +126,6 @@ func (p *Manager) GetMessageTopicState(topicName string) (*swire.TopicServiceSna
 	if err != nil {
 		return nil, err
 	}
-	if err := p.bindAccountToCurrentCoreNode(wallet); err != nil {
-		return nil, err
-	}
 	client, _, err := p.messageServiceClient()
 	if err != nil {
 		return nil, err
@@ -164,9 +158,6 @@ func (p *Manager) GetMessageTopicState(topicName string) (*swire.TopicServiceSna
 func (p *Manager) submitMessageTopicMembershipRequest(topicName, serviceCore, requestType string) error {
 	wallet, err := p.messageTopicWallet()
 	if err != nil {
-		return err
-	}
-	if err := p.bindAccountToCurrentCoreNode(wallet); err != nil {
 		return err
 	}
 	client, _, err := p.messageServiceClient()
@@ -216,9 +207,6 @@ func (p *Manager) RequestMessageTopicLeave(topicName, serviceCore string) error 
 func (p *Manager) RejectMessageTopicJoin(topicName, targetAccount string) error {
 	wallet, err := p.messageTopicWallet()
 	if err != nil {
-		return err
-	}
-	if err := p.bindAccountToCurrentCoreNode(wallet); err != nil {
 		return err
 	}
 	snapshot, err := p.GetMessageTopicState(topicName)
@@ -375,9 +363,6 @@ func (p *Manager) sendPersistedTopicControl(wallet *InternalWallet, outbox *topi
 func (p *Manager) commitMessageTopicChange(topicName, changeType, targetAccount string) (*swire.TopicMembershipCommit, error) {
 	wallet, err := p.messageTopicWallet()
 	if err != nil {
-		return nil, err
-	}
-	if err := p.bindAccountToCurrentCoreNode(wallet); err != nil {
 		return nil, err
 	}
 	issuer, err := dkvsAccountID(wallet)
@@ -597,9 +582,6 @@ func (p *Manager) PublishMessageTopic(applicationID, topicName, serviceCore stri
 	}
 	p.messageSendMu.Lock()
 	defer p.messageSendMu.Unlock()
-	if err := p.bindAccountToCurrentCoreNode(wallet); err != nil {
-		return nil, err
-	}
 	sender, err := dkvsAccountID(wallet)
 	if err != nil {
 		return nil, err

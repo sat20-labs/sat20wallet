@@ -92,6 +92,7 @@ const { toast } = useToast()
 const channelStore = useChannelStore()
 const transcendingModeStore = useTranscendingModeStore()
 const {
+  withdraw,
   splicingIn: runSplicingIn,
   splicingOut: runSplicingOut,
   unlockUtxo,
@@ -563,45 +564,6 @@ const deposit = async ({
   toast({
     title: t('walletComponents.success'),
     description: t(asset_name.startsWith('rgb11:') ? 'rgb11Transfer.crossLayerSubmitted' : 'walletComponents.depositSuccess'),
-    variant: 'success',
-    duration: 1500,
-  })
-}
-
-// Withdraw 操作
-const withdraw = async ({
-  toAddress,
-  asset_name,
-  amt,
-  utxos = [],
-  fees = [],
-}: any) => {
-  loading.value = true
-  const [err] = await walletManager.withdraw(
-    toAddress,
-    asset_name,
-    amt,
-    utxos,
-    fees,
-    btcFeeRate.value
-  )
-  if (err) {
-    toast({
-      title: t('walletComponents.error'),
-      description: err.message,
-      variant: 'destructive',
-      duration: 1500,
-    })
-    loading.value = false
-    return
-  }
-
-  loading.value = false
-  refreshL2Assets()
-  refreshL1Assets()
-  toast({
-    title: t('walletComponents.success'),
-    description: t(asset_name.startsWith('rgb11:') ? 'rgb11Transfer.crossLayerSubmitted' : 'walletComponents.withdrawSuccess'),
     variant: 'success',
     duration: 1500,
   })

@@ -72,11 +72,12 @@ type OperationLogCreate struct {
 }
 
 type OperationLogUpdate struct {
-	Status  OperationLogStatus
-	Message string
-	Details map[string]string
-	Result  map[string]string
-	TxID    string
+	Status     OperationLogStatus
+	Message    string
+	Details    map[string]string
+	Result     map[string]string
+	Parameters map[string]string
+	TxID       string
 }
 
 // OperationLogManager is an independent module accessed and owned through the
@@ -224,6 +225,14 @@ func (m *OperationLogManager) Update(id string, update OperationLogUpdate) (*Ope
 	}
 	if update.Result != nil {
 		record.Result = cloneOperationLogStringMap(update.Result)
+	}
+	if len(update.Parameters) > 0 {
+		if record.Parameters == nil {
+			record.Parameters = make(map[string]string)
+		}
+		for key, value := range update.Parameters {
+			record.Parameters[key] = value
+		}
 	}
 	record.History = append(record.History, OperationLogEvent{
 		Timestamp: now,

@@ -2,9 +2,11 @@ package wallet
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
@@ -26,20 +28,29 @@ func (p *Manager) rootDKVSAccountID() string {
 	return accountID
 }
 
+func (p *Manager) registerRootMailbox(root common.Wallet) error {
+	key, err := dkvsindexer.AccountMappingKey(GetChainParam().Name, root.GetAddress())
+	if err != nil {
+		return err
+	}
+	prefix, _, err := dkvsManagedPathForKey(key)
+	if err != nil {
+		return err
+	}
+	if err := p.ensureOwnedDKVSPrefix(prefix); err != nil {
+		return err
+	}
+	return p.watchAccountMailbox(root)
+}
+
 func (p *Manager) scheduleRootAccountDKVSServices(accountID string) {
 	accountID = strings.TrimSpace(accountID)
 	if p == nil || p.dkvs == nil || accountID == "" {
 		return
 	}
 	p.dkvs.schedule(dkvsAccountServiceJobPrefix+accountID, func(store *dkvsStore) error {
-		if !p.accountManagedRecoveryConfigured() {
-			return nil
-		}
 		if p.rootDKVSAccountID() != accountID {
 			return nil
-		}
-		if _, err := p.enableRootRGB11AddressReceive(RGB11ReceiveCapabilityOptions{}); err != nil {
-			return err
 		}
 		ctx := context.Background()
 		if p.dkvs != nil {
@@ -47,11 +58,22 @@ func (p *Manager) scheduleRootAccountDKVSServices(accountID string) {
 		}
 		_, err := p.syncRootRGB11AddressMailbox(ctx,
 			dkvsindexer.RecordVerificationOptions{})
+		if mailboxWaitingForAccount(err) {
+			return nil
+		}
 		if err == nil {
 			p.dkvs.markMailboxPolled(accountID)
 		}
 		return err
 	})
+}
+
+// A module waiting for discovery, import or conflict resolution leaves its
+// messages unread. DKVS receiving and independent backup jobs can continue.
+func mailboxWaitingForAccount(err error) bool {
+	return errors.Is(err, ErrRootAccountDiscoveryPending) ||
+		errors.Is(err, ErrAccountManagedDataImportIncomplete) ||
+		errors.Is(err, dkvsindexer.ErrWriteConflict)
 }
 
 func (m *dkvsManager) mailboxPollDue(accountID string) bool {
@@ -78,9 +100,6 @@ func (p *Manager) pollRootAccountMailboxIfDue(client *SatsNetDKVSClient) (bool, 
 	if p == nil || p.dkvs == nil || client == nil {
 		return false, nil
 	}
-	if !p.accountManagedRecoveryConfigured() {
-		return false, nil
-	}
 	accountID := p.rootDKVSAccountID()
 	mailboxPrefix, err := mailboxSubscriptionTarget(accountID)
 	if err != nil || !p.dkvs.desiredPrefixContainsKey(client, mailboxPrefix) {
@@ -92,6 +111,9 @@ func (p *Manager) pollRootAccountMailboxIfDue(client *SatsNetDKVSClient) (bool, 
 	ctx := p.dkvs.requestContext()
 	_, err = p.syncRootRGB11AddressMailbox(ctx,
 		dkvsindexer.RecordVerificationOptions{})
+	if mailboxWaitingForAccount(err) {
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}

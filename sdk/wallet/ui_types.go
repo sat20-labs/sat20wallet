@@ -363,7 +363,20 @@ type OperationView struct {
 	TxIDs     []string         `json:"tx_ids"`
 	ErrorCode string           `json:"error_code"`
 	History   []OperationEvent `json:"history"`
+	Contract  *ContractLogView `json:"contract,omitempty"`
 	// 不返回 reservation、原始 DKVS、协议参数或需由 PWA 拼装的执行状态。
+}
+
+type ContractLogView struct {
+	URL    string `json:"url"`
+	Action string `json:"action"`
+	Chain  string `json:"chain"`
+}
+
+type ContractLogResult struct {
+	Status string `json:"status"`
+	TxID   string `json:"txid,omitempty"`
+	Chain  string `json:"chain,omitempty"`
 }
 
 type OperationEvent struct {

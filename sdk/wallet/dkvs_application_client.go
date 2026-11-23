@@ -1,12 +1,10 @@
 package wallet
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 
 	dkvscore "github.com/sat20-labs/sat20wallet/sdk/wallet/dkvs"
@@ -287,13 +285,13 @@ func (p *SatsNetDKVSClient) putRecordBatchCASRaw(mutations []dkvsindexer.CASMuta
 	return p.submitDKVSBatch(mutations, endpointID, requestID, authorization, nil)
 }
 
-type freeCASUnavailable struct{ cause error }
+type backupSubmitError struct{ cause error }
 
-func (e *freeCASUnavailable) Error() string { return e.cause.Error() }
-func (e *freeCASUnavailable) Unwrap() error { return e.cause }
+func (e *backupSubmitError) Error() string { return e.cause.Error() }
+func (e *backupSubmitError) Unwrap() error { return e.cause }
 
 func (p *SatsNetDKVSClient) sendDKVSBatch(mutations []dkvsindexer.CASMutation, endpointID, requestID string,
-	authorization *dkvsindexer.WalletWriteAuthorization, initial bool) (*dkvsindexer.WriteResult, error) {
+	authorization *dkvsindexer.WalletWriteAuthorization, backup bool) (*dkvsindexer.WriteResult, error) {
 	req, err := dkvscore.BuildBatchCASRequest(mutations, endpointID, requestID)
 	if err != nil {
 		return nil, err
@@ -303,14 +301,8 @@ func (p *SatsNetDKVSClient) sendDKVSBatch(mutations []dkvsindexer.CASMutation, e
 	ctx := p.requestContext()
 	if err := p.postDKVSApplicationContext(ctx, "/v3/dkvs/records/batch-cas", req, &resp); err != nil {
 		cause := fmt.Errorf("submit DKVS batch: %w", err)
-		if reply, ok := err.(*HTTPResponseError); ok && reply != nil && reply.directPost &&
-			reply.StatusCode == http.StatusServiceUnavailable && ctx.Err() == nil && initial &&
-			authorization != nil && len(authorization.Signature) != 0 && len(mutations) == 1 &&
-			dkvsWalletRecordIsFreeLocal(mutations[0].Record) {
-			body := bytes.TrimSpace(reply.Body)
-			if len(body) != 0 && body[0] != '{' && body[0] != '[' && !json.Valid(body) {
-				return nil, &freeCASUnavailable{cause: cause}
-			}
+		if backup && !errors.Is(ctx.Err(), context.Canceled) && isDKVSNetworkFailure(err) {
+			return nil, &backupSubmitError{cause: cause}
 		}
 		return nil, cause
 	}

@@ -140,7 +140,7 @@ func (p *Manager) bumpAccountGenerationLocked() {
 	}
 }
 
-var errAccountManagementDisabled = errors.New("account management is disabled for STP service wallets")
+var errAccountManagementDisabled = errors.New("personal account backup is disabled for STP service wallets")
 
 type AccountManagementStatus struct {
 	AccountState       string                `json:"account_state"`
@@ -228,15 +228,16 @@ func (p *Manager) accountLocalOnlyLocked(service string) bool {
 func (p *Manager) GetAccountManagementStatus() AccountManagementStatus {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
-	if p.IsServerMode() {
-		status := AccountManagementStatus{LocalOnly: true, DiscoveryStatus: "inactive"}
-		p.fillAccountStatus(&status)
-		return status
-	}
 	service, _ := p.accountServiceStateLocked()
 	localOnly := p.accountLocalOnlyLocked(service)
 	if p.accountProfile == nil {
 		result := AccountManagementStatus{LocalOnly: localOnly, DiscoveryStatus: service}
+		if root, err := p.accountManagementCandidateRootLocked(); err == nil {
+			result.AccountID, _ = dkvsAccountID(cloneWalletAtAccountZero(root.Wallet))
+			result.RootWalletID = root.Id
+			result.RootFingerprint = walletFingerprint(root.Wallet)
+			result.Active = result.AccountID != ""
+		}
 		if p.dkvs != nil {
 			result.LastDKVSSyncErrorCode, result.LastDKVSSyncError, result.LastDKVSSyncErrorAt = p.dkvs.lastSyncErrorStatus()
 		}

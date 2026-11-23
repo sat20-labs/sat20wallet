@@ -229,7 +229,7 @@ func (p *Manager) GetRGBView() (*RGBView, error) {
 	return view, nil
 }
 func (p *Manager) RefreshRGBState(ctx context.Context) (*RGBView, error) {
-	if _, err := p.syncRootRGB11AddressMailbox(ctx, dkvsindexer.RecordVerificationOptions{}); err != nil {
+	if _, err := p.SyncConfiguredRGB11AddressMailbox(ctx, dkvsindexer.RecordVerificationOptions{}); err != nil {
 		return nil, err
 	}
 	if _, err := p.RefreshRGB11State(ctx); err != nil {

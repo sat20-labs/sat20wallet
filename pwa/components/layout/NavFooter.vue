@@ -29,7 +29,7 @@ const navItems = [
   { icon: House, label: 'navigation.home', to: '/wallet' },
   { icon: Globe, label: 'navigation.dapp', to: '/wallet/dapp' },
   { icon: Wrench, label: 'tools.title', to: '/wallet/tools' },
-  { icon: Settings, label: 'setting.title', to: '/wallet/setting' },
+  { icon: Settings, label: 'navigation.setting', to: '/wallet/setting' },
 ]
 
 const isActive = (path: string) => route.path === path ||

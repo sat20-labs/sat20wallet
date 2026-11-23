@@ -275,8 +275,8 @@ func assertPaidAccountDKVSExpectedDelta(t *testing.T, setup *accountManagementAu
 	if label == "AccountManagementAutopaySync" {
 		ownerBinding, err := dkvs.AccountMappingKey("testnet", setup.owner.Address)
 		require.NoError(t, err)
-		require.False(t, before.coreRecords[ownerBinding].present, "the account case starts without an owner binding")
-		require.True(t, core[ownerBinding].present, "account management must create the owner binding")
+		require.True(t, before.coreRecords[ownerBinding].present, "the imported root must already be registered")
+		require.Equal(t, before.coreRecords[ownerBinding], core[ownerBinding], "paid backup must preserve the existing binding")
 		for _, key := range []string{setup.packageKey} {
 			require.NotEmpty(t, key)
 			require.True(t, core[key].present, "the recovery package must be written to Core")

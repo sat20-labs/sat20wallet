@@ -10,6 +10,7 @@ import satsnetStp, { parseLockExpandRequiredAmount } from '@/utils/stp'
 import { sleep } from 'radash'
 import { useQueryClient } from '@tanstack/vue-query'
 import { useI18n } from 'vue-i18n'
+import { toast as sonner } from 'vue-sonner'
 
 export function useAssetActions() {
   const walletStore = useWalletStore()
@@ -156,32 +157,35 @@ export function useAssetActions() {
     fees = [],
   }: any) => {
     loading.value = true
-    const [err] = await walletManager.withdraw(
-      toAddress,
-      asset_name,
-      amt,
-      utxos,
-      fees,
-      btcFeeRate.value
-    )
-    if (err) {
-      toast({
-        title: t('common.error'),
-        description: err.message,
-        duration:1500,
+    const id = sonner.loading(t('pwaUi.assetActions.preparingWithdrawal'))
+    try {
+      const [err] = await walletManager.withdraw(
+        toAddress,
+        asset_name,
+        amt,
+        utxos,
+        fees,
+        btcFeeRate.value
+      )
+      if (err) throw err
+    } catch (error) {
+      sonner.error(t('common.error'), {
+        id,
+        description: error instanceof Error ? error.message : String(error),
+        duration: 7000,
       })
-      loading.value = false
       return
+    } finally {
+      loading.value = false
     }
 
-    loading.value = false
-    refreshL2Assets()
-    await channelStore.getCurrentChannel()
-    toast({
-      title: t('common.success'),
-      description: t('pwaUi.assetActions.withdraw'),
-      duration:1500,
+    sonner.success(t(asset_name.startsWith('rgb11:') ? 'rgb11Transfer.crossLayerSubmitted' : 'pwaUi.assetActions.withdraw'), {
+      id,
+      duration: 4500,
     })
+    refreshL2Assets()
+    refreshL1Assets()
+    void channelStore.getCurrentChannel().catch((error) => console.warn('Withdrawal channel refresh failed', error))
   }
 
   const unlockUtxo = async ({ chanid, amt, feeUtxos = [], asset_name }: any) => {

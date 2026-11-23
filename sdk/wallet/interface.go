@@ -245,8 +245,8 @@ func (p *Manager) CreateWallet(password string) (opValue0 int64, opValue1 string
 		return -1, "", err
 	}
 
-	first = !p.IsServerMode() && p.firstRootEmptyLocked()
-	if first {
+	first = p.firstRootEmptyLocked()
+	if first && !p.IsServerMode() {
 		if err := p.activateFirstMnemonicWalletLocked(nil, wallet, mnemonic, password); err != nil {
 			p.mutex.Unlock()
 			return -1, "", err
@@ -381,8 +381,8 @@ func (p *Manager) importWallet(ctx context.Context, mnemonic, password string) (
 		return -1, err
 	}
 
-	first = !p.IsServerMode() && p.firstRootEmptyLocked()
-	if first {
+	first = p.firstRootEmptyLocked()
+	if first && !p.IsServerMode() {
 		if err := p.activateFirstMnemonicWalletLocked(ctx, wallet, mnemonic, password); err != nil {
 			p.mutex.Unlock()
 			return -1, err
@@ -677,8 +677,6 @@ func (p *Manager) changePasswordLocked(oldPS, newPS string) error {
 }
 
 func (p *Manager) UnlockWallet(password string) (opValue0 int64, opErr error) {
-	opLogID := p.beginWalletLog("security", "unlock_wallet", "Unlock wallet")
-	defer func() { p.finishWalletLog(opLogID, opErr, nil) }()
 	coldStartup := false
 	// Registered before identity/scope defers, so startup runs after their
 	// release. A same-page reauthentication must not repeat root discovery.

@@ -31,7 +31,10 @@ func contractInvokeTitle(action string) string {
 }
 
 func (p *Manager) beginContractInvokeOperationLog(contractURL, jsonInvokeParam, network, assetName, amount string) string {
-	action := contractInvokeAction(jsonInvokeParam)
+	return p.beginContractActionLog(contractURL, contractInvokeAction(jsonInvokeParam), network, assetName, amount)
+}
+
+func (p *Manager) beginContractActionLog(contractURL, action, network, assetName, amount string) string {
 	parameters := map[string]string{
 		"contract": contractURL,
 		"action":   action,
@@ -53,22 +56,27 @@ func (p *Manager) beginContractInvokeOperationLog(contractURL, jsonInvokeParam, 
 }
 
 func (p *Manager) completeContractInvokeOperationLog(logID, txID string) {
-	p.updateOperationLogBestEffort(logID, OperationLogUpdate{
-		Status:  OperationLogSucceeded,
-		Message: "Contract invocation submitted",
-		TxID:    txID,
-		Details: map[string]string{"txid": txID},
-		Result:  map[string]string{"txid": txID},
-	})
+	p.finishContractInvokeLog(logID, txID, nil, nil)
 }
 
 func (p *Manager) failContractInvokeOperationLog(logID string, err error) {
-	if err == nil {
+	p.finishContractInvokeLog(logID, "", err, nil)
+}
+
+func (p *Manager) finishContractInvokeLog(logID, txID string, err error, params map[string]string) {
+	update := OperationLogUpdate{Parameters: params}
+	if err != nil {
+		update.Status = OperationLogFailed
+		update.Message = err.Error()
+		update.Details = map[string]string{"error": err.Error()}
+	} else if txID != "" {
+		update.Status = OperationLogSucceeded
+		update.Message = "Contract invocation submitted"
+		update.TxID = txID
+		update.Details = map[string]string{"txid": txID}
+		update.Result = map[string]string{"txid": txID}
+	} else {
 		return
 	}
-	p.updateOperationLogBestEffort(logID, OperationLogUpdate{
-		Status:  OperationLogFailed,
-		Message: err.Error(),
-		Details: map[string]string{"error": err.Error()},
-	})
+	p.updateOperationLogBestEffort(logID, update)
 }

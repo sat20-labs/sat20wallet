@@ -45,13 +45,36 @@ func runServiceWalletProfile(t *testing.T, chain *nativeIfaceChain) {
 			require.NoError(t, device.db.Write(key, obsolete))
 
 			device.reopen(t)
+			device.mgr.Start()
 			require.Equal(t, address, device.mgr.GetWallet().GetAddress())
 			status := device.mgr.GetAccountManagementStatus()
 			require.True(t, status.LocalOnly)
-			require.False(t, status.Active)
+			require.True(t, status.Active)
+			require.False(t, status.RecoveryConfigured)
+			require.Equal(t, id, status.RootWalletID)
+			require.Equal(t, dkvsindexer.AccountID(device.mgr.GetWallet().GetPubKey().SerializeCompressed()), status.AccountID)
+			receiver, err := device.mgr.ResolveConfiguredRGB11AddressEndpoint(address, dkvsindexer.RecordVerificationOptions{})
+			require.NoError(t, err)
+			require.Equal(t, status.AccountID, receiver.AccountID)
+			body := []byte("service wallet Direct after restart")
+			sent, err := device.mgr.SendAccountDirectMessage("service-self", wallet.AccountMessageKindGeneric, status.AccountID, body)
+			require.NoError(t, err)
+			deadline := time.Now().Add(30 * time.Second)
+			for {
+				messages, _, err := device.mgr.ReadAccountDirectMessages(0, 10)
+				if err == nil && len(messages) != 0 {
+					require.Len(t, messages, 1)
+					require.Equal(t, sent.MessageID, messages[0].Direct.MessageID)
+					require.Equal(t, body, messages[0].Payload.Body)
+					break
+				}
+				require.True(t, time.Now().Before(deadline), "waiting for service wallet Direct, last read: %v", err)
+				time.Sleep(100 * time.Millisecond)
+			}
+
 			require.Equal(t, "inactive", status.DiscoveryStatus)
 			require.EqualError(t, device.mgr.InitializeAccountManagement(device.password),
-				"account management is disabled for STP service wallets")
+				"personal account backup is disabled for STP service wallets")
 			require.NoError(t, device.mgr.UpdateWalletName(id, "Local service wallet"))
 			device.reopen(t)
 			catalog := device.mgr.GetWalletCatalog()

@@ -159,6 +159,7 @@ type Manager struct {
 	accountGeneration           uint64
 	debugID                     uint64
 	messageSendMu               sync.Mutex
+	rgbMailboxMu                sync.Mutex
 	accountStorageMu            sync.Mutex
 	accountStorageAuthorization *accountStorageAuthorizationSession
 	accountStorageStopped       bool

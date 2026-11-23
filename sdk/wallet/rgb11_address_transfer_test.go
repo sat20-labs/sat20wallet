@@ -21,7 +21,33 @@ import (
 	"github.com/sat20-labs/satoshinet/btcec"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
+	"github.com/stretchr/testify/require"
 )
+
+type directReplyProbe struct {
+	*rgb11MessageNodeClient
+	attempts    []swire.DirectMessage
+	acceptFirst bool
+	committed   bool
+}
+
+func (c *directReplyProbe) SendMessageServiceReq(req *swire.MessageServiceRequest) (*swire.MessageServiceResponse, error) {
+	if req.Action != swire.MessageServiceActionSendDirect {
+		return c.rgb11MessageNodeClient.SendMessageServiceReq(req)
+	}
+	c.attempts = append(c.attempts, *req.Direct)
+	if len(c.attempts) == 1 && !c.acceptFirst {
+		return nil, context.DeadlineExceeded
+	}
+	resp, err := c.rgb11MessageNodeClient.SendMessageServiceReq(req)
+	if err == nil {
+		if len(c.attempts) == 1 {
+			return nil, context.DeadlineExceeded
+		}
+		resp.MailboxCommitted = c.committed
+	}
+	return resp, err
+}
 
 type rgb11AddressEvidence struct {
 	*rgb11FlowEvidence
@@ -32,7 +58,7 @@ type rgb11AddressEvidence struct {
 type rgb11AddressACKObservedMessageClient struct {
 	*rgb11MessageNodeClient
 	wallet            *InternalWallet
-	beforeAcceptedACK func() error
+	beforeAcceptedACK func(*swire.DirectMessage) error
 }
 
 func (c *rgb11AddressACKObservedMessageClient) SendMessageServiceReq(
@@ -45,7 +71,7 @@ func (c *rgb11AddressACKObservedMessageClient) SendMessageServiceReq(
 			if decodeErr == nil && payload.Kind == AccountMessageKindRGB11ACK {
 				ack, ackErr := rgb11wallet.DecodeAddressACK(payload.Body)
 				if ackErr == nil && ack.Status == RGB11AddressACKAccepted {
-					if err := c.beforeAcceptedACK(); err != nil {
+					if err := c.beforeAcceptedACK(req.Direct); err != nil {
 						return nil, err
 					}
 				}
@@ -308,19 +334,15 @@ func TestRGB11AddressMailboxUsesMessageManagerSenderSequence(t *testing.T) {
 			}},
 			http: remote,
 		}
-		manager.serverNode = NewNode(messageClient, "message.test", SERVER_NODE,
-			messageClient.CoreNodePubKey(), messageClient.CoreNodePubKey())
+		node := NewNode(messageClient, "message.test", SERVER_NODE, messageClient.CoreNodePubKey(), messageClient.CoreNodePubKey())
+		if err := manager.SetAccountServiceNode(node); err != nil {
+			t.Fatal(err)
+		}
 		return manager
 	}
 	sender := newManager(senderWallet)
 	receiver := newManager(receiverWallet)
-	receiverID, err := dkvsAccountID(receiverWallet)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := receiver.bindAccountToCurrentCoreNode(receiverWallet); err != nil {
-		t.Fatal(err)
-	}
+	receiverID := receiver.rootDKVSAccountID()
 	first, err := sender.sendWalletDirectMessage(senderWallet, strings.Repeat("1", 64),
 		AccountMessageKindRGB11Consignment, receiverID, []byte("first"))
 	if err != nil {
@@ -346,6 +368,56 @@ func TestRGB11AddressMailboxUsesMessageManagerSenderSequence(t *testing.T) {
 	}
 	if firstRecord.Seq != 1 || secondRecord.Seq != 1 || firstRecord.Key == secondRecord.Key {
 		t.Fatalf("immutable mailbox records first=%+v second=%+v", firstRecord, secondRecord)
+	}
+
+	for i, tc := range []struct {
+		name        string
+		payout      bool
+		acceptFirst bool
+	}{
+		{"transfer-before-accept", false, false},
+		{"transfer-lost-response", false, true},
+		{"payout-before-accept", true, false},
+		{"payout-lost-response", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			probe := &directReplyProbe{rgb11MessageNodeClient: messageClient, acceptFirst: tc.acceptFirst}
+			node := NewNode(probe, "message.test", SERVER_NODE, messageClient.CoreNodePubKey(), messageClient.CoreNodePubKey())
+			id := fmt.Sprintf("%064x", 100+i)
+			deliver := func() (*swire.DirectMessage, error) {
+				return sender.ensureDKVSManager().sendWalletMessageOnNode(senderWallet, id,
+					AccountMessageKindRGB11Consignment, receiverID, []byte("consignment"), node, tc.payout)
+			}
+			original, err := deliver()
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			require.Len(t, probe.attempts, 1)
+			other, err := sender.sendWalletDirectMessage(senderWallet, fmt.Sprintf("%064x", 200+i),
+				AccountMessageKindGeneric, receiverID, []byte("another transfer"))
+			require.NoError(t, err)
+
+			retried, err := deliver()
+			if tc.payout {
+				require.ErrorIs(t, err, errRGBMailboxPending)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, *original, probe.attempts[1])
+			if tc.acceptFirst {
+				require.Len(t, probe.attempts, 2)
+				require.Equal(t, *original, *retried)
+			} else {
+				require.Len(t, probe.attempts, 3)
+				require.Equal(t, other.SenderMsgID+1, retried.SenderMsgID)
+				require.Equal(t, original.MessageID, retried.MessageID)
+				require.Equal(t, original.Ciphertext, retried.Ciphertext)
+			}
+			if tc.payout {
+				probe.committed = true
+				final, err := deliver()
+				require.NoError(t, err)
+				require.Equal(t, *retried, *final)
+			}
+		})
 	}
 }
 
@@ -573,36 +645,44 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 		firstSync.Invalid != 256 {
 		t.Fatalf("first mailbox page=%+v", firstSync)
 	}
-	savedNode := recipient.serverNode
-	recipient.serverNode = nil
+	var attempts []swire.DirectMessage
+	ackClient := &rgb11AddressACKObservedMessageClient{
+		rgb11MessageNodeClient: messageClient, wallet: recipientWallet,
+		beforeAcceptedACK: func(msg *swire.DirectMessage) error {
+			attempts = append(attempts, *msg)
+			if len(attempts) == 1 {
+				return errors.New("ACK request lost before Core acceptance")
+			}
+			return verifyRGB11ACKUsesDurableLocalRecovery(t, recipient, prepared.State.TransferID, deliveryRecord)
+		},
+	}
+	recipient.serverNode = NewNode(ackClient, "message.test", SERVER_NODE,
+		messageClient.CoreNodePubKey(), messageClient.CoreNodePubKey())
 	failedSync, err := recipient.SyncConfiguredRGB11AddressMailbox(
 		context.Background(), dkvsindexer.RecordVerificationOptions{},
 	)
-	recipient.serverNode = savedNode
-	if err != nil {
-		t.Fatal(err)
-	}
-	if failedSync.Received != 0 || failedSync.Invalid == 0 {
-		t.Fatalf("failed ACK sync=%+v", failedSync)
+	if !errors.Is(err, errRGBACKSend) || failedSync == nil || failedSync.Received != 0 || len(attempts) != 1 {
+		t.Fatalf("failed ACK sync=%+v err=%v", failedSync, err)
 	}
 	receivesBeforeRetry := countRGB11Receives(t, recipient.db)
 	if receivesBeforeRetry != 1 {
 		t.Fatalf("receive records after failed ACK=%d", receivesBeforeRetry)
 	}
-	ackObserved := false
-	ackClient := &rgb11AddressACKObservedMessageClient{
-		rgb11MessageNodeClient: messageClient, wallet: recipientWallet,
-		beforeAcceptedACK: func() error {
-			if err := verifyRGB11ACKUsesDurableLocalRecovery(t, recipient,
-				prepared.State.TransferID, deliveryRecord); err != nil {
-				return err
-			}
-			ackObserved = true
-			return nil
-		},
+	// A different Direct is accepted while the first ACK is waiting for the user.
+	other, err := recipient.sendWalletDirectMessage(recipientWallet, strings.Repeat("e", 64),
+		AccountMessageKindGeneric, senderID, []byte("next message"))
+	if err != nil || other.SenderMsgID != attempts[0].SenderMsgID {
+		t.Fatalf("intervening Direct did not use the unaccepted sequence: %v", err)
 	}
-	recipient.serverNode = NewNode(ackClient, "message.test", SERVER_NODE,
-		messageClient.CoreNodePubKey(), messageClient.CoreNodePubKey())
+	// Two pages cover the entire rotating mailbox, including the failed receipt.
+	for range 2 {
+		if _, err := recipient.syncRootRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(attempts) != 1 {
+		t.Fatal("background scan retried a failed Direct ACK")
+	}
 	syncResult, err := recipient.SyncConfiguredRGB11AddressMailbox(
 		context.Background(), dkvsindexer.RecordVerificationOptions{},
 	)
@@ -612,8 +692,10 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	if syncResult.Received != 1 || syncResult.ACKs != 0 {
 		t.Fatalf("mailbox sync=%+v", syncResult)
 	}
-	if !ackObserved {
-		t.Fatal("positive RGB11 Address ACK was not checked against its pre-ACK recovery closure")
+	if len(attempts) != 3 || !reflect.DeepEqual(attempts[0], attempts[1]) ||
+		attempts[2].SenderMsgID != other.SenderMsgID+1 || attempts[2].MessageID != attempts[0].MessageID ||
+		!bytes.Equal(attempts[2].Ciphertext, attempts[0].Ciphertext) {
+		t.Fatal("manual retry must replay the signed ACK, then re-sign the same receipt at the next sequence")
 	}
 	if receivesAfterRetry := countRGB11Receives(t, recipient.db); receivesAfterRetry != receivesBeforeRetry {
 		t.Fatalf("retry created receive records: before=%d after=%d", receivesBeforeRetry, receivesAfterRetry)
@@ -777,7 +859,7 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 
 	replayRemote := newRGB11MemoryDKVSHTTP()
 	for key, record := range remote.records {
-		if strings.HasPrefix(key, "/account/") {
+		if strings.HasPrefix(key, "/account/") || strings.HasPrefix(key, rgb11wallet.RGB11RegistryPath+"/") {
 			replayRemote.records[key] = cloneRGB11DKVSRecord(record)
 			continue
 		}
@@ -805,14 +887,21 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	if err := restoredRecipient.SubscribeDKVSPrefix(mailboxTarget); err != nil {
 		t.Fatal(err)
 	}
+	// An online root can receive the retained proof during fixture activation.
+	// A later mailbox pass must then recognize that exact application ID.
+	receivedAtStartup := restoredRecipient.rgbManager.rgb11AddressMessageProcessed("consignment", prepared.State.AddressMessageID)
 	recoveryResult, err := restoredRecipient.SyncConfiguredRGB11AddressMailbox(
 		context.Background(), dkvsindexer.RecordVerificationOptions{},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if recoveryResult.Received != 1 {
-		t.Fatalf("mnemonic replay result=%+v", recoveryResult)
+	wantReceived, wantDone := 1, 0
+	if receivedAtStartup {
+		wantReceived, wantDone = 0, 1
+	}
+	if recoveryResult.Received != wantReceived || recoveryResult.AlreadyDone != wantDone || recoveryResult.Invalid != 0 {
+		t.Fatalf("mnemonic replay result=%+v, processed at startup=%t", recoveryResult, receivedAtStartup)
 	}
 	if _, err := restoredRecipient.RefreshRGB11State(context.Background()); err != nil {
 		t.Fatal(err)
@@ -977,8 +1066,8 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 		t.Fatal(err)
 	}
 	if ackDirect.SenderAccount != recipientID || ackDirect.RecipientAccount != senderID ||
-		ackDirect.SenderMsgID != 0 {
-		t.Fatalf("unexpected MessageManager ACK envelope: %+v", ackDirect)
+		!reflect.DeepEqual(*ackDirect, attempts[2]) {
+		t.Fatal("mailbox did not persist the re-signed ACK from the recipient")
 	}
 	outerACK, err := rgb11wallet.EncodeAddressACK(RGB11AddressACK{Status: RGB11AddressACKAccepted})
 	if err != nil {

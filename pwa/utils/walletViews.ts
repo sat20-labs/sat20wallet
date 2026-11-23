@@ -1,3 +1,5 @@
+import type { Chain } from '@/types/index'
+
 export interface RGBSendRequest {
   recipients: RGBRecipient[]
   fee_rate: number
@@ -267,6 +269,19 @@ export interface OperationView {
   tx_ids: string[]
   error_code: string
   history: OperationEvent[]
+  contract?: {
+    url: string
+    action: string
+    chain: Chain
+  }
+}
+
+export type ContractLogResult = {
+  status: 'ready'
+  txid: string
+  chain: Chain
+} | {
+  status: 'pending' | 'none' | 'unavailable'
 }
 
 export interface OperationEvent {

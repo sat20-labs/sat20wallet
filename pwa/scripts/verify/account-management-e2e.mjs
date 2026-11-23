@@ -386,7 +386,7 @@ if (regtestMode && focusedWalletCases) {
     ...(regtestWalletFixture?.realBitcoinFunds ? [requiredPwaPosCases[9], requiredPwaPosCases[10], requiredPwaPosCases[11], requiredPwaPosCases[24]] : []),
     ...(regtestWalletFixture?.realSatoshiNetFunds ? [requiredPwaPosCases[12]] : []),
     ...(regtestWalletFixture?.realChannel ? [requiredPwaPosCases[0], requiredPwaPosCases[1], requiredPwaPosCases[14], requiredPwaPosCases[16], ...requiredPwaPosCases.slice(20, 23)] : []),
-    ...(regtestWalletFixture?.realChannel && regtestWalletFixture?.realBitcoinControl ? [requiredPwaPosCases[25]] : []),
+    ...(regtestWalletFixture?.realChannel && regtestWalletFixture?.realBitcoinControl ? [requiredPwaPosCases[23], requiredPwaPosCases[25]] : []),
     ...(regtestWalletFixture?.realChannel && regtestWalletFixture?.realBitcoinControl ? [optionalPwaEscapeCases[0]] : []),
     ...(regtestWalletFixture?.realChannel && regtestWalletFixture?.pos_activation_scheduled === true ? [requiredPwaPosCases[2]] : []),
     ...(regtestWalletFixture?.realChannel && regtestWalletFixture?.pos_v2_active === true ? [requiredPwaPosCases[3]] : []),

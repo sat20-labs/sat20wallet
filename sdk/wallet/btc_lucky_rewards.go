@@ -835,7 +835,20 @@ func (p *Manager) channelAssetSummaryWithoutLucky(address string, l2 bool) ([]*i
 		rpc = p.GetIndexerRPCClient_SatsNet()
 		err = p.excludeBTCLuckyL2Outputs(address, excluded)
 	} else {
-		err = p.excludeBTCLuckyL1Outputs(address, excluded)
+		var candidates []string
+		candidates, err = p.l1IndexerClient.getCoinbaseCandidates(address)
+		if err != nil {
+			return nil, err
+		}
+		for _, point := range candidates {
+			lucky, err := p.isBTCLuckyL1Output(point, nil)
+			if err != nil {
+				return nil, err
+			}
+			if lucky {
+				excluded[point] = true
+			}
+		}
 	}
 	if err != nil {
 		return nil, err

@@ -12,7 +12,12 @@ const release={version:'1.2.3',buildId:'20260909T010000Z',minVersion:'1.0.0',for
 let p=make();assert.equal(p.blocked,false);p.begin(false)(); // first unknown retains capability
 assert.equal(p.accept({...release,minVersion:'2.0.0'}),true);assert.equal(p.blocked,true)
 assert.equal(p.accept({version:'bad'}),false);assert.equal(p.blocked,true) // invalid/offline never clears known
-for(const info of [{...release,buildId:'20260909T020000Z'},{...release,version:'1.2.4'}]){p=make();assert.equal(p.accept(info),true);assert.equal(p.blocked,true);assert.throws(()=>p.begin(false));p.begin(true)()}
+const newerBuild={...release,buildId:'20260909T020000Z'}
+const newerVersion={...release,version:'1.2.4'}
+for(const info of [newerBuild,newerVersion]){
+ p=make();assert.equal(p.accept(info),true);assert.equal(p.isNew(info),true)
+ assert.equal(p.blocked,false,'a normal update must allow wallet writes');p.begin(false)()
+}
 for(const [build,blocked] of [['20260909T020000Z',true],['20260909T000000Z',false],['garbage',false],['20260230T010000Z',false],['20260909T010000Z',false]]){p=make();p.accept({...release,buildId:build,forceUpdate:true});assert.equal(p.blocked,blocked)}
 p=make();p.accept({...release,version:'1.2.4',forceUpdate:true});assert.equal(p.blocked,true)
 p=make();const finish=p.begin(false);let updated=false;const wait=p.waitForUpdate().then(()=>{updated=true});assert.throws(()=>p.begin(false));assert.equal(updated,false);finish();await wait;assert.equal(updated,true);p.updateFailed();assert.equal(p.updating,false)
@@ -23,7 +28,11 @@ const shared=async(build='20260909T010000Z',mode='production',nonce='')=>{
  let text=transpile(sharedSource).replace(/import \{ ref \} from 'vue';/, 'const ref=value=>({value});').replace("from './versionPolicy'",`from '${policyURL}'`).replaceAll('__SAT20_APP_VERSION__',"'1.2.3'").replaceAll('__SAT20_BUILD_ID__',JSON.stringify(build)).replaceAll('import.meta.env.VITE_SAT20_VERSION_URL',"''").replaceAll('import.meta.env.BASE_URL',"'/pwa/'").replaceAll('import.meta.env.MODE',JSON.stringify(mode));
  return import(url(text+'\n//'+nonce))
 }
-let singleton=await shared();singleton.acceptVersionPolicy({...release,minVersion:'2.0.0'})
+const singleton=await shared();singleton.acceptVersionPolicy(newerBuild)
+const reloaded=await shared(undefined,undefined,'optional-reload')
+assert.equal(reloaded.versionPolicy.blocked,false)
+assert.equal(reloaded.versionPolicy.isNew(reloaded.versionPolicy.remote),true)
+singleton.acceptVersionPolicy({...release,minVersion:'2.0.0'})
 assert.equal((await shared(undefined,undefined,'reload')).versionPolicy.blocked,true)
 assert.equal((await shared('20260909T030000Z')).versionPolicy.blocked,false)
 assert.equal((await shared(undefined,'development')).versionPolicy.blocked,false)
@@ -43,17 +52,29 @@ for(const name of ['sat20','stp','accountManagement']){
  facades.push((await import(url(helpers+text))).default)
 }
 const mutations=[()=>facades[0].sendAssets('a','::','330',1),()=>facades[1].openChannel('a','1','1'),
- ()=>facades[0].prepareRGB11Transfer({}),()=>facades[2].fundAutopay({})]
+ ()=>facades[0].prepareRGB11Transfer({}),()=>facades[0].confirmRGB11Transfer('transfer'),
+ ()=>facades[0].cancelRGB11Transfer('transfer'),()=>facades[0].importRGB11Contract('fixture'),
+ ()=>facades[2].fundAutopay({})]
 globalThis.sat20wallet_wasm=new Proxy({}, {get:()=>async()=>{calls++;return {code:0,data:{ok:true}}}})
 globalThis.sat20account_wasm=globalThis.sat20wallet_wasm
 globalThis.sat20stp_wasm=globalThis.sat20wallet_wasm
-for(const mutate of mutations){
- const before=calls
- try{const result=await mutate();assert.ok(result[0] instanceof Error)}
- catch(e){assert.match(e.message,/update required/)}
- assert.equal(calls,before)
+for(const info of [{...release,minVersion:'2.0.0'},{...newerBuild,forceUpdate:true}]){
+ singleton.acceptVersionPolicy(info)
+ for(const mutate of mutations){
+  const before=calls
+  const error=await Promise.resolve().then(mutate).then(result=>result?.[0],error=>error)
+  assert.match(error?.message ?? '',/update required/)
+  assert.equal(calls,before)
+ }
 }
 await facades[0].getVersion();await facades[2].getAccountView();assert.equal(calls,2)
+singleton.acceptVersionPolicy(newerBuild)
+for(const mutate of mutations){
+ const before=calls
+ const result=await mutate()
+ assert.deepEqual(result?.ok ? result : result?.[1],{ok:true})
+ assert.equal(calls,before+1)
+}
 // Once dispatched, an update waits for the original result and preserves it.
 singleton.acceptVersionPolicy(release)
 let resolveWasm

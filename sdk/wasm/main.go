@@ -21,6 +21,7 @@ import (
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	"github.com/sirupsen/logrus"
 )
 
@@ -2653,7 +2654,8 @@ func addOutputsToPsbt_SatsNet(this js.Value, p []js.Value) any {
 
 func getVersion(this js.Value, p []js.Value) any {
 	data := map[string]any{
-		"version": wallet.SOFTWARE_VERSION,
+		"version":              wallet.SOFTWARE_VERSION,
+		"rgb_protocol_version": rgb11wallet.RGB11ProtocolVersion,
 	}
 	return createJsRet(data, 0, "ok")
 }

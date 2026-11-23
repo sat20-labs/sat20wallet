@@ -28,10 +28,8 @@ export class VersionPolicy {
     const info=value as VersionRelease
     if(!info||versionCompare(info.version,this.local)===null||versionCompare(info.minVersion,this.local)===null||typeof info.forceUpdate!=='boolean')return false
     this.remote={...info}
-    // A published newer release may already be installed as a waiting worker.
-    // Keep mutations on the embedded release blocked until that atomic update
-    // is activated; reads and unlock remain available through begin().
-    this.blocked=versionCompare(this.local,info.minVersion)===-1||this.isNew(info)
+    this.blocked = versionCompare(this.local, info.minVersion) === -1 ||
+      (info.forceUpdate && this.isNew(info))
     this.changed();return true
   }
   assertAllowed(readOnly: boolean) {
@@ -42,9 +40,22 @@ export class VersionPolicy {
     this.active++;this.changed();let ended=false
     return ()=>{if(ended)return;ended=true;this.active--;this.changed();if(!this.active){for(const done of this.waiters.splice(0))done()}}
   }
-  async waitForUpdate() {
+  async waitForUpdate(signal?: AbortSignal) {
+    signal?.throwIfAborted()
     this.updating=true;this.changed()
-    if(this.active)await new Promise<void>(resolve=>this.waiters.push(resolve))
+    if (!this.active) return
+    await new Promise<void>((resolve, reject) => {
+      const done = () => {
+        signal?.removeEventListener('abort', abort)
+        resolve()
+      }
+      const abort = () => {
+        this.waiters = this.waiters.filter(waiter => waiter !== done)
+        reject(signal?.reason)
+      }
+      this.waiters.push(done)
+      signal?.addEventListener('abort', abort, { once: true })
+    })
   }
   updateFailed(){this.updating=false;this.changed()}
 }

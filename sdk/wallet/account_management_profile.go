@@ -209,7 +209,10 @@ func zeroBytes(value []byte) {
 }
 
 func (p *Manager) isAccountManagementRootLocked(info *WalletInfo) bool {
-	return p.accountProfile != nil && info != nil && info.Wallet != nil &&
+	if p.accountProfile == nil {
+		return info != nil && info.Type == WALLET_TYPE_MNEMONIC && info == p.firstWalletLocked()
+	}
+	return info != nil && info.Wallet != nil &&
 		walletFingerprint(info.Wallet) == p.accountProfile.RootFingerprint
 }
 

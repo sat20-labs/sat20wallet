@@ -19,7 +19,7 @@
             {{ $t('rgb11Transfer.selectedContractFile', { name: selectedFile.name }) }}
           </p>
         </div>
-        <p v-if="message" class="break-all text-xs"
+        <p v-if="message" :role="success ? 'status' : 'alert'" class="break-all text-xs"
           :class="warning ? 'text-amber-500' : success ? 'text-emerald-400' : 'text-red-400'">
           {{ message }}
         </p>
@@ -108,7 +108,7 @@ const runImport = async () => {
       : await walletManager.importRGB11Contract(encodeBase64(new TextEncoder().encode(consignment.value.trim()).buffer))
     if (err || !result) throw err || new Error(t('rgb11Transfer.importFailed'))
     success.value = true
-    message.value = t('rgb11Transfer.imported', { count: 1 })
+    message.value = t('rgb11Transfer.imported')
     emit('completed')
   } catch (error: any) {
     message.value = displayOperationError(error, 'rgb11Transfer.importFailed')

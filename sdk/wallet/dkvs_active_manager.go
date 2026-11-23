@@ -12,16 +12,34 @@ func (p *Manager) discoverNewRoot(password string) {
 	p.actionMonitorLock.Lock()
 	running := p.actionMonitorRunning
 	p.actionMonitorLock.Unlock()
-	if !running {
-		return
-	}
-	ctx, cancel := context.WithTimeout(p.ensureDKVSManager().requestContext(), accountManagedDataReadyTimeout)
+	m := p.ensureDKVSManager()
+	m.mu.Lock()
+	session, epoch := m.requestContextLocked(), m.onlineEpoch
+	m.mu.Unlock()
+	ctx, cancel := context.WithTimeout(session, accountManagedDataReadyTimeout)
 	defer cancel()
-	_, err := p.RecoverAccountManagementFromCurrentWallet(ctx, password)
-	if errors.Is(err, ErrRootAccountNotFound) {
-		err = nil
+	var err error
+	if running && !p.IsServerMode() {
+		_, err = p.RecoverAccountManagementFromCurrentWallet(ctx, password)
+		if errors.Is(err, ErrRootAccountNotFound) {
+			err = nil
+		}
 	}
-	p.dkvs.setLastSyncError(err)
+	if err == nil {
+		err = p.ensureAccountCoreBindingForSync(ctx)
+	}
+	m.setLastSyncError(err)
+	if running && !p.accountRecoveryConfigured() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if m.stop == nil && m.requestCtx == session && session.Err() == nil && !m.stopping {
+			if err == nil {
+				m.startWorkerLocked(false, false)
+			} else if isDKVSNetworkFailure(err) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				m.recheckAfterOnlineLocked(epoch)
+			}
+		}
+	}
 }
 
 // accountDKVSClient returns the endpoint client privately coordinated by this
@@ -112,12 +130,16 @@ func (p *Manager) startAccountRuntime(discover bool) {
 	p.mutex.RLock()
 	unlocked := p.accountDiscoveryUnlockedLocked()
 	p.mutex.RUnlock()
-	if !unlocked {
+	if !unlocked && !(discover && p.IsServerMode()) {
 		return
 	}
 	if p.accountRecoveryConfigured() {
 		if err := p.StartDKVSSync(); err != nil {
 			Log.Warningf("start activated account synchronization failed: %v", err)
+		}
+	} else if discover && p.IsServerMode() {
+		if _, err := p.accountManagementRootWallet(); err == nil {
+			p.ensureDKVSManager().startWorker(true)
 		}
 	} else if discover {
 		if err := p.startAccountDiscovery(); err != nil {

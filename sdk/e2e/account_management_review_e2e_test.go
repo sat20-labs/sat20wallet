@@ -545,8 +545,9 @@ func runSDKAccountReviewActivationWithoutPrebinding(t *testing.T, network *realS
 	root := f.manager.GetWalletCatalog()[0]
 	bindingKey, err := dkvs.AccountMappingKey("testnet", root.Accounts[0].Address)
 	require.NoError(t, err)
-	_, err = dkvsClientForNode(t, network.Core).GetRecordDirect(bindingKey)
-	require.ErrorIs(t, err, dkvs.ErrRecordNotFound, "the test must not accidentally inherit a binding")
+	registered, err := dkvsClientForNode(t, network.Core).GetRecordDirect(bindingKey)
+	require.NoError(t, err, "import must register the root without a manual binding call")
+	require.NotNil(t, registered)
 	var activationErr error
 	require.NotPanics(t, func() {
 		err = f.manager.UseAccountStorageAuthorization(wallet.AccountStoragePurposeRecovery,
@@ -555,16 +556,17 @@ func runSDKAccountReviewActivationWithoutPrebinding(t *testing.T, network *realS
 					f.pkg.Envelope.Locator, "account://"+f.pkg.Envelope.Locator.PackageID)
 				return activationErr
 			})
-	}, "activation must bind before generic KV writes, and must not panic on admission rejection")
+	}, "activation must use the registered root")
 	t.Logf("account-review: activation_error=%v use_error=%v recovery_configured=%t",
 		activationErr, err, f.manager.GetAccountManagementStatus().RecoveryConfigured)
-	require.NoError(t, err, "activation must establish its CoreNode binding before publishing state")
+	require.NoError(t, err)
 	require.True(t, f.manager.GetAccountManagementStatus().RecoveryConfigured)
 
 	// BindAccount is the one pre-binding write exception. Its accepted mapping
 	// is network DKVS state, so peers must learn the same signed binding through
 	// ordinary DKVS P2P propagation rather than another service-specific store.
 	binding := waitForDKVSRecord(t, network.Core, bindingKey)
+	require.Equal(t, dkvs.RecordHash(registered), dkvs.RecordHash(binding), "backup activation must preserve the signed binding")
 	_, _, descriptor, err := dkvs.ValidateAccountMappingBindingRecord(binding)
 	require.NoError(t, err)
 	require.Equal(t, f.pkg.Envelope.Locator.AccountID, descriptor.AccountID)

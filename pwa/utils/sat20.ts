@@ -347,7 +347,7 @@ class WalletManager {
   }
 
   async getVersion(): Promise<
-    [Error | undefined, { version: string } | undefined]
+    [Error | undefined, { version: string; rgb_protocol_version: string } | undefined]
   > {
     return this._handleRequest('getVersion')
   }

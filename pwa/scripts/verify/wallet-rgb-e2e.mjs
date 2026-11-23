@@ -83,7 +83,7 @@ export async function runPwaRgbCases(t, fixture) {
     await button(page, tr.issue).click()
     const form = dialog(page, tr.issueTitle)
     await form.locator('select').selectOption(kind)
-    await form.getByPlaceholder('USDT', { exact: true }).fill(ticker)
+    await form.getByRole('textbox', { name: /^Asset symbol\b/ }).fill(ticker)
     await form.getByRole('textbox', { name: /^Display name\b/ }).fill(`PWA ${kind} acceptance`)
     await form.locator('input[type=number]').fill(kind === 'UDA' ? '0' : '2')
     if (kind !== 'UDA') await form.getByPlaceholder('1000', { exact: true }).fill('100')
@@ -92,7 +92,9 @@ export async function runPwaRgbCases(t, fixture) {
     await expect(form.getByText(asset.contract_id, { exact: true })).toBeVisible()
     const pending = page.waitForEvent('download')
     await button(form, tr.downloadContract).click()
-    const contract = readFileSync(await (await pending).path())
+    const download = await pending
+    await expect(form.getByText(messages.common.fileDownloadStarted.replace('{filename}', download.suggestedFilename()), { exact: true })).toBeVisible()
+    const contract = readFileSync(await download.path())
     await close(form)
     await expect(card(page, asset)).toBeVisible()
     return { asset, contract }
@@ -106,6 +108,7 @@ export async function runPwaRgbCases(t, fixture) {
     await form.locator('#rgb11-contract-file').setInputFiles({ name: 'pwa-contract.rgb', mimeType: 'application/octet-stream', buffer: issued.contract })
     const asset = await observe(page, 'importRGB11Contract', () => button(form, tr.import).click())
     assert.equal(asset.contract_id, issued.asset.contract_id)
+    await expect(form.getByRole('status').filter({ hasText: tr.imported })).toBeVisible()
     assert.equal(asset.available, '0')
     await close(form)
     await expect(card(page, asset)).toBeVisible()
@@ -166,10 +169,15 @@ export async function runPwaRgbCases(t, fixture) {
     return { form, prepared }
   }
   const cancel = async (page, form) => {
-    page.once('dialog', popup => popup.accept())
-    const result = await observe(page, 'cancelRGB11Transfer', () => button(form, messages.common.cancel).click())
+    await button(form, tr.cancelTransfer).click()
+    await expect(form.getByText(tr.taskCancelConfirm, { exact: true })).toBeVisible()
+    await button(form, tr.keepTransfer).click()
+    await expect(form.getByText(tr.taskCancelConfirm, { exact: true })).toHaveCount(0)
+    await button(form, tr.cancelTransfer).click()
+    const result = await observe(page, 'cancelRGB11Transfer', () => button(form, tr.confirmCancel).click())
+    assert.equal(result.status, 'cancelled')
     assert.equal(result.can_confirm, false)
-    await close(form)
+    await expect(form).not.toBeVisible()
   }
   const manual = async (owner, recipient, asset, amounts, inflate = false) => {
     const requests = []
@@ -177,7 +185,8 @@ export async function runPwaRgbCases(t, fixture) {
     let { form, prepared } = await prepare(owner, asset, requests, inflate)
     // Close and continue from the actual pending list. Preparing again would
     // create a different intent and would miss the UI recovery boundary.
-    await close(form)
+    await button(form, tr.close).first().click()
+    await expect(form).not.toBeVisible()
     await refreshed(owner)
     const pending = owner.locator('div.rounded.border.border-zinc-700').filter({ has: owner.getByText(prepared.id, { exact: true }) })
     await button(pending, tr.retryTask).click()
@@ -192,10 +201,12 @@ export async function runPwaRgbCases(t, fixture) {
       assert.ok(file, 'each recipient needs its own consignment')
       receipts.push((await receivePackage(recipient, asset, request, file.file.data, index === requests.length - 1)).receipt)
     }
+    await expect(button(form, messages.common.confirm)).toBeDisabled()
+    for (const [index, receipt] of receipts.entries()) await form.locator('textarea').nth(index).fill(receipt)
     await form.locator('textarea').first().fill('invalid receipt')
     await observe(owner, 'confirmRGB11Transfer', () => button(form, messages.common.confirm).click(), false)
-    await expect(form.getByRole('alert')).toBeVisible()
-    for (const [index, receipt] of receipts.entries()) await form.locator('textarea').nth(index).fill(receipt)
+    await expect(form.getByRole('alert')).toHaveText(tr.summaryMismatch)
+    await form.locator('textarea').first().fill(receipts[0])
     const broadcast = await observe(owner, 'confirmRGB11Transfer', () => button(form, messages.common.confirm).click())
     assert.match(broadcast.tx_id, /^[0-9a-f]{64}$/)
     assert.notEqual(broadcast.status, 'completed', 'broadcast is not confirmed receipt')

@@ -31,6 +31,7 @@
 
     <!-- Asset Lists -->
     <div class="space-y-2">
+      <RGBVersion v-if="selectedType === 'RGB11'" />
       <div v-if="selectedType === 'RGB11'" class="rounded-lg border border-zinc-700 p-3 text-xs space-y-3">
         <p v-if="rgb11State.error_code || rgb11Error" class="text-red-400">{{ rgb11State.error_code || rgb11Error }}</p>
         <Button size="sm" variant="outline" @click="emit('issue-rgb11')">{{ $t('rgb11Transfer.issue') }}</Button>
@@ -143,7 +144,13 @@
               </Button>
             </template>
             <Button v-if="asset.protocol === 'rgb11' && asset.contract_id" size="sm" variant="outline"
-              :disabled="rgb11Exporting === asset.contract_id" @click="exportRGB11Contract(asset)"
+              :disabled="!!rgb11Exporting" @click="exportRGB11Contract(asset, 'copy')"
+              class="text-zinc-400 border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]">
+              <Icon icon="lucide:copy" class="w-4 h-4 mr-1" />
+              {{ $t('rgb11Transfer.copyContractArmor') }}
+            </Button>
+            <Button v-if="asset.protocol === 'rgb11' && asset.contract_id" size="sm" variant="outline"
+              :disabled="!!rgb11Exporting" @click="exportRGB11Contract(asset, 'save')"
               class="text-zinc-400 border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]">
               <Icon icon="lucide:download" class="w-4 h-4 mr-1" />
               {{ $t('rgb11Transfer.downloadContract') }}
@@ -155,7 +162,8 @@
             </Button>
           </div>
           <div v-if="asset.protocol === 'rgb11' && rgb11ExportMessages[asset.contract_id || '']"
-            class="mt-1 break-all text-right text-[11px]"
+            class="mt-1 break-words text-right text-[11px]"
+            :role="rgb11ExportMessages[asset.contract_id || ''].success ? 'status' : 'alert'"
             :class="rgb11ExportMessages[asset.contract_id || ''].success ? 'text-emerald-400' : 'text-red-400'">
             {{ rgb11ExportMessages[asset.contract_id || ''].text }}
           </div>
@@ -181,6 +189,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onUnmounted } from 'vue'
 import RGB11SendDialog from '@/components/wallet/RGB11SendDialog.vue'
+import RGBVersion from '@/components/asset/RGBVersion.vue'
 import { Button } from '@/components/ui/button'
 import { Icon } from '@iconify/vue'
 import { useRGB11Store, useWalletStore } from '@/store'
@@ -189,7 +198,8 @@ import { Chain } from '@/types/index'
 import { generateMempoolUrl, formatLargeNumber } from '@/utils'
 import { useGlobalStore } from '@/store/global'
 import walletManager from '@/utils/sat20'
-import { saveExportFile } from '@/utils/accountManagement'
+import { exportFileText } from '@/utils/accountManagement'
+import { downloadRGB11ContractFile } from '@/utils/rgb11ContractFile'
 import type { RGBTransferView } from '@/utils/walletViews'
 import { walletRequestSessionGuard } from '@/lib/walletSession'
 import { useI18n } from 'vue-i18n'
@@ -305,16 +315,41 @@ const rgb11Exporting = ref('')
 const rgb11ExportMessages = ref<Record<string, {success: boolean; text: string}>>({})
 const rgbAsset = (asset: Asset) => rgb11State.value.assets.find(item => item.asset === (asset.key || asset.id))
 const hasIFAControl = (asset: Asset) => rgbAsset(asset)?.can_inflate === true
-const exportRGB11Contract = async (asset: Asset) => {
+const exportRGB11Contract = async (asset: Asset, action: 'copy' | 'save') => {
   const id = asset.contract_id || ''
+  if (!id || rgb11Exporting.value) return
   rgb11Exporting.value = id
+  delete rgb11ExportMessages.value[id]
   try {
-    const [error, files] = await walletManager.exportRGB11Contract(asset.key || asset.id)
-    if (error) throw error
-    for (const file of files || []) saveExportFile(file)
-    rgb11ExportMessages.value[id] = {success: true, text: t('rgb11Transfer.exportContractSucceeded')}
-  } catch (error) { rgb11ExportMessages.value[id] = {success: false, text: String(error)} }
-  finally { rgb11Exporting.value = '' }
+    const checkSession = walletRequestSessionGuard('exportRGB11Contract')
+    const readFile = async (extension: '.rgb' | '.asc') => {
+      checkSession()
+      const [error, files] = await walletManager.exportRGB11Contract(asset.key || asset.id)
+      if (error) throw error
+      const file = files?.find(file => file.name.endsWith(extension))
+      if (!file?.data) throw new Error(t('rgb11Transfer.exportContractFailed'))
+      return file
+    }
+    if (action === 'copy') {
+      if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
+        throw new Error(t('rgb11Transfer.contractArmorCopyFailed'))
+      }
+      // Write from the click while the clipboard still has user activation.
+      const armor = readFile('.asc').then(file => new Blob([exportFileText(file)], { type: 'text/plain' }))
+      await Promise.all([navigator.clipboard.write([new ClipboardItem({ 'text/plain': armor })]), armor])
+      rgb11ExportMessages.value[id] = { success: true, text: t('rgb11Transfer.contractArmorCopied') }
+      return
+    }
+    const filename = downloadRGB11ContractFile(id, (await readFile('.rgb')).data)
+    rgb11ExportMessages.value[id] = { success: true, text: t('common.fileDownloadStarted', { filename }) }
+  } catch (error) {
+    const text = action === 'copy' && error instanceof DOMException && error.name === 'NotAllowedError'
+      ? t('rgb11Transfer.contractArmorCopyFailed')
+      : error instanceof Error ? error.message : String(error)
+    rgb11ExportMessages.value[id] = { success: false, text }
+  } finally {
+    rgb11Exporting.value = ''
+  }
 }
 const resumeRGB11Task = (task: RGBTransferView) => {
   resumeTaskId.value = task.id

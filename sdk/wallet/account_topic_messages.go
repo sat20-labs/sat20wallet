@@ -23,7 +23,7 @@ func validateTopicMailboxOuter(accountID string, record *swire.DKVSRecord, topic
 // Account management owns mailbox subscription and record validation. Topic
 // business code receives only domain messages, never transport records.
 func (p *Manager) readAccountTopicKeys(accountID, topic string) ([]*swire.TopicKeyFanoutMessage, error) {
-	store, err := p.accountDKVSStore()
+	store, err := p.ensureDKVSManager().primaryStore()
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +51,7 @@ func (p *Manager) readAccountTopicKeys(accountID, topic string) ([]*swire.TopicK
 }
 
 func (p *Manager) readAccountTopicMessages(accountID, topic string, start, limit int) ([]*swire.TopicPublishMessage, int, error) {
-	store, err := p.accountDKVSStore()
+	store, err := p.ensureDKVSManager().primaryStore()
 	if err != nil {
 		return nil, 0, err
 	}

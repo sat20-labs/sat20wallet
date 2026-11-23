@@ -30,6 +30,7 @@
 
     <!-- Asset Lists -->
     <div class="space-y-2">
+      <RGBVersion v-if="selectedType === 'RGB11'" />
       <div v-for="asset in filteredAssets" :key="asset.id"
         class="flex justify-left pl-1 pr-3 py-3 rounded-lg bg-muted border hover:border-primary/40 transition-colors">
         <!-- 圆形背景 + 居中 Icon -->
@@ -93,6 +94,7 @@ import { ref, computed, watch } from 'vue'
 import { Button } from '@/components/ui/button'
 import { Icon } from '@iconify/vue'
 import { useWalletStore } from '@/store'
+import RGBVersion from '@/components/asset/RGBVersion.vue'
 import { storeToRefs } from 'pinia'
 import { Chain } from '@/types/index'
 import { generateMempoolUrl, formatLargeNumber } from '@/utils'
