@@ -19,8 +19,8 @@ pwa/.build-status/
 
 sdk/db
 sdk/log
-sdk/wasm/html/wasm/sat20wallet.wasm
 sdk/data
 sdk/.cache/
 sdk/review-evidence/
 /.cache/
+*.wasm
