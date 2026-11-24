@@ -392,7 +392,6 @@ export async function runPwaSilentPayCases(t, fixture) {
         assertPayment(balance, payment)
         assert.equal(payment.raws.length, 1)
       }
-      // The native SDK phase uses these exact PWA payment outpoints.
       console.log(JSON.stringify({ event: 'sp-multiple-payments', baseline: before,
         payments: payments.map(({ txid, amount }) => ({ txid, amount })) }))
     },

@@ -90,6 +90,7 @@ const exporting = ref(false)
 const notice = ref<{ success: boolean; text: string }>()
 
 const supplyText = (raw?: string) => {
+  if (props.asset.kind === 'UDA') return '1'
   if (!raw || !/^\d+$/.test(raw)) return ''
   const precision = props.asset.precision
   const digits = raw.padStart(precision + 1, '0')

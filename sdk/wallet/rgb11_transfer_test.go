@@ -666,6 +666,9 @@ func TestRGB11IssueFirstReleaseSchemas(t *testing.T) {
 			remote := newRGB11MemoryDKVSHTTP()
 			client := newRGB11MessageNodeClient(remote)
 			manager := newRGB11ActivatedFlowAccount(t, "inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", remote, client, evidence, rpc)
+			if test.name == "NIA" {
+				test.request.Details = "Asset details from genesis."
+			}
 			issued, err := manager.IssueRGB11Asset(context.Background(), test.request)
 			if err != nil {
 				t.Fatal(err)
@@ -722,6 +725,12 @@ func TestRGB11IssueFirstReleaseSchemas(t *testing.T) {
 			viewer := newRGB11ActivatedFlowAccount(t, "comfort very add tuition senior run eight snap burst appear exile dutch", remote, client, evidence, rpc)
 			if _, err := viewer.ImportRGB11ContractFile(context.Background(), contractFile); err != nil {
 				t.Fatal(err)
+			}
+			for _, reader := range []*Manager{manager, viewer} {
+				info := reader.GetTickerInfoV2(issued.AssetName.String())
+				if info == nil || info.Description != test.request.Details {
+					t.Fatalf("ticker description after issue/import: got %+v, want %q", info, test.request.Details)
+				}
 			}
 			viewerState, err := viewer.GetRGB11State()
 			if err != nil {

@@ -62,6 +62,12 @@ func spAccountGroup(t *testing.T, state accountGroupState) (*Manager, *InternalW
 	t.Helper()
 	manager, wallet := spE2EAccountManager(t)
 	manager.status.CurrentWallet = wallet.GetId()
+	// Account activation imports the wallet catalog and rebinds its RGB scope,
+	// even when the account has no RGB assets.
+	rgb, err := newRGB11Manager(manager, manager.db, nil, nil)
+	require.NoError(t, err)
+	manager.rgbManager = rgb
+	require.NoError(t, rgb.selectRGB11Scope())
 	prepareAccountGroup(t, manager, state, silentPayE2EMnemonic, "password")
 	return manager, wallet
 }

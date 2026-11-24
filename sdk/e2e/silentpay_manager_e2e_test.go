@@ -225,6 +225,19 @@ func (f *spManagerRegtest) ordinaryRead(w http.ResponseWriter, r *http.Request) 
 		_ = json.NewEncoder(w).Encode(map[string]any{"code": 0, "data": map[string]int{"height": f.base.GetHeight()}})
 		return
 	}
+	const utxoInfo = "/v3/utxo/info/"
+	if strings.HasPrefix(path, utxoInfo) {
+		outpoint := strings.TrimPrefix(path, utxoInfo)
+		output, err := f.txOutput(outpoint)
+		if err != nil {
+			_ = json.NewEncoder(w).Encode(indexerwire.TxOutputRespV3{
+				BaseResp: indexerwire.BaseResp{Code: -1, Msg: err.Error()},
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(indexerwire.TxOutputRespV3{Data: output})
+		return
+	}
 	const assets = "/v3/address/asset/"
 	const summary = "/v3/address/summary/"
 	if strings.HasPrefix(path, assets) || strings.HasPrefix(path, summary) {
@@ -252,6 +265,36 @@ func (f *spManagerRegtest) ordinaryRead(w http.ResponseWriter, r *http.Request) 
 	_ = json.NewEncoder(w).Encode(map[string]any{"code": -1, "msg": "not provided by the isolated SP L1 fixture"})
 }
 
+func (f *spManagerRegtest) txOutput(outpoint string) (*indexercommon.AssetsInUtxo, error) {
+	point, err := wallet.UtxoToWireOutpoint(outpoint)
+	if err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	id, err := f.base.GetUtxoInfo(outpoint)
+	if err != nil {
+		return nil, err
+	}
+	var raw string
+	if err := f.core.call("getrawtransaction", []any{point.Hash.String()}, &raw); err != nil {
+		return nil, err
+	}
+	tx, err := wallet.DecodeMsgTx(raw)
+	if err != nil {
+		return nil, err
+	}
+	if uint64(point.Index) >= uint64(len(tx.TxOut)) {
+		return nil, fmt.Errorf("output index outside confirmed transaction")
+	}
+	// This Bitcoin-only fixture has no issued assets. The output must still
+	// exist in the committed Base UTXO set, and its script comes from Core.
+	out := tx.TxOut[point.Index]
+	return &indexercommon.AssetsInUtxo{
+		OutPoint: outpoint, UtxoId: id, Value: out.Value, PkScript: out.PkScript,
+	}, nil
+}
+
 func (f *spManagerRegtest) manager(t *testing.T, mnemonic string) *wallet.Manager {
 	t.Helper()
 	db := wallet.NewKVDB(testCaseDirectory(t))
@@ -269,10 +312,141 @@ func (f *spManagerRegtest) fund(t *testing.T, address string, sats int64) {
 	t.Helper()
 	var txid string
 	require.NoError(t, f.miner.call("sendtoaddress", []any{address, float64(sats) / 1e8}, &txid))
+	f.mine(t)
+}
+
+func (f *spManagerRegtest) mine(t *testing.T) {
+	t.Helper()
 	var mining string
 	require.NoError(t, f.miner.call("getnewaddress", nil, &mining))
 	require.NoError(t, f.core.call("generatetoaddress", []any{1, mining}, nil))
 	require.NoError(t, f.sync())
+}
+
+func TestSPSharedAddressSDK(t *testing.T) {
+	f := newSPManagerRegtest(t)
+	ctx := t.Context()
+	first := f.manager(t, minerMnemonic)
+	second := f.manager(t, bootstrapMnemonic)
+	receiver := f.manager(t, coreMnemonic)
+	require.NotEqual(t, first.GetWallet().GetAddress(), second.GetWallet().GetAddress())
+	id, index := receiver.GetCurrentWalletId(), receiver.GetCurrentAccountId()
+	shared, err := receiver.EnableSilentPay(id, index)
+	require.NoError(t, err)
+	enabled, address, err := receiver.SilentPayAccount(id, index)
+	require.NoError(t, err)
+	require.True(t, enabled)
+	require.Equal(t, shared, address)
+
+	const feeRate = int64(2)
+	amounts := []int64{3000, 4500}
+	payers := []*wallet.Manager{first, second}
+	for _, payer := range payers {
+		f.fund(t, payer.GetWallet().GetAddress(), 100_000)
+	}
+	var payments []string
+	for i, payer := range payers {
+		txid, err := payer.SendSilentPayment(shared, amounts[i], feeRate)
+		require.NoError(t, err)
+		payments = append(payments, txid)
+	}
+	require.NotEqual(t, payments[0], payments[1])
+	f.mine(t)
+
+	for scan := 0; scan < 2; scan++ {
+		_, err := receiver.SyncSilentPayLive(ctx)
+		require.NoError(t, err)
+		balance, err := receiver.LastSyncedSilentPay(id, index)
+		require.NoError(t, err)
+		require.True(t, balance.Complete)
+		require.Equal(t, amounts[0]+amounts[1], balance.Balance)
+		require.Len(t, balance.Outputs, 2)
+		actual := make(map[string]int64, 2)
+		for _, out := range balance.Outputs {
+			require.True(t, out.Unspent)
+			require.Zero(t, out.Vout)
+			actual[out.TxID] = out.Value
+		}
+		require.Equal(t, map[string]int64{payments[0]: amounts[0], payments[1]: amounts[1]}, actual)
+	}
+	require.Equal(t, int64(2), f.broadcasts.Load())
+
+	destination := first.GetWallet().GetAddress()
+	destScript, err := wallet.GetPkScriptFromAddress(destination)
+	require.NoError(t, err)
+	sweep := func(t *testing.T, outpoints []string, total int64) {
+		t.Helper()
+		ctx := t.Context()
+		before := f.broadcasts.Load()
+		txid, err := receiver.SendSilentPaySweep(ctx, id, index, outpoints, destination, feeRate)
+		require.NoError(t, err)
+		require.Equal(t, before+1, f.broadcasts.Load(), "one sweep must broadcast exactly one transaction")
+		var pending []string
+		require.NoError(t, f.core.call("getrawmempool", nil, &pending))
+		require.Equal(t, []string{txid}, pending)
+		f.mine(t)
+
+		var raw string
+		require.NoError(t, f.core.call("getrawtransaction", []any{txid}, &raw))
+		tx := spRealDecodeTx(t, raw)
+		require.Equal(t, txid, tx.TxHash().String())
+		require.Len(t, tx.TxIn, len(outpoints))
+		for i, input := range tx.TxIn {
+			require.Equal(t, outpoints[i], input.PreviousOutPoint.String())
+			require.Len(t, input.Witness, 1)
+			require.Len(t, input.Witness[0], 64)
+		}
+		require.Len(t, tx.TxOut, 1, "a sweep must have no change")
+		require.Equal(t, destScript, tx.TxOut[0].PkScript)
+		fee := feeRate * wallet.GetTxVirtualSize2(tx)
+		require.Equal(t, total-fee, tx.TxOut[0].Value)
+		var unspent *struct{ Confirmations int }
+		require.NoError(t, f.core.call("gettxout", []any{txid, 0, true}, &unspent))
+		require.NotNil(t, unspent)
+		require.Positive(t, unspent.Confirmations)
+		for _, input := range tx.TxIn {
+			point := input.PreviousOutPoint
+			require.NoError(t, f.core.call("gettxout", []any{point.Hash.String(), point.Index, true}, &unspent))
+			require.Nil(t, unspent, "the exact private output must now be spent")
+		}
+		_, err = receiver.SyncSilentPayLive(ctx)
+		require.NoError(t, err)
+		balance, err := receiver.LastSyncedSilentPay(id, index)
+		require.NoError(t, err)
+		require.True(t, balance.Complete)
+		require.Zero(t, balance.Balance)
+		require.Empty(t, balance.Outputs)
+		t.Logf("confirmed SP sweep: txid=%s inputs=%d total=%d sats received=%d sats fee=%d sats broadcasts=%d",
+			txid, len(outpoints), total, tx.TxOut[0].Value, fee, f.broadcasts.Load()-before)
+	}
+
+	outpoints := []string{payments[0] + ":0", payments[1] + ":0"}
+	if !t.Run("merged_outputs", func(t *testing.T) {
+		// A malformed selection must fail as a whole before any broadcast.
+		for _, invalid := range [][]string{nil, {outpoints[0], outpoints[0]}, {outpoints[0], payments[1] + ":1"}} {
+			_, err := receiver.SendSilentPaySweep(t.Context(), id, index, invalid, destination, feeRate)
+			require.Error(t, err)
+		}
+		require.Equal(t, int64(2), f.broadcasts.Load())
+		sweep(t, outpoints, amounts[0]+amounts[1])
+	}) {
+		return
+	}
+
+	t.Run("single_output", func(t *testing.T) {
+		const amount = int64(2000)
+		txid, err := first.SendSilentPayment(shared, amount, feeRate)
+		require.NoError(t, err)
+		f.mine(t)
+		_, err = receiver.SyncSilentPayLive(t.Context())
+		require.NoError(t, err)
+		balance, err := receiver.LastSyncedSilentPay(id, index)
+		require.NoError(t, err)
+		require.Equal(t, amount, balance.Balance)
+		require.Len(t, balance.Outputs, 1)
+		require.Equal(t, txid, balance.Outputs[0].TxID)
+		sweep(t, []string{txid + ":0"}, amount)
+	})
 }
 
 func TestSPManagerBitcoinCoreSendReceiveE2E(t *testing.T) {

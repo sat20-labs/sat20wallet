@@ -79,6 +79,9 @@ func (p *Manager) finishWalletLog(id string, err error, result any) {
 				update.Result = map[string]string{"rgb_id": value.ID}
 				update.Status = rgbLogStatus(value.Status)
 				update.TxID = value.TxID
+				if value.ErrorCode != "" {
+					update.Details = map[string]string{"error_code": value.ErrorCode}
+				}
 			}
 		case *StorageView:
 			if value != nil {
@@ -288,6 +291,7 @@ func (p *Manager) GetOperationViews() ([]OperationView, error) {
 				return nil, err
 			}
 			view.Status = string(rgbLogStatus(transfer.Status))
+			view.RGBTransferID = transfer.ID
 			view.Amounts = []AssetAmount{}
 			for _, recipient := range transfer.Recipients {
 				view.Amounts = append(view.Amounts, recipient.Amount)

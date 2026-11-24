@@ -354,16 +354,17 @@ type OperationAPI interface {
 }
 
 type OperationView struct {
-	ID        string           `json:"id"`
-	Kind      string           `json:"kind"`
-	Status    string           `json:"status"` // pending、running、succeeded、failed、cancelled
-	CreatedAt int64            `json:"created_at"`
-	UpdatedAt int64            `json:"updated_at"`
-	Amounts   []AssetAmount    `json:"amounts"`
-	TxIDs     []string         `json:"tx_ids"`
-	ErrorCode string           `json:"error_code"`
-	History   []OperationEvent `json:"history"`
-	Contract  *ContractLogView `json:"contract,omitempty"`
+	ID            string           `json:"id"`
+	RGBTransferID string           `json:"rgb_transfer_id,omitempty"`
+	Kind          string           `json:"kind"`
+	Status        string           `json:"status"` // pending、running、succeeded、failed、cancelled
+	CreatedAt     int64            `json:"created_at"`
+	UpdatedAt     int64            `json:"updated_at"`
+	Amounts       []AssetAmount    `json:"amounts"`
+	TxIDs         []string         `json:"tx_ids"`
+	ErrorCode     string           `json:"error_code"`
+	History       []OperationEvent `json:"history"`
+	Contract      *ContractLogView `json:"contract,omitempty"`
 	// 不返回 reservation、原始 DKVS、协议参数或需由 PWA 拼装的执行状态。
 }
 

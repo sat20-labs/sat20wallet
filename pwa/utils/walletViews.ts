@@ -261,6 +261,7 @@ export interface RecoveryResult {
 
 export interface OperationView {
   id: string
+  rgb_transfer_id?: string
   kind: string
   status: string
   created_at: number

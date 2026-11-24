@@ -2230,6 +2230,15 @@ func (p *rgb11Manager) cancelRGB11PendingBatchMode(pendingList []*rgb11wallet.Pe
 	if err := p.rgbManager.projectionStore.CompareAndSavePendingTransferStates(baseline, pendingList); err != nil {
 		return err
 	}
+	// A Direct preview has no command log. Record the batch once, when the
+	// authenticated rejection becomes durable, even if unlocking needs a retry.
+	first := pendingList[0]
+	if recipientRejected && first.State.AddressMode && first.ChannelSend == nil {
+		logID := p.Manager.beginWalletLog("rgb", "rgb_send", "Send RGB asset")
+		p.Manager.finishWalletLog(logID, nil, &RGBTransferView{
+			ID: first.State.TransferID, Status: "rejected", ErrorCode: reason,
+		})
+	}
 	p.accountManagementOwner().NotifyAccountChanged()
 	if owner := p.accountManagementOwner(); owner != nil {
 		if err := p.checkRGB11Write(); err != nil {

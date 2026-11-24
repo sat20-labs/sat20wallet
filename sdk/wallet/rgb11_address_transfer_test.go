@@ -1136,6 +1136,35 @@ func TestRGB11AddressNACKCancelsBeforeBroadcast(t *testing.T) {
 	if lock := fixture.manager.utxoLockerL1.GetLockedUtxoList()[fixture.input]; lock != nil {
 		t.Fatalf("address NACK left input locked: %+v", lock)
 	}
+	checkHistory := func(want int) {
+		t.Helper()
+		views, err := fixture.manager.GetOperationViews()
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := 0
+		for _, view := range views {
+			if view.RGBTransferID != pending.State.TransferID {
+				continue
+			}
+			if view.Kind != "rgb_send" || view.Status != "failed" || view.ErrorCode != "recipient-rejected" {
+				t.Fatalf("incorrect rejection history: %+v", view)
+			}
+			found++
+		}
+		if found != want {
+			t.Fatalf("found %d rejection records, want %d", found, want)
+		}
+	}
+	checkHistory(1)
+	if err := fixture.manager.DeleteOperationHistory(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.manager.rgbManager.acceptRGB11AddressACKDecoded(senderID, receiverID, messageID,
+		RGB11AddressACK{Status: RGB11AddressACKRejected}); err != nil {
+		t.Fatal(err)
+	}
+	checkHistory(0)
 }
 
 func TestRGBDirectPreview(t *testing.T) {

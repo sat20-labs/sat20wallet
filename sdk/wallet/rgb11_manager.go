@@ -2114,6 +2114,42 @@ func rgb11FreshAllocationsAreRetained(retained, fresh []rgb11wallet.ValidatedAll
 	return true
 }
 
+// RGBContract.AssetSpec commits optional details in genesis global 2000.
+// This projection runs only after the schema and its globals were validated.
+func rgb11AssetDescription(genesis strict_types.Value) string {
+	const assetSpecGlobal = 2000
+	globals, _ := genesis.Field("globals")
+	for _, entry := range globals.Unwrap().Entries {
+		id, ok := entry.Key.Unwrap().Uint64()
+		if !ok || id != assetSpecGlobal {
+			continue
+		}
+		states := entry.Value.Unwrap().Items
+		if len(states) != 1 {
+			break
+		}
+		raw, ok := states[0].Bytes()
+		if !ok {
+			break
+		}
+		registry, err := strict_types.RC2Registry()
+		if err != nil {
+			break
+		}
+		spec, err := registry.Decode("RGBContract", "AssetSpec", raw)
+		if err != nil {
+			break
+		}
+		details, ok := spec.Field("details")
+		if ok && details.Name == "some" && details.Inner != nil {
+			text, _ := details.Inner.TextValue()
+			return text
+		}
+		break
+	}
+	return ""
+}
+
 func rgb11TickerInfoFromValidatedContract(container *coreconsignment.Container,
 	receipt *rgb11wallet.ValidationReceipt) (*indexer.TickerInfo, error) {
 
@@ -2155,6 +2191,7 @@ func rgb11TickerInfoFromValidatedContract(container *coreconsignment.Container,
 	}
 	return &indexer.TickerInfo{
 		AssetName: assetName, DisplayName: metadata.DisplayName, Divisibility: int(metadata.Precision),
+		Description: rgb11AssetDescription(genesisValue),
 		DeployTx:    allocationOutpointTxID(firstAllocationOutpoint(receipt.Allocations)),
 		TotalMinted: fmt.Sprintf("%d", metadata.IssuedSupply), MaxSupply: fmt.Sprintf("%d", metadata.MaxSupply), Content: extContent,
 	}, nil

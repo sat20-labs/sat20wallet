@@ -3,6 +3,7 @@ package wallet
 import (
 	"context"
 	"errors"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -637,6 +638,35 @@ func (p *Manager) SetDKVSStatusUpdateCallback(callback func()) {
 	}
 }
 
+// Cold discovery and activation still use the registered account prefix for
+// explicit reads. Only an activated account watches that prefix continuously.
+func (m *dkvsManager) watchPrefixes(store *dkvsReplicaStore, namespace string) ([]string, error) {
+	prefixes, err := m.desiredPrefixes(store, namespace)
+	if err != nil || m.owner.IsServerMode() {
+		return prefixes, err
+	}
+	p := m.owner
+	p.mutex.RLock()
+	if p.accountProfile != nil && p.accountProfile.RecoveryConfigured {
+		p.mutex.RUnlock()
+		return prefixes, nil
+	}
+	root, err := p.accountDiscoveryRootLocked()
+	p.mutex.RUnlock()
+	if err != nil {
+		return prefixes, nil
+	}
+	key, err := accountRootWrapperKey(root)
+	if err != nil {
+		return nil, err
+	}
+	prefix, _, err := dkvsManagedPathForKey(key)
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(prefixes, func(candidate string) bool { return candidate == prefix }), nil
+}
+
 // The long poll never holds the transport coordinator: a foreground write
 // must remain able to commit while the wallet waits for remote changes.
 func (m *dkvsManager) watchManagedActive(stop, wake <-chan struct{}, retryAt time.Time) error {
@@ -656,7 +686,7 @@ func (m *dkvsManager) watchManagedActive(stop, wake <-chan struct{}, retryAt tim
 			return err
 		}
 		store := newDKVSReplicaStore(m.owner.db)
-		prefixes, err = m.desiredPrefixes(store, client.replicaNamespace)
+		prefixes, err = m.watchPrefixes(store, client.replicaNamespace)
 		if err != nil {
 			return err
 		}
@@ -731,7 +761,7 @@ func (m *dkvsManager) watchManagedActive(stop, wake <-chan struct{}, retryAt tim
 			return dkvsindexer.ErrEndpointMismatch
 		}
 		store := newDKVSReplicaStore(m.owner.db)
-		now, err := m.desiredPrefixes(store, client.replicaNamespace)
+		now, err := m.watchPrefixes(store, client.replicaNamespace)
 		if err != nil {
 			return err
 		}

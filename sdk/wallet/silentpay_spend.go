@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/txscript"
@@ -15,20 +14,28 @@ import (
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 )
 
-// BuildSilentPaySweep consumes exactly one previously recovered, confirmed SP
-// BTC output and sends all its value minus fees to an ordinary BTC or BIP352
-// destination. No change output is made; this is intentionally NOT a generic
-// coin selector. Ordinary partial sends and wallet-level balance unification
-// require separate asset-safe transaction planning.
+// BuildSilentPaySweep spends the selected confirmed SP outputs in one
+// transaction. The destination receives the total less fees, with no change.
 func (p *Manager) BuildSilentPaySweep(ctx context.Context, walletID int64, index uint32,
-	outpoint string, destination string, feeRate int64) (*wire.MsgTx, error) {
-
+	outpoints []string, destination string, feeRate int64) (*wire.MsgTx, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if p == nil || p.l1IndexerClient == nil || p.utxoLockerL1 == nil || p.db == nil {
 		return nil, ErrSilentPayUnsupported
 	}
+	// The indexer accepts at most 500 positions in one snapshot query.
+	if len(outpoints) == 0 || len(outpoints) > 500 {
+		return nil, fmt.Errorf("silentpay: select between 1 and 500 outputs")
+	}
+	requested := make(map[string]int, len(outpoints))
+	for i, outpoint := range outpoints {
+		if _, exists := requested[outpoint]; exists {
+			return nil, fmt.Errorf("silentpay: duplicate outpoint %s", outpoint)
+		}
+		requested[outpoint] = i
+	}
+
 	keys, err := p.silentPayKeysForAccount(walletID, index)
 	if err != nil {
 		return nil, err
@@ -39,27 +46,41 @@ func (p *Manager) BuildSilentPaySweep(ctx context.Context, walletID int64, index
 	if err != nil || !last.Complete {
 		return nil, fmt.Errorf("silentpay: no complete confirmed snapshot")
 	}
-
-	var selected *SPReceivedOutput
+	selected := make([]*SPReceivedOutput, len(outpoints))
 	for i := range last.Outputs {
 		out := &last.Outputs[i]
-		if !out.Unspent {
-			continue
-		}
-		if out.TxID+":"+strconv.FormatUint(uint64(out.Vout), 10) == outpoint {
-			selected = out
-			break
+		outpoint := out.TxID + ":" + strconv.FormatUint(uint64(out.Vout), 10)
+		if position, ok := requested[outpoint]; ok {
+			selected[position] = out
 		}
 	}
-	if selected == nil || selected.TxIndex == 0 || selected.Value < 330 {
-		return nil, fmt.Errorf("silentpay: selected output missing or not spendable")
-	}
-	point, err := UtxoToWireOutpoint(outpoint)
-	if err != nil {
-		return nil, err
-	}
-	if p.isL1SendInputProtected(outpoint) {
-		return nil, fmt.Errorf("silentpay: selected BTC input is locked or protected")
+
+	query := make([]SPIndexerPosition, len(selected))
+	tx := wire.NewMsgTx(2)
+	var total int64
+	var highest int
+	for i, out := range selected {
+		outpoint := outpoints[i]
+		if out == nil || !out.Unspent || out.TxIndex == 0 || out.Value < 330 {
+			return nil, fmt.Errorf("silentpay: selected output %s missing or not spendable", outpoint)
+		}
+		if out.Value > btcutil.MaxSatoshi-total {
+			return nil, fmt.Errorf("silentpay: selected input value exceeds Bitcoin supply")
+		}
+		total += out.Value
+		if p.isL1SendInputProtected(outpoint) {
+			return nil, fmt.Errorf("silentpay: selected BTC input %s is locked or protected", outpoint)
+		}
+		point, err := UtxoToWireOutpoint(outpoint)
+		if err != nil {
+			return nil, err
+		}
+		tx.AddTxIn(wire.NewTxIn(point, nil, nil))
+		query[i] = SPIndexerPosition{
+			Height: out.Height, BlockHash: out.BlockHash,
+			TxIndex: out.TxIndex, Vout: out.Vout, ExpectedTxID: out.TxID,
+		}
+		highest = max(highest, out.Height)
 	}
 
 	spReader, rawReader, err := p.spScanRPC()
@@ -71,83 +92,80 @@ func (p *Manager) BuildSilentPaySweep(ctx context.Context, walletID int64, index
 		return nil, err
 	}
 	if status.Network != spIndexerExpectedNetwork() || status.SchemaVersion != 1 ||
-		status.BaseAnchor.Height < selected.Height {
+		status.BaseAnchor.Height < highest {
 		return nil, fmt.Errorf("silentpay: Indexer not ready for spend")
 	}
 	snapshot, err := spReader.SPSnapshot(ctx)
 	if err != nil {
 		return nil, err
 	}
-	query := SPIndexerPosition{
-		Height: selected.Height, BlockHash: selected.BlockHash,
-		TxIndex: selected.TxIndex, Vout: selected.Vout, ExpectedTxID: selected.TxID,
-	}
-	anchor, positions, err := spReader.SPOutpoints(ctx, snapshot.SnapshotID, []SPIndexerPosition{query})
+	anchor, positions, err := spReader.SPOutpoints(ctx, snapshot.SnapshotID, query)
 	if err != nil {
 		return nil, err
 	}
-	if anchor != snapshot.Anchor || len(positions) != 1 ||
-		positions[0].State != "unspent" || positions[0].TxID != selected.TxID {
-		return nil, fmt.Errorf("silentpay: selected UTXO is not unspent at the verified snapshot")
+	if anchor != snapshot.Anchor || anchor.Height < highest || len(positions) != len(query) {
+		return nil, fmt.Errorf("silentpay: inconsistent spend snapshot")
 	}
-
-	raw, err := rawReader.GetBitcoinRawTx(selected.TxID)
-	if err != nil || raw == nil || raw.Error != "" {
-		return nil, fmt.Errorf("silentpay: confirmed transaction unavailable: %v", err)
-	}
-	txSource, err := spParseFoundTransaction(raw.RawTx, selected.TxID)
-	if err != nil {
-		return nil, err
-	}
-	if uint64(selected.Vout) >= uint64(len(txSource.TxOut)) {
-		return nil, fmt.Errorf("silentpay: confirmed output index invalid")
-	}
-	source := txSource.TxOut[selected.Vout]
-	if source.Value != selected.Value {
-		return nil, fmt.Errorf("silentpay: recovered amount no longer matches Bitcoin")
-	}
-
-	// A receiver private key represents the final Taproot OUTPUT key, NOT the
-	// BIP86 internal key. TaprootWitnessSignature would double-tweak it.
-	tweak := SilentPayMatch{Vout: selected.Vout, K: selected.K, Tweak: selected.Tweak}
-	var compressedSpendOutput []byte
-	{
-		// The stored tweak was checked against BIP352 when scanning; derive
-		// the x-only key without trusting a caller-supplied script.
-		var scalar = keys.Spend.Key
-		var delta btcec.ModNScalar
-		if delta.SetByteSlice(selected.Tweak[:]) || delta.IsZero() {
-			return nil, fmt.Errorf("silentpay: invalid stored output tweak")
+	for i, position := range positions {
+		if position.SPIndexerPosition != query[i] || position.TxID != selected[i].TxID ||
+			position.State != "unspent" || position.Error != "" {
+			return nil, fmt.Errorf("silentpay: selected UTXO %s is not unspent at the verified snapshot", outpoints[i])
 		}
-		scalar.Add(&delta)
-		if scalar.IsZero() {
-			return nil, fmt.Errorf("silentpay: invalid spend scalar")
-		}
-		compressedSpendOutput = schnorr.SerializePubKey(btcec.PrivKeyFromScalar(&scalar).PubKey())
 	}
-	tweak.OutputKey = compressedSpendOutput
-	signKey, err := SilentPayOutputSpendKey(keys, tweak)
+
+	sources := make(map[string]*wire.MsgTx)
+	fetcher := txscript.NewMultiPrevOutFetcher(nil)
+	inputs := make([]SilentPaySenderInput, 0, len(selected))
+	var weight utils.TxWeightEstimator
+	for i, out := range selected {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		sourceTx := sources[out.TxID]
+		if sourceTx == nil {
+			raw, err := rawReader.GetBitcoinRawTx(out.TxID)
+			if err != nil || raw == nil || raw.Error != "" {
+				return nil, fmt.Errorf("silentpay: confirmed transaction %s unavailable: %v", out.TxID, err)
+			}
+			sourceTx, err = spParseFoundTransaction(raw.RawTx, out.TxID)
+			if err != nil {
+				return nil, err
+			}
+			sources[out.TxID] = sourceTx
+		}
+		if uint64(out.Vout) >= uint64(len(sourceTx.TxOut)) {
+			return nil, fmt.Errorf("silentpay: confirmed output index invalid")
+		}
+		source := sourceTx.TxOut[out.Vout]
+		if source.Value != out.Value || !txscript.IsPayToTaproot(source.PkScript) {
+			return nil, fmt.Errorf("silentpay: recovered Taproot output no longer matches Bitcoin")
+		}
+
+		// An unknown asset state is never interpreted as pure BTC.
+		assetValue, err := p.l1IndexerClient.GetTxOutput(outpoints[i])
+		if err != nil || assetValue == nil || len(assetValue.Assets) != 0 ||
+			assetValue.Value() != source.Value || !bytes.Equal(assetValue.OutValue.PkScript, source.PkScript) {
+			return nil, fmt.Errorf("silentpay: input %s is not verified asset-free BTC", outpoints[i])
+		}
+		signKey, err := SilentPayOutputSpendKey(keys, SilentPayMatch{
+			Vout: out.Vout, K: out.K, Tweak: out.Tweak, OutputKey: source.PkScript[2:],
+		})
+		if err != nil {
+			return nil, err
+		}
+		defer signKey.Zero()
+		point := tx.TxIn[i].PreviousOutPoint
+		fetcher.AddPrevOut(point, source)
+		inputs = append(inputs, SilentPaySenderInput{Outpoint: point, Key: signKey})
+		weight.AddTaprootKeySpendInput(txscript.SigHashDefault)
+	}
+
+	destScript, err := spSweepDestScript(destination, inputs)
 	if err != nil {
 		return nil, err
 	}
-	defer signKey.Zero()
-	expectedScript := append([]byte{txscript.OP_1, 0x20}, compressedSpendOutput...)
-	if !bytes.Equal(source.PkScript, expectedScript) {
-		return nil, fmt.Errorf("silentpay: scanned output script does not match its spend key")
-	}
-
-	// Check the asset-aware indexer as well as the SDK's local RGB reservation
-	// protection. An unknown asset state is never interpreted as pure BTC.
-	assetValue, err := p.l1IndexerClient.GetTxOutput(outpoint)
-	if err != nil || assetValue == nil || len(assetValue.Assets) != 0 ||
-		assetValue.Value() != source.Value ||
-		!bytes.Equal(assetValue.OutValue.PkScript, expectedScript) {
-		return nil, fmt.Errorf("silentpay: input is not verified asset-free BTC")
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
+	weight.AddOutput(destScript)
+	vsize := weight.VSize()
 	rate := feeRate
 	if rate <= 0 {
 		rate = p.GetFeeRate()
@@ -155,76 +173,73 @@ func (p *Manager) BuildSilentPaySweep(ctx context.Context, walletID int64, index
 	if rate <= 0 {
 		return nil, fmt.Errorf("silentpay: invalid fee rate")
 	}
-	var weight utils.TxWeightEstimator
-	weight.AddTaprootKeySpendInput(txscript.SigHashDefault)
-	weight.AddP2TROutput()
-	fee := weight.Fee(rate)
-	if fee <= 0 || source.Value-fee < 330 {
+	if rate > (total-330)/vsize {
 		return nil, fmt.Errorf("silentpay: insufficient balance after fee")
 	}
-	tx := wire.NewMsgTx(2)
-	tx.AddTxIn(wire.NewTxIn(point, nil, nil))
-	var destScript []byte
-	if strings.HasPrefix(strings.ToLower(destination), "sp1") ||
-		strings.HasPrefix(strings.ToLower(destination), "tsp1") {
-		target, err := DecodeSilentPayAddress(destination, GetChainParam())
-		if err != nil {
-			return nil, err
-		}
-		destScript, err = SilentPayDestinationScript(target, []SilentPaySenderInput{{
-			Outpoint: *point, Key: signKey,
-		}}, 0)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		addr, err := btcutil.DecodeAddress(destination, GetChainParam())
-		if err != nil {
-			return nil, err
-		}
-		if !addr.IsForNet(GetChainParam()) {
-			return nil, fmt.Errorf("silentpay: destination network mismatch")
-		}
-		destScript, err = txscript.PayToAddrScript(addr)
-		if err != nil {
-			return nil, err
-		}
-	}
-	tx.AddTxOut(wire.NewTxOut(source.Value-fee, destScript))
-	fetcher := txscript.NewCannedPrevOutputFetcher(expectedScript, source.Value)
+	tx.AddTxOut(wire.NewTxOut(total-rate*vsize, destScript))
+
 	sighashes := txscript.NewTxSigHashes(tx, fetcher)
-	digest, err := txscript.CalcTaprootSignatureHash(sighashes, txscript.SigHashDefault, tx, 0, fetcher)
-	if err != nil {
-		return nil, err
-	}
-	sig, err := schnorr.Sign(signKey, digest)
-	if err != nil {
-		return nil, err
-	}
-	tx.TxIn[0].Witness = wire.TxWitness{sig.Serialize()}
-	// Refuse to broadcast a transaction that fails Bitcoin consensus
-	// verification, including parity/key-path edge cases.
-	engine, err := txscript.NewEngine(expectedScript, tx, 0, txscript.StandardVerifyFlags,
-		nil, sighashes, source.Value, fetcher)
-	if err != nil {
-		return nil, err
-	}
-	if err := engine.Execute(); err != nil {
-		return nil, fmt.Errorf("silentpay: invalid BTC spend signature: %w", err)
+	for i, input := range inputs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		digest, err := txscript.CalcTaprootSignatureHash(sighashes, txscript.SigHashDefault, tx, i, fetcher)
+		if err != nil {
+			return nil, err
+		}
+		// The derived key is the Taproot output key. Sign it without another tweak.
+		sig, err := schnorr.Sign(input.Key, digest)
+		if err != nil {
+			return nil, err
+		}
+		tx.TxIn[i].Witness = wire.TxWitness{sig.Serialize()}
+		prev := fetcher.FetchPrevOutput(input.Outpoint)
+		engine, err := txscript.NewEngine(prev.PkScript, tx, i, txscript.StandardVerifyFlags,
+			nil, sighashes, prev.Value, fetcher)
+		if err != nil {
+			return nil, err
+		}
+		if err := engine.Execute(); err != nil {
+			return nil, fmt.Errorf("silentpay: invalid BTC spend signature for input %d: %w", i, err)
+		}
 	}
 	return tx, nil
 }
 
+func spSweepDestScript(destination string, inputs []SilentPaySenderInput) ([]byte, error) {
+	lower := strings.ToLower(destination)
+	if strings.HasPrefix(lower, "sp1") || strings.HasPrefix(lower, "tsp1") {
+		target, err := DecodeSilentPayAddress(destination, GetChainParam())
+		if err != nil {
+			return nil, err
+		}
+		return SilentPayDestinationScript(target, inputs, 0)
+	}
+	addr, err := btcutil.DecodeAddress(destination, GetChainParam())
+	if err != nil {
+		return nil, err
+	}
+	if !addr.IsForNet(GetChainParam()) {
+		return nil, fmt.Errorf("silentpay: destination network mismatch")
+	}
+	return txscript.PayToAddrScript(addr)
+}
+
 func (p *Manager) SendSilentPaySweep(ctx context.Context, walletID int64, index uint32,
-	outpoint, destination string, feeRate int64) (string, error) {
-	tx, err := p.BuildSilentPaySweep(ctx, walletID, index, outpoint, destination, feeRate)
+	outpoints []string, destination string, feeRate int64) (string, error) {
+	if p == nil {
+		return "", ErrSilentPayUnsupported
+	}
+	p.l1SendMu.Lock()
+	defer p.l1SendMu.Unlock()
+
+	tx, err := p.BuildSilentPaySweep(ctx, walletID, index, outpoints, destination, feeRate)
 	if err != nil {
 		return "", err
 	}
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	// The ordinary broadcast path manages the same L1 locking as other BTC
-	// transactions. A failed broadcast must never report spend success.
+	// The ordinary broadcast path locks each input until confirmation.
 	return p.BroadcastTx(tx)
 }

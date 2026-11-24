@@ -44,7 +44,7 @@ export async function waitForAccountWrite(page, accountCall) {
   }
 }
 
-export const runtimeAccountCases = ["usage: background catalog refresh cannot invalidate a subaccount switch", "usage: independent address DID entry persists changes and clearing through recovery", "usage: address DID persistence failure leaves catalog and recovery value unchanged", "usage: committed creation and import pages recover from a catalog read failure without replay", "usage: SDK creation page delivers mnemonic without redundant PWA persistence", "usage: import page and cold selection use SDK without redundant PWA persistence", "usage: IndexedDB open failure recovers on explicit retry", "usage: PWA snapshot read failure preserves durable and displayed account state", "usage: cold startup SDK status read failure preserves selection and retries from page", "usage: browser password transaction failure preserves every wallet and original password", "usage: same-context PWA pages serialize Manager lifetime", "usage: refresh serializes PWA Manager startup", "usage: active Manager rejects a pending account write after same-page lock", "usage: same-page subaccount switch discards a stale account response", "usage: committed wallet selection survives single Manager handoff", "usage: password changes apply on single Manager handoff", 'usage: maintenance rehearsal locks after inactivity and discards its session', 'usage: committed recovery response loss does not duplicate wallets', 'usage: background backup failure and recovery remain visible on the account page']
+export const runtimeAccountCases = ["usage: background catalog refresh cannot invalidate a subaccount switch", "usage: independent address DID entry persists changes and clearing through recovery", "usage: address DID persistence failure leaves catalog and recovery value unchanged", "usage: committed creation and import pages recover from a catalog read failure without replay", "usage: SDK creation page delivers mnemonic without redundant PWA persistence", "usage: cold discovery failure warns once and recovers on reconnect", "usage: import page and cold selection use SDK without redundant PWA persistence", "usage: IndexedDB open failure recovers on explicit retry", "usage: PWA snapshot read failure preserves durable and displayed account state", "usage: cold startup SDK status read failure preserves selection and retries from page", "usage: browser password transaction failure preserves every wallet and original password", "usage: same-context PWA pages serialize Manager lifetime", "usage: refresh serializes PWA Manager startup", "usage: active Manager rejects a pending account write after same-page lock", "usage: same-page subaccount switch discards a stale account response", "usage: committed wallet selection survives single Manager handoff", "usage: password changes apply on single Manager handoff", 'usage: maintenance rehearsal locks after inactivity and discards its session', 'usage: committed recovery response loss does not duplicate wallets', 'usage: background backup failure and recovery remain visible on the account page']
 
 export const fixedRegtestUsageCases = [
   'usage: fixed regtest ordinary-1 adds selects renames subaccount and preserves root identity',
@@ -638,22 +638,60 @@ export async function runPwaUsageCases(t) {
     }
   })
 
+  const installEntryProbe = async (page, backupPrefix) => {
+    await page.context().addInitScript(backupPrefix => {
+      const observed = {started:0, completedStart:0, events:0, eventStart:0, rejected:0, eventRejected:0}
+      window.__dkvsEntryProbe = observed
+      const original = window.fetch
+      window.fetch = async function (...args) {
+        const input = args[0]
+        const url = typeof input === 'string' || input instanceof URL ? String(input) : input.url
+        let sync = false
+        if (new URL(url, location.href).pathname.endsWith('/dkvs/active/sync')) {
+          const body = args[1].body
+          const payload = JSON.parse(typeof body === 'string' ? body : new TextDecoder().decode(body))
+          sync = payload.scope?.keys?.includes(backupPrefix + '/root')
+        }
+        const start = sync ? ++observed.started : 0
+        try {
+          const response = await Reflect.apply(original, this, args)
+          if (sync && response.ok) observed.completedStart = Math.max(observed.completedStart,start)
+          return response
+        } catch (error) {
+          if (sync) observed.rejected++
+          throw error
+        }
+      }
+      const event = () => { observed.events++; observed.eventStart = observed.completedStart; observed.eventRejected = observed.rejected }
+      window.addEventListener('sat20:account-status-updated',event)
+    }, backupPrefix)
+  }
+
+  const observeAccountDKVS = (page, accountID) => {
+    const backupPrefix = `/personal/${accountID}/account`
+    const mailboxPrefix = `/mail/${accountID}`
+    const traffic = { backupWatches: 0, mailboxWatches: 0, backupWrites: 0 }
+    page.context().on('request', request => {
+      const path = new URL(request.url()).pathname
+      if (request.method() !== 'POST') return
+      if (path.endsWith('/dkvs/active/watch')) {
+        const scopes = request.postDataJSON().scopes
+        if (scopes.some(({ scope }) => scope.prefix === backupPrefix)) traffic.backupWatches++
+        if (scopes.some(({ scope }) => scope.prefix === mailboxPrefix)) traffic.mailboxWatches++
+      }
+      if (path.endsWith('/dkvs/records/batch-cas') && request.postDataJSON().mutations
+        .some(({ record }) => record.Key.startsWith(backupPrefix + '/'))) traffic.backupWrites++
+    })
+    return { backupPrefix, traffic }
+  }
+
   await scenario('usage: SDK creation page delivers mnemonic without redundant PWA persistence', async () => {
     const page = await device()
-    let watchCount = 0
-    const faultPath = '**/dkvs/active/sync*'
-    let faultHits = 0
-    const failDiscovery = route => { faultHits++; return route.abort('failed') }
-    const observeWatch = request => {
-      if (new URL(request.url()).pathname.endsWith('/dkvs/active/watch')) watchCount++
-    }
-    page.context().on('request', observeWatch)
     const before = await catalog(page)
     assert.equal(before.length, 0, 'the initial create page requires an empty wallet device')
     await page.evaluate(() => {
       const put = IDBObjectStore.prototype.put
       window.usageRedundantWrites = 0
-      window.restoreUsagePut = () => { IDBObjectStore.prototype.put = put }
       IDBObjectStore.prototype.put = function(value, key) {
         if (this.name === 'wallet-state' && String(key).endsWith('wallet_state_snapshot_v1')) {
           window.usageRedundantWrites++
@@ -678,31 +716,10 @@ export async function runPwaUsageCases(t) {
       const added = committed.filter(wallet => !before.some(old => String(old.id) === String(wallet.id)))
       assert.equal(added.length, 1, 'creation must add exactly one wallet')
       assert.equal(derived.fingerprint, added[0].fingerprint, 'displayed mnemonic must belong to the newly committed wallet')
-      await page.context().addInitScript(() => {
-        const observed = {started:0, completedStart:0, events:0, eventStart:0, rejected:0, eventRejected:0}
-        window.__dkvsEntryProbe = observed
-        const original = window.fetch
-        window.fetch = async function (...args) {
-          const input = args[0]
-          const url = typeof input === 'string' || input instanceof URL ? String(input) : input.url
-          const sync = new URL(url, location.href).pathname.endsWith('/dkvs/active/sync')
-          const start = sync ? ++observed.started : 0
-          try {
-            const response = await Reflect.apply(original, this, args)
-            if (sync && response.ok) observed.completedStart = Math.max(observed.completedStart,start)
-            return response
-          } catch (error) {
-            if (sync) observed.rejected++
-            throw error
-          }
-        }
-        const event = () => { observed.events++; observed.eventStart = observed.completedStart; observed.eventRejected = observed.rejected }
-        window.addEventListener('sat20:account-status-updated',event)
-        window.__restoreEntryProbe = () => {
-          window.fetch = original
-          window.removeEventListener('sat20:account-status-updated',event)
-        }
-      })
+      const root = added[0].accounts.find(account => account.index === 0)
+      assert.ok(root?.account_id)
+      const { backupPrefix, traffic } = observeAccountDKVS(page, root.account_id)
+      await installEntryProbe(page, backupPrefix)
       await page.reload(); await ready(page); await unlock(page)
       try {
         await expect.poll(() => page.evaluate(() => {
@@ -711,21 +728,16 @@ export async function runPwaUsageCases(t) {
         }),{timeout:90000,message:'cold entry sync must complete before its SDK status event'}).toBe(true)
       } finally {
         const progress = await page.evaluate(() => ({...window.__dkvsEntryProbe}))
-        console.log(JSON.stringify({dkvsActivationWatchEvidence:{phase:'cold-entry',...progress,watchCount}}))
+        console.log(JSON.stringify({dkvsActivationWatchEvidence:{phase:'cold-entry',...progress,...traffic}}))
       }
       const displayed = await page.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().wallets.map(wallet => wallet.fingerprint).sort())
       assert.deepEqual(displayed, committed.map(wallet => wallet.fingerprint).sort())
       assert.deepEqual(await catalog(page), committed)
-      // Initial discovery sync is allowed; ordinary long-poll is not started
-      // until account recovery activation. Observe actual transport only.
       const inactive = await accountCall(page, 'getAccountView')
-      const beforeActivationWatchCount = watchCount
-      console.log(JSON.stringify({dkvsActivationWatchEvidence:{
-        phase:'before-activation',watchCount:beforeActivationWatchCount,
-        backupRisk:inactive.backup_risk,locatorPresent:Boolean(inactive.locator)}}))
-      assert.equal(inactive.backup_risk,'notConfigured')
-      assert.equal(Boolean(inactive.locator),false)
-      assert.equal(beforeActivationWatchCount,0,'unactivated wallet started ordinary DKVS watch')
+      assert.equal(inactive.backup_risk, 'notConfigured')
+      assert.equal(Boolean(inactive.locator), false)
+      await expect.poll(() => traffic.mailboxWatches, { timeout: 90000 }).toBeGreaterThan(0)
+      assert.equal(traffic.backupWatches, 0, 'inactive wallets must only watch unrelated paths such as the RGB mailbox')
       await page.evaluate(async () => {
         const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
         await store.updateWalletName(store.walletId, 'Local before cold start')
@@ -735,6 +747,46 @@ export async function runPwaUsageCases(t) {
       const localView = await accountCall(page,'getAccountView')
       assert.equal(localView.backup_state,'none')
       assert.equal(localView.backup_risk,'notConfigured')
+      assert.equal(traffic.backupWrites, 0, 'local rename published a remote backup')
+      assert.equal(traffic.backupWatches, 0)
+      // Existing public SDK setup performs real temporary-storage activation;
+      // this positive control does not synthesize profile or transport state.
+      const options = await accountCall(page, 'getStorageOptions', 100)
+      const temporary = options.find(option => option.id === 'temporary')
+      assert.equal(temporary?.available, true)
+      await accountCall(page, 'confirmStorage', temporary)
+      await accountCall(page, 'activateRootAccount', password, [localCatalog[0].id])
+      await settled(page)
+      const activated = await accountCall(page,'getAccountView')
+      assert.equal(activated.backup_state,'backed_up')
+      assert.equal(activated.locator, '')
+      await expect.poll(() => traffic.backupWatches,{timeout:90000}).toBeGreaterThan(0)
+      console.log(JSON.stringify({dkvsActivationWatchEvidence:{
+        phase:'after-activation',...traffic,backupState:activated.backup_state,
+        locatorPresent:Boolean(activated.locator)}}))
+    } finally {
+      await page.context().close()
+    }
+  })
+
+  await scenario('usage: cold discovery failure warns once and recovers on reconnect', async () => {
+    const page = await fresh()
+    await page.evaluate(() => { location.hash = '#/wallet' })
+    const localCatalog = await catalog(page)
+    const root = localCatalog[0].accounts.find(account => account.index === 0)
+    assert.ok(root?.account_id)
+    const { backupPrefix, traffic } = observeAccountDKVS(page, root.account_id)
+    const faultPath = '**/dkvs/active/sync*'
+    let faultHits = 0
+    const failDiscovery = route => {
+      const request = route.request()
+      const keys = request.method() === 'POST' && request.postDataJSON()?.scope?.keys
+      if (!keys?.includes(backupPrefix + '/root')) return route.fallback()
+      faultHits++
+      return route.abort('failed')
+    }
+    try {
+      await installEntryProbe(page, backupPrefix)
       // A cold device retains its catalog. Editing requires a successful root check.
       await page.evaluate(() => { location.hash = '#/wallet' })
       await page.waitForURL('**/#/wallet')
@@ -773,6 +825,7 @@ export async function runPwaUsageCases(t) {
           const { shownAt, removedAt } = window.__noticeTiming
           return shownAt !== null && removedAt !== null ? removedAt - shownAt : 0
         })
+        console.log(JSON.stringify({ coldDiscoveryToastMS: Math.round(duration) }))
         assert.ok(duration >= 4000, 'the 4.5-second account warning must remain readable after unlock')
         await expect.poll(async () => {
           const probe = await page.evaluate(() => ({...window.__dkvsEntryProbe}))
@@ -785,10 +838,10 @@ export async function runPwaUsageCases(t) {
         const probe = await page.evaluate(() => ({...window.__dkvsEntryProbe}))
         const view = await accountCall(page, 'getAccountView')
         console.log(JSON.stringify({coldDiscoveryWarning:{faultHits,...probe,state:view.state,
-          backupRisk:view.backup_risk,errorCode:view.error_code,hasLocator:Boolean(view.locator),watchCount}}))
+          backupRisk:view.backup_risk,errorCode:view.error_code,hasLocator:Boolean(view.locator),...traffic}}))
       }
       assert.deepEqual(await catalog(page), localCatalog, 'failed discovery must retain the local catalog')
-      assert.equal(watchCount,0)
+      assert.equal(traffic.backupWatches,0)
       const failedView = await accountCall(page,'getAccountView')
       assert.equal(failedView.discovery_status,'unknown')
       await badge.click()
@@ -809,7 +862,7 @@ export async function runPwaUsageCases(t) {
       await expect(page.getByText(/managed account discovery is pending/i).first()).toBeVisible()
       await expect(renameDialog).toBeVisible()
       assert.deepEqual(await catalog(page),localCatalog,'rejected rename must leave the durable catalog unchanged')
-      assert.equal(watchCount,0,'failed discovery must not start a backup watch')
+      assert.equal(traffic.backupWatches,0,'failed discovery must not start a backup watch')
       await page.keyboard.press('Escape')
       await page.evaluate(() => { location.hash = '#/wallet/setting/account-management' })
       await expect(page.locator('section').first()).toBeVisible()
@@ -832,9 +885,9 @@ export async function runPwaUsageCases(t) {
       } finally {
         const progress = await page.evaluate(() => ({...window.__dkvsEntryProbe}))
         console.log(JSON.stringify({dkvsActivationWatchEvidence:{phase:'reconnect',
-          baselineStarted:baseline.started,baselineEvents:baseline.events,...progress,watchCount}}))
+          baselineStarted:baseline.started,baselineEvents:baseline.events,...progress,...traffic}}))
       }
-      assert.equal(watchCount,0,'reconnect must not start an unactivated backup watch')
+      assert.equal(traffic.backupWatches,0,'reconnect must not start an unactivated backup watch')
       const verifiedLocal = await accountCall(page,'getAccountView')
       assert.equal(verifiedLocal.error_code || '', '')
       assert.equal(verifiedLocal.discovery_status,'inactive')
@@ -856,22 +909,7 @@ export async function runPwaUsageCases(t) {
       await page.context().setOffline(false)
       await waitForAccountWrite(page,accountCall)
       assert.equal(await page.evaluate(() => window.__dkvsEntryProbe.started),offlineReads+1)
-      assert.equal(watchCount,0)
-      // Existing public SDK setup performs real temporary-storage activation;
-      // this positive control does not synthesize profile or transport state.
-      const options = await accountCall(page, 'getStorageOptions', 100)
-      const temporary = options.find(option => option.id === 'temporary')
-      assert.equal(temporary?.available, true)
-      await accountCall(page, 'confirmStorage', temporary)
-      await accountCall(page, 'activateRootAccount', password, [localCatalog[0].id])
-      await settled(page)
-      const activated = await accountCall(page,'getAccountView')
-      assert.equal(activated.backup_state,'backed_up')
-      assert.equal(activated.locator, '')
-      await expect.poll(() => watchCount-beforeActivationWatchCount,{timeout:90000}).toBeGreaterThan(0)
-      console.log(JSON.stringify({dkvsActivationWatchEvidence:{
-        phase:'after-activation',watchCount,backupState:activated.backup_state,
-        locatorPresent:Boolean(activated.locator)}}))
+      assert.equal(traffic.backupWatches,0)
     } catch (error) {
       const ui = await page.evaluate(async () => {
         const { useAccountManagementStore } = await import('/store/accountManagement.ts')
@@ -881,12 +919,10 @@ export async function runPwaUsageCases(t) {
           discovery: store.status?.discovery_status, errorCode: store.status?.error_code,
           probe: window.__dkvsEntryProbe, noticeTiming: window.__noticeTiming}
       }).catch(() => null)
-      console.error(JSON.stringify({coldEntryFailure: {faultHits, watchCount, ui}}))
+      console.error(JSON.stringify({coldEntryFailure: {faultHits, ...traffic, ui}}))
       throw error
     } finally {
       await page.context().unroute(faultPath, failDiscovery)
-      page.context().off('request', observeWatch)
-      await page.evaluate(() => { window.__restoreEntryProbe?.(); window.restoreUsagePut?.() }).catch(() => {})
       await page.context().close()
     }
   })

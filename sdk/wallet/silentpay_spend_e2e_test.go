@@ -162,7 +162,7 @@ func runSPSignedSweep(t *testing.T, mgr *Manager, receiver *InternalWallet) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tx, err := mgr.BuildSilentPaySweep(context.Background(), receiver.GetId(), 0, utxo, spDest, 2)
+	tx, err := mgr.BuildSilentPaySweep(context.Background(), receiver.GetId(), 0, []string{utxo}, spDest, 2)
 	if err != nil {
 		t.Fatalf("unable to sign SP funds: %v", err)
 	}
@@ -211,12 +211,12 @@ func runSPSignedSweep(t *testing.T, mgr *Manager, receiver *InternalWallet) {
 
 	// A once-spent or asset-bearing source is never signed.
 	fake.spent = true
-	if _, err := mgr.BuildSilentPaySweep(context.Background(), receiver.GetId(), 0, utxo, spDest, 2); err == nil {
+	if _, err := mgr.BuildSilentPaySweep(context.Background(), receiver.GetId(), 0, []string{utxo}, spDest, 2); err == nil {
 		t.Fatal("spent UTXO passed latest snapshot check")
 	}
 	fake.spent = false
 	fake.output.Assets = indexercommon.TxAssets{{}}
-	if _, err := mgr.BuildSilentPaySweep(context.Background(), receiver.GetId(), 0, utxo, spDest, 2); err == nil {
+	if _, err := mgr.BuildSilentPaySweep(context.Background(), receiver.GetId(), 0, []string{utxo}, spDest, 2); err == nil {
 		t.Fatal("asset-bearing UTXO was silently spent as BTC")
 	}
 }

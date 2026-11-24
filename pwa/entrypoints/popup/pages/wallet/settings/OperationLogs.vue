@@ -87,7 +87,7 @@
       </details>
       <Button v-if="records.length" variant="ghost" class="text-destructive hover:text-destructive" :disabled="busy" @click="confirmClear = true">{{ t('pwaUi.logs.deleteAll') }}</Button>
     </div>
-    <RGB11SendDialog v-if="transferId" :key="transferId" v-model:open="showTransfer" :asset="null" :resume-transfer-id="transferId" />
+    <RGB11SendDialog v-if="transferId" :key="transferId" v-model:open="showTransfer" :asset="null" :resume-transfer-id="transferId" @completed="refresh" />
     <AlertDialog v-model:open="confirmClear">
     <AlertDialogContent class="w-[calc(100%_-_2rem)] max-w-md rounded-xl">
         <AlertDialogHeader>
@@ -124,11 +124,10 @@ const globalStore = useGlobalStore()
 const records = ref<OperationView[]>([])
 const transfers = ref<RGBTransferView[]>([])
 const results = ref<Partial<Record<string, ContractLogResult | { status: 'loading' }>>>({})
-const rows = computed(() => records.value.map(record => {
-  const matching = record.kind === 'rgb_send' || record.kind === 'rgb_inflate'
-    ? transfers.value.filter(transfer => transfer.tx_id && transfer.tx_id === record.tx_ids[0]) : []
-  return { record, result: results.value[record.id], transfer: matching.length === 1 ? matching[0] : undefined }
-}))
+const rows = computed(() => records.value.map(record => ({
+  record, result: results.value[record.id],
+  transfer: transfers.value.find(transfer => transfer.id === record.rgb_transfer_id),
+})))
 const canResumeRgb = (transfer: RGBTransferView) =>
   transfer.can_confirm && !transfer.needs_receipts && transfer.status !== 'prepared'
 const rgbInFlight = computed(() => {

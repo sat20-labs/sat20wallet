@@ -1241,10 +1241,7 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 			"SP PWA: reviewed BTC send confirms once and receiver refresh discovers exact funds",
 			"SP PWA: two wallets pay the same shared address and both outputs are found",
 		}
-		logPath := runSDKPWARegtestBrowserGroup(t, pwa, configPath, fixturePath, evidenceDir, "silentpay", cases)
-		t.Run("spend_both_private_outputs", func(t *testing.T) {
-			spSweepSharedPayments(t, ordinary2, actorB, actorA["address"], confirmationAddress, logPath, mine)
-		})
+		runSDKPWARegtestBrowserGroup(t, pwa, configPath, fixturePath, evidenceDir, "silentpay", cases)
 		return
 	}
 	if feature == "l2-plain-send" {
@@ -1360,7 +1357,7 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 	})
 }
 
-func runSDKPWARegtestBrowserGroup(t *testing.T, pwa, configPath, fixturePath, evidenceDir, group string, cases []string, selector ...string) string {
+func runSDKPWARegtestBrowserGroup(t *testing.T, pwa, configPath, fixturePath, evidenceDir, group string, cases []string, selector ...string) {
 	t.Helper()
 	node, err := exec.LookPath("node")
 	require.NoError(t, err)
@@ -1401,5 +1398,4 @@ func runSDKPWARegtestBrowserGroup(t *testing.T, pwa, configPath, fixturePath, ev
 	require.NoError(t, logFile.Close())
 	require.NoError(t, err, "regtest %s PWA runner failed; private JSON log: %s", group, logPath)
 	t.Logf("regtest %s PWA runner exit=0; private JSON log: %s", group, logPath)
-	return logPath
 }

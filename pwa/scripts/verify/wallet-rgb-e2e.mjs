@@ -35,18 +35,18 @@ export async function runPwaRgbCases(t, fixture) {
     }
   }
   const view = page => walletCall(page, 'getRGB11View')
-  const observe = async (page, method, action, success = true) => {
-    await page.evaluate(method => {
+  const observe = async (page, method, action, success = true, api = 'sat20wallet_wasm') => {
+    await page.evaluate(({ api, method }) => {
       window.__rgbPageResult = null
-      const original = window.sat20wallet_wasm[method]
-      window.sat20wallet_wasm[method] = async (...args) => {
-        window.sat20wallet_wasm[method] = original
+      const original = window[api][method]
+      window[api][method] = async (...args) => {
+        window[api][method] = original
         window.__rgbPageArgs = args
         const result = await original(...args)
         window.__rgbPageResult = result
         return result
       }
-    }, method)
+    }, { api, method })
     await action()
     await page.waitForFunction(() => window.__rgbPageResult !== null, undefined, { timeout: 180000 })
     const result = await page.evaluate(() => { const result = window.__rgbPageResult; delete window.__rgbPageResult; return result })
@@ -92,12 +92,13 @@ export async function runPwaRgbCases(t, fixture) {
       return (await view(page)).assets.find(item => item.asset === asset.asset)?.available
     }, poll).toBe(expected)
   }
-  const issue = async (page, kind, ticker) => {
+  const issue = async (page, kind, ticker, description = '') => {
     await button(page, tr.issue).click()
     const form = dialog(page, tr.issueTitle)
     await form.locator('select').selectOption(kind)
     await form.getByRole('textbox', { name: /^Asset symbol\b/ }).fill(ticker)
     await form.getByRole('textbox', { name: /^Display name\b/ }).fill(`PWA ${kind} acceptance`)
+    if (description) await form.getByRole('textbox', { name: tr.details, exact: true }).fill(description)
     await form.locator('input[type=number]').fill(kind === 'UDA' ? '0' : '2')
     if (kind !== 'UDA') await form.getByPlaceholder('1000', { exact: true }).fill('100')
     if (kind === 'IFA') await form.getByPlaceholder('9000', { exact: true }).fill('20')
@@ -208,7 +209,10 @@ export async function runPwaRgbCases(t, fixture) {
     // create a different intent and would miss the UI recovery boundary.
     await button(form, tr.close).first().click()
     await expect(form).not.toBeVisible()
-    await refreshed(owner)
+    const assets = owner.getByRole('tabpanel', { name: 'Bitcoin', exact: true })
+    const snapshot = await observe(owner, 'refreshRGB11State', () => button(assets, messages.common.refresh).click())
+    const saved = snapshot.transfers.find(item => item.id === prepared.id)
+    assert.ok(saved?.can_confirm && saved.needs_receipts, 'the asset refresh must return the saved manual transfer')
     const pending = owner.locator('div.rounded.border.border-zinc-700').filter({ has: owner.getByText(prepared.id, { exact: true }) })
     await expect(pending.getByText(tr.taskReceiptHint, { exact: true })).toBeVisible()
     await button(pending, tr.retryTask).click()
@@ -255,7 +259,8 @@ export async function runPwaRgbCases(t, fixture) {
   try {
     sender = await fresh(actors.sender); receiver = await fresh(actors.recipient)
     const cases = [async () => {
-      const issued = await issue(sender, 'NIA', 'PWANIA')
+      const description = 'Issued for the PWA contract import check.'
+      const issued = await issue(sender, 'NIA', 'PWANIA', description)
       const details = dialog(sender, messages.rgb11Contract.title)
       const metadata = await observe(sender, 'getTickerInfo', () =>
         button(card(sender, issued.asset), `${tr.contractId}: ${issued.asset.contract_id}`).click())
@@ -263,8 +268,13 @@ export async function runPwaRgbCases(t, fixture) {
       assert.match(outpoint, /^[0-9a-f]{64}:\d+$/)
       await expect(details.getByText(messages.rgb11Contract.genesisOutput, { exact: true })).toBeVisible()
       await checkBitcoinReference(details, outpoint)
+      await expect(details.getByText(description, { exact: true })).toBeVisible()
       await close(details)
       await importContract(receiver, issued)
+      await button(card(receiver, issued.asset), `${tr.contractId}: ${issued.asset.contract_id}`).click()
+      const importedDetails = dialog(receiver, messages.rgb11Contract.title)
+      await expect(importedDetails.getByText(description, { exact: true })).toBeVisible()
+      await close(importedDetails)
       await receive(receiver, issued.asset, '1', 'blind', 'proxy')
       const request = await receive(receiver, issued.asset, '1')
       const other = await issue(sender, 'NIA', 'PWAOTHER')
@@ -308,6 +318,12 @@ export async function runPwaRgbCases(t, fixture) {
       }
       const issued = await issue(sender, 'UDA', 'PWAUDA')
       await importContract(receiver, issued)
+      await button(card(receiver, issued.asset), `${tr.contractId}: ${issued.asset.contract_id}`).click()
+      const uniqueDetails = dialog(receiver, messages.rgb11Contract.title)
+      for (const label of [tr.initialSupply, tr.fixedSupply]) {
+        await expect(uniqueDetails.getByText(label, { exact: true }).locator('+ dd')).toHaveText('1')
+      }
+      await close(uniqueDetails)
       await refreshed(receiver) // SDK registers its own Direct receive endpoint.
       await button(card(sender, issued.asset), messages.l1AssetsTabs.send).click()
       const form = dialog(sender, tr.sendTitle)
@@ -386,6 +402,11 @@ export async function runPwaRgbCases(t, fixture) {
       await operation.locator('summary').click()
       await expect(operation.getByText(prepared.id, { exact: true })).toBeVisible()
       await expect(button(operation, messages.common.confirm)).toHaveCount(0)
+      await button(operation, tr.viewTransfer).click()
+      const retryDialog = dialog(sender, tr.sendTitle)
+      await observe(sender, 'getOperationLogs', () => button(retryDialog, messages.common.confirm).click(), true, 'sat20wallet_operation_log')
+      await expect(retryDialog.getByRole('status')).toHaveText(messages.walletComponents[`states_${delivered.status}`])
+      await close(retryDialog)
       const broadcastRoute = '**/v3/bitcoin/tx/broadcast'
       let broadcastRejected = false
       const denyBroadcast = async route => {
