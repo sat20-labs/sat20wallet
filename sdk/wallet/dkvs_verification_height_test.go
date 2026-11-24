@@ -12,18 +12,13 @@ import (
 func newAccountStorageHeightTestManager(t *testing.T, ttl uint64, bestHeight int64,
 	bestHeightErr error, syncHeight int) *Manager {
 	t.Helper()
-	manager, remote, service, _ := newAccountGroup(t)
+	manager, remote, _, _ := newAccountGroup(t)
 	remote.freeLocal.MaxTTL = ttl
 	remote.bestHeight = bestHeight
 	remote.bestHeightErr = bestHeightErr
-	manager.serverNode = NewNode(service, "message.test", SERVER_NODE,
-		service.CoreNodePubKey(), service.CoreNodePubKey())
 	manager.status.Lock()
 	manager.status.SyncHeightL2 = syncHeight
 	manager.status.Unlock()
-	if _, err := manager.ImportWallet(accountRootWrapperTestMnemonic, "password"); err != nil {
-		t.Fatalf("import real wallet without endpoint synchronization: %v", err)
-	}
 	if height, known := manager.ensureDKVSManager().endpointVerificationHeight(); known {
 		t.Fatalf("storage height fixture already observed trusted endpoint height %d", height)
 	}

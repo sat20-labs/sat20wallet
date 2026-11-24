@@ -512,6 +512,7 @@ func testRGB11AcknowledgedBackupLocalCommit(t *testing.T, waitForFailedProfile b
 	database := &rgb11LocalCommitFailureDB{KVDB: manager.db}
 	manager.db = database
 	var failPublication, holdReceiver atomic.Bool
+	var watchRecordHash atomic.Value
 	var originalID atomic.Value
 	var originalBody atomic.Value
 	var originalAttempts atomic.Int32
@@ -520,19 +521,44 @@ func testRGB11AcknowledgedBackupLocalCommit(t *testing.T, waitForFailedProfile b
 	watching, receiving, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	var watchOnce, receiveOnce, releaseOnce sync.Once
 	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	waitForRelease := func(ctx context.Context) error {
+		receiveOnce.Do(func() { close(receiving) })
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	http := &reviewAcceptanceHTTP{rgb11MemoryDKVSHTTP: remote}
 	http.post = func(ctx context.Context, path string, body []byte) ([]byte, error) {
 		if path == "/v3/dkvs/active/watch" {
 			watchOnce.Do(func() { close(watching) })
-			<-ctx.Done()
-			return nil, ctx.Err()
+			if waitForFailedProfile {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+			response, err := remote.SendDKVSPostContext(ctx, path, body)
+			target := watchRecordHash.Load()
+			if err != nil || target == nil {
+				return response, err
+			}
+			var watch dkvsActiveWatchResponse
+			if err := json.Unmarshal(response, &watch); err != nil {
+				return nil, err
+			}
+			if watch.Data != nil && watch.Data.Page != nil {
+				for _, record := range watch.Data.Page.Records {
+					if record != nil && dkvsindexer.RecordHash(record) == target {
+						return response, waitForRelease(ctx)
+					}
+				}
+			}
+			return response, nil
 		}
 		if path == "/v3/dkvs/active/sync" && holdReceiver.Load() {
-			receiveOnce.Do(func() { close(receiving) })
-			select {
-			case <-release:
-			case <-ctx.Done():
-				return nil, ctx.Err()
+			if err := waitForRelease(ctx); err != nil {
+				return nil, err
 			}
 		}
 		var request DKVSBatchCASRequest
@@ -548,6 +574,8 @@ func testRGB11AcknowledgedBackupLocalCommit(t *testing.T, waitForFailedProfile b
 					originalBody.Store(sha256.Sum256(body))
 					if waitForFailedProfile {
 						database.profileFailureTarget.Store(accountStateDigest(mutation.Record.Value))
+					} else {
+						watchRecordHash.Store(dkvsindexer.RecordHash(mutation.Record))
 					}
 					break
 				}
@@ -564,8 +592,6 @@ func testRGB11AcknowledgedBackupLocalCommit(t *testing.T, waitForFailedProfile b
 		if selected && err == nil {
 			if waitForFailedProfile {
 				database.fail.Store(1)
-			} else {
-				holdReceiver.Store(true)
 			}
 			published <- request
 		}

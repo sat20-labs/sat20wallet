@@ -387,9 +387,15 @@ func openRGB11RegtestManagedWallet(t *testing.T, dbPath string, remote *rgb11Mem
 		t.Fatal("construct persistent regtest SDK manager")
 	}
 	messageClient := newRGB11MessageNodeClient(remote)
+	registration := &rgb11RegistrationHTTP{rgb11MemoryDKVSHTTP: remote}
+	core := &rgb11RegistrationNode{
+		NodeRPCClient: messageClient,
+		raw:           NewNodeClient("http", "message.test", "regtest", registration),
+	}
 	opened.http = remote
-	opened.serverNode = NewNode(messageClient, "message.test", SERVER_NODE,
+	opened.serverNode = NewNode(core, "message.test", SERVER_NODE,
 		messageClient.CoreNodePubKey(), messageClient.CoreNodePubKey())
+	useRGB11TestCoreAuthority(t, opened)
 	opened.SetIndexerHttpClient(rpc)
 	opened.rgbManager.evidence = esplora
 	opened.rgbManager.scopeStates.stopReconciliations()
@@ -400,6 +406,11 @@ func TestRGB11RegtestOfficialBidirectional(t *testing.T) {
 	requireWalletLiveNetwork(t)
 	esploraURL := requiredRegtestEnv(t, "RGB11_REGTEST_ESPLORA")
 	officialBin := requiredRegtestEnv(t, "RGB11_REGTEST_OFFICIAL_BIN")
+	officialBinary, err := os.ReadFile(officialBin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	officialBinaryHash := sha256.Sum256(officialBinary)
 	officialAlice := requiredRegtestEnv(t, "RGB11_REGTEST_OFFICIAL_ALICE")
 	officialBob := requiredRegtestEnv(t, "RGB11_REGTEST_OFFICIAL_BOB")
 	composeDir := os.Getenv("RGB11_REGTEST_COMPOSE_DIR")
@@ -587,21 +598,28 @@ func TestRGB11RegtestOfficialBidirectional(t *testing.T) {
 		status, err := esplora.GetTxStatus(officialTxID)
 		return err == nil && status.Confirmed
 	})
+	t.Logf("official->Go confirmed txid=%s amount=%d", officialTxID, officialToGo)
 	officialJSON(t, officialBin, "refresh", officialAlice, esploraURL, assetID)
 	if err := populateRegtestIndexer(esplora, rpc, goWallet.GetAddress(), receiveAddress); err != nil {
 		t.Fatal(err)
 	}
-	confirmedReceive, err := manager.rgbManager.projectionStore.LoadTransferState(receipt.TransferID)
-	if err != nil {
-		t.Fatal(err)
+	// An external consignment can carry recipient and change assignments. The
+	// receive request records the wallet's transfer ID for its exact output.
+	accepted, err := manager.GetRGB11ReceiveRequest(goReceive.RequestID)
+	if err != nil || accepted == nil || accepted.TransferID == "" {
+		t.Fatalf("accepted receive request has no local transfer ID: %v", err)
 	}
-	t.Logf("receive status before confirmed-chain refresh: %s", confirmedReceive.Status)
 	if _, err := manager.RefreshRGB11State(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	confirmedReceive, err = manager.rgbManager.projectionStore.LoadTransferState(receipt.TransferID)
+	confirmedReceive, err := manager.rgbManager.projectionStore.LoadTransferState(accepted.TransferID)
 	if err != nil || confirmedReceive == nil || confirmedReceive.Status != "settled" {
 		t.Fatalf("confirmed receive not settled: receive=%+v err=%v", confirmedReceive, err)
+	}
+	if confirmedReceive.Direction != "receive" || confirmedReceive.ReceiveRequestID != goReceive.RequestID ||
+		confirmedReceive.WitnessTxID != officialTxID || confirmedReceive.ConsignmentHash != receipt.ConsignmentHash ||
+		len(confirmedReceive.OutputOutPoints) != 1 || confirmedReceive.OutputOutPoints[0] != receivedAllocation.OutPoint {
+		t.Fatal("settled receive does not match the external consignment and invoice output")
 	}
 	goBalance, err := manager.GetRGB11AssetBalance(&receivedAllocation.AssetName)
 	if err != nil || goBalance == nil || goBalance.Value.Uint64() != officialToGo {
@@ -663,6 +681,7 @@ func TestRGB11RegtestOfficialBidirectional(t *testing.T) {
 		status, err := esplora.GetTxStatus(prepared.TxID)
 		return err == nil && status.Confirmed
 	})
+	t.Logf("Go->official confirmed txid=%s amount=%d", prepared.TxID, goToOfficial)
 	officialJSON(t, officialBin, "refresh", officialBob, esploraURL, assetID)
 	bobBalance := officialJSON(t, officialBin, "balance", officialBob, assetID)
 	settled, ok := bobBalance["settled"].(float64)
@@ -813,7 +832,7 @@ func TestRGB11RegtestOfficialBidirectional(t *testing.T) {
 		"network":                     "regtest",
 		"sdk_account_gate":            "public import, activation, sync and persistent unlock",
 		"dkvs_transport":              "in-memory test transport; RGB/Bitcoin use the real official wallet and regtest",
-		"official_rgb_lib_commit":     "538f2abaa67d7ce96be32d94092e8f1b9e3ea38e",
+		"official_binary_sha256":      hex.EncodeToString(officialBinaryHash[:]),
 		"asset_id":                    assetID,
 		"schema":                      schema,
 		"official_receive_settled":    settledReceive,
@@ -840,9 +859,6 @@ func TestRGB11RegtestOfficialBidirectional(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(artifactDir, "bidirectional-summary.json"), append(summaryRaw, '\n'), 0o600); err != nil {
 		t.Fatal(err)
 	}
-
-	t.Logf("official->Go txid=%s amount=%d", officialTxID, officialToGo)
-	t.Logf("Go->official txid=%s amount=%d", prepared.TxID, goToOfficial)
 }
 
 // Continue only the read-only tail of the already confirmed NIA run. The
