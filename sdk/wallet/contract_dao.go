@@ -833,7 +833,7 @@ func (p *DaoContractRunTime) InitFromDB(stp ContractManager, resv ContractDeploy
 	}
 
 	// 在 uidMap 后
-	history := LoadContractInvokeHistory(p.db, url, true, false)
+	history := loadInvokeHistory(p.db, url, true, false, p.CurrBlockL1)
 	for _, v := range history {
 		item, ok := v.(*InvokeItem)
 		if !ok {
@@ -1864,9 +1864,8 @@ func (p *DaoContractRunTime) VerifyAndAcceptInvokeItem(invokeTx *InvokeTx, heigh
 	Log.Infof("utxo %x %s\n", utxoId, utxo)
 	org, ok := p.history[utxo]
 	if ok {
-		if org.UtxoId != utxoId { // reorg
-			org.UtxoId = utxoId
-			SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), org)
+		if err := p.setL1Position(org, utxoId); err != nil {
+			return nil, err
 		}
 		invokeTx.Handled = true
 		return nil, fmt.Errorf("contract utxo %s exists", utxo)
@@ -2088,6 +2087,10 @@ func (p *DaoContractRunTime) addUnhandledUID_airdrop(item *InvokeItem) {
 
 // 不需要写入数据库的缓存数据，不能修改任何需要保存数据库的变量
 func (p *DaoContractRunTime) addItem(item *InvokeItem) {
+	p.insertBuck(item)
+	if item.FromL1 && (item.UtxoId == REORG_UTXOID || item.Finished()) {
+		return
+	}
 	if item.Reason == INVOKE_REASON_NORMAL {
 		switch item.OrderType {
 		case ORDERTYPE_REGISTER:
@@ -2109,8 +2112,10 @@ func (p *DaoContractRunTime) addItem(item *InvokeItem) {
 			addItemToMap(item, p.validateMap)
 		}
 	}
+}
 
-	p.insertBuck(item)
+func (p *DaoContractRunTime) removeL1Item(item *InvokeItem) {
+	removeItemFromMap(item, p.donateMap)
 }
 
 func getMinItem(items map[string]*Decimal) (string, *Decimal) {

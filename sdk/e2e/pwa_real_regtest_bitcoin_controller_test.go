@@ -234,7 +234,14 @@ func startSDKPWARegtestBitcoinControllerInternal(t *testing.T, address string, m
 				http.Error(w, "expected one pending public RGB deposit on the isolated regtest", http.StatusBadRequest)
 				return
 			}
-			mine(address, emptyBlocks)
+			if paced && nodes[0].rgbDepositFork != nil {
+				if err := nodes[0].rgbDepositFork(r.Context(), address, request.RGBContract, request.Funding); err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+			} else {
+				mine(address, emptyBlocks)
+			}
 			if paced {
 				deadline = time.Now().Add(180 * time.Second)
 				ctx, cancel := context.WithDeadline(r.Context(), deadline)

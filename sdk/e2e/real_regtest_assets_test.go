@@ -157,10 +157,18 @@ func realRegtestBitcoinCLI(t *testing.T, args ...string) []byte {
 	require.True(t, filepath.IsAbs(cli) && filepath.IsAbs(dataDir))
 	_, err := strconv.Atoi(port)
 	require.NoError(t, err)
-	command := exec.Command(cli, append([]string{"-datadir=" + dataDir, "-regtest", "-rpcport=" + port}, args...)...)
-	output, err := command.CombinedOutput()
-	require.NoError(t, err, "Bitcoin RPC %s: %s", args[0], output)
+	output, err := runRegtestCLI(context.Background(), cli, dataDir, port, args...)
+	require.NoError(t, err)
 	return output
+}
+
+func runRegtestCLI(ctx context.Context, cli, dir, port string, args ...string) ([]byte, error) {
+	command := exec.CommandContext(ctx, cli, append([]string{"-datadir=" + dir, "-regtest", "-rpcport=" + port}, args...)...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("Bitcoin RPC %s: %w: %s", args[0], err, output)
+	}
+	return output, nil
 }
 
 // The real environment owns these persistent ordinary-wallet databases. This

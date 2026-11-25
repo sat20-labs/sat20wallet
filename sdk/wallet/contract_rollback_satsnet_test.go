@@ -836,6 +836,139 @@ type recycleOrderingResyncReservation struct {
 
 func (r *recycleOrderingResyncReservation) ResyncBlock(start, end int) { r.resync(start, end) }
 
+func TestL1InvokeReconfirmation(t *testing.T) {
+	t.Run("public_deposit_after_restart", func(t *testing.T) {
+		fixture, manager := newRecycleActivationOrderingFixture(t)
+		defer manager.GetDB().Close()
+		p := NewTranscendContractRuntime(manager)
+		resv := fixture.resv.(*rollbackContractReservation)
+		resv.contract = p
+		p.ChannelAddr, p.LocalPubKey, p.RemotePubKey = resv.channel, resv.localKey, resv.remoteKey
+		p.CoreNodePubKey = resv.coreKey
+		p.Contract.GetContractBase().AssetName = indexer.AssetName{Protocol: "rgb11", Type: "nia", Ticker: "deposit"}
+		if err := p.InitFromDB(manager, resv); err != nil {
+			t.Fatal(err)
+		}
+		p.EnableBlockL1, p.CurrBlockL1 = 2, 8
+		tx := newRecycleOrderingDeposit(fixture, 8)
+		output := OutputToSatsNet(tx.TxOutput)
+		output.OutValue.Assets = swire.TxAssets{{Name: *p.GetAssetName(), Amount: *indexer.NewDefaultDecimal(100)}}
+		item := p.updateContract_deposit(tx.Invoker, output, nil, true, true)
+		if err := p.HandleReorg(8, 8); err != nil {
+			t.Fatal(err)
+		}
+		if len(p.genDepositInfo(8).ItemIDs) != 0 {
+			t.Fatal("orphaned deposit was eligible for an anchor")
+		}
+		if err := p.InitFromDB(manager, resv); err != nil {
+			t.Fatal(err)
+		}
+		if len(p.genDepositInfo(8).ItemIDs) != 0 {
+			t.Fatal("restart made the orphan eligible for an anchor")
+		}
+		if err := p.InvokeWithBlock(&InvokeDataInBlock{Height: 8}); err != nil {
+			t.Fatal(err)
+		}
+		err := p.InvokeWithBlock(&InvokeDataInBlock{Height: 9,
+			ContractOutputs: map[string]uint64{item.InUtxo: indexer.ToUtxoId(9, 2, 0)}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		info := p.genDepositInfo(9)
+		if len(p.genDepositInfo(8).ItemIDs) != 0 || len(info.ItemIDs) != 1 ||
+			info.ItemIDs[0] != item.Id || info.TotalAmt.String() != "100" || p.InvokeCount != 1 {
+			t.Fatal("replacement block did not restore the original deposit exactly once")
+		}
+	})
+	for _, restart := range []bool{false, true} {
+		t.Run(fmt.Sprintf("restart_%t", restart), func(t *testing.T) {
+			runtime, manager := newRecycleActivationOrderingFixture(t)
+			defer manager.GetDB().Close()
+			runtime.SetEnableBlock(3, 2)
+			tx := newRecycleOrderingDeposit(runtime, 2)
+			point := tx.TxOutput.OutPointStr
+			apply := func(height int, txs []*InvokeTx, positions map[string]uint64) {
+				t.Helper()
+				err := runtime.InvokeWithBlock(&InvokeDataInBlock{Height: height,
+					BlockHash:    recycleOrderingBlockHash(fmt.Sprint(height)),
+					InvokeTxVect: txs, ContractOutputs: positions})
+				if err != nil {
+					t.Fatalf("apply height %d: %v", height, err)
+				}
+			}
+			reload := func() {
+				t.Helper()
+				data, err := runtime.GobEncode()
+				if err != nil {
+					t.Fatal(err)
+				}
+				resv := runtime.resv.(*rollbackContractReservation)
+				runtime = new(RecycleContractRunTime)
+				if err := runtime.GobDecode(data); err != nil {
+					t.Fatal(err)
+				}
+				resv.contract = runtime
+				if err := runtime.InitFromDB(manager, resv); err != nil {
+					t.Fatal(err)
+				}
+			}
+			apply(2, []*InvokeTx{tx}, nil)
+			original := runtime.history[point]
+			if original == nil || runtime.recycleMap[tx.Invoker][original.Id] != original {
+				t.Fatal("initial deposit is missing from the queue")
+			}
+			if err := runtime.HandleReorg(2, 2); err != nil {
+				t.Fatal(err)
+			}
+			if restart {
+				reload()
+			}
+			item := runtime.history[point]
+			if item == nil || item.UtxoId != REORG_UTXOID || !runtime.IsIdle() ||
+				runtime.getItemFromBuck(original.Id) != item {
+				t.Fatal("orphan must remain in history only")
+			}
+			for h := 2; h <= 8; h++ {
+				apply(h, nil, nil)
+			}
+			if item.Finished() || runtime.TotalPoints != 0 {
+				t.Fatal("orphan settled while absent from the replacement chain")
+			}
+			// Replay can see a known output in the block even after an indexer
+			// no longer returns the output as unspent.
+			pos := indexer.ToUtxoId(9, 3, 0)
+			apply(9, nil, map[string]uint64{point: pos})
+			stored, err := loadContractInvokeHistoryItemByInUtxo(manager.GetDB(), runtime.URL(), point)
+			if err != nil || stored.GetInvokeUtxoId() != pos || item.UtxoId != pos ||
+				runtime.recycleMap[tx.Invoker][item.Id] != item || runtime.InvokeCount != 1 ||
+				runtime.TotalInputSats != original.InValue {
+				t.Fatalf("reconfirmation did not restore exactly one deposit: %v", err)
+			}
+			for h := 10; h <= 13; h++ {
+				apply(h, nil, nil)
+			}
+			if item.Finished() || runtime.TotalPoints != 0 {
+				t.Fatal("deposit settled before six confirmations on the replacement chain")
+			}
+			apply(14, nil, nil)
+			if !item.Finished() || runtime.TotalPoints == 0 {
+				t.Fatal("deposit did not settle at six confirmations")
+			}
+			points := runtime.TotalPoints
+			if err := runtime.HandleReorg(9, 14); err != nil {
+				t.Fatal(err)
+			}
+			if restart {
+				reload()
+			}
+			apply(9, []*InvokeTx{newRecycleOrderingDeposit(runtime, 9)}, nil)
+			if !runtime.IsIdle() || runtime.InvokeCount != 1 || runtime.TotalPoints != points {
+				t.Fatal("replay of a completed deposit repeated its settlement")
+			}
+		})
+	}
+}
+
 func TestRecycleActivationNextBlockReplaysDeferredDeposit(t *testing.T) {
 	for _, initiallyUnknown := range []bool{false, true} {
 		t.Run(fmt.Sprintf("unknown_enable_%t", initiallyUnknown), func(t *testing.T) {

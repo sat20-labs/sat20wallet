@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -2304,10 +2305,40 @@ func (p *ContractRuntimeBase) InvokeWithBlock(data *InvokeDataInBlock) error {
 				p.resyncBlock(from, data.Height-1)
 				Log.Infof("%s has resync L1 from %d to %d", p.URL(), from, data.Height-1)
 				p.mutex.Lock()
-				if p.rgb11PublicContract() && p.CurrBlockL1+1 != data.Height {
-					p.mutex.Unlock()
-					return fmt.Errorf("%w: preceding deposit blocks have not completed", ErrRGB11ContractRetry)
+				if p.CurrBlockL1+1 != data.Height {
+					if p.rgb11PublicContract() {
+						p.mutex.Unlock()
+						return fmt.Errorf("%w: preceding deposit blocks have not completed", ErrRGB11ContractRetry)
+					}
+					for _, item := range p.history {
+						if item.FromL1 && item.UtxoId == REORG_UTXOID {
+							p.mutex.Unlock()
+							return fmt.Errorf("%w: missing blocks before %d", ErrL1InvokeRetry, data.Height)
+						}
+					}
 				}
+			}
+		}
+	}
+
+	// A previously accepted output may already be spent when replay reaches
+	// its new block. Its position comes from the block, independently of
+	// the live UTXO material used to accept new invokes.
+	if data.ContractOutputs == nil && len(data.InvokeTxVect) > 0 {
+		data.ContractOutputs = make(map[string]uint64, len(data.InvokeTxVect))
+		for _, tx := range data.InvokeTxVect {
+			if tx != nil && tx.Tx != nil && tx.InvokeVout >= 0 && tx.InvokeVout < len(tx.Tx.TxOut) {
+				outpoint := fmt.Sprintf("%s:%d", tx.Tx.TxID(), tx.InvokeVout)
+				data.ContractOutputs[outpoint] = indexer.ToUtxoId(data.Height, tx.TxIndex, tx.InvokeVout)
+			}
+		}
+	}
+	for outpoint, pos := range data.ContractOutputs {
+		item := p.history[outpoint]
+		if item != nil && item.FromL1 && item.UtxoId == REORG_UTXOID {
+			if err := p.setL1Position(item, pos); err != nil {
+				p.mutex.Unlock()
+				return err
 			}
 		}
 	}
@@ -2775,18 +2806,60 @@ func (p *ContractRuntimeBase) resolveCanonicalInvokeUtxoID_SatsNet(item InvokeHi
 func (p *ContractRuntimeBase) HandleReorg(orgHeight, currHeight int) error {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
+	return p.rewindL1(orgHeight)
+}
+
+// The queues contain only actionable items. History retains orphaned records
+// so replay can restore their position without counting the invoke twice.
+type l1InvokeQueue interface {
+	removeL1Item(*InvokeItem)
+	addItem(*InvokeItem)
+}
+
+var ErrL1InvokeRetry = errors.New("L1 contract replay incomplete")
+
+func (p *ContractRuntimeBase) setL1Position(item *InvokeItem, pos uint64) error {
+	if pos == item.UtxoId {
+		return nil
+	}
+	updated := *item
+	updated.UtxoId = pos
+	if err := SaveContractInvokeHistoryItem(p.db, p.URL(), &updated); err != nil {
+		return fmt.Errorf("%w: save position for %s: %w", ErrL1InvokeRetry, item.InUtxo, err)
+	}
+	wasOrphan := item.UtxoId == REORG_UTXOID
+	item.UtxoId = pos
+	p.history[item.InUtxo] = item
+	p.insertBuck(item)
+	if q, ok := p.runtime.(l1InvokeQueue); ok && !item.Finished() {
+		if pos == REORG_UTXOID {
+			q.removeL1Item(item)
+		} else if wasOrphan {
+			q.addItem(item)
+		}
+	}
+	return nil
+}
+
+func (p *ContractRuntimeBase) rewindL1(orgHeight int) error {
 	url := p.URL()
-	history := loadContractInvokeHistoryFromHeight(p.stp.GetDB(), url, false, orgHeight, false)
+	history, err := readInvokeHistoryFrom(p.stp.GetDB(), url, false, orgHeight, false)
+	if err != nil {
+		return err
+	}
 	for _, v := range history {
 		item, ok := v.(*InvokeItem)
 		if !ok {
 			continue
 		}
-		item.UtxoId = REORG_UTXOID
-		p.history[item.InUtxo] = item
-		SaveContractInvokeHistoryItem(p.db, url, item)
+		if active := p.history[item.InUtxo]; active != nil {
+			item = active
+		}
+		if err := p.setL1Position(item, REORG_UTXOID); err != nil {
+			return err
+		}
 	}
-	p.CurrBlockL1 = orgHeight - 1
+	p.CurrBlockL1 = min(p.CurrBlockL1, orgHeight-1)
 	return p.stp.SaveReservation(p.resv)
 }
 
@@ -2825,7 +2898,7 @@ func (p *ContractRuntimeBase) PrepareForReInvoke(height int, bSatsNet bool) int 
 		history := loadContractInvokeHistoryFromHeight(p.stp.GetDB(), url, false, height, false)
 		for _, v := range history {
 			item, ok := v.(*SwapHistoryItem)
-			if !ok {
+			if !ok || p.history[item.InUtxo] != nil {
 				continue
 			}
 			p.history[item.InUtxo] = item
@@ -3986,9 +4059,10 @@ type InvokeTx struct {
 }
 
 type InvokeDataInBlock struct {
-	Height       int
-	BlockHash    string
-	InvokeTxVect []*InvokeTx
+	ContractOutputs map[string]uint64 // canonical positions before live UTXO filtering
+	Height          int
+	BlockHash       string
+	InvokeTxVect    []*InvokeTx
 }
 
 func GetInvokeInnerParam(action string) InvokeInnerParamIF {

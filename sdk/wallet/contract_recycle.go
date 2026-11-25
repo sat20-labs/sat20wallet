@@ -471,7 +471,7 @@ func (p *RecycleContractRunTime) InitFromDB(stp ContractManager, resv ContractDe
 	}
 	p.init()
 
-	history := LoadContractInvokeHistory(p.db, p.URL(), true, false)
+	history := loadInvokeHistory(p.db, p.URL(), true, false, p.CurrBlockL1)
 	for _, v := range history {
 		item, ok := v.(*SwapHistoryItem)
 		if !ok {
@@ -863,11 +863,12 @@ func (p *RecycleContractRunTime) InvokeWithBlock(data *InvokeDataInBlock) error 
 }
 
 func (p *RecycleContractRunTime) HandleReorg(orgHeight, currHeight int) error {
-	p.ContractRuntimeBase.HandleReorg(orgHeight, currHeight)
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
 	for i := orgHeight; i <= currHeight; i++ {
 		delete(p.BlockHashMap, i)
 	}
-	return nil
+	return p.rewindL1(orgHeight)
 }
 
 func (p *RecycleContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *InvokeTx_SatsNet, height int) (InvokeHistoryItem, error) {
@@ -969,9 +970,8 @@ func (p *RecycleContractRunTime) VerifyAndAcceptInvokeItem(invokeTx *InvokeTx, h
 	Log.Infof("utxo %x %s\n", utxoId, utxo)
 	org, ok := p.history[utxo]
 	if ok {
-		if org.UtxoId != utxoId { // reorg
-			org.UtxoId = utxoId
-			SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), org)
+		if err := p.setL1Position(org, utxoId); err != nil {
+			return nil, err
 		}
 		invokeTx.Handled = true
 		return nil, fmt.Errorf("contract utxo %s exists", utxo)
@@ -1135,21 +1135,26 @@ func (p *RecycleContractRunTime) DisableItem(input InvokeHistoryItem) {
 
 // 不需要写入数据库的缓存数据，不能修改任何需要保存数据库的变量
 func (p *RecycleContractRunTime) addItem(item *SwapHistoryItem) {
-	if item.Reason == INVOKE_REASON_NORMAL {
-		switch item.OrderType {
-		case ORDERTYPE_RECYCLE:
-			if len(item.Padded) == 0 {
-				addItemToMap(item, p.recycleMap)
-			} else {
-				if item.OutAmt.Sign() != 0 || item.OutValue != 0 {
-					addItemToMap(item, p.rewardMap)
-				}
-			}
-
-		}
-	}
-
 	p.insertBuck(item)
+	if item.FromL1 && (item.UtxoId == REORG_UTXOID || item.Finished()) {
+		return
+	}
+	if item.OrderType != ORDERTYPE_RECYCLE {
+		return
+	}
+	if len(item.Padded) == 0 {
+		if item.Reason == INVOKE_REASON_NORMAL {
+			addItemToMap(item, p.recycleMap)
+		}
+	} else if item.OutAmt.Sign() != 0 || item.OutValue != 0 {
+		// A partial prize also has a payable balance after restart.
+		addItemToMap(item, p.rewardMap)
+	}
+}
+
+func (p *RecycleContractRunTime) removeL1Item(item *InvokeItem) {
+	removeItemFromMap(item, p.recycleMap)
+	removeItemFromMap(item, p.rewardMap)
 }
 
 // XorLastNHex XORs the last n hex digits of blockHash and txId
@@ -1631,6 +1636,9 @@ func (p *RecycleContractRunTime) loadHistoryRewardItemByID(id int64) *InvokeItem
 	if !ok {
 		return nil
 	}
+	if live := p.history[item.InUtxo]; live != nil && live.Id == id {
+		return live
+	}
 	return item
 }
 
@@ -1779,7 +1787,7 @@ func (p *RecycleContractRunTime) addRewardSendInfo(height int, item *InvokeItem,
 	sendInfoMap map[string]*SendAssetInfo, itemIDs *[]int64,
 	maxHeight *int, totalAmt **Decimal, totalValue *int64) {
 	h, _, _ := indexer.FromUtxoId(item.UtxoId)
-	if h > height {
+	if h > height || (item.FromL1 && (item.UtxoId == REORG_UTXOID || h > p.CurrBlockL1-5)) {
 		return
 	}
 	if item.Finished() {

@@ -691,6 +691,7 @@ func (p *Manager) SaveBlockMonitorProgress(l1 bool, height int, hash string, has
 	if l1 {
 		progress, hashes = &onDisk.SyncHeightL1, &onDisk.BlockHashMapL1
 	}
+	rewind := l1 && height < *progress
 	*progress = height
 	if hash != "" {
 		if *hashes == nil {
@@ -700,7 +701,7 @@ func (p *Manager) SaveBlockMonitorProgress(l1 bool, height int, hash string, has
 	}
 	if hashWindow > 0 {
 		for h := range *hashes {
-			if h <= height-hashWindow {
+			if h <= height-hashWindow || (rewind && h > height) {
 				delete(*hashes, h)
 			}
 		}
@@ -2328,6 +2329,10 @@ func DeleteContractInvokeHistory(db db.KVDB, url string) error {
 }
 
 func LoadContractInvokeHistory(db db.KVDB, url string, excludingDone, reverse bool) map[string]InvokeHistoryItem {
+	return loadInvokeHistory(db, url, excludingDone, reverse, -1)
+}
+
+func loadInvokeHistory(db db.KVDB, url string, excludingDone, reverse bool, l1Cursor int) map[string]InvokeHistoryItem {
 	prefix := []byte(GetDBKeyPrefix() + DB_KEY_TC_INVOKE_HISTORY + url)
 
 	ty := ExtractContractType(url)
@@ -2354,7 +2359,8 @@ func LoadContractInvokeHistory(db db.KVDB, url string, excludingDone, reverse bo
 			upgradedItems = append(upgradedItems, item)
 		}
 
-		if excludingDone && (item.Finished() && item.GetInvokeUtxoId() != REORG_UTXOID) {
+		if excludingDone && item.Finished() && item.GetInvokeUtxoId() != REORG_UTXOID &&
+			(l1Cursor < 0 || item.FromSatsNet() || item.GetHeight() <= l1Cursor) {
 			return nil
 		}
 
@@ -2406,18 +2412,22 @@ func findContractInvokeItem(db db.KVDB, url string, target string) *InvokeItem {
 // 从这个高度开始的交易都加载： TODO 需要优化下以高度有序，就不需要全部遍历
 func loadContractInvokeHistoryFromHeight(db db.KVDB, url string, excludingDone bool,
 	height int, bSatsNet bool) map[string]InvokeHistoryItem {
-	prefix := []byte(GetDBKeyPrefix() + DB_KEY_TC_INVOKE_HISTORY + url)
+	items, err := readInvokeHistoryFrom(db, url, excludingDone, height, bSatsNet)
+	if err != nil {
+		Log.Errorf("read contract history %s: %v", url, err)
+	}
+	return items
+}
+
+func readInvokeHistoryFrom(db db.KVDB, url string, excludingDone bool,
+	height int, bSatsNet bool) (map[string]InvokeHistoryItem, error) {
+	prefix := []byte(GetDBKeyPrefix() + DB_KEY_TC_INVOKE_HISTORY + url + "-")
 
 	ty := ExtractContractType(url)
 	result := make(map[string]InvokeHistoryItem, 0)
 	upgradedItems := make([]InvokeHistoryItem, 0)
-	db.BatchRead(prefix, false, func(k, v []byte) error {
-		// _, inkey, err := ParseContractInvokeHistoryKey(string(k))
-		// if err != nil {
-		// 	Log.Errorf("ParseContractInvokeHistoryKey failed. %v", err)
-		// 	return nil
-		// }
-
+	var decodeErr error
+	err := db.BatchRead(prefix, false, func(k, v []byte) error {
 		item := NewInvokeHistoryItem(ty)
 		err := DecodeFromBytes(v, item)
 		if err != nil {
@@ -2425,7 +2435,9 @@ func loadContractInvokeHistoryFromHeight(db db.KVDB, url string, excludingDone b
 			item = NewInvokeHistoryItem_old(ty)
 			err = DecodeFromBytes(v, item)
 			if err != nil {
-				Log.Errorf("DecodeFromBytes %s failed. %v", string(k), err)
+				if decodeErr == nil {
+					decodeErr = fmt.Errorf("decode invoke %s: %w", k, err)
+				}
 				return nil
 			}
 			item = item.ToNewVersion()
@@ -2446,13 +2458,16 @@ func loadContractInvokeHistoryFromHeight(db db.KVDB, url string, excludingDone b
 		return nil
 	})
 
-	if len(upgradedItems) != 0 {
-		for _, item := range upgradedItems {
-			SaveContractInvokeHistoryItem(db, url, item)
+	if err != nil {
+		return result, err
+	}
+	for _, item := range upgradedItems {
+		if err := SaveContractInvokeHistoryItem(db, url, item); err != nil {
+			return result, err
 		}
 	}
 
-	return result
+	return result, decodeErr
 }
 
 func loadContractInvokeHistoryWithRange(db db.KVDB, url string, start, limit int) map[string]InvokeHistoryItem {

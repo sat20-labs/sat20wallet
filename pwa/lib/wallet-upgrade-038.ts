@@ -101,6 +101,10 @@ export const migrateWallet038 = async () => {
           wallets,
           catalog: metadata.map(item => ({ ...item, id: String(item.id) })),
         }))
+        if (prepared.code !== 0 && prepared.msg === 'Invalid 0.1.38 wallet data') {
+          console.warn('Skipped 0.1.38 wallet migration because the old records failed validation.')
+          return
+        }
         if (prepared.code !== 0) throw new Error(prepared.msg)
         if (!prepared.data) return
         const migration = { keys, network: prepared.data.network }

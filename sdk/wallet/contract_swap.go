@@ -544,7 +544,7 @@ func (p *SwapContractRuntime) InitFromDB(stp ContractManager, resv ContractDeplo
 
 	p.rebuildTraderHistory()
 
-	history := LoadContractInvokeHistory(p.db, p.URL(), true, false)
+	history := loadInvokeHistory(p.db, p.URL(), true, false, p.CurrBlockL1)
 	for _, v := range history {
 		item, ok := v.(*SwapHistoryItem)
 		if !ok {
@@ -2147,9 +2147,8 @@ func (p *SwapContractRuntime) VerifyAndAcceptInvokeItem(invokeTx *InvokeTx, heig
 	Log.Infof("utxo %x %s\n", utxoId, utxo)
 	org, ok := p.history[utxo]
 	if ok {
-		if org.UtxoId != utxoId { // reorg
-			org.UtxoId = utxoId
-			SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), org)
+		if err := p.setL1Position(org, utxoId); err != nil {
+			return nil, err
 		}
 		invokeTx.Handled = true
 		return nil, fmt.Errorf("contract utxo %s exists", utxo)
@@ -3389,6 +3388,10 @@ func (p *SwapContractRuntime) addRefundItem(item *SwapHistoryItem, updatePool bo
 
 // 不需要写入数据库的缓存数据，不能修改任何需要保存数据库的变量
 func (p *SwapContractRuntime) addItem(item *SwapHistoryItem) {
+	p.insertBuck(item)
+	if item.FromL1 && (item.UtxoId == REORG_UTXOID || item.Finished()) {
+		return
+	}
 	if item.Reason == INVOKE_REASON_NORMAL {
 		switch item.OrderType {
 		case ORDERTYPE_BUY:
@@ -3440,8 +3443,17 @@ func (p *SwapContractRuntime) addItem(item *SwapHistoryItem) {
 	} else {
 		addItemToMap(item, p.refundMap)
 	}
+}
 
-	p.insertBuck(item)
+func (p *SwapContractRuntime) removeL1Item(item *InvokeItem) {
+	removeItemFromMap(item, p.depositMap)
+	removeItemFromMap(item, p.addLiquidityMap)
+	removeItemFromMap(item, p.removeLiquidityMap)
+	removeItemFromMap(item, p.refundMap)
+	if item.OrderType == ORDERTYPE_BUY {
+		p.buyPool = removeRollbackPoolItem(p.buyPool, item.Id)
+		removeItemFromMap(item, p.swapMap)
+	}
 }
 
 type DealInfo struct {

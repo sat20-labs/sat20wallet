@@ -463,12 +463,13 @@ func (f *fakeL1Indexer) host() string {
 }
 
 type realSatoshiNet struct {
-	Bootstrap     *testHarness
-	Core          *testHarness
-	Miner         *testHarness
-	Nodes         []*testHarness
-	fakeL1        *fakeL1Indexer
-	scheduledOnly bool
+	rgbDepositFork func(context.Context, string, string, string) error
+	Bootstrap      *testHarness
+	Core           *testHarness
+	Miner          *testHarness
+	Nodes          []*testHarness
+	fakeL1         *fakeL1Indexer
+	scheduledOnly  bool
 }
 
 func newRealSatoshiNet(t *testing.T, fakeL1 *fakeL1Indexer) *realSatoshiNet {

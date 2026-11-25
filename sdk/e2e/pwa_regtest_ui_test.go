@@ -163,7 +163,12 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 	var rgbCrossLayerFunding map[string]string
 	var rgbCoreStakeEvidence map[string]string
 
-	network := prepareSDKPWARegtestNodes(t)
+	var network *realSatoshiNet
+	if rgbCrossLayer && os.Getenv("SAT20_REAL_RGB_REORG") == "1" {
+		network = rgbForkNodes(t)
+	} else {
+		network = prepareSDKPWARegtestNodes(t)
+	}
 	_, currentHeight, err := network.Bootstrap.Client.GetBestBlock()
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, currentHeight, int32(3), "reuse only the existing H1/H2/H3 regtest chain")

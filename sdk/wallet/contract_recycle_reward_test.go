@@ -326,6 +326,34 @@ func configureRewardCutoffOrdxStub(t *testing.T, fixture *rewardCutoffFixture, w
 func TestRecycleRewardHeightCutoff(t *testing.T) {
 	const processedTip = 550
 
+	t.Run("peer_checks_reconfirmed_reward", func(t *testing.T) {
+		f := newRewardCutoffFixture(t, processedTip)
+		defer f.manager.db.Close()
+		p := f.runtime
+		item := p.rewardMap[f.recipientAddress][f.itemID]
+		item.InUtxo = f.fundingOutpoint
+		item.FromL1, item.OrderType = true, ORDERTYPE_RECYCLE
+		item.Reason, item.Padded = INVOKE_REASON_POOL_TOO_SMALL, []byte("7")
+		p.history[item.InUtxo] = item
+		if err := p.setL1Position(item, REORG_UTXOID); err != nil {
+			t.Fatal(err)
+		}
+		ids := []int64{item.Id}
+		if len(p.genRewardInfoByItemIDs(processedTip, ids).ItemIDs) != 0 {
+			t.Fatal("peer selected an orphaned prize from persisted history")
+		}
+		if err := p.setL1Position(item, indexer.ToUtxoId(processedTip, 1, 0)); err != nil {
+			t.Fatal(err)
+		}
+		if p.findRewardItemByID(item.Id) != item || len(p.genRewardInfo(processedTip).ItemIDs) != 0 {
+			t.Fatal("reconfirmed partial prize must wait for maturity")
+		}
+		p.CurrBlockL1 += 5
+		if len(p.genRewardInfoByItemIDs(processedTip, ids).ItemIDs) != 1 {
+			t.Fatal("mature prize unavailable to the peer")
+		}
+	})
+
 	t.Run("actual_reward_send_uses_processed_tip_funding", func(t *testing.T) {
 		fixture := newRewardCutoffFixture(t, processedTip)
 		transport := fixture.runtime.stp.(*rewardCutoffTransport)

@@ -341,9 +341,8 @@ func (p *FaucetContractRuntime) VerifyAndAcceptInvokeItem(invokeTx *InvokeTx, he
 	Log.Infof("utxo %x %s\n", utxoId, utxo)
 	org, ok := p.history[utxo]
 	if ok {
-		if org.UtxoId != utxoId { // reorg
-			org.UtxoId = utxoId
-			SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), org)
+		if err := p.setL1Position(org, utxoId); err != nil {
+			return nil, err
 		}
 		invokeTx.Handled = true
 		return nil, fmt.Errorf("contract utxo %s exists", utxo)
