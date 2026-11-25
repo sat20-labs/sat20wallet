@@ -3,10 +3,11 @@ package wallet
 import (
 	"bytes"
 	"encoding/hex"
-	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	"strings"
 
 	indexercommon "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
+	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
@@ -46,6 +47,77 @@ func (p *SatsNetDKVSClient) registerRGB11SignedContract(record *swire.DKVSRecord
 		return nil, dkvsindexer.ErrWriteConflict
 	}
 	return registration, nil
+}
+
+// CommitRGB11Name signs the Anchor proof only after the authority endpoint
+// has durably recorded and returned the same immutable short-name claim.
+func (p *Manager) CommitRGB11Name(signer common.Wallet, ticker, id string, height uint64) error {
+	key, err := dkvsindexer.RGB11NameKey(ticker)
+	if err != nil {
+		return err
+	}
+	value, err := dkvsindexer.RGB11NameValue(id)
+	if err != nil {
+		return err
+	}
+	client, err := p.accountDKVSClient()
+	if err != nil {
+		return err
+	}
+	for _, seq := range []uint64{dkvsindexer.RGB11NameClaimSeq, dkvsindexer.RGB11NameProofSeq} {
+		record, err := NewDKVSSignedRecord(signer, key, value, dkvsindexer.RecordOptions{Seq: seq, IssueHeight: height})
+		if err != nil {
+			return err
+		}
+		if err := client.putRGB11Name(record, ticker, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *SatsNetDKVSClient) putRGB11Name(record *swire.DKVSRecord, ticker, id string) error {
+	if signedID, err := dkvsindexer.VerifyRGB11NameRecord(record, ticker); err != nil || signedID != id {
+		return dkvsindexer.ErrInvalidRecord
+	}
+	var response struct {
+		ContractID string `json:"contract_id"`
+	}
+	if err := p.postDKVSApplication("/v3/rgb11/contracts/register", map[string]any{"record": record}, &response); err != nil {
+		return err
+	}
+	stored, err := p.GetRecordDirect(record.Key)
+	if err != nil {
+		return err
+	}
+	storedID, err := dkvsindexer.VerifyRGB11NameRecord(stored, ticker)
+	if err != nil {
+		return err
+	}
+	if response.ContractID != id || storedID != id || stored.Seq < record.Seq {
+		return dkvsindexer.ErrWriteConflict
+	}
+	return nil
+}
+
+func (p *Manager) readRGB11Name(ticker string) (*swire.DKVSRecord, string, error) {
+	key, err := dkvsindexer.RGB11NameKey(ticker)
+	if err != nil {
+		return nil, "", err
+	}
+	client, err := p.accountDKVSClient()
+	if err != nil {
+		return nil, "", err
+	}
+	record, err := client.GetRecordDirect(key)
+	if err != nil {
+		return nil, "", err
+	}
+	if record.Seq == dkvsindexer.RGB11NameClaimSeq {
+		return nil, "", dkvsindexer.ErrRecordNotFound
+	}
+	id, err := dkvsindexer.VerifyRGB11Name(record, ticker)
+	return record, id, err
 }
 
 // rgb11NetworkRegistryVerifier uses the same locally configured, network-stable

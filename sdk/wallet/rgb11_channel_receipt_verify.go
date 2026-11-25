@@ -21,6 +21,7 @@ import (
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	"github.com/sat20-labs/satoshinet/anchortx/nativeproof"
 	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
+	dkvs "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -100,6 +101,7 @@ type rgb11ReceiptAllocation struct {
 
 type rgb11ReceiptMapping struct {
 	public      bool
+	assetName   swire.AssetName
 	script      []byte
 	witness     []byte
 	poolScript  []byte
@@ -327,7 +329,7 @@ func (g *rgb11ReceiptGraph) applyAnchor(point string) error {
 		}
 		amount.Add(amount, allocation.amount)
 	}
-	if len(data.Assets) != 1 || data.Assets[0].Name != g.asset.Name || data.Assets[0].BindingSat != 0 ||
+	if len(data.Assets) != 1 || data.Assets[0].BindingSat != 0 ||
 		data.Assets[0].Amount.Validate() != nil || data.Assets[0].Amount.Precision != g.asset.Amount.Precision || data.Assets[0].Amount.Value.Cmp(amount) != 0 {
 		return fmt.Errorf("RGB11 mapping did not claim the complete canonical asset amount")
 	}
@@ -336,12 +338,13 @@ func (g *rgb11ReceiptGraph) applyAnchor(point string) error {
 		return fmt.Errorf("RGB11 mapping has no authenticated RGB history: %w", err)
 	}
 	validated, err := nativeproof.Validate(proof, nativeproof.Source{Outpoint: point, Value: data.Value,
-		PkScript: script, Assets: data.Assets, BitcoinNetwork: GetChainParam().Name},
+		PkScript: script, Assets: data.Assets, BitcoinNetwork: GetChainParam().Name, VerifyName: dkvs.VerifyRGB11Name},
 		rgb11wallet.RGB11BitcoinResolver(g.chains.ctx, g.chains.bitcoin), nativeproof.Historical)
-	if err != nil || validated.Value != allocations[0].output.Value {
+	if err != nil || validated.Value != allocations[0].output.Value ||
+		!rgb11wallet.ContractAssetKeyMatches(g.asset.Name, validated.ContractID) {
 		return fmt.Errorf("RGB11 mapping history differs from its Bitcoin carrier: %w", err)
 	}
-	mapping := &rgb11ReceiptMapping{script: script, witness: append([]byte(nil), data.WitnessScript...)}
+	mapping := &rgb11ReceiptMapping{script: script, witness: append([]byte(nil), data.WitnessScript...), assetName: data.Assets[0].Name}
 	if bytes.Equal(keys[0], g.bootstrap) || bytes.Equal(keys[1], g.bootstrap) {
 		mapping.public, mapping.poolScript, mapping.poolWitness = true, script, mapping.witness
 	} else {
@@ -360,7 +363,8 @@ func (g *rgb11ReceiptGraph) applyAnchor(point string) error {
 }
 
 func sameRGB11ReceiptMapping(left, right *rgb11ReceiptMapping) bool {
-	return left != nil && right != nil && left.public == right.public && bytes.Equal(left.script, right.script) && bytes.Equal(left.poolScript, right.poolScript)
+	return left != nil && right != nil && left.public == right.public && left.assetName == right.assetName &&
+		bytes.Equal(left.script, right.script) && bytes.Equal(left.poolScript, right.poolScript)
 }
 
 func (g *rgb11ReceiptGraph) walk(id string) error {
@@ -432,7 +436,7 @@ func (g *rgb11ReceiptGraph) applyMappedStep(step *rgb11ReceiptStep, tx *wire.Msg
 	var nextPool *rgb11ReceiptMapping
 	poolMapping := func() *rgb11ReceiptMapping {
 		if nextPool == nil {
-			nextPool = &rgb11ReceiptMapping{public: true, script: mapping.poolScript, witness: mapping.poolWitness,
+			nextPool = &rgb11ReceiptMapping{public: true, assetName: mapping.assetName, script: mapping.poolScript, witness: mapping.poolWitness,
 				poolScript: mapping.poolScript, poolWitness: mapping.poolWitness}
 		}
 		return nextPool
@@ -557,7 +561,9 @@ func (g *rgb11ReceiptGraph) applyClosedPrivateStep(step *rgb11ReceiptStep, mappi
 }
 
 func (g *rgb11ReceiptGraph) verifyDescend(receipt *rgb11ReceiptDescend, mapping *rgb11ReceiptMapping, burned *big.Int) error {
-	amount, err := rgb11ReceiptAssetAmount(receipt.output.Assets, &g.asset)
+	asset := g.asset
+	asset.Name = mapping.assetName
+	amount, err := rgb11ReceiptAssetAmount(receipt.output.Assets, &asset)
 	if err != nil || amount.Cmp(burned) != 0 {
 		return fmt.Errorf("RGB11 descending amount does not match the exact mapped Bitcoin exit")
 	}
@@ -568,7 +574,7 @@ func (g *rgb11ReceiptGraph) verifyDescend(receipt *rgb11ReceiptDescend, mapping 
 	inputAmount, outputAmount := new(big.Int), new(big.Int)
 	for _, input := range receipt.tx.TxIn {
 		out := previous.FetchPrevOutput(input.PreviousOutPoint)
-		amount, err := rgb11ReceiptAssetAmount(out.Assets, &g.asset)
+		amount, err := rgb11ReceiptAssetAmount(out.Assets, &asset)
 		if err != nil {
 			return err
 		}
@@ -578,7 +584,7 @@ func (g *rgb11ReceiptGraph) verifyDescend(receipt *rgb11ReceiptDescend, mapping 
 		inputAmount.Add(inputAmount, amount)
 	}
 	for _, out := range receipt.tx.TxOut {
-		amount, err := rgb11ReceiptAssetAmount(out.Assets, &g.asset)
+		amount, err := rgb11ReceiptAssetAmount(out.Assets, &asset)
 		if err != nil {
 			return err
 		}

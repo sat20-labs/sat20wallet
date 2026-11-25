@@ -337,28 +337,7 @@ const handleRGB11Receive = (asset: any) => {
 // The market owns RGB registration and deployment. These read-only checks
 // reuse its existing wallet APIs; no registration or deployment is started here.
 const requireRGB11PublicContract = async (asset: any, operation: OperationType, check: () => void) => {
-  const [listError, deployed] = await walletManager.getDeployedContractsInServer()
-  check()
-  if (listError) throw listError
-  const urls = deployed?.contractURLs || []
-  // Match the full canonical asset key and retain the SDK's AMM-first selection.
-  const url = urls.find((value: unknown) => typeof value === 'string' && value.endsWith(`_${asset.key}_amm.tc`)) ||
-    urls.find((value: unknown) => typeof value === 'string' && value.endsWith(`_${asset.key}_transcend.tc`))
-  if (!url) throw new Error(t('rgb11Transfer.crossLayerMarketRequired'))
-  const [statusError, result] = await walletManager.getDeployedContractStatus(url)
-  check()
-  if (statusError) throw statusError
-  const status = JSON.parse(result?.contractStatus || '{}')
-  const [contractChannel, contractAsset, contractType] = url.split('_')
-  const name = status.Contract?.assetName
-  const current = operation === 'deposit' ? status.currentBlockL1 : status.currentBlock
-  const enabled = operation === 'deposit' ? status.enableBlockL1 : status.enableBlock
-  if (contractAsset !== asset.key || status.channelAddr !== contractChannel || status.Contract?.contractType !== contractType ||
-      name?.Protocol !== 'rgb11' || name.Type !== 'f' || name.Ticker !== asset.ticker ||
-      !(status.status >= 100 && status.status < 200) ||
-      !Number.isSafeInteger(current) || !Number.isSafeInteger(enabled) || current < enabled) {
-    throw new Error(t('rgb11Transfer.crossLayerContractInactive'))
-  }
+  let chainKey = asset.key
   if (operation === 'deposit') {
     const contractId = typeof asset.contract_id === 'string' ? asset.contract_id.trim() : ''
     if (!contractId) throw new Error(t('rgb11Transfer.crossLayerContractIdMissing'))
@@ -369,9 +348,34 @@ const requireRGB11PublicContract = async (asset: any, operation: OperationType, 
     if (publicContract.contract_id !== asset.ticker || !publicContract.contract_consignment_base64) {
       throw new Error(t('rgb11Transfer.crossLayerMarketRequired'))
     }
-    const [verifyError] = await walletManager.verifyRGB11PublicContract(contractId, publicContract.contract_consignment_base64)
+    const [verifyError, verified] = await walletManager.verifyRGB11PublicContract(contractId, publicContract.contract_consignment_base64)
     check()
     if (verifyError) throw verifyError
+    chainKey = JSON.parse(verified?.result || '{}').asset_name
+    if (typeof chainKey !== 'string' || !/^rgb11:f:[a-z0-9-]+@[0-9a-f]{4}$/.test(chainKey)) {
+      throw new Error(t('rgb11Transfer.crossLayerMarketRequired'))
+    }
+  }
+  const [listError, deployed] = await walletManager.getDeployedContractsInServer()
+  check()
+  if (listError) throw listError
+  const urls = deployed?.contractURLs || []
+  const url = urls.find((value: unknown) => typeof value === 'string' && value.endsWith(`_${chainKey}_amm.tc`)) ||
+    urls.find((value: unknown) => typeof value === 'string' && value.endsWith(`_${chainKey}_transcend.tc`))
+  if (!url) throw new Error(t('rgb11Transfer.crossLayerMarketRequired'))
+  const [statusError, result] = await walletManager.getDeployedContractStatus(url)
+  check()
+  if (statusError) throw statusError
+  const status = JSON.parse(result?.contractStatus || '{}')
+  const [contractChannel, contractAsset, contractType] = url.split('_')
+  const name = status.Contract?.assetName
+  const current = operation === 'deposit' ? status.currentBlockL1 : status.currentBlock
+  const enabled = operation === 'deposit' ? status.enableBlockL1 : status.enableBlock
+  if (contractAsset !== chainKey || status.channelAddr !== contractChannel || status.Contract?.contractType !== contractType ||
+      name?.Protocol !== 'rgb11' || name.Type !== 'f' || `rgb11:f:${name.Ticker}` !== chainKey ||
+      !(status.status >= 100 && status.status < 200) ||
+      !Number.isSafeInteger(current) || !Number.isSafeInteger(enabled) || current < enabled) {
+    throw new Error(t('rgb11Transfer.crossLayerContractInactive'))
   }
   // Withdraw intentionally does not export a local L1 contract: an L2-only
   // holder uses the registered L2 ticker and the SDK's final transaction checks.
@@ -397,7 +401,8 @@ const openAssetOperation = async (type: OperationType, asset: any) => {
         throw new Error(t('rgb11Transfer.scopeChanged'))
       }
     }
-    if (asset.type !== 'f' || !/^rgb11:f:[0-9a-f]{64}$/.test(asset.key)) {
+    const assetKey = type === 'withdraw' ? /^rgb11:f:[a-z0-9-]+@[0-9a-f]{4}$/ : /^rgb11:f:[0-9a-f]{64}$/
+    if (asset.type !== 'f' || !assetKey.test(asset.key)) {
       throw new Error(t('rgb11Transfer.crossLayerFungibleOnly'))
     }
     const destination = type === 'splicing_in' ? channel.value?.address : address.value

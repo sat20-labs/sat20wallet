@@ -115,6 +115,7 @@ export async function runPwaPosCases(t, fixture) {
   const context = page.context()
   let channelId
   let publicRGBContractURL
+  let publicRGBKey
   let latestDeposit = fixture.resumeDeposit ? {
     funding: { txid: fixture.resumeDeposit.funding_txid },
     anchor: { txid: fixture.resumeDeposit.anchor_txid },
@@ -194,6 +195,7 @@ export async function runPwaPosCases(t, fixture) {
     }
     const tab = (await page.getByRole('tab', { selected: true }).innerText()).trim()
     assert.ok(['Bitcoin', 'SatoshiNet', 'Channel'].includes(tab), 'RGB asset selection requires a known source layer')
+    const expectedKey = tab === 'SatoshiNet' && publicRGBKey ? publicRGBKey : fixture.asset.key
     let channelLabel
     if (tab === 'Channel') {
       // Channel rows start with the canonical ticker, then metadata updates
@@ -213,11 +215,15 @@ export async function runPwaPosCases(t, fixture) {
           : (await import('/store/channel.ts')).useChannelStore()
       return store.rgb11List.filter(asset => asset.key === key)
         .map(({ key, ticker, label }) => ({ key, ticker, label }))
-    }, { key: fixture.asset.key, tab })
+    }, { key: expectedKey, tab })
     assert.equal(matches.length, 1, 'the source layer must contain exactly the issued RGB asset key')
     const asset = matches[0]
-    assert.equal(asset.key, fixture.asset.key)
-    assert.equal(asset.ticker, fixture.asset.ticker, 'display labels must not replace the canonical RGB ticker')
+    assert.equal(asset.key, expectedKey)
+    assert.equal(asset.ticker, expectedKey.split(':').at(-1))
+    const canonical = fixture.asset.genesisTicker
+      ? `rgb11:f:${fixture.asset.genesisTicker.toLowerCase()}@${fixture.asset.ticker.slice(-4)}`
+      : publicRGBKey
+    if (canonical) assert.equal(asset.label, canonical)
     const label = tab === 'Channel' ? channelLabel : asset.label
     assert.ok(typeof label === 'string' && label.trim(), 'the selected RGB asset must have a display label')
     const row = tab === 'Bitcoin'
@@ -252,9 +258,9 @@ export async function runPwaPosCases(t, fixture) {
     assert.equal(runtime?.Contract?.contractType, 'transcend.tc',
       'status must identify the exact Transcend contract template')
     assert.deepEqual(runtime?.Contract?.assetName, {
-      Protocol: 'rgb11', Type: 'f', Ticker: fixture.asset.ticker,
+      Protocol: 'rgb11', Type: 'f', Ticker: publicRGBKey.split(':').at(-1),
     }, 'status must identify the exact complete RGB11 asset')
-    assert.equal(url, `${runtime.channelAddr}_${fixture.asset.key}_transcend.tc`,
+    assert.equal(url, `${runtime.channelAddr}_${publicRGBKey}_transcend.tc`,
       'status URL must identify the exact channel, RGB11 asset, and contract template')
     assert.ok(Number.isSafeInteger(runtime.status), 'contract status must be an integer')
     assert.ok(Number.isSafeInteger(runtime.deployTime) && runtime.deployTime > 0,
@@ -500,8 +506,10 @@ export async function runPwaPosCases(t, fixture) {
   }
   const deposit = async (token, expectedNodes = 3) => {
     await selectMode('poolswap')
-    const key = token ? fixture.asset.key : '::'
-    const beforeAmount = await readL2Amount(key)
+    const key = token ? (publicRGBKey || fixture.asset.key) : '::'
+    const beforeAmount = publicRGBKey && token
+      ? await addressAmount('SatoshiNet', fixture.address, key)
+      : await readL2Amount(key)
     const beforeTotal = await readL2Total()
     const before = await control('snapshot')
     assert.deepEqual(before.l1.pending_txids, [])
@@ -535,6 +543,13 @@ export async function runPwaPosCases(t, fixture) {
     const expectedCredit = asInteger(token ? amounts.deposit_asset : amounts.deposit_btc)
     assert.equal(credited, expectedCredit, 'deposit credit must equal the user-confirmed amount; deposit service fee is zero')
     const creditedSats = outputs.reduce((sum, output) => sum + asInteger(output.value), 0n)
+    if (rgbCrossLayer && token) {
+      assert.equal(creditedSats, 0n, 'the public RGB Anchor must credit zero SatoshiNet sats')
+      const fundingTx = await readL1Transaction(funding.txid)
+      const carrierVout = Number(confirmed.anchor.funding_outpoint.split(':')[1])
+      assert.equal(asInteger(fundingTx.outs[carrierVout].value), 330n, 'the BTC RGB carrier must retain its 330 sats')
+      console.log(JSON.stringify({ rgbDepositValue: { anchor: confirmed.anchor.txid, bitcoin: '330', satsnet: '0' } }))
+    }
     await expect.poll(() => readL2Amount(key), pollOptions).toBe(beforeAmount + credited)
     await expect.poll(readL2Total, pollOptions).toBe(beforeTotal + creditedSats)
     await showTab('SatoshiNet')
@@ -601,7 +616,7 @@ export async function runPwaPosCases(t, fixture) {
       if (rgbCrossLayer && chain === 'Bitcoin') {
         await assertAssetVisible(rgbStateAmount(await rgbState(), fixture.asset.key))
       } else if (rgbCrossLayer && chain === 'SatoshiNet') {
-        const amount = await readL2Amount(fixture.asset.key)
+        const amount = await readL2Amount(publicRGBKey || fixture.asset.key)
         if (amount > 0n) await assertAssetVisible(amount)
       } else await assertAssetVisible(summaryAmount(summary, fixture.asset.key))
     }
@@ -931,11 +946,12 @@ export async function runPwaPosCases(t, fixture) {
   const withdraw = async token => {
     await selectMode('poolswap')
     const key = token ? fixture.asset.key : '::'
+    const l2Key = token ? (publicRGBKey || key) : key
     const amount = token ? (rgbCrossLayer ? asInteger(amounts.withdraw_asset) : 400n) : 4000n
     const before = await control('snapshot')
     const l1Before = await addressAmount('Bitcoin', fixture.address, key)
     const l1SatsBefore = await addressAmount('Bitcoin', fixture.address, '::')
-    const l2Before = await readL2Amount(key)
+    const l2Before = await readL2Amount(l2Key)
     const feeRate = asInteger(await page.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().btcFeeRate))
     let rgbPlainBeforeWithdraw
     let rgbWithdrawFee
@@ -947,7 +963,7 @@ export async function runPwaPosCases(t, fixture) {
         'browser fee rate must match the live SDK fee rate used to prepare the real budget')
       const invoke = JSON.stringify({
         action: 'withdraw',
-        param: JSON.stringify({ orderType: 7, assetName: key, amt: String(amount),
+        param: JSON.stringify({ orderType: 7, assetName: l2Key, amt: String(amount),
           feeRate: Number(feeRate), destAddr: fixture.address }),
       })
       const quote = await walletCall(page, 'getFeeForInvokeContract', publicRGBContractURL, invoke)
@@ -990,7 +1006,7 @@ export async function runPwaPosCases(t, fixture) {
         return rgbStateAmount(state, key)
       } : () => addressAmount('Bitcoin', fixture.address, key)
       await expect.poll(receivedAmount, pollOptions).toBe(l1Before + amount)
-      await expect.poll(() => readL2Amount(key), pollOptions).toBe(l2Before - amount)
+      await expect.poll(() => readL2Amount(l2Key), pollOptions).toBe(l2Before - amount)
       if (rgbCrossLayer) {
         const returned = rgbCarriers(key, await rgbState()).filter(row => row.outpoint.startsWith(`${funding.txid}:`))
         assert.equal(returned.reduce((total, carrier) => total + carrier.amount, 0n), amount,
@@ -1129,14 +1145,16 @@ export async function runPwaPosCases(t, fixture) {
     await expect(form.getByText('Asset issued. The contract consignment is shown for other wallets to import.', { exact: true }))
       .toBeVisible({ timeout: 180000 })
     const contractId = (await form.getByText('RGB Contract ID', { exact: true }).locator('..').locator('p').last().textContent()).trim()
-    const key = (await form.getByText('Full asset name', { exact: true }).locator('..').locator('p').last().textContent()).trim()
+    const displayedName = (await form.getByText('Full asset name', { exact: true }).locator('..').locator('p').last().textContent()).trim()
     assert.match(contractId, /^rgb:/)
-    assert.match(key, /^rgb11:f:[0-9a-f]{64}$/)
     const issued = await rgbState()
+    const key = issued.assets.find(asset => asset.contract_id === contractId)?.asset
+    assert.match(key, /^rgb11:f:[0-9a-f]{64}$/)
+    assert.equal(displayedName, `rgb11:f:${ticker.toLowerCase()}@${key.slice(-4)}`)
     assert.equal(issued.error_code, '')
     assert.equal(rgbStateAmount(issued, key), 1000n)
     await assertRGBProofs(key, 1000n)
-    fixture.asset = { key, type: 'RGB', ticker: key.split(':').at(-1) }
+    fixture.asset = { key, type: 'RGB', ticker: key.split(':').at(-1), genesisTicker: ticker }
     await form.getByRole('button', { name: 'Close', exact: true }).first().click()
     await expect(form).toBeHidden()
     return key
@@ -1224,6 +1242,7 @@ export async function runPwaPosCases(t, fixture) {
       await tickerSearch.fill(fixture.asset.ticker)
       const exactTickerOption = marketFrame.locator(`[role="option"][data-value="${fixture.asset.ticker}"]`)
       await expect(exactTickerOption).toBeVisible()
+      await expect(exactTickerOption).toHaveText(publicRGBKey)
       assert.equal(await exactTickerOption.getAttribute('data-value'), fixture.asset.ticker,
         'ticker option identity must match the complete RGB11 asset key suffix')
       await exactTickerOption.click()
@@ -1273,17 +1292,21 @@ export async function runPwaPosCases(t, fixture) {
           if (contract?.contractType === 'transcend.tc' &&
             assetName?.Protocol === 'rgb11' &&
             assetName?.Type === 'f' &&
-            assetName?.Ticker === fixture.asset.ticker) return { url, parsed }
+            assetKey(assetName) === publicRGBKey) return { url, parsed }
         }
         return null
       }
       await expect.poll(async () => Boolean(await findDeployed()), pollOptions).toBe(true)
       const deployed = await findDeployed()
       assert.ok(deployed?.url)
+      const registration = JSON.parse((await walletCall(page, 'verifyRGB11PublicContract',
+        tickerExt.contract_id, publicContract.contract_consignment_base64)).result)
+      assert.equal(registration.contract_id, publicContract.contract_id)
+      assert.equal(registration.asset_name, publicRGBKey)
       assert.equal(deployed.parsed.Contract.contractType, 'transcend.tc',
         'deployed contract status must identify the exact Transcend template')
       assert.deepEqual(deployed.parsed.Contract.assetName, {
-        Protocol: 'rgb11', Type: 'f', Ticker: fixture.asset.ticker,
+        Protocol: 'rgb11', Type: 'f', Ticker: publicRGBKey.split(':').at(-1),
       }, 'deployed Transcend status must identify the exact complete RGB11 asset')
       const deployedRuntime = await readPublicRGBTranscendStatus(deployed.url)
       assert.match(serviceFeeTxid, txidPattern)
@@ -1386,9 +1409,10 @@ export async function runPwaPosCases(t, fixture) {
 
   const publicRGBRoundTrip = async () => {
     const key = await issueCrossLayerRGB()
+    publicRGBKey = `rgb11:f:${fixture.asset.genesisTicker.toLowerCase()}@${fixture.asset.ticker.slice(-4)}`
     const initial = await assertRGBProofs(key, 1000n)
     const l1Before = rgbStateAmount(initial, key)
-    const l2Before = await readL2Amount(key)
+    const l2Before = await addressAmount('SatoshiNet', fixture.address, publicRGBKey)
     const channelBefore = await channelAmount(await assertReadyChannel(), key)
     assert.equal(l1Before + l2Before + channelBefore, 1000n,
       'the issued cross-layer fixture must account for its complete RGB supply before public deposit')
@@ -1402,7 +1426,7 @@ export async function runPwaPosCases(t, fixture) {
       'browser fee rate must match the rate used to prepare the real withdrawal budget')
     const quoteInvoke = JSON.stringify({
       action: 'withdraw',
-      param: JSON.stringify({ orderType: 7, assetName: key, amt: amounts.withdraw_asset,
+      param: JSON.stringify({ orderType: 7, assetName: publicRGBKey, amt: amounts.withdraw_asset,
         feeRate: Number(feeRate), destAddr: fixture.address }),
     })
     const feeQuote = await walletCall(page, 'getFeeForInvokeContract', publicRGBContractURL, quoteInvoke)
@@ -1414,9 +1438,13 @@ export async function runPwaPosCases(t, fixture) {
     const before = await control('snapshot')
     const deposited = await deposit(true)
     assert.equal(await addressAmount('Bitcoin', fixture.address, key), l1Before - depositAmount)
-    assert.equal(await readL2Amount(key), l2Before + depositAmount)
+    assert.equal(await readL2Amount(publicRGBKey), l2Before + depositAmount)
+    const tickerInfo = JSON.parse((await walletCall(page, 'getTickerInfo', publicRGBKey)).ticker)
+    assert.equal(assetKey(tickerInfo.name), publicRGBKey)
+    assert.equal(tickerInfo.displayname, publicRGBKey)
+    assert.equal(tickerInfo.contract_id, fixture.asset.ticker)
     assert.equal(await channelAmount(await readChannel(), key), channelBefore)
-    assert.equal(await addressAmount('Bitcoin', fixture.address, key) + await readL2Amount(key) + await channelAmount(await readChannel(), key), 1000n)
+    assert.equal(await addressAmount('Bitcoin', fixture.address, key) + await readL2Amount(publicRGBKey) + await channelAmount(await readChannel(), key), 1000n)
     const afterDeposit = await control('snapshot')
     assert.notDeepEqual(afterDeposit.l1.confirmed_txids, before.l1.confirmed_txids,
       'public Deposit must confirm its own real Bitcoin funding transaction')
@@ -1435,15 +1463,16 @@ export async function runPwaPosCases(t, fixture) {
 
     await withdraw(true)
     assert.equal(await addressAmount('Bitcoin', fixture.address, key), l1Before)
-    assert.equal(await readL2Amount(key), l2Before)
+    assert.equal(await readL2Amount(publicRGBKey), l2Before)
     assert.equal(await channelAmount(await readChannel(), key), channelBefore)
-    assert.equal(await addressAmount('Bitcoin', fixture.address, key) + await readL2Amount(key) + await channelAmount(await readChannel(), key), 1000n)
+    assert.equal(await addressAmount('Bitcoin', fixture.address, key) + await readL2Amount(publicRGBKey) + await channelAmount(await readChannel(), key), 1000n)
     await assertRGBProofs(key, l1Before)
     await assertWalletBalanceUI('Bitcoin', true)
-    console.log(JSON.stringify({ rgbPublicRoundTrip: { key, amount: String(depositAmount),
+    console.log(JSON.stringify({ rgbPublicRoundTrip: { key, chain_key: publicRGBKey, amount: String(depositAmount),
       l1_before: String(l1Before), l2_before: String(l2Before),
       l1_final: String(await addressAmount('Bitcoin', fixture.address, key)),
-      l2_final: String(await readL2Amount(key)) } }))
+      l2_final: String(await readL2Amount(publicRGBKey)) } }))
+    publicRGBKey = undefined
   }
 
   const continueConfirmedRGBDeposit = async () => {
@@ -1451,7 +1480,8 @@ export async function runPwaPosCases(t, fixture) {
     assert.equal(amounts.deposit_asset, continuation.amount)
     assert.equal(amounts.withdraw_asset, continuation.amount)
     publicRGBContractURL = continuation.contract_url
-    assert.equal(publicRGBContractURL, `${continuation.pool_address}_${key}_transcend.tc`)
+    publicRGBKey = publicRGBContractURL.split('_')[1]
+    assert.equal(publicRGBContractURL, `${continuation.pool_address}_${publicRGBKey}_transcend.tc`)
     const anchor = continuation.anchor
     assert.equal(anchor.funding_outpoint, `${continuation.funding_txid}:1`)
     const confirmed = await confirmedL2Transaction(anchor.txid)
@@ -1462,14 +1492,14 @@ export async function runPwaPosCases(t, fixture) {
       bitcoinAddress.toOutputScript(continuation.pool_address, bitcoinNetwork).toString('hex'))
     const snapshot = await control('snapshot')
     assert.deepEqual(snapshot.l1.pending_txids, [])
-    await expect.poll(() => readL2Amount(key), pollOptions).toBe(100n)
+    await expect.poll(() => readL2Amount(publicRGBKey), pollOptions).toBe(100n)
     await expect.poll(() => addressAmount('Bitcoin', fixture.address, key), pollOptions).toBe(900n)
     await assertRGBProofs(key, 900n)
     assert.equal(channelAmount(await readChannel(), key), 0n)
     await waitForPublicRGBTranscendActivation(publicRGBContractURL, true)
     const withdrawn = await withdraw(true)
     assert.equal(await addressAmount('Bitcoin', fixture.address, key), 1000n)
-    assert.equal(await readL2Amount(key), 0n)
+    assert.equal(await readL2Amount(publicRGBKey), 0n)
     assert.equal(channelAmount(await readChannel(), key), 0n)
     await assertRGBProofs(key, 1000n)
     const consumed = withdrawn.tx.ins.map(input => `${Buffer.from(input.hash).reverse().toString('hex')}:${input.index}`)

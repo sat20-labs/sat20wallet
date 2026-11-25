@@ -13,7 +13,7 @@
           {{ t('pwaUi.logs.rgbSend') }} · {{ rgbStatus(transfer) }}
         </summary>
         <div class="mt-3 space-y-2 border-t border-border pt-3 text-sm">
-          <p v-for="(recipient, index) in transfer.recipients" :key="index">{{ recipient.amount.amount }} {{ recipient.amount.asset }}</p>
+          <p v-for="(recipient, index) in transfer.recipients" :key="index">{{ recipient.amount.amount }} {{ assetNameLabel(recipient.amount.asset, rgbAssets) }}</p>
           <p class="break-all font-mono text-xs">{{ transfer.id }}</p>
           <p v-if="transfer.error_code" class="break-words text-destructive">{{ transfer.error_code }}</p>
           <p v-if="transfer.status === 'pending_chain'" class="text-xs text-muted-foreground">{{ t('rgb11Transfer.taskChainHint') }}</p>
@@ -34,7 +34,7 @@
           <span class="mt-1 block text-xs font-normal text-muted-foreground">{{ new Date(record.updated_at).toLocaleString() }}</span>
         </summary>
         <div class="mt-3 space-y-2 border-t border-border pt-3 text-sm">
-          <p v-for="(amount,index) in record.amounts" :key="index">{{ amount.amount }} {{ amount.asset === '::' ? 'sats' : amount.asset }}</p>
+          <p v-for="(amount,index) in record.amounts" :key="index">{{ amount.amount }} {{ amount.asset === '::' ? 'sats' : assetNameLabel(amount.asset, rgbAssets) }}</p>
           <dl v-if="record.contract" class="space-y-3">
             <div v-if="record.contract.url">
               <dt class="text-xs text-muted-foreground">{{ t('pwaUi.logs.contractId') }}</dt>
@@ -117,11 +117,12 @@ import walletManager from '@/utils/sat20'
 import { generateMempoolUrl } from '@/utils'
 import { useGlobalStore, useWalletStore } from '@/store'
 import { Chain, Network } from '@/types/index'
-import type { ContractLogResult, OperationView, RGBTransferView } from '@/utils/walletViews'
+import { assetNameLabel, type ContractLogResult, type OperationView, type RGBAssetView, type RGBTransferView } from '@/utils/walletViews'
 const {t, te} = useI18n()
 const walletStore = useWalletStore()
 const globalStore = useGlobalStore()
 const records = ref<OperationView[]>([])
+const rgbAssets = ref<RGBAssetView[]>([])
 const transfers = ref<RGBTransferView[]>([])
 const results = ref<Partial<Record<string, ContractLogResult | { status: 'loading' }>>>({})
 const rows = computed(() => records.value.map(record => ({
@@ -204,6 +205,7 @@ const loadRecords = async () => {
   const [logs, rgb] = await Promise.all([getOperationLogs(), walletManager.getRGB11View().catch(() => undefined)])
   records.value = logs.filter(record => !['unlock_wallet', 'lock_wallet', 'switch_account'].includes(record.kind))
   transfers.value = rgb?.[1]?.transfers || []
+  rgbAssets.value = rgb?.[1]?.assets || []
   results.value = {}
   for (const record of records.value) {
     if (openRows.has(record.id)) void readResult(record)

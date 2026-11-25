@@ -1,14 +1,14 @@
 {
   "version": "0.1.46",
-  "buildId": "20261124T121641Z",
-  "commit": "b0912be09c4b",
-  "releaseNotes": "RGB official 0.11.1 history validation",
+  "buildId": "20261125T145045Z",
+  "commit": "4489360d5673",
+  "releaseNotes": "Switch existing subaccounts and wallets without backup prompts",
   "forceUpdate": false,
   "minVersion": "0.1.0",
-  "publishedAt": "2026-11-24T12:16:41.069Z",
+  "publishedAt": "2026-11-25T14:50:45.400Z",
   "serviceWorker": {
     "schemaVersion": 1,
-    "releaseId": "0.1.46-20261124T121641Z",
+    "releaseId": "0.1.46-20261125T145045Z",
     "killSwitch": false
   }
 }

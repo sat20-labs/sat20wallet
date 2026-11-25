@@ -42,13 +42,29 @@ func (p *Manager) sendRGB11FromChannelAtHeight(local common.Wallet, dest []*Send
 	if name == nil || name.Protocol != rgb11wallet.Protocol {
 		return "", 0, rgb11wallet.ErrInvalidRGB11Asset
 	}
+	localAsset, err := p.RGB11LocalAsset(name)
+	if err != nil {
+		return "", 0, err
+	}
+	if *localAsset != *name {
+		localDest := make([]*SendAssetInfo, len(dest))
+		for i, recipient := range dest {
+			if recipient == nil || recipient.AssetName == nil || *recipient.AssetName != *name {
+				return "", 0, ErrRGB11PublicIdentityMismatch
+			}
+			mapped := *recipient
+			mapped.AssetName = localAsset
+			localDest[i] = &mapped
+		}
+		dest = localDest
+	}
 	ctx, err := p.newRGB11ChannelSendContext(local, channelID, reason, moreData, payFeeByLocal)
 	if err != nil {
 		return "", 0, err
 	}
 	ctx.maxConfirmedInputHeight = maxConfirmedInputHeight
 	ctx.excludeRecentBlock = excludeRecentBlock
-	tx, fee, err := p.sendRGB11AssetsWithChannel(local, dest, name, feeRate, nil, ctx)
+	tx, fee, err := p.sendRGB11AssetsWithChannel(local, dest, localAsset, feeRate, nil, ctx)
 	if tx == nil {
 		return "", fee, err
 	}

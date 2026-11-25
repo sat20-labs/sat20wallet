@@ -2,7 +2,7 @@
   <Dialog :open="isOpen" @update:open="handleOpenChange">
     <DialogContent class="max-h-[calc(100dvh_-_2rem)] w-[calc(100%_-_2rem)] max-w-md grid-cols-[minmax(0,1fr)] gap-4 overflow-y-auto rounded-xl bg-background"
       @escape-key-down="preventDismiss" @interact-outside="preventDismiss">
-      <DialogHeader><DialogTitle>{{ t('rgb11Invoice.title') }}</DialogTitle><DialogDescription class="break-words">{{ asset?.label || asset?.contract_id }}</DialogDescription></DialogHeader>
+      <DialogHeader><DialogTitle>{{ t('rgb11Invoice.title') }}</DialogTitle><DialogDescription class="break-words">{{ asset?.label || 'RGB' }}</DialogDescription></DialogHeader>
       <div class="space-y-3">
         <RGB11InvoiceGuide v-if="(receive?.transport || transport) === 'manual'" />
         <Label v-if="requests.length" :for="fieldId + '-saved'">{{ t('rgb11Invoice.savedRequests') }}</Label>

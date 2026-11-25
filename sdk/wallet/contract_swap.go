@@ -2487,9 +2487,8 @@ func (p *SwapContractRuntime) updateContract_deposit(
 		expectedAmt = inAmt.Clone()
 		remainingAmt = inAmt.Clone()
 		if assetName.Protocol == "rgb11" && fromL1 {
-			// RGB11 anchors map the full carrier. Bitcoin value is not a fee
-			// denominated in RGB tokens and belongs to the signed beneficiary.
-			remainingValue = inValue
+			// The BTC carrier is retained as input evidence. Only the RGB
+			// amount crosses to SatoshiNet, and the carrier is not a fee.
 			serviceFee = 0
 		}
 	}
@@ -4352,15 +4351,19 @@ func (p *SwapContractRuntime) genDepositInfo(height int) *DealInfo {
 			maxHeight = max(maxHeight, h)
 			itemIDs = appendDealItemID(itemIDs, item.Id)
 
+			value := item.RemainingValue
+			if p.rgb11PublicContract() {
+				value = 0
+			}
 			sendInfoMap[item.InUtxo] = &SendAssetInfo{
 				Address:   item.Address,
-				Value:     item.RemainingValue,
+				Value:     value,
 				AssetName: assetName,
 				AssetAmt:  item.RemainingAmt.Clone(),
 			}
 
 			totalAmt = totalAmt.Add(item.RemainingAmt)
-			totalValue += item.RemainingValue
+			totalValue += value
 		}
 	}
 
@@ -4417,7 +4420,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_deposit(dealInfo *DealInfo) {
 	p.TotalOutputSats += dealInfo.TotalValue + dealInfo.Fee
 
 	url := p.URL()
-	for inUtxo := range dealInfo.SendInfo {
+	for inUtxo, send := range dealInfo.SendInfo {
 		item, ok := p.history[inUtxo]
 		if ok {
 			txId := dealInfo.SendTxIdMap[inUtxo]
@@ -4435,7 +4438,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_deposit(dealInfo *DealInfo) {
 			// 更新对应数据
 			item.OutTxId = txId
 			item.OutAmt = item.RemainingAmt
-			item.OutValue = item.RemainingValue
+			item.OutValue = send.Value
 			item.RemainingAmt = nil
 			item.RemainingValue = 0
 			item.Done = ITEM_STATUS_DEALT
@@ -5879,16 +5882,20 @@ func (p *SwapContractRuntime) genDepositInfoFromResultTx(tx *swire.MsgTx, detail
 			continue
 		}
 		maxHeight = max(maxHeight, h)
+		value := item.RemainingValue
+		if p.rgb11PublicContract() {
+			value = data.Value
+		}
 		sendInfoMap[item.InUtxo] = &SendAssetInfo{
 			Address:   item.Address,
-			Value:     item.RemainingValue,
+			Value:     value,
 			AssetName: p.GetAssetName(),
 			AssetAmt:  item.RemainingAmt.Clone(),
 		}
 		sendTxIdMap[item.InUtxo] = tx.TxID()
 		itemIDs = appendDealItemID(itemIDs, item.Id)
 		totalAmt = totalAmt.Add(item.RemainingAmt)
-		totalValue += item.RemainingValue
+		totalValue += value
 		found = true
 		break
 	}
@@ -6014,9 +6021,6 @@ func (p *SwapContractRuntime) genDepositInfoFromAnchorTxs(req *wwire.RemoteSignM
 						return nil, fmt.Errorf("%s should be only one asset", tx.TxID())
 					}
 					value := indexer.GetBindingSatNum(item.RemainingAmt, STPAssetBindingSat(p.GetAssetNameV2()))
-					if p.rgb11PublicContract() {
-						value = item.RemainingValue
-					}
 					if value != anchorData.Value {
 						return nil, fmt.Errorf("%s invalid value %d, expected %d", tx.TxID(), anchorData.Value, value)
 					}
@@ -6029,16 +6033,20 @@ func (p *SwapContractRuntime) genDepositInfoFromAnchorTxs(req *wwire.RemoteSignM
 					}
 				}
 
+				value := item.RemainingValue
+				if p.rgb11PublicContract() {
+					value = anchorData.Value
+				}
 				sendInfoMap[item.InUtxo] = &SendAssetInfo{
 					Address:   item.Address,
-					Value:     item.RemainingValue,
+					Value:     value,
 					AssetName: assetName,
 					AssetAmt:  item.RemainingAmt.Clone(),
 				}
 				sendTxIdMap[item.InUtxo] = tx.TxID()
 				itemIDs = appendDealItemID(itemIDs, item.Id)
 				totalAmt = totalAmt.Add(item.RemainingAmt)
-				totalValue += item.RemainingValue
+				totalValue += value
 				bFound = true
 			}
 		}

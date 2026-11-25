@@ -108,7 +108,7 @@
         <div><dt>{{ $t('tools.txConfirm.account') }}</dt><dd>{{ review.accountIndex }}</dd></div>
         <div><dt>{{ $t('tools.txConfirm.sourceAddress') }}</dt><dd class="break-all">{{ review.sourceAddress }}</dd></div>
         <div><dt>{{ $t('tools.txConfirm.network') }}</dt><dd>Bitcoin / {{ review.network }}</dd></div>
-        <div><dt>{{ $t('splitAsset.assetKey') }}</dt><dd>{{ review.assetName === '::' ? 'BTC (sats)' : review.assetName }}</dd></div>
+        <div><dt>{{ $t('splitAsset.assetKey') }}</dt><dd>{{ review.assetName === '::' ? 'BTC (sats)' : assetApprovalLabel(review.assetName, rgb11.state.assets) }}</dd></div>
         <div><dt>{{ $t('splitAsset.amountPerOutput') }}</dt><dd>{{ review.amt }}{{ review.assetName === '::' ? ' sats' : '' }}</dd></div>
         <div><dt>{{ $t('splitAsset.repeat') }}</dt><dd>{{ review.n }}</dd></div>
         <div><dt>{{ $t('splitAsset.requestedTotal') }}</dt><dd>{{ review.total }}{{ review.assetName === '::' ? ' sats' : '' }}</dd></div>
@@ -131,7 +131,8 @@ import { ref, onBeforeUnmount, reactive, computed, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
 import { storeToRefs } from 'pinia';
-import { useWalletStore, useGlobalStore } from '@/store';
+import { useWalletStore, useGlobalStore, useRGB11Store } from '@/store';
+import { assetApprovalLabel } from '@/utils/walletViews';
 import { useL1Assets } from '@/composables/hooks/useL1Assets';
 import { assertWalletIdentityReady, subscribeWalletIdentity } from '@/lib/identity-boundary';
 import { useToast } from '@/components/ui/toast-new';
@@ -161,6 +162,7 @@ const errorMessage = ref<string | null>(null);
 // Store and Hooks
 const walletStore = useWalletStore();
 const globalStore = useGlobalStore();
+const rgb11 = useRGB11Store();
 const { address } = storeToRefs(walletStore);
 const { refreshL1Assets } = useL1Assets();
 const { t } = useI18n();

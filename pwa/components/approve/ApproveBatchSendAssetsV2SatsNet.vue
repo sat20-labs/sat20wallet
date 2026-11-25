@@ -9,7 +9,7 @@
         <div class="rounded-md border p-4 space-y-3 bg-muted/50">
           <div>
             <p class="text-sm font-medium">
-              {{ $t('batchSendAssetsV2.assetName') }}: <strong>{{ assetDisplayName }}</strong>
+              {{ $t('batchSendAssetsV2.assetName') }}: <strong class="break-all">{{ assetDisplayName }}</strong>
             </p>
           </div>
           <div>
@@ -57,13 +57,14 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
-import { ref, computed, watch } from 'vue'
+import { ref, computed } from 'vue'
 import { storeToRefs } from 'pinia'
 import { z } from 'zod'
 import LayoutApprove from '@/components/layout/LayoutApprove.vue'
-import { useWalletStore } from '@/store'
+import { useRGB11Store, useWalletStore } from '@/store'
 import { useToast } from '@/components/ui/toast-new'
 import sat20 from '@/utils/sat20'
+import { assetApprovalLabel } from '@/utils/walletViews'
 
 // Define Zod schema for validation
 const batchSendAssetsV2Schema = computed(() => z.object({
@@ -86,12 +87,13 @@ const props = defineProps<Props>()
 const emit = defineEmits(['confirm', 'cancel'])
 
 const walletStore = useWalletStore()
+const rgb11 = useRGB11Store()
 const { toast } = useToast()
 
 const loading = ref(false)
 const errorMessage = ref<string | null>(null)
 
-const assetDisplayName = ref<string>(props.data.assetName)
+const assetDisplayName = computed(() => assetApprovalLabel(props.data.assetName, rgb11.state.assets))
 
 // Computed property to check data validity
 const isValidData = computed(() => {
@@ -112,13 +114,6 @@ const totalAmount = computed(() => {
     return '0'
   }
 })
-
-// Watch for asset name changes
-watch(() => props.data.assetName, (newAssetName) => {
-  if (newAssetName) {
-    assetDisplayName.value = newAssetName
-  }
-}, { immediate: true })
 
 const validateData = (): boolean => {
   const result = batchSendAssetsV2Schema.value.safeParse(props.data)

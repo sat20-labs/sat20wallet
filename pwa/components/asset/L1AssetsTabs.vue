@@ -44,7 +44,7 @@
               {{ $t(task.needs_receipts ? 'rgb11Transfer.taskReceiptHint' : 'rgb11Transfer.taskResumeHint') }}
             </p>
             <p class="break-all font-mono text-muted-foreground">{{ task.id }}</p>
-            <p v-for="(recipient, index) in task.recipients" :key="index" class="break-all">{{ recipient.amount.amount }} · {{ recipient.amount.asset }}</p>
+            <p v-for="(recipient, index) in task.recipients" :key="index" class="break-all">{{ recipient.amount.amount }} · {{ assetNameLabel(recipient.amount.asset, rgb11Store.state.assets) }}</p>
             <p v-if="task.tx_id" class="break-all font-mono text-muted-foreground">{{ task.tx_id }}</p>
             <p v-if="task.error_code" class="break-words text-red-400">{{ task.error_code }}</p>
             <Button size="sm" variant="outline" @click="resumeRGB11Task(task)">
@@ -55,7 +55,7 @@
         <details v-if="exportableTransfers.length" class="space-y-2">
           <summary class="cursor-pointer font-medium">{{ $t('rgb11Transfer.completedFiles') }}</summary>
           <div v-for="task in exportableTransfers" :key="task.id" class="space-y-2 rounded border border-zinc-700 p-2">
-            <p v-for="(recipient, index) in task.recipients" :key="index" class="break-all">{{ recipient.amount.amount }} · {{ recipient.amount.asset }}</p>
+            <p v-for="(recipient, index) in task.recipients" :key="index" class="break-all">{{ recipient.amount.amount }} · {{ assetNameLabel(recipient.amount.asset, rgb11Store.state.assets) }}</p>
             <p class="break-all font-mono text-muted-foreground">{{ task.tx_id || task.id }}</p>
             <Button size="sm" variant="outline" @click="resumeRGB11Task(task)">{{ $t('rgb11Transfer.viewTransfer') }}</Button>
           </div>
@@ -80,9 +80,6 @@
               <div v-if="asset.protocol === 'rgb11' && asset.display_name && asset.display_name !== asset.label"
                 class="truncate text-xs text-zinc-400" :title="asset.display_name">
                 {{ asset.display_name }}
-              </div>
-              <div v-if="asset.protocol === 'rgb11' && asset.canonical_name" class="break-all font-mono text-[10px] leading-4 text-zinc-500">
-                {{ $t('rgb11Transfer.assetId') }}: {{ asset.canonical_name }}
               </div>
               <button v-if="asset.protocol === 'rgb11' && asset.contract_id" type="button" aria-haspopup="dialog"
                 class="rounded-sm py-1 text-left font-mono text-[11px] leading-4 text-primary underline underline-offset-2 break-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
@@ -195,6 +192,7 @@ import { generateMempoolUrl, formatLargeNumber } from '@/utils'
 import { useGlobalStore } from '@/store/global'
 import walletManager from '@/utils/sat20'
 import type { RGBAssetView, RGBTransferView } from '@/utils/walletViews'
+import { assetNameLabel } from '@/utils/walletViews'
 import { useI18n } from 'vue-i18n'
 // 类型定义
 interface Asset {

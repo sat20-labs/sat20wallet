@@ -14,6 +14,7 @@ import (
 	"github.com/sat20-labs/satoshinet/anchortx/nativeproof"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
+	dkvs "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -52,9 +53,6 @@ func (p *Manager) validateRGB11DepositAnchor(ctx context.Context, contract Contr
 	if err != nil {
 		return err
 	}
-	if !bytes.Equal(source.PublicProof, material) {
-		return fmt.Errorf("RGB11 anchor changed the authenticated source proof")
-	}
 	var result *nativeproof.Result
 	if mode == nativeproof.Historical {
 		// Only the canonical-anchor replay below uses this path. It verifies
@@ -66,10 +64,33 @@ func (p *Manager) validateRGB11DepositAnchor(ctx context.Context, contract Contr
 	if err != nil {
 		return err
 	}
-	if len(data.Assets) != 1 || data.Assets[0].Name != result.Asset.Name ||
+	name := *contract.GetAssetName()
+	if name != result.Asset.Name {
+		proof, err := nativeproof.Decode(material)
+		if err != nil {
+			return err
+		}
+		id, err := dkvs.VerifyRGB11Name(proof.NameRecord, name.Ticker)
+		if err != nil || id != result.Asset.Name.Ticker {
+			return ErrRGB11PublicIdentityMismatch
+		}
+		material, err = nativeproof.BuildRGB11(proof.Consignment, proof.Reveals)
+		if err != nil {
+			return err
+		}
+	}
+	if !bytes.Equal(source.PublicProof, material) {
+		return fmt.Errorf("RGB11 anchor changed the authenticated source proof")
+	}
+	if len(data.Assets) != 1 || data.Assets[0].Name != name ||
 		data.Assets[0].BindingSat != 0 || data.Assets[0].Amount.Precision != result.Asset.Amount.Precision ||
-		data.Assets[0].Amount.Cmp(&result.Asset.Amount) != 0 || data.Value != result.Value {
+		data.Assets[0].Amount.Cmp(&result.Asset.Amount) != 0 {
 		return fmt.Errorf("RGB11 anchor invoice must map the full canonical source")
+	}
+	// A new public anchor maps only RGB. Historical replay checks the
+	// signed amount of the already confirmed anchor against its BTC source.
+	if data.Value != 0 && (mode != nativeproof.Historical || data.Value != result.Value) {
+		return fmt.Errorf("invalid RGB11 anchor invoice value %d", data.Value)
 	}
 	raw, err := p.GetDB().Read(rgb11DepositKey("receive", data.Utxo))
 	if err != nil {
@@ -92,8 +113,8 @@ func (p *Manager) validateRGB11DepositAnchor(ctx context.Context, contract Contr
 		return err
 	}
 	output := tx.TxOut[0]
-	if !bytes.Equal(output.PkScript, script) || output.Value != result.Value || len(output.Assets) != 1 ||
-		output.Assets[0].Name != result.Asset.Name || output.Assets[0].BindingSat != 0 ||
+	if !bytes.Equal(output.PkScript, script) || output.Value != data.Value || len(output.Assets) != 1 ||
+		output.Assets[0].Name != name || output.Assets[0].BindingSat != 0 ||
 		output.Assets[0].Amount.Precision != result.Asset.Amount.Precision || output.Assets[0].Amount.Cmp(&result.Asset.Amount) != 0 {
 		return fmt.Errorf("RGB11 deposit anchor changed the customer's signed recipient or quantity")
 	}
@@ -188,20 +209,33 @@ func (p *Manager) CreateRGB11DepositAnchor(ctx context.Context, contract Contrac
 	if err != nil {
 		return nil, err
 	}
+	material := source.PublicProof
+	mappedAsset := validated.Asset
+	if mappedAsset.Name != assetName.AssetName {
+		record, id, err := p.readRGB11Name(assetName.Ticker)
+		if err != nil || id != validated.Asset.Name.Ticker {
+			return nil, ErrRGB11PublicIdentityMismatch
+		}
+		material, err = nativeproof.WithRGB11Name(material, record)
+		if err != nil {
+			return nil, err
+		}
+		mappedAsset.Name = assetName.AssetName
+	}
 	destScript, err := GetPkScriptFromAddress(destAddr)
 	if err != nil {
 		return nil, err
 	}
 	script, err := sindexer.StandardAnchorScriptWithSig(output.OutPointStr, contract.GetRedeemScript(),
-		validated.Value, swire.TxAssets{validated.Asset}, nil)
+		0, swire.TxAssets{mappedAsset}, nil)
 	if err != nil {
 		return nil, err
 	}
 	tx := swire.NewMsgTx(swire.TxVersion)
 	tx.AddTxIn(&swire.TxIn{PreviousOutPoint: *swire.NewOutPoint(&chainhash.Hash{}, swire.AnchorTxOutIndex),
 		Sequence: swire.AnchorTxOutIndex, SignatureScript: script})
-	tx.AddTxOut(swire.NewTxOut(validated.Value, swire.TxAssets{validated.Asset}, destScript))
-	metadata := fmt.Sprintf("%s-%s-%d-0", ticker.AssetName.String(), ticker.MaxSupply, ticker.Divisibility)
+	tx.AddTxOut(swire.NewTxOut(0, swire.TxAssets{mappedAsset}, destScript))
+	metadata := fmt.Sprintf("%s-%s-%d-0", mappedAsset.Name.String(), ticker.MaxSupply, ticker.Divisibility)
 	for _, marker := range []struct {
 		kind int
 		data []byte
@@ -219,7 +253,7 @@ func (p *Manager) CreateRGB11DepositAnchor(ctx context.Context, contract Contrac
 	if len(memo) != 0 {
 		tx.AddTxOut(swire.NewTxOut(0, nil, memo))
 	}
-	if err := sindexer.SetNativeAssetProof(tx, source.PublicProof); err != nil {
+	if err := sindexer.SetNativeAssetProof(tx, material); err != nil {
 		return nil, err
 	}
 	if _, err := p.SignAnchorTx(tx, contract.GetRuntimeBase().GetLocalWallet().SignMessage); err != nil {

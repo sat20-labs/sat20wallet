@@ -324,7 +324,7 @@ export function usePwaDappBridge(iframeWindow: () => Window | null, currentUrl: 
       return result.assets.flatMap(info => {
         const [protocol, type, ticker] = info.asset.split(':')
         return protocol === 'rgb11' && type === 'f' && /^[0-9a-f]{64}$/.test(ticker)
-          ? [{ ticker, displayName: info.name || ticker }] : []
+          ? [{ ticker, displayName: info.canonical_name || 'RGB' }] : []
       })
     }
 

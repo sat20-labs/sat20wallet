@@ -120,7 +120,6 @@ import { sendAccountsChangedEvent } from '@/lib/utils'
 import { useNameManager } from '@/composables/useNameManager'
 import { useDebounceFn } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
-import { confirmPendingBackupRisk } from '@/utils/pendingBackupRisk'
 
 const router = useRouter()
 const { t } = useI18n()
@@ -236,7 +235,6 @@ async function createAccount() {
 // 创建防抖的切换账户函数
 const debouncedSelectAccount = useDebounceFn(async (account: WalletAccountWithDisplay) => {
   try {
-    if (!await confirmPendingBackupRisk(key => t(key))) return
     await walletStore.switchToAccount(account.index)
     toast({
       title: t('walletComponents.success'),

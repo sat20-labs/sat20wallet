@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "releaseId": "0.1.46-20261124T121641Z",
+  "releaseId": "0.1.46-20261125T145045Z",
   "assets": [
     {
       "role": "go-runtime",
@@ -18,8 +18,8 @@
       "mimeTypes": [
         "application/wasm"
       ],
-      "size": 40288592,
-      "sha256": "0281c086e8769c33b54d733559af0aecf18c3b3aa8c7a1f375a590b5b4c7a961"
+      "size": 40329766,
+      "sha256": "b8baa3393fbd95300f1df6547ff3950b814a9fde4c385ab7bf2394f70a90e94a"
     }
   ]
 }

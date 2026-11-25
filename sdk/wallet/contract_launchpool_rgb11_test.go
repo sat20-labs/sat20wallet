@@ -103,7 +103,11 @@ func TestRGB11LaunchImportFailure(t *testing.T) {
 		bytes.Contains(fixed, []byte("offsets")) {
 		t.Fatal("genesis journal lost RGB11 source facts or leaked ordinal offsets")
 	}
-	for _, other := range [][]byte{rgb11LaunchPoolKey("asset", record.Contract.AssetName.String()), rgb11LaunchPoolKey("source", issuancePoint)} {
+	localAsset := record.Source.Assets[0].Name
+	if record.Contract.AssetName.Ticker != "pool@"+localAsset.Ticker[len(localAsset.Ticker)-4:] {
+		t.Fatal("launchpool ticker does not match the fixed genesis")
+	}
+	for _, other := range [][]byte{rgb11LaunchPoolKey("asset", localAsset.String()), rgb11LaunchPoolKey("source", issuancePoint)} {
 		raw, err := database.Read(other)
 		if err != nil || !bytes.Equal(raw, fixed) {
 			t.Fatalf("issuance indexes were not committed together: %v", err)
@@ -124,7 +128,7 @@ func TestRGB11LaunchImportFailure(t *testing.T) {
 	if err != nil || !bytes.Equal(raw, fixed) {
 		t.Fatalf("retry rewrote the fixed genesis: %v", err)
 	}
-	balance, err := manager.GetRGB11AssetBalance(&recovered.AssetName)
+	balance, err := manager.GetRGB11AssetBalance(&localAsset)
 	if err != nil || balance.String() != "400000" {
 		t.Fatalf("recovered NIA supply was not imported: %s: %v", balance, err)
 	}
@@ -166,12 +170,12 @@ func TestRGB11LaunchFixedAnchor(t *testing.T) {
 	database := &rgb11LaunchWriteFailureDB{KVDB: db, fail: true}
 	pool := NewLaunchPoolContractRuntime(&Manager{db: database})
 	pool.LaunchPoolContract = *rgb11LaunchTestContent()
-	pool.AssetName = indexer.AssetName{Protocol: rgb11wallet.Protocol, Type: indexer.ASSET_TYPE_FT, Ticker: strings.Repeat("a", 64)}
+	pool.AssetName = indexer.AssetName{Protocol: rgb11wallet.Protocol, Type: indexer.ASSET_TYPE_FT, Ticker: "pool@aaaa"}
 	pool.RGBPrecision, pool.RGBGenesisHash, pool.RGBSourcePoint = 2, strings.Repeat("b", 64), strings.Repeat("c", 64)+":0"
 	pool.ChannelAddr = "rgb11-launchpool-fixed-anchor"
 	tx := swire.NewMsgTx(swire.TxVersion)
 	tx.AddTxIn(&swire.TxIn{PreviousOutPoint: swire.OutPoint{Index: swire.AnchorTxOutIndex}, SignatureScript: []byte("signed fixed invoice")})
-	tx.AddTxOut(swire.NewTxOut(330, swire.TxAssets{{Name: pool.AssetName, Amount: *indexer.NewDecimal(400_000, 2)}}, []byte{0x51}))
+	tx.AddTxOut(swire.NewTxOut(0, swire.TxAssets{{Name: pool.AssetName, Amount: *indexer.NewDecimal(400_000, 2)}}, []byte{0x51}))
 	if err := pool.saveRGB11LaunchAnchor(tx); !errors.Is(err, errRGB11SettlementWrite) {
 		t.Fatalf("anchor persistence failure was hidden: %v", err)
 	}

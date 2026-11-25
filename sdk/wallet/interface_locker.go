@@ -3,6 +3,7 @@ package wallet
 import (
 	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -23,9 +24,23 @@ func (p *Manager) GetTickerInfoV2(assetName string) *indexer.TickerInfo {
 		return nil
 	}
 
+	if asset.Protocol == rgb11wallet.Protocol {
+		info := p.getTickerInfo(asset)
+		if info == nil || len(info.Content) == 0 {
+			return info
+		}
+		var ext rgb11wallet.TickerExt
+		if json.Unmarshal(info.Content, &ext) != nil {
+			return info
+		}
+		detail := *info
+		detail.ContractID = asset.Ticker
+		detail.DisplayName = rgb11DisplayName(*asset, ext.Ticker)
+		return &detail
+	}
 	// Public queries include changing mint totals. Internal construction keeps
-	// its metadata cache; RGB11 remains locally validated rather than indexed.
-	if asset.Protocol == rgb11wallet.Protocol || asset.String() == ASSET_PLAIN_SAT.String() ||
+	// its metadata cache.
+	if asset.String() == ASSET_PLAIN_SAT.String() ||
 		asset.String() == indexer.ASSET_ALL_SAT.String() {
 		return p.getTickerInfo(asset)
 	}

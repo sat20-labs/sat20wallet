@@ -149,6 +149,13 @@ func (p *Manager) DeployContract_Remote(templateName, contractContent string,
 		return "", 0, "", err
 	}
 	if templateName == TEMPLATE_CONTRACT_TRANSCEND {
+		if name := contract.GetAssetName(); name.Protocol == "rgb11" {
+			registered, err := p.RGB11ChainAsset(name, true)
+			if err != nil {
+				return "", 0, "", err
+			}
+			*name = *registered
+		}
 		if err := p.requireRGB11PublicRegistration(contract.GetAssetName()); err != nil {
 			return "", 0, "", err
 		}
@@ -616,6 +623,13 @@ func (p *Manager) DepositWithContract(destAddr string, assetName string, amt str
 	// 确保sln在线
 	if !p.checkSuperNodeStatus() {
 		return "", fmt.Errorf("peer is offline")
+	}
+	if asset := ParseAssetString(assetName); asset != nil && asset.Protocol == "rgb11" {
+		registered, err := p.RGB11ChainAsset(asset, false)
+		if err != nil {
+			return "", err
+		}
+		assetName = registered.String()
 	}
 
 	// 检查是否有对应的amm合约，如果存在，通过该合约处理资产进出

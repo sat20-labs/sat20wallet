@@ -50,33 +50,21 @@
           </div>
 
           <div class="flex justify-end gap-2 mt-2">
-            <!-- Lightning 模式按钮 -->
-            <template v-if="mode === 'lightning'">
-              <Button v-if="asset.protocol !== 'rgb11'" size="sm" variant="outline" class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
-                @click="$emit('send', asset)">
-                <Icon icon="lucide:send" class="w-4 h-4 mr-1" />
-                {{ $t('l2AssetsTabs.send') }}
-              </Button>
-              <Button v-if="asset.protocol !== 'rgb11'" size="sm" variant="outline" class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
-                @click="$emit('lock', asset)">
-                <Icon icon="lucide:lock" class="w-4 h-4 mr-1" />
-                {{ $t('l2AssetsTabs.lock') }}
-              </Button>
-            </template>
-
-            <!-- Poolswap 模式按钮 -->
-            <template v-else>
-              <Button v-if="asset.protocol !== 'rgb11'" size="sm" variant="outline" class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
-                @click="$emit('send', asset)">
-                <Icon icon="lucide:send" class="w-4 h-4 mr-1" />
-                {{ $t('l2AssetsTabs.send') }}
-              </Button>
-              <Button v-if="asset.protocol !== 'rgb11' || asset.type === 'f'" size="sm" variant="outline" class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
-                @click="$emit('withdraw', asset)">
-                <Icon icon="lucide:arrow-up-right" class="w-4 h-4 mr-1" />
-                {{ $t('l2AssetsTabs.withdraw') }}
-              </Button>
-            </template>
+            <Button size="sm" variant="outline" class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
+              @click="$emit('send', asset)">
+              <Icon icon="lucide:send" class="w-4 h-4 mr-1" />
+              {{ $t('l2AssetsTabs.send') }}
+            </Button>
+            <Button v-if="mode === 'lightning' && asset.protocol !== 'rgb11'" size="sm" variant="outline" class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
+              @click="$emit('lock', asset)">
+              <Icon icon="lucide:lock" class="w-4 h-4 mr-1" />
+              {{ $t('l2AssetsTabs.lock') }}
+            </Button>
+            <Button v-else-if="mode === 'poolswap' && (asset.protocol !== 'rgb11' || asset.type === 'f')" size="sm" variant="outline" class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
+              @click="$emit('withdraw', asset)">
+              <Icon icon="lucide:arrow-up-right" class="w-4 h-4 mr-1" />
+              {{ $t('l2AssetsTabs.withdraw') }}
+            </Button>
           </div>
         </div>
       </div>

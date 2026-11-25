@@ -2988,7 +2988,9 @@ func (p *ContractRuntimeBase) buildDepositAnchorTx(itemId int64, output *indexer
 	}
 	//
 	var assetName *AssetName
-	if !output.HasAsset() {
+	if p.rgb11PublicContract() {
+		assetName = p.GetAssetNameV2()
+	} else if !output.HasAsset() {
 		assetName = &AssetName{
 			AssetName: indexer.ASSET_PLAIN_SAT,
 			N:         1,
@@ -3409,10 +3411,15 @@ func (p *ContractRuntimeBase) genSendInfoFromTx(tx *wire.MsgTx, preFectcher map[
 	}
 
 	assetName := p.runtime.GetAssetName()
+	outputAsset := assetName
 	if len(rgbProof) != 0 && rgbProof[0] != nil {
+		outputAsset, err = p.stp.GetWalletMgr().RGB11LocalAsset(assetName)
+		if err != nil {
+			return nil, err
+		}
 		found := false
 		for _, output := range outputs {
-			if output.GetAsset(assetName) != nil {
+			if output.GetAsset(outputAsset) != nil {
 				found = true
 				break
 			}
@@ -3476,7 +3483,7 @@ func (p *ContractRuntimeBase) genSendInfoFromTx(tx *wire.MsgTx, preFectcher map[
 			// 主网有资产的utxo，其value就当作0
 			output := outputs[i]
 			plainSat := int64(0)
-			amt := output.GetAsset(assetName)
+			amt := output.GetAsset(outputAsset)
 			if assetName.Protocol == "rgb11" && (amt == nil || amt.Sign() == 0) {
 				// Independently funded plain change is not a token recipient.
 				continue

@@ -22,6 +22,7 @@ import (
 	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
 	"github.com/sat20-labs/satoshinet/anchortx/nativeproof"
 	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
+	dkvs "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
 func (p *LaunchPoolContract) launchAssetAmount(value int64) *Decimal {
@@ -37,6 +38,9 @@ func (p *LaunchPoolContract) checkRGB11LaunchPoolContent() error {
 			return fmt.Errorf("RGB genesis fields require an RGB launchpool")
 		}
 		return nil
+	}
+	if _, err := dkvs.RGB11NameKey(p.AssetName.Ticker); p.AssetName.Type != indexer.ASSET_TYPE_FT || err != nil {
+		return fmt.Errorf("RGB launchpool requires a canonical asset name")
 	}
 	if p.BindingSat != 0 || p.MaxSupply <= 0 || p.MaxSupply > math.MaxInt64/100 || p.MintAmtPerSat <= 0 ||
 		p.LaunchRatio < LAUNCH_POOL_MIN_RATION || p.LaunchRatio > LAUNCH_POOL_MAX_RATION ||
@@ -136,11 +140,11 @@ func (p *LaunchPoolContract) decodeRGB11LaunchPoolIdentity(raw []byte) error {
 }
 
 type rgb11LaunchPoolGenesis struct {
-	Version     uint32                   `json:"version"`
-	Owner       string                   `json:"owner"`
-	RequestHash string                   `json:"request_hash"`
-	Contract    LaunchPoolContract       `json:"contract"`
-	Genesis     []byte                   `json:"genesis"`
+	Version     uint32                  `json:"version"`
+	Owner       string                  `json:"owner"`
+	RequestHash string                  `json:"request_hash"`
+	Contract    LaunchPoolContract      `json:"contract"`
+	Genesis     []byte                  `json:"genesis"`
 	Source      *rgb11ChannelOutputJSON `json:"source"`
 }
 
@@ -148,7 +152,7 @@ func (r *rgb11LaunchPoolGenesis) validate() error {
 	if r.Version != 1 || r.Owner == "" || r.RequestHash == "" || r.Source == nil ||
 		r.Source.Value <= 0 || len(r.Source.PkScript) == 0 || r.Source.Outpoint != r.Contract.RGBSourcePoint ||
 		r.Contract.AssetName.Protocol != rgb11wallet.Protocol || len(r.Source.Assets) != 1 ||
-		r.Source.Assets[0].Name != r.Contract.AssetName || r.Source.Assets[0].Amount.Value == nil ||
+		r.Source.Assets[0].Amount.Value == nil ||
 		r.Source.Assets[0].BindingSat != 0 || r.Source.Assets[0].Amount.Precision != r.Contract.RGBPrecision ||
 		r.Contract.RGBPrecision < 0 || r.Contract.RGBPrecision > MAX_ASSET_DIVISIBILITY {
 		return fmt.Errorf("invalid fixed RGB11 launchpool issuance")
@@ -167,8 +171,15 @@ func (r *rgb11LaunchPoolGenesis) validate() error {
 	if err != nil {
 		return err
 	}
-	name, err := rgb11wallet.NewContractAssetKey(container.ContractID, indexer.ASSET_TYPE_FT)
-	if err != nil || name != r.Contract.AssetName || container.GenesisReport.Kind != schemas.NIA ||
+	_, registration, err := rgb11wallet.NewRGB11ContractValue(r.Genesis)
+	if err != nil {
+		return err
+	}
+	ticker, err := dkvs.RGB11NameTicker(registration.BaseTicker, registration.ContractID)
+	source := r.Source.Assets[0].Name
+	if err != nil || ticker != r.Contract.AssetName.Ticker || registration.AssetType != r.Contract.AssetName.Type ||
+		source.Protocol != r.Contract.AssetName.Protocol || source.Type != registration.AssetType || source.Ticker != registration.ContractID ||
+		container.GenesisReport.Kind != schemas.NIA ||
 		container.GenesisReport.FungibleAmounts[4000] != r.Contract.launchAssetAmount(r.Contract.MaxSupply).Value.Uint64() {
 		return fmt.Errorf("RGB11 launchpool requires its exact fixed-supply NIA genesis")
 	}
@@ -220,83 +231,19 @@ func (p *Manager) PrepareRGB11LaunchPool(ctx context.Context, requestID string, 
 	return runRGB11ManagedOperation(p, ctx, rgb11ManagedOperationNew, func(rgb *rgb11Manager) (*LaunchPoolContract, error) {
 		owner := hex.EncodeToString(rgb.wallet.GetPaymentPubKey().SerializeCompressed())
 		key := rgb11LaunchPoolKey("request", owner+"/"+requestID)
-		var record rgb11LaunchPoolGenesis
+		requestHash := hex.EncodeToString(digest[:])
 		raw, err := p.GetDB().Read(key)
-		if err == nil {
-			if json.Unmarshal(raw, &record) != nil || record.Version != 1 || record.Owner != owner ||
-				record.RequestHash != hex.EncodeToString(digest[:]) || record.Source == nil {
-				return nil, fmt.Errorf("RGB11 launchpool request ID is immutable")
-			}
-		} else if errors.Is(err, indexer.ErrKeyNotFound) {
-			selected, err := rgb.selectRGB11IssueOutpoints(1, max(request.MinConfirmations, 1))
-			if err != nil {
-				return nil, err
-			}
-			protected, err := p.RGB11ContractInputProtected(selected[0])
-			if err != nil {
-				return nil, err
-			}
-			if protected {
-				return nil, fmt.Errorf("RGB11 launchpool issuance source is already reserved")
-			}
-			allocations, err := rgb11IssueAllocations(selected, request.Amounts)
-			if err != nil {
-				return nil, err
-			}
-			issued, err := coreissuance.Issue(coreissuance.Spec{Kind: schemas.NIA, Network: rgb11IssuanceNetwork(GetChainParam()),
-				Ticker: request.Ticker, Name: request.Name, Details: request.Details, Precision: request.Precision,
-				Terms: request.Terms, Allocations: allocations, RejectListURL: request.RejectListURL})
-			if err != nil {
-				return nil, err
-			}
-			genesis, err := coreconsignment.EncodeFile(issued.Container)
-			if err != nil {
-				return nil, err
-			}
-			asset, err := rgb11wallet.NewContractAssetKey(issued.Container.ContractID, indexer.ASSET_TYPE_FT)
-			if err != nil {
-				return nil, err
-			}
-			utxo, err := rgb.evidence.GetUTXO(selected[0])
-			if err != nil || utxo == nil {
-				return nil, fmt.Errorf("RGB11 issuance source unavailable: %w", err)
-			}
-			source := indexer.NewTxOutput(utxo.Value)
-			source.OutPointStr, source.OutValue.PkScript = selected[0], append([]byte(nil), utxo.PkScript...)
-			source.Assets = indexer.TxAssets{{Name: asset, Amount: *supply.Clone()}}
-			static.AssetName, static.RGBSourcePoint = asset, selected[0]
-			genesisHash := sha256.Sum256(genesis)
-			static.RGBGenesisHash = hex.EncodeToString(genesisHash[:])
-			if err := static.CheckContent(); err != nil {
-				return nil, err
-			}
-			record = rgb11LaunchPoolGenesis{Version: 1, Owner: owner, RequestHash: hex.EncodeToString(digest[:]),
-				Contract: static, Genesis: genesis, Source: &rgb11ChannelOutputJSON{
-					UtxoID: source.UtxoId, Outpoint: source.OutPointStr, Value: source.Value(),
-					PkScript: source.OutValue.PkScript, Assets: source.Assets,
-				}}
-			if err := record.validate(); err != nil {
-				return nil, err
-			}
-			raw, err = json.Marshal(record)
-			if err != nil {
-				return nil, err
-			}
-			batch, err := NewAtomicWriteBatch(p.GetDB())
-			if err != nil {
-				return nil, err
-			}
-			defer batch.Close()
-			for _, k := range [][]byte{key, rgb11LaunchPoolKey("asset", asset.String()), rgb11LaunchPoolKey("source", selected[0])} {
-				if err := batch.Put(k, raw); err != nil {
-					return nil, err
-				}
-			}
-			if err := batch.Flush(); err != nil {
-				return nil, err
-			}
-		} else {
+		if errors.Is(err, indexer.ErrKeyNotFound) {
+			candidate, prepareErr := rgb.makeRGB11LaunchGenesis(static, request, supply, owner, requestHash)
+			raw, err = p.reserveRGB11LaunchGenesis(rgb, key, candidate, prepareErr)
+		}
+		if err != nil {
 			return nil, err
+		}
+		var record rgb11LaunchPoolGenesis
+		if json.Unmarshal(raw, &record) != nil || record.Version != 1 || record.Owner != owner ||
+			record.RequestHash != requestHash || record.Source == nil {
+			return nil, fmt.Errorf("RGB11 launchpool request ID is immutable")
 		}
 		if err := record.validate(); err != nil {
 			return nil, err
@@ -309,17 +256,146 @@ func (p *Manager) PrepareRGB11LaunchPool(ctx context.Context, requestID string, 
 	})
 }
 
+func (rgb *rgb11Manager) makeRGB11LaunchGenesis(static LaunchPoolContract, request RGB11IssueRequest,
+	supply *Decimal, owner, requestHash string) (rgb11LaunchPoolGenesis, error) {
+	selected, err := rgb.selectRGB11IssueOutpoints(1, request.MinConfirmations)
+	if err != nil {
+		return rgb11LaunchPoolGenesis{}, err
+	}
+	allocations, err := rgb11IssueAllocations(selected, request.Amounts)
+	if err != nil {
+		return rgb11LaunchPoolGenesis{}, err
+	}
+	issued, err := coreissuance.Issue(coreissuance.Spec{Kind: schemas.NIA, Network: rgb11IssuanceNetwork(GetChainParam()),
+		Ticker: request.Ticker, Name: request.Name, Details: request.Details, Precision: request.Precision,
+		Terms: request.Terms, Allocations: allocations, RejectListURL: request.RejectListURL})
+	if err != nil {
+		return rgb11LaunchPoolGenesis{}, err
+	}
+	genesis, err := coreconsignment.EncodeFile(issued.Container)
+	if err != nil {
+		return rgb11LaunchPoolGenesis{}, err
+	}
+	asset, err := rgb11wallet.NewContractAssetKey(issued.Container.ContractID, indexer.ASSET_TYPE_FT)
+	if err != nil {
+		return rgb11LaunchPoolGenesis{}, err
+	}
+	ticker, err := dkvs.RGB11NameTicker(request.Ticker, asset.Ticker)
+	if err != nil {
+		return rgb11LaunchPoolGenesis{}, err
+	}
+	utxo, err := rgb.evidence.GetUTXO(selected[0])
+	if err != nil {
+		return rgb11LaunchPoolGenesis{}, fmt.Errorf("RGB11 issuance source unavailable: %w", err)
+	}
+	if utxo == nil || utxo.Confirmations < request.MinConfirmations {
+		return rgb11LaunchPoolGenesis{}, ErrRGB11IssueUTXOUnavailable
+	}
+	source := indexer.NewTxOutput(utxo.Value)
+	source.OutPointStr, source.OutValue.PkScript = selected[0], append([]byte(nil), utxo.PkScript...)
+	source.Assets = indexer.TxAssets{{Name: asset, Amount: *supply.Clone()}}
+	static.AssetName, static.RGBSourcePoint = asset, selected[0]
+	static.AssetName.Ticker = ticker
+	genesisHash := sha256.Sum256(genesis)
+	static.RGBGenesisHash = hex.EncodeToString(genesisHash[:])
+	if err := static.CheckContent(); err != nil {
+		return rgb11LaunchPoolGenesis{}, err
+	}
+	record := rgb11LaunchPoolGenesis{Version: 1, Owner: owner, RequestHash: requestHash,
+		Contract: static, Genesis: genesis, Source: &rgb11ChannelOutputJSON{
+			UtxoID: source.UtxoId, Outpoint: source.OutPointStr, Value: source.Value(),
+			PkScript: source.OutValue.PkScript, Assets: source.Assets,
+		}}
+	if err := record.validate(); err != nil {
+		return rgb11LaunchPoolGenesis{}, err
+	}
+	return record, nil
+}
+
+func (p *Manager) reserveRGB11LaunchGenesis(rgb *rgb11Manager, key []byte, record rgb11LaunchPoolGenesis,
+	prepareErr error) ([]byte, error) {
+	p.l1SendMu.Lock()
+	defer p.l1SendMu.Unlock()
+
+	// Another caller may have reserved this request while we queried Bitcoin.
+	raw, err := p.GetDB().Read(key)
+	if !errors.Is(err, indexer.ErrKeyNotFound) {
+		return raw, err
+	}
+	if prepareErr != nil {
+		return nil, prepareErr
+	}
+	point := record.Source.Outpoint
+	changes, err := rgb.rgb11ExpectedChangeOutpoints()
+	if err != nil {
+		return nil, err
+	}
+	rgb.utxoLockerL1.Reload(rgb.wallet.GetAddress())
+	free, err := rgb.rgb11IssuePointFree(point, changes)
+	if err != nil {
+		return nil, err
+	}
+	if !free {
+		return nil, fmt.Errorf("%w: RGB11 launchpool issuance source is already reserved", ErrRGB11IssueUTXOUnavailable)
+	}
+	raw, err = json.Marshal(record)
+	if err != nil {
+		return nil, err
+	}
+	batch, err := NewAtomicWriteBatch(p.GetDB())
+	if err != nil {
+		return nil, err
+	}
+	defer batch.Close()
+	for _, k := range [][]byte{key, rgb11LaunchPoolKey("asset", record.Source.Assets[0].Name.String()), rgb11LaunchPoolKey("source", point)} {
+		if err := batch.Put(k, raw); err != nil {
+			return nil, err
+		}
+	}
+	if err := batch.Flush(); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+// RGB11LaunchPublicGenesis returns the public registration payload for a prepared launch.
+func (p *Manager) RGB11LaunchPublicGenesis(pool *LaunchPoolContract) ([]byte, error) {
+	if pool == nil || pool.AssetName.Protocol != rgb11wallet.Protocol {
+		return nil, ErrRGB11PublicIdentityMismatch
+	}
+	raw, err := p.GetDB().Read(rgb11LaunchPoolKey("source", pool.RGBSourcePoint))
+	if err != nil {
+		return nil, err
+	}
+	var record rgb11LaunchPoolGenesis
+	if err := json.Unmarshal(raw, &record); err != nil {
+		return nil, err
+	}
+	if err := record.validate(); err != nil {
+		return nil, err
+	}
+	if record.Contract.Content() != pool.Content() {
+		return nil, ErrRGB11PublicIdentityMismatch
+	}
+	return rgb11wallet.PublicRGB11Contract(record.Genesis)
+}
+
 func (p *LaunchPoolContractRunTime) allowRGB11LaunchPoolDeploy() error {
 	if err := p.checkRGB11LaunchPoolContent(); err != nil {
 		return err
 	}
+	manager := p.stp.GetWalletMgr()
+	asset, err := manager.RGB11LocalAsset(&p.AssetName)
+	if err != nil {
+		return err
+	}
 	if p.isInitiator {
-		raw, err := p.db.Read(rgb11LaunchPoolKey("asset", p.AssetName.String()))
+		raw, err := p.db.Read(rgb11LaunchPoolKey("asset", asset.String()))
 		if err != nil {
 			return fmt.Errorf("prepare the RGB genesis on the issuing core before deployment: %w", err)
 		}
 		var record rgb11LaunchPoolGenesis
-		if json.Unmarshal(raw, &record) != nil || record.Contract.RGBGenesisHash != p.RGBGenesisHash ||
+		if json.Unmarshal(raw, &record) != nil || record.Contract.AssetName != p.AssetName || record.Contract.RGBGenesisHash != p.RGBGenesisHash ||
 			record.Contract.RGBSourcePoint != p.RGBSourcePoint || record.Contract.MaxSupply != p.MaxSupply ||
 			record.Contract.RGBPrecision != p.RGBPrecision || record.Owner != hex.EncodeToString(p.LocalPubKey) {
 			return fmt.Errorf("deployment does not match the issuing core's fixed genesis")
@@ -374,7 +450,7 @@ func (p *LaunchPoolContractRunTime) validateRGB11LaunchDeposit(ctx context.Conte
 	var root *schemas.InputRef
 	for _, allocation := range result.History.HistoricalStates {
 		if allocation.Outpoint.TxID == [32]byte(initial.Hash) && allocation.Outpoint.Vout == initial.Index &&
-			hex.EncodeToString(allocation.Reference.OperationID[:]) == p.AssetName.Ticker &&
+			hex.EncodeToString(allocation.Reference.OperationID[:]) == result.Asset.Name.Ticker &&
 			allocation.Reference.AssignmentType == 4000 && allocation.State.Class == "fungible" &&
 			allocation.State.Amount == p.launchAssetAmount(p.MaxSupply).Value.Uint64() {
 			if root != nil {
@@ -520,8 +596,7 @@ func installRGB11LaunchPool(stp ContractManager, resv ContractDeployResvIF, _ an
 	if err := stp.SaveReservation(resv); err != nil {
 		return nil, err
 	}
-	input, err := manager.MaterializeRGB11ContractInput(ctx, pool, deposit.Source.Output.OutPointStr)
-	if err != nil {
+	if _, err := manager.MaterializeRGB11ContractInput(ctx, pool, deposit.Source.Output.OutPointStr); err != nil {
 		return nil, err
 	}
 	signed, err := resv.SignedDeployContractInvoice()
@@ -537,7 +612,7 @@ func installRGB11LaunchPool(stp ContractManager, resv ContractDeployResvIF, _ an
 		return nil, err
 	}
 	if anchor == nil {
-		anchor, err = manager.CreateRGB11DepositAnchor(ctx, pool, pool.Address(), input.Output, pool.GetAssetNameV2(), memo)
+		anchor, err = manager.CreateRGB11DepositAnchor(ctx, pool, pool.Address(), deposit.Source.Output, pool.GetAssetNameV2(), memo)
 		if err != nil {
 			return nil, err
 		}

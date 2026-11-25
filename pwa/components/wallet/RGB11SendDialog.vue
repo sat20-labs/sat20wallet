@@ -85,7 +85,7 @@
                   </div>
                   <div>
                     <dt class="text-muted-foreground">{{ t('tools.txConfirm.asset') }}</dt>
-                    <dd class="break-all font-mono">{{ recipient.amount.asset }}</dd>
+                    <dd class="break-all font-mono">{{ assetApprovalLabel(recipient.amount.asset, rgb11.state.assets) }}</dd>
                   </div>
                 </div>
               </dl>
@@ -151,6 +151,7 @@ import walletManager from '@/utils/sat20'
 import RGB11InvoiceGuide from './RGB11InvoiceGuide.vue'
 import { downloadExportFile } from '@/utils/fileSave'
 import type { ExportFile, RGBTransferView, RGBTransferFile } from '@/utils/walletViews'
+import { assetApprovalLabel } from '@/utils/walletViews'
 import { useWalletStore } from '@/store/wallet'
 import { useRGB11Store } from '@/store/rgb11'
 import { useAccountManagementStore } from '@/store/accountManagement'

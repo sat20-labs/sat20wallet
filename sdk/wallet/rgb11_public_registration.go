@@ -14,6 +14,7 @@ import (
 	"github.com/sat20-labs/rgb11/consignment"
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
+	dkvs "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -30,13 +31,11 @@ func (p *Manager) requireRGB11PublicRegistration(asset *swire.AssetName) error {
 	if asset == nil || asset.Protocol != rgb11wallet.Protocol {
 		return nil
 	}
-	// The first transcend deployment precedes L2 ticker creation. The current
-	// protocol key is the full ContractID hex, so the authenticated public
-	// record supplies its identity even when no local ticker exists yet.
-	contractID := asset.Ticker
-	if _, err := rgb11wallet.RGB11RegistryKey(contractID); err != nil {
-		return ErrRGB11PublicIdentityMismatch
+	local, err := p.RGB11LocalAsset(asset)
+	if err != nil {
+		return err
 	}
+	contractID := local.Ticker
 	registration, _, err := p.readAccountRGBContract(contractID)
 	if errors.Is(err, ErrRGB11PublicRegistrationRequired) {
 		return fmt.Errorf("%w: %s", ErrRGB11PublicRegistrationRequired, contractID)
@@ -47,16 +46,16 @@ func (p *Manager) requireRGB11PublicRegistration(asset *swire.AssetName) error {
 	if registration.ContractID != contractID || registration.AssetType != asset.Type {
 		return ErrRGB11PublicIdentityMismatch
 	}
-	info := p.getTickerInfo(asset)
+	info := p.getTickerInfo(local)
 	if info == nil {
 		return nil
 	}
-	if info.AssetName != *asset {
+	if info.AssetName != *local {
 		return ErrRGB11PublicIdentityMismatch
 	}
 	var ext rgb11wallet.TickerExt
 	if err := json.Unmarshal(info.Content, &ext); err != nil || ext.ContractID == "" ||
-		ext.SchemaID == "" || !rgb11wallet.ContractAssetKeyMatches(*asset, ext.ContractID) {
+		ext.SchemaID == "" || !rgb11wallet.ContractAssetKeyMatches(*local, ext.ContractID) {
 		return ErrRGB11PublicIdentityMismatch
 	}
 	base, err := rgb11wallet.NormalizeRGB11Ticker(ext.Ticker)
@@ -91,6 +90,15 @@ func (p *Manager) verifyRGB11PublicContract(contractID string, private []byte) e
 // validates it and signs the registry record; the wallet never signs as an
 // authority and never sends the indexer-only {record} request by mistake.
 func (p *NodeClient) RegisterPublicRGB11(content []byte) (*rgb11wallet.RGB11Registration, error) {
+	return p.registerPublicRGB11(content, false)
+}
+
+func (p *NodeClient) RegisterRGB11Name(content []byte) error {
+	_, err := p.registerPublicRGB11(content, true)
+	return err
+}
+
+func (p *NodeClient) registerPublicRGB11(content []byte, registerName bool) (*rgb11wallet.RGB11Registration, error) {
 	if p == nil || p.RESTClient == nil || p.Http == nil {
 		return nil, ErrRGB11PublicDataUnavailable
 	}
@@ -103,9 +111,10 @@ func (p *NodeClient) RegisterPublicRGB11(content []byte) (*rgb11wallet.RGB11Regi
 		return nil, err
 	}
 	body, err := json.Marshal(struct {
-		Content string `json:"contract_consignment_base64"`
+		Content      string `json:"contract_consignment_base64"`
+		RegisterName bool   `json:"register_name,omitempty"`
 	}{
-		Content: base64.StdEncoding.EncodeToString(public),
+		Content: base64.StdEncoding.EncodeToString(public), RegisterName: registerName,
 	})
 	if err != nil {
 		return nil, err
@@ -200,6 +209,15 @@ func (p *Manager) VerifyRGB11PublicContract(contractID, contentBase64 string) (*
 	}
 	if *registration != *expected || !bytes.Equal(value.ContractContent, public) {
 		return nil, ErrRGB11PublicIdentityMismatch
+	}
+	if registration.AssetType == "f" {
+		ticker, err := dkvs.RGB11NameTicker(registration.BaseTicker, contractHex)
+		if err != nil {
+			return nil, err
+		}
+		if _, namedID, err := p.readRGB11Name(ticker); err == nil && namedID == contractHex {
+			registration.AssetName = "rgb11:f:" + ticker
+		}
 	}
 	return registration, nil
 }

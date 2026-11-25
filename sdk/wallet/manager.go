@@ -730,6 +730,11 @@ func (p *Manager) getRuneIdFromName(name *swire.AssetName) (*runestone.RuneId, e
 }
 
 func (p *Manager) getTickerInfo(name *swire.AssetName) *indexer.TickerInfo {
+	if name.Protocol == rgb11wallet.Protocol {
+		if _, err := dkvsindexer.RGB11NameKey(name.Ticker); err == nil {
+			return p.getSendTickerInfo_SatsNet(name)
+		}
+	}
 
 	if name.String() == ASSET_PLAIN_SAT.String() ||
 		name.String() == db.ASSET_ALL_SAT.String() {

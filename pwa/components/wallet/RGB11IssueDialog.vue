@@ -85,11 +85,11 @@
             <p class="text-xs text-zinc-500">{{ $t('rgb11Transfer.issuedContractId') }}</p>
             <p class="break-all font-mono text-xs text-zinc-300">{{ issuedSummary.contractId }}</p>
           </div>
-          <div>
+          <div v-if="issuedSummary.assetName">
             <p class="text-xs text-zinc-500">{{ $t('rgb11Transfer.issuedAssetName') }}</p>
             <p class="break-all font-mono text-xs text-zinc-300">{{ issuedSummary.assetName }}</p>
           </div>
-          <Button variant="outline" class="w-full" @click="copyAssetName">
+          <Button v-if="issuedSummary.assetName" variant="outline" class="w-full" @click="copyAssetName">
             {{ $t('rgb11Transfer.copyAssetName') }}
           </Button>
         </div>
@@ -315,7 +315,7 @@ const runIssue = async () => {
       reject_url: parsedRejectUrl.value,
     })
     if (err || !result) throw err || new Error(t('rgb11Transfer.issueFailed'))
-    issuedSummary.value = { ticker: result.ticker, displayName: result.name, contractId: result.contract_id, assetName: result.asset }
+    issuedSummary.value = { ticker: normalizedTicker, displayName: result.name, contractId: result.contract_id, assetName: result.canonical_name }
     const [exportError, files] = await walletManager.exportRGB11Contract(result.asset)
     if (exportError) throw exportError
     const armored = files?.find(file => file.name.endsWith('.asc'))

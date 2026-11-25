@@ -1010,7 +1010,8 @@ import type { AbiParameter } from 'abitype'
 import { smartContractApi } from '@/apis'
 import ordxApi from '@/apis/ordx'
 import sat20 from '@/utils/sat20'
-import { useGlobalStore, useWalletStore } from '@/store'
+import { useGlobalStore, useRGB11Store, useWalletStore } from '@/store'
+import { assetApprovalLabel, assetNameLabel } from '@/utils/walletViews'
 import { Storage } from '@/lib/storage-adapter'
 import { useQueryClient } from '@tanstack/vue-query'
 
@@ -1023,6 +1024,7 @@ const { t, locale } = useI18n()
 const router = useRouter()
 const walletStore = useWalletStore()
 const globalStore = useGlobalStore()
+const rgb11Store = useRGB11Store()
 const queryClient = useQueryClient()
 const { network } = storeToRefs(walletStore)
 const { env } = storeToRefs(globalStore)
@@ -1803,8 +1805,12 @@ const findContractAssetName = (keys: string[]) => {
 const displayAssetName = (assetName: string) => {
   if (!assetName) return '-'
   if (assetName === '::') return t('tools.common.sats')
-  return assetName
+  return assetNameLabel(assetName, rgb11Store.state.assets)
 }
+
+const displayApprovalAssetName = (assetName: string) => assetName.startsWith('rgb11:')
+  ? assetApprovalLabel(assetName, rgb11Store.state.assets)
+  : displayAssetName(assetName)
 
 const invokeTransactionSummary = (contract: string, req: Record<string, unknown>): ToolTxConfirmPayload => {
   const params = invokeParams()
@@ -1819,7 +1825,7 @@ const invokeTransactionSummary = (contract: string, req: Record<string, unknown>
     const assets = Array.isArray(req.Assets) ? req.Assets as Record<string, unknown>[] : []
     const firstAsset = assets[0] || {}
     if (firstAsset.AssetName) {
-      asset = displayAssetName(String(firstAsset.AssetName))
+      asset = displayApprovalAssetName(String(firstAsset.AssetName))
     }
     if (firstAsset.Amount) {
       amount = String(firstAsset.Amount)
@@ -1836,7 +1842,7 @@ const invokeTransactionSummary = (contract: string, req: Record<string, unknown>
     const assets = Array.isArray(req.Assets) ? req.Assets as Record<string, unknown>[] : []
     const firstAsset = assets[0] || {}
     if (firstAsset.AssetName) {
-      asset = displayAssetName(String(firstAsset.AssetName))
+      asset = displayApprovalAssetName(String(firstAsset.AssetName))
     }
     if (firstAsset.Amount) {
       amount = String(firstAsset.Amount)
@@ -1848,7 +1854,7 @@ const invokeTransactionSummary = (contract: string, req: Record<string, unknown>
     for (const fundingAsset of contractFundingAssets(req)) {
       const row = txDetail(
         t('tools.txConfirm.fundingAsset'),
-        `${displayAssetName(String(fundingAsset.AssetName || ''))} ${String(fundingAsset.Amount || '').trim()}`
+        `${displayApprovalAssetName(String(fundingAsset.AssetName || ''))} ${String(fundingAsset.Amount || '').trim()}`
       )
       if (row) details.push(row)
     }
@@ -4130,7 +4136,7 @@ const deploySmartContract = async () => {
         req.FundingValue ? txDetail(t('tools.txConfirm.satsAmount'), req.FundingValue) : null,
         ...fundingAssets.map((asset) => txDetail(
           t('tools.txConfirm.fundingAsset'),
-          `${displayAssetName(String(asset.AssetName || ''))} ${String(asset.Amount || '').trim()}`
+          `${displayApprovalAssetName(String(asset.AssetName || ''))} ${String(asset.Amount || '').trim()}`
         )),
       ]),
     })

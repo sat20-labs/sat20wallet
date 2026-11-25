@@ -304,7 +304,11 @@ func (p *Manager) rgb11SourceRecorded(scope *rgb11Manager, channelID string,
 		return false, fmt.Errorf("invalid durable RGB11 withdrawal pair")
 	}
 	channel, asset, _, err := ParseContractURL(pair.ContractURL)
-	if err != nil || channel != channelID || asset != source.Output.Assets[0].Name.String() || len(source.PrivateWitness) != 0 {
+	if err != nil || channel != channelID || len(source.PrivateWitness) != 0 {
+		return false, fmt.Errorf("RGB11 source differs from its recorded withdrawal")
+	}
+	local, err := p.RGB11LocalAsset(ParseAssetString(asset))
+	if err != nil || *local != source.Output.Assets[0].Name {
 		return false, fmt.Errorf("RGB11 source differs from its recorded withdrawal")
 	}
 	proof, err := nativeproof.BuildRGB11(pair.Proof.Consignment, pair.Proof.ChangeSeals)

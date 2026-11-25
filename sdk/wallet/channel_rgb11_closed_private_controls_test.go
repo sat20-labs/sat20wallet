@@ -59,7 +59,7 @@ func newRGBClosedPrivateBurnFixture(t *testing.T) *rgbClosedPrivateBurnFixture {
 	rpc := &recoveryRPC{raw: map[string]string{previous.TxID(): raw}}
 	manager := &Manager{l2IndexerClient: &IndexerRPCClientMgr{active: rpc}}
 	graph := &rgb11ReceiptGraph{asset: asset, chains: &settlementChains{manager: manager, ctx: context.Background()}}
-	return &rgbClosedPrivateBurnFixture{graph: graph, mapping: &rgb11ReceiptMapping{script: script},
+	return &rgbClosedPrivateBurnFixture{graph: graph, mapping: &rgb11ReceiptMapping{script: script, assetName: asset.Name},
 		receipt: &rgb11ReceiptDescend{id: tx.TxID(), tx: tx, output: burn, payload: &sindexer.DescendPayload{Version: 2, Operation: sindexer.DESCEND_OP_CLOSE, L1TxId: mainID}}, previous: previous, rpc: rpc}
 }
 

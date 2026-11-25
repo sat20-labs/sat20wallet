@@ -16,6 +16,7 @@ import (
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	"github.com/sat20-labs/satoshinet/anchortx/nativeproof"
+	dkvs "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
 // RGB quantities are client validated. A Bitcoin/indexer output without an
@@ -98,6 +99,11 @@ func (rgb11STPProtocol) AssetNameN(_, _ int) int { return 0 }
 func (rgb11STPProtocol) ValidateAsset(name *indexer.AssetName, operation STPAssetOperation) error {
 	if err := validateSTPFungibleAsset(name, rgb11wallet.Protocol, operation); err != nil {
 		return err
+	}
+	if operation == STPOpContract {
+		if _, err := dkvs.RGB11NameKey(name.Ticker); err == nil {
+			return nil
+		}
 	}
 	key, err := hex.DecodeString(name.Ticker)
 	if err != nil || len(key) != 32 || name.Ticker != strings.ToLower(name.Ticker) {

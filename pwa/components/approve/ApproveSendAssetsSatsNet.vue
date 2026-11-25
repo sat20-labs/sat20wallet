@@ -9,7 +9,7 @@
         <div class="rounded-md border p-4 space-y-3 bg-muted/50">
           <div>
             <p class="text-sm font-medium">
-              {{ $t('sendAssets.assetName') }}: <strong>{{ props.data.assetName }}</strong>
+              {{ $t('sendAssets.assetName') }}: <strong class="break-all">{{ assetApprovalLabel(props.data.assetName, rgb11.state.assets) }}</strong>
             </p>
           </div>
           <div>
@@ -51,6 +51,8 @@ import { z } from 'zod'
 import LayoutApprove from '@/components/layout/LayoutApprove.vue'
 import { useToast } from '@/components/ui/toast-new'
 import sat20 from '@/utils/sat20'
+import { useRGB11Store } from '@/store/rgb11'
+import { assetApprovalLabel } from '@/utils/walletViews'
 
 // Define Zod schema for validation
 const sendAssetsSchema = computed(() => z.object({
@@ -68,6 +70,7 @@ interface Props {
 }
 
 const props = defineProps<Props>()
+const rgb11 = useRGB11Store()
 const emit = defineEmits(['confirm', 'cancel'])
 
 const { toast } = useToast()

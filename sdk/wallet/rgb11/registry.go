@@ -26,6 +26,7 @@ type RGB11Registration struct {
 	SchemaID   string `json:"schema_id"`
 	AssetType  string `json:"asset_type"`
 	BaseTicker string `json:"base_ticker"`
+	AssetName  string `json:"asset_name,omitempty"`
 }
 
 // Technical registration contains public contract data only. DID ownership,

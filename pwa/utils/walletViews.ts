@@ -55,6 +55,18 @@ export interface RGBAssetView {
   can_export: boolean
 }
 
+export function assetNameLabel(key: string, assets: readonly RGBAssetView[] = []): string {
+  if (!key.startsWith('rgb11:') || /^rgb11:[^:]+:[a-z0-9]+(?:-[a-z0-9]+)*@[0-9a-f]{4}$/.test(key)) return key
+  return assets.find(asset => asset.asset === key)?.canonical_name || 'RGB'
+}
+
+export function assetApprovalLabel(key: string, assets: readonly RGBAssetView[] = []): string {
+  const label = assetNameLabel(key, assets)
+  if (label === 'RGB') return key
+  if (label !== key && key.startsWith('rgb11:')) return `${label} (${key})`
+  return label
+}
+
 export interface RGBRecipientView {
   destination: string
   amount: AssetAmount

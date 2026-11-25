@@ -396,7 +396,6 @@ watch(wallets, async (newWallets) => {
 // 创建防抖的切换钱包函数
 const debouncedSelectWallet = useDebounceFn(async (wallet: WalletData) => {
   try {
-    if (!await confirmPendingBackupRisk(key => t(key))) return
     await walletStore.switchWallet(wallet.id)
     toast({
       title: t('walletComponents.success'),

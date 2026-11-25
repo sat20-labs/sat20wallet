@@ -22,9 +22,16 @@ func (fakeRGB11RegistryAuthority) CanWriteSystem(key string, pubKey []byte) erro
 	return nil
 }
 
-// The in-process L2 accepts only the same signed, public, immutable technical
-// record that the Core registration route accepts. It is not a generic DKVS
-// CAS escape hatch for contract keys.
+func verifyRGB11Record(record *swire.DKVSRecord) (string, error) {
+	if ticker, ok := dkvsindexer.RGB11NameFromKey(record.Key); ok {
+		return dkvsindexer.VerifyRGB11NameRecord(record, ticker)
+	}
+	id := strings.TrimPrefix(record.Key, rgb11wallet.RGB11RegistryPath+"/")
+	_, err := rgb11wallet.VerifyRGB11RegistrationForClient(record, id, fakeRGB11RegistryAuthority{})
+	return id, err
+}
+
+// The in-process L2 enforces the Core route's immutable, signed registrations.
 func (p *Client) fakeRGB11Register(body []byte) ([]byte, error) {
 	var request struct {
 		Record *swire.DKVSRecord `json:"record"`
@@ -32,8 +39,8 @@ func (p *Client) fakeRGB11Register(body []byte) ([]byte, error) {
 	if err := json.Unmarshal(body, &request); err != nil || request.Record == nil {
 		return fakeDKVSErrorResponse(dkvsindexer.ErrInvalidRecord)
 	}
-	id := strings.TrimPrefix(request.Record.Key, rgb11wallet.RGB11RegistryPath+"/")
-	if _, err := rgb11wallet.VerifyRGB11RegistrationForClient(request.Record, id, fakeRGB11RegistryAuthority{}); err != nil {
+	id, err := verifyRGB11Record(request.Record)
+	if err != nil {
 		return fakeDKVSErrorResponse(err)
 	}
 	p.Network.Mutex.Lock()
@@ -42,7 +49,7 @@ func (p *Client) fakeRGB11Register(body []byte) ([]byte, error) {
 	}
 	stored := p.Network.DkvsRecords[request.Record.Key]
 	if stored != nil {
-		if _, err := rgb11wallet.VerifyRGB11RegistrationForClient(stored, id, fakeRGB11RegistryAuthority{}); err != nil {
+		if _, err := verifyRGB11Record(stored); err != nil {
 			p.Network.Mutex.Unlock()
 			return fakeDKVSErrorResponse(err)
 		}
@@ -50,7 +57,11 @@ func (p *Client) fakeRGB11Register(body []byte) ([]byte, error) {
 			p.Network.Mutex.Unlock()
 			return fakeDKVSErrorResponse(dkvsindexer.ErrWriteConflict)
 		}
-	} else {
+	} else if request.Record.Seq != 1 {
+		p.Network.Mutex.Unlock()
+		return fakeDKVSErrorResponse(dkvsindexer.ErrRecordNotFound)
+	}
+	if stored == nil || stored.Seq < request.Record.Seq {
 		p.Network.DkvsRecords[request.Record.Key] = cloneFakeDKVSRecord(request.Record)
 		if p.Network.DkvsGenerations == nil {
 			p.Network.DkvsGenerations = make(map[string]uint64)
@@ -63,8 +74,8 @@ func (p *Client) fakeRGB11Register(body []byte) ([]byte, error) {
 	}
 	readback := cloneFakeDKVSRecord(p.Network.DkvsRecords[request.Record.Key])
 	p.Network.Mutex.Unlock()
-	if _, err := rgb11wallet.VerifyRGB11RegistrationForClient(readback, id, fakeRGB11RegistryAuthority{}); err != nil ||
-		!bytes.Equal(readback.Value, request.Record.Value) {
+	if storedID, err := verifyRGB11Record(readback); err != nil || storedID != id ||
+		!bytes.Equal(readback.Value, request.Record.Value) || readback.Seq < request.Record.Seq {
 		return fakeDKVSErrorResponse(dkvsindexer.ErrInvalidRecord)
 	}
 	return json.Marshal(map[string]any{"code": 0, "msg": "ok", "contract_id": id})

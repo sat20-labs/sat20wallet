@@ -373,7 +373,7 @@ func startSDKPWARegtestBitcoinControllerInternal(t *testing.T, address string, m
 	return server.URL
 }
 
-var localRGBPool = regexp.MustCompile(`^bcrt1[0-9a-z]+_rgb11:f:[0-9a-f]{64}_transcend\.tc$`)
+var localRGBPool = regexp.MustCompile(`^bcrt1[0-9a-z]+_rgb11:f:[a-z0-9]+(?:-[a-z0-9]+)*@[0-9a-f]{4}_transcend\.tc$`)
 
 func waitRGBPeerDeposit(ctx context.Context, network *realSatoshiNet, contract, outpoint string) error {
 	for _, node := range []*testHarness{network.Bootstrap, network.Core} {

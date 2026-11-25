@@ -1662,21 +1662,15 @@ func (p *rgb11Manager) selectRGB11IssueOutpoints(count int, minConfirmations int
 	p.utxoLockerL1.Reload(address)
 	selected := make([]string, 0, count)
 	for _, candidate := range candidates {
-		if candidate == nil || candidate.OutPoint == "" || p.utxoLockerL1.IsLocked(candidate.OutPoint) ||
-			reservedChanges[candidate.OutPoint] != "" {
+		if candidate == nil || candidate.OutPoint == "" {
 			continue
 		}
-		protected, err := p.RGB11ContractInputProtected(candidate.OutPoint)
+		free, err := p.rgb11IssuePointFree(candidate.OutPoint, reservedChanges)
 		if err != nil {
 			return nil, err
 		}
-		if protected || p.isSTPInputProtected(candidate.OutPoint) {
+		if !free {
 			continue
-		}
-		if _, err := p.rgbManager.projectionStore.LoadOutput(candidate.OutPoint); err == nil {
-			continue
-		} else if !errors.Is(err, indexer.ErrKeyNotFound) {
-			return nil, err
 		}
 		evidence, err := p.rgbManager.evidence.GetUTXO(candidate.OutPoint)
 		if err != nil || evidence == nil {
@@ -1694,6 +1688,22 @@ func (p *rgb11Manager) selectRGB11IssueOutpoints(count int, minConfirmations int
 		}
 	}
 	return nil, fmt.Errorf("%w: need %d, found %d", ErrRGB11IssueUTXOUnavailable, count, len(selected))
+}
+
+// rgb11IssuePointFree checks local reservations without calling the indexer.
+func (p *rgb11Manager) rgb11IssuePointFree(point string, changes map[string]string) (bool, error) {
+	if p.utxoLockerL1.IsLocked(point) || changes[point] != "" {
+		return false, nil
+	}
+	protected, err := p.RGB11ContractInputProtected(point)
+	if err != nil || protected || p.isSTPInputProtected(point) {
+		return false, err
+	}
+	_, err = p.rgbManager.projectionStore.LoadOutput(point)
+	if errors.Is(err, indexer.ErrKeyNotFound) {
+		return true, nil
+	}
+	return false, err
 }
 
 func rgb11IssueAllocations(outpoints []string, amounts []uint64) ([]coreissuance.Allocation, error) {
@@ -2287,7 +2297,7 @@ func (p *rgb11Manager) rgb11TickerPresentation(info *indexer.TickerInfo) (*RGB11
 	return &RGB11TickerInfo{
 		TickerInfo: info, Ticker: label, AssetKey: info.AssetName.String(),
 		ContractID: contractID, GenesisAddress: ext.GenesisAddress, NamingStatus: status,
-		CanonicalName: "", Verified: false,
+		CanonicalName: rgb11DisplayName(info.AssetName, ext.Ticker), Verified: false,
 	}, nil
 }
 

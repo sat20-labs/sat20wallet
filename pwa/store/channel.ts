@@ -1,5 +1,6 @@
 import satsnetStp from '@/utils/stp'
 import walletManager from '@/utils/sat20'
+import { assetNameLabel } from '@/utils/walletViews'
 import { defineStore } from 'pinia'
 import { computed, nextTick, ref, watch } from 'vue'
 import { parallel } from 'radash'
@@ -233,7 +234,7 @@ export const useChannelStore = defineStore('channel', () => {
           type: item.Name.Type,
           ticker: item.Name.Ticker,
           label:
-            item.Name.Type === 'e'
+            protocol === 'rgb11' ? assetNameLabel(key) : item.Name.Type === 'e'
               ? `${item.Name.Ticker}（raresats）`
               : item.Name.Ticker,
           utxos: [],
@@ -252,7 +253,7 @@ export const useChannelStore = defineStore('channel', () => {
           const result = JSON.parse(ticker)
           const findItem = allAssetList.value?.find((a: any) => a.key === key)
           if (findItem) {
-            findItem.label = (findItem.protocol === 'rgb11' ? result?.displayname : '') || result?.name.Ticker || findItem.label
+            findItem.label = (findItem.protocol === 'rgb11' ? result?.displayname : result?.name.Ticker) || findItem.label
             findItem.precision = result?.divisibility ?? 0
             console.log('更新资产标签:', findItem)
           }

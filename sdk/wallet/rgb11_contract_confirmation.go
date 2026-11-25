@@ -49,6 +49,10 @@ func (p *Manager) LoadConfirmedRGB11Withdrawal(ctx context.Context, owner common
 	if name == nil || name.Protocol != rgb11wallet.Protocol {
 		return nil, fmt.Errorf("invalid RGB11 withdrawal asset")
 	}
+	local, err := p.RGB11LocalAsset(name)
+	if err != nil {
+		return nil, err
+	}
 	witness, _, err := p.channelOwnerWitness(owner, channel)
 	if err != nil {
 		return nil, err
@@ -163,7 +167,7 @@ func (p *Manager) LoadConfirmedRGB11Withdrawal(ctx context.Context, owner common
 	outputAmounts := make(map[string]*Decimal)
 	for _, historical := range history.Allocations {
 		allocation := historical.Allocation
-		if allocation.AssetName != *name {
+		if allocation.AssetName != *local {
 			return nil, fmt.Errorf("RGB11 withdrawal proof includes another asset or control allocation")
 		}
 		if consumed[rgb11AllocationID(allocation.OperationID, allocation.AssignmentType, allocation.AssignmentIndex)] {
@@ -209,7 +213,7 @@ func (p *Manager) LoadConfirmedRGB11Withdrawal(ctx context.Context, owner common
 		if e != nil {
 			return nil, e
 		}
-		if validated.Asset.Name != *name || validated.Asset.Amount.Cmp(amount) != 0 || validated.Value != previous.Value {
+		if validated.Asset.Name != *local || validated.Asset.Amount.Cmp(amount) != 0 || validated.Value != previous.Value {
 			return nil, fmt.Errorf("RGB11 withdrawal does not consume the full authenticated source")
 		}
 		spent, e := scope.evidence.GetOutspend(point)
@@ -256,7 +260,7 @@ func (p *Manager) LoadConfirmedRGB11Withdrawal(ctx context.Context, owner common
 		}
 		sourceOutput := indexer.NewTxOutput(out.Value)
 		sourceOutput.OutPointStr, sourceOutput.OutValue.PkScript = point, append([]byte(nil), out.PkScript...)
-		sourceOutput.Assets = indexer.TxAssets{{Name: *name, Amount: *amount.Clone(), BindingSat: 0}}
+		sourceOutput.Assets = indexer.TxAssets{{Name: *local, Amount: *amount.Clone(), BindingSat: 0}}
 		source := &RGB11ChannelSource{Version: 1, ChannelID: channel, Output: sourceOutput, PublicProof: material, DescendTxIDs: append(append([]string(nil), ancestry...), descend.TxID())}
 		result.PoolSources = append(result.PoolSources, source)
 	}

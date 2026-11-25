@@ -54,13 +54,17 @@ func (p *ContractRuntimeBase) verifyRGB11ContractWithdrawal(req *wwire.RemoteSig
 	if commitments != 1 {
 		return fmt.Errorf("RGB11 withdrawal requires exactly one descend output")
 	}
+	asset, err := p.stp.GetWalletMgr().RGB11LocalAsset(p.runtime.GetAssetName())
+	if err != nil {
+		return err
+	}
 	var poolValue, poolChange int64
 	for _, output := range deal.PreOutputs {
 		if !bytes.Equal(output.OutValue.PkScript, p.pkScript) {
 			continue
 		}
 		poolValue += output.Value()
-		if amount := output.GetAsset(p.runtime.GetAssetName()); amount != nil && amount.Sign() > 0 {
+		if amount := output.GetAsset(asset); amount != nil && amount.Sign() > 0 {
 			source, err := p.stp.GetWalletMgr().loadRGB11ChannelSource(p.ChannelAddr, output.OutPointStr)
 			if err != nil {
 				return err
@@ -70,7 +74,7 @@ func (p *ContractRuntimeBase) verifyRGB11ContractWithdrawal(req *wwire.RemoteSig
 			if err != nil {
 				return err
 			}
-			if validated.Asset.Amount.Cmp(amount) != 0 {
+			if validated.Asset.Name != *asset || validated.Asset.Amount.Cmp(amount) != 0 {
 				return fmt.Errorf("RGB11 source amount differs from managed inventory")
 			}
 		}

@@ -2,7 +2,8 @@ import { useQuery, useQueryClient } from '@tanstack/vue-query'
 import { ref, computed, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { satnetApi } from '@/apis'
-import { useGlobalStore, useL2Store, useWalletStore } from '@/store'
+import { useGlobalStore, useL2Store, useRGB11Store, useWalletStore } from '@/store'
+import { assetNameLabel } from '@/utils/walletViews'
 import {
   applyAssetSnapshot,
   buildAssetSnapshotFromAssets,
@@ -44,6 +45,7 @@ const l2RefreshPromises = new Map<string, Promise<void>>()
 
 export const useL2Assets = (options: UseAssetQueryOptions = {}) => {
   const assetsStore = useL2Store()
+  const rgb11Store = useRGB11Store()
   const walletStore = useWalletStore()
   const globalStore = useGlobalStore()
   const { address, network, chain, walletId, accountIndex } = storeToRefs(walletStore)
@@ -118,9 +120,9 @@ export const useL2Assets = (options: UseAssetQueryOptions = {}) => {
       // They intentionally share the send asset key, so keep the native total row
       // deterministically instead of depending on the server's map iteration order.
       if (existingIndex === -1 || (key === '::' && item.Name.Type === '*')) {
-        let label = item.Name.Type === 'e'
-          ? `${item.Name.Ticker}（raresats）`
-          : item.Name.Ticker;
+        const label = item.Name.Protocol === 'rgb11'
+          ? assetNameLabel(key, rgb11Store.state.assets)
+          : item.Name.Type === 'e' ? `${item.Name.Ticker}（raresats）` : item.Name.Ticker
         if (item.Name.Type === 'n') {
           continue
         }

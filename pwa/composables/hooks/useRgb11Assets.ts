@@ -12,7 +12,7 @@ interface UseAssetQueryOptions {
 export const decorateRGB11AssetItems = (items: RGBAssetView[]) => items.map(item => {
   const [protocol, type, ticker] = item.asset.split(':')
   return { ...item, protocol, type, ticker, id: item.asset, key: item.asset, asset_key: item.asset,
-    label: item.ticker || item.name || item.asset, symbol: item.ticker, display_name: item.name,
+    label: item.canonical_name || item.name || 'RGB', symbol: item.canonical_name || item.name || 'RGB', display_name: item.name,
     amount: item.available, balance: item.available, utxos: [], available_amount: item.available, pending_amount: item.pending }
 })
 

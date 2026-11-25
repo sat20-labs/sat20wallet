@@ -40,30 +40,30 @@ type RGB11ContractDepositIntent struct {
 // sender change secrets or private channel package. Sender recovery remains in
 // the existing RGB pending-transfer store and its protected input reservation.
 type RGB11ContractDeposit struct {
-	Version    uint32                      `json:"version"`
-	TransferID string                      `json:"transfer_id"`
+	Version    uint32                     `json:"version"`
+	TransferID string                     `json:"transfer_id"`
 	Intent     RGB11ContractDepositIntent `json:"intent"`
 	// Like PendingTransfer.SignedTx at prepare time, this is the fixed unsigned
 	// transaction. Final signatures belong to the existing RGB broadcast record.
-	SignedTx      []byte               `json:"signed_tx"`
-	WitnessScript []byte               `json:"witness_script"`
+	SignedTx      []byte              `json:"signed_tx"`
+	WitnessScript []byte              `json:"witness_script"`
 	Source        *RGB11ChannelSource `json:"source"`
 }
 
 type rgb11ContractDepositJournal struct {
 	Deposit          RGB11ContractDeposit `json:"deposit"`
-	PeerAcknowledged bool                  `json:"peer_acknowledged"`
-	Broadcast        bool                  `json:"broadcast"`
-	DirectPeer       bool                  `json:"direct_peer,omitempty"`
-	OwnerPublicKey   []byte                `json:"owner_public_key"`
-	PeerPublicKey    []byte                `json:"peer_public_key"`
+	PeerAcknowledged bool                 `json:"peer_acknowledged"`
+	Broadcast        bool                 `json:"broadcast"`
+	DirectPeer       bool                 `json:"direct_peer,omitempty"`
+	OwnerPublicKey   []byte               `json:"owner_public_key"`
+	PeerPublicKey    []byte               `json:"peer_public_key"`
 }
 
 type RGB11ContractInput struct {
 	Output      *TxOutput
 	Recipient   string
 	ProofDigest []byte
-	RGB11Proof []byte
+	RGB11Proof  []byte
 }
 
 func rgb11ContractIntentScript(intent RGB11ContractDepositIntent) ([]byte, error) {
@@ -139,7 +139,11 @@ func (p *Manager) prepareRGB11ContractDeposit(ctx context.Context, contract Cont
 	if name == nil || name.Protocol != rgb11wallet.Protocol {
 		return nil, rgb11wallet.ErrInvalidRGB11Asset
 	}
-	info := p.GetTickerInfo(name)
+	local, err := p.RGB11LocalAsset(name)
+	if err != nil {
+		return nil, err
+	}
+	info := p.GetTickerInfo(local)
 	if info == nil {
 		return nil, fmt.Errorf("RGB11 deposit requires validated genesis metadata")
 	}
@@ -158,7 +162,7 @@ func (p *Manager) prepareRGB11ContractDeposit(ctx context.Context, contract Cont
 	}
 	return runRGB11ManagedOperationWithManager(p, ctx, rgb11ManagedOperationNew,
 		func() (*rgb11Manager, error) { return p.stpRGB11Scope(owner) }, func(rgb *rgb11Manager) (*RGB11ContractDeposit, error) {
-			id, err := rgb.rgb11ContractIDForAssetName(*name)
+			id, err := rgb.rgb11ContractIDForAssetName(*local)
 			if err != nil {
 				return nil, err
 			}
@@ -405,6 +409,10 @@ func (p *Manager) ReceiveRGB11ContractDeposit(ctx context.Context, contract Cont
 	if validated.Asset.Amount.Value.String() != deposit.Intent.Amount {
 		return fmt.Errorf("RGB11 deposit amount differs from signed intent")
 	}
+	local, err := p.RGB11LocalAsset(contract.GetAssetName())
+	if err != nil || validated.Asset.Name != *local {
+		return ErrRGB11PublicIdentityMismatch
+	}
 	// Preparation checks every input independently of the RGB assignment proof.
 	// Spend authorization is checked against the observed final witness before
 	// any contract input or anchor can be authorized.
@@ -560,11 +568,18 @@ func (p *Manager) MaterializeRGB11ContractInput(ctx context.Context, contract Co
 			return nil, err
 		}
 	}
-	if err := contract.GetRuntimeBase().initializeRGB11PublicMetadata(deposit.Source.Output); err != nil {
+	local, err := p.RGB11LocalAsset(contract.GetAssetName())
+	if err != nil || len(deposit.Source.Output.Assets) != 1 || deposit.Source.Output.Assets[0].Name != *local {
+		return nil, ErrRGB11PublicIdentityMismatch
+	}
+	output := deposit.Source.Output.Clone()
+	output.Assets = append(indexer.TxAssets(nil), output.Assets...)
+	output.Assets[0].Name = *contract.GetAssetName()
+	if err := contract.GetRuntimeBase().initializeRGB11PublicMetadata(output); err != nil {
 		return nil, err
 	}
 	h := sha256.Sum256(deposit.Source.PublicProof)
-	return &RGB11ContractInput{Output: deposit.Source.Output.Clone(), Recipient: deposit.Intent.Recipient,
+	return &RGB11ContractInput{Output: output, Recipient: deposit.Intent.Recipient,
 		ProofDigest: h[:], RGB11Proof: append([]byte(nil), deposit.Source.PublicProof...)}, nil
 }
 

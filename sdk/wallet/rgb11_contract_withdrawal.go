@@ -138,12 +138,21 @@ func (p *rgb11Manager) rgb11ContractDescendPlan(first *rgb11wallet.PendingTransf
 			return nil, nil, fmt.Errorf("invalid RGB11 withdrawal plan")
 		}
 	} else if errors.Is(err, indexer.ErrKeyNotFound) {
+		_, asset, _, err := ParseContractURL(more.ContractURL)
+		if err != nil {
+			return nil, nil, err
+		}
+		name := ParseAssetString(asset)
+		local, err := owner.RGB11LocalAsset(name)
+		if err != nil || *local != first.State.Asset.Name {
+			return nil, nil, ErrRGB11PublicIdentityMismatch
+		}
 		var amount *Decimal
 		for _, item := range batch {
 			amount = amount.Add(&item.State.Asset.Amount)
 		}
 		tx, fetcher, err := owner.CreateDeAnchorTx(first.ChannelSend.ChannelID, first.State.WitnessTxID,
-			&AssetName{AssetName: first.State.Asset.Name}, amount, 0, nil)
+			&AssetName{AssetName: *name}, amount, 0, nil)
 		if err != nil {
 			return nil, nil, err
 		}

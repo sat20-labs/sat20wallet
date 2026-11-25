@@ -43,7 +43,7 @@
             <div class="flex items-center justify-between gap-2 py-1">
               <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.swapAsset')
               }}</span>
-              <span class="text-xs sm:text-sm font-medium text-right break-all">{{ swapDetails.assetName }}</span>
+              <span class="text-xs sm:text-sm font-medium text-right break-all">{{ assetApprovalLabel(swapDetails.assetName, rgb11.state.assets) }}</span>
             </div>
             <div class="flex items-center justify-between gap-2 py-1">
               <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.swapInputAmount')
@@ -66,8 +66,7 @@
             <div class="flex items-center justify-between gap-2 py-1">
               <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.asset')
               }}</span>
-              <span class="text-xs sm:text-sm font-medium text-right break-all">{{ withdrawDetails.assetName
-              }}</span>
+              <span class="text-xs sm:text-sm font-medium text-right break-all">{{ assetApprovalLabel(withdrawDetails.assetName, rgb11.state.assets) }}</span>
             </div>
             <div class="flex items-center justify-between gap-2 py-1">
               <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.quantity')
@@ -147,6 +146,8 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/
 import { useToast } from '@/components/ui/toast-new'
 import sat20 from '@/utils/sat20'
 import { useWalletStore } from '@/store/wallet'
+import { useRGB11Store } from '@/store/rgb11'
+import { assetApprovalLabel } from '@/utils/walletViews'
 interface Props {
   data: {
     url: string;
@@ -163,6 +164,7 @@ const props = defineProps<Props>()
 const emit = defineEmits(['confirm', 'cancel'])
 const toast = useToast()
 const wallet = useWalletStore()
+const rgb11 = useRGB11Store()
 
 const isLoading = ref(false)
 const invokeError = ref('')
