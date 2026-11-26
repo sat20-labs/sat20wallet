@@ -214,6 +214,14 @@ func (p *Manager) prepareBindingOnNode(root common.Wallet, store *dkvsStore, nod
 	if err != nil {
 		return nil, err
 	}
+	if mode == registerCoreBinding && p.cfg != nil && p.cfg.Mode == SERVER_NODE {
+		// A Core bootstraps its service identity with the standalone signed
+		// mapping CAS before initializing its local account subscriptions.
+		return func() error {
+			_, err := store.client.withRequestContext(ctx).acceptCoreBinding(root, key, coreID, value, mode)
+			return err
+		}, nil
+	}
 	prefix, _, err := dkvsManagedPathForKey(key)
 	if err != nil {
 		return nil, err
@@ -397,23 +405,30 @@ func verifyAccountDirectRecord(localAccount string, record *swire.DKVSRecord) (*
 	if message.RecipientAccount != localAccount || message.SenderAccount != parsed.Segments[2] || message.MessageID != parsed.Segments[3] {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
+	if err := verifyDirectSignature(message); err != nil {
+		return nil, err
+	}
+	return message, nil
+}
+
+func verifyDirectSignature(message *swire.DirectMessage) error {
 	hash, err := swire.DirectMessageSigningHash(message)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	pubBytes, err := dkvsindexer.AccountPubKey(message.SenderAccount)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	pub, err := btcec.ParsePubKey(pubBytes)
 	if err != nil {
-		return nil, dkvsindexer.ErrInvalidSignature
+		return dkvsindexer.ErrInvalidSignature
 	}
 	sig, err := schnorr.ParseSignature(message.SenderSignature)
 	if err != nil || !sig.Verify(hash[:], pub) {
-		return nil, dkvsindexer.ErrInvalidSignature
+		return dkvsindexer.ErrInvalidSignature
 	}
-	return message, nil
+	return nil
 }
 
 func (p *Manager) ReadAccountDirectMessages(start, limit int) ([]*AccountDirectMessage, int, error) {

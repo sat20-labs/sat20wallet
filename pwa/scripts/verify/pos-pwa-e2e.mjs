@@ -195,19 +195,19 @@ export async function runPwaPosCases(t, fixture) {
     }
     const tab = (await page.getByRole('tab', { selected: true }).innerText()).trim()
     assert.ok(['Bitcoin', 'SatoshiNet', 'Channel'].includes(tab), 'RGB asset selection requires a known source layer')
-    const expectedKey = tab === 'SatoshiNet' && publicRGBKey ? publicRGBKey : fixture.asset.key
+    const expectedKey = tab === 'Bitcoin' ? fixture.asset.key : (publicRGBKey || fixture.asset.chainKey)
     let channelLabel
     if (tab === 'Channel') {
       // Channel rows start with the canonical ticker, then metadata updates
       // their label. Wait for that known final label before fixing a locator.
-      const ticker = JSON.parse((await walletCall(page, 'getTickerInfo', fixture.asset.key)).ticker)
-      assert.deepEqual(ticker.name, { Protocol: 'rgb11', Type: 'f', Ticker: fixture.asset.ticker })
+      const ticker = JSON.parse((await walletCall(page, 'getTickerInfo', expectedKey)).ticker)
+      assert.equal(assetKey(ticker.name), expectedKey)
       channelLabel = ticker.displayname || ticker.name.Ticker
       assert.ok(typeof channelLabel === 'string' && channelLabel.trim())
       await expect.poll(() => page.evaluate(async key => {
         const store = (await import('/store/channel.ts')).useChannelStore()
         return store.rgb11List.filter(asset => asset.key === key).map(asset => asset.label)
-      }, fixture.asset.key), pollOptions).toEqual([channelLabel])
+      }, expectedKey), pollOptions).toEqual([channelLabel])
     }
     const matches = await page.evaluate(async ({ key, tab }) => {
       const store = tab === 'Bitcoin' ? (await import('/store/l1.ts')).useL1Store()
@@ -226,11 +226,12 @@ export async function runPwaPosCases(t, fixture) {
     if (canonical) assert.equal(asset.label, canonical)
     const label = tab === 'Channel' ? channelLabel : asset.label
     assert.ok(typeof label === 'string' && label.trim(), 'the selected RGB asset must have a display label')
+    const visibleLabel = tab === 'SatoshiNet' ? label.split(':').at(-1) : label
     const row = tab === 'Bitcoin'
       ? rows.and(page.locator(`[data-asset-key=${JSON.stringify(asset.key)}]`))
-      : rows.filter({ has: page.getByText(label, { exact: true }) })
+      : rows.filter({ has: page.getByText(visibleLabel, { exact: true }) })
     await expect(row).toHaveCount(1)
-    await expect(row.locator('div.font-medium.text-zinc-400').first()).toHaveText(label)
+    await expect(row.locator('div.font-medium.text-zinc-400').first()).toHaveText(visibleLabel)
     return { row, label }
   }
   const assertAssetVisible = async amount => {
@@ -343,10 +344,10 @@ export async function runPwaPosCases(t, fixture) {
     await expect(balancePanel().getByRole('heading', { level: 2 })).toHaveText(btcText(channelAmount(channel, '::')))
     return channel
   }
-  const observeAssetCall = method => page.evaluateHandle(async method => {
-    const manager = (await import('/utils/sat20.ts')).default
+  const observeAssetCall = (method, stp = false) => page.evaluateHandle(async ({ method, stp }) => {
+    const manager = (stp ? await import('/utils/stp.ts') : await import('/utils/sat20.ts')).default
     const original = manager[method]
-    const state = { called: false, error: '', txid: null, restore: () => { manager[method] = original } }
+    const state = { called: false, settled: false, error: '', txid: null, restore: () => { manager[method] = original } }
     const record = error => {
       state.error = String(error?.message ?? error)
         .replace(/\b(?:[a-z]{2,}\s+){11,23}[a-z]{2,}\b/gi, '[redacted mnemonic]')
@@ -358,15 +359,18 @@ export async function runPwaPosCases(t, fixture) {
       state.called = true
       try {
         const result = await original.apply(this, args)
-        if (result?.[0]) record(result[0]); else state.txid = result?.[1]?.txId ?? null
+        if (result?.[0]) record(result[0])
+        else state.txid = result?.[1]?.txId ?? result?.[1]?.unlockTxId ?? result?.[1]?.lockTxId ?? null
         return result
       } catch (error) {
         record(error)
         throw error
+      } finally {
+        state.settled = true
       }
     }
     return state
-  }, method)
+  }, { method, stp })
 
   const pendingFunding = async (before, submissionError) => {
     let snapshot
@@ -544,6 +548,7 @@ export async function runPwaPosCases(t, fixture) {
     assert.equal(credited, expectedCredit, 'deposit credit must equal the user-confirmed amount; deposit service fee is zero')
     const creditedSats = outputs.reduce((sum, output) => sum + asInteger(output.value), 0n)
     if (rgbCrossLayer && token) {
+      assert.equal(asInteger(confirmed.anchor.value), 0n, 'the public RGB Anchor invoice must carry zero sats')
       assert.equal(creditedSats, 0n, 'the public RGB Anchor must credit zero SatoshiNet sats')
       const fundingTx = await readL1Transaction(funding.txid)
       const carrierVout = Number(confirmed.anchor.funding_outpoint.split(':')[1])
@@ -616,7 +621,7 @@ export async function runPwaPosCases(t, fixture) {
       if (rgbCrossLayer && chain === 'Bitcoin') {
         await assertAssetVisible(rgbStateAmount(await rgbState(), fixture.asset.key))
       } else if (rgbCrossLayer && chain === 'SatoshiNet') {
-        const amount = await readL2Amount(publicRGBKey || fixture.asset.key)
+        const amount = await readL2Amount(publicRGBKey || fixture.asset.chainKey)
         if (amount > 0n) await assertAssetVisible(amount)
       } else await assertAssetVisible(summaryAmount(summary, fixture.asset.key))
     }
@@ -799,8 +804,10 @@ export async function runPwaPosCases(t, fixture) {
   }
   const privateRoundTrip = async token => {
     await selectMode('lightning')
-    const key = token ? fixture.asset.key : '::'
-    const amount = token ? 100n : 4000n
+    const rgb = token && rgbCrossLayer
+    const key = token ? (rgb ? fixture.asset.chainKey : fixture.asset.key) : '::'
+    const amount = rgb ? 1n : token ? 100n : 4000n
+    const beforeBitcoin = rgb ? (await control('snapshot')).l1 : null
     if (!token && fixture.privateBTCRoundTripResume) {
       const original = fixture.privateBTCRoundTripResume
       const snapshot = await control('snapshot')
@@ -859,24 +866,56 @@ export async function runPwaPosCases(t, fixture) {
     const before = await readChannel()
     const sourceBefore = await readL2Amount(key)
     const satsBefore = await readL2Total()
+    const submit = async (action, tab) => {
+      const observation = await observeAssetCall(action === 'Unlock' ? 'unlockFromChannel' : 'lockToChannel', true)
+      let call
+      try {
+        await clickAssetOperation(action, amount, token, tab)
+        await expect.poll(() => observation.evaluate(value => value.settled), {
+          ...pollOptions, message: `${action} did not finish in the wallet SDK`,
+        }).toBe(true)
+        call = await observation.evaluate(value => ({ error: value.error, txid: value.txid }))
+      } finally {
+        await observation.evaluate(value => value.restore())
+        await observation.dispose()
+      }
+      assert.equal(call.error, '', `${action} was rejected by the wallet SDK: ${call.error}`)
+      assert.match(call.txid ?? '', txidPattern, `${action} did not return a SatoshiNet transaction ID`)
+      return call.txid
+    }
     // Unlock first gives the peer an equivalent balance, so locking it back
     // exercises the ordinary funded channel without an unrelated expansion.
-    await clickAssetOperation('Unlock', amount, token, 'Channel')
+    let unlockTxID
+    if (rgb) {
+      assert.ok(await readL2Amount('::') >= asInteger(fixture.rgbCrossLayerFunding.channel_fee_budget),
+        'ordinary-2 must keep enough plain sats to pay the two private SatoshiNet transaction fees')
+      unlockTxID = await submit('Unlock', 'Channel')
+    } else await clickAssetOperation('Unlock', amount, token, 'Channel')
     await expect.poll(async () => channelAmount(await readChannel(), key), pollOptions).toBe(channelAmount(before, key) - amount)
     const unlocked = await readyChannelUI()
     assert.notEqual(unlocked.lastPaymentId, before.lastPaymentId)
+    if (rgb) assert.equal(unlocked.lastPaymentId, unlockTxID)
     await confirmedL2Transaction(unlocked.lastPaymentId)
     await expect.poll(() => readL2Amount(key), pollOptions).toBe(sourceBefore + amount - (token ? 0n : 10n))
-    await expect.poll(readL2Total, pollOptions).toBe(satsBefore + amount - 10n)
+    if (!rgb) await expect.poll(readL2Total, pollOptions).toBe(satsBefore + amount - 10n)
     await assertWalletBalanceUI('SatoshiNet', token)
-    await clickAssetOperation('Lock', amount, token, 'SatoshiNet')
+    let lockTxID
+    if (rgb) lockTxID = await submit('Lock', 'SatoshiNet')
+    else await clickAssetOperation('Lock', amount, token, 'SatoshiNet')
     await expect.poll(async () => channelAmount(await readChannel(), key), pollOptions).toBe(channelAmount(before, key))
     const locked = await readyChannelUI()
     assert.notEqual(locked.lastPaymentId, unlocked.lastPaymentId)
+    if (rgb) assert.equal(locked.lastPaymentId, lockTxID)
     await confirmedL2Transaction(locked.lastPaymentId)
     assert.deepEqual(channelBalances(locked), channelBalances(before))
     await expect.poll(() => readL2Amount(key), pollOptions).toBe(sourceBefore - (token ? 0n : 20n))
-    await expect.poll(readL2Total, pollOptions).toBe(satsBefore - 20n)
+    if (rgb) {
+      const afterBitcoin = (await control('snapshot')).l1
+      assert.deepEqual(afterBitcoin.pending_txids, beforeBitcoin.pending_txids)
+      assert.deepEqual(afterBitcoin.confirmed_txids, beforeBitcoin.confirmed_txids)
+      console.log(JSON.stringify({ rgbLockUnlock: { asset: key, amount: String(amount),
+        unlock_txid: unlocked.lastPaymentId, lock_txid: locked.lastPaymentId } }))
+    } else await expect.poll(readL2Total, pollOptions).toBe(satsBefore - 20n)
     await assertWalletBalanceUI('SatoshiNet', token)
     if (!token && fixture.realBitcoinControl) {
       console.log(JSON.stringify({ privateBTCBeforeReload: {
@@ -907,6 +946,7 @@ export async function runPwaPosCases(t, fixture) {
   const splicingOut = async token => {
     await selectMode('lightning')
     const key = token ? fixture.asset.key : '::'
+    const channelKey = token && rgbCrossLayer ? fixture.asset.chainKey : key
     const amount = token ? (rgbCrossLayer ? asInteger(amounts.splicing_out_asset) : 400n) : 10000n
     const prior = await readChannel()
     const before = await control('snapshot')
@@ -919,7 +959,7 @@ export async function runPwaPosCases(t, fixture) {
         'splicing-out has no exact requested output to the wallet')
     }
     const current = await readyChannelUI()
-    assert.equal(channelAmount(current, key), channelAmount(prior, key) - amount)
+    assert.equal(channelAmount(current, channelKey), channelAmount(prior, channelKey) - amount)
     if (token) await expect.poll(() => addressAmount('Bitcoin', fixture.address, key), pollOptions).toBe(l1Before + amount)
     else {
       const received = (await addressAmount('Bitcoin', fixture.address, key)) - l1Before
@@ -1154,7 +1194,7 @@ export async function runPwaPosCases(t, fixture) {
     assert.equal(issued.error_code, '')
     assert.equal(rgbStateAmount(issued, key), 1000n)
     await assertRGBProofs(key, 1000n)
-    fixture.asset = { key, type: 'RGB', ticker: key.split(':').at(-1), genesisTicker: ticker }
+    fixture.asset = { key, chainKey: displayedName, type: 'RGB', ticker: key.split(':').at(-1), genesisTicker: ticker }
     await form.getByRole('button', { name: 'Close', exact: true }).first().click()
     await expect(form).toBeHidden()
     return key
@@ -1271,8 +1311,8 @@ export async function runPwaPosCases(t, fixture) {
       assert.equal(deploymentParameters.contractType, 'transcend.tc',
         'PWA deployment approval must target the Transcend template')
       assert.deepEqual(deploymentParameters.assetName, {
-        Protocol: 'rgb11', Type: 'f', Ticker: fixture.asset.ticker,
-      }, 'PWA deployment approval must preserve the exact complete RGB11 asset identity')
+        Protocol: 'rgb11', Type: 'f', Ticker: fixture.asset.chainKey.split(':').at(-1),
+      }, 'PWA deployment approval must use the verified SatoshiNet asset name')
       const deployLogsBefore = await operationLogs()
       await deployDialog.getByRole('button', { name: 'Confirm', exact: true }).click()
       const serviceFeeTxid = await newOperationTx('deploy_contract', deployLogsBefore)
@@ -1366,11 +1406,12 @@ export async function runPwaPosCases(t, fixture) {
 
   const privateRGBRoundTrip = async key => {
     await selectMode('lightning')
+    const chainKey = fixture.asset.chainKey
     const amount = asInteger(amounts.splicing_asset)
     const initial = await assertReadyChannel()
     const l1Before = await addressAmount('Bitcoin', fixture.address, key)
-    const channelBefore = channelAmount(initial, key)
-    const l2Before = await readL2Amount(key)
+    const channelBefore = channelAmount(initial, chainKey)
+    const l2Before = await readL2Amount(chainKey)
     const before = await control('snapshot')
     assert.deepEqual(before.l1.pending_txids, [], 'private RGB splicing requires a clean L1 mempool')
     assert.equal(l1Before + channelBefore + l2Before, 1000n,
@@ -1383,37 +1424,41 @@ export async function runPwaPosCases(t, fixture) {
     assert.equal(anchor.native_proof, true, 'confirmed private RGB Anchor must carry its committed proof')
     const mapped = anchor.outputs[0].assets
     assert.equal(mapped.length, 1)
-    assert.equal(assetKey(mapped[0].Name), key)
+    assert.equal(assetKey(mapped[0].Name), chainKey)
+    assert.equal(mapped[0].BindingSat, 0)
+    assert.equal(asInteger(anchor.value), 0n)
+    assert.equal(asInteger(anchor.outputs[0].value), 0n)
     assert.equal(asInteger(mapped[0].Amount.Value), amount)
     assert.equal(mapped[0].Amount.Precision, 0)
     const afterIn = await readyChannelUI()
-    assert.equal(channelAmount(afterIn, key), channelBefore + amount)
+    assert.equal(channelAmount(afterIn, chainKey), channelBefore + amount)
     assert.equal(await addressAmount('Bitcoin', fixture.address, key), l1Before - amount)
-    assert.equal(channelAmount(afterIn, key) + await addressAmount('Bitcoin', fixture.address, key) + await readL2Amount(key), 1000n)
+    assert.equal(channelAmount(afterIn, chainKey) + await addressAmount('Bitcoin', fixture.address, key) + await readL2Amount(chainKey), 1000n)
     assertSignedAnchor(signed, anchor, afterIn)
     await assertAssetVisible(channelBefore + amount)
+    await privateRoundTrip(true)
 
     await splicingOut(true)
     const finalChannel = await readyChannelUI()
-    assert.equal(channelAmount(finalChannel, key), channelBefore)
+    assert.equal(channelAmount(finalChannel, chainKey), channelBefore)
     assert.equal(await addressAmount('Bitcoin', fixture.address, key), l1Before)
-    assert.equal(await readL2Amount(key), l2Before)
-    assert.equal(channelAmount(finalChannel, key) + await addressAmount('Bitcoin', fixture.address, key) + await readL2Amount(key), 1000n)
+    assert.equal(await readL2Amount(chainKey), l2Before)
+    assert.equal(channelAmount(finalChannel, chainKey) + await addressAmount('Bitcoin', fixture.address, key) + await readL2Amount(chainKey), 1000n)
     await assertRGBProofs(key, l1Before)
     await assertWalletBalanceUI('Bitcoin', true)
-    console.log(JSON.stringify({ rgbPrivateRoundTrip: { key, amount: String(amount),
+    console.log(JSON.stringify({ rgbPrivateRoundTrip: { key, chain_key: chainKey, anchor: anchor.txid, amount: String(amount),
       l1_before: String(l1Before), channel_before: String(channelBefore), l2_before: String(l2Before),
       l1_final: String(await addressAmount('Bitcoin', fixture.address, key)),
-      channel_final: String(channelAmount(finalChannel, key)), l2_final: String(await readL2Amount(key)) } }))
+      channel_final: String(channelAmount(finalChannel, chainKey)), l2_final: String(await readL2Amount(chainKey)) } }))
   }
 
   const publicRGBRoundTrip = async () => {
     const key = await issueCrossLayerRGB()
-    publicRGBKey = `rgb11:f:${fixture.asset.genesisTicker.toLowerCase()}@${fixture.asset.ticker.slice(-4)}`
+    publicRGBKey = fixture.asset.chainKey
     const initial = await assertRGBProofs(key, 1000n)
     const l1Before = rgbStateAmount(initial, key)
     const l2Before = await addressAmount('SatoshiNet', fixture.address, publicRGBKey)
-    const channelBefore = await channelAmount(await assertReadyChannel(), key)
+    const channelBefore = channelAmount(await assertReadyChannel(), publicRGBKey)
     assert.equal(l1Before + l2Before + channelBefore, 1000n,
       'the issued cross-layer fixture must account for its complete RGB supply before public deposit')
     publicRGBContractURL = await deployPublicRGBTranscend(key)
@@ -1443,8 +1488,8 @@ export async function runPwaPosCases(t, fixture) {
     assert.equal(assetKey(tickerInfo.name), publicRGBKey)
     assert.equal(tickerInfo.displayname, publicRGBKey)
     assert.equal(tickerInfo.contract_id, fixture.asset.ticker)
-    assert.equal(await channelAmount(await readChannel(), key), channelBefore)
-    assert.equal(await addressAmount('Bitcoin', fixture.address, key) + await readL2Amount(publicRGBKey) + await channelAmount(await readChannel(), key), 1000n)
+    assert.equal(channelAmount(await readChannel(), publicRGBKey), channelBefore)
+    assert.equal(await addressAmount('Bitcoin', fixture.address, key) + await readL2Amount(publicRGBKey) + channelAmount(await readChannel(), publicRGBKey), 1000n)
     const afterDeposit = await control('snapshot')
     assert.notDeepEqual(afterDeposit.l1.confirmed_txids, before.l1.confirmed_txids,
       'public Deposit must confirm its own real Bitcoin funding transaction')
@@ -1464,8 +1509,8 @@ export async function runPwaPosCases(t, fixture) {
     await withdraw(true)
     assert.equal(await addressAmount('Bitcoin', fixture.address, key), l1Before)
     assert.equal(await readL2Amount(publicRGBKey), l2Before)
-    assert.equal(await channelAmount(await readChannel(), key), channelBefore)
-    assert.equal(await addressAmount('Bitcoin', fixture.address, key) + await readL2Amount(publicRGBKey) + await channelAmount(await readChannel(), key), 1000n)
+    assert.equal(channelAmount(await readChannel(), publicRGBKey), channelBefore)
+    assert.equal(await addressAmount('Bitcoin', fixture.address, key) + await readL2Amount(publicRGBKey) + channelAmount(await readChannel(), publicRGBKey), 1000n)
     await assertRGBProofs(key, l1Before)
     await assertWalletBalanceUI('Bitcoin', true)
     console.log(JSON.stringify({ rgbPublicRoundTrip: { key, chain_key: publicRGBKey, amount: String(depositAmount),
@@ -1550,7 +1595,7 @@ export async function runPwaPosCases(t, fixture) {
           return
         }
         await check(requiredPwaRgbCrossLayerCases[0], publicRGBRoundTrip)
-        await check(requiredPwaRgbCrossLayerCases[1], async () => privateRGBRoundTrip(await issueCrossLayerRGB()))
+        await check(requiredPwaRgbCrossLayerCases[1], () => privateRGBRoundTrip(fixture.asset.key))
       } catch (error) {
         await t.preserveBrowserFailureState?.()
         throw error

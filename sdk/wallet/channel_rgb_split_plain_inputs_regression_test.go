@@ -15,7 +15,7 @@ import (
 func TestSTPRGBSplitAllowsCanonicalPlainChannelAndFeeInputs(t *testing.T) {
 	fixture := newRGB11PrecisionFixture(t, 2)
 	asset := &AssetName{AssetName: fixture.source.AssetName, N: 0}
-	ticker, err := fixture.manager.GetSTPFundingTickerInfo(&fixture.source.AssetName, fixture.channel.AssetFunding)
+	ticker, err := fixture.manager.GetSTPFundingTickerInfo(&fixture.registeredName, fixture.channel.AssetFunding)
 	if err != nil {
 		t.Fatal(err)
 	}

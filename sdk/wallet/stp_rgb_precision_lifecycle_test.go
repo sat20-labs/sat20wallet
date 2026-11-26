@@ -18,24 +18,30 @@ import (
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	"github.com/sat20-labs/satoshinet/anchortx/nativeproof"
+	dkvs "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
+	"github.com/stretchr/testify/require"
 )
 
 type precisionSeparationRGB11Fixture struct {
-	channel *Channel
-	manager *Manager
-	source  rgb11wallet.ChannelFunding
-	output  *TxOutput
-	wallet  common.Wallet
-	remote  common.Wallet
+	channel        *Channel
+	manager        *Manager
+	source         rgb11wallet.ChannelFunding
+	output         *TxOutput
+	registeredName indexer.AssetName
+	channelOutput  *TxOutput
+	wallet         common.Wallet
+	remote         common.Wallet
 }
+
+const precisionFixtureTicker = "NPREC"
 
 // The allocation is issued by core and independently validated against a
 // synthetic Bitcoin transaction. No indexer response contains an RGB balance.
 func newRGB11PrecisionFixture(t *testing.T, precision int) *precisionSeparationRGB11Fixture {
 	t.Helper()
-	previous := _chain
-	_chain = "testnet4"
-	t.Cleanup(func() { _chain = previous })
+	previous, previousIndexer := _chain, indexer.CHAIN
+	_chain, indexer.CHAIN = "testnet4", "testnet"
+	t.Cleanup(func() { _chain, indexer.CHAIN = previous, previousIndexer })
 	local := NewInternalWalletWithMnemonic(accountRootWrapperTestMnemonic, "precision-local", GetChainParam())
 	remote := NewInternalWalletWithMnemonic(channelHeartbeatTestMnemonic, "precision-remote", GetChainParam())
 	redeem, err := utils.GenMultiSigScript(local.GetPubKey().SerializeCompressed(), remote.GetPubKey().SerializeCompressed())
@@ -65,7 +71,7 @@ func newRGB11PrecisionFixture(t *testing.T, precision int) *precisionSeparationR
 	}
 	issued, err := coreissuance.Issue(coreissuance.Spec{
 		Kind: schemas.NIA, Network: rgb11IssuanceNetwork(GetChainParam()),
-		Ticker: "NPREC", Name: "RGB11 precision", Precision: uint8(precision), Allocations: allocations,
+		Ticker: precisionFixtureTicker, Name: "RGB11 precision", Precision: uint8(precision), Allocations: allocations,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -97,8 +103,13 @@ func newRGB11PrecisionFixture(t *testing.T, precision int) *precisionSeparationR
 	}
 	output := indexer.GenerateTxOutput(tx, 0)
 	output.Assets = indexer.TxAssets{validated.Asset}
-	identity := GetAssetName2(&validated.Asset)
-	channel.FundingUtxos[*identity] = []*TxOutput{output}
+	registered := name
+	registered.Ticker, err = dkvs.RGB11NameTicker(precisionFixtureTicker, name.Ticker)
+	require.NoError(t, err)
+	channelOutput := output.Clone()
+	channelOutput.Assets[0].Name = registered
+	identity := GetAssetName2(&channelOutput.Assets[0])
+	channel.FundingUtxos[*identity] = []*TxOutput{channelOutput}
 	inventory, err := rgb11wallet.EncodeChannelInventory([]rgb11wallet.ChannelFunding{source})
 	if err != nil {
 		t.Fatal(err)
@@ -106,24 +117,35 @@ func newRGB11PrecisionFixture(t *testing.T, precision int) *precisionSeparationR
 	channel.AssetFunding["rgb11"] = inventory
 	// Match the production constructor's real reservation owner. Evidence is
 	// synthetic, but the coasset consistency read still uses its actual gate.
-	manager := &Manager{}
+	key, err := dkvs.RGB11NameKey(registered.Ticker)
+	require.NoError(t, err)
+	value, err := dkvs.RGB11NameValue(name.Ticker)
+	require.NoError(t, err)
+	core := NewInternalWalletWithMnemonic(testCoreMnemonic, "", GetChainParam())
+	record, err := NewDKVSSignedRecord(core, key, value, dkvs.RecordOptions{Seq: dkvs.RGB11NameProofSeq, IssueHeight: 1})
+	require.NoError(t, err)
+	registry := newRGB11MemoryDKVSHTTP()
+	registry.records[key] = record
+	manager := &Manager{db: newMemoryKVDB(), http: registry, cfg: &common.Config{
+		IndexerL2: &common.Indexer{Scheme: "http", Host: "dkvs.test", Proxy: "testnet"},
+	}}
 	manager.rgbManager = &rgb11Manager{Manager: manager, accountOwner: manager, evidence: evidence}
-	return &precisionSeparationRGB11Fixture{channel: channel, source: source, output: output, wallet: local, remote: remote,
-		manager: manager}
+	return &precisionSeparationRGB11Fixture{channel: channel, source: source, output: output,
+		registeredName: registered, channelOutput: channelOutput, wallet: local, remote: remote, manager: manager}
 }
 
 func TestRGBPrecisionSeparationFundingCommitmentExpansion(t *testing.T) {
 	for _, precision := range []int{0, 2, 18} {
 		t.Run(fmt.Sprint(precision), func(t *testing.T) {
 			fixture := newRGB11PrecisionFixture(t, precision)
-			name := &AssetName{AssetName: fixture.source.AssetName, N: 0}
+			name := &AssetName{AssetName: fixture.registeredName, N: 0}
 			protocol := rgb11STPProtocol{}
 			empty := &Channel{ChannelInDB: *NewChannelInDB()}
 			incoming := fixture.channel.AssetFunding["rgb11"]
 			if _, err := protocol.ValidateChannelFunding(fixture.manager, empty, name, []*TxOutput{fixture.output.Clone()}, incoming); err != nil {
 				t.Fatalf("N=0 funding with explicit precision %d rejected: %v", precision, err)
 			}
-			if _, err := protocol.BuildExpansionAnchorProof(fixture.manager, fixture.channel, name, fixture.output); err != nil {
+			if _, err := protocol.BuildExpansionAnchorProof(fixture.manager, fixture.channel, name, fixture.channelOutput); err != nil {
 				t.Fatalf("N=0 expansion with explicit precision %d rejected: %v", precision, err)
 			}
 			local := fixture.source.Amount.Clone()
@@ -173,7 +195,7 @@ func TestRGBPrecisionSeparationFundingCommitmentExpansion(t *testing.T) {
 			if _, err := protocol.ValidateChannelFunding(fixture.manager, empty, name, []*TxOutput{fixture.output.Clone()}, badInventory); err == nil {
 				t.Fatal("funding accepted a claimed precision different from actual genesis under the same asset ID")
 			}
-			badOutput := fixture.output.Clone()
+			badOutput := fixture.channelOutput.Clone()
 			badOutput.Assets[0].Amount.Precision = (precision + 1) % 19
 			if _, err := protocol.BuildExpansionAnchorProof(fixture.manager, fixture.channel, name, badOutput); err == nil {
 				t.Fatal("expansion accepted a local view with a different RGB11 quantity precision")
@@ -213,7 +235,7 @@ func TestRGBPrecisionSeparationLaunchPoolInitAndRestore(t *testing.T) {
 			t.Cleanup(func() { _ = db.Close() })
 			manager := &precisionSeparationLaunchManager{database: db, wallet: fixture.wallet}
 			static := rgb11LaunchTestContent()
-			static.AssetName, static.BindingSat, static.RGBPrecision = fixture.source.AssetName, 0, precision
+			static.AssetName, static.BindingSat, static.RGBPrecision = fixture.registeredName, 0, precision
 			hash := sha256.Sum256(fixture.source.Consignment)
 			static.RGBGenesisHash, static.RGBSourcePoint = hex.EncodeToString(hash[:]), fixture.source.OutPoint
 			if err := static.CheckContent(); err != nil {

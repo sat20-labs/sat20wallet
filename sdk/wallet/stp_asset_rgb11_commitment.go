@@ -95,8 +95,15 @@ func (rgb11STPProtocol) BuildCommitment(_ *Manager, req STPAssetCommitmentReques
 			return nil, fmt.Errorf("nil RGB11 channel source")
 		}
 		source, exists := byPoint[input.OutPointStr]
+		if !exists {
+			return nil, fmt.Errorf("RGB11 channel funding has no source proof")
+		}
+		name, err := stpRGB11FundingName(source)
+		if err != nil {
+			return nil, err
+		}
 		inputAmount := input.GetAsset(&asset.AssetName)
-		if !exists || source.AssetName != asset.AssetName || source.Amount.Precision != precision ||
+		if name != asset.AssetName || source.Amount.Precision != precision ||
 			inputAmount.Validate() != nil || inputAmount.Precision != precision ||
 			source.Amount.Cmp(inputAmount) != 0 || source.Value != input.Value() ||
 			!bytes.Equal(source.PkScript, input.OutValue.PkScript) || !bytes.Equal(source.PkScript, req.Channel.GetChannelPkScript()) {
@@ -292,7 +299,11 @@ func (protocol rgb11STPProtocol) BindSplice(p *Manager, req STPAssetSpliceReques
 			return err
 		}
 		remaining = append(remaining, funding)
-		resv.RGB11AnchorProof, err = funding.RGB11Proof()
+		proof, err := funding.RGB11Proof()
+		if err != nil {
+			return err
+		}
+		resv.RGB11AnchorProof, err = protocol.view.namedFundingProof(p, resv.AssetName.AssetName, funding.AssetName.Ticker, proof)
 		if err != nil {
 			return err
 		}

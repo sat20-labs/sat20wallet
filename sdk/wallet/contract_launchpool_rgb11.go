@@ -646,11 +646,7 @@ func (p *LaunchPoolContractRunTime) verifyRGB11LaunchAnchor(req *wwire.RemoteSig
 		return nil, err
 	}
 	manager := p.stp.GetWalletMgr()
-	bind, err := manager.AnchorOutputsActive()
-	if err != nil || len(tx.TxIn) != 1 {
-		return nil, fmt.Errorf("invalid RGB11 launchpool anchor input: %w", err)
-	}
-	data, _, err := CheckAnchorPkScript(tx.TxIn[0].SignatureScript, tx.TxOut, bind)
+	data, _, err := CheckAnchorTxSig(tx, true)
 	if err != nil {
 		return nil, err
 	}

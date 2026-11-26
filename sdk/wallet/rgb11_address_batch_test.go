@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/btcsuite/btcd/chaincfg"
-	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 	coreissuance "github.com/sat20-labs/rgb11/issuance"
@@ -278,8 +277,8 @@ func TestRGB11FullContractProjectionIdentityThroughBatchPrepare(t *testing.T) {
 	assertRGB11ProjectionProofIdentity(t, sender, "after-prepare")
 }
 
-func TestRGB11DirectBatchRequiresEveryOutputACK(t *testing.T) {
-	sender, recipient, imported, evidence, _ := newRGB11GenericSendFixture(t)
+func TestDirectBatchMailboxCommits(t *testing.T) {
+	sender, recipient, imported, evidence, rpc := newRGB11GenericSendFixture(t)
 	request := RGB11AddressSendRequest{ReceiverAddress: recipient.wallet.GetAddress(), AssetName: imported.AssetName, AmountRaw: "20000", FeeRate: 2, MinConfirmations: 1}
 	prepared, err := runRGB11ManagedOperation(sender, context.Background(), rgb11ManagedOperationNew, func(m *rgb11Manager) (*RGB11PreparedTransfer, error) {
 		return m.prepareRGB11AddressBatch(context.Background(), []RGB11AddressSendRequest{request, request}, dkvsindexer.RecordVerificationOptions{})
@@ -295,21 +294,9 @@ func TestRGB11DirectBatchRequiresEveryOutputACK(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		syncResult, err := recipient.rgbManager.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{})
-		if err != nil || syncResult.Invalid != 0 || syncResult.Received != 1 {
-			transfers, transferErr := recipient.rgbManager.projectionStore.ListTransfers()
-			reservations, reservationErr := recipient.rgbManager.loadRGB11Reservations()
-			engineRecords, engineErr := recipient.rgbManager.engineStore.ExportSnapshot()
-			t.Fatalf("output %d receive=%+v err=%v state=%+v transferErr=%v reservations=%+v reservationErr=%v engineRecords=%+v engineErr=%v preparedStates=%+v",
-				i, syncResult, err, transfers, transferErr, reservations, reservationErr, engineRecords, engineErr, prepared.States)
-		}
-		_, err = sender.rgbManager.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{})
-		if err != nil {
-			t.Fatal(err)
-		}
 		if i == 0 {
 			if _, err := sender.rgbManager.BroadcastRGB11AddressTransfer(state.TransferID); !errors.Is(err, ErrRGB11AddressDeliveryRequired) {
-				t.Fatalf("partial ACK allowed broadcast: %v", err)
+				t.Fatalf("partial mailbox commitment allowed broadcast: %v", err)
 			}
 			evidence.mu.Lock()
 			sent := len(evidence.broadcasted) != 0
@@ -345,31 +332,31 @@ func TestRGB11DirectBatchRequiresEveryOutputACK(t *testing.T) {
 	if err != nil || txid != prepared.TxID || fee <= 0 {
 		t.Fatalf("resume=%s fee=%d err=%v", txid, fee, err)
 	}
+	pending, err := sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := acceptRGB11FlowTx(evidence, rpc, pending.SignedTx, txid); err != nil {
+		t.Fatal(err)
+	}
+	evidence.mu.Lock()
+	for point, out := range evidence.utxos {
+		if allocationOutpointTxID(point) == txid {
+			out.Confirmations = 1
+		}
+	}
+	evidence.mu.Unlock()
+	evidence.setStatus(txid, rgb11wallet.BitcoinTxStatus{TxID: txid, Confirmed: true, Confirmations: 1})
+	received, err := recipient.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{})
+	if err != nil || received.Invalid != 0 || received.Received != 2 {
+		t.Fatalf("receive confirmed offline batch: %+v, %v", received, err)
+	}
 	for _, state := range prepared.States {
 		local, err := recipient.rgbManager.projectionStore.LoadTransferState(state.TransferID)
 		if err != nil || len(local.OutputOutPoints) != 1 || local.OutputOutPoints[0] != fmt.Sprintf("%s:%d", txid, state.RecipientVout) {
 			t.Fatalf("recipient state=%+v err=%v", local, err)
 		}
 	}
-	pending, err := sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	witness := wire.NewMsgTx(2)
-	if err := witness.Deserialize(bytes.NewReader(pending.SignedTx)); err != nil {
-		t.Fatal(err)
-	}
-	evidence.mu.Lock()
-	evidence.rawTx[txid] = append([]byte(nil), pending.SignedTx...)
-	for _, input := range witness.TxIn {
-		evidence.spendingTx[input.PreviousOutPoint.String()] = txid
-	}
-	for i, output := range witness.TxOut {
-		point := fmt.Sprintf("%s:%d", txid, i)
-		evidence.utxos[point] = &rgb11wallet.BitcoinUTXO{OutPoint: point, Value: output.Value, PkScript: output.PkScript, Confirmations: 1}
-	}
-	evidence.mu.Unlock()
-	evidence.setStatus(txid, rgb11wallet.BitcoinTxStatus{TxID: txid, Confirmed: true, Confirmations: 1})
 	if _, err := recipient.RefreshRGB11State(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -610,23 +597,11 @@ func TestRGB11DirectReservationResumesAfterSDKRestart(t *testing.T) {
 		t.Fatalf("prepared Direct state=%+v", prepared.State)
 	}
 	unsigned := assertRGB11UnsignedPending(t, sender.rgbManager, prepared.State.TransferID)
-	delivery, err := sender.DeliverAndBroadcastConfiguredRGB11AddressTransfer(
-		prepared.State.TransferID,
-	)
+	_, err = sender.rgbManager.deliverRGBAddress(prepared.State.TransferID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !delivery.AwaitingACK || delivery.Broadcast {
-		t.Fatalf("Direct transfer crossed broadcast boundary before ACK: %+v", delivery)
-	}
 	assertRGB11UnsignedPending(t, sender.rgbManager, prepared.State.TransferID)
-	received, err := recipient.SyncConfiguredRGB11AddressMailbox(
-		context.Background(), dkvsindexer.RecordVerificationOptions{},
-	)
-	if err != nil || received == nil || received.Received != 1 || received.Invalid != 0 {
-		t.Fatalf("recipient did not accept exactly the prepared transfer: result=%+v err=%v", received, err)
-	}
-
 	// Simulate the RGB SDK module being recreated while keeping only durable DB,
 	// reservation, wallet and transport state. Stop the old module's background
 	// workers first, just as a real runtime shutdown must do before DB teardown.
@@ -654,7 +629,7 @@ func TestRGB11DirectReservationResumesAfterSDKRestart(t *testing.T) {
 		context.Background(), dkvsindexer.RecordVerificationOptions{},
 	)
 	logRGB11BroadcastState(t, "after-restart-ack", sender, prepared.State.TransferID, accepted)
-	if err != nil || resumed == nil || resumed.ACKs != 1 || resumed.Invalid != 0 {
+	if err != nil || resumed == nil || resumed.ACKs != 0 || resumed.Invalid != 0 {
 		t.Fatalf("restarted module did not consume the original ACK: result=%+v err=%v", resumed, err)
 	}
 
@@ -666,7 +641,7 @@ func TestRGB11DirectReservationResumesAfterSDKRestart(t *testing.T) {
 		t.Fatal("restarted module did not sign the exact restored unsigned operation")
 	}
 	if !rgb11BroadcastCompleteStatus(pending.State.Status) ||
-		!pending.State.DeliveryAcknowledged || pending.State.AckStatus != "accepted" {
+		pending.State.DeliveryAcknowledged || !rgbDeliveryReady(pending) {
 		t.Fatalf("durable Direct reservation did not resume: %+v", pending.State)
 	}
 	reservations, err := restarted.loadRGB11Reservations()
@@ -717,12 +692,30 @@ func TestRGB11DirectPreparedMailboxPolicyMatchesDelivery(t *testing.T) {
 		t.Fatal("Direct preparation claimed a transport receipt before delivery")
 	}
 	transferID, witness := prepared.State.TransferID, prepared.TxID
+	client := sender.serverNode.client.(*rgb11MessageNodeClient)
+	probe := &directReplyProbe{rgb11MessageNodeClient: client, acceptFirst: true}
+	sender.serverNode = NewNode(probe, "message.test", SERVER_NODE, client.CoreNodePubKey(), client.CoreNodePubKey())
+	if _, err := sender.DeliverAndBroadcastConfiguredRGB11AddressTransfer(transferID); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected lost Core response: %v", err)
+	}
+	queued, err := sender.DeliverAndBroadcastConfiguredRGB11AddressTransfer(transferID)
+	if err != nil || queued == nil || !queued.AwaitingACK || queued.Broadcast {
+		t.Fatalf("Core has not confirmed storage: %+v, %v", queued, err)
+	}
+	assertRGB11UnsignedPending(t, sender.rgbManager, transferID)
+	probe.committed = true
+	if _, err := sender.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}); err != nil {
+		t.Fatal(err)
+	}
 	result, err := sender.DeliverAndBroadcastConfiguredRGB11AddressTransfer(transferID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result == nil || !result.AwaitingACK || result.Broadcast {
-		t.Fatal("Direct delivery crossed the receiver ACK boundary")
+	if result == nil || result.AwaitingACK || !result.Broadcast || result.TxID != witness {
+		t.Fatal("Direct did not broadcast on Core commit with the recipient offline")
+	}
+	if len(probe.attempts) != 3 || !bytes.Equal(probe.attempts[0].Ciphertext, probe.attempts[2].Ciphertext) || probe.attempts[0].MessageID != probe.attempts[2].MessageID {
+		t.Fatal("Core retry changed the Direct message")
 	}
 	root, err := sender.captureRGB11NetworkScope(true)
 	if err != nil {

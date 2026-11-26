@@ -141,6 +141,8 @@ func prepareSDKPWARegtestRGBCrossLayerPlainFunding(t *testing.T, source *wallet.
 	// submit an L2 transaction with the SDK's 10-sat network fee.
 	minimumDeployerBalance := deployQuote + wallet.DEFAULT_FEE_SATSNET +
 		withdrawQuote + wallet.DEFAULT_FEE_SATSNET
+	channelFeeBudget := 2 * wallet.DEFAULT_FEE_SATSNET // Unlock and Lock each spend one L2 fee.
+	minimumDeployerBalance += channelFeeBudget
 	minimumCoreBalance := int64(30) // Core's AllowDeploy reserve, separate from the deployer's fee.
 
 	nodes := make(map[*testHarness]*wallet.IndexerClient, len(network.Nodes))
@@ -269,7 +271,7 @@ func prepareSDKPWARegtestRGBCrossLayerPlainFunding(t *testing.T, source *wallet.
 			label, txid, confirmedHeight, confirmedBlock, address, amount, actualFee)
 	}
 	fund("Core deployment reserve", coreAddress, coreGap, coreBefore)
-	fund("ordinary-2 public route budget", deployerAddress, deployerGap, deployerBefore)
+	fund("ordinary-2 public and private route budget", deployerAddress, deployerGap, deployerBefore)
 	coreAfter := sdkPWARegtestL2PlainBalance(t, nodes[network.Core], coreAddress)
 	deployerAfter := sdkPWARegtestL2PlainBalance(t, nodes[network.Core], deployerAddress)
 	require.GreaterOrEqual(t, coreAfter, minimumCoreBalance)
@@ -291,6 +293,7 @@ func prepareSDKPWARegtestRGBCrossLayerPlainFunding(t *testing.T, source *wallet.
 		"deployer_address": deployerAddress, "deployer_before": strconv.FormatInt(deployerBefore, 10),
 		"deployer_after":     strconv.FormatInt(deployerAfter, 10),
 		"deployer_minimum":   strconv.FormatInt(minimumDeployerBalance, 10),
+		"channel_fee_budget": strconv.FormatInt(channelFeeBudget, 10),
 		"withdraw_fee_rate":  strconv.FormatInt(feeRate, 10),
 		"withdraw_fee_quote": strconv.FormatInt(withdrawQuote, 10),
 		"withdraw_amount":    withdrawAssetAmount.String(),

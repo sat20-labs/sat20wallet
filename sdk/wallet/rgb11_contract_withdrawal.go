@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
@@ -41,24 +42,14 @@ func isRGBPublicPayout(item *rgb11wallet.PendingTransfer) bool {
 	return err == nil && reason == INVOKE_RESULT_WITHDRAW && path == ExtractRelativePath(more.ContractURL)
 }
 
-func rgbDeliveryReady(item *rgb11wallet.PendingTransfer) bool {
-	if isRGBPublicPayout(item) {
-		return item.State.DeliveryMode == "direct" && item.State.RelayDurability == rgbMailboxCommitted &&
-			item.State.DeliveryRecordKey != "" && item.State.DeliveryRecordHash != ""
-	}
-	return item.State.DeliveryAcknowledged && item.State.AckStatus == "accepted"
-}
-
-func needsRGBRedelivery(item *rgb11wallet.PendingTransfer) bool {
-	return item.State.Status == "delivered" && isRGBPublicPayout(item) && !rgbDeliveryReady(item)
-}
-
 type rgb11ContractWithdrawPlan struct {
-	Version     uint32              `json:"version"`
-	ContractURL string              `json:"contract_url"`
-	BitcoinTxID string              `json:"bitcoin_txid"`
-	Descend     []byte              `json:"descend"`
-	PrevOutputs []*TxOutput_SatsNet `json:"prev_outputs"`
+	RecipientMail          [][]byte            `json:"recipientMail"`
+	RecipientMailSignature []byte              `json:"recipientMailSignature"`
+	Version                uint32              `json:"version"`
+	ContractURL            string              `json:"contract_url"`
+	BitcoinTxID            string              `json:"bitcoin_txid"`
+	Descend                []byte              `json:"descend"`
+	PrevOutputs            []*TxOutput_SatsNet `json:"prev_outputs"`
 }
 
 type rgb11ContractBroadcastPair struct {
@@ -121,7 +112,7 @@ func (p *Manager) resumeRGB11ContractWithdrawal(ctx context.Context, more []byte
 	return "", 0, false, nil
 }
 
-func (p *rgb11Manager) rgb11ContractDescendPlan(first *rgb11wallet.PendingTransfer, batch []*rgb11wallet.PendingTransfer) (*swire.MsgTx, *stxscript.MultiPrevOutFetcher, error) {
+func (p *rgb11Manager) rgb11ContractDescendPlan(first *rgb11wallet.PendingTransfer, batch []*rgb11wallet.PendingTransfer, proof *wwire.RGB11SigningProof) (*swire.MsgTx, *stxscript.MultiPrevOutFetcher, error) {
 	var more wwire.RemoteSignMoreData_Contract
 	if first.ChannelSend == nil || json.Unmarshal(first.ChannelSend.MoreData, &more) != nil || !more.RGB11Withdrawal {
 		return nil, nil, nil
@@ -162,6 +153,27 @@ func (p *rgb11Manager) rgb11ContractDescendPlan(first *rgb11wallet.PendingTransf
 		}
 		plan = rgb11ContractWithdrawPlan{Version: 1, ContractURL: more.ContractURL,
 			BitcoinTxID: first.State.WitnessTxID, Descend: encoded.Bytes()}
+		for i, item := range batch {
+			state := &item.State
+			outbox, err := owner.loadWalletMessageOutbox(state.SenderAccountID, state.AddressMessageID)
+			if err != nil {
+				return nil, nil, err
+			}
+			if outbox == nil || outbox.Kind != AccountMessageKindRGB11Consignment ||
+				outbox.Direct.RecipientAccount != state.ReceiverAccountID || state.WitnessTxID != plan.BitcoinTxID ||
+				state.RecipientVout != uint32(i+1) {
+				return nil, nil, fmt.Errorf("missing RGB withdrawal envelope for output %d", i+1)
+			}
+			mail, err := swire.SerializeDirectMessage(&outbox.Direct, true)
+			if err != nil || rgb11ObjectHash(mail) != state.DeliveryRecordHash {
+				return nil, nil, fmt.Errorf("RGB withdrawal envelope differs from committed receipt")
+			}
+			plan.RecipientMail = append(plan.RecipientMail, mail)
+		}
+		plan.RecipientMailSignature, err = signRGB11WithdrawalMail(p.wallet, plan.ContractURL, plan.BitcoinTxID, plan.RecipientMail)
+		if err != nil {
+			return nil, nil, err
+		}
 		for _, input := range tx.TxIn {
 			out := fetcher.FetchPrevOutput(input.PreviousOutPoint)
 			if out == nil {
@@ -179,6 +191,19 @@ func (p *rgb11Manager) rgb11ContractDescendPlan(first *rgb11wallet.PendingTransf
 	} else {
 		return nil, nil, err
 	}
+	if len(plan.RecipientMail) != len(batch) || len(plan.RecipientMailSignature) == 0 {
+		return nil, nil, fmt.Errorf("incomplete RGB withdrawal envelope archive")
+	}
+	for i, item := range batch {
+		if rgb11ObjectHash(plan.RecipientMail[i]) != item.State.DeliveryRecordHash {
+			return nil, nil, fmt.Errorf("RGB withdrawal plan differs from committed receipt")
+		}
+		if err := owner.forgetAccountMessage(p.wallet, item.State.AddressMessageID); err != nil {
+			Log.Warnf("delete archived RGB withdrawal outbox: %v", err)
+		}
+	}
+	proof.RecipientMail = plan.RecipientMail
+	proof.RecipientMailSignature = plan.RecipientMailSignature
 	tx := new(swire.MsgTx)
 	if err := tx.Deserialize(bytes.NewReader(plan.Descend)); err != nil {
 		return nil, nil, err
@@ -201,12 +226,15 @@ func (p *rgb11Manager) rgb11ContractDescendPlan(first *rgb11wallet.PendingTransf
 // RecordRGB11ContractBroadcast persists a complete signed pair before either
 // chain can see it. The same function is used by both pool owners. Retries may
 // only replay the identical bytes; a fresh fee/input selection is forbidden.
-func (p *Manager) RecordRGB11ContractBroadcast(contractURL string, bitcoin []*wire.MsgTx, descend []*swire.MsgTx, proofs ...*wwire.RGB11SigningProof) error {
+func (p *Manager) RecordRGB11ContractBroadcast(contractURL string, bitcoin []*wire.MsgTx, descend []*swire.MsgTx, proof *wwire.RGB11SigningProof, core *btcec.PublicKey) error {
 	if len(bitcoin) != 1 || len(descend) != 1 || bitcoin[0] == nil || descend[0] == nil {
 		return fmt.Errorf("RGB11 withdrawal requires exactly one Bitcoin transaction and one descend")
 	}
-	if len(proofs) != 1 || proofs[0] == nil || len(proofs[0].Consignment) == 0 {
+	if proof == nil || len(proof.Consignment) == 0 {
 		return fmt.Errorf("RGB11 withdrawal requires recoverable RGB11 change proof")
+	}
+	if _, err := checkRGB11WithdrawalMail(contractURL, bitcoin[0], proof, core); err != nil {
+		return err
 	}
 	matched := 0
 	for _, output := range descend[0].TxOut {
@@ -233,7 +261,7 @@ func (p *Manager) RecordRGB11ContractBroadcast(contractURL string, bitcoin []*wi
 	if err := descend[0].Serialize(&l2); err != nil {
 		return err
 	}
-	pair := rgb11ContractBroadcastPair{Version: 1, ContractURL: contractURL, Bitcoin: btc.Bytes(), Descend: l2.Bytes(), Proof: proofs[0]}
+	pair := rgb11ContractBroadcastPair{Version: 1, ContractURL: contractURL, Bitcoin: btc.Bytes(), Descend: l2.Bytes(), Proof: proof}
 	raw, err := json.Marshal(pair)
 	if err != nil {
 		return err
@@ -277,7 +305,8 @@ func (p *rgb11Manager) broadcastRGB11ContractDescend(first *rgb11wallet.PendingT
 		return err
 	}
 	var pair rgb11ContractBroadcastPair
-	if json.Unmarshal(raw, &pair) != nil || pair.Version != 1 || pair.ContractURL != more.ContractURL {
+	if json.Unmarshal(raw, &pair) != nil || pair.Version != 1 || pair.ContractURL != more.ContractURL ||
+		pair.Proof == nil || len(pair.Proof.RecipientMail) == 0 {
 		return fmt.Errorf("invalid RGB11 broadcast pair")
 	}
 	btc, l2 := new(wire.MsgTx), new(swire.MsgTx)
@@ -289,6 +318,9 @@ func (p *rgb11Manager) broadcastRGB11ContractDescend(first *rgb11wallet.PendingT
 	}
 	if btc.TxID() != first.State.WitnessTxID {
 		return fmt.Errorf("RGB11 broadcast pair changed Bitcoin identity")
+	}
+	if _, err := checkRGB11WithdrawalMail(more.ContractURL, btc, pair.Proof, p.wallet.GetPaymentPubKey()); err != nil {
+		return err
 	}
 	observed := false
 	if status, err := p.evidence.GetTxStatus(btc.TxID()); err == nil && status != nil && (status.Confirmed || status.InMempool) {
@@ -367,7 +399,11 @@ func (p *rgb11Manager) recoverRGB11ContractBroadcast(first *rgb11wallet.PendingT
 	if err := VerifySignedTx_SatsNet(observed, previous); err != nil {
 		return err
 	}
-	proof := &wwire.RGB11SigningProof{Consignment: append([]byte(nil), first.LocalConsignment...)}
+	proof := &wwire.RGB11SigningProof{Consignment: append([]byte(nil), first.LocalConsignment...),
+		RecipientMail: plan.RecipientMail, RecipientMailSignature: plan.RecipientMailSignature}
+	if _, err := checkRGB11WithdrawalMail(more.ContractURL, bitcoin, proof, p.wallet.GetPaymentPubKey()); err != nil {
+		return err
+	}
 	for _, seal := range first.ChangeSeals {
 		raw, err := seal.StrictBytes()
 		if err != nil {
@@ -375,5 +411,5 @@ func (p *rgb11Manager) recoverRGB11ContractBroadcast(first *rgb11wallet.PendingT
 		}
 		proof.ChangeSeals = append(proof.ChangeSeals, raw)
 	}
-	return owner.RecordRGB11ContractBroadcast(more.ContractURL, []*wire.MsgTx{bitcoin}, []*swire.MsgTx{observed}, proof)
+	return owner.RecordRGB11ContractBroadcast(more.ContractURL, []*wire.MsgTx{bitcoin}, []*swire.MsgTx{observed}, proof, p.wallet.GetPaymentPubKey())
 }

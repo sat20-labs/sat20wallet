@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/sat20-labs/sat20wallet/sdk/common"
+	dkvs "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
 func TestUtxoLockClassification(t *testing.T) {
@@ -41,18 +42,15 @@ func TestRGBLockViewReadOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := rgb11GenericFixtureSource(t, sender, imported)
-	preview, err := sender.PrepareRGBTransfer(context.Background(), RGBSendRequest{
-		Recipients: []RGBRecipient{{Destination: recipient.wallet.GetAddress(), Asset: imported.AssetName.String(), Amount: "20000"}},
-		FeeRate:    2,
-	})
+	prepared, _, err := sender.PrepareConfiguredRGB11AddressTransfer(context.Background(), RGB11AddressSendRequest{
+		ReceiverAddress: recipient.wallet.GetAddress(), AssetName: imported.AssetName,
+		AmountRaw: "20000", FeeRate: 2, MinConfirmations: 1,
+	}, dkvs.RecordVerificationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	confirmed, err := sender.ConfirmRGBTransfer(context.Background(), preview.ID, nil)
-	if err != nil || confirmed == nil || confirmed.Status != "awaiting_persistence" {
-		t.Fatalf("prepare actual pending RGB lock fixture: result=%+v err=%v", confirmed, err)
-	}
-	pending, err := sender.rgbManager.projectionStore.LoadPendingTransfer(preview.ID)
+	transferID := prepared.State.TransferID
+	pending, err := sender.rgbManager.projectionStore.LoadPendingTransfer(transferID)
 	if err != nil || pending == nil || len(pending.State.InputOutPoints) < 2 {
 		t.Fatalf("fixture must reserve a real carrier and separate fee input: %v", err)
 	}
@@ -88,7 +86,7 @@ func TestRGBLockViewReadOnly(t *testing.T) {
 			if row == nil || row.Scope != scope || row.Reason != common.UtxoLockRGBPending || locks[input] == nil {
 				t.Fatalf("reserved input missing or incorrectly scoped: scope=%s row=%+v", scope, row)
 			}
-			if scope == "current" && !reflect.DeepEqual(row.TransferIDs, []string{preview.ID}) {
+			if scope == "current" && !reflect.DeepEqual(row.TransferIDs, []string{transferID}) {
 				t.Fatal("carrier or fee input lost its actual pending transfer association")
 			}
 			if scope == "unknown" && len(row.TransferIDs) != 0 {

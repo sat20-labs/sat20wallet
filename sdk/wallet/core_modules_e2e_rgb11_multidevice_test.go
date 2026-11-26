@@ -176,10 +176,10 @@ func coreRGB11SameRootThreeDeviceE2E(t *testing.T, cfg coreE2EConfig, chain *cor
 		overlapsRGB11Outpoints(issued.OutPoints, directPrepared.State.InputOutPoints),
 		"cancel did not free the actual issued carrier for the new intent")
 	directBaseline := cloneRGB11BroadcastIntent(assertRGB11UnsignedPending(t, deviceA.rgbManager, directPrepared.State.TransferID))
-	delivered, err := deviceA.DeliverAndBroadcastConfiguredRGB11AddressTransfer(directPrepared.State.TransferID)
+	delivered, err := deviceA.rgbManager.deliverRGBAddress(directPrepared.State.TransferID)
 	coreRequire(t, "deliver direct consignment before ACK", err)
-	coreAssert(t, delivered.AwaitingACK && !delivered.Broadcast && chain.broadcastCount() == beforeTransfers,
-		"direct delivery crossed its positive-ACK barrier")
+	coreAssert(t, delivered.RecordHash != "" && !delivered.Broadcast && chain.broadcastCount() == beforeTransfers,
+		"delivery-only step must persist a mailbox receipt without broadcasting")
 	coreRGB11RetireDevice(t, deviceA)
 	coreRGB11UseDevice(t, receiver)
 	coreWaitRGB11MailboxACK(t, chain, receiver, directPrepared, beforeTransfers)

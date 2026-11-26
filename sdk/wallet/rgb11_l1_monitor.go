@@ -154,11 +154,21 @@ func detectRGB11L1Reorg(previous *rgb11L1MonitorCheckpoint, current RGB11L1Chain
 	}, nil
 }
 
+// Keep the wallet/account scope and use the wallet DB's environment/network
+// prefix for the checkpoint name. Never read the old, unscoped checkpoint:
+// it has no chain identity and cannot establish a reorg on the current chain.
+func (p *rgb11Manager) l1MonitorMetadataKey() string {
+	if p.Manager != nil && p.cfg != nil && p.cfg.Chain != "" {
+		return dbNetworkKeyPrefix(p.cfg.Env, p.cfg.Chain) + rgb11L1MonitorMetadataKey
+	}
+	return dbNetworkKeyPrefix(_env, _chain) + rgb11L1MonitorMetadataKey
+}
+
 func (p *rgb11Manager) loadRGB11L1MonitorCheckpoint() (*rgb11L1MonitorCheckpoint, error) {
 	if p == nil || p.projectionStore == nil {
 		return nil, ErrRGB11Inconsistent
 	}
-	encoded, err := p.projectionStore.LoadLocalMetadata(rgb11L1MonitorMetadataKey)
+	encoded, err := p.projectionStore.LoadLocalMetadata(p.l1MonitorMetadataKey())
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +183,7 @@ func (p *rgb11Manager) saveRGB11L1MonitorCheckpoint(checkpoint *rgb11L1MonitorCh
 	if err != nil {
 		return err
 	}
-	return p.projectionStore.SaveLocalMetadata(rgb11L1MonitorMetadataKey, encoded)
+	return p.projectionStore.SaveLocalMetadata(p.l1MonitorMetadataKey(), encoded)
 }
 
 // handleL1Reorg deliberately reuses the single RGB chain reconciliation path.

@@ -164,7 +164,7 @@ func TestRGB11DirectLifecycleAuthorityIsSDKOwned(t *testing.T) {
 		"readAccountMessages(p.wallet, verify)", "p.resumeReadyRGB11AddressTransfers()", "p.continueRGB11AddressSend(state.TransferID)",
 		"p.scopeStates.sendFlights.Do(key,", "p.readRGB11AddressBatch(transferID)", "for _, item := range batch", "!rgbDeliveryReady(item)",
 		"p.broadcastRGB11PendingBatch(batch, nil)", "result, err := p.continueRGB11AddressSend(transferID)")
-	requireSteps("Direct delivery", readRepoTextForTest(t, "rgb11_contract_withdrawal.go"), "if isRGBPublicPayout(item)", "item.State.RelayDurability == rgbMailboxCommitted", `item.State.DeliveryAcknowledged && item.State.AckStatus == "accepted"`)
+	requireSteps("Direct delivery", readRepoTextForTest(t, "rgb11_dkvs.go"), "func rgbDeliveryReady(", "item.State.TransportMode == RGB11AddressTransport", "item.State.RelayDurability == rgbMailboxCommitted")
 	requireSteps("broadcast", readRepoTextForTest(t, "rgb11_broadcast.go"), "func (p *rgb11Manager) broadcastRGB11PendingBatch(",
 		"pending.State.Status = rgb11StatusBroadcastAttempted", "CompareAndSavePendingTransferStates(intentBaseline, pendingList)",
 		"p.expectedRGB11TransactionStatus(first)", "if !visible && broadcastErr == nil", "p.evidence.Broadcast(first.SignedTx)")

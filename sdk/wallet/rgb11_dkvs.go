@@ -64,7 +64,7 @@ func (p *rgb11Manager) PrepareConfiguredRGB11AddressTransfer(ctx context.Context
 }
 
 func (p *rgb11Manager) DeliverAndBroadcastConfiguredRGB11AddressTransfer(transferID string) (*RGB11AddressDeliveryResult, error) {
-	pending, err := p.rgbManager.projectionStore.LoadPendingTransfer(transferID)
+	pending, err := p.projectionStore.LoadPendingTransfer(transferID)
 	if err != nil {
 		return nil, err
 	}
@@ -78,20 +78,25 @@ func (p *rgb11Manager) DeliverAndBroadcastConfiguredRGB11AddressTransfer(transfe
 		result.Broadcast = true
 		return result, nil
 	}
-	if pending.State.Status == "prepared" || needsRGBRedelivery(pending) {
-		result, err = p.deliverRGBAddress(transferID)
-		if err != nil {
-			return nil, err
-		}
-		pending, err = p.rgbManager.projectionStore.LoadPendingTransfer(transferID)
-		if err != nil {
-			return nil, err
-		}
+	batch, err := p.loadRGB11AddressBatch(pending)
+	if err != nil {
+		return nil, err
 	}
-	if pending.State.Status != rgb11StatusBroadcastAttempted &&
-		!rgbDeliveryReady(pending) {
-		result.AwaitingACK = true
-		return result, nil
+	for _, item := range batch {
+		if item.State.Status != "prepared" && !needsRGBRedelivery(item) {
+			continue
+		}
+		delivery, err := p.deliverRGBAddress(item.State.TransferID)
+		if errors.Is(err, errRGBMailboxPending) {
+			result.AwaitingACK = true // waiting for the recipient Core to commit
+			return result, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if item.State.TransferID == transferID {
+			result = delivery
+		}
 	}
 	txID, err := p.BroadcastRGB11AddressTransfer(transferID)
 	if err != nil {
@@ -198,8 +203,16 @@ func (p *rgb11Manager) syncRGBMailbox(ctx context.Context,
 				continue
 			}
 			receipt, ackRecord, err := p.acceptRGB11AddressDirect(ctx, direct)
-			if errors.Is(err, errRGBACKSend) {
-				return result, errors.Join(err, p.projectionStore.SaveLocalMetadata(key, []byte{rgbACKNeedsRetry}))
+			if receipt != nil && errors.Is(err, errRGBACKSend) {
+				// The verified receive is already durable. A failed courtesy
+				// notification must not block this or other Direct payments.
+				if err := p.projectionStore.SaveLocalMetadata(key, []byte{rgbACKNeedsRetry}); err != nil {
+					return result, err
+				}
+				if len(marker) == 0 {
+					result.Received++
+				}
+				continue
 			}
 			if err != nil {
 				result.Invalid++
@@ -209,8 +222,8 @@ func (p *rgb11Manager) syncRGBMailbox(ctx context.Context,
 			if err := p.markRGB11AddressMessageProcessed("consignment", messageID); err != nil {
 				return nil, err
 			}
-			if receipt != nil && ackRecord == nil {
-				// An exactly verified settled receive needs no new ACK or business write.
+			if len(marker) == 1 && marker[0] == rgbACKNeedsRetry || receipt != nil && ackRecord == nil {
+				// The receive was already committed on an earlier scan.
 				result.AlreadyDone++
 			} else {
 				result.Received++
@@ -219,7 +232,7 @@ func (p *rgb11Manager) syncRGBMailbox(ctx context.Context,
 	}
 	// Direct send progression is owned by the durable RGB reservation state.
 	// A restarted UI does not need to remember whether it already tried to
-	// broadcast: accepted ACKs and broadcast-attempted are persisted before this
+	// broadcast: mailbox commits and broadcast-attempted are persisted before this
 	// helper crosses the irreversible boundary.
 	if err := p.resumeReadyRGB11AddressTransfers(); err != nil {
 		return result, err
@@ -239,6 +252,19 @@ func (p *rgb11Manager) resumeReadyRGB11AddressTransfers() error {
 	for _, state := range states {
 		if state == nil || state.Direction != "send" || !state.AddressMode ||
 			state.TransferID == "" || rgb11BroadcastCompleteStatus(state.Status) {
+			continue
+		}
+		if state.Status == "prepared" {
+			outbox, err := p.accountManagementOwner().loadWalletMessageOutbox(state.SenderAccountID, state.AddressMessageID)
+			if err != nil {
+				return err
+			}
+			if outbox == nil || outbox.Kind != AccountMessageKindRGB11Consignment {
+				continue
+			}
+			if _, err := p.DeliverAndBroadcastConfiguredRGB11AddressTransfer(state.TransferID); err != nil {
+				return err
+			}
 			continue
 		}
 		key := state.WitnessTxID
@@ -293,6 +319,18 @@ var (
 type rgb11AccountPayloadCryptor interface {
 	EncryptToAccount(accountID string, plaintext []byte) ([]byte, error)
 	DecryptFromAccount(accountID string, ciphertext []byte) ([]byte, error)
+}
+
+// A Direct transfer can be signed once the recipient's Core has committed
+// every addressed envelope. A wallet-level ACK is not a signing authority.
+func rgbDeliveryReady(item *rgb11wallet.PendingTransfer) bool {
+	return item != nil && item.State.AddressMode && item.State.TransportMode == RGB11AddressTransport &&
+		item.State.DeliveryMode == "direct" && item.State.RelayDurability == rgbMailboxCommitted &&
+		item.State.DeliveryRecordKey != "" && item.State.DeliveryRecordHash != ""
+}
+
+func needsRGBRedelivery(item *rgb11wallet.PendingTransfer) bool {
+	return item.State.Status == "delivered" && !rgbDeliveryReady(item)
 }
 
 func (p *rgb11Manager) deliverRGBAddress(transferID string) (*RGB11AddressDeliveryResult, error) {
@@ -353,9 +391,8 @@ func (p *rgb11Manager) deliverRGBAddress(transferID string) (*RGB11AddressDelive
 	}
 	baseline := cloneRGB11BroadcastIntent(pending)
 	owner := p.accountManagementOwner()
-	payout := isRGBPublicPayout(pending)
 	receipt, err := owner.sendAccountMessage(p.wallet, messageID, AccountMessageKindRGB11Consignment,
-		pending.State.ReceiverAccountID, pending.RecipientConsignment, payout)
+		pending.State.ReceiverAccountID, pending.RecipientConsignment, true)
 	if err != nil {
 		return nil, err
 	}
@@ -369,17 +406,16 @@ func (p *rgb11Manager) deliverRGBAddress(transferID string) (*RGB11AddressDelive
 	pending.State.DeliveryTemporary = true
 	pending.State.DeliveryIssueHeight = 0
 	pending.State.DeliveryTTL = 0 // retention is controlled by the recipient CoreNode mailbox policy
-	pending.State.RelayDurability = "ACCOUNT_BOUND"
-	if payout {
-		pending.State.RelayDurability = rgbMailboxCommitted
-	}
+	pending.State.RelayDurability = rgbMailboxCommitted
+	pending.State.AckStatus = "mailbox-committed"
 	pending.State.Status = "delivered"
 	if err := p.rgbManager.projectionStore.CompareAndSavePendingTransferStates([]*rgb11wallet.PendingTransfer{baseline}, []*rgb11wallet.PendingTransfer{pending}); err != nil {
 		return nil, err
 	}
-	if payout {
+	// A withdrawal copies the exact signed envelope into its durable plan before signing.
+	if !isRGBPublicPayout(pending) {
 		if err := owner.forgetAccountMessage(p.wallet, messageID); err != nil {
-			Log.Warnf("delete committed RGB payout outbox: %v", err)
+			Log.Warnf("delete committed RGB Direct outbox: %v", err)
 		}
 	}
 	p.accountManagementOwner().NotifyAccountChanged()
@@ -456,8 +492,7 @@ func (p *rgb11Manager) continueRGB11AddressSend(transferID string) (rgb11Address
 				continue
 			}
 			if (item.State.Status != "delivered" && item.State.Status != rgb11StatusBroadcastAttempted) ||
-				item.State.DeliveryRecordHash == "" || item.State.DeliveryRecordKey == "" ||
-				((item.State.Status != rgb11StatusBroadcastAttempted || isRGBPublicPayout(item)) && !rgbDeliveryReady(item)) {
+				!rgbDeliveryReady(item) {
 				return empty, nil
 			}
 		}
@@ -476,7 +511,7 @@ func (p *rgb11Manager) continueRGB11AddressSend(transferID string) (rgb11Address
 }
 
 // BroadcastRGB11AddressTransfer crosses the irreversible broadcast boundary
-// only after the required wallet ACK or public withdrawal mailbox receipt.
+// only after every recipient Core has committed its Direct message.
 func (p *rgb11Manager) BroadcastRGB11AddressTransfer(transferID string) (string, error) {
 	result, err := p.continueRGB11AddressSend(transferID)
 	if err != nil {
@@ -958,7 +993,7 @@ func (p *rgb11Manager) acceptRGB11MailboxAttempt(ctx context.Context,
 		ackRecord, err := sendACK(senderID, messageID,
 			RGB11AddressACK{Status: RGB11AddressACKAccepted})
 		if err != nil {
-			return nil, nil, err
+			return receipt, nil, err
 		}
 		state.AckStatus = "ack-sent"
 		state.DeliveryAcknowledged = true
@@ -1088,7 +1123,7 @@ func (p *rgb11Manager) acceptRGB11MailboxAttempt(ctx context.Context,
 	ackRecord, err := sendACK(senderID, messageID,
 		RGB11AddressACK{Status: RGB11AddressACKAccepted})
 	if err != nil {
-		return nil, nil, err
+		return accepted, nil, err
 	}
 	state.AckStatus = "ack-sent"
 	state.DeliveryAcknowledged = true
@@ -1213,34 +1248,12 @@ func (p *rgb11Manager) acceptRGB11AddressACKDecoded(senderID, receiverID, messag
 	if pending.State.AddressMessageID != messageID {
 		return nil, ErrRGB11AddressMailbox
 	}
-	// Only the Core mailbox receipt authorizes a public withdrawal. A wallet
-	// response arriving concurrently cannot cancel the Core's obligation.
-	if isRGBPublicPayout(pending) && ack.Status != RGB11AddressACKAccepted {
+	// Wallet feedback is informational. It cannot cancel a Direct payment
+	// that the recipient Core has accepted.
+	if ack.Status != RGB11AddressACKAccepted {
 		return &ack, nil
 	}
 	baseline := cloneRGB11BroadcastIntent(pending)
-	if ack.Status != RGB11AddressACKAccepted {
-		pending.State.AckStatus = "need-resend"
-		if ack.Status == RGB11AddressACKRejected {
-			if pending.State.Status == "delivered" {
-				batch, err := p.loadRGB11AddressBatch(pending)
-				if err != nil {
-					return nil, err
-				}
-				if err := p.cancelRGB11RejectedPendingBatch(
-					batch, "recipient-rejected", nil,
-				); err != nil {
-					return nil, err
-				}
-				return &ack, nil
-			}
-			pending.State.AckStatus = "rejected-after-broadcast"
-		}
-		if err := p.rgbManager.projectionStore.CompareAndSavePendingTransferStates([]*rgb11wallet.PendingTransfer{baseline}, []*rgb11wallet.PendingTransfer{pending}); err != nil {
-			return nil, err
-		}
-		return &ack, nil
-	}
 	pending.State.AckStatus = "accepted"
 	pending.State.DeliveryAcknowledged = true
 	if err := p.rgbManager.projectionStore.CompareAndSavePendingTransferStates([]*rgb11wallet.PendingTransfer{baseline}, []*rgb11wallet.PendingTransfer{pending}); err != nil {

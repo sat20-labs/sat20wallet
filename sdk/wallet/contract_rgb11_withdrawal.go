@@ -39,6 +39,24 @@ func (p *ContractRuntimeBase) verifyRGB11ContractWithdrawal(req *wwire.RemoteSig
 	if bitcoin == nil {
 		return fmt.Errorf("missing RGB11 withdrawal Bitcoin transaction")
 	}
+	// The contract trusts its registered Core identity, not a signing key
+	// or an unverified hash supplied with the request.
+	core := p.GetCoreNodePubKey()
+	if core == nil || req.ContractURL != p.URL() {
+		return fmt.Errorf("RGB11 withdrawal mail has no authenticated contract origin")
+	}
+	recipients, err := checkRGB11WithdrawalMail(req.ContractURL, bitcoin, req.RGB11Proof, core)
+	if err != nil {
+		return err
+	}
+	if len(recipients) != len(deal.SendInfo) {
+		return fmt.Errorf("incomplete RGB withdrawal recipient mail")
+	}
+	for _, recipient := range recipients {
+		if deal.SendInfo[recipient] == nil {
+			return fmt.Errorf("RGB withdrawal mail does not match the selected recipient")
+		}
+	}
 	commitments := 0
 	for _, output := range descend.TxOut {
 		kind, data, err := sindexer.ReadDataFromNullDataScript(output.PkScript)

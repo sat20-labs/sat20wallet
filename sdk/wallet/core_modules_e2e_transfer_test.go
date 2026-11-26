@@ -753,10 +753,10 @@ func coreDirectTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 	}, dkvsindexer.RecordVerificationOptions{})
 	coreRequire(t, "prepare Direct transfer", err)
 	sender = corePendingCheckpoint(t, "02_prepared_sender", sender, cfg, chain, senderMaterial)
-	result, err := sender.DeliverAndBroadcastConfiguredRGB11AddressTransfer(prepared.State.TransferID)
+	result, err := sender.rgbManager.deliverRGBAddress(prepared.State.TransferID)
 	coreRequire(t, "deliver Direct consignment via real CoreNode", err)
-	coreAssert(t, result.AwaitingACK && !result.Broadcast && chain.broadcastCount() == before, "Direct broadcast crossed receiver ACK boundary")
-	sender = corePendingCheckpoint(t, "03_delivered_waiting_ACK_sender", sender, cfg, chain, senderMaterial)
+	coreAssert(t, result.RecordHash != "" && !result.Broadcast && chain.broadcastCount() == before, "delivery-only checkpoint must retain the committed mailbox receipt")
+	sender = corePendingCheckpoint(t, "03_mailbox_committed_sender", sender, cfg, chain, senderMaterial)
 	// Join this sender before the recipient goes online and publishes its ACK.
 	// It resumes only after its own broadcast-backup fault has been installed.
 	coreSuspendRGBDevice(t, sender)

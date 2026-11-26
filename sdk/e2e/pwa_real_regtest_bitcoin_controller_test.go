@@ -598,7 +598,8 @@ func readSDKPWARegtestSatoshiNetSnapshot(network *realSatoshiNet, after int32) (
 			if err != nil {
 				return nil, err
 			}
-			anchor := posPWAAnchorEvidence{TxID: tx.TxID(), Height: h, FundingOutpoint: info.Utxo, Version: tx.Version, LockTime: tx.LockTime, Sequence: tx.TxIn[0].Sequence, Outputs: []posPWAAnchorOutput{}}
+			anchor := posPWAAnchorEvidence{TxID: tx.TxID(), Height: h, FundingOutpoint: info.Utxo, Value: info.Value,
+				Version: tx.Version, LockTime: tx.LockTime, Sequence: tx.TxIn[0].Sequence, Outputs: []posPWAAnchorOutput{}}
 			_, present, err := sindexercommon.NativeAssetProof(tx)
 			if err != nil {
 				return nil, fmt.Errorf("Anchor %s native proof: %w", anchor.TxID, err)

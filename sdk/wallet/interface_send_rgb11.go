@@ -141,7 +141,7 @@ func (p *Manager) sendRGB11AssetsWithChannel(localWallet common.Wallet, dest []*
 }
 
 // ResumeRGB11Send completes SAT20 direct delivery and waits for all recipient
-// ACKs before using the existing durable RGB broadcast boundary.
+// Core mailbox commits before using the existing durable RGB broadcast boundary.
 func (p *Manager) ResumeRGB11Send(ctx context.Context, transferID string) (string, int64, error) {
 	tx, fee, err := p.resumeRGB11Send(ctx, transferID)
 	if tx == nil {
@@ -233,9 +233,7 @@ func (p *Manager) resumeRGB11Send(ctx context.Context, transferID string) (*wire
 				result.done = true
 				return result, nil
 			}
-			needsWalletACK := false
 			for _, item := range batch {
-				needsWalletACK = needsWalletACK || !isRGBPublicPayout(item)
 				if item.State.Status == "prepared" || needsRGBRedelivery(item) {
 					if _, err := manager.deliverRGBAddress(item.State.TransferID); err != nil {
 						if errors.Is(err, errRGBMailboxPending) {
@@ -243,11 +241,6 @@ func (p *Manager) resumeRGB11Send(ctx context.Context, transferID string) (*wire
 						}
 						return result, err
 					}
-				}
-			}
-			if needsWalletACK {
-				if _, err := manager.syncRGBMailbox(ctx, dkvsindexer.RecordVerificationOptions{}, false); err != nil {
-					return result, err
 				}
 			}
 			_, err = manager.BroadcastRGB11AddressTransfer(transferID)

@@ -7,7 +7,9 @@ import (
 	"fmt"
 
 	"github.com/btcsuite/btcd/wire"
+	indexer "github.com/sat20-labs/indexer/common"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
+	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
 var errSTPRGBEvidenceMissing = errors.New("RGB reservation evidence is missing or unavailable")
@@ -61,6 +63,15 @@ type STPRGBReservationEvidence struct {
 	// runtime-only, never a second inventory or a persisted channel field.
 	closedSourceFunding []byte
 	closedSourceBackup  []byte
+
+	// Verified immutable name record and its exact RGB funding asset.
+	fundingName *stpRGBFundingName
+}
+
+type stpRGBFundingName struct {
+	chain  indexer.AssetName
+	local  indexer.AssetName
+	record *swire.DKVSRecord
 }
 
 type stpRGBRawFact struct {
@@ -353,7 +364,7 @@ func (f *STPRGBReservationEvidence) ValidateForChannel(channel *Channel, request
 	if f == nil {
 		return nil
 	}
-	if channel == nil || channel.LocalCommitment == nil || channel.RemoteCommitment == nil || channel != f.channel || channel.ChannelId != f.channelID || channel.Status != f.capturedStatus ||
+	if channel == nil || channel.LocalCommitment == nil || channel.RemoteCommitment == nil || channel != f.channel || channel.ChannelId != f.channelID || f.network != GetChainParam().Name || channel.Status != f.capturedStatus ||
 		channel.CommitHeight != f.capturedHeight || channel.ResvId != f.capturedResvID || sha256.Sum256(request) != f.requestHash ||
 		!bytes.Equal(channel.AssetFunding["rgb11"], f.capturedInventory) ||
 		!bytes.Equal(channel.LocalCommitment.AssetProofs["rgb11"], f.capturedLocalProof) ||

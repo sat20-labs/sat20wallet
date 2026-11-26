@@ -305,6 +305,8 @@ type RGB11AddressEndpoint struct {
 	TTL                  uint64 `json:"ttl"`
 }
 
+// AwaitingACK on a Direct delivery refers to the Core mailbox commit.
+// The receiving wallet can be offline through Bitcoin broadcast.
 type RGB11AddressDeliveryResult struct {
 	TransferID  string `json:"transfer_id"`
 	Mode        string `json:"mode"`

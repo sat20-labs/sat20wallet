@@ -19,6 +19,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testCoreMnemonic = "uniform bulb body vital later special era tourist build chief devote annual"
+
 var _test_chain = "testnet"
 var _client *Manager
 var _server *Manager
@@ -126,7 +128,7 @@ func initNode(t *testing.T, mode, dbPath string) *Manager {
 				mnemonic = "acquire pet news congress unveil erode paddle crumble blue fish match eye"
 			} else {
 				//mnemonic = "suit pitch annual bar plug pull comic response night debate evoke original" // server-1
-				mnemonic = "uniform bulb body vital later special era tourist build chief devote annual"
+				mnemonic = testCoreMnemonic
 			}
 		} else {
 			// 跑模拟测试用

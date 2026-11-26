@@ -84,9 +84,12 @@ func TestRGB11NamingIssueRenameAndReceiverOrigin(t *testing.T) {
 	}
 	info := before.TickerInfos[0]
 	want := "naming@" + address[len(address)-12:]
+	id := issued.AssetName.Ticker
+	canonical := "rgb11:f:naming@" + id[len(id)-4:]
 	if info.Ticker != want || info.AssetKey != issued.AssetName.String() || info.ContractID != issued.ContractID ||
-		info.GenesisAddress != address || info.CanonicalName != "" || info.Verified {
-		t.Fatalf("wrong local naming view: %+v want=%s", info, want)
+		info.GenesisAddress != address || info.CanonicalName != canonical || info.Verified {
+		t.Fatalf("wrong naming view: ticker=%q canonical=%q verified=%t, want ticker=%q canonical=%q and unverified",
+			info.Ticker, info.CanonicalName, info.Verified, want, canonical)
 	}
 	beforeAssets, err := json.Marshal(before.Assets)
 	if err != nil {
@@ -104,6 +107,7 @@ func TestRGB11NamingIssueRenameAndReceiverOrigin(t *testing.T) {
 		t.Fatal(err)
 	}
 	if after.TickerInfos[0].Ticker != "my local RGB asset" || after.TickerInfos[0].AssetKey != info.AssetKey ||
+		after.TickerInfos[0].CanonicalName != canonical || after.TickerInfos[0].Verified ||
 		after.TickerInfos[0].ContractID != info.ContractID || !bytes.Equal(beforeAssets, afterAssets) || observation.reads != 0 {
 		t.Fatalf("local rename affected identity/balance or read network: %+v reads=%d", after.TickerInfos[0], observation.reads)
 	}
@@ -153,7 +157,8 @@ func TestRGB11NamingIssueRenameAndReceiverOrigin(t *testing.T) {
 		t.Fatal(err)
 	}
 	received, err := recipient.GetRGB11State()
-	if err != nil || len(received.TickerInfos) != 1 || received.TickerInfos[0].Ticker != want || received.TickerInfos[0].GenesisAddress != address {
+	if err != nil || len(received.TickerInfos) != 1 || received.TickerInfos[0].Ticker != want || received.TickerInfos[0].GenesisAddress != address ||
+		received.TickerInfos[0].CanonicalName != canonical || received.TickerInfos[0].Verified {
 		t.Fatalf("receiver changed provider origin or inherited local alias: %+v %v", received, err)
 	}
 	// A cold runtime has no ticker cache. The imported contract remains visible

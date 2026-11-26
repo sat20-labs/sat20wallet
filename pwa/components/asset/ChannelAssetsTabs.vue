@@ -61,7 +61,7 @@
               <Icon icon="lets-icons:sign-out-squre" class="w-4 h-4 mr-1" />
               {{ $t('channelAssetsTabs.splicingOut') }}
             </Button>
-            <Button v-if="asset.protocol !== 'rgb11'" size="sm" variant="outline" class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
+            <Button size="sm" variant="outline" class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
               @click="$emit('unlock', asset)">
               <Icon icon="lucide:unlock" class="w-4 h-4 mr-1" />
               {{ $t('channelAssetsTabs.unlock') }}

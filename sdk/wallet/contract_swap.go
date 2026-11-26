@@ -5848,7 +5848,7 @@ func (p *SwapContractRuntime) SetPeerActionResult(action string, param any) {
 
 func (p *SwapContractRuntime) genDepositInfoFromResultTx(tx *swire.MsgTx, details *InvokeResultMore) (*DealInfo, error) {
 	bindOutputs := GetChainParam_SatsNet().POSV2Active(int32(p.CurrBlock))
-	data, _, err := CheckAnchorPkScript(tx.TxIn[0].SignatureScript, tx.TxOut, bindOutputs)
+	data, _, err := CheckAnchorTxSig(tx, bindOutputs)
 	if err != nil {
 		return nil, err
 	}
@@ -5943,7 +5943,7 @@ func (p *SwapContractRuntime) genDepositInfoFromAnchorTxs(req *wwire.RemoteSignM
 		if err != nil {
 			return nil, err
 		}
-		anchorData, _, err := CheckAnchorPkScript(tx.TxIn[0].SignatureScript, tx.TxOut, bindOutputs)
+		anchorData, _, err := CheckAnchorTxSig(tx, bindOutputs)
 		if err != nil {
 			Log.Errorf("CheckAnchorPkScript %s failed", tx.TxID())
 			return nil, err

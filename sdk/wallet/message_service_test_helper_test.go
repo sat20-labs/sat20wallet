@@ -160,7 +160,14 @@ func (c *rgb11MessageNodeClient) SendMessageServiceReq(req *swire.MessageService
 				return nil, fmt.Errorf("sender message id reused")
 			}
 			c.state.mu.Unlock()
-			return &swire.MessageServiceResponse{}, nil
+			key, err := dkvsindexer.MailMsgKey(req.Direct.RecipientAccount, req.Direct.SenderAccount, req.Direct.MessageID)
+			if err != nil {
+				return nil, err
+			}
+			c.remote.mu.Lock()
+			defer c.remote.mu.Unlock()
+			record := c.remote.records[key]
+			return &swire.MessageServiceResponse{MailboxCommitted: record != nil && bytes.Equal(record.Value, encoded)}, nil
 		}
 		if want := c.state.next[req.Direct.SenderAccount]; req.Direct.SenderMsgID != want {
 			c.state.mu.Unlock()
@@ -207,7 +214,7 @@ func (c *rgb11MessageNodeClient) SendMessageServiceReq(req *swire.MessageService
 		}
 		c.remote.records[key] = cloneRGB11DKVSRecord(record)
 		c.remote.mu.Unlock()
-		return &swire.MessageServiceResponse{}, nil
+		return &swire.MessageServiceResponse{MailboxCommitted: true}, nil
 
 	case swire.MessageServiceActionDeleteMailbox:
 		if req.Record == nil {

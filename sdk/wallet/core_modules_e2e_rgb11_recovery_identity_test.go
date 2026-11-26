@@ -705,7 +705,7 @@ func coreObserveSelfSendBroadcast(t *testing.T, chain *coreE2EChain, manager *Ma
 	observe := func(raw []byte) {
 		pending, err := store.LoadPendingTransfer(prepared.State.TransferID)
 		valid := err == nil && pending != nil && pending.State.Direction == "send" &&
-			pending.State.DeliveryAcknowledged && pending.State.AckStatus == "accepted" &&
+			rgbDeliveryReady(pending) &&
 			pending.State.DeliveryRecordKey != "" && pending.State.DeliveryRecordHash != "" &&
 			bytes.Equal(pending.SignedTx, raw) && validRGB11SigningTransition(unsigned, pending)
 		mu.Lock()
@@ -730,12 +730,12 @@ func coreObserveSelfSendBroadcast(t *testing.T, chain *coreE2EChain, manager *Ma
 		count, failed := calls, invalid
 		mu.Unlock()
 		coreAssert(t, count == 1 && !failed && chain.broadcastCount() == beforeBroadcast+1,
-			"self-send did not broadcast exactly one original signed intent after its durable accepted ACK")
+			"self-send did not broadcast exactly one original signed intent after its durable Core receipt")
 		pending, err := store.LoadPendingTransfer(prepared.State.TransferID)
 		coreRequire(t, "read completed self-send signed intent", err)
-		coreAssert(t, pending.State.Status == "broadcast" && pending.State.DeliveryAcknowledged &&
-			pending.State.AckStatus == "accepted" && validRGB11SigningTransition(unsigned, pending),
-			"self-send completion lost its original identity, accepted ACK or verified signed witness")
+		coreAssert(t, pending.State.Status == "broadcast" && rgbDeliveryReady(pending) &&
+			validRGB11SigningTransition(unsigned, pending),
+			"self-send completion lost its original identity, Core receipt or verified signed witness")
 		raw, err := chain.GetRawTx(prepared.TxID)
 		coreRequire(t, "read actual self-send Bitcoin transaction", err)
 		coreAssert(t, bytes.Equal(raw, pending.SignedTx), "self-send chain record differs from its durable signed transaction")

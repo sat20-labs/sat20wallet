@@ -151,11 +151,20 @@ func (p *Manager) ValidateSTPServerSweep(tx *wire.MsgTx, destination []byte,
 			if indexer.IsPlainAsset(&asset.Name) || asset.Amount.Sign() == 0 {
 				continue
 			}
-			if err := ValidateSTPAsset(&asset.Name, STPOpForceClose); err != nil {
+			if asset.Name.Protocol == rgb11wallet.Protocol {
+				// The sweep only spends Bitcoin and its reconstructed allocations
+				// use the contract key from the authenticated RGB proof.
+				if proof == nil {
+					return fmt.Errorf("known RGB11 sweep input requires a channel proof")
+				}
+				if err := validateSTPFungibleAsset(&asset.Name, rgb11wallet.Protocol, STPOpForceClose); err != nil {
+					return err
+				}
+				if _, err := rgb11ContractIDFromAssetName(asset.Name); err != nil {
+					return err
+				}
+			} else if err := ValidateSTPAsset(&asset.Name, STPOpForceClose); err != nil {
 				return err
-			}
-			if asset.Name.Protocol == rgb11wallet.Protocol && proof == nil {
-				return fmt.Errorf("known RGB11 sweep input requires a channel proof")
 			}
 			totals[asset.Name] = totals[asset.Name].Add(&asset.Amount)
 		}

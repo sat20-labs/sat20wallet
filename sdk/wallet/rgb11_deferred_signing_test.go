@@ -55,7 +55,7 @@ func TestRGB11UnsignedExpiredCancelCannotResumeAndReleasesInputs(t *testing.T) {
 	}
 	coreAssertRGB11Reservation(t, sender, original.State.TransferID, false, original)
 	delivery, err := sender.DeliverAndBroadcastConfiguredRGB11AddressTransfer(original.State.TransferID)
-	if err != nil || delivery == nil || delivery.Broadcast || delivery.TxID != "" || delivery.RecordKey != "" || delivery.RecordHash != "" || delivery.ObjectID != "" {
+	if !errors.Is(err, ErrRGB11AddressDeliveryRequired) || delivery == nil || delivery.Broadcast || delivery.TxID != "" || delivery.RecordKey != "" || delivery.RecordHash != "" || delivery.ObjectID != "" {
 		t.Fatalf("canceled preparation performed delivery/broadcast: result=%+v err=%v", delivery, err)
 	}
 	if _, err := sender.rgbManager.deliverRGBAddress(original.State.TransferID); !errors.Is(err, ErrRGB11AddressDeliveryRequired) {
@@ -142,8 +142,8 @@ func TestRGB11DirectBroadcastTimeoutCannotCancelAndResolvesWithoutRebroadcast(t 
 		t.Fatal(err)
 	}
 	original := assertRGB11UnsignedPending(t, sender.rgbManager, prepared.State.TransferID)
-	delivered, err := sender.DeliverAndBroadcastConfiguredRGB11AddressTransfer(original.State.TransferID)
-	if err != nil || delivered == nil || !delivered.AwaitingACK || delivered.Broadcast {
+	delivered, err := sender.rgbManager.deliverRGBAddress(original.State.TransferID)
+	if err != nil || delivered == nil || delivered.RecordHash == "" || delivered.Broadcast {
 		t.Fatalf("delivery before ACK: result=%+v err=%v", delivered, err)
 	}
 	received, err := recipient.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{})

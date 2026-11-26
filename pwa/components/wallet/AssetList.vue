@@ -391,6 +391,13 @@ const openAssetOperation = async (type: OperationType, asset: any) => {
   sendPrecision.value = undefined
   openedSendScope.value = sendScope()
   if (asset.protocol !== 'rgb11') { showDialog.value = true; return }
+  if (type === 'withdraw') {
+    const current = walletStore.wallet?.accounts.find(account => account.index === walletStore.accountIndex)
+    if (walletStore.accountIndex !== 0 || (walletStore.rootAccountId && current?.accountId !== walletStore.rootAccountId)) {
+      handleError(t('rgb11Transfer.withdrawRootRequired'))
+      return
+    }
+  }
   const scope = openedSendScope.value
   loading.value = true
   try {
@@ -401,11 +408,14 @@ const openAssetOperation = async (type: OperationType, asset: any) => {
         throw new Error(t('rgb11Transfer.scopeChanged'))
       }
     }
-    const assetKey = type === 'withdraw' ? /^rgb11:f:[a-z0-9-]+@[0-9a-f]{4}$/ : /^rgb11:f:[0-9a-f]{64}$/
-    if (asset.type !== 'f' || !assetKey.test(asset.key)) {
-      throw new Error(t('rgb11Transfer.crossLayerFungibleOnly'))
+    if (type !== 'lock' && type !== 'unlock') {
+      const assetKey = type === 'withdraw' || type === 'splicing_out'
+        ? /^rgb11:f:[a-z0-9-]+@[0-9a-f]{4}$/ : /^rgb11:f:[0-9a-f]{64}$/
+      if (asset.type !== 'f' || !assetKey.test(asset.key)) {
+        throw new Error(t('rgb11Transfer.crossLayerFungibleOnly'))
+      }
     }
-    const destination = type === 'splicing_in' ? channel.value?.address : address.value
+    const destination = type === 'splicing_in' || type === 'lock' ? channel.value?.address : address.value
     if (!destination) throw new Error(t('approvalUi.addressEmpty'))
     if (type === 'deposit' || type === 'withdraw') {
       const runtimePrecision = await requireRGB11PublicContract(asset, type, check)
@@ -423,7 +433,7 @@ const openAssetOperation = async (type: OperationType, asset: any) => {
       check()
       if (error) throw error
       const ticker = JSON.parse(result?.ticker || '{}')
-      if (ticker.name?.Protocol !== 'rgb11' || ticker.name.Type !== 'f' || ticker.name.Ticker !== asset.ticker) {
+      if (ticker.name?.Protocol !== asset.protocol || ticker.name.Type !== asset.type || ticker.name.Ticker !== asset.ticker) {
         throw new Error(t('assetOperationDialog.amountErrors.unavailable'))
       }
       sendPrecision.value = ticker.divisibility ?? 0
@@ -442,22 +452,8 @@ const handleSplicingIn = (asset: any) => openAssetOperation('splicing_in', asset
 const handleDeposit = (asset: any) => openAssetOperation('deposit', asset)
 const handleWithdraw = (asset: any) => openAssetOperation('withdraw', asset)
 
-const handleLock = (asset: any) => {
-  if (loading.value || assetActionLoading.value) return
-  operationType.value = 'lock'
-  selectedAsset.value = asset
-  operationAmount.value = ''
-  showDialog.value = true
-}
-
-const handleUnlock = (asset: any) => {
-  if (loading.value || assetActionLoading.value) return
-  operationType.value = 'unlock'
-  selectedAsset.value = asset
-  operationAmount.value = ''
-  showDialog.value = true
-}
-
+const handleLock = (asset: any) => openAssetOperation('lock', asset)
+const handleUnlock = (asset: any) => openAssetOperation('unlock', asset)
 const handleSplicingOut = (asset: any) => openAssetOperation('splicing_out', asset)
 
 

@@ -38,12 +38,12 @@ func (p *Manager) getTxOutputFromIndexerOrInscribe(utxo string, inscribe *Inscri
 func (p *Manager) FunderInitSplicingInProcess(channel *Channel, assetName *swire.AssetName,
 	amt *Decimal, feeRate int64, utxos, fees []*TxOutput, inscribe *InscribeResv,
 	revealPrivKey []byte, reason string) (string, int64, error) {
-	return p.funderInitSplicingInProcessWithRGBEvidence(channel, assetName, amt, feeRate, utxos, fees, inscribe, revealPrivKey, reason, nil)
+	return p.funderInitSplicingInProcessWithRGBEvidence(channel, assetName, amt, feeRate, utxos, fees, inscribe, revealPrivKey, reason, nil, nil)
 }
 
 func (p *Manager) funderInitSplicingInProcessWithRGBEvidence(channel *Channel, assetName *swire.AssetName,
 	amt *Decimal, feeRate int64, utxos, fees []*TxOutput, inscribe *InscribeResv,
-	revealPrivKey []byte, reason string, evidence *STPRGBReservationEvidence) (string, int64, error) {
+	revealPrivKey []byte, reason string, evidence *STPRGBReservationEvidence, tickerInfo *indexer.TickerInfo) (string, int64, error) {
 	if err := ValidateSTPAssetForChannel(channel, assetName, STPOpSpliceIn); err != nil {
 		return "", 0, err
 	}
@@ -53,7 +53,9 @@ func (p *Manager) funderInitSplicingInProcessWithRGBEvidence(channel *Channel, a
 		return "", 0, err
 	}
 
-	tickerInfo := p.getTickerInfo(assetName)
+	if tickerInfo == nil && assetName.Protocol != "rgb11" {
+		tickerInfo = p.fundingTicker(assetName)
+	}
 	if tickerInfo == nil {
 		return "", 0, fmt.Errorf("can't get ticker %s info", assetName.String())
 	}

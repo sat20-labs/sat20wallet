@@ -113,7 +113,11 @@ func (p *Manager) prepareSTPRGBClosedChannelSource(f *STPRGBReservationEvidence,
 		if source.OutPoint != point {
 			continue
 		}
-		if selected != nil || source.AssetName != *asset || !bytes.Equal(source.PkScript, stored.GetChannelPkScript()) {
+		name, err := stpRGB11FundingName(source)
+		if err != nil {
+			return nil, err
+		}
+		if selected != nil || name != *asset || !bytes.Equal(source.PkScript, stored.GetChannelPkScript()) {
 			return nil, fmt.Errorf("RGB closed source is not one complete selected private carrier")
 		}
 		selected = &source

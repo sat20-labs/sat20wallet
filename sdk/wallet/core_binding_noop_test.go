@@ -7,9 +7,73 @@ import (
 	"errors"
 	"testing"
 
+	indexer "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 	dkvs "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	"github.com/stretchr/testify/require"
 )
+
+type coreInitDKVS struct {
+	*rgb11MemoryDKVSHTTP
+	wallet *Manager
+}
+
+func (h *coreInitDKVS) DKVSClientConfig() (*dkvs.ClientConfig, error) {
+	root := h.wallet.GetWallet()
+	if root != nil {
+		h.mu.Lock()
+		h.endpointID = hex.EncodeToString(root.GetPaymentPubKey().SerializeCompressed())
+		h.mu.Unlock()
+	}
+	return h.rgb11MemoryDKVSHTTP.DKVSClientConfig()
+}
+
+func TestCoreWalletInitialBinding(t *testing.T) {
+	oldEnv, oldChain, oldMode, oldIndexerChain := _env, _chain, _mode, indexer.CHAIN
+	t.Cleanup(func() { _env, _chain, _mode, indexer.CHAIN = oldEnv, oldChain, oldMode, oldIndexerChain })
+	_chain, indexer.CHAIN = "testnet", "testnet"
+	for _, operation := range []string{"create", "import"} {
+		t.Run(operation, func(t *testing.T) {
+			remote := newRGB11MemoryDKVSHTTP()
+			bootstrap := indexer.GetBootstrapPubKey()
+			cfg := &common.Config{
+				Env: "test", Chain: "testnet", Mode: SERVER_NODE, DB: t.TempDir(),
+				Peers:     []string{"b@" + bootstrap + "@http://127.0.0.1:1/testnet"},
+				IndexerL1: &common.Indexer{Scheme: "http", Host: "127.0.0.1:1", Proxy: "testnet"},
+				IndexerL2: &common.Indexer{Scheme: "http", Host: "dkvs.test", Proxy: "testnet"},
+			}
+			cfg.RPC.Scheme, cfg.RPC.Host, cfg.RPC.Proxy = "http", "0.0.0.0:19529", "testnet"
+			manager, _ := openAccountGroup(t, cfg, remote, newRGB11MessageNodeClient(remote))
+			manager.SetDKVSHttpClient(&coreInitDKVS{rgb11MemoryDKVSHTTP: remote, wallet: manager})
+			replica := newDKVSReplicaStore(manager.db)
+			require.NoError(t, replica.PreparePrefixSync(manager.dkvsReplicaNamespace(),
+				bootstrap, []string{"/svc/old-core"}, true))
+
+			if operation == "create" {
+				_, _, err := manager.CreateWallet("core-binding-test")
+				require.NoError(t, err)
+			} else {
+				_, err := manager.ImportWallet(coreE2ESenderMnemonic, "core-binding-test")
+				require.NoError(t, err)
+			}
+			root := manager.GetWallet()
+			key, err := dkvs.AccountMappingKey(GetChainParam().Name, root.GetAddress())
+			require.NoError(t, err)
+			client, err := manager.ensureDKVSManager().primaryClient()
+			require.NoError(t, err)
+			record, err := client.GetRecordDirect(key)
+			require.NoError(t, err)
+			_, _, binding, err := dkvs.ValidateAccountMappingBindingRecord(record)
+			require.NoError(t, err)
+			require.Equal(t, hex.EncodeToString(root.GetPaymentPubKey().SerializeCompressed()), binding.CoreNodeID)
+			require.Equal(t, bootstrap, hex.EncodeToString(manager.GetServerNode().NodeId.SerializeCompressed()))
+			require.Equal(t, uint64(1), record.Seq)
+			state, err := replica.LoadSubscriptionState(manager.dkvsReplicaNamespace())
+			require.NoError(t, err)
+			require.Equal(t, bootstrap, state.EndpointID, "registration must not reset an existing replica")
+		})
+	}
+}
 
 // The client reads and verifies signed endpoint responses. The shared memory
 // endpoint applies real signatures, exact CAS preconditions and sequences;

@@ -37,13 +37,13 @@
         <div
           class="w-12 h-10 mt-3 flex items-center justify-center rounded-full bg-zinc-700 text-zinc-200 font-bold text-lg">
           <!-- <img v-if="asset.logo" :src="asset.logo" alt="logo" class="w-full h-full object-cover rounded-full" /> -->
-          <span class="flex justify-center items-center w-10 h-10">{{ asset.label.charAt(0).toUpperCase() }}</span>
+          <span class="flex justify-center items-center w-10 h-10">{{ assetLabel(asset).charAt(0).toUpperCase() }}</span>
         </div>
 
         <div class="flex min-w-0 flex-1 flex-col justify-between h-full ml-3">
           <!-- 第一行：资产名称和数量 -->
           <div class="flex justify-between items-center">
-            <div class="min-w-0 flex-1 font-medium text-zinc-400 break-all">{{ asset.protocol === 'rgb11' ? asset.label : asset.label.toLocaleUpperCase() }}</div>
+            <div class="min-w-0 flex-1 font-medium text-zinc-400 break-all">{{ assetLabel(asset) }}</div>
             <div class="shrink-0 ml-2 text-sm font-semibold text-zinc-300">
               {{ formatAmount(asset) }}
             </div>
@@ -55,7 +55,7 @@
               <Icon icon="lucide:send" class="w-4 h-4 mr-1" />
               {{ $t('l2AssetsTabs.send') }}
             </Button>
-            <Button v-if="mode === 'lightning' && asset.protocol !== 'rgb11'" size="sm" variant="outline" class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
+            <Button v-if="mode === 'lightning'" size="sm" variant="outline" class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
               @click="$emit('lock', asset)">
               <Icon icon="lucide:lock" class="w-4 h-4 mr-1" />
               {{ $t('l2AssetsTabs.lock') }}
@@ -137,6 +137,10 @@ const filteredAssets = computed(() => {
     // return selectedType.value === assetType
   })
 })
+
+const assetLabel = (asset: Asset) => asset.protocol === 'rgb11'
+  ? asset.label.slice(asset.label.lastIndexOf(':') + 1)
+  : asset.label.toLocaleUpperCase()
 
 // 格式化金额显示
 const formatAmount = (asset: Asset) => {

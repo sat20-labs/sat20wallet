@@ -157,8 +157,10 @@ func signRGBBroadcastFixture(t *testing.T, fixture *expiredCancelFixture) *expir
 		t.Fatal(err)
 	}
 	pending.SignedTx, pending.SignedPSBT = signed.Bytes(), prepared.Bytes()
-	pending.State.Status, pending.State.AckStatus = "delivered", "accepted"
-	pending.State.DeliveryAcknowledged = true
+	pending.State.Status, pending.State.AckStatus = "delivered", "mailbox-committed"
+	pending.State.DeliveryAcknowledged = false
+	pending.State.RelayDurability = rgbMailboxCommitted
+	pending.State.DeliveryMode = "direct"
 	pending.State.DeliveryRecordKey, pending.State.DeliveryRecordHash = "/mail/test/msg", "durable-record-hash"
 	if err := runtime.projectionStore.SavePendingTransferState(pending); err != nil {
 		t.Fatal(err)
@@ -380,8 +382,10 @@ func TestRGB11AddressBroadcastUsesDurableIntent(t *testing.T) {
 		t.Fatal(err)
 	}
 	pending.State.Status = "delivered"
-	pending.State.AckStatus = "accepted"
-	pending.State.DeliveryAcknowledged = true
+	pending.State.AckStatus = "mailbox-committed"
+	pending.State.DeliveryAcknowledged = false
+	pending.State.RelayDurability = rgbMailboxCommitted
+	pending.State.DeliveryMode = "direct"
 	pending.State.DeliveryRecordHash = "durable-record-hash"
 	pending.State.DeliveryRecordKey = "/mail/test/msg"
 	if err := runtime.projectionStore.SavePendingTransferState(pending); err != nil {

@@ -30,15 +30,7 @@ func (p *Manager) validateRGB11DepositAnchor(ctx context.Context, contract Contr
 	if contract == nil || tx == nil || len(tx.TxIn) != 1 || len(tx.TxOut) == 0 {
 		return fmt.Errorf("invalid RGB11 contract deposit anchor")
 	}
-	bind := true
-	if mode != nativeproof.Historical {
-		var err error
-		bind, err = p.AnchorOutputsActive()
-		if err != nil {
-			return err
-		}
-	}
-	data, _, err := CheckAnchorPkScript(tx.TxIn[0].SignatureScript, tx.TxOut, bind)
+	data, _, err := CheckAnchorTxSig(tx, true)
 	if err != nil {
 		return err
 	}
@@ -65,19 +57,17 @@ func (p *Manager) validateRGB11DepositAnchor(ctx context.Context, contract Contr
 		return err
 	}
 	name := *contract.GetAssetName()
-	if name != result.Asset.Name {
-		proof, err := nativeproof.Decode(material)
-		if err != nil {
-			return err
-		}
-		id, err := dkvs.VerifyRGB11Name(proof.NameRecord, name.Ticker)
-		if err != nil || id != result.Asset.Name.Ticker {
-			return ErrRGB11PublicIdentityMismatch
-		}
-		material, err = nativeproof.BuildRGB11(proof.Consignment, proof.Reveals)
-		if err != nil {
-			return err
-		}
+	proof, err := nativeproof.Decode(material)
+	if err != nil {
+		return err
+	}
+	id, err := dkvs.VerifyRGB11Name(proof.NameRecord, name.Ticker)
+	if err != nil || id != result.Asset.Name.Ticker {
+		return ErrRGB11PublicIdentityMismatch
+	}
+	material, err = nativeproof.BuildRGB11(proof.Consignment, proof.Reveals)
+	if err != nil {
+		return err
 	}
 	if !bytes.Equal(source.PublicProof, material) {
 		return fmt.Errorf("RGB11 anchor changed the authenticated source proof")
@@ -87,9 +77,7 @@ func (p *Manager) validateRGB11DepositAnchor(ctx context.Context, contract Contr
 		data.Assets[0].Amount.Cmp(&result.Asset.Amount) != 0 {
 		return fmt.Errorf("RGB11 anchor invoice must map the full canonical source")
 	}
-	// A new public anchor maps only RGB. Historical replay checks the
-	// signed amount of the already confirmed anchor against its BTC source.
-	if data.Value != 0 && (mode != nativeproof.Historical || data.Value != result.Value) {
+	if data.Value != 0 {
 		return fmt.Errorf("invalid RGB11 anchor invoice value %d", data.Value)
 	}
 	raw, err := p.GetDB().Read(rgb11DepositKey("receive", data.Utxo))
@@ -209,19 +197,12 @@ func (p *Manager) CreateRGB11DepositAnchor(ctx context.Context, contract Contrac
 	if err != nil {
 		return nil, err
 	}
-	material := source.PublicProof
 	mappedAsset := validated.Asset
-	if mappedAsset.Name != assetName.AssetName {
-		record, id, err := p.readRGB11Name(assetName.Ticker)
-		if err != nil || id != validated.Asset.Name.Ticker {
-			return nil, ErrRGB11PublicIdentityMismatch
-		}
-		material, err = nativeproof.WithRGB11Name(material, record)
-		if err != nil {
-			return nil, err
-		}
-		mappedAsset.Name = assetName.AssetName
+	material, err := p.rgb11NamedProof(assetName.AssetName, validated.Asset.Name.Ticker, source.PublicProof)
+	if err != nil {
+		return nil, err
 	}
+	mappedAsset.Name = assetName.AssetName
 	destScript, err := GetPkScriptFromAddress(destAddr)
 	if err != nil {
 		return nil, err

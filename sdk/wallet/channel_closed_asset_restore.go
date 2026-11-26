@@ -88,10 +88,18 @@ func (policy *closedChannelAssetRestorePolicy) validateSource(p *Manager, resv *
 	if err != nil {
 		return err
 	}
-	if err := protocol.VerifyInput(resv.AssetName, actual); err != nil {
+	name := *resv.AssetName
+	if name.Protocol == "rgb11" {
+		local, err := p.RGB11LocalAsset(&name.AssetName)
+		if err != nil {
+			return err
+		}
+		name.AssetName = *local
+	}
+	if err := protocol.VerifyInput(&name, actual); err != nil {
 		return err
 	}
-	amount, _ := actual.GetAssetV2(&resv.AssetName.AssetName)
+	amount, _ := actual.GetAssetV2(&name.AssetName)
 	if resv.SplicingAmt == nil || amount.Cmp(resv.SplicingAmt) != 0 {
 		return fmt.Errorf("exact asset output amount changed")
 	}
@@ -206,6 +214,10 @@ func (p *Manager) startClosedChannelAssetRestoreForWallet(ctx context.Context, w
 	if err != nil {
 		return 0, err
 	}
+	tickerInfo := p.fundingTicker(asset)
+	if tickerInfo == nil {
+		return 0, fmt.Errorf("can't get ticker %s info", assetName)
+	}
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
@@ -218,7 +230,7 @@ func (p *Manager) startClosedChannelAssetRestoreForWallet(ctx context.Context, w
 		return 0, err
 	}
 	policy := &closedChannelAssetRestorePolicy{ctx: ctx, wallet: captured, owner: owner}
-	_, _, childID, err = p.funderInitExpandingProcessWithRGBEvidenceAndPolicy(channel, asset, exactUTXO, "", nil, evidence, policy)
+	_, _, childID, err = p.funderInitExpandingProcessWithRGBEvidenceAndPolicy(channel, asset, exactUTXO, "", nil, evidence, policy, tickerInfo)
 	return childID, err
 }
 

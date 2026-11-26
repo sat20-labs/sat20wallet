@@ -120,9 +120,9 @@ func (p *Manager) readAccountMessages(wallet common.Wallet, verify dkvsindexer.R
 }
 
 func (p *Manager) sendAccountMessage(wallet common.Wallet, id, kind, recipient string,
-	body []byte, payout bool) (*accountMessageReceipt, error) {
+	body []byte, requireCommit bool) (*accountMessageReceipt, error) {
 	node := p.rootMessageNode(wallet)
-	message, err := p.ensureDKVSManager().sendWalletMessageOnNode(wallet, id, kind, recipient, body, node, payout)
+	message, err := p.ensureDKVSManager().sendWalletMessageOnNode(wallet, id, kind, recipient, body, node, requireCommit)
 	if err != nil {
 		return nil, err
 	}

@@ -11,6 +11,7 @@ import { sleep } from 'radash'
 import { useQueryClient } from '@tanstack/vue-query'
 import { useI18n } from 'vue-i18n'
 import { toast as sonner } from 'vue-sonner'
+import type { CodedWasmError } from '@/utils/wasmError'
 
 export function useAssetActions() {
   const walletStore = useWalletStore()
@@ -169,9 +170,15 @@ export function useAssetActions() {
       )
       if (err) throw err
     } catch (error) {
+      const code = (error as CodedWasmError | undefined)?.code
+      const description = code === 'RGB_WITHDRAW_ROOT_REQUIRED'
+        ? t('rgb11Transfer.withdrawRootRequired')
+        : code === 'RGB_WITHDRAW_ROOT_UNREGISTERED'
+          ? t('rgb11Transfer.withdrawRootUnregistered')
+          : error instanceof Error ? error.message : String(error)
       sonner.error(t('common.error'), {
         id,
-        description: error instanceof Error ? error.message : String(error),
+        description,
         duration: 7000,
       })
       return

@@ -6,9 +6,11 @@ import (
 	"testing"
 
 	"github.com/btcsuite/btcd/btcutil"
+	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
+	dkvs "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	"github.com/stretchr/testify/require"
 )
 
@@ -167,15 +169,35 @@ func TestContractInvokeOperationLogRecordsFailureWithoutReservation(t *testing.T
 
 func TestRGB11DepositLog(t *testing.T) {
 	mgr, recipient, issued, evidence, rpc := newRGB11GenericSendFixture(t)
+	previousChain := indexer.CHAIN
+	indexer.CHAIN = "testnet"
+	t.Cleanup(func() { indexer.CHAIN = previousChain })
+
+	chainAsset := issued.AssetName
+	id := issued.AssetName.Ticker
+	var err error
+	chainAsset.Ticker, err = dkvs.RGB11NameTicker("SEND", id)
+	require.NoError(t, err)
+	key, err := dkvs.RGB11NameKey(chainAsset.Ticker)
+	require.NoError(t, err)
+	value, err := dkvs.RGB11NameValue(id)
+	require.NoError(t, err)
+	signer := NewInternalWalletWithMnemonic(testCoreMnemonic, "", &chaincfg.TestNet4Params)
+	record, err := NewDKVSSignedRecord(signer, key, value, dkvs.RecordOptions{Seq: dkvs.RGB11NameProofSeq, IssueHeight: 1})
+	require.NoError(t, err)
+	remote := mgr.http.(*rgb11MemoryDKVSHTTP)
+	remote.mu.Lock()
+	remote.records[key] = record
+	remote.mu.Unlock()
+
 	mgr.rgbManager.evidence = newRGB11AcceptedEvidence(evidence, rpc)
 	mgr.l2IndexerClient = &IndexerRPCClientMgr{active: rpc}
 	node := &depositLogNode{NodeRPCClient: mgr.serverNode.client}
 	mgr.serverNode.client = node
 	bridge := NewTranscendContractRuntime(mgr)
-	*bridge.GetAssetName() = issued.AssetName
+	*bridge.GetAssetName() = chainAsset
 	bridge.ChannelAddr = mgr.GetCoreChannelAddr()
 	bridge.LocalPubKey = mgr.serverNode.Pubkey.SerializeCompressed()
-	var err error
 	bridge.RemotePubKey, err = hex.DecodeString(indexer.GetBootstrapPubKey())
 	require.NoError(t, err)
 	bridge.Status, bridge.EnableBlockL1 = CONTRACT_STATUS_READY, 0
@@ -191,6 +213,8 @@ func TestRGB11DepositLog(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, txID)
 	require.Equal(t, dest, node.deposit.Intent.Recipient)
+	require.Equal(t, chainAsset.String(), node.deposit.Intent.AssetName)
+	require.Equal(t, issued.AssetName, node.deposit.Source.Output.Assets[0].Name)
 	logs, err := mgr.GetOperationLogs()
 	require.NoError(t, err)
 	deposits := make(map[string]*OperationLogRecord)
@@ -206,7 +230,7 @@ func TestRGB11DepositLog(t *testing.T) {
 		require.Equal(t, node.contract, record.Parameters["contract"])
 		require.Equal(t, INVOKE_API_DEPOSIT, record.Parameters["action"])
 		require.Equal(t, "Bitcoin", record.Parameters["network"])
-		require.Equal(t, asset, record.Parameters["asset"])
+		require.Equal(t, chainAsset.String(), record.Parameters["asset"])
 	}
 	require.Contains(t, deposits, "-1")
 	require.Equal(t, OperationLogFailed, deposits["-1"].Status)

@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
 	indexer "github.com/sat20-labs/indexer/common"
 	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
 	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
+	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	"github.com/sat20-labs/satoshinet/txscript"
 )
 
@@ -144,8 +146,11 @@ func (p *Manager) DeployContract_Remote(templateName, contractContent string,
 		feeRate = p.GetFeeRate()
 	}
 
-	contract, err := ContractContentUnMarsh(templateName, contractContent)
-	if err != nil {
+	contract := NewContract(templateName)
+	if contract == nil {
+		return "", 0, "", fmt.Errorf("invalid contract name %s", templateName)
+	}
+	if err := json.Unmarshal([]byte(contractContent), contract); err != nil {
 		return "", 0, "", err
 	}
 	if templateName == TEMPLATE_CONTRACT_TRANSCEND {
@@ -159,6 +164,9 @@ func (p *Manager) DeployContract_Remote(templateName, contractContent string,
 		if err := p.requireRGB11PublicRegistration(contract.GetAssetName()); err != nil {
 			return "", 0, "", err
 		}
+	}
+	if err := contract.CheckContent(); err != nil {
+		return "", 0, "", err
 	}
 	buf, err := contract.Encode()
 	if err != nil {
@@ -268,6 +276,57 @@ func (p *Manager) getRemoteDeployedContract(url string) ContractRuntime {
 	return c
 }
 
+var (
+	ErrRGBWithdrawRoot          = errors.New("RGB withdrawal requires the root account. Transfer the asset to your root account on SatoshiNet before withdrawing.")
+	ErrRGBWithdrawNotRegistered = errors.New("The root account is not registered for RGB withdrawals. Open Account Management and retry account service setup before withdrawing.")
+)
+
+func (p *Manager) checkRGBWithdrawRoot(param *InvokeParam) error {
+	if param.Action != INVOKE_API_WITHDRAW {
+		return nil
+	}
+	root, err := p.accountManagementRootWallet()
+	if err != nil || p.wallet.GetAddress() != root.GetAddress() {
+		return ErrRGBWithdrawRoot
+	}
+	raw, err := base64.StdEncoding.DecodeString(param.Param)
+	if err != nil {
+		return err
+	}
+	var withdrawal WithdrawInvokeParam
+	if err := withdrawal.Decode(raw); err != nil {
+		return err
+	}
+	if withdrawal.DestAddr != "" && !strings.EqualFold(withdrawal.DestAddr, root.GetAddress()) {
+		return ErrRGBWithdrawRoot
+	}
+	key, err := dkvsindexer.AccountMappingKey(GetChainParam().Name, root.GetAddress())
+	if err != nil {
+		return err
+	}
+	client, err := p.ensureDKVSManager().primaryClient()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(client.requestContext(), dkvsUnmanagedReadTimeout)
+	defer cancel()
+	record, err := client.GetRecordDirectContext(ctx, key)
+	if errors.Is(err, dkvsindexer.ErrRecordNotFound) {
+		return ErrRGBWithdrawNotRegistered
+	}
+	if err != nil {
+		return fmt.Errorf("verify RGB withdrawal account registration: %w", err)
+	}
+	_, _, binding, err := dkvsindexer.ValidateAccountMappingBindingRecord(record)
+	if err != nil {
+		return fmt.Errorf("verify RGB withdrawal account registration: %w", err)
+	}
+	if binding.Capabilities&accountServiceCapabilityRGB11Direct == 0 {
+		return ErrRGBWithdrawNotRegistered
+	}
+	return nil
+}
+
 func (p *Manager) QueryFeeForInvokeContract(contractURL string, jsonInvokeParam string) (ContractRuntime, int64, error) {
 
 	// client mode
@@ -317,6 +376,11 @@ func (p *Manager) InvokeContract_Satsnet(contractURL string, jsonInvokeParam str
 	wrapperParam, err := ConvertInvokeParam(jsonInvokeParam, false)
 	if err != nil {
 		return "", err
+	}
+	if runtime.GetRuntimeBase().rgb11PublicContract() {
+		if err := p.checkRGBWithdrawRoot(wrapperParam); err != nil {
+			return "", err
+		}
 	}
 	buf, err := wrapperParam.Encode()
 	if err != nil {
@@ -387,6 +451,11 @@ func (p *Manager) invokeSatsnetContract(contractURL, jsonInvokeParam, assetName,
 	wrapperParam, err := ConvertInvokeParam(jsonInvokeParam, false)
 	if err != nil {
 		return "", err
+	}
+	if runtime.GetRuntimeBase().rgb11PublicContract() {
+		if err := p.checkRGBWithdrawRoot(wrapperParam); err != nil {
+			return "", err
+		}
 	}
 	buf, err := wrapperParam.Encode()
 	if err != nil {

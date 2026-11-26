@@ -498,6 +498,8 @@ const getOperationHint = () => {
   }
   if (props.operationType === 'splicing_in') return `Bitcoin → ${t('walletComponents.channel')}`
   if (props.operationType === 'splicing_out') return `${t('walletComponents.channel')} → Bitcoin`
+  if (props.operationType === 'lock') return `SatoshiNet → ${t('walletComponents.channel')}`
+  if (props.operationType === 'unlock') return `${t('walletComponents.channel')} → SatoshiNet`
   return null
 }
 

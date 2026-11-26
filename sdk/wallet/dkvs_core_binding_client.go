@@ -177,12 +177,15 @@ func (m *dkvsManager) registerRootService(ctx context.Context, root common.Walle
 			return err
 		}
 		if err := bind(); err != nil {
-			return err
+			return fmt.Errorf("publish root account binding: %w", err)
 		}
 	} else if err != nil {
 		return err
 	}
-	return m.owner.registerRootMailbox(root)
+	if err := m.owner.registerRootMailbox(root); err != nil {
+		return fmt.Errorf("register root mailbox subscriptions: %w", err)
+	}
+	return nil
 }
 
 func verifyBindingOnNode(ctx context.Context, store *dkvsStore, root common.Wallet, node *Node) error {

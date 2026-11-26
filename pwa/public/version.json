@@ -1,14 +1,14 @@
 {
   "version": "0.1.46",
-  "buildId": "20261125T145045Z",
-  "commit": "4489360d5673",
-  "releaseNotes": "Switch existing subaccounts and wallets without backup prompts",
+  "buildId": "20261126T121057Z",
+  "commit": "f37e7ab68c76",
+  "releaseNotes": "Check RGB withdrawal eligibility before signing",
   "forceUpdate": false,
   "minVersion": "0.1.0",
-  "publishedAt": "2026-11-25T14:50:45.400Z",
+  "publishedAt": "2026-11-26T12:10:57.066Z",
   "serviceWorker": {
     "schemaVersion": 1,
-    "releaseId": "0.1.46-20261125T145045Z",
+    "releaseId": "0.1.46-20261126T121057Z",
     "killSwitch": false
   }
 }

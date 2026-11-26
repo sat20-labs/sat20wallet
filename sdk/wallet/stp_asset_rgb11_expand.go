@@ -32,7 +32,11 @@ func (protocol rgb11STPProtocol) BuildExpansionAnchorProof(p *Manager, channel *
 		if source.OutPoint != output.OutPointStr {
 			continue
 		}
-		if source.AssetName != asset.AssetName || source.Value != output.Value() ||
+		name, err := stpRGB11FundingName(source)
+		if err != nil {
+			return nil, err
+		}
+		if name != asset.AssetName || source.Value != output.Value() ||
 			!bytes.Equal(source.PkScript, output.OutValue.PkScript) || len(output.Assets) != 1 ||
 			output.Assets[0].BindingSat != 0 || source.Amount.Precision != output.Assets[0].Amount.Precision ||
 			source.Amount.Cmp(output.GetAsset(&asset.AssetName)) != 0 {
@@ -45,11 +49,15 @@ func (protocol rgb11STPProtocol) BuildExpansionAnchorProof(p *Manager, channel *
 		if err := completeSTPRGBView(protocol.view); err != nil {
 			return nil, err
 		}
-		if validated.Value != output.Value() || validated.Asset.Name != asset.AssetName ||
+		if validated.Value != output.Value() || validated.Asset.Name != source.AssetName ||
 			validated.Asset.Amount.Cmp(&source.Amount) != 0 || validated.Asset.Amount.Precision != source.Amount.Precision {
 			return nil, fmt.Errorf("RGB11 expansion source differs from its validated allocation")
 		}
-		return source.RGB11Proof()
+		proof, err := source.RGB11Proof()
+		if err != nil {
+			return nil, err
+		}
+		return protocol.view.namedFundingProof(p, asset.AssetName, source.AssetName.Ticker, proof)
 	}
 	return nil, fmt.Errorf("RGB11 expansion has no authenticated source consignment")
 }

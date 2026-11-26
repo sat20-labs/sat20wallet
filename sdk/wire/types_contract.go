@@ -148,6 +148,11 @@ type RemoteSignMoreData_Contract struct {
 type RGB11SigningProof struct {
 	Consignment []byte   `json:"consignment"`
 	ChangeSeals [][]byte `json:"changeSeals,omitempty"`
+
+	// Exact signed, encrypted Direct messages for withdrawal outputs 1..N.
+	RecipientMail [][]byte `json:"recipientMail,omitempty"`
+	// Sender's signature over the exact archive and its Bitcoin output positions.
+	RecipientMailSignature []byte `json:"recipientMailSignature,omitempty"`
 }
 type RemoteSignMoreData struct {
 	Tx       []*TxSignInfo `json:"tx1"`

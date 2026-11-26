@@ -133,6 +133,13 @@ func (p *Manager) rgbTransferView(state *RGB11State, id string) (*RGBTransferVie
 		if first.TransportMode == "out-of-band" {
 			view.NeedsReceipts = first.Status != rgb11StatusBroadcastAttempted
 			view.Status = "awaiting_receipts"
+		} else if first.AddressMode {
+			for _, item := range members {
+				if item.Status != "prepared" && item.RelayDurability != rgbMailboxCommitted {
+					view.Status = "awaiting_persistence"
+					break
+				}
+			}
 		} else if first.Status != "prepared" && first.AckStatus != "accepted" {
 			view.Status = "awaiting_ack"
 			if first.AckStatus == "awaiting-persistence" {

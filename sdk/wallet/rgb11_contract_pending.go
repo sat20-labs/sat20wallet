@@ -126,7 +126,7 @@ func (p *SwapContractRuntime) reconcileRGB11Withdrawals() (bool, error) {
 	defer cancel()
 	return p.reconcileRGB11ContractWithdrawal(ctx, func(ctx context.Context, txid string) (*ConfirmedRGB11ContractWithdrawal, error) {
 		manager := p.stp.GetWalletMgr()
-		if err := manager.resumeRGB11ContractBroadcast(ctx, p.localWallet, p.URL(), txid); err != nil {
+		if err := manager.resumeRGB11ContractBroadcast(ctx, p.localWallet, p.URL(), txid, p.GetCoreNodePubKey()); err != nil {
 			return nil, err
 		}
 		return manager.LoadConfirmedRGB11Withdrawal(ctx, p.localWallet, txid)

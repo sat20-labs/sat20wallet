@@ -765,9 +765,11 @@ func TestRGB11IssueFirstReleaseSchemas(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			id := issued.AssetName.Ticker
+			canonical := "rgb11:" + issued.AssetName.Type + ":" + strings.ToLower(test.request.Ticker) + "@" + id[len(id)-4:]
 			if len(state.TickerInfos) != 1 || state.TickerInfos[0].AssetKey != issued.AssetName.String() ||
 				state.TickerInfos[0].ContractID != issued.ContractID || state.TickerInfos[0].Ticker != expectedLabel ||
-				state.TickerInfos[0].CanonicalName != "" || state.TickerInfos[0].Verified {
+				state.TickerInfos[0].CanonicalName != canonical || state.TickerInfos[0].Verified {
 				t.Fatalf("unexpected RGB11 naming presentation: %+v", state.TickerInfos)
 			}
 			if _, err := json.Marshal(state); err != nil {

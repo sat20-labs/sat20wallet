@@ -957,6 +957,8 @@
     "crossLayerContractInactive": "公共合约在本次操作所需链上尚未生效，请到聪网市场查看状态。",
     "crossLayerFungibleOnly": "此操作仅支持使用完整合约 ID 的可分割 RGB 资产。",
     "crossLayerSubmitted": "已提交，请等待确认后刷新来源层和目标层余额。",
+    "withdrawRootRequired": "RGB 提现请使用根账户。请先在聪网上将资产转到根账户，再提现。",
+    "withdrawRootUnregistered": "根账户尚未完成 RGB 提现所需的登记。请打开账户管理，重试账户服务设置。",
     "protocolVersion": "RGB 版本 {version}",
     "sendTitle": "发送 RGB 资产",
     "destinationType": "收款方式",

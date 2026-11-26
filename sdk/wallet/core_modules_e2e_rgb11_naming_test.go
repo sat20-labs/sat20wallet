@@ -33,6 +33,10 @@ func coreRGB11NamingE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 		"issued RGB11 asset did not resolve genesis address")
 	coreAssert(t, strings.HasPrefix(before.Ticker, "e2en@"),
 		"default local RGB11 name is not ticker@address-suffix")
+	id := issued.AssetName.Ticker
+	canonical := "rgb11:f:e2en@" + id[len(id)-4:]
+	coreAssert(t, before.CanonicalName == canonical && !before.Verified,
+		"issued RGB11 asset must show its computed name as unverified")
 
 	balanceBefore, err := manager.GetRGB11AssetBalance(&issued.AssetName)
 	coreRequire(t, "RGB11 naming balance before rename", err)
@@ -52,8 +56,8 @@ func coreRGB11NamingE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 		"SDK local RGB11 rename not visible")
 	coreAssert(t, renamed.AssetKey == issued.AssetName.String(),
 		"SDK local rename changed immutable asset key")
-	coreAssert(t, renamed.CanonicalName == "" && !renamed.Verified,
-		"unregistered local name was marked canonical")
+	coreAssert(t, renamed.CanonicalName == canonical && !renamed.Verified,
+		"local rename changed the computed name or verification")
 	balanceAfter, err := manager.GetRGB11AssetBalance(&issued.AssetName)
 	coreRequire(t, "RGB11 naming balance after rename", err)
 	coreAssert(t, balanceAfter.Cmp(balanceBefore) == 0,
@@ -101,8 +105,8 @@ func coreRGB11NamingE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 		if info != nil && info.ContractID == issued.ContractID {
 			coreAssert(t, info.Ticker == "still-local-before-stp",
 				"primary DID change incorrectly froze local RGB11 name")
-			coreAssert(t, info.CanonicalName == "" && !info.Verified,
-				"primary DID alone incorrectly created a canonical RGB11 registration")
+			coreAssert(t, info.CanonicalName == canonical && !info.Verified,
+				"primary DID change affected the computed name or verification")
 		}
 	}
 

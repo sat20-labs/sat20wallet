@@ -63,12 +63,8 @@ func (p *Manager) OpenChannel(feeRate int64, amt int64, utxos []string, memo str
 		}
 	}
 
-	l2DrainTxId, err := p.DrainChannelL2BeforeOpenIfNeeded(channelAddr)
-	if err != nil {
-		return "", err
-	}
-
-	result, err := p.FunderInitFundingProcess(feeRate, amt, utxos, memo, l2DrainTxId)
+	// Funds already at the channel address can be added after opening via expand.
+	result, err := p.FunderInitFundingProcess(feeRate, amt, utxos, memo, "")
 	Log.Infof("OpenChannel finished: %s, %v", result, time.Since(start))
 	return result, err
 }
@@ -167,9 +163,21 @@ func (p *Manager) BatchUnlockFromChannelV2(channelId string, destAddr []string, 
 	if err != nil {
 		return "", 0, err
 	}
-	rgbEvidence, err := p.PrepareSTPRGBSplicingEvidence(channel, ParseAssetString(assetName), nil, nil, rgbRequest, nil)
+	rgbEvidence, err := p.PrepareSTPRGBSplicingEvidence(channel, nil, nil, nil, rgbRequest, nil)
 	if err != nil {
 		return "", 0, err
+	}
+
+	asset := ParseAssetString(assetName)
+	if asset == nil {
+		return "", 0, fmt.Errorf("invalid asset name %s", assetName)
+	}
+	if err := ValidateSTPAsset(asset, STPOpUnlock); err != nil {
+		return "", 0, err
+	}
+	tickerInfo := p.getSendTickerInfo_SatsNet(asset)
+	if tickerInfo == nil {
+		return "", 0, fmt.Errorf("can't get ticker %s info", assetName)
 	}
 
 	channel.Mutex.Lock()
@@ -181,17 +189,6 @@ func (p *Manager) BatchUnlockFromChannelV2(channelId string, destAddr []string, 
 		return "", 0, fmt.Errorf("channel %s is not ready", channelId)
 	}
 
-	asset := ParseAssetString(assetName)
-	if asset == nil {
-		return "", 0, fmt.Errorf("invalid asset name %s", assetName)
-	}
-	if err := ValidateSTPAsset(asset, STPOpUnlock); err != nil {
-		return "", 0, err
-	}
-	tickerInfo := p.getTickerInfo(asset)
-	if tickerInfo == nil {
-		return "", 0, fmt.Errorf("can't get ticker %s info", assetName)
-	}
 	var destAmt []*Decimal
 	var totalAmt *Decimal
 	for _, amt := range amtVect {
@@ -299,9 +296,21 @@ func (p *Manager) LockToChannel(channelId string, assetName string, amt string,
 	if err != nil {
 		return "", 0, err
 	}
-	rgbEvidence, err := p.PrepareSTPRGBSplicingEvidence(channel, ParseAssetString(assetName), nil, nil, rgbRequest, nil)
+	rgbEvidence, err := p.PrepareSTPRGBSplicingEvidence(channel, nil, nil, nil, rgbRequest, nil)
 	if err != nil {
 		return "", 0, err
+	}
+
+	asset := ParseAssetString(assetName)
+	if asset == nil {
+		return "", 0, fmt.Errorf("invalid asset name %s", assetName)
+	}
+	if err := ValidateSTPAsset(asset, STPOpLock); err != nil {
+		return "", 0, err
+	}
+	tickerInfo := p.getSendTickerInfo_SatsNet(asset)
+	if tickerInfo == nil {
+		return "", 0, fmt.Errorf("can't get ticker %s info", assetName)
 	}
 
 	channel.Mutex.Lock()
@@ -313,17 +322,6 @@ func (p *Manager) LockToChannel(channelId string, assetName string, amt string,
 		return "", 0, fmt.Errorf("channel %s is not ready", channelId)
 	}
 
-	asset := ParseAssetString(assetName)
-	if asset == nil {
-		return "", 0, fmt.Errorf("invalid asset name %s", assetName)
-	}
-	if err := ValidateSTPAsset(asset, STPOpLock); err != nil {
-		return "", 0, err
-	}
-	tickerInfo := p.getTickerInfo(asset)
-	if tickerInfo == nil {
-		return "", 0, fmt.Errorf("can't get ticker %s info", assetName)
-	}
 	dAmt, err := indexer.NewDecimalFromString(amt, tickerInfo.Divisibility)
 	if err != nil {
 		return "", 0, err
@@ -572,15 +570,28 @@ func (p *Manager) SplicingIn(channelId string, assetName string, amt string,
 	var rgbEvidence *STPRGBReservationEvidence
 	var rgbRequest []byte
 	preAsset := ParseAssetString(assetName)
+	if preAsset != nil && preAsset.Protocol == "rgb11" {
+		registered, err := p.RGB11ChainAsset(preAsset, false)
+		if err != nil {
+			return "", 0, err
+		}
+		preAsset, assetName = registered, registered.String()
+	}
 	if err := p.requireRGB11PublicRegistration(preAsset); err != nil {
 		return "", 0, err
 	}
-	if preAsset != nil && preAsset.Protocol == "rgb11" && len(utxos) == 0 {
-		info := p.getTickerInfo(preAsset)
-		if info == nil {
-			return "", 0, fmt.Errorf("can't get ticker %s info", assetName)
-		}
-		amount, parseErr := indexer.NewDecimalFromString(amt, info.Divisibility)
+	if preAsset == nil {
+		return "", 0, fmt.Errorf("invalid asset name %s", assetName)
+	}
+	if err := ValidateSTPAsset(preAsset, STPOpSpliceIn); err != nil {
+		return "", 0, err
+	}
+	tickerInfo := p.fundingTicker(preAsset)
+	if tickerInfo == nil {
+		return "", 0, fmt.Errorf("can't get ticker %s info", assetName)
+	}
+	if preAsset.Protocol == "rgb11" && len(utxos) == 0 {
+		amount, parseErr := indexer.NewDecimalFromString(amt, tickerInfo.Divisibility)
 		if parseErr != nil {
 			return "", 0, parseErr
 		}
@@ -627,18 +638,11 @@ func (p *Manager) SplicingIn(channelId string, assetName string, amt string,
 	if err := rgbEvidence.ValidateForChannel(channel, rgbRequest); err != nil {
 		return "", 0, err
 	}
+	if channel.Status != CS_READY || p.GetChannel(channelId) != channel {
+		return "", 0, fmt.Errorf("channel %s is not ready", channelId)
+	}
 
-	asset := ParseAssetString(assetName)
-	if asset == nil {
-		return "", 0, fmt.Errorf("invalid asset name %s", assetName)
-	}
-	if err := ValidateSTPAsset(asset, STPOpSpliceIn); err != nil {
-		return "", 0, err
-	}
-	tickerInfo := p.getTickerInfo(asset)
-	if tickerInfo == nil {
-		return "", 0, fmt.Errorf("can't get ticker %s info", assetName)
-	}
+	asset := preAsset
 	dAmt, err := indexer.NewDecimalFromString(amt, tickerInfo.Divisibility)
 	if err != nil {
 		return "", 0, err
@@ -732,7 +736,7 @@ func (p *Manager) SplicingIn(channelId string, assetName string, amt string,
 	}
 
 	txid, id, err := p.funderInitSplicingInProcessWithRGBEvidence(channel, asset, dAmt, feeRate,
-		assetInputs, feeInputs, inscribe, revealKey, reason, rgbEvidence)
+		assetInputs, feeInputs, inscribe, revealKey, reason, rgbEvidence, tickerInfo)
 	Log.Infof("SplicingIn finished, %v", time.Since(start))
 	return txid, id, err
 }
@@ -782,6 +786,19 @@ func (p *Manager) ExpandChannel(channelId string, assetName string, utxo string,
 	if err != nil {
 		return "", "", 0, err
 	}
+	asset := ParseAssetString(assetName)
+	if asset == nil {
+		return "", "", 0, fmt.Errorf("invalid asset name %s", assetName)
+	}
+	if err := ValidateSTPAsset(asset, STPOpExpand); err != nil {
+		return "", "", 0, err
+	}
+
+	tickerInfo := p.fundingTicker(asset)
+	if tickerInfo == nil {
+		return "", "", 0, fmt.Errorf("can't get ticker %s info", assetName)
+	}
+
 	channel.Mutex.Lock()
 	defer channel.Mutex.Unlock()
 	if err := rgbEvidence.ValidateForChannel(channel, rgbRequest); err != nil {
@@ -792,15 +809,7 @@ func (p *Manager) ExpandChannel(channelId string, assetName string, utxo string,
 		return "", "", 0, fmt.Errorf("only initiator can perform this interface")
 	}
 
-	asset := ParseAssetString(assetName)
-	if asset == nil {
-		return "", "", 0, fmt.Errorf("invalid asset name %s", assetName)
-	}
-	if err := ValidateSTPAsset(asset, STPOpExpand); err != nil {
-		return "", "", 0, err
-	}
-
-	txid, amt, id, err := p.funderInitExpandingProcessWithRGBEvidence(channel, asset, utxo, reason, memo, rgbEvidence)
+	txid, amt, id, err := p.funderInitExpandingProcessWithRGBEvidence(channel, asset, utxo, reason, memo, rgbEvidence, tickerInfo)
 	if err != nil {
 		Log.Errorf("funderInitExpandingProcess %s failed. %v", utxo, err)
 		return "", "", 0, err
@@ -857,6 +866,16 @@ func (p *Manager) expandChannelSatsNet(channelId string, assetName string, utxos
 	if err != nil {
 		return nil, err
 	}
+	asset := ParseAssetString(assetName)
+	if asset == nil {
+		return nil, fmt.Errorf("invalid asset name %s", assetName)
+	}
+
+	tickerInfo := p.getSendTickerInfo_SatsNet(asset)
+	if tickerInfo == nil {
+		return nil, fmt.Errorf("can't get ticker %s info", assetName)
+	}
+
 	channel.Mutex.Lock()
 	defer channel.Mutex.Unlock()
 	if err := rgbEvidence.ValidateForChannel(channel, rgbRequest); err != nil {
@@ -867,12 +886,7 @@ func (p *Manager) expandChannelSatsNet(channelId string, assetName string, utxos
 		return nil, fmt.Errorf("only initiator can perform this interface")
 	}
 
-	asset := ParseAssetString(assetName)
-	if asset == nil {
-		return nil, fmt.Errorf("invalid asset name %s", assetName)
-	}
-
-	amt, err := p.funderInitExpandingProcessSatsNetWithRGBEvidence(channel, asset, utxos, rgbEvidence)
+	amt, err := p.funderInitExpandingProcessSatsNetWithRGBEvidence(channel, asset, utxos, rgbEvidence, tickerInfo)
 	if err != nil {
 		Log.Errorf("funderInitExpandingProcess_SatsNet failed. %v", err)
 		return nil, err

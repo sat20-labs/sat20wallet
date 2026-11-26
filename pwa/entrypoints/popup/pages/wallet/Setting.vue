@@ -21,10 +21,10 @@
         <NodeSetting />
         <ReferrerSetting />
       </section>
-      <Button variant="outline" class="min-h-11 w-full justify-between" @click="$router.push('/wallet/setting/operation-logs')">
+      <Button variant="outline" class="min-h-11 w-full justify-between text-lg font-bold" @click="$router.push('/wallet/setting/operation-logs')">
         {{ $t('pwaUi.settings.logs') }} <ChevronRight class="size-4" aria-hidden="true" />
       </Button>
-      <Button variant="outline" class="min-h-11 w-full justify-between" @click="$router.push('/wallet/setting/utxo')">
+      <Button variant="outline" class="min-h-11 w-full justify-between text-lg font-bold" @click="$router.push('/wallet/setting/utxo')">
         {{ $t('utxoManager.title') }} <ChevronRight class="size-4" aria-hidden="true" />
       </Button>
     </div>

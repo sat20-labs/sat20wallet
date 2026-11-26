@@ -1848,6 +1848,9 @@ func (m *dkvsManager) runDiscovery(session context.Context, stop, done, wake cha
 	timedOut := errors.Is(ctx.Err(), context.DeadlineExceeded)
 	cancel()
 	m.setLastSyncError(err)
+	if err != nil && session.Err() == nil && m.owner.cfg != nil && m.owner.cfg.Mode == SERVER_NODE {
+		Log.Warningf("register Core wallet at startup: %v", err)
+	}
 	m.notifyStatusCallback()
 	// Pair the activation check with completion: an activation racing this
 	// boundary either continues this owned lifetime or starts after its release.

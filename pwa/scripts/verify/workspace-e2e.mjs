@@ -17,6 +17,7 @@ export const workspaceRoot = resolve(pwaRoot, '../..')
 const fixedAccountUsageTests = ['TestSDKPWARealRegtestFixedAccountManagementBrowser']
 const forceCloseCSVCase = 'TestSDKPWARealRegtestForceCloseCSVBrowser'
 const rgbCrossLayer = 'TestSDKPWARealRegtestRGBCrossLayerBrowser'
+const rgbExpand = 'TestSDKPWARealRegtestRGBExpand'
 const guardianCase = 'TestSDKPWARealRegtestGuardianRecoveryBrowser'
 const miningCase = 'TestSDKPWARealRegtestMiningBrowser'
 const rgbFullCase = 'TestSDKPWARealRegtestRGBBrowser'
@@ -59,12 +60,12 @@ const pwaGroups = [
     'TestSDKPWARealRegtestSatoshiNetPlainSendBrowser', ...channelCases, forceCloseCSVCase,
   ] },
   { id: 'pos-v2', cases: [v2SpliceCase] },
-  { id: 'rgb11-cross-layer', cases: [rgbCrossLayer] },
+  { id: 'rgb11-cross-layer', cases: [rgbCrossLayer, rgbExpand] },
   { id: 'btc-mining', cases: [miningCase] },
   { id: 'guardian-2of3', cases: [guardianCase], blockedReason: 'Guardian 2-of-3 is disabled in the SDK and PWA' },
 ]
 const pwaTests = pwaGroups.flatMap(group => group.cases)
-const separatePwaTests = [forceCloseCSVCase, rgbCrossLayer, guardianCase, ...fixedAccountUsageTests]
+const separatePwaTests = [forceCloseCSVCase, rgbCrossLayer, rgbExpand, guardianCase, ...fixedAccountUsageTests]
 const pwaCanonicalTests = pwaTests.filter(test => !separatePwaTests.includes(test))
 const sdkRequiredEnv = [
   'SAT20_REAL_BITCOIN_CLI',
@@ -90,7 +91,7 @@ function goStage(id, repo, packageName, tests, timeout) {
 
 export function buildCommand(stage, env = process.env) {
   const tags = []
-  if (stage.tests.some(name => name.endsWith('Browser'))) {
+  if (stage.tests.some(name => name.endsWith('Browser') || name === rgbExpand)) {
     const guardian = stage.tests.includes(guardianCase)
     tags.push(guardian ? '-tags=pwa,guardian' : '-tags=pwa')
   }
@@ -106,7 +107,7 @@ export const stageCatalog = [
   goStage('sdk-assets', 'sat20wallet/sdk', './e2e', ['TestSDKPWARealRegtestL1AssetPreparation'], '60m'),
   goStage('sdk-wasm-real', 'sat20wallet/sdk', './e2e', ['TestSDKPWARealRegtestSDKWASMInterfacesBrowser'], '60m'),
   goStage('pwa-canonical', 'sat20wallet/sdk', './e2e', pwaCanonicalTests, '60m'),
-  goStage('pwa-rgb-cross-layer', 'sat20wallet/sdk', './e2e', [rgbCrossLayer], '60m'),
+  goStage('pwa-rgb-cross-layer', 'sat20wallet/sdk', './e2e', [rgbCrossLayer, rgbExpand], '60m'),
   goStage('pwa-force-close-csv', 'sat20wallet/sdk', './e2e', [forceCloseCSVCase], '60m'),
   goStage('pwa-fixed-account-usage', 'sat20wallet/sdk', './e2e', fixedAccountUsageTests, '60m'),
   goStage('pwa-guardian-2of3', 'sat20wallet/sdk', './e2e', [guardianCase], '60m'),
@@ -131,6 +132,7 @@ const dependentJourneys = [
   [openingCase, spliceCase, forceCloseCSVCase],
   [openingCase, activation, 'TestSDKPWARealRegtestV2AssetPreparation', v2SpliceCase],
   [openingCase, rgbCrossLayer],
+  [openingCase, rgbExpand],
   [openingCase, sdkWasmCase],
 ]
 
@@ -161,11 +163,12 @@ export function buildGroups(stages, { reuseCore = true } = {}) {
       return journey ? journey.slice(0, journey.indexOf(test) + 1) : [test]
     })
     const tests = [...new Set([...prerequisites, ...ordered])]
+    const freshCore = id === 'rgb11-cross-layer'
     groups.push({ id, selectedTests,
-      reuseCore: reuseCore && pwaTests.includes(first) && !selectedTests.includes(rgbCrossLayer),
+      reuseCore: reuseCore && pwaTests.includes(first) && !freshCore,
       steps: tests.map(test => {
         // The cross-layer gate validates a fresh pair in each Go process.
-        const testNames = selectedTests.includes(rgbCrossLayer)
+        const testNames = freshCore
           ? [artifactFingerprintGuard, test]
           : [test]
         return { ...goStage(test, 'sat20wallet/sdk', './e2e', testNames, '60m'),
@@ -706,7 +709,7 @@ async function main(argv) {
         groupEnv = { ...env, ...environment.env, SAT20_E2E_LOCAL_REAL: '1' }
         delete groupEnv.SAT20_REAL_RGB_CROSS_LAYER
         if (group.reuseCore) groupEnv[coreBundleEnv] = coreDir
-        if (group.selectedTests.includes(rgbCrossLayer)) {
+        if (group.id === 'rgb11-cross-layer') {
           groupEnv.SAT20_REAL_RGB_CROSS_LAYER = '1'
           result.overlayInputs = { before: captureGoOverlayInputs(groupEnv) }
           save()

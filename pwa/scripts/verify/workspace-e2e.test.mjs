@@ -354,7 +354,7 @@ test('plan subprocess expands prerequisites without contacting services or requi
   assert.deepEqual(groups.map(group => [group.id, group.selectedTests.length]), [
     ['wallet-and-dapp', 3], ['account-recovery-and-renewal', 1], ['bitcoin-assets', 8],
     ['rgb11-onchain', 3], ['satoshinet-and-btc-channel', 7], ['pos-v2', 1],
-    ['rgb11-cross-layer', 1], ['btc-mining', 1], ['guardian-2of3', 1],
+    ['rgb11-cross-layer', 2], ['btc-mining', 1], ['guardian-2of3', 1],
   ])
   assert.deepEqual(groups.flatMap(group => group.selectedTests).sort(), pwaStages.flatMap(stage => stage.tests).sort())
   for (const group of groups.filter(group => !group.blockedReason)) {

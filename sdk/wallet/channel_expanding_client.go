@@ -12,6 +12,7 @@ import (
 	"github.com/btcsuite/btcd/btcec/v2"
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
+	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
 	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
 	swire "github.com/sat20-labs/satoshinet/wire"
@@ -174,12 +175,35 @@ func isPeerChannelPendingError(err error) bool {
 // Read current UTXOs, not an address total: channel commitments already own
 // their funding, pending and stub inputs. Lucky backing is never surplus.
 func (p *Manager) unmanagedChannelExpansionInputs(channel *Channel, assetName *swire.AssetName) ([]string, error) {
+	channel.Mutex.RLock()
+	address, controlled := channel.Address, channel.UtxosInControl()
+	rawFunding := bytes.Clone(channel.AssetFunding["rgb11"])
+	channel.Mutex.RUnlock()
 	rpc := p.GetIndexerRPCClient()
-	outputs, err := rpc.GetUtxosWithAddress(channel.Address)
+	outputs, err := rpc.GetUtxosWithAddress(address)
 	if err != nil {
 		return nil, err
 	}
-	controlled := channel.UtxosInControl()
+	var rgbSources map[string]bool
+	if assetName.Protocol == "rgb11" {
+		local, err := p.RGB11LocalAsset(assetName)
+		if err != nil {
+			return nil, err
+		}
+		rgbSources = make(map[string]bool)
+		if len(rawFunding) == 0 {
+			return nil, nil
+		}
+		inventory, err := rgb11wallet.DecodeChannelInventory(rawFunding)
+		if err != nil {
+			return nil, err
+		}
+		for _, source := range inventory.Sources {
+			if source.AssetName == *local {
+				rgbSources[source.OutPoint] = true
+			}
+		}
+	}
 	result := make([]string, 0)
 	for point := range outputs {
 		if controlled[point] || (p.utxoLockerL1 != nil && p.utxoLockerL1.IsLocked(point)) {
@@ -193,7 +217,10 @@ func (p *Manager) unmanagedChannelExpansionInputs(channel *Channel, assetName *s
 			return nil, fmt.Errorf("missing expansion output %s", point)
 		}
 		amount, invalid := output.GetAssetV2(assetName)
-		if (invalid && !STPPolicyFor(&AssetName{AssetName: *assetName}).AccountBased) || amount == nil || amount.Sign() <= 0 || (indexer.IsPlainAsset(assetName) && len(output.Assets) != 0) {
+		if rgbSources != nil && !rgbSources[point] {
+			continue
+		}
+		if rgbSources == nil && ((invalid && !STPPolicyFor(&AssetName{AssetName: *assetName}).AccountBased) || amount == nil || amount.Sign() <= 0 || (indexer.IsPlainAsset(assetName) && len(output.Assets) != 0)) {
 			continue
 		}
 		lucky, err := p.isBTCLuckyL1Output(point, nil)
@@ -322,9 +349,11 @@ func (p *Manager) expandAssetInChannelForWallet(channel *Channel, assetName *swi
 	if err := p.requireRGB11PublicRegistration(assetName); err != nil {
 		return nil, nil, err
 	}
-	channel.Mutex.Lock()
+	tickerInfo := p.fundingTicker(assetName)
+	if tickerInfo == nil {
+		return nil, nil, fmt.Errorf("can't get ticker %s info", assetName.String())
+	}
 	utxos, err := p.getAllUnmanagedUtxos(channel, assetName)
-	channel.Mutex.Unlock()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -352,7 +381,7 @@ func (p *Manager) expandAssetInChannelForWallet(channel *Channel, assetName *swi
 		var amt *Decimal
 		var id int64
 		if err == nil {
-			txid, amt, id, err = p.funderInitExpandingProcessWithRGBEvidence(channel, assetName, output, "", nil, evidence)
+			txid, amt, id, err = p.funderInitExpandingProcessWithRGBEvidence(channel, assetName, output, "", nil, evidence, tickerInfo)
 		}
 		channel.Mutex.Unlock()
 		if err != nil {
@@ -376,18 +405,18 @@ func (p *Manager) expandAssetInChannelForWallet(channel *Channel, assetName *swi
 // must pass evidence captured outside the business lock.
 func (p *Manager) FunderInitExpandingProcess(channel *Channel, assetName *swire.AssetName, utxo string,
 	reason string, memo []byte) (string, *Decimal, int64, error) {
-	return p.funderInitExpandingProcessWithRGBEvidence(channel, assetName, utxo, reason, memo, nil)
+	return p.funderInitExpandingProcessWithRGBEvidence(channel, assetName, utxo, reason, memo, nil, nil)
 }
 
 func (p *Manager) funderInitExpandingProcessWithRGBEvidence(channel *Channel, assetName *swire.AssetName, utxo string,
-	reason string, memo []byte, evidence *STPRGBReservationEvidence) (string, *Decimal, int64, error) {
-	return p.funderInitExpandingProcessWithRGBEvidenceAndPolicy(channel, assetName, utxo, reason, memo, evidence, nil)
+	reason string, memo []byte, evidence *STPRGBReservationEvidence, tickerInfo *indexer.TickerInfo) (string, *Decimal, int64, error) {
+	return p.funderInitExpandingProcessWithRGBEvidenceAndPolicy(channel, assetName, utxo, reason, memo, evidence, nil, tickerInfo)
 }
 
 // A non-nil policy is private to closed-channel restoration. Explicit expansion
 // keeps its former funding, locking, RPC order and cleanup behavior.
 func (p *Manager) funderInitExpandingProcessWithRGBEvidenceAndPolicy(channel *Channel, assetName *swire.AssetName, utxo string,
-	reason string, memo []byte, evidence *STPRGBReservationEvidence, policy *closedChannelAssetRestorePolicy) (string, *Decimal, int64, error) {
+	reason string, memo []byte, evidence *STPRGBReservationEvidence, policy *closedChannelAssetRestorePolicy, tickerInfo *indexer.TickerInfo) (string, *Decimal, int64, error) {
 	if err := ValidateSTPAssetForChannel(channel, assetName, STPOpExpand); err != nil {
 		return "", nil, 0, err
 	}
@@ -399,7 +428,9 @@ func (p *Manager) funderInitExpandingProcessWithRGBEvidenceAndPolicy(channel *Ch
 	if err != nil {
 		return "", nil, 0, err
 	}
-	tickerInfo := p.getTickerInfo(assetName)
+	if tickerInfo == nil && assetName.Protocol != "rgb11" {
+		tickerInfo = p.fundingTicker(assetName)
+	}
 	if tickerInfo == nil {
 		return "", nil, 0, fmt.Errorf("can't get ticker %s info", assetName.String())
 	}
@@ -686,10 +717,10 @@ func (p *Manager) ExpandAssetInChannelSatsNet(channel *Channel, assetName *swire
 // The low-level wrapper is lock-held and non-RGB only. RGB callers must
 // prepare outside that lock and pass the reservation-local evidence explicitly.
 func (p *Manager) FunderInitExpandingProcessSatsNet(channel *Channel, assetName *swire.AssetName, utxos []string) (*Decimal, error) {
-	return p.funderInitExpandingProcessSatsNetWithRGBEvidence(channel, assetName, utxos, nil)
+	return p.funderInitExpandingProcessSatsNetWithRGBEvidence(channel, assetName, utxos, nil, nil)
 }
 
-func (p *Manager) funderInitExpandingProcessSatsNetWithRGBEvidence(channel *Channel, assetName *swire.AssetName, utxos []string, evidence *STPRGBReservationEvidence) (*Decimal, error) {
+func (p *Manager) funderInitExpandingProcessSatsNetWithRGBEvidence(channel *Channel, assetName *swire.AssetName, utxos []string, evidence *STPRGBReservationEvidence, tickerInfo *indexer.TickerInfo) (*Decimal, error) {
 	if _, err := rgbReservationView(&RevocationInfo{Channel: channel, RGBEvidence: evidence}); err != nil {
 		return nil, err
 	}
@@ -701,7 +732,9 @@ func (p *Manager) funderInitExpandingProcessSatsNetWithRGBEvidence(channel *Chan
 	if err != nil {
 		return nil, err
 	}
-	tickerInfo := p.getTickerInfo(assetName)
+	if tickerInfo == nil && assetName.Protocol != "rgb11" {
+		tickerInfo = p.getTickerInfo(assetName)
+	}
 	if tickerInfo == nil {
 		return nil, fmt.Errorf("can't get ticker %s info", assetName)
 	}

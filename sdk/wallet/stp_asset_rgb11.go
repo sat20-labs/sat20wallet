@@ -3,15 +3,14 @@ package wallet
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/rgb11/anchors"
 	coreconsignment "github.com/sat20-labs/rgb11/consignment"
+	"github.com/sat20-labs/rgb11/schemas"
 	"github.com/sat20-labs/rgb11/seals"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
@@ -100,14 +99,8 @@ func (rgb11STPProtocol) ValidateAsset(name *indexer.AssetName, operation STPAsse
 	if err := validateSTPFungibleAsset(name, rgb11wallet.Protocol, operation); err != nil {
 		return err
 	}
-	if operation == STPOpContract {
-		if _, err := dkvs.RGB11NameKey(name.Ticker); err == nil {
-			return nil
-		}
-	}
-	key, err := hex.DecodeString(name.Ticker)
-	if err != nil || len(key) != 32 || name.Ticker != strings.ToLower(name.Ticker) {
-		return fmt.Errorf("RGB11 STP requires the canonical full contract ID")
+	if _, err := dkvs.RGB11NameKey(name.Ticker); err != nil {
+		return fmt.Errorf("RGB11 STP requires the registered asset name")
 	}
 	return nil
 }
@@ -165,6 +158,27 @@ func stpRGB11Inventory(channel *Channel) (*rgb11wallet.ChannelInventory, error) 
 	return rgb11wallet.DecodeChannelInventory(raw)
 }
 
+// Commitment construction checks its saved Bitcoin proof against the channel
+// name without consulting a registry or the wallet's Bitcoin inventory.
+func stpRGB11FundingName(source rgb11wallet.ChannelFunding) (indexer.AssetName, error) {
+	contract, err := coreconsignment.Decode(source.Consignment)
+	if err != nil {
+		return indexer.AssetName{}, err
+	}
+	if !rgb11wallet.ContractAssetKeyMatches(source.AssetName, contract.ContractID) {
+		return indexer.AssetName{}, ErrRGB11PublicIdentityMismatch
+	}
+	schema, types := contract.SchemaValues()
+	genesis, _ := contract.Value.Field("genesis")
+	meta, err := schemas.ExtractGenesisAssetMetadata(schema, types, genesis)
+	if err != nil {
+		return indexer.AssetName{}, err
+	}
+	name := source.AssetName
+	name.Ticker, err = dkvs.RGB11NameTicker(meta.Ticker, name.Ticker)
+	return name, err
+}
+
 // CheckRGB11ChannelUTXO authenticates the channel's saved allocation against
 // the controlled output. The L1 indexer supplies only Bitcoin evidence.
 func (p *Manager) CheckRGB11ChannelUTXO(channel *Channel, output *TxOutput, asset indexer.AssetInfo) error {
@@ -176,8 +190,12 @@ func (p *Manager) CheckRGB11ChannelUTXO(channel *Channel, output *TxOutput, asse
 		if source.OutPoint != output.OutPointStr {
 			continue
 		}
+		name, err := stpRGB11FundingName(source)
+		if err != nil {
+			return err
+		}
 		if source.Value != output.Value() || !bytes.Equal(source.PkScript, output.OutValue.PkScript) ||
-			source.AssetName != asset.Name || asset.BindingSat != 0 || asset.Amount.Validate() != nil ||
+			name != asset.Name || asset.BindingSat != 0 || asset.Amount.Validate() != nil ||
 			source.Amount.Precision != asset.Amount.Precision || source.Amount.Cmp(&asset.Amount) != 0 {
 			return fmt.Errorf("stored RGB11 funding does not match controlled output")
 		}
@@ -204,6 +222,10 @@ func (protocol rgb11STPProtocol) PrepareInputs(p *Manager, req STPAssetInputRequ
 	if req.Amount == nil || req.Amount.Validate() != nil || req.Amount.Sign() <= 0 {
 		return nil, fmt.Errorf("invalid RGB11 funding amount")
 	}
+	local, err := p.RGB11LocalAsset(req.Asset)
+	if err != nil {
+		return nil, err
+	}
 	manager, err := p.stpRGB11Scope(nil)
 	if err != nil {
 		return nil, err
@@ -220,7 +242,7 @@ func (protocol rgb11STPProtocol) PrepareInputs(p *Manager, req STPAssetInputRequ
 	total := indexer.NewDecimal(0, req.Amount.Precision)
 	var inputs []*TxOutput
 	for _, proof := range proofs {
-		if proof == nil || proof.AssetName != *req.Asset || seen[proof.OutPoint] || req.ExcludedUtxos[proof.OutPoint] ||
+		if proof == nil || proof.AssetName != *local || seen[proof.OutPoint] || req.ExcludedUtxos[proof.OutPoint] ||
 			(proof.Status != "valid" && proof.Status != "settled") {
 			continue
 		}
@@ -239,7 +261,7 @@ func (protocol rgb11STPProtocol) PrepareInputs(p *Manager, req STPAssetInputRequ
 		if !bytes.Equal(output.OutValue.PkScript, walletScript) {
 			continue
 		}
-		source, err := manager.stpRGB11Funding(output, req.Asset)
+		source, err := manager.stpRGB11Funding(output, local)
 		if err != nil {
 			return nil, err
 		}
@@ -340,12 +362,16 @@ func (protocol rgb11STPProtocol) PrepareChannelFunding(p *Manager, channel *Chan
 	if err := protocol.ValidateAsset(&asset.AssetName, STPOpSpliceIn); err != nil {
 		return nil, err
 	}
+	local, err := protocol.view.localFundingAsset(p, &asset.AssetName)
+	if err != nil {
+		return nil, err
+	}
 	inventory, err := stpRGB11Inventory(channel)
 	if err != nil {
 		return nil, err
 	}
 	for _, source := range inventory.Sources {
-		if source.AssetName != asset.AssetName {
+		if source.AssetName != *local {
 			return nil, fmt.Errorf("this channel already carries another RGB11 contract")
 		}
 	}
@@ -364,12 +390,12 @@ func (protocol rgb11STPProtocol) PrepareChannelFunding(p *Manager, channel *Chan
 		if _, exists := byPoint[input.OutPointStr]; exists {
 			continue
 		}
-		source, captured, err := protocol.closedChannelFunding(input, &asset.AssetName)
+		source, captured, err := protocol.closedChannelFunding(input, local)
 		if err != nil {
 			return nil, err
 		}
 		if !captured {
-			source, err = manager.stpRGB11Funding(input, &asset.AssetName)
+			source, err = manager.stpRGB11Funding(input, local)
 			if err != nil {
 				return nil, err
 			}
@@ -390,6 +416,10 @@ func (protocol rgb11STPProtocol) ValidateChannelFunding(p *Manager, channel *Cha
 	if err := protocol.ValidateAsset(&asset.AssetName, STPOpSpliceIn); err != nil {
 		return nil, err
 	}
+	local, err := protocol.view.localFundingAsset(p, &asset.AssetName)
+	if err != nil {
+		return nil, err
+	}
 	old, err := stpRGB11Inventory(channel)
 	if err != nil {
 		return nil, err
@@ -407,7 +437,7 @@ func (protocol rgb11STPProtocol) ValidateChannelFunding(p *Manager, channel *Cha
 	}
 	oldSources := make(map[string]rgb11wallet.ChannelFunding)
 	for _, source := range old.Sources {
-		if source.AssetName != asset.AssetName {
+		if source.AssetName != *local {
 			return nil, fmt.Errorf("this channel already carries another RGB11 contract")
 		}
 		oldSources[source.OutPoint] = source
@@ -417,7 +447,7 @@ func (protocol rgb11STPProtocol) ValidateChannelFunding(p *Manager, channel *Cha
 		if input == nil || requested[input.OutPointStr] != nil {
 			return nil, fmt.Errorf("duplicate or nil RGB11 funding input")
 		}
-		if HasMultiAsset(input, &asset.AssetName) {
+		if HasMultiAsset(input, local) {
 			return nil, ErrRGB11AssetPreservation
 		}
 		requested[input.OutPointStr] = input
@@ -430,7 +460,7 @@ func (protocol rgb11STPProtocol) ValidateChannelFunding(p *Manager, channel *Cha
 		return nil, err
 	}
 	for _, source := range incoming.Sources {
-		if source.AssetName != asset.AssetName {
+		if source.AssetName != *local {
 			return nil, fmt.Errorf("RGB11 funding changed the requested contract")
 		}
 		input := requested[source.OutPoint]
@@ -455,6 +485,7 @@ func (protocol rgb11STPProtocol) ValidateChannelFunding(p *Manager, channel *Cha
 			if validated.Value != source.Value || validated.Asset.Amount.Precision != source.Amount.Precision {
 				return nil, fmt.Errorf("RGB11 funding value or precision mismatch")
 			}
+			validated.Asset.Name = asset.AssetName
 			input.Assets = indexer.TxAssets{validated.Asset}
 			input.SatBindingMap = nil
 			delete(requested, source.OutPoint)
@@ -553,6 +584,10 @@ func sameSTPRGB11AccountKeys(left, right []localRGB11Account) bool {
 }
 
 func (protocol rgb11STPProtocol) TickerFromFunding(p *Manager, name *indexer.AssetName, raw []byte) (*indexer.TickerInfo, error) {
+	local, err := p.RGB11LocalAsset(name)
+	if err != nil {
+		return nil, err
+	}
 	inventory, err := rgb11wallet.DecodeChannelInventory(raw)
 	if err != nil {
 		return nil, err
@@ -562,7 +597,7 @@ func (protocol rgb11STPProtocol) TickerFromFunding(p *Manager, name *indexer.Ass
 		return nil, err
 	}
 	for _, source := range inventory.Sources {
-		if name == nil || source.AssetName != *name {
+		if source.AssetName != *local {
 			continue
 		}
 		validated, err := rgb11wallet.ValidateChannelFunding(context.Background(), source, evidence, nativeproof.Prepared, GetChainParam().Name)
@@ -595,6 +630,7 @@ func (protocol rgb11STPProtocol) TickerFromFunding(p *Manager, name *indexer.Ass
 		if info.AssetName != validated.Asset.Name || info.Divisibility != validated.Asset.Amount.Precision {
 			return nil, rgb11wallet.ErrValidationReceipt
 		}
+		info.AssetName = *name
 		return info, nil
 	}
 	return nil, fmt.Errorf("RGB11 funding has no authenticated metadata for the requested asset")

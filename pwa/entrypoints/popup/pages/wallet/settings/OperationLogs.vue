@@ -27,7 +27,7 @@
           </Button>
         </div>
       </details>
-      <details v-for="{ record, result, transfer } in rows" :key="record.id" class="rounded-xl border border-border bg-card p-3"
+      <details v-for="{ record, result, transfer, chain } in rows" :key="record.id" class="rounded-xl border border-border bg-card p-3"
         @toggle="toggleDetails(record, $event)">
         <summary class="cursor-pointer text-sm font-medium">
           {{ record.contract ? contractTitle(record.contract) : kindLabel(record.kind) }} · {{ transfer ? rgbStatus(transfer) : operationStatus(record, record.status) }}
@@ -77,7 +77,11 @@
             </Button>
           </template>
           <template v-else>
-            <p v-for="tx in record.tx_ids" :key="tx" class="break-all font-mono text-xs">{{ tx }}</p>
+            <p v-for="tx in record.tx_ids" :key="tx" class="break-all font-mono text-xs">
+              <a v-if="txLink(tx, chain)" :href="txLink(tx, chain)"
+                class="text-primary underline underline-offset-2" target="_blank" rel="noopener noreferrer">{{ tx }}</a>
+              <span v-else>{{ tx }}</span>
+            </p>
           </template>
           <p v-if="record.error_code" class="break-all text-destructive">{{ record.error_code }}</p>
           <ol class="space-y-1 text-xs text-muted-foreground">
@@ -128,6 +132,7 @@ const results = ref<Partial<Record<string, ContractLogResult | { status: 'loadin
 const rows = computed(() => records.value.map(record => ({
   record, result: results.value[record.id],
   transfer: transfers.value.find(transfer => transfer.id === record.rgb_transfer_id),
+  chain: operationTxChain(record),
 })))
 const canResumeRgb = (transfer: RGBTransferView) =>
   transfer.can_confirm && !transfer.needs_receipts && transfer.status !== 'prepared'
@@ -172,8 +177,54 @@ const contractTitle = (contract: NonNullable<OperationView['contract']>) => {
 const chainLabel = (chain: Chain) => chain === Chain.BTC
   ? (walletStore.network === Network.TESTNET ? 'BTC Testnet4' : 'Bitcoin')
   : 'SatoshiNet'
-const txLink = (txid: string, chain: Chain) => {
-  if (!/^[a-f0-9]{64}$/i.test(txid)) return ''
+const operationTxChain = ({ kind, status }: OperationView): Chain | undefined => {
+  if (kind.endsWith('_l1')) return Chain.BTC
+  if (kind.endsWith('_l2')) return Chain.SATNET
+  switch (kind) {
+    case 'open_channel':
+    case 'reopen_channel':
+    case 'rebuild_channel':
+    case 'force_close_channel':
+    case 'splice_in':
+    case 'splice_out':
+    case 'respond_splice_in':
+    case 'respond_splice_out':
+    case 'confirm_transaction':
+    case 'ascend_asset':
+    case 'deploy_runes':
+    case 'mint_runes_asset':
+    case 'deploy_brc20_asset':
+    case 'mint_brc20_asset':
+    case 'deploy_ordx_asset':
+    case 'mint_ordx_asset':
+    case 'inscribe_name':
+    case 'register_referrer':
+    case 'rgb_send':
+    case 'rgb_inflate':
+    case 'rgb_receive_prepare':
+    case 'rgb_receive_accept':
+    case 'build_channel_sweep':
+    case 'broadcast_punishment':
+      return Chain.BTC
+    case 'send_from_channel':
+    case 'lock_to_channel':
+    case 'respond_expand_channel':
+    case 'confirm_satoshinet_transaction':
+    case 'bind_referrer':
+    case 'claim_lucky_reward':
+    case 'account_autopay_fund':
+    case 'account_storage_confirm':
+    case 'deploy_unified_contract':
+    case 'invoke_unified_contract':
+      return Chain.SATNET
+    case 'close_channel':
+      // The recorded ID changes from the SatoshiNet de-anchor to the Bitcoin closing transaction.
+      if (status === 'running') return Chain.SATNET
+      if (status === 'succeeded') return Chain.BTC
+  }
+}
+const txLink = (txid: string, chain: Chain | undefined) => {
+  if (!chain || !/^[a-f0-9]{64}$/i.test(txid)) return ''
   const network = walletStore.network
   const env = globalStore.env
   // The public SatoshiNet testnet serves transaction details under its API route.
@@ -203,7 +254,7 @@ const toggleDetails = (record: OperationView, event: Event) => {
 const run = async (action: () => Promise<void>) => { busy.value = true; error.value = ''; try { await action() } catch (cause) { error.value = String(cause) } finally { busy.value = false } }
 const loadRecords = async () => {
   const [logs, rgb] = await Promise.all([getOperationLogs(), walletManager.getRGB11View().catch(() => undefined)])
-  records.value = logs.filter(record => !['unlock_wallet', 'lock_wallet', 'switch_account'].includes(record.kind))
+  records.value = logs.filter(record => !['unlock_wallet', 'lock_wallet', 'switch_account', 'switch_wallet'].includes(record.kind))
   transfers.value = rgb?.[1]?.transfers || []
   rgbAssets.value = rgb?.[1]?.assets || []
   results.value = {}

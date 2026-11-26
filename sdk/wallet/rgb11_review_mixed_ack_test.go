@@ -120,6 +120,17 @@ func TestRGB11ReviewMixedACKBatchCancellation(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
+					if transport == RGB11AddressTransport {
+						if pending.State.Status != "delivered" || pending.State.WitnessTxID != prepared.TxID {
+							t.Fatal("wallet feedback changed a Direct payment")
+						}
+						for _, point := range pending.State.InputOutPoints {
+							if sender.utxoLockerL1.GetLockedUtxoList()[point] == nil {
+								t.Fatal("wallet feedback released a Direct input")
+							}
+						}
+						continue
+					}
 					if pending.State.Status != "rejected" || pending.State.AckStatus != "rejected" || pending.State.RejectReason != "recipient-rejected" || pending.State.WitnessTxID != prepared.TxID {
 						t.Fatalf("batch terminal identity changed: %+v", pending.State)
 					}
@@ -156,8 +167,12 @@ func TestRGB11ReviewMixedACKBatchCancellation(t *testing.T) {
 				}
 				for _, state := range prepared.States {
 					pending, err := restarted.projectionStore.LoadPendingTransfer(state.TransferID)
-					if err != nil || pending.State.Status != "rejected" || pending.State.AckStatus != "rejected" || pending.State.WitnessTxID != prepared.TxID {
-						t.Fatalf("restart lost rejected batch: %v", err)
+					if err != nil || pending.State.WitnessTxID != prepared.TxID {
+						t.Fatalf("restart lost batch identity: %v", err)
+					}
+					if transport == RGB11ProxyTransport && (pending.State.Status != "rejected" || pending.State.AckStatus != "rejected") ||
+						transport == RGB11AddressTransport && pending.State.Status != "delivered" {
+						t.Fatalf("unexpected restored %s state: %+v", transport, pending.State)
 					}
 				}
 				if lock := sender.utxoLockerL1.GetLockedUtxoList()[unrelated]; lock == nil || lock.ReservationID != "unrelated-owner" {

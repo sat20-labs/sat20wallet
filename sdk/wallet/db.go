@@ -919,9 +919,13 @@ func (p *Manager) IsWalletExist() bool {
 	return len(p.walletInfoMap) != 0
 }
 
+func dbNetworkKeyPrefix(env, chain string) string {
+	return env + "-" + chain + "-"
+}
+
 func GetDBKeyPrefix() string {
 	if _mode == LIGHT_NODE {
-		return _env + "-" + _chain + "-"
+		return dbNetworkKeyPrefix(_env, _chain)
 	}
 	return ""
 }

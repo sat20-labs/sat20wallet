@@ -413,16 +413,16 @@ func (p *Manager) localActionLockWithExpandRemaining(resv *LocalActionPerformDat
 		resv.Status = RS_PERFORM_ACTION_COMPLETED
 		return nil
 	}
-	channel.Mutex.RLock()
 	sources, err := p.unmanagedChannelExpansionInputs(channel, &param.AssetName.AssetName)
+	if err != nil {
+		return err
+	}
+	channel.Mutex.RLock()
 	remoteAmt := channel.GetCommitRemoteValue(param.AssetName)
 	if remoteAmt == nil {
 		remoteAmt = indexer.NewDecimal(0, remaining.Precision)
 	}
 	channel.Mutex.RUnlock()
-	if err != nil {
-		return err
-	}
 	if len(sources) != 0 {
 		txid, amount, id, err := p.ExpandChannel(channel.ChannelId, param.AssetName.String(), sources[0], "", nil)
 		if err != nil {

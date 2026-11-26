@@ -29,6 +29,9 @@ func (p *Manager) discoverNewRoot(password string) {
 		err = p.ensureAccountCoreBindingForSync(ctx)
 	}
 	m.setLastSyncError(err)
+	if err != nil && p.cfg != nil && p.cfg.Mode == SERVER_NODE {
+		Log.Warningf("register Core wallet after creation or import: %v", err)
+	}
 	if running && !p.accountRecoveryConfigured() {
 		m.mu.Lock()
 		defer m.mu.Unlock()

@@ -132,6 +132,9 @@ func getReturnedChannelVouts(tx *bwire.MsgTx, channelAddr string) ([]uint32, err
 
 func CreateAnchorTx(splicingOutput *indexer.TxOutput, assetName *AssetName, tickerInfo *indexer.TickerInfo,
 	redeemScript, invoiceSig []byte, memo []byte, bindOutputs bool) (*wire.MsgTx, error) {
+	if assetName.Protocol == "rgb11" {
+		return nil, fmt.Errorf("RGB11 requires a proof-backed Anchor")
+	}
 	var localAsset *wire.AssetInfo
 	if len(splicingOutput.Assets) > 0 && !indexer.IsPlainAsset(&assetName.AssetName) {
 		amt, _ := splicingOutput.GetAssetV2(&assetName.AssetName)

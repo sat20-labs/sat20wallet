@@ -45,6 +45,31 @@ func addExpansionTestOutput(t *testing.T, rpc *channelHistoryRPC, seed byte, pkS
 	return output.OutPointStr
 }
 
+type expansionLockProbeRPC struct {
+	*channelHistoryRPC
+	check func()
+}
+
+func (r *expansionLockProbeRPC) GetUtxosWithAddress(address string) (map[string]*wire.TxOut, error) {
+	r.check()
+	return r.channelHistoryRPC.GetUtxosWithAddress(address)
+}
+
+func TestUnmanagedExpansionQueriesOutsideChannelLock(t *testing.T) {
+	manager, template, _, address, _ := channelHistoryFixture(t)
+	channel := &Channel{ChannelInDB: *NewChannelInDB()}
+	channel.Address, channel.ChannelId = address, address
+	called := false
+	manager.l1IndexerClient.active = &expansionLockProbeRPC{channelHistoryRPC: template, check: func() {
+		require.True(t, channel.Mutex.TryLock(), "indexer query must not hold even a channel read lock")
+		channel.Mutex.Unlock()
+		called = true
+	}}
+	_, err := manager.unmanagedChannelExpansionInputs(channel, &PLAIN_ASSET.AssetName)
+	require.NoError(t, err)
+	require.True(t, called)
+}
+
 func TestUnmanagedChannelExpansionInputsExcludesControlledLockedAndLucky(t *testing.T) {
 	p, l1, l2, address, _ := channelHistoryFixture(t)
 	l1.outputs, l1.raw = make(map[string]*TxOutput), make(map[string]string)

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
@@ -22,7 +23,7 @@ import (
 // inputs have already been spent. Replay the durable bytes from the ordinary
 // contract reconciliation loop, including after restart, without new signatures
 // or a new input/fee selection. Canonical settlement remains a separate step.
-func (p *Manager) resumeRGB11ContractBroadcast(ctx context.Context, owner common.Wallet, contractURL, txid string) error {
+func (p *Manager) resumeRGB11ContractBroadcast(ctx context.Context, owner common.Wallet, contractURL, txid string, core *btcec.PublicKey) error {
 	raw, err := p.GetDB().Read(rgb11ContractWithdrawKey("signed", txid))
 	if errors.Is(err, indexer.ErrKeyNotFound) {
 		return nil // The selection can be durable before co-signing completes.
@@ -32,7 +33,7 @@ func (p *Manager) resumeRGB11ContractBroadcast(ctx context.Context, owner common
 	}
 	var pair rgb11ContractBroadcastPair
 	if json.Unmarshal(raw, &pair) != nil || pair.Version != 1 || pair.ContractURL != contractURL ||
-		pair.Proof == nil || len(pair.Proof.Consignment) == 0 {
+		pair.Proof == nil || len(pair.Proof.Consignment) == 0 || len(pair.Proof.RecipientMail) == 0 {
 		return fmt.Errorf("invalid durable RGB11 broadcast pair")
 	}
 	channel, assetText, _, err := ParseContractURL(contractURL)
@@ -50,6 +51,12 @@ func (p *Manager) resumeRGB11ContractBroadcast(ctx context.Context, owner common
 	reader := bytes.NewReader(pair.Bitcoin)
 	if bitcoin.Deserialize(reader) != nil || reader.Len() != 0 || bitcoin.TxID() != txid {
 		return fmt.Errorf("durable RGB11 Bitcoin transaction identity changed")
+	}
+	if core == nil {
+		return fmt.Errorf("RGB11 withdrawal mail has no authenticated contract origin")
+	}
+	if _, err := checkRGB11WithdrawalMail(contractURL, bitcoin, pair.Proof, core); err != nil {
+		return err
 	}
 	reader = bytes.NewReader(pair.Descend)
 	if descend.Deserialize(reader) != nil || reader.Len() != 0 {

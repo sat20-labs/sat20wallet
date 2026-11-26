@@ -178,7 +178,7 @@ func (p *rgb11Manager) ownsRGB11ChannelScript(script []byte) bool {
 
 // signRGB11ChannelBatch is called inside the persisted broadcast-intent
 // boundary. The peer may broadcast as part of its existing signing handler,
-// therefore each required wallet ACK or public payout receipt must already be durable.
+// therefore all recipient Core mailbox receipts must already be durable.
 func (p *rgb11Manager) signRGB11ChannelBatch(batch []*rgb11wallet.PendingTransfer) error {
 	baseline := cloneRGB11PendingBatch(batch)
 	first := batch[0]
@@ -234,7 +234,8 @@ func (p *rgb11Manager) signRGB11ChannelBatch(batch []*rgb11wallet.PendingTransfe
 		return err
 	}
 	signInfos := []*wwire.TxSignInfo{{Tx: txHex, L1Tx: true, LocalSigs: sigs}}
-	descend, descendPrev, err := p.rgb11ContractDescendPlan(first, batch)
+	proof := &wwire.RGB11SigningProof{Consignment: first.LocalConsignment}
+	descend, descendPrev, err := p.rgb11ContractDescendPlan(first, batch, proof)
 	if err != nil {
 		return err
 	}
@@ -269,7 +270,6 @@ func (p *rgb11Manager) signRGB11ChannelBatch(batch []*rgb11wallet.PendingTransfe
 	if err != nil {
 		return err
 	}
-	proof := &wwire.RGB11SigningProof{Consignment: first.LocalConsignment}
 	for _, seal := range first.ChangeSeals {
 		raw, err := seal.StrictBytes()
 		if err != nil {
@@ -330,7 +330,7 @@ func (p *rgb11Manager) signRGB11ChannelBatch(batch []*rgb11wallet.PendingTransfe
 		if err := json.Unmarshal(data.MoreData, &more); err != nil {
 			return err
 		}
-		if err := owner.RecordRGB11ContractBroadcast(more.ContractURL, []*wire.MsgTx{tx}, []*swire.MsgTx{descend}, proof); err != nil {
+		if err := owner.RecordRGB11ContractBroadcast(more.ContractURL, []*wire.MsgTx{tx}, []*swire.MsgTx{descend}, proof, context.wallet.GetNodePubKey()); err != nil {
 			return err
 		}
 	}

@@ -4,8 +4,10 @@ import (
 	"encoding/base64"
 	"errors"
 
+	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/rgb11/consensus"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
+	"github.com/sat20-labs/satoshinet/anchortx/nativeproof"
 	dkvs "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
@@ -84,8 +86,7 @@ func (p *Manager) RGB11ChainAsset(asset *swire.AssetName, register bool) (*swire
 	return name, nil
 }
 
-// RGB11LocalAsset maps a registered chain name back to the immutable key used
-// by the Bitcoin RGB inventory. Private-channel calls already use that key.
+// RGB11LocalAsset maps a registered chain name to the Bitcoin RGB inventory key.
 func (p *Manager) RGB11LocalAsset(asset *swire.AssetName) (*swire.AssetName, error) {
 	if asset == nil || asset.Protocol != rgb11wallet.Protocol {
 		return nil, ErrRGB11PublicIdentityMismatch
@@ -96,9 +97,71 @@ func (p *Manager) RGB11LocalAsset(asset *swire.AssetName) (*swire.AssetName, err
 	if asset.Type != "f" {
 		return nil, ErrRGB11PublicIdentityMismatch
 	}
+	if _, err := dkvs.RGB11NameKey(asset.Ticker); err != nil {
+		return nil, ErrRGB11PublicIdentityMismatch
+	}
 	_, id, err := p.readRGB11Name(asset.Ticker)
 	if err != nil {
 		return nil, err
 	}
 	return &swire.AssetName{Protocol: asset.Protocol, Type: asset.Type, Ticker: id}, nil
+}
+
+func (v *stpRGBEvidenceView) localFundingAsset(p *Manager, asset *swire.AssetName) (*swire.AssetName, error) {
+	if v == nil {
+		return p.RGB11LocalAsset(asset)
+	}
+	if asset != nil {
+		if _, err := rgb11ContractIDFromAssetName(*asset); err == nil {
+			return asset, nil
+		}
+		if v.facts != nil && v.facts.fundingName != nil && v.facts.fundingName.chain == *asset {
+			local := v.facts.fundingName.local
+			return &local, nil
+		}
+	}
+	return nil, v.unavailable("registered funding asset", "")
+}
+
+func (v *stpRGBEvidenceView) namedFundingProof(p *Manager, name indexer.AssetName, id string, proof []byte) ([]byte, error) {
+	if v == nil {
+		return p.rgb11NamedProof(name, id, proof)
+	}
+	if v.facts == nil || v.facts.fundingName == nil || v.facts.fundingName.chain != name {
+		return nil, v.unavailable("registered funding proof", name.String())
+	}
+	fact := v.facts.fundingName
+	if fact.local.Ticker != id {
+		return nil, ErrRGB11PublicIdentityMismatch
+	}
+	return nativeproof.WithRGB11Name(proof, fact.record)
+}
+
+func (p *Manager) rgb11NamedProof(name indexer.AssetName, id string, proof []byte) ([]byte, error) {
+	record, registered, err := p.readRGB11Name(name.Ticker)
+	if err != nil {
+		return nil, err
+	}
+	if registered != id {
+		return nil, ErrRGB11PublicIdentityMismatch
+	}
+	return nativeproof.WithRGB11Name(proof, record)
+}
+
+// A Bitcoin-funded entry needs genesis precision before it has a SatoshiNet UTXO.
+func (p *Manager) fundingTicker(name *swire.AssetName) *indexer.TickerInfo {
+	if name.Protocol != rgb11wallet.Protocol {
+		return p.getTickerInfo(name)
+	}
+	local, err := p.RGB11LocalAsset(name)
+	if err != nil {
+		return nil
+	}
+	info := p.getTickerInfo(local)
+	if info == nil {
+		return nil
+	}
+	copy := *info
+	copy.AssetName = *name
+	return &copy
 }

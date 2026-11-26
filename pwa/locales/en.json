@@ -957,6 +957,8 @@
     "crossLayerContractInactive": "The public contract is not active on the required chain yet. Check it in SatoshiNet Market.",
     "crossLayerFungibleOnly": "Only fungible RGB assets with a full contract ID support this operation.",
     "crossLayerSubmitted": "Submitted. Wait for confirmation, then refresh the source and destination balances.",
+    "withdrawRootRequired": "Use your root account for RGB withdrawals. Send the asset to your root account on SatoshiNet first.",
+    "withdrawRootUnregistered": "Your root account needs to be registered for RGB withdrawals. Open Account Management and retry account service setup.",
     "protocolVersion": "RGB version {version}",
     "sendTitle": "Send RGB Asset",
     "destinationType": "Destination type",

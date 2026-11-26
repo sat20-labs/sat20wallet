@@ -540,7 +540,7 @@ func (p *rgb11Manager) signRGB11OrdinaryBatch(batch []*rgb11wallet.PendingTransf
 				return ErrRGB11BatchAckRequired
 			}
 		case RGB11AddressTransport:
-			if !item.State.DeliveryAcknowledged || item.State.AckStatus != "accepted" || item.State.DeliveryRecordKey == "" || item.State.DeliveryRecordHash == "" {
+			if !rgbDeliveryReady(item) {
 				return ErrRGB11AddressDeliveryRequired
 			}
 		case RGB11ProxyTransport:

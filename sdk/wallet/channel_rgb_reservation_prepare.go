@@ -10,6 +10,7 @@ import (
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/rgb11/seals"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
+	dkvs "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
 // A single-carrier expansion adopts authenticated private funding. A fresh
@@ -29,6 +30,9 @@ func (p *Manager) prepareSTPRGBExpansionEvidence(channel *Channel, asset *indexe
 	channel.Mutex.RUnlock()
 	if err != nil || facts == nil {
 		return facts, err
+	}
+	if err := p.captureSTPRGBFundingName(facts, asset); err != nil {
+		return nil, err
 	}
 	closedFunding, err := p.prepareSTPRGBClosedChannelSource(facts, owner, asset, point)
 	if err != nil {
@@ -61,9 +65,16 @@ func (p *Manager) PrepareSTPRGBSplicingEvidence(channel *Channel, asset *indexer
 	if err != nil || facts == nil {
 		return facts, err
 	}
+	if err := p.captureSTPRGBFundingName(facts, asset); err != nil {
+		return nil, err
+	}
 	// Client-owned sources are local projection objects. Copy their exact
 	// material before querying; peer inventories are already request-owned.
-	if asset != nil && asset.Protocol == rgb11wallet.Protocol && len(funding[rgb11wallet.Protocol]) == 0 {
+	if asset != nil && asset.Protocol == rgb11wallet.Protocol && len(inputs) != 0 && len(funding[rgb11wallet.Protocol]) == 0 {
+		local, err := facts.useView().localFundingAsset(p, asset)
+		if err != nil {
+			return nil, err
+		}
 		manager, scopeErr := p.stpRGB11Scope(owner)
 		if scopeErr != nil {
 			Log.Debugf("RGB STP evidence rejected: manager=%d phase=scope", p.debugID)
@@ -76,7 +87,7 @@ func (p *Manager) PrepareSTPRGBSplicingEvidence(channel *Channel, asset *indexer
 				manager.traceRGB11Broadcast("stp-funding-load", "", loadErr)
 				return nil, loadErr
 			}
-			source, sourceErr := manager.stpRGB11Funding(output, asset)
+			source, sourceErr := manager.stpRGB11Funding(output, local)
 			if sourceErr != nil {
 				return nil, sourceErr
 			}
@@ -136,6 +147,9 @@ func (p *Manager) PrepareSTPRGBSplicingReservationEvidence(resv *SplicingReserva
 	if err != nil || facts == nil {
 		return facts, err
 	}
+	if err := p.captureSTPRGBFundingName(facts, asset); err != nil {
+		return nil, err
+	}
 	if err := p.querySTPRGBEvidence(facts, inventories, packages); err != nil {
 		return nil, err
 	}
@@ -172,6 +186,30 @@ func (p *Manager) PrepareSTPRGBPaymentReservationEvidence(resv *PaymentReservati
 		return nil, err
 	}
 	return facts, nil
+}
+
+// Resolve and copy the authenticated record outside the channel lock. Local
+// signing phases cannot fall back to DKVS if the captured name is absent.
+func (p *Manager) captureSTPRGBFundingName(f *STPRGBReservationEvidence, asset *indexer.AssetName) error {
+	if asset == nil || asset.Protocol != rgb11wallet.Protocol {
+		return nil
+	}
+	if _, err := dkvs.RGB11NameKey(asset.Ticker); err != nil {
+		return nil // A local full contract ID needs no name lookup.
+	}
+	record, id, err := p.readRGB11Name(asset.Ticker)
+	if err != nil {
+		return err
+	}
+	local := *asset
+	local.Ticker = id
+	copy := *record
+	copy.Value = bytes.Clone(record.Value)
+	copy.PubKey = bytes.Clone(record.PubKey)
+	copy.Signature = bytes.Clone(record.Signature)
+	copy.FeeProof = bytes.Clone(record.FeeProof)
+	f.fundingName = &stpRGBFundingName{chain: *asset, local: local, record: &copy}
+	return nil
 }
 
 func captureSTPRGBEvidence(channel *Channel, asset *indexer.AssetName, inputs []string,

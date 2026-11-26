@@ -25,6 +25,13 @@ export async function runPwaRgbCases(t, fixture) {
   const button = (scope, name) => scope.getByRole('button', { name, exact: true })
   const dialog = (page, name) => page.getByRole('dialog', { name, exact: true })
   const card = (page, asset) => page.locator(`[data-asset-key=${JSON.stringify(asset.asset)}]`)
+  const assetNameKey = name => `${name.Protocol}:${name.Type}:${name.Ticker}`
+  const assetDisplay = async (page, key, expectedName) => {
+    const info = JSON.parse((await walletCall(page, 'getTickerInfo', key)).ticker)
+    assert.equal(assetNameKey(info.name), key, 'RGB ticker info must preserve the full asset identity')
+    assert.equal(info.displayname, expectedName, 'RGB display name must match the normalized ticker and contract suffix')
+    return `${expectedName} (${key})`
+  }
   const checkBitcoinReference = async (scope, reference) => {
     await expect(scope.getByText(reference, { exact: true })).toBeVisible()
     const link = scope.getByRole('link', { name: reference, exact: true })
@@ -104,6 +111,9 @@ export async function runPwaRgbCases(t, fixture) {
     if (kind === 'IFA') await form.getByPlaceholder('9000', { exact: true }).fill('20')
     const asset = await observe(page, 'issueRGB11Asset', () => button(form, tr.issue).click())
     await expect(form.getByText(asset.contract_id, { exact: true })).toBeVisible()
+    const [protocol, type, contractId] = asset.asset.split(':')
+    assert.match(contractId || '', /^[0-9a-f]{64}$/i, 'issued RGB key must contain the full contract ID')
+    const displayName = `${protocol}:${type}:${ticker.toLowerCase()}@${contractId.slice(-4).toLowerCase()}`
     const pending = page.waitForEvent('download')
     await button(form, tr.downloadContract).click()
     const download = await pending
@@ -111,7 +121,7 @@ export async function runPwaRgbCases(t, fixture) {
     const contract = readFileSync(await download.path())
     await close(form)
     await expect(card(page, asset)).toBeVisible()
-    return { asset, contract }
+    return { asset, contract, displayName }
   }
   const importContract = async (page, issued) => {
     await button(page, tr.import).click()
@@ -166,15 +176,15 @@ export async function runPwaRgbCases(t, fixture) {
     if (!keepOpen) await close(form)
     return result
   }
-  const checkRecipients = async (form, prepared) => {
+  const checkRecipients = async (page, form, prepared, displayName) => {
     for (const [index, recipient] of prepared.recipients.entries()) {
       const row = form.getByRole('listitem').nth(index)
       await expect(row.getByText(recipient.amount.amount, { exact: true })).toBeVisible()
-      await expect(row.getByText(recipient.amount.asset, { exact: true })).toBeVisible()
+      await expect(row.getByText(await assetDisplay(page, recipient.amount.asset, displayName), { exact: true })).toBeVisible()
       await expect(row.getByText(recipient.destination, { exact: true })).toBeVisible()
     }
   }
-  const prepare = async (owner, asset, requests, inflate = false) => {
+  const prepare = async (owner, asset, requests, inflate = false, displayName) => {
     await button(card(owner, asset), inflate ? tr.inflate : messages.l1AssetsTabs.send).click()
     const form = dialog(owner, inflate ? tr.inflate : tr.sendTitle)
     if (!inflate) {
@@ -186,7 +196,7 @@ export async function runPwaRgbCases(t, fixture) {
     }
     await form.locator('textarea').fill(requests.map(item => item.invoice).join('\n'))
     const prepared = await observe(owner, inflate ? 'prepareRGB11Inflation' : 'prepareRGB11Transfer', () => button(form, tr.prepare).click())
-    await checkRecipients(form, prepared)
+    await checkRecipients(owner, form, prepared, displayName)
     assert.equal(prepared.needs_receipts, true)
     return { form, prepared }
   }
@@ -201,10 +211,10 @@ export async function runPwaRgbCases(t, fixture) {
     assert.equal(result.can_confirm, false)
     await expect(form).not.toBeVisible()
   }
-  const manual = async (owner, recipient, asset, amounts, inflate = false) => {
+  const manual = async (owner, recipient, asset, amounts, inflate = false, displayName) => {
     const requests = []
     for (const amount of amounts) requests.push(await receive(recipient, asset, amount))
-    let { form, prepared } = await prepare(owner, asset, requests, inflate)
+    let { form, prepared } = await prepare(owner, asset, requests, inflate, displayName)
     // Close and continue from the actual pending list. Preparing again would
     // create a different intent and would miss the UI recovery boundary.
     await button(form, tr.close).first().click()
@@ -219,7 +229,7 @@ export async function runPwaRgbCases(t, fixture) {
     form = dialog(owner, tr.sendTitle)
     await form.getByText(tr.transferDetails, { exact: true }).click()
     await expect(form.getByText(prepared.id, { exact: true })).toBeVisible()
-    await checkRecipients(form, prepared)
+    await checkRecipients(owner, form, prepared, displayName)
     const files = await observe(owner, 'exportRGB11Transfer', () => button(form, tr.downloadConsignment).click())
     const receipts = []
     for (const [index, request] of requests.entries()) {
@@ -278,12 +288,12 @@ export async function runPwaRgbCases(t, fixture) {
       await receive(receiver, issued.asset, '1', 'blind', 'proxy')
       const request = await receive(receiver, issued.asset, '1')
       const other = await issue(sender, 'NIA', 'PWAOTHER')
-      const canceled = await prepare(sender, other.asset, [request])
+      const canceled = await prepare(sender, other.asset, [request], false, issued.displayName)
       assert.equal(canceled.prepared.recipients[0].amount.asset, issued.asset.asset)
-      await expect(canceled.form.getByText(other.asset.contract_id, { exact: true })).toHaveCount(0)
+      await expect(canceled.form.getByText(await assetDisplay(sender, other.asset.asset, other.displayName), { exact: true })).toHaveCount(0)
       await expect(canceled.form.getByText(/PWAOTHER/i)).toHaveCount(0)
       await cancel(sender, canceled.form)
-      const sent = await manual(sender, receiver, issued.asset, ['1', '2'])
+      const sent = await manual(sender, receiver, issued.asset, ['1', '2'], false, issued.displayName)
       await balance(receiver, issued.asset, '3')
       await balance(sender, issued.asset, '97')
       await sender.evaluate(() => { location.hash = '#/wallet/setting/operation-logs' })
@@ -305,7 +315,7 @@ export async function runPwaRgbCases(t, fixture) {
     }, async () => {
       const issued = await issue(sender, 'IFA', 'PWAIFA')
       await importContract(receiver, issued)
-      await manual(sender, receiver, issued.asset, ['10'], true)
+      await manual(sender, receiver, issued.asset, ['10'], true, issued.displayName)
       await balance(receiver, issued.asset, '10')
       await balance(sender, issued.asset, '100')
     }, async () => {

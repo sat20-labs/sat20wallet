@@ -165,6 +165,7 @@ type posPWAAnchorEvidence struct {
 	TxID            string               `json:"txid"`
 	Height          int32                `json:"height"`
 	FundingOutpoint string               `json:"funding_outpoint"`
+	Value           int64                `json:"value"`
 	Version         int32                `json:"version"`
 	LockTime        uint32               `json:"lock_time"`
 	Sequence        uint32               `json:"sequence"`

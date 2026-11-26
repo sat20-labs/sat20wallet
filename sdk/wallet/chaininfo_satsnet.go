@@ -200,6 +200,25 @@ func CheckAnchorPkScript(anchorPkScript []byte, outputs []*wire.TxOut, bindOutpu
 	return data, pubkey, nil
 }
 
+// CheckAnchorTxSig checks the complete Anchor. A native proof binds outputs
+// at every height, including before the POSv2 activation for other Anchors.
+func CheckAnchorTxSig(tx *wire.MsgTx, bindOutputs bool) (*AnchorData, []byte, error) {
+	if tx == nil || len(tx.TxIn) != 1 || tx.TxIn[0] == nil {
+		return nil, nil, fmt.Errorf("anchor requires one input")
+	}
+	_, native, err := sindexer.NativeAssetProof(tx)
+	if err != nil {
+		return nil, nil, err
+	}
+	bindOutputs = bindOutputs || native
+	if bindOutputs {
+		if err := sindexer.CheckAnchorTxEncoding(tx); err != nil {
+			return nil, nil, err
+		}
+	}
+	return CheckAnchorPkScript(tx.TxIn[0].SignatureScript, tx.TxOut, bindOutputs)
+}
+
 // AnchorOutputsActive selects the invoice for the next block. A failed height
 // lookup must not silently issue a legacy signature after scheduled activation.
 func (p *Manager) AnchorOutputsActive() (bool, error) {
@@ -248,7 +267,11 @@ func (p *Manager) SignAnchorTx(tx *wire.MsgTx, sign func([]byte) ([]byte, error)
 	if err != nil {
 		return nil, err
 	}
-	if _, _, err := CheckAnchorPkScript(script, tx.TxOut, bindOutputs); err != nil {
+	candidate := *tx
+	input := *tx.TxIn[0]
+	input.SignatureScript = script
+	candidate.TxIn = []*wire.TxIn{&input}
+	if _, _, err := CheckAnchorTxSig(&candidate, bindOutputs); err != nil {
 		return nil, err
 	}
 	tx.TxIn[0].SignatureScript = script

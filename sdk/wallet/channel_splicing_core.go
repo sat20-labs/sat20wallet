@@ -18,6 +18,10 @@ func CreateSplicingInAnchorTx(resv *SplicingReservation, toDAOPkScript []byte,
 	channel := resv.Channel
 	splicingOutput := resv.SplicingOutput
 	assetName := resv.AssetName
+	if assetName.Protocol == "rgb11" && len(resv.RGB11AnchorProof) == 0 {
+		Log.Errorf("missing registered RGB11 Anchor proof")
+		return nil
+	}
 	localValue := resv.SplicingOutput.OutValue.Value
 
 	var localAsset *swire.AssetInfo

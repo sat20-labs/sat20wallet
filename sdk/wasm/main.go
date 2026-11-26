@@ -4871,6 +4871,12 @@ func withdraw(this js.Value, p []js.Value) any {
 			int64(feeRate64))
 		if err != nil {
 			wallet.Log.Errorf("Withdraw error: %v", err)
+			switch {
+			case errors.Is(err, wallet.ErrRGBWithdrawRoot):
+				return accountErrorData{code: "RGB_WITHDRAW_ROOT_REQUIRED"}, -1, err.Error()
+			case errors.Is(err, wallet.ErrRGBWithdrawNotRegistered):
+				return accountErrorData{code: "RGB_WITHDRAW_ROOT_UNREGISTERED"}, -1, err.Error()
+			}
 			return nil, -1, err.Error()
 		}
 

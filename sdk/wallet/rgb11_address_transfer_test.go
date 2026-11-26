@@ -611,8 +611,8 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 		t.Fatal("address pending transfer absent from snapshot")
 	}
 
-	if _, err := sender.BroadcastRGB11AddressTransfer(prepared.State.TransferID); !errors.Is(err, ErrRGB11AddressDeliveryRequired) {
-		t.Fatalf("address transfer broadcast before ACK: %v", err)
+	if !rgbDeliveryReady(pendingBeforeSnapshot) || pendingBeforeSnapshot.State.DeliveryAcknowledged {
+		t.Fatal("Core commit must authorize signing before wallet feedback")
 	}
 	deliveryRecord, err := client.GetRecord(secondDelivery.RecordKey)
 	if err != nil {
@@ -661,7 +661,7 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	failedSync, err := recipient.SyncConfiguredRGB11AddressMailbox(
 		context.Background(), dkvsindexer.RecordVerificationOptions{},
 	)
-	if !errors.Is(err, errRGBACKSend) || failedSync == nil || failedSync.Received != 0 || len(attempts) != 1 {
+	if err != nil || failedSync == nil || failedSync.Received != 1 || len(attempts) != 1 {
 		t.Fatalf("failed ACK sync=%+v err=%v", failedSync, err)
 	}
 	receivesBeforeRetry := countRGB11Receives(t, recipient.db)
@@ -689,7 +689,7 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if syncResult.Received != 1 || syncResult.ACKs != 0 {
+	if syncResult.Received != 0 || syncResult.AlreadyDone == 0 || syncResult.ACKs != 0 {
 		t.Fatalf("mailbox sync=%+v", syncResult)
 	}
 	if len(attempts) != 3 || !reflect.DeepEqual(attempts[0], attempts[1]) ||
@@ -1087,7 +1087,7 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	}
 }
 
-func TestRGB11AddressNACKCancelsBeforeBroadcast(t *testing.T) {
+func TestDirectNACKKeepsReservation(t *testing.T) {
 	fixture := newExpiredCancelFixture(t, 1)
 	pending, err := fixture.manager.rgbManager.projectionStore.LoadPendingTransfer(fixture.transferIDs[0])
 	if err != nil {
@@ -1130,11 +1130,11 @@ func TestRGB11AddressNACKCancelsBeforeBroadcast(t *testing.T) {
 		t.Fatalf("reject ACK result=%+v err=%v", ack, err)
 	}
 	stored, err := fixture.manager.rgbManager.projectionStore.LoadPendingTransfer(fixture.transferIDs[0])
-	if err != nil || stored.State.Status != "rejected" || stored.State.RejectReason != "recipient-rejected" {
-		t.Fatalf("address NACK state=%+v err=%v", stored, err)
+	if err != nil || stored.State.Status != "delivered" || stored.State.RejectReason != "" {
+		t.Fatalf("wallet feedback changed Direct intent: %+v, %v", stored, err)
 	}
-	if lock := fixture.manager.utxoLockerL1.GetLockedUtxoList()[fixture.input]; lock != nil {
-		t.Fatalf("address NACK left input locked: %+v", lock)
+	if lock := fixture.manager.utxoLockerL1.GetLockedUtxoList()[fixture.input]; lock == nil {
+		t.Fatal("wallet feedback released the reserved input")
 	}
 	checkHistory := func(want int) {
 		t.Helper()
@@ -1156,7 +1156,7 @@ func TestRGB11AddressNACKCancelsBeforeBroadcast(t *testing.T) {
 			t.Fatalf("found %d rejection records, want %d", found, want)
 		}
 	}
-	checkHistory(1)
+	checkHistory(0)
 	if err := fixture.manager.DeleteOperationHistory(); err != nil {
 		t.Fatal(err)
 	}
@@ -1320,6 +1320,7 @@ func TestRGBDirectPreviewConflict(t *testing.T) {
 
 func TestRGBDirectConfirmOriginal(t *testing.T) {
 	sender, recipient, imported, evidence, rpc := newRGB11GenericSendFixtureWithCarrier(t, 1_000)
+	sender.rgbManager.evidence = newRGB11AcceptedEvidence(evidence, rpc)
 	operationIDs := func() map[string]bool {
 		t.Helper()
 		logs, err := sender.GetOperationLogs()
@@ -1358,54 +1359,36 @@ func TestRGBDirectConfirmOriginal(t *testing.T) {
 		t.Fatal("preview created an operation log")
 	}
 
-	// If Confirm tries to resolve the recipient, select assets, fetch UTXOs,
-	// or rebuild fees, the existing candidate cannot be reproduced from these
-	// unavailable source views. Confirmation must consume the exact preview.
-	savedOutputs, savedPlain := rpc.outputs, rpc.plain
-	evidence.rgb11FlowEvidence.mu.Lock()
-	savedUTXOs := evidence.rgb11FlowEvidence.utxos
-	evidence.rgb11FlowEvidence.utxos = make(map[string]*rgb11wallet.BitcoinUTXO)
-	evidence.rgb11FlowEvidence.mu.Unlock()
-	rpc.outputs, rpc.plain = make(map[string]*TxOutput), nil
-	dependenciesRestored := false
-	restoreDependencies := func() {
-		rpc.outputs, rpc.plain = savedOutputs, savedPlain
-		evidence.rgb11FlowEvidence.mu.Lock()
-		evidence.rgb11FlowEvidence.utxos = savedUTXOs
-		evidence.rgb11FlowEvidence.mu.Unlock()
-		dependenciesRestored = true
-	}
-	defer func() {
-		if !dependenciesRestored {
-			restoreDependencies()
-		}
-	}()
+	// No unused fee UTXOs are available for reselection. Signing still has
+	// access to the chain evidence for the preview's already chosen inputs.
+	savedPlain := rpc.plain
+	rpc.plain = nil
+	defer func() { rpc.plain = savedPlain }()
 	evidence.rgb11FlowEvidence.mu.Lock()
 	broadcastsBefore := evidence.rgb11FlowEvidence.broadcastCount
 	evidence.rgb11FlowEvidence.mu.Unlock()
 
 	confirmed, err := sender.ConfirmRGBTransfer(context.Background(), preview.ID, nil)
-	restoreDependencies()
-	if err != nil || confirmed == nil || confirmed.TxID != originalTxID || confirmed.Status != "awaiting_persistence" {
-		t.Fatalf("confirm did not reuse unbroadcast preview: result=%+v err=%v", confirmed, err)
+	if err != nil || confirmed == nil || confirmed.TxID != originalTxID || confirmed.Status != "pending_chain" {
+		t.Fatalf("confirm did not broadcast the original preview: result=%+v err=%v", confirmed, err)
 	}
 	stored, err := sender.rgbManager.projectionStore.LoadPendingTransfer(preview.ID)
 	if err != nil || stored.State.WitnessTxID != originalTxID ||
-		!reflect.DeepEqual(stored.State.InputOutPoints, originalInputs) || stored.State.Status != "delivered" {
+		!reflect.DeepEqual(stored.State.InputOutPoints, originalInputs) || !rgb11BroadcastCompleteStatus(stored.State.Status) || stored.State.DeliveryAcknowledged {
 		t.Fatalf("confirmation changed preview transaction/input set: state=%+v err=%v", stored, err)
 	}
 	evidence.rgb11FlowEvidence.mu.Lock()
 	broadcastsAfterConfirm := evidence.rgb11FlowEvidence.broadcastCount
 	evidence.rgb11FlowEvidence.mu.Unlock()
-	if broadcastsAfterConfirm != broadcastsBefore {
-		t.Fatalf("unacknowledged direct transaction broadcast: before=%d after=%d", broadcastsBefore, broadcastsAfterConfirm)
+	if broadcastsAfterConfirm != broadcastsBefore+1 {
+		t.Fatalf("Direct broadcast count after Core commit: before=%d after=%d", broadcastsBefore, broadcastsAfterConfirm)
 	}
-	if !reflect.DeepEqual(beforeLogs, operationIDs()) {
-		t.Fatal("confirmation created an operation log before broadcast")
+	if reflect.DeepEqual(beforeLogs, operationIDs()) {
+		t.Fatal("broadcast was not recorded in operation history")
 	}
 
 	// Simulate the wallet closing after its first confirmation. The existing
-	// mailbox worker receives the recipient's durable ACK and resumes broadcast.
+	// mailbox worker receives later wallet feedback without rebroadcasting.
 	received, err := recipient.SyncConfiguredRGB11AddressMailbox(
 		context.Background(), dkvsindexer.RecordVerificationOptions{},
 	)

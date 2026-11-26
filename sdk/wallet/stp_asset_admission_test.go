@@ -6,11 +6,16 @@ import (
 	"testing"
 
 	indexer "github.com/sat20-labs/indexer/common"
+	dkvs "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
 func TestSTPChannelAdmissionBeforeIO(t *testing.T) {
 	rune := AssetName{AssetName: indexer.AssetName{Protocol: indexer.PROTOCOL_NAME_RUNES, Type: indexer.ASSET_TYPE_FT, Ticker: "TOKEN"}}
-	rgb := AssetName{AssetName: indexer.AssetName{Protocol: "rgb11", Type: indexer.ASSET_TYPE_FT, Ticker: strings.Repeat("a", 64)}, N: 0}
+	ticker, err := dkvs.RGB11NameTicker("RGB", strings.Repeat("a", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rgb := AssetName{AssetName: indexer.AssetName{Protocol: "rgb11", Type: indexer.ASSET_TYPE_FT, Ticker: ticker}, N: 0}
 	steps := []struct {
 		name string
 		run  func(*Manager, *Channel, *AssetName) error
