@@ -260,6 +260,9 @@ func TestSplicingRuntimeRecoveryPreservesExistingRuntime(t *testing.T) {
 	manager, stored, resv := pendingSplicingRuntimeFixture(t, RS_SPLICINGIN_BROADCASTED)
 	runtime := NewChannel(stored, manager)
 	runtime.ResvId = 777
+	// An already running splice owns its channel before recovery. Loading a
+	// channel alone must not attach a decoded reservation that has no runtime.
+	resv.Channel = runtime
 	if err := manager.EnableChannel(runtime); err != nil {
 		t.Fatal(err)
 	}
