@@ -34,7 +34,7 @@ func TestRGB11AddressMessageIDIsBoundedAndDomainSeparated(t *testing.T) {
 }
 
 func TestConfiguredRGB11AddressTransferRejectsChildAccount(t *testing.T) {
-	manager, _, _, _, _ := newRGB11GenericSendFixture(t)
+	manager, recipient, issued, _, _ := newRGB11GenericSendFixture(t)
 	if err := manager.EnsureAccount(manager.status.CurrentWallet, 1, "child", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,11 @@ func TestConfiguredRGB11AddressTransferRejectsChildAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, _, err := manager.PrepareConfiguredRGB11AddressTransfer(
-		context.Background(), RGB11AddressSendRequest{}, dkvsindexer.RecordVerificationOptions{},
+		context.Background(), RGB11AddressSendRequest{
+			ReceiverAddress: recipient.wallet.GetAddress(),
+			AssetName:       issued.AssetName,
+			AmountRaw:       "1",
+		}, dkvsindexer.RecordVerificationOptions{},
 	); !errors.Is(err, ErrRGB11TraditionalReceiveRequired) {
 		t.Fatalf("child account direct transfer err=%v", err)
 	}
