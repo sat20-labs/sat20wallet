@@ -5,16 +5,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"testing"
+	"time"
+
 	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 	coreissuance "github.com/sat20-labs/rgb11/issuance"
 	"github.com/sat20-labs/rgb11/schemas"
+	"github.com/sat20-labs/rgb11/seals"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
-	"os"
-	"testing"
-	"time"
+	"github.com/stretchr/testify/require"
 )
 
 func newRGB11ActivatedFlowAccount(t *testing.T, mnemonic string, remote *rgb11MemoryDKVSHTTP,
@@ -435,6 +439,102 @@ func TestGenericBatchSendAssetsRGB11(t *testing.T) {
 				t.Fatalf("receive=%+v err=%v state=%+v transferErr=%v reservations=%+v reservationErr=%v engineRecords=%+v engineErr=%v",
 					syncResult, err, transfers, transferErr, reservations, reservationErr, engineRecords, engineErr)
 			}
+		}
+	}
+}
+
+func TestRGB11CollidingLocalSends(t *testing.T) {
+	sender, recipient, _, evidence, rpc := newRGB11GenericSendFixture(t)
+	sender.rgbManager.evidence = newRGB11AcceptedEvidence(evidence, rpc)
+	oldChain := indexer.CHAIN
+	indexer.CHAIN = "testnet"
+	t.Cleanup(func() { indexer.CHAIN = oldChain })
+	ctx := context.Background()
+	remote := sender.http.(*rgb11MemoryDKVSHTTP)
+	script, err := AddrToPkScript(sender.wallet.GetAddress(), GetChainParam())
+	require.NoError(t, err)
+
+	// These two genuine genesis consignments deterministically share twin@7c9b.
+	assets := make([]indexer.AssetName, 2)
+	var shortName indexer.AssetName
+	for i, timestamp := range []int64{1730000298, 1730000292} {
+		source := seedRGB11FlowEvidenceUTXO(t, evidence.rgb11FlowEvidence, script, 10_000, byte(93+i))
+		output := indexer.NewTxOutput(10_000)
+		output.OutPointStr, output.OutValue.PkScript = source, script
+		rpc.outputs[source] = output
+		point, err := wire.NewOutPointFromString(source)
+		require.NoError(t, err)
+		seal, err := seals.NewGraphBlindSeal(point.Hash[:], point.Index, 1)
+		require.NoError(t, err)
+		issued, err := coreissuance.Issue(coreissuance.Spec{
+			Kind: schemas.NIA, Network: coreissuance.BitcoinTestnet4, Ticker: "TWIN",
+			Name: "RGB11 short name collision", Precision: uint8(i + 1), Timestamp: timestamp,
+			Allocations: []coreissuance.Allocation{{Seal: seal, Amount: 50_000}},
+		})
+		require.NoError(t, err)
+		imported, err := sender.ImportRGB11Contract(ctx, []byte(issued.Armor))
+		require.NoError(t, err)
+		require.Equal(t, 1, imported.Projected)
+		installRGB11PublicContractFixture(t, sender, remote, imported.ContractID)
+		assets[i] = imported.AssetName
+		if i == 0 {
+			shortName = seedRGB11Name(t, sender, assets[i], "TWIN")
+		}
+	}
+	require.NotEqual(t, assets[0], assets[1])
+	otherShort, err := dkvsindexer.RGB11NameTicker("TWIN", assets[1].Ticker)
+	require.NoError(t, err)
+	require.Equal(t, shortName.Ticker, otherShort)
+	_, err = sender.RGB11ChainAsset(&assets[1], false)
+	require.ErrorIs(t, err, dkvsindexer.ErrWriteConflict)
+	require.Nil(t, sender.getSendTickerInfo_SatsNet(&shortName))
+
+	checkBalance := func(manager *Manager, asset *indexer.AssetName, want uint64) {
+		t.Helper()
+		balance, err := manager.GetRGB11AssetBalance(asset)
+		require.NoError(t, err)
+		if want == 0 && balance == nil {
+			return
+		}
+		require.NotNil(t, balance, asset.String())
+		require.Equal(t, want, balance.Value.Uint64(), asset.String())
+	}
+	remaining := [2]uint64{50_000, 50_000}
+	paid := [2]uint64{}
+	for i, name := range []indexer.AssetName{shortName, assets[1]} {
+		txid, err := sender.SendAssetsV3(recipient.wallet.GetAddress(), name.String(), "1.5", 2, nil)
+		require.NoError(t, err)
+		require.NotEmpty(t, txid)
+		evidence.mu.Lock()
+		for point, output := range evidence.utxos {
+			if allocationOutpointTxID(point) == txid {
+				output.Confirmations = 1
+			}
+		}
+		evidence.mu.Unlock()
+		evidence.setStatus(txid, rgb11wallet.BitcoinTxStatus{TxID: txid, Confirmed: true, Confirmations: 1})
+		received, err := recipient.SyncConfiguredRGB11AddressMailbox(ctx, dkvsindexer.RecordVerificationOptions{})
+		require.NoError(t, err)
+		require.NotNil(t, received)
+		require.Equal(t, 1, received.Received, "%+v", received)
+		_, err = recipient.RefreshRGB11State(ctx)
+		require.NoError(t, err)
+		_, err = sender.RefreshRGB11State(ctx)
+		require.NoError(t, err)
+		transfers, err := recipient.rgbManager.projectionStore.ListTransfers()
+		require.NoError(t, err)
+		var receivedAsset indexer.AssetName
+		for _, transfer := range transfers {
+			if transfer.WitnessTxID == txid {
+				receivedAsset = transfer.Asset.Name
+			}
+		}
+		require.Equal(t, assets[i], receivedAsset)
+		paid[i] = [2]uint64{15, 150}[i]
+		remaining[i] -= paid[i]
+		for j := range assets {
+			checkBalance(sender, &assets[j], remaining[j])
+			checkBalance(recipient, &assets[j], paid[j])
 		}
 	}
 }

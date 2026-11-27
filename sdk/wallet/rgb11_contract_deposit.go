@@ -114,6 +114,15 @@ func (p *Manager) PrepareRGB11ContractDeposit(ctx context.Context, contractURL, 
 	if contract == nil || !contract.GetRuntimeBase().IsActive() {
 		return nil, fmt.Errorf("RGB11 deposit contract is not active")
 	}
+	if asset := ParseAssetString(assetName); asset != nil && asset.Protocol == rgb11wallet.Protocol {
+		if _, err := rgb11ContractIDFromAssetName(*asset); err == nil {
+			name, err := p.RGB11ChainAsset(asset, false)
+			if err != nil {
+				return nil, err
+			}
+			assetName = name.String()
+		}
+	}
 	return p.prepareRGB11ContractDeposit(ctx, contract, recipient, assetName, amount, feeRate, nil, false)
 }
 

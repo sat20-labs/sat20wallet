@@ -379,7 +379,7 @@ const requireRGB11PublicContract = async (asset: any, operation: OperationType, 
   }
   // Withdraw intentionally does not export a local L1 contract: an L2-only
   // holder uses the registered L2 ticker and the SDK's final transaction checks.
-  return status.divisibility
+  return { chainKey, precision: status.divisibility }
 }
 
 const openAssetOperation = async (type: OperationType, asset: any) => {
@@ -418,10 +418,10 @@ const openAssetOperation = async (type: OperationType, asset: any) => {
     const destination = type === 'splicing_in' || type === 'lock' ? channel.value?.address : address.value
     if (!destination) throw new Error(t('approvalUi.addressEmpty'))
     if (type === 'deposit' || type === 'withdraw') {
-      const runtimePrecision = await requireRGB11PublicContract(asset, type, check)
+      const { precision } = await requireRGB11PublicContract(asset, type, check)
       // Before its first deposit, a Transcend runtime may still have provisional
       // precision. Deposit must use the validated local genesis ticker instead.
-      sendPrecision.value = type === 'withdraw' ? runtimePrecision : undefined
+      sendPrecision.value = type === 'withdraw' ? precision : undefined
     } else {
       if (!channel.value || channel.value.status !== 16 || channel.value.pendingSplicing) {
         throw new Error(t('pwaUi.assetActions.channelUnconfirmed'))
@@ -595,14 +595,16 @@ const handleOperationConfirm = async () => {
     type === 'send' ? operationAddress.value : address.value
 
   try {
+    let operationAsset = asset.key
     if (asset.protocol === 'rgb11' && (type === 'deposit' || type === 'withdraw')) {
       loading.value = true
       try {
         const checkSession = walletRequestSessionGuard('getDeployedContractStatus')
-        await requireRGB11PublicContract(asset, type, () => {
+        const { chainKey } = await requireRGB11PublicContract(asset, type, () => {
           checkSession()
           if (scope !== sendScope() || operationType.value !== type || selectedAsset.value?.key !== asset.key) throw new Error(t('rgb11Transfer.scopeChanged'))
         })
+        operationAsset = chainKey
       } finally { loading.value = false }
     }
     switch (type) {
@@ -627,7 +629,7 @@ const handleOperationConfirm = async () => {
       case 'deposit':
         await deposit({
           toAddress: address.value,
-          asset_name: asset.key,
+          asset_name: operationAsset,
           amt: amount,
           utxos: [],
           fees: [],
@@ -636,7 +638,7 @@ const handleOperationConfirm = async () => {
       case 'withdraw':
         await withdraw({
           toAddress: address.value,
-          asset_name: asset.key,
+          asset_name: operationAsset,
           amt: amount,
           utxos: [],
           fees: [],

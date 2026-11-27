@@ -42,6 +42,7 @@ export interface RGBAssetView {
   naming_status: string
   verified: boolean
   asset: string
+  chain_asset?: string
   contract_id: string
   kind: string
   ticker: string

@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"strings"
 
@@ -101,6 +102,10 @@ func (p *SatsNetDKVSClient) putRGB11Name(record *swire.DKVSRecord, ticker, id st
 }
 
 func (p *Manager) readRGB11Name(ticker string) (*swire.DKVSRecord, string, error) {
+	return p.readRGB11NameCtx(nil, ticker)
+}
+
+func (p *Manager) readRGB11NameCtx(ctx context.Context, ticker string) (*swire.DKVSRecord, string, error) {
 	key, err := dkvsindexer.RGB11NameKey(ticker)
 	if err != nil {
 		return nil, "", err
@@ -109,7 +114,10 @@ func (p *Manager) readRGB11Name(ticker string) (*swire.DKVSRecord, string, error
 	if err != nil {
 		return nil, "", err
 	}
-	record, err := client.GetRecordDirect(key)
+	if ctx == nil {
+		ctx = client.requestContext()
+	}
+	record, err := client.GetRecordDirectContext(ctx, key)
 	if err != nil {
 		return nil, "", err
 	}

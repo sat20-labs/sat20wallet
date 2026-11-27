@@ -1195,6 +1195,13 @@ func (p *Manager) BatchSendAssetsWithWallet(localWallet common.Wallet, destAddr 
 	if name == nil {
 		return nil, 0, fmt.Errorf("invalid asset name %s", assetName)
 	}
+	if name.Protocol == "rgb11" {
+		local, err := p.rgb11WalletAsset(name)
+		if err != nil {
+			return nil, 0, err
+		}
+		name = local
+	}
 	tickerInfo := p.getTickerInfo(name)
 	if tickerInfo == nil {
 		return nil, 0, fmt.Errorf("can't get ticker %s info", assetName)
@@ -2089,6 +2096,13 @@ func (p *Manager) SendAssetsV3(destAddr string, assetName string,
 	name := ParseAssetString(assetName)
 	if name == nil || (name.Protocol != indexer.PROTOCOL_NAME_ORDX && name.Protocol != "rgb11") {
 		return "", fmt.Errorf("SendAssetsV3 only supports ORDX or RGB11 assets")
+	}
+	if name.Protocol == "rgb11" {
+		local, err := p.rgb11WalletAsset(name)
+		if err != nil {
+			return "", err
+		}
+		name, assetName = local, local.String()
 	}
 	tickerInfo := p.getTickerInfo(name)
 	if tickerInfo == nil {
@@ -3707,11 +3721,6 @@ func (p *Manager) BatchSendAssetsV3(dest []*SendAssetInfo,
 	if name == nil {
 		return "", 0, fmt.Errorf("invalid asset name %s", assetNameStr)
 	}
-	tickerInfo := p.getTickerInfo(name)
-	if tickerInfo == nil {
-		return "", 0, fmt.Errorf("can't get ticker %s info", assetNameStr)
-	}
-	assetName := GetAssetName(tickerInfo)
 	if feeRate == 0 {
 		feeRate = p.GetFeeRate()
 	}
@@ -3723,6 +3732,11 @@ func (p *Manager) BatchSendAssetsV3(dest []*SendAssetInfo,
 		}
 		return tx.TxID(), fee, err
 	}
+	tickerInfo := p.getTickerInfo(name)
+	if tickerInfo == nil {
+		return "", 0, fmt.Errorf("can't get ticker %s info", assetNameStr)
+	}
+	assetName := GetAssetName(tickerInfo)
 
 	release, restoreErr := p.beginL1Send(p.wallet)
 	if restoreErr != nil {

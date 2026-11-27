@@ -1,8 +1,12 @@
 package wallet
 
 import (
+	"bytes"
+	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"fmt"
 
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/rgb11/consensus"
@@ -28,8 +32,21 @@ func (p *Manager) RGB11ChainAsset(asset *swire.AssetName, register bool) (*swire
 		return nil, ErrRGB11PublicIdentityMismatch
 	}
 	if _, err := dkvs.RGB11NameKey(asset.Ticker); err == nil {
-		_, _, err := p.readRGB11Name(asset.Ticker)
-		return asset, err
+		return p.verifyRGB11ChainAsset(asset.Ticker, "")
+	}
+	if _, err := rgb11ContractIDFromAssetName(*asset); err != nil {
+		return nil, ErrRGB11PublicIdentityMismatch
+	}
+	// Issuance and import already persisted the validated genesis ticker.
+	// A chain operation only needs to verify its official name binding.
+	if !register {
+		ticker, err := p.rgb11ChainTicker(asset)
+		if err == nil {
+			return p.verifyRGB11ChainAsset(ticker, asset.Ticker)
+		}
+		if !errors.Is(err, indexer.ErrKeyNotFound) {
+			return nil, err
+		}
 	}
 	id, err := consensus.IDFromHex(asset.Ticker)
 	if err != nil {
@@ -51,13 +68,8 @@ func (p *Manager) RGB11ChainAsset(asset *swire.AssetName, register bool) (*swire
 	if err != nil {
 		return nil, err
 	}
-	contractID := registration.ContractID
-	name := &swire.AssetName{Protocol: asset.Protocol, Type: asset.Type, Ticker: ticker}
-	_, registeredID, err := p.readRGB11Name(ticker)
+	name, err := p.verifyRGB11ChainAsset(ticker, registration.ContractID)
 	if err == nil {
-		if registeredID != contractID {
-			return nil, dkvs.ErrWriteConflict
-		}
 		return name, nil
 	}
 	if !register || !errors.Is(err, dkvs.ErrRecordNotFound) {
@@ -76,14 +88,132 @@ func (p *Manager) RGB11ChainAsset(asset *swire.AssetName, register bool) (*swire
 		return nil, ErrRGB11PublicDataUnavailable
 	}
 	submitErr := registrar.RegisterRGB11Name(public)
-	_, registeredID, err = p.readRGB11Name(ticker)
-	if err == nil && registeredID != contractID {
-		return nil, dkvs.ErrWriteConflict
-	}
+	name, err = p.verifyRGB11ChainAsset(ticker, registration.ContractID)
 	if err != nil {
 		return nil, errors.Join(submitErr, err)
 	}
 	return name, nil
+}
+
+func (p *Manager) rgb11ChainTicker(asset *swire.AssetName) (string, error) {
+	info := p.getTickerInfo(asset)
+	if info == nil {
+		return "", indexer.ErrKeyNotFound
+	}
+	var ext rgb11wallet.TickerExt
+	if info.AssetName != *asset || json.Unmarshal(info.Content, &ext) != nil ||
+		!rgb11wallet.ContractAssetKeyMatches(*asset, ext.ContractID) {
+		return "", ErrRGB11PublicIdentityMismatch
+	}
+	return dkvs.RGB11NameTicker(ext.Ticker, asset.Ticker)
+}
+
+// An imported genesis is usable as native RGB even when its public name is
+// unavailable or belongs to a different contract. Try once after local commit.
+func (p *Manager) learnRGB11Name(ctx context.Context, asset *swire.AssetName) {
+	if asset.Type != indexer.ASSET_TYPE_FT {
+		return
+	}
+	ticker, err := p.rgb11ChainTicker(asset)
+	if err != nil {
+		return
+	}
+	if _, err := p.loadRGB11Name(ticker); !errors.Is(err, indexer.ErrKeyNotFound) {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, dkvsUnmanagedReadTimeout)
+	defer cancel()
+	network := dbNetworkKeyPrefix(_env, _chain)
+	record, id, err := p.readRGB11NameCtx(ctx, ticker)
+	if err == nil && id == asset.Ticker && network == dbNetworkKeyPrefix(_env, _chain) {
+		if err := p.saveRGB11Name(record); err != nil {
+			Log.Warnf("cache imported RGB11 name %s: %v", ticker, err)
+		}
+	}
+}
+
+func (p *Manager) verifyRGB11ChainAsset(ticker, expectedID string) (*swire.AssetName, error) {
+	record, id, err := p.readRGB11Name(ticker)
+	if err != nil {
+		return nil, err
+	}
+	if expectedID != "" && id != expectedID {
+		return nil, dkvs.ErrWriteConflict
+	}
+	if err := p.saveRGB11Name(record); err != nil {
+		return nil, err
+	}
+	return &swire.AssetName{Protocol: rgb11wallet.Protocol, Type: indexer.ASSET_TYPE_FT, Ticker: ticker}, nil
+}
+
+// The signed record is the single reverse lookup for wallet operations. Chain
+// admission and Anchor construction still read the authoritative registry.
+func rgb11NameDBKey(key string) []byte {
+	return []byte(dbNetworkKeyPrefix(_env, _chain) + "rgb11-name" + key)
+}
+
+func (p *Manager) saveRGB11Name(record *swire.DKVSRecord) error {
+	key := rgb11NameDBKey(record.Key)
+	raw, err := swire.SerializeDKVSRecord(record)
+	if err != nil {
+		return err
+	}
+	old, err := p.db.Read(key)
+	if err == nil && bytes.Equal(old, raw) {
+		return nil
+	}
+	if err != nil && !errors.Is(err, indexer.ErrKeyNotFound) {
+		return err
+	}
+	return p.db.Write(key, raw)
+}
+
+func (p *Manager) loadRGB11Name(ticker string) (string, error) {
+	key, err := dkvs.RGB11NameKey(ticker)
+	if err != nil {
+		return "", err
+	}
+	if p.db == nil {
+		return "", indexer.ErrKeyNotFound
+	}
+	raw, err := p.db.Read(rgb11NameDBKey(key))
+	if err != nil {
+		return "", err
+	}
+	record, err := swire.DeserializeDKVSRecord(raw)
+	if err != nil {
+		return "", err
+	}
+	return dkvs.VerifyRGB11Name(record, ticker)
+}
+
+// rgb11WalletAsset accepts a registered name at wallet API boundaries and
+// returns the immutable projection key consumed by the native RGB engine.
+func (p *Manager) rgb11WalletAsset(asset *swire.AssetName) (*swire.AssetName, error) {
+	if asset == nil || asset.Protocol != rgb11wallet.Protocol {
+		return nil, ErrRGB11PublicIdentityMismatch
+	}
+	if _, err := rgb11ContractIDFromAssetName(*asset); err == nil {
+		return asset, nil
+	}
+	if asset.Type != indexer.ASSET_TYPE_FT {
+		return nil, ErrRGB11PublicIdentityMismatch
+	}
+	id, err := p.loadRGB11Name(asset.Ticker)
+	if errors.Is(err, indexer.ErrKeyNotFound) {
+		var proof *swire.DKVSRecord
+		proof, id, err = p.readRGB11Name(asset.Ticker)
+		if err == nil {
+			err = p.saveRGB11Name(proof)
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("resolve RGB11 asset %s: %w", asset, err)
+	}
+	return &swire.AssetName{Protocol: asset.Protocol, Type: asset.Type, Ticker: id}, nil
 }
 
 // RGB11LocalAsset maps a registered chain name to the Bitcoin RGB inventory key.

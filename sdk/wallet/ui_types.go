@@ -80,6 +80,7 @@ type RGBAssetView struct {
 	NamingStatus   string `json:"naming_status"`
 	Verified       bool   `json:"verified"`
 	Asset          string `json:"asset"`
+	ChainAsset     string `json:"chain_asset,omitempty"`
 	ContractID     string `json:"contract_id"` // 供资产详情展示，不要求 PWA 解析合约
 	Kind           string `json:"kind"`
 	Ticker         string `json:"ticker"`

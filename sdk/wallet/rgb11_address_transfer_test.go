@@ -1321,6 +1321,10 @@ func TestRGBDirectPreviewConflict(t *testing.T) {
 func TestRGBDirectConfirmOriginal(t *testing.T) {
 	sender, recipient, imported, evidence, rpc := newRGB11GenericSendFixtureWithCarrier(t, 1_000)
 	sender.rgbManager.evidence = newRGB11AcceptedEvidence(evidence, rpc)
+	oldChain := indexer.CHAIN
+	indexer.CHAIN = "testnet"
+	t.Cleanup(func() { indexer.CHAIN = oldChain })
+	chainAsset := seedRGB11Name(t, sender, imported.AssetName, "SEND")
 	operationIDs := func() map[string]bool {
 		t.Helper()
 		logs, err := sender.GetOperationLogs()
@@ -1337,7 +1341,7 @@ func TestRGBDirectConfirmOriginal(t *testing.T) {
 	preview, err := sender.PrepareRGBTransfer(context.Background(), RGBSendRequest{
 		Recipients: []RGBRecipient{{
 			Destination: recipient.wallet.GetAddress(),
-			Asset:       imported.AssetName.String(),
+			Asset:       chainAsset.String(),
 			Amount:      "20000",
 		}},
 		FeeRate: 2,

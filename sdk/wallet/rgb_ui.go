@@ -32,6 +32,18 @@ func rgbAssetInfo(state *RGB11State, key string) (*RGB11TickerInfo, error) {
 	}
 	return nil, fmt.Errorf("RGB asset is not available in the current wallet")
 }
+
+func (p *Manager) rgbWalletInfo(state *RGB11State, key string) (*RGB11TickerInfo, error) {
+	asset := ParseAssetString(key)
+	if asset != nil && asset.Protocol == rgb.Protocol {
+		local, err := p.rgb11WalletAsset(asset)
+		if err != nil {
+			return nil, err
+		}
+		key = local.String()
+	}
+	return rgbAssetInfo(state, key)
+}
 func rgbAmount(text string, precision uint8) (string, error) {
 	amount, err := indexer.NewDecimalFromString(text, int(precision))
 	if err != nil {
@@ -45,8 +57,13 @@ func rgbAmount(text string, precision uint8) (string, error) {
 func rgbDisplayAmount(a indexer.AssetInfo) AssetAmount {
 	return AssetAmount{Asset: a.Name.String(), Amount: a.Amount.String(), Precision: uint8(a.Amount.Precision)}
 }
-func rgbAssetView(t *RGB11TickerInfo, state *RGB11State) RGBAssetView {
+func (p *Manager) rgbAssetView(t *RGB11TickerInfo, state *RGB11State) RGBAssetView {
 	v := RGBAssetView{Asset: t.AssetName.String(), ContractID: t.ContractID, Ticker: t.Ticker, Name: t.DisplayName, Precision: uint8(t.Divisibility), Available: "0", Pending: "0", CanExport: true, CanInvoice: true, CanonicalName: t.CanonicalName, GenesisAddress: t.GenesisAddress, NamingStatus: t.NamingStatus, Verified: t.Verified}
+	if name := ParseAssetString(t.CanonicalName); name != nil && name.Type == indexer.ASSET_TYPE_FT {
+		if id, err := p.loadRGB11Name(name.Ticker); err == nil && id == t.AssetName.Ticker {
+			v.ChainAsset = name.String()
+		}
+	}
 	var ext rgb.TickerExt
 	if json.Unmarshal(t.Content, &ext) == nil {
 		if d, err := schemas.ByID(ext.SchemaID); err == nil {
@@ -188,7 +205,7 @@ func (p *Manager) GetRGBView() (*RGBView, error) {
 	}
 	view := &RGBView{LockScope: lockScope, Locks: locks, Assets: []RGBAssetView{}, Transfers: []RGBTransferView{}, Receives: []RGBReceiveView{}, Syncing: state.SyncStatus == "syncing", CanWrite: state.ConsistencyStatus != "broken" && p.rgbModuleView(p.GetAccountManagementStatus()).CanWrite}
 	for _, t := range state.TickerInfos {
-		view.Assets = append(view.Assets, rgbAssetView(t, state))
+		view.Assets = append(view.Assets, p.rgbAssetView(t, state))
 	}
 	seen := make(map[string]bool)
 	for _, t := range state.Transfers {
@@ -280,7 +297,7 @@ func (p *Manager) PrepareRGBTransfer(ctx context.Context, req RGBSendRequest) (o
 		if len(req.Recipients) != 1 {
 			return nil, fmt.Errorf("address transfer requires one recipient")
 		}
-		asset, e := rgbAssetInfo(state, first.Asset)
+		asset, e := p.rgbWalletInfo(state, first.Asset)
 		if e != nil {
 			return nil, e
 		}
@@ -422,7 +439,7 @@ func (p *Manager) CreateRGBInvoice(ctx context.Context, req RGBInvoiceRequest) (
 	if err != nil {
 		return nil, err
 	}
-	asset, err := rgbAssetInfo(state, req.Asset)
+	asset, err := p.rgbWalletInfo(state, req.Asset)
 	if err != nil {
 		return nil, err
 	}
@@ -552,7 +569,7 @@ func (p *Manager) rgbCurrentAsset(id string) (*RGBAssetView, error) {
 	if err != nil {
 		return nil, err
 	}
-	view := rgbAssetView(asset, state)
+	view := p.rgbAssetView(asset, state)
 	return &view, nil
 }
 func (p *Manager) ExportRGBContract(asset string) ([]ExportFile, error) {
@@ -560,7 +577,7 @@ func (p *Manager) ExportRGBContract(asset string) ([]ExportFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	info, err := rgbAssetInfo(state, asset)
+	info, err := p.rgbWalletInfo(state, asset)
 	if err != nil {
 		return nil, err
 	}

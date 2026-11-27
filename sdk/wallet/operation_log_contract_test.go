@@ -1,6 +1,8 @@
 package wallet
 
 import (
+	"context"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"testing"
@@ -173,19 +175,68 @@ func TestRGB11DepositLog(t *testing.T) {
 	indexer.CHAIN = "testnet"
 	t.Cleanup(func() { indexer.CHAIN = previousChain })
 
-	chainAsset := issued.AssetName
-	id := issued.AssetName.Ticker
-	var err error
-	chainAsset.Ticker, err = dkvs.RGB11NameTicker("SEND", id)
+	// A different contract already owns the candidate short name. The
+	// imported contract still works through its unambiguous native RGB key.
+	other := issued.AssetName
+	other.Ticker = "0" + other.Ticker[1:]
+	if other == issued.AssetName {
+		other.Ticker = "1" + other.Ticker[1:]
+	}
+	conflict := seedRGB11Name(t, mgr, other, "SEND")
+	_, err := mgr.RGB11ChainAsset(&issued.AssetName, false)
+	require.ErrorIs(t, err, dkvs.ErrWriteConflict)
+	localBalance, err := mgr.GetRGB11AssetBalance(&issued.AssetName)
 	require.NoError(t, err)
+	require.Positive(t, localBalance.Sign())
+	_, err = mgr.CreateRGBInvoice(context.Background(), RGBInvoiceRequest{
+		Asset: issued.AssetName.String(), Amount: "1", ReceiveMode: "witness", Transport: "manual",
+	})
+	require.NoError(t, err)
+	view, err := mgr.GetRGBView()
+	require.NoError(t, err)
+	require.Len(t, view.Assets, 1)
+	require.Empty(t, view.Assets[0].ChainAsset)
+
+	// For the deposit path, use a fixture where the actual contract holds
+	// the binding. The rejected chain admission above published no local name.
+	chainAsset := seedRGB11Name(t, mgr, issued.AssetName, "SEND")
+	require.Equal(t, conflict, chainAsset)
 	key, err := dkvs.RGB11NameKey(chainAsset.Ticker)
 	require.NoError(t, err)
-	value, err := dkvs.RGB11NameValue(id)
-	require.NoError(t, err)
-	signer := NewInternalWalletWithMnemonic(testCoreMnemonic, "", &chaincfg.TestNet4Params)
-	record, err := NewDKVSSignedRecord(signer, key, value, dkvs.RecordOptions{Seq: dkvs.RGB11NameProofSeq, IssueHeight: 1})
-	require.NoError(t, err)
 	remote := mgr.http.(*rgb11MemoryDKVSHTTP)
+	public, err := mgr.ExportPublicRGB11Contract(issued.ContractID)
+	require.NoError(t, err)
+	file, err := base64.StdEncoding.DecodeString(public.ContractConsignmentBase64)
+	require.NoError(t, err)
+	imported, err := recipient.ImportRGB11ContractFile(context.Background(), file)
+	require.NoError(t, err)
+	require.Equal(t, issued.AssetName, imported.AssetName)
+	recipientView, err := recipient.GetRGBView()
+	require.NoError(t, err)
+	require.Len(t, recipientView.Assets, 1)
+	require.Equal(t, chainAsset.String(), recipientView.Assets[0].ChainAsset)
+	reg, err := mgr.VerifyRGB11PublicContract(issued.ContractID, public.ContractConsignmentBase64)
+	require.NoError(t, err)
+	require.Equal(t, chainAsset.String(), reg.AssetName)
+	view, err = mgr.GetRGBView()
+	require.NoError(t, err)
+	require.Len(t, view.Assets, 1)
+	require.Equal(t, chainAsset.String(), view.Assets[0].ChainAsset)
+
+	remote.mu.Lock()
+	record := remote.records[key]
+	delete(remote.records, key)
+	remote.mu.Unlock()
+	local := &Manager{db: mgr.db}
+	resolved, err := local.rgb11WalletAsset(&chainAsset)
+	require.NoError(t, err)
+	require.Equal(t, issued.AssetName, *resolved)
+	available, _, err := mgr.GetAssetAmountForJS(mgr.wallet.GetAddress(), chainAsset.String())
+	require.NoError(t, err)
+	direct, err := mgr.GetRGB11AssetBalance(&issued.AssetName)
+	require.NoError(t, err)
+	require.Positive(t, available.Sign())
+	require.Zero(t, available.Cmp(direct))
 	remote.mu.Lock()
 	remote.records[key] = record
 	remote.mu.Unlock()
@@ -207,6 +258,8 @@ func TestRGB11DepositLog(t *testing.T) {
 	node.status = string(status)
 
 	asset, dest := issued.AssetName.String(), recipient.wallet.GetAddress()
+	_, err = mgr.PrepareRGB11ContractDeposit(context.Background(), node.contract, dest, asset, "-1", 2)
+	require.EqualError(t, err, "invalid RGB11 deposit quantity")
 	_, err = mgr.DepositWithContract(dest, asset, "-1", 2)
 	require.EqualError(t, err, "invalid RGB11 deposit quantity")
 	txID, err := mgr.DepositWithContract(dest, asset, "100", 2)
@@ -245,6 +298,26 @@ func TestRGB11DepositLog(t *testing.T) {
 	result, err := mgr.GetContractLogResult(deposits["100"].ID)
 	require.NoError(t, err)
 	require.Equal(t, ContractLogResult{Status: "ready", TxID: "settlement", Chain: "satnet"}, result)
+}
+
+func seedRGB11Name(t *testing.T, mgr *Manager, asset indexer.AssetName, ticker string) indexer.AssetName {
+	t.Helper()
+	id := asset.Ticker
+	var err error
+	asset.Ticker, err = dkvs.RGB11NameTicker(ticker, id)
+	require.NoError(t, err)
+	key, err := dkvs.RGB11NameKey(asset.Ticker)
+	require.NoError(t, err)
+	value, err := dkvs.RGB11NameValue(id)
+	require.NoError(t, err)
+	signer := NewInternalWalletWithMnemonic(testCoreMnemonic, "", &chaincfg.TestNet4Params)
+	record, err := NewDKVSSignedRecord(signer, key, value, dkvs.RecordOptions{Seq: dkvs.RGB11NameProofSeq, IssueHeight: 1})
+	require.NoError(t, err)
+	remote := mgr.http.(*rgb11MemoryDKVSHTTP)
+	remote.mu.Lock()
+	remote.records[key] = record
+	remote.mu.Unlock()
+	return asset
 }
 
 type errOperationLogTestFailure struct{}

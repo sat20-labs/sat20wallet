@@ -241,6 +241,13 @@ func (p *Manager) GetAssetAmountForJS(address, assetName string) (*Decimal, *Dec
 	if asset == nil {
 		return nil, nil, fmt.Errorf("invalid asset name %s", assetName)
 	}
+	if asset.Protocol == rgb11wallet.Protocol {
+		var err error
+		asset, err = p.rgb11WalletAsset(asset)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
 	tickerInfo := p.getTickerInfo(asset)
 	if tickerInfo == nil {
 		return nil, nil, fmt.Errorf("can't get ticker %s info", assetName)

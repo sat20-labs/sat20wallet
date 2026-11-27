@@ -103,7 +103,11 @@ func (p *Manager) sendRGB11AssetsWithChannel(localWallet common.Wallet, dest []*
 	if len(dest) == 0 || len(dest) > 32 {
 		return nil, 0, fmt.Errorf("RGB11 send requires 1 to 32 outputs")
 	}
-	info := p.getTickerInfo(name)
+	local, err := p.rgb11WalletAsset(name)
+	if err != nil {
+		return nil, 0, err
+	}
+	info := p.getTickerInfo(local)
 	if info == nil {
 		return nil, 0, fmt.Errorf("unknown RGB11 ticker %s", name.String())
 	}
@@ -119,7 +123,7 @@ func (p *Manager) sendRGB11AssetsWithChannel(localWallet common.Wallet, dest []*
 		if d.Value != 0 && d.Value != rgb11CarrierValue {
 			return nil, 0, fmt.Errorf("RGB11 recipient value must be %d sats", rgb11CarrierValue)
 		}
-		requests[i] = RGB11AddressSendRequest{ReceiverAddress: d.Address, AssetName: *name, AmountRaw: strconv.FormatUint(amount, 10), FeeRate: feeRate, MinConfirmations: 1}
+		requests[i] = RGB11AddressSendRequest{ReceiverAddress: d.Address, AssetName: *local, AmountRaw: strconv.FormatUint(amount, 10), FeeRate: feeRate, MinConfirmations: 1}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()

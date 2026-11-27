@@ -30,7 +30,7 @@ const evaluateInit = async (name, mocks, dependencies = []) => {
   return Function(...Object.keys(mocks), `${js}; return ${name}`)(...Object.values(mocks))
 }
 
-test('invoice uses the complete SDK asset key, never the display ticker', async () => {
+test('invoice selection uses the full contract key, never the display ticker', async () => {
   const key = `rgb11:f:${'01'.repeat(32)}`
   for (const [asset, expected] of [[{key, ticker: 'USDT'}, key], [{asset:key, ticker:'USDT'}, key], [{ticker:'USDT'}, '']]) {
     const value = await evaluateInit('assetKey', {props: {asset}, computed: factory => ({value:factory()})})
@@ -38,24 +38,38 @@ test('invoice uses the complete SDK asset key, never the display ticker', async 
   }
 })
 
-test('invoice forwards SDK asset input and displays SDK rejection without a receive result', async () => {
+test('invoice sends the registered name when available and keeps the full contract key for the result', async () => {
   // SDK validation is not duplicated here. The real WASM negative cases are in
   // sdk-wasm-e2e.mjs (createRGB11Invoice: missing asset, zero amount, invalid transport).
-  for (const asset of ['', `rgb11:f:${'01'.repeat(32)}`]) {
+  const key = `rgb11:f:${'01'.repeat(32)}`
+  const shortName = 'rgb11:f:usdt@0101'
+  const invoice = {id: 'invoice', amount: {asset: key}}
+  const cases = [
+    {asset: '', result: null},
+    {asset: key, result: null},
+    {asset: key, registered: shortName, result: invoice},
+  ]
+  for (const {asset, registered, result} of cases) {
     const calls = [], message = {value:''}, loading = {value:false}, receive = {value:null}
-    const mocks = {assetKey:{value:asset}, amount:{value:' 1 '}, receiveMode:{value:'witness'},
+    let loads = 0
+    const mocks = {props: {asset: asset ? {key: asset, chain_asset: registered} : undefined},
+      assetKey:{value:asset}, amount:{value:' 1 '}, receiveMode:{value:'witness'},
       transport:{value:'manual'}, proxyEndpoint:{value:' '}, message, loading, receive,
       isOpen:{value:true}, generation:0, createWaitTimer:undefined,
       invoiceCreationPending:{value:false}, createWaiting:{value:false}, createTimedOut:{value:false},
-      t:key=>key, load:async()=>{throw new Error('must not load on rejection')},
-      walletManager:{createRGB11Invoice:async input=>{calls.push(input);return [new Error('SDK rejected invoice'),null]}},
+      t:key=>key, load:async()=>{loads++},
+      walletManager:{createRGB11Invoice:async input=>{
+        calls.push(input)
+        return result ? [null, result] : [new Error('SDK rejected invoice'), null]
+      }},
     }
     // Keep the real request guards and timer cleanup in the same closure as generate.
     const generate = await evaluateInit('generate', mocks, ['createPending', 'isCurrent', 'clearCreateWait', 'run'])
     await generate()
-    assert.deepEqual(calls, [{asset,amount:'1',receive_mode:'witness',transport:'manual',proxy_endpoint:''}])
-    assert.equal(message.value,'SDK rejected invoice')
-    assert.equal(receive.value,null)
+    assert.deepEqual(calls, [{asset:registered || asset,amount:'1',receive_mode:'witness',transport:'manual',proxy_endpoint:''}])
+    assert.equal(message.value,result ? '' : 'SDK rejected invoice')
+    assert.equal(receive.value,result)
+    assert.equal(loads,result ? 1 : 0)
     assert.equal(loading.value,false)
   }
 })

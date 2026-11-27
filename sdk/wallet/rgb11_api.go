@@ -257,13 +257,17 @@ func (p *Manager) EnableConfiguredRGB11AddressReceive(options RGB11ReceiveCapabi
 }
 
 func (p *Manager) GetRGB11AssetBalance(name *indexer.AssetName) (*Decimal, error) {
+	local, err := p.rgb11WalletAsset(name)
+	if err != nil {
+		return nil, err
+	}
 	releaseRGB11Observation := p.beginRGB11ReadObservation()
 	defer releaseRGB11Observation()
 	manager, err := p.synchronizedRGB11Manager()
 	if err != nil {
 		return nil, err
 	}
-	return manager.GetRGB11AssetBalance(name)
+	return manager.GetRGB11AssetBalance(local)
 }
 
 func (p *Manager) GetRGB11ConsistencyStatus() string {
@@ -293,17 +297,25 @@ func (p *Manager) GetRGB11State() (*RGB11State, error) {
 }
 
 func (p *Manager) ImportRGB11Contract(ctx context.Context, raw []byte) (*RGB11ImportResult, error) {
-	return runRGB11ManagedOperation(p, ctx, rgb11ManagedOperationNew,
+	result, err := runRGB11ManagedOperation(p, ctx, rgb11ManagedOperationNew,
 		func(manager *rgb11Manager) (*RGB11ImportResult, error) {
 			return manager.ImportRGB11Contract(ctx, raw)
 		})
+	if err == nil && result != nil {
+		p.learnRGB11Name(ctx, &result.AssetName)
+	}
+	return result, err
 }
 
 func (p *Manager) ImportRGB11ContractFile(ctx context.Context, raw []byte) (*RGB11ImportResult, error) {
-	return runRGB11ManagedOperation(p, ctx, rgb11ManagedOperationNew,
+	result, err := runRGB11ManagedOperation(p, ctx, rgb11ManagedOperationNew,
 		func(manager *rgb11Manager) (*RGB11ImportResult, error) {
 			return manager.ImportRGB11ContractFile(ctx, raw)
 		})
+	if err == nil && result != nil {
+		p.learnRGB11Name(ctx, &result.AssetName)
+	}
+	return result, err
 }
 
 // ExportRGB11Contract returns the canonical RGB\0CON file for a contract
@@ -337,6 +349,11 @@ func (p *Manager) ListRGB11Outputs() ([]*TxOutput, error) {
 
 func (p *Manager) PrepareConfiguredRGB11AddressTransfer(ctx context.Context, request RGB11AddressSendRequest,
 	verify dkvsindexer.RecordVerificationOptions) (*RGB11PreparedTransfer, *RGB11AddressEndpoint, error) {
+	local, err := p.rgb11WalletAsset(&request.AssetName)
+	if err != nil {
+		return nil, nil, err
+	}
+	request.AssetName = *local
 	type result struct {
 		transfer *RGB11PreparedTransfer
 		endpoint *RGB11AddressEndpoint

@@ -215,8 +215,12 @@ func (p *Manager) VerifyRGB11PublicContract(contractID, contentBase64 string) (*
 		if err != nil {
 			return nil, err
 		}
-		if _, namedID, err := p.readRGB11Name(ticker); err == nil && namedID == contractHex {
-			registration.AssetName = "rgb11:f:" + ticker
+		name, err := p.verifyRGB11ChainAsset(ticker, contractHex)
+		if errors.Is(err, dkvs.ErrWriteConflict) {
+			return nil, err
+		}
+		if err == nil {
+			registration.AssetName = name.String()
 		}
 	}
 	return registration, nil
