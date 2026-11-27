@@ -1,14 +1,14 @@
 {
   "version": "0.1.46",
-  "buildId": "20261126T121057Z",
-  "commit": "f37e7ab68c76",
+  "buildId": "20261127T064223Z",
+  "commit": "6311329f1918",
   "releaseNotes": "Check RGB withdrawal eligibility before signing",
   "forceUpdate": false,
   "minVersion": "0.1.0",
-  "publishedAt": "2026-11-26T12:10:57.066Z",
+  "publishedAt": "2026-11-27T06:42:23.362Z",
   "serviceWorker": {
     "schemaVersion": 1,
-    "releaseId": "0.1.46-20261126T121057Z",
+    "releaseId": "0.1.46-20261127T064223Z",
     "killSwitch": false
   }
 }

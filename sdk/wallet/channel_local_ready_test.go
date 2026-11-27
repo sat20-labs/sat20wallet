@@ -439,3 +439,82 @@ func TestSplicingRuntimeRecoveryRejectsMissingPrerequisite(t *testing.T) {
 		t.Fatal("prerequisite validation changed persisted evidence")
 	}
 }
+
+func TestEmbeddedChannelStartupRestoresOnceAndKeepsPendingRuntime(t *testing.T) {
+	for _, state := range []ChannelStatus{CS_READY, CS_FUNDING_BROADCASTED, CS_CLOSING_BROADCASTED} {
+		t.Run(fmt.Sprint(state), func(t *testing.T) {
+			manager, stored := localReadyTestFixture(t, 0)
+			stored.Status = state
+			if err := manager.SaveChannelInDB(stored); err != nil {
+				t.Fatal(err)
+			}
+			if state == CS_FUNDING_BROADCASTED {
+				if err := manager.SaveWalletReservation(&FundingReservation{FundingDataInDB: FundingDataInDB{
+					ReservationBase: NewReservationBase(stored.FundingTime, true, ResvStatus(RS_FUNDING_BROADCASTED), manager.wallet),
+					ChannelId:       stored.ChannelId,
+				}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			manager.wallet = nil
+			manager.clearAccountManagementSession()
+			manager.initResvMap()
+			if err := manager.initDB(); err != nil {
+				t.Fatal(err)
+			}
+			db := &readyChannelCountingDB{KVDB: manager.db}
+			manager.db = db
+			manager.DeferChannelStartupRestore()
+			if _, err := manager.UnlockWallet("password"); err != nil {
+				t.Fatal(err)
+			}
+			if db.channelScans != 0 || manager.GetChannel(stored.ChannelId) != nil {
+				t.Fatal("embedded SDK unlock started the bulk channel restore before migration")
+			}
+			var pending *Channel
+			if state == CS_FUNDING_BROADCASTED {
+				// Exercise the already-recovered path too: publication must
+				// preserve the generation and its operation's channel object.
+				manager.rehydratePendingFundingRuntime()
+				resv := manager.GetFundingReservations()[stored.FundingTime]
+				if resv == nil || resv.Channel == nil {
+					t.Fatal("pending SDK reservation did not restore its channel")
+				}
+				pending = resv.Channel
+			}
+			if err := manager.RestoreSTPChannels(); err != nil {
+				t.Fatal(err)
+			}
+			channel := manager.GetChannel(stored.ChannelId)
+			if channel == nil || channel.Status != state || channel.PeerRPC != manager.GetServerNode().RPCClient() {
+				t.Fatalf("SDK did not install the persisted channel with its peer: %+v", channel)
+			}
+			if pending != nil && (channel != pending || manager.GetFundingReservations()[stored.FundingTime].Channel != pending) {
+				t.Fatal("bulk restore replaced the SDK's in-flight channel object")
+			}
+			if err := manager.RestoreSTPChannels(); err != nil || db.channelScans != 1 || manager.GetChannel(stored.ChannelId) != channel {
+				t.Fatalf("restore scanned again or replaced runtime: scans=%d err=%v", db.channelScans, err)
+			}
+		})
+	}
+}
+
+func TestEmbeddedStartupDoesNotAttachUnrestoredSplicingReservation(t *testing.T) {
+	manager, stored := localReadyTestFixture(t, 0)
+	// A reservation for an earlier operation on this channel is not eligible
+	// to attach to the current channel generation.
+	stale := &SplicingReservation{SplicingDataInDB: SplicingDataInDB{
+		ReservationBase: NewReservationBase(805, true, RS_SPLICINGIN_STARTED, manager.wallet),
+		ChannelId:       stored.ChannelId,
+	}}
+	manager.addResv(stale)
+	if err := manager.RestoreSTPChannels(); err != nil {
+		t.Fatal(err)
+	}
+	if manager.GetChannel(stored.ChannelId) == nil {
+		t.Fatal("the valid channel was not published")
+	}
+	if got := manager.GetSplicingReservations()[stale.Id]; got != stale || got.Channel != nil {
+		t.Fatal("unrestored operation was attached by the bulk channel installer")
+	}
+}

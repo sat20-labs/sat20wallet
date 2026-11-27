@@ -738,24 +738,15 @@ func (p *Manager) UnlockWallet(password string) (opValue0 int64, opErr error) {
 	pendingAccountSync := err == nil && p.accountProfile != nil
 	p.mutex.Unlock()
 	if err == nil {
-		p.rehydratePendingFundingRuntime()
-		p.rehydratePendingClosingRuntime()
-		if recoveryErr := p.rehydratePendingSplicingRuntime(); recoveryErr != nil {
-			Log.Warningf("restore pending splicing channels failed: %v", recoveryErr)
+		if !p.deferChannelStartupRestore {
+			p.restorePendingChannelRuntime()
+			if recoveryErr := p.initializeLocalReadyChannels(); recoveryErr != nil {
+				Log.Warningf("initialize local ready channels failed: %v", recoveryErr)
+			}
 		}
-		if recoveryErr := p.rehydratePendingLocalActionRuntime(); recoveryErr != nil {
-			Log.Warningf("restore pending local action channels failed: %v", recoveryErr)
-		}
-		if recoveryErr := p.rehydratePendingRemoteActionRuntime(); recoveryErr != nil {
+		if recoveryErr := p.rehydratePendingRemoteActionRuntime(true); recoveryErr != nil {
 			Log.Warningf("restore pending remote action signers failed: %v", recoveryErr)
 		}
-		if recoveryErr := p.rehydratePendingPaymentRuntime(); recoveryErr != nil {
-			Log.Warningf("restore pending payment channels failed: %v", recoveryErr)
-		}
-		if recoveryErr := p.initializeLocalReadyChannels(); recoveryErr != nil {
-			Log.Warningf("initialize local ready channels failed: %v", recoveryErr)
-		}
-		p.reconcileReadyOpenChannelOperationLogs()
 		if refreshErr := p.refreshDKVSRegistrations(); refreshErr != nil {
 			Log.Warningf("refresh DKVS registrations after unlock failed: %v", refreshErr)
 		}

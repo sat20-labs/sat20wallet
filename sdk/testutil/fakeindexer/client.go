@@ -574,6 +574,8 @@ func (p *Client) GetUtxoId(utxo string) (uint64, error) {
 
 // btcutil.Tx
 func (p *Client) GetRawTx(tx string) (string, error) {
+	p.Network.Mutex.RLock()
+	defer p.Network.Mutex.RUnlock()
 	str, ok := p.Network.TxBroadcasted[tx]
 	if !ok {
 		return "", fmt.Errorf("not found")

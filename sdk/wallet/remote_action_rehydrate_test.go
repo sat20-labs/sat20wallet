@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/sat20-labs/sat20wallet/sdk/common"
@@ -212,4 +213,55 @@ func prepareRemoteActionAccountSelection(t *testing.T, manager *Manager) {
 	require.NoError(t, manager.dkvs.ensureCurrentSubscription(client))
 	require.NoError(t, manager.SyncAccountManagementState(nil))
 	manager.accountBackgroundWG.Wait()
+}
+
+type remoteActionAckProbe struct {
+	NodeRPCClient
+	err error
+}
+
+func (p remoteActionAckProbe) SendPerformRemoteActionAckReq(*RemoteActionPerformReservation) error {
+	return p.err
+}
+
+func TestRemoteActionMissingReservationKeepsBroadcastEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		feeTxID string
+		err     error
+		close   bool
+	}{
+		{"peer confirms absence before fee", "", ErrRemoteActionReservationNotFound, true},
+		{"peer confirms absence with persisted fee", "fee", ErrRemoteActionReservationNotFound, false},
+		{"temporary error", "", errors.New("temporary transport failure"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newAccountManagementAutoTestManager(t)
+			m.initResvMap()
+			_, _, err := m.CreateWallet("password")
+			require.NoError(t, err)
+			signer := m.GetWallet()
+			key := signer.GetPaymentPubKey()
+			m.SetServerNode(NewNode(remoteActionAckProbe{err: tc.err}, "local-fixture", SERVER_NODE, key, key))
+			action := &RemoteActionPerformReservation{
+				ReservationBase: NewReservationBase(9109, true, RS_PERFORM_ACTION_STARTED, signer),
+				ReqPubKey:       key.SerializeCompressed(), FeeTxId: tc.feeTxID,
+			}
+			m.addResv(action)
+			require.NoError(t, m.SaveWalletReservation(action))
+			err = m.handleRemoteActionStatus(action)
+			stored, readErr := LoadReservation(m.db, nil, RESV_TYPE_REMOTEACTION, action.Id)
+			require.NoError(t, readErr)
+			if tc.close {
+				require.NoError(t, err)
+				require.Nil(t, m.GetResv(action.Id))
+				require.Equal(t, RS_FAILED, stored.GetStatus())
+			} else {
+				require.ErrorIs(t, err, tc.err)
+				require.Same(t, action, m.GetResv(action.Id))
+				require.Equal(t, RS_PERFORM_ACTION_STARTED, stored.GetStatus())
+				require.Equal(t, tc.feeTxID, stored.(*RemoteActionPerformReservation).FeeTxId)
+			}
+		})
+	}
 }

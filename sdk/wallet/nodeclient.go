@@ -3,6 +3,7 @@ package wallet
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -320,6 +321,12 @@ func (p *NodeClient) SendPerformRemoteActionReq(info *RemoteActionPerformReserva
 	return nil
 }
 
+var ErrRemoteActionReservationNotFound = errors.New("remote action reservation not found")
+
+func RemoteActionReservationNotFoundMessage(id int64) string {
+	return fmt.Sprintf("%s: %d", ErrRemoteActionReservationNotFound, id)
+}
+
 func (p *NodeClient) SendPerformRemoteActionAckReq(info *RemoteActionPerformReservation) error {
 	req := wwire.PerformActionAckReq{
 		Id:      info.Id,
@@ -352,6 +359,10 @@ func (p *NodeClient) SendPerformRemoteActionAckReq(info *RemoteActionPerformRese
 
 	if result.Code != 0 {
 		Log.Errorf("SendPerformActionAckReq failed, %s", result.Msg)
+		if result.Msg == RemoteActionReservationNotFoundMessage(info.Id) ||
+			result.Msg == fmt.Sprintf("can't find reservation  %d action", info.Id) {
+			return fmt.Errorf("%w: %d", ErrRemoteActionReservationNotFound, info.Id)
+		}
 		return fmt.Errorf("%s", result.Msg)
 	}
 

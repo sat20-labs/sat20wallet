@@ -32,7 +32,7 @@ func (p *Manager) UnlockWalletForRemoteActionRepair(password string) (int64, err
 	if err != nil {
 		return id, err
 	}
-	if err := p.rehydratePendingRemoteActionRuntime(); err != nil {
+	if err := p.rehydratePendingRemoteActionRuntime(false); err != nil {
 		return id, err
 	}
 	return id, nil

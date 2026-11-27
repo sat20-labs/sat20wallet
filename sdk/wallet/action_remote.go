@@ -87,14 +87,24 @@ func (p *Manager) PerformRemoteAction(doAction StartRemoteAction, action string,
 			Details: map[string]string{"txid": resv.FeeTxId},
 		})
 
+		// Keep the transaction and its owner before handing the transaction
+		// to the peer. A lost ACK is not proof the fee was never broadcast.
+		if resv.FeeTxId != "" || resv.FeeTx != "" {
+			resv.Status = RS_PERFORM_ACTION_TX_BROADCASTED
+			if err = p.SaveWalletReservation(resv); err != nil {
+				p.updateOperationLogBestEffort(logID, OperationLogUpdate{
+					Status: OperationLogFailed, Message: err.Error(), TxID: resv.FeeTxId,
+				})
+				return resv.FeeTxId, resv.Id, resv.ActionResult, fmt.Errorf("save remote action reservation before acknowledgement: %w", err)
+			}
+		}
 		err = client.SendPerformRemoteActionAckReq(resv)
-		if err != nil {
+		if err != nil && !errors.Is(err, ErrRemoteActionReservationNotFound) {
 			Log.Errorf("SendPerformRemoteActionAckReq failed. %v, try again", err)
 			err = client.SendPerformRemoteActionAckReq(resv)
-			if err != nil {
-				Log.Errorf("SendPerformRemoteActionAckReq failed. %v", err)
-				break
-			}
+		}
+		if err != nil {
+			break
 		}
 		p.updateOperationLogBestEffort(logID, OperationLogUpdate{
 			Status:  OperationLogRunning,
@@ -112,6 +122,14 @@ func (p *Manager) PerformRemoteAction(doAction StartRemoteAction, action string,
 	}
 
 	if err != nil {
+		if remoteActionHasBroadcastEvidence(resv) {
+			p.addResv(resv)
+			p.updateOperationLogBestEffort(logID, OperationLogUpdate{
+				Status: OperationLogRunning, Message: "Fee transaction retained; service acknowledgement pending",
+				TxID: resv.FeeTxId, Details: map[string]string{"error": err.Error()},
+			})
+			return resv.FeeTxId, resv.Id, resv.ActionResult, err
+		}
 		p.updateOperationLogBestEffort(logID, OperationLogUpdate{Status: OperationLogFailed, Message: err.Error(), Details: map[string]string{"error": err.Error()}})
 		if resv.Id != 0 {
 			_ = client.SendActionResultNfty(resv.LocalWallet(), resv.Id, RESV_TYPE_REMOTEACTION, -1, err.Error())
@@ -265,7 +283,20 @@ func (p *Manager) handleRemoteActionStatus(resv *RemoteActionPerformReservation)
 
 	if resv.Status != RS_PERFORM_ACTION_COMPLETED {
 		if err := client.SendPerformRemoteActionAckReq(resv); err != nil {
-			return err
+			if !errors.Is(err, ErrRemoteActionReservationNotFound) {
+				return err
+			}
+			if remoteActionHasBroadcastEvidence(resv) {
+				return fmt.Errorf("remote action %d: transaction retained for recovery: %w", resv.Id, err)
+			}
+			failed := *resv
+			failed.Status = RS_FAILED
+			if err := p.SaveWalletReservation(&failed); err != nil {
+				return err
+			}
+			resv.Status = RS_FAILED
+			p.DelResvWithId(resv.Id)
+			return nil
 		}
 	}
 
@@ -282,6 +313,11 @@ func (p *Manager) handleRemoteActionStatus(resv *RemoteActionPerformReservation)
 	}
 
 	return p.SaveWalletReservation(resv)
+}
+
+func remoteActionHasBroadcastEvidence(resv *RemoteActionPerformReservation) bool {
+	return resv.FeeTxId != "" || resv.FeeTx != "" || resv.ActionResvId != 0 ||
+		resv.Status >= RS_PERFORM_ACTION_TX_BROADCASTED
 }
 
 func validateRemoteActionRuntimeSigner(resv *RemoteActionPerformReservation) error {

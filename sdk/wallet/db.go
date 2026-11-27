@@ -1259,6 +1259,45 @@ func cloneFundingReservationForRuntime(resv *FundingReservation) *FundingReserva
 // data. Existing runtimes and unfinished operations retain their ownership.
 // The caller holds channelIdentityMu while unlocking the wallet catalog.
 func (p *Manager) initializeLocalReadyChannels() error {
+	return p.initializeLocalChannels(false)
+}
+
+// DeferChannelStartupRestore is configured before unlock by the embedded STP
+// service, which may need to migrate legacy channel records before restoration.
+func (p *Manager) DeferChannelStartupRestore() {
+	p.deferChannelStartupRestore = true
+}
+
+// RestoreSTPChannels restores all active states after STP's DB migration,
+// before STP starts its monitors. The SDK owns the live channel registry.
+func (p *Manager) RestoreSTPChannels() error {
+	p.channelIdentityMu.Lock()
+	defer p.channelIdentityMu.Unlock()
+	p.mutex.RLock()
+	initialized := p.localReadyChannelsInitialized
+	p.mutex.RUnlock()
+	if initialized {
+		return nil
+	}
+	p.restorePendingChannelRuntime()
+	return p.initializeLocalChannels(true)
+}
+
+func (p *Manager) restorePendingChannelRuntime() {
+	p.rehydratePendingFundingRuntime()
+	p.rehydratePendingClosingRuntime()
+	if err := p.rehydratePendingSplicingRuntime(); err != nil {
+		Log.Warningf("restore pending splicing channels failed: %v", err)
+	}
+	if err := p.rehydratePendingLocalActionRuntime(); err != nil {
+		Log.Warningf("restore pending local action channels failed: %v", err)
+	}
+	if err := p.rehydratePendingPaymentRuntime(); err != nil {
+		Log.Warningf("restore pending payment channels failed: %v", err)
+	}
+}
+
+func (p *Manager) initializeLocalChannels(includeInFlight bool) error {
 	p.mutex.RLock()
 	initialized := p.localReadyChannelsInitialized
 	p.mutex.RUnlock()
@@ -1271,37 +1310,73 @@ func (p *Manager) initializeLocalReadyChannels() error {
 	}
 	var initializationErrors []error
 	for id, stored := range channels {
-		if stored.Status != CS_READY || p.GetChannel(id) != nil {
+		if stored.Status <= CS_CLOSED || (!includeInFlight && (stored.Status != CS_READY || p.GetChannel(id) != nil)) {
 			continue
 		}
-		wallet := p.FindWalletById(stored.LocalWalletId)
-		if stored.LocalWalletId == 0 {
-			wallet = p.findWalletByChannelLocalKey(&Channel{ChannelInDB: *stored})
+		current := p.GetChannel(id)
+		recoveredCommitment := false
+		if includeInFlight {
+			recovered, err := p.LoadSTPRevocationRecovery(stored)
+			if err != nil {
+				initializationErrors = append(initializationErrors, fmt.Errorf("channel %s recovery: %w", id, err))
+				continue
+			}
+			if recovered != nil {
+				stored = recovered
+				recoveredCommitment = true
+			}
+			if current != nil && !recoveredCommitment {
+				continue
+			}
 		}
-		if wallet == nil {
+
+		owner := p.FindWalletById(stored.LocalWalletId)
+		if stored.LocalWalletId == 0 || (includeInFlight && owner == nil) {
+			owner = p.findWalletByChannelLocalKey(&Channel{ChannelInDB: *stored})
+		} else if owner != nil {
+			owner = owner.Clone()
+			owner.SetSubAccount(stored.LocalChanCfg.WalletId)
+		}
+		if owner == nil {
 			initializationErrors = append(initializationErrors, fmt.Errorf("channel %s local wallet is unavailable", id))
 			continue
 		}
-		wallet = wallet.Clone()
-		wallet.SetSubAccount(stored.LocalChanCfg.WalletId)
 		if stored.LocalChanCfg.PaymentKey == nil || stored.RemoteChanCfg.PaymentKey == nil ||
-			!stored.LocalChanCfg.PaymentKey.IsEqual(wallet.GetPaymentPubKey()) {
+			!stored.LocalChanCfg.PaymentKey.IsEqual(owner.GetPaymentPubKey()) {
 			initializationErrors = append(initializationErrors, fmt.Errorf("channel %s local wallet key mismatch", id))
 			continue
 		}
 		expectedID, err := GetP2WSHaddress(stored.LocalChanCfg.PaymentKey.SerializeCompressed(),
 			stored.RemoteChanCfg.PaymentKey.SerializeCompressed())
-		if err != nil || expectedID != id {
+		if err != nil || expectedID != id || stored.ChannelId != id {
 			initializationErrors = append(initializationErrors, fmt.Errorf("channel %s payment keys do not match channel id", id))
 			continue
 		}
-		channel := &Channel{ChannelInDB: *stored, manager: p,
-			localWallet: wallet, PeerRPC: p.GetPeerNodeClient(stored)}
+		channel := current
 		p.mutex.Lock()
-		if p.channelMap[id] != nil || p.rejectUnfinishedChannelLifecycleLocked(id,
-			wallet.GetWalletId(), wallet.GetPaymentPubKey().SerializeCompressed()) != nil {
+		if p.channelMap[id] != current || (!includeInFlight && p.rejectUnfinishedChannelLifecycleLocked(id,
+			owner.GetWalletId(), owner.GetPaymentPubKey().SerializeCompressed()) != nil) {
 			p.mutex.Unlock()
 			continue
+		}
+		if includeInFlight && channel == nil {
+			channel = p.pendingStartupChannelLocked(stored)
+		}
+		// Keep the same object and data for an already restored operation.
+		if channel == nil {
+			channel = &Channel{ChannelInDB: *stored, manager: p,
+				localWallet: owner.Clone(), PeerRPC: p.GetPeerNodeClient(stored)}
+			if includeInFlight {
+				channel.LocalWalletId = owner.GetId()
+			}
+		} else if channel.localWallet == nil || channel.localWallet.GetWalletId() != owner.GetWalletId() {
+			p.mutex.Unlock()
+			initializationErrors = append(initializationErrors, fmt.Errorf("channel %s in-flight wallet mismatch", id))
+			continue
+		} else if recoveredCommitment {
+			// Apply the verified journal overlay to the same runtime object.
+			channel.ChannelInDB = *stored
+			channel.LocalWalletId = owner.GetId()
 		}
 		p.installChannelLocked(channel)
 		p.mutex.Unlock()
@@ -1309,12 +1384,25 @@ func (p *Manager) initializeLocalReadyChannels() error {
 			tower.CleanCurrentRemoteCommitTx(channel)
 		}
 	}
+	p.reconcileReadyOpenChannelOperationLogs(channels)
 	if len(initializationErrors) == 0 {
 		p.mutex.Lock()
 		p.localReadyChannelsInitialized = true
 		p.mutex.Unlock()
 	}
 	return errors.Join(initializationErrors...)
+}
+
+// pendingStartupChannelLocked reuses the exact operation generation when a
+// funding/closing reservation already restored it without publishing it.
+func (p *Manager) pendingStartupChannelLocked(stored *ChannelInDB) *Channel {
+	if resv := p.closingChannelMap[stored.UpdateTime]; resv != nil && resv.ChannelId == stored.ChannelId && resv.Channel != nil {
+		return resv.Channel
+	}
+	if resv := p.fundingChannelMap[stored.FundingTime]; resv != nil && resv.ChannelId == stored.ChannelId && resv.Channel != nil {
+		return resv.Channel
+	}
+	return nil
 }
 
 // rehydratePendingFundingRuntime restores only restart-safe open-channel
@@ -1330,6 +1418,9 @@ func (p *Manager) rehydratePendingFundingRuntime() {
 
 	channelCache := make(map[string]*Channel)
 	for id, original := range reservations {
+		if original == nil || original.Channel != nil {
+			continue
+		}
 		replacement := cloneFundingReservationForRuntime(original)
 		if replacement == nil {
 			continue
@@ -1615,11 +1706,10 @@ func (p *Manager) rehydratePendingLocalActionRuntime() error {
 	return errors.Join(recoveryErrors...)
 }
 
-// rehydratePendingRemoteActionRuntime restores only the signer captured by an
-// active initiator reservation. The request payment key is authoritative for
-// signing, while the persisted wallet/account id prevents the same key from
-// being rebound to another catalog identity.
-func (p *Manager) rehydratePendingRemoteActionRuntime() error {
+// rehydratePendingRemoteActionRuntime restores the saved local identity.
+// For an initiator, ReqPubKey must match the local signer. For a responder,
+// ReqPubKey belongs to the peer; use the saved local wallet/account instead.
+func (p *Manager) rehydratePendingRemoteActionRuntime(includeResponders bool) error {
 	p.mutex.RLock()
 	reservations := make(map[int64]*RemoteActionPerformReservation, len(p.remoteActionPerformMap))
 	for id, reservation := range p.remoteActionPerformMap {
@@ -1636,13 +1726,20 @@ func (p *Manager) rehydratePendingRemoteActionRuntime() error {
 			continue
 		}
 		resv.Mutex().RLock()
-		active := resv.IsInitiator && resv.Status > RS_CLOSED
+		active := needsRemoteActionSignerRecovery(resv, includeResponders)
+		initiator, expected := resv.IsInitiator, resv.WalletId
 		resv.Mutex().RUnlock()
 		if !active {
 			continue
 		}
 
-		signer, err := p.findRemoteActionSigningWallet(resv)
+		var signer common.Wallet
+		var err error
+		if initiator {
+			signer, err = p.findRemoteActionSigningWallet(resv)
+		} else {
+			signer, err = p.findRemoteActionResponderWallet(expected)
+		}
 		if err != nil {
 			recoveryErrors = append(recoveryErrors,
 				fmt.Errorf("restore remote action %d signer: %w", id, err))
@@ -1654,13 +1751,48 @@ func (p *Manager) rehydratePendingRemoteActionRuntime() error {
 		stillActive = stillActive && current == resv
 		p.mutex.RUnlock()
 		resv.Mutex().Lock()
-		stillActive = stillActive && resv.IsInitiator && resv.Status > RS_CLOSED
+		stillActive = stillActive && resv.IsInitiator == initiator && resv.WalletId == expected &&
+			needsRemoteActionSignerRecovery(resv, includeResponders)
 		if stillActive {
 			resv.SetLocalWallet(signer)
 		}
 		resv.Mutex().Unlock()
 	}
 	return errors.Join(recoveryErrors...)
+}
+
+func needsRemoteActionSignerRecovery(resv *RemoteActionPerformReservation, includeResponders bool) bool {
+	if resv.IsInitiator {
+		return resv.Status > RS_CLOSED
+	}
+	if !includeResponders {
+		return false
+	}
+	switch resv.Status {
+	case RS_PERFORM_ACTION_STARTED, RS_PERFORM_ACTION_TX_BROADCASTED,
+		RS_PERFORM_ACTION_TX_CONFIRMED, RS_PERFORM_ACTION_RUN_STARTED:
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *Manager) findRemoteActionResponderWallet(expected common.WalletId) (common.Wallet, error) {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	info := p.walletInfoMap[expected.Id]
+	if expected.Id == 0 || info == nil || info.Wallet == nil {
+		return nil, fmt.Errorf("persisted responder wallet %d is unavailable", expected.Id)
+	}
+	if uint64(expected.SubAccountId) >= uint64(max(info.Accounts, 1)) {
+		return nil, fmt.Errorf("persisted responder wallet %d account %d is unavailable", expected.Id, expected.SubAccountId)
+	}
+	w := info.Wallet.Clone()
+	w.SetSubAccount(expected.SubAccountId)
+	if w.GetWalletId() != expected || w.GetPaymentPubKey() == nil {
+		return nil, fmt.Errorf("persisted responder wallet %d account %d cannot sign", expected.Id, expected.SubAccountId)
+	}
+	return w, nil
 }
 
 func (p *Manager) findRemoteActionSigningWallet(resv *RemoteActionPerformReservation) (common.Wallet, error) {

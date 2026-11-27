@@ -36,7 +36,7 @@ func TestReconcileReadyOpenChannelOperationLog(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	manager.reconcileReadyOpenChannelOperationLogs()
+	manager.reconcileReadyOpenChannelOperationLogs(map[string]*ChannelInDB{stored.ChannelId: stored})
 	updated, err := manager.GetOperationLog(record.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -45,7 +45,7 @@ func TestReconcileReadyOpenChannelOperationLog(t *testing.T) {
 		t.Fatalf("unexpected reconciled log: %+v", updated)
 	}
 
-	manager.reconcileReadyOpenChannelOperationLogs()
+	manager.reconcileReadyOpenChannelOperationLogs(map[string]*ChannelInDB{stored.ChannelId: stored})
 	idempotent, err := manager.GetOperationLog(record.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -87,7 +87,7 @@ func TestReconcileReadyOpenChannelOperationLogRejectsWrongWallet(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	manager.reconcileReadyOpenChannelOperationLogs()
+	manager.reconcileReadyOpenChannelOperationLogs(map[string]*ChannelInDB{stored.ChannelId: stored})
 	unchanged, err := manager.GetOperationLog(record.ID)
 	if err != nil {
 		t.Fatal(err)

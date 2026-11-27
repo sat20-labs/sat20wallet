@@ -126,18 +126,12 @@ func (p *Manager) handleOperationLogActionStatusEvent(event *ActionStatusEvent) 
 // reconcileReadyOpenChannelOperationLogs repairs only the display log for an
 // already READY channel. It does not recreate reservations, recheck L1, or
 // rebroadcast transactions.
-func (p *Manager) reconcileReadyOpenChannelOperationLogs() {
+func (p *Manager) reconcileReadyOpenChannelOperationLogs(channels map[string]*ChannelInDB) {
 	logs, err := p.GetOperationLogs()
 	if err != nil {
 		Log.Warnf("load operation logs for ready-channel reconciliation failed: %v", err)
 		return
 	}
-	channels, err := p.LoadAllChannelInDBFromDB()
-	if err != nil {
-		Log.Warnf("load channels for operation-log reconciliation failed: %v", err)
-		return
-	}
-
 	p.mutex.RLock()
 	currentWallet := p.wallet
 	p.mutex.RUnlock()

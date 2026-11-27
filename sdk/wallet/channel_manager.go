@@ -94,8 +94,10 @@ func (p *Manager) rebindReservationChannelsLocked(channel *Channel) {
 			resv.Channel = channel
 		}
 	}
+	// A decoded splice with no runtime channel has not passed operation
+	// recovery. Only its dedicated validator can attach the first channel.
 	for _, resv := range p.splicingChannelMap {
-		if resv != nil && resv.ChannelId == channel.ChannelId {
+		if resv != nil && resv.Channel != nil && resv.ChannelId == channel.ChannelId {
 			resv.Channel = channel
 		}
 	}

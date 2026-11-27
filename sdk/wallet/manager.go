@@ -195,6 +195,7 @@ type Manager struct {
 	channelMap map[string]*Channel // key: channelId. 活跃的channel，维持状态是最新的
 
 	localReadyChannelsInitialized bool // local DB initialization after keys become available
+	deferChannelStartupRestore    bool // embedded STP runs restoration after its legacy schema migration
 
 	actionMonitorLock         sync.Mutex
 	actionMonitorL1Lock       sync.Mutex

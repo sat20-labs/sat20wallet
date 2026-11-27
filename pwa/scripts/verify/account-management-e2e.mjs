@@ -1210,6 +1210,20 @@ async function runRootImport(rootStep = check) {
     assert.deepEqual(await catalog(owner), [root])
   })
   await rootStep('PWA adds and renames subaccount and preserves root identity', async () => {
+    // Unlock makes the local catalog readable before discovery allows edits.
+    const started = Date.now()
+    let initial, latest
+    try {
+      await expect.poll(async () => {
+        const view = await accountCall(owner, 'getAccountView')
+        latest = { state: view.state, discovery_status: view.discovery_status, error_code: view.error_code || '' }
+        initial ??= latest
+        return latest
+      }, { timeout: 90000, message: 'unactivated root must finish discovery before adding a subaccount' })
+        .toEqual({ state: 'local', discovery_status: 'inactive', error_code: '' })
+    } finally {
+      console.log(JSON.stringify({ rootSubaccountDiscovery: { initial, latest, elapsed_ms: Date.now() - started } }))
+    }
     await owner.evaluate(async () => {
       const wallet = window.__SAT20_PWA_VERIFY__.useWalletStore()
       await wallet.addAccount('Savings', 1)
