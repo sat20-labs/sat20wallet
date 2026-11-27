@@ -24,6 +24,7 @@ type RGB11Output struct {
 type RGB11TickerInfo struct {
 	*indexer.TickerInfo
 	Ticker         string `json:"ticker"`
+	DisplayTicker  string `json:"display_ticker,omitempty"`
 	AssetKey       string `json:"asset_key"`
 	CanonicalName  string `json:"canonical_name,omitempty"`
 	ContractID     string `json:"contract_id"`

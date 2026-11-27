@@ -12,7 +12,10 @@ import (
 
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/rgb11/consensus"
+	coreconsignment "github.com/sat20-labs/rgb11/consignment"
+	"github.com/sat20-labs/rgb11/schemas"
 	"github.com/sat20-labs/rgb11/seals"
+	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
 const (
@@ -53,26 +56,89 @@ func NormalizeTicker(ticker string) string {
 	return result
 }
 
-// NewContractAssetKey is the immutable SDK projection identity. Its ticker is
-// the complete 32-byte ContractID in lossless hex form, NOT a readable name or
-// a digest prefix. Local aliases and SatoshiNet names are separate metadata.
-func NewContractAssetKey(contractID, assetType string) (indexer.AssetName, error) {
-	contract, err := consensus.ParseContractID(contractID)
+// RGB11ContractIDHex returns the full immutable identity, separate from AssetName.
+func RGB11ContractIDHex(contractID string) (string, error) {
+	if id, err := consensus.IDFromHex(contractID); err == nil {
+		return hex.EncodeToString(id[:]), nil
+	}
+	id, err := consensus.ParseContractID(contractID)
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(id[:]), nil
+}
+
+// NewContractAssetKey derives an AssetName from committed genesis metadata.
+// The full ID is not recoverable from the resulting short ticker.
+func NewContractAssetKey(contractID, assetType, genesisTicker string) (indexer.AssetName, error) {
+	id, err := RGB11ContractIDHex(contractID)
 	if err != nil {
 		return indexer.AssetName{}, err
 	}
 	if assetType == "" {
 		assetType = indexer.ASSET_TYPE_FT
 	}
-	if assetType != indexer.ASSET_TYPE_FT && assetType != indexer.ASSET_TYPE_NFT && assetType != "control" {
+	if !rgb11AssetType(assetType) {
 		return indexer.AssetName{}, ErrInvalidRGB11Asset
 	}
-	return indexer.AssetName{Protocol: Protocol, Type: assetType, Ticker: hex.EncodeToString(contract[:])}, nil
+	ticker, err := dkvsindexer.RGB11NameTicker(genesisTicker, id)
+	if err != nil {
+		return indexer.AssetName{}, err
+	}
+	return indexer.AssetName{Protocol: Protocol, Type: assetType, Ticker: ticker}, nil
 }
 
-func ContractAssetKeyMatches(name indexer.AssetName, contractID string) bool {
-	expected, err := NewContractAssetKey(contractID, name.Type)
+func rgb11AssetType(assetType string) bool {
+	return assetType == indexer.ASSET_TYPE_FT || assetType == indexer.ASSET_TYPE_NFT || assetType == "control"
+}
+
+// IsCanonicalAssetName checks the representation only. Use checked contract
+// data as well when establishing identity or authorizing a spend.
+func IsCanonicalAssetName(name indexer.AssetName) bool {
+	if name.Protocol != Protocol || !rgb11AssetType(name.Type) {
+		return false
+	}
+	_, err := dkvsindexer.RGB11NameKey(name.Ticker)
+	return err == nil
+}
+
+// ContractAssetKeyMatches compares the derived short name only. It cannot
+// substitute for comparison of two full validated ContractIDs.
+func ContractAssetKeyMatches(name indexer.AssetName, contractID, genesisTicker string) bool {
+	expected, err := NewContractAssetKey(contractID, name.Type, genesisTicker)
 	return err == nil && name == expected
+}
+
+// ContractAssetKeyFromContainer derives the exact name from the semantic
+// genesis data. An empty assetType derives the primary allocation type.
+func ContractAssetKeyFromContainer(container *coreconsignment.Container, assetType string) (indexer.AssetName, error) {
+	if container == nil || !container.GenesisValid {
+		return indexer.AssetName{}, ErrInvalidRGB11Asset
+	}
+	descriptor, err := schemas.ByKind(container.GenesisReport.Kind)
+	if err != nil {
+		return indexer.AssetName{}, err
+	}
+	primaryType := indexer.ASSET_TYPE_FT
+	if !descriptor.Fungible {
+		primaryType = indexer.ASSET_TYPE_NFT
+	}
+	if assetType == "" {
+		assetType = primaryType
+	}
+	if assetType != primaryType && assetType != "control" {
+		return indexer.AssetName{}, ErrInvalidRGB11Asset
+	}
+	genesis, ok := container.Value.Field("genesis")
+	if !ok {
+		return indexer.AssetName{}, ErrInvalidRGB11Asset
+	}
+	schema, types := container.SchemaValues()
+	metadata, err := schemas.ExtractGenesisAssetMetadata(schema, types, genesis)
+	if err != nil {
+		return indexer.AssetName{}, err
+	}
+	return NewContractAssetKey(container.ContractID, assetType, metadata.Ticker)
 }
 
 type TickerExt struct {

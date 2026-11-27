@@ -803,20 +803,6 @@ func (p *rgb11Manager) importRGB11ReservationSnapshotWithMutation(ctx context.Co
 	} else if err := p.projectionStore.StageSnapshotImport(batch, snapshot.ProjectionRecords); err != nil {
 		return err
 	}
-	seenTickers := make(map[string]bool, len(tickerInfos))
-	for _, info := range tickerInfos {
-		if info == nil || validateRGB11TickerInfoName(info) != nil || seenTickers[info.AssetName.String()] {
-			return ErrRGB11Inconsistent
-		}
-		seenTickers[info.AssetName.String()] = true
-		encoded, err := EncodeToBytes(info)
-		if err != nil {
-			return err
-		}
-		if err := batch.Put([]byte(GetTickerInfoKey(info.AssetName.String())), encoded); err != nil {
-			return err
-		}
-	}
 	committer, ok := batch.(rgb11wallet.ReservationCommitBatch)
 	if !ok {
 		return fmt.Errorf("RGB11 wallet batch does not support atomic publication")
@@ -840,6 +826,26 @@ func (p *rgb11Manager) importRGB11ReservationSnapshotWithMutation(ctx context.Co
 		return err
 	}
 	defer unlockLocal()
+	// Serialize the final local identity check with other ticker writers.
+	// Evidence reads have already completed; this lock covers no RPC.
+	if len(tickerInfos) != 0 {
+		rgb11TickerWriteMu.Lock()
+		defer rgb11TickerWriteMu.Unlock()
+		seen := make(map[string]bool, len(tickerInfos))
+		for _, info := range tickerInfos {
+			if info == nil || validateRGB11TickerInfoName(info) != nil {
+				return ErrRGB11Inconsistent
+			}
+			key := string(rgb11TickerBindingKey(info.AssetName))
+			if seen[key] {
+				return ErrRGB11Inconsistent
+			}
+			seen[key] = true
+			if err := stageRGB11TickerInfo(p.db, batch, info); err != nil {
+				return err
+			}
+		}
+	}
 	if err := committer.FlushWith(func(batch indexer.WriteBatch) (func(bool), error) {
 		// Remote evidence was checked without a local lock. Reject an old
 		// candidate if another local commit completed while it was in flight.

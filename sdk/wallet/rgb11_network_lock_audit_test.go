@@ -261,10 +261,18 @@ func TestRGB11ExactRestoreNamingTransportHoldsNoWalletLocks(t *testing.T) {
 	// Exact restore only derives naming metadata on a cold ticker-cache miss.
 	// Remove this derived cache in the private in-memory fixture, keeping the
 	// complete authenticated RGB snapshot and all real environment data intact.
+	info := manager.getTickerInfo(&imported.AssetName)
+	if info == nil {
+		t.Fatal("missing imported RGB ticker")
+	}
+	key, err := tickerInfoStorageKey(info)
+	if err != nil {
+		t.Fatal(err)
+	}
 	manager.mutex.Lock()
 	delete(manager.tickerInfoMap, imported.AssetName.String())
 	manager.mutex.Unlock()
-	if err := manager.db.Delete([]byte(GetTickerInfoKey(imported.AssetName.String()))); err != nil {
+	if err := manager.db.Delete([]byte(key)); err != nil {
 		t.Fatal(err)
 	}
 	probe := &rgbNetworkAuditProbe{owner: manager}

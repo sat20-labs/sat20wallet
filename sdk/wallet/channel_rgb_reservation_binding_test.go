@@ -15,7 +15,7 @@ func rgbReservationBindingFixture(t *testing.T) (*Channel, *STPRGBReservationEvi
 	channel := &Channel{ChannelInDB: *NewChannelInDB(), localWallet: owner}
 	channel.LocalCommitment, channel.RemoteCommitment = NewChannelCommitment(), NewChannelCommitment()
 	channel.ChannelId, channel.Status, channel.CommitHeight, channel.ResvId = "rgb-facts-binding", CS_READY, 7, 19
-	asset := &indexer.AssetName{Protocol: "rgb11", Type: indexer.ASSET_TYPE_FT, Ticker: strings.Repeat("1", 64)}
+	asset := &indexer.AssetName{Protocol: "rgb11", Type: indexer.ASSET_TYPE_FT, Ticker: "binding@1111"}
 	facts, _, _, err := captureSTPRGBEvidence(channel, asset, []string{"owned-input"}, nil, []byte("one-request"), nil, nil)
 	if err != nil {
 		t.Fatal(err)

@@ -35,7 +35,7 @@ func rgb11ResvEvidenceFixture(t *testing.T) (*STPRGBReservationEvidence, []rgb11
 	if err != nil {
 		t.Fatal(err)
 	}
-	asset, err := rgb11wallet.NewContractAssetKey(issued.ContractID, indexer.ASSET_TYPE_FT)
+	asset, err := rgb11wallet.NewContractAssetKey(issued.ContractID, indexer.ASSET_TYPE_FT, "RESV")
 	if err != nil {
 		t.Fatal(err)
 	}

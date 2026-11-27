@@ -105,7 +105,7 @@ func nativeIfaceBootstrap(t *testing.T, f *nativeIfaceChain, ordinary *wallet.Ma
 	var unspent any
 	require.NoError(t, f.core.call("gettxout", []any{funding, 0, true}, &unspent))
 	require.NotNil(t, unspent, "the actual Bitcoin funding output must still be unspent")
-	ticker := ordinary.GetTickerInfoV2(wallet.PLAIN_ASSET.String())
+	ticker := ordinary.GetTickerInfo(wallet.ParseAssetString(wallet.PLAIN_ASSET.String()))
 	require.NotNil(t, ticker)
 	active, err := ordinary.AnchorOutputsActive()
 	require.NoError(t, err)
@@ -217,7 +217,7 @@ func runNativeIfaceRealL2(t *testing.T, f *nativeIfaceChain) {
 	t.Log("real L2 prerequisite: actual SDK open and both-peer READY")
 	nativeIfaceOpenChannel(t, f, b)
 	t.Log("real L2 prerequisite: BRC20 deploy/mint/transfer-inscription/splice/unlock")
-	require.Nil(t, b.GetTickerInfoV2(sdkPWARegtestWASMAsset), "the fresh chain must exercise actual BRC20 deployment")
+	require.Nil(t, b.GetIndexerClient().GetTickInfo(wallet.ParseAssetString(sdkPWARegtestWASMAsset)), "the fresh chain must exercise actual BRC20 deployment")
 	owner, buyer, sample := prepareNativeIfaceAsset(t, f.network, a, b, requireNativeIfaceLocalSender,
 		func(_ string, blocks int) { f.mine(t, blocks) },
 		func(manager *wallet.Manager, txid string) { f.confirmL1(t, manager, txid) })

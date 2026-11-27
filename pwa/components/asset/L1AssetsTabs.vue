@@ -192,7 +192,7 @@ import { generateMempoolUrl, formatLargeNumber } from '@/utils'
 import { useGlobalStore } from '@/store/global'
 import walletManager from '@/utils/sat20'
 import type { RGBAssetView, RGBTransferView } from '@/utils/walletViews'
-import { assetNameLabel } from '@/utils/walletViews'
+import { assetNameLabel, parseRGB11AssetName } from '@/utils/walletViews'
 import { useI18n } from 'vue-i18n'
 // 类型定义
 interface Asset {
@@ -337,7 +337,7 @@ const isPositiveAmount = (amount: number | string | undefined) => {
 }
 
 const hasAvailableRGB11 = (asset: Asset) => rgbAsset(asset)?.can_send === true
-const isFungibleRGB11 = (asset: Asset) => asset.type === 'f' && /^[0-9a-f]{64}$/.test(asset.ticker)
+const isFungibleRGB11 = (asset: Asset) => asset.type === 'f' && parseRGB11AssetName(asset.key || asset.id)?.type === 'f'
 const canMoveRGB11 = (asset: Asset) => isFungibleRGB11(asset) && rgb11State.value.can_write && hasAvailableRGB11(asset)
 
 const formatAmount = (asset: Asset) => {

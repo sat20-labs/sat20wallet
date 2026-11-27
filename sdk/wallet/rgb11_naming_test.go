@@ -84,12 +84,15 @@ func TestRGB11NamingIssueRenameAndReceiverOrigin(t *testing.T) {
 	}
 	info := before.TickerInfos[0]
 	want := "naming@" + address[len(address)-12:]
-	id := issued.AssetName.Ticker
+	id, err := rgb11wallet.RGB11ContractIDHex(issued.ContractID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	canonical := "rgb11:f:naming@" + id[len(id)-4:]
-	if info.Ticker != want || info.AssetKey != issued.AssetName.String() || info.ContractID != issued.ContractID ||
+	if info.DisplayTicker != want || info.AssetKey != issued.AssetName.String() || info.ContractID != issued.ContractID ||
 		info.GenesisAddress != address || info.CanonicalName != canonical || info.Verified {
 		t.Fatalf("wrong naming view: ticker=%q canonical=%q verified=%t, want ticker=%q canonical=%q and unverified",
-			info.Ticker, info.CanonicalName, info.Verified, want, canonical)
+			info.DisplayTicker, info.CanonicalName, info.Verified, want, canonical)
 	}
 	beforeAssets, err := json.Marshal(before.Assets)
 	if err != nil {
@@ -106,7 +109,7 @@ func TestRGB11NamingIssueRenameAndReceiverOrigin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.TickerInfos[0].Ticker != "my local RGB asset" || after.TickerInfos[0].AssetKey != info.AssetKey ||
+	if after.TickerInfos[0].DisplayTicker != "my local RGB asset" || after.TickerInfos[0].AssetKey != info.AssetKey ||
 		after.TickerInfos[0].CanonicalName != canonical || after.TickerInfos[0].Verified ||
 		after.TickerInfos[0].ContractID != info.ContractID || !bytes.Equal(beforeAssets, afterAssets) || observation.reads != 0 {
 		t.Fatalf("local rename affected identity/balance or read network: %+v reads=%d", after.TickerInfos[0], observation.reads)
@@ -119,7 +122,7 @@ func TestRGB11NamingIssueRenameAndReceiverOrigin(t *testing.T) {
 	}
 	foundAlias := false
 	for _, record := range records {
-		if record.Key == "local-name-"+issued.AssetName.Ticker {
+		if record.Key == "local-name-"+id {
 			foundAlias = string(record.Value) == "my local RGB asset"
 		}
 	}
@@ -157,7 +160,7 @@ func TestRGB11NamingIssueRenameAndReceiverOrigin(t *testing.T) {
 		t.Fatal(err)
 	}
 	received, err := recipient.GetRGB11State()
-	if err != nil || len(received.TickerInfos) != 1 || received.TickerInfos[0].Ticker != want || received.TickerInfos[0].GenesisAddress != address ||
+	if err != nil || len(received.TickerInfos) != 1 || received.TickerInfos[0].DisplayTicker != want || received.TickerInfos[0].GenesisAddress != address ||
 		received.TickerInfos[0].CanonicalName != canonical || received.TickerInfos[0].Verified {
 		t.Fatalf("receiver changed provider origin or inherited local alias: %+v %v", received, err)
 	}
@@ -176,7 +179,7 @@ func TestRGB11NamingIssueRenameAndReceiverOrigin(t *testing.T) {
 		t.Fatalf("cold rename must read durable metadata: %v", err)
 	}
 	received, err = recipient.GetRGB11State()
-	if err != nil || len(received.TickerInfos) != 1 || len(received.Assets) != 0 || received.TickerInfos[0].AssetKey != issued.AssetName.String() || received.TickerInfos[0].Ticker != "receiver reload alias" {
+	if err != nil || len(received.TickerInfos) != 1 || len(received.Assets) != 0 || received.TickerInfos[0].AssetKey != issued.AssetName.String() || received.TickerInfos[0].DisplayTicker != "receiver reload alias" {
 		t.Fatalf("zero-balance imported contract disappeared after restart: %+v %v", received, err)
 	}
 	if err := recipient.SwitchAccount(1); err != nil {

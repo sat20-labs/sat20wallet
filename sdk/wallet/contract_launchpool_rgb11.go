@@ -178,7 +178,7 @@ func (r *rgb11LaunchPoolGenesis) validate() error {
 	ticker, err := dkvs.RGB11NameTicker(registration.BaseTicker, registration.ContractID)
 	source := r.Source.Assets[0].Name
 	if err != nil || ticker != r.Contract.AssetName.Ticker || registration.AssetType != r.Contract.AssetName.Type ||
-		source.Protocol != r.Contract.AssetName.Protocol || source.Type != registration.AssetType || source.Ticker != registration.ContractID ||
+		source.Protocol != r.Contract.AssetName.Protocol || source.Type != registration.AssetType || source.Ticker != ticker ||
 		container.GenesisReport.Kind != schemas.NIA ||
 		container.GenesisReport.FungibleAmounts[4000] != r.Contract.launchAssetAmount(r.Contract.MaxSupply).Value.Uint64() {
 		return fmt.Errorf("RGB11 launchpool requires its exact fixed-supply NIA genesis")
@@ -276,11 +276,7 @@ func (rgb *rgb11Manager) makeRGB11LaunchGenesis(static LaunchPoolContract, reque
 	if err != nil {
 		return rgb11LaunchPoolGenesis{}, err
 	}
-	asset, err := rgb11wallet.NewContractAssetKey(issued.Container.ContractID, indexer.ASSET_TYPE_FT)
-	if err != nil {
-		return rgb11LaunchPoolGenesis{}, err
-	}
-	ticker, err := dkvs.RGB11NameTicker(request.Ticker, asset.Ticker)
+	asset, err := rgb11wallet.NewContractAssetKey(issued.Container.ContractID, indexer.ASSET_TYPE_FT, request.Ticker)
 	if err != nil {
 		return rgb11LaunchPoolGenesis{}, err
 	}
@@ -295,7 +291,6 @@ func (rgb *rgb11Manager) makeRGB11LaunchGenesis(static LaunchPoolContract, reque
 	source.OutPointStr, source.OutValue.PkScript = selected[0], append([]byte(nil), utxo.PkScript...)
 	source.Assets = indexer.TxAssets{{Name: asset, Amount: *supply.Clone()}}
 	static.AssetName, static.RGBSourcePoint = asset, selected[0]
-	static.AssetName.Ticker = ticker
 	genesisHash := sha256.Sum256(genesis)
 	static.RGBGenesisHash = hex.EncodeToString(genesisHash[:])
 	if err := static.CheckContent(); err != nil {
@@ -447,10 +442,14 @@ func (p *LaunchPoolContractRunTime) validateRGB11LaunchDeposit(ctx context.Conte
 	if err != nil {
 		return err
 	}
+	contractID, err := rgb11wallet.RGB11ContractIDHex(result.ContractID)
+	if err != nil {
+		return err
+	}
 	var root *schemas.InputRef
 	for _, allocation := range result.History.HistoricalStates {
 		if allocation.Outpoint.TxID == [32]byte(initial.Hash) && allocation.Outpoint.Vout == initial.Index &&
-			hex.EncodeToString(allocation.Reference.OperationID[:]) == result.Asset.Name.Ticker &&
+			hex.EncodeToString(allocation.Reference.OperationID[:]) == contractID &&
 			allocation.Reference.AssignmentType == 4000 && allocation.State.Class == "fungible" &&
 			allocation.State.Amount == p.launchAssetAmount(p.MaxSupply).Value.Uint64() {
 			if root != nil {

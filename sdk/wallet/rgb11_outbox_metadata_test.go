@@ -89,7 +89,7 @@ func newMetadataFixture(t *testing.T) *metadataFixture {
 	transferID := testRGB11ConsignmentID(t, "outbox-metadata")
 	appID, err := rgb11AddressMessageID(transferID)
 	require.NoError(t, err)
-	asset := indexer.AssetName{Protocol: rgb11wallet.Protocol, Type: indexer.ASSET_TYPE_FT, Ticker: strings.Repeat("12", 32)}
+	asset := indexer.AssetName{Protocol: rgb11wallet.Protocol, Type: indexer.ASSET_TYPE_FT, Ticker: "outbox@1212"}
 	state := &rgb11wallet.TransferState{TransferID: transferID, Direction: "send", Status: "prepared",
 		AddressMode: true, TransportMode: RGB11AddressTransport, AddressMessageID: appID,
 		SenderAccountID: sender, ReceiverAccountID: sender, Asset: indexer.AssetInfo{Name: asset, Amount: *indexer.NewDecimal(1, 0)},

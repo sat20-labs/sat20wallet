@@ -62,7 +62,7 @@ func TestSTPRGBEvidenceRejectsReplacedRegisteredChannel(t *testing.T) {
 	channel, _ := rgbReservationBindingFixture(t)
 	manager := &Manager{channelMap: map[string]*Channel{channel.ChannelId: channel}}
 	channel.manager = manager
-	asset := &indexer.AssetName{Protocol: "rgb11", Type: indexer.ASSET_TYPE_FT, Ticker: "1111111111111111111111111111111111111111111111111111111111111111"}
+	asset := &indexer.AssetName{Protocol: "rgb11", Type: indexer.ASSET_TYPE_FT, Ticker: "binding@1111"}
 	facts, _, _, err := captureSTPRGBEvidence(channel, asset, nil, nil, []byte("same-request"), nil, nil)
 	if err != nil {
 		t.Fatal(err)

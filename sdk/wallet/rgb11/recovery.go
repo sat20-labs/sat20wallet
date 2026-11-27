@@ -219,11 +219,11 @@ func recoveryClosureKeys(snapshot *RGB11WalletSnapshot,
 		}
 		aliasKey := ""
 		if len(contractsNamed) != 0 {
-			identity, identityErr := NewContractAssetKey(receipt.ContractID, indexer.ASSET_TYPE_FT)
+			id, identityErr := RGB11ContractIDHex(receipt.ContractID)
 			if identityErr != nil {
 				return nil, nil, ErrValidationReceipt
 			}
-			aliasKey = identity.Ticker
+			aliasKey = id
 		}
 		contractHash := sha256.Sum256([]byte(receipt.ContractID))
 		contractObjectKey := hex.EncodeToString(contractHash[:])

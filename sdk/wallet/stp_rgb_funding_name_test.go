@@ -8,10 +8,10 @@ import (
 )
 
 func TestSTPRGBFundingNameUsesCapturedIdentity(t *testing.T) {
-	name := indexer.AssetName{Protocol: "rgb11", Type: "f", Ticker: "name"}
-	local := indexer.AssetName{Protocol: "rgb11", Type: "f", Ticker: "local-contract"}
+	name := indexer.AssetName{Protocol: "rgb11", Type: "f", Ticker: "name@abcd"}
+	local := name
 	facts := newSTPRGBReservationEvidence()
-	facts.fundingName = &stpRGBFundingName{chain: name, local: local}
+	facts.fundingName = &stpRGBFundingName{chain: name, contractID: "contract-id"}
 	view := facts.useView()
 	got, err := view.localFundingAsset(nil, &name)
 	require.NoError(t, err)

@@ -7,7 +7,11 @@ import (
 )
 
 func TestSelectHistoricalValidationReceiptKeepsOnlyRequiredCoreAllocations(t *testing.T) {
-	asset := indexer.AssetName{Protocol: Protocol, Type: indexer.ASSET_TYPE_FT, Ticker: "history-select"}
+	const contractID = "rgb:Ar4ouaLv-b7f7Dc_-z5EMvtu-FA5KNh1-nlae~jk-8xMBo7E"
+	asset, err := NewContractAssetKey(contractID, indexer.ASSET_TYPE_FT, "history-select")
+	if err != nil {
+		t.Fatal(err)
+	}
 	allocation := func(outpoint, operation string, amount int64, disclosure byte) ValidatedAllocation {
 		return ValidatedAllocation{
 			OutPoint: outpoint, AssetName: asset, Amount: *indexer.NewDefaultDecimal(amount),
@@ -19,7 +23,7 @@ func TestSelectHistoricalValidationReceiptKeepsOnlyRequiredCoreAllocations(t *te
 	needed := allocation("2222222222222222222222222222222222222222222222222222222222222222:1", "op-b", 20, 2)
 	unneeded := allocation("3333333333333333333333333333333333333333333333333333333333333333:2", "op-c", 30, 3)
 	material := &ValidationReceipt{
-		Version: 1, EngineBuildID: RGB11EngineBuildID, ConsignmentHash: "raw-hash", ContractID: "contract",
+		Version: 1, EngineBuildID: RGB11EngineBuildID, ConsignmentHash: "raw-hash", ContractID: contractID,
 		SchemaID: "schema", TransferID: "transfer", ValidatedAt: 200, Status: "valid",
 		Allocations: []ValidatedAllocation{unneeded, needed, first},
 	}

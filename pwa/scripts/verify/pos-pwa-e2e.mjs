@@ -50,12 +50,9 @@ export const requiredPwaRgbCrossLayerCases = [
   'RGB PWA: splice the fungible RGB asset into and out of the READY private channel',
 ]
 
-export const optionalPwaRgbContinuationCases = [
-  'RGB PWA: continue the confirmed deposit Anchor and withdraw without another deposit',
-]
-
 const pollOptions = { timeout: 180000, intervals: [250, 500, 1000, 2000] }
 const txidPattern = /^[0-9a-f]{64}$/
+const rgbNamePattern = /^rgb11:f:[a-z0-9]+(?:-[a-z0-9]+)*@[0-9a-f]{4}$/
 const asInteger = value => {
   assert.ok(typeof value === 'string' || typeof value === 'number', 'expected an exact integer amount')
   if (typeof value === 'number') assert.ok(Number.isSafeInteger(value), 'unsafe numeric amount')
@@ -78,15 +75,6 @@ const deanchorInputs = channel => Object.fromEntries(['localDeAnchorTx', 'remote
 export async function runPwaPosCases(t, fixture) {
   const { check, device, ready, walletCall, accountCall } = t
   const rgbCrossLayer = fixture.rgbCrossLayer === true
-  const continuation = fixture.resumeConfirmedRGBDeposit
-  if (continuation) {
-    assert.equal(rgbCrossLayer, true)
-    assert.deepEqual(t.selectedCases, optionalPwaRgbContinuationCases, 'restored state must never enter issue/deploy/deposit cases')
-    assert.equal(continuation.asset_key, fixture.asset.key)
-    assert.equal(continuation.amount, '100')
-    assert.equal(continuation.carrier_value, 330)
-    assert.equal(continuation.funding_height, 1139)
-  }
   assert.ok(['testnet', 'regtest'].includes(fixture.config.Chain))
   const network = fixture.config.Chain
   const bitcoinNetwork = network === 'regtest' ? networks.regtest : networks.testnet
@@ -96,7 +84,7 @@ export async function runPwaPosCases(t, fixture) {
   assert.ok(['127.0.0.1', 'localhost'].includes(controller.hostname), 'controller must be loopback')
   if (rgbCrossLayer) {
     assert.equal(fixture.asset.type, 'RGB')
-    if (fixture.asset.key) assert.match(fixture.asset.key, /^rgb11:f:[0-9a-f]{64}$/)
+    if (fixture.asset.key) assert.match(fixture.asset.key, rgbNamePattern)
   } else {
     assert.equal(fixture.asset.key, `ordx:f:${fixture.asset.ticker}`)
     assert.equal(fixture.asset.type, 'ORDX')
@@ -111,7 +99,7 @@ export async function runPwaPosCases(t, fixture) {
   assert.notEqual(fixture.recipient.address, fixture.address, 'transfers require an independent recipient')
   const recipientScript = bitcoinAddress.toOutputScript(fixture.recipient.address, bitcoinNetwork).toString('hex')
   assert.equal(recipientScript, fixture.recipient.pk_script)
-  let page = await device(undefined, true, undefined, 'rgb-continuation', continuation?.storage_state)
+  let page = await device()
   const context = page.context()
   let channelId
   let publicRGBContractURL
@@ -220,10 +208,7 @@ export async function runPwaPosCases(t, fixture) {
     const asset = matches[0]
     assert.equal(asset.key, expectedKey)
     assert.equal(asset.ticker, expectedKey.split(':').at(-1))
-    const canonical = fixture.asset.genesisTicker
-      ? `rgb11:f:${fixture.asset.genesisTicker.toLowerCase()}@${fixture.asset.ticker.slice(-4)}`
-      : publicRGBKey
-    if (canonical) assert.equal(asset.label, canonical)
+    assert.equal(asset.label, expectedKey)
     const label = tab === 'Channel' ? channelLabel : asset.label
     assert.ok(typeof label === 'string' && label.trim(), 'the selected RGB asset must have a display label')
     const visibleLabel = tab === 'SatoshiNet' ? label.split(':').at(-1) : label
@@ -1189,12 +1174,15 @@ export async function runPwaPosCases(t, fixture) {
     assert.match(contractId, /^rgb:/)
     const issued = await rgbState()
     const key = issued.assets.find(asset => asset.contract_id === contractId)?.asset
-    assert.match(key, /^rgb11:f:[0-9a-f]{64}$/)
-    assert.equal(displayedName, `rgb11:f:${ticker.toLowerCase()}@${key.slice(-4)}`)
+    assert.match(key, rgbNamePattern)
+    assert.equal(displayedName, key)
+    const exported = JSON.parse((await walletCall(page, 'exportPublicRGB11Contract', contractId)).result)
+    assert.match(exported.contract_id, txidPattern)
+    assert.equal(key, `rgb11:f:${ticker.toLowerCase()}@${exported.contract_id.slice(-4)}`)
     assert.equal(issued.error_code, '')
     assert.equal(rgbStateAmount(issued, key), 1000n)
     await assertRGBProofs(key, 1000n)
-    fixture.asset = { key, chainKey: displayedName, type: 'RGB', ticker: key.split(':').at(-1), genesisTicker: ticker }
+    fixture.asset = { key, chainKey: key, type: 'RGB', ticker: key.split(':').at(-1), contractId, contractHex: exported.contract_id }
     await form.getByRole('button', { name: 'Close', exact: true }).first().click()
     await expect(form).toBeHidden()
     return key
@@ -1256,7 +1244,7 @@ export async function runPwaPosCases(t, fixture) {
       await expect(protocol).toContainText('RGB11')
       await expect(protocol).toHaveAttribute('aria-expanded', 'false')
 
-      assert.match(fixture.asset.ticker, /^[0-9a-f]{64}$/, 'RGB11 selection must use the full canonical ticker')
+      assert.match(fixture.asset.key, rgbNamePattern, 'RGB11 selection must use the canonical short ticker')
       assert.equal(key, fixture.asset.key, 'Market form must select the exact issued RGB asset')
       const tickerInfo = JSON.parse((await walletCall(page, 'getTickerInfo', key)).ticker)
       assert.equal(tickerInfo.name.Protocol, 'rgb11')
@@ -1266,10 +1254,11 @@ export async function runPwaPosCases(t, fixture) {
       assert.equal(tickerExt.asset_name.Protocol, 'rgb11')
       assert.equal(tickerExt.asset_name.Type, 'f')
       assert.equal(tickerExt.asset_name.Ticker, fixture.asset.ticker)
-      const publicContract = JSON.parse((await walletCall(page, 'exportPublicRGB11Contract', tickerExt.contract_id)).result)
+      const publicContract = JSON.parse((await walletCall(page, 'exportPublicRGB11Contract', fixture.asset.contractId)).result)
       assert.match(publicContract.contract_id, /^[0-9a-f]{64}$/)
-      assert.equal(publicContract.contract_id, fixture.asset.ticker,
-        'canonical RGB11 contract identity must match the exact selected asset ticker')
+      assert.equal(publicContract.contract_id, fixture.asset.contractHex,
+        'public RGB11 contract identity must match the independently selected ContractID')
+      assert.equal(tickerInfo.contract_id, fixture.asset.contractHex)
       assert.equal(publicContract.schema_id, tickerExt.schema_id,
         'canonical RGB11 contract schema must match its ticker metadata')
       const tickerPickers = form.locator('button[role="combobox"]:not([data-slot="select-trigger"])')
@@ -1284,7 +1273,7 @@ export async function runPwaPosCases(t, fixture) {
       await expect(exactTickerOption).toBeVisible()
       await expect(exactTickerOption).toHaveText(publicRGBKey)
       assert.equal(await exactTickerOption.getAttribute('data-value'), fixture.asset.ticker,
-        'ticker option identity must match the complete RGB11 asset key suffix')
+        'ticker option value must match the canonical short ticker')
       await exactTickerOption.click()
       await expect(form.getByRole('button').last()).toBeEnabled()
       await form.getByRole('button').last().click()
@@ -1340,7 +1329,7 @@ export async function runPwaPosCases(t, fixture) {
       const deployed = await findDeployed()
       assert.ok(deployed?.url)
       const registration = JSON.parse((await walletCall(page, 'verifyRGB11PublicContract',
-        tickerExt.contract_id, publicContract.contract_consignment_base64)).result)
+        fixture.asset.contractId, publicContract.contract_consignment_base64)).result)
       assert.equal(registration.contract_id, publicContract.contract_id)
       assert.equal(registration.asset_name, publicRGBKey)
       assert.equal(deployed.parsed.Contract.contractType, 'transcend.tc',
@@ -1487,7 +1476,7 @@ export async function runPwaPosCases(t, fixture) {
     const tickerInfo = JSON.parse((await walletCall(page, 'getTickerInfo', publicRGBKey)).ticker)
     assert.equal(assetKey(tickerInfo.name), publicRGBKey)
     assert.equal(tickerInfo.displayname, publicRGBKey)
-    assert.equal(tickerInfo.contract_id, fixture.asset.ticker)
+    assert.equal(tickerInfo.contract_id, fixture.asset.contractHex)
     assert.equal(channelAmount(await readChannel(), publicRGBKey), channelBefore)
     assert.equal(await addressAmount('Bitcoin', fixture.address, key) + await readL2Amount(publicRGBKey) + channelAmount(await readChannel(), publicRGBKey), 1000n)
     const afterDeposit = await control('snapshot')
@@ -1520,49 +1509,10 @@ export async function runPwaPosCases(t, fixture) {
     publicRGBKey = undefined
   }
 
-  const continueConfirmedRGBDeposit = async () => {
-    const key = fixture.asset.key
-    assert.equal(amounts.deposit_asset, continuation.amount)
-    assert.equal(amounts.withdraw_asset, continuation.amount)
-    publicRGBContractURL = continuation.contract_url
-    publicRGBKey = publicRGBContractURL.split('_')[1]
-    assert.equal(publicRGBContractURL, `${continuation.pool_address}_${publicRGBKey}_transcend.tc`)
-    const anchor = continuation.anchor
-    assert.equal(anchor.funding_outpoint, `${continuation.funding_txid}:1`)
-    const confirmed = await confirmedL2Transaction(anchor.txid)
-    assert.ok(confirmed.confirmations >= 1)
-    const original = await readL1Transaction(continuation.funding_txid)
-    assert.equal(asInteger(original.outs[1].value), 330n)
-    assert.equal(original.outs[1].script.toString('hex'),
-      bitcoinAddress.toOutputScript(continuation.pool_address, bitcoinNetwork).toString('hex'))
-    const snapshot = await control('snapshot')
-    assert.deepEqual(snapshot.l1.pending_txids, [])
-    await expect.poll(() => readL2Amount(publicRGBKey), pollOptions).toBe(100n)
-    await expect.poll(() => addressAmount('Bitcoin', fixture.address, key), pollOptions).toBe(900n)
-    await assertRGBProofs(key, 900n)
-    assert.equal(channelAmount(await readChannel(), key), 0n)
-    await waitForPublicRGBTranscendActivation(publicRGBContractURL, true)
-    const withdrawn = await withdraw(true)
-    assert.equal(await addressAmount('Bitcoin', fixture.address, key), 1000n)
-    assert.equal(await readL2Amount(publicRGBKey), 0n)
-    assert.equal(channelAmount(await readChannel(), key), 0n)
-    await assertRGBProofs(key, 1000n)
-    const consumed = withdrawn.tx.ins.map(input => `${Buffer.from(input.hash).reverse().toString('hex')}:${input.index}`)
-    assert.ok(consumed.includes(`${continuation.funding_txid}:1`), 'withdrawal must consume the original pool carrier')
-    const poolScript = original.outs[1].script.toString('hex')
-    assert.equal(withdrawn.tx.outs.filter(output => output.script.toString('hex') === poolScript)
-      .reduce((sum, output) => sum + asInteger(output.value), 0n), 330n, 'return the full pool carrier')
-    console.log(JSON.stringify({ rgbConfirmedContinuation: { asset: key, original_funding: continuation.funding_txid,
-      anchor: anchor.txid, withdrawal: withdrawn.txid, amount: '100', returned_pool_carrier: 330 } }))
-  }
-
   try {
     // Test wallet import is fixture setup. Every movement of its funds below
     // goes through the same controls a PWA user operates.
-    if (continuation) {
-      await t.unlock(page, fixture.password)
-      await page.evaluate(() => { location.hash = '#/wallet' })
-    } else await page.evaluate(async ({ mnemonic, password }) => {
+    await page.evaluate(async ({ mnemonic, password }) => {
       const [error] = await window.__SAT20_PWA_VERIFY__.useWalletStore().importWallet(mnemonic, password)
       if (error) throw error
       location.hash = '#/wallet'
@@ -1590,10 +1540,6 @@ export async function runPwaPosCases(t, fixture) {
 
     if (rgbCrossLayer) {
       try {
-        if (continuation) {
-          await check(optionalPwaRgbContinuationCases[0], continueConfirmedRGBDeposit)
-          return
-        }
         await check(requiredPwaRgbCrossLayerCases[0], publicRGBRoundTrip)
         await check(requiredPwaRgbCrossLayerCases[1], () => privateRGBRoundTrip(fixture.asset.key))
       } catch (error) {

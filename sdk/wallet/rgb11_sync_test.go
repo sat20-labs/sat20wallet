@@ -35,7 +35,7 @@ func TestRGB11SnapshotDoesNotCopyGlobalTickerCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager := newRGB11MultiDeviceManager(t, priv, 42)
-	globalName := indexer.AssetName{Protocol: rgb11wallet.Protocol, Type: indexer.ASSET_TYPE_FT, Ticker: "global_test"}
+	globalName := indexer.AssetName{Protocol: rgb11wallet.Protocol, Type: indexer.ASSET_TYPE_FT, Ticker: "global-test@1234"}
 	manager.tickerInfoMap[globalName.String()] = &indexer.TickerInfo{
 		AssetName: globalName, DisplayName: "Global RGB Test",
 	}

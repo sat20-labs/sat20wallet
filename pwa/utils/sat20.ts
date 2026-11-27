@@ -388,8 +388,8 @@ class WalletManager {
   async importRGB11Contract(data: string): Promise<[Error | undefined, RGBAssetView | undefined]> {
     return this._handleRequest('importRGB11Contract', JSON.stringify({data}))
   }
-  async exportRGB11Contract(asset: string): Promise<[Error | undefined, ExportFile[] | undefined]> {
-    return this._handleRequest('exportRGB11Contract', JSON.stringify({asset}))
+  async exportRGB11Contract(contract_id: string): Promise<[Error | undefined, ExportFile[] | undefined]> {
+    return this._handleRequest('exportRGB11Contract', JSON.stringify({contract_id}))
   }
   async exportPublicRGB11Contract(contractId: string): Promise<
     [Error | undefined, { result: string } | undefined]
@@ -902,9 +902,11 @@ class WalletManager {
   }
 
   async getTickerInfo(
-    asset: string
+    asset: string, refreshMint = false
   ): Promise<[Error | undefined, any | undefined]> {
-    return this._handleRequest('getTickerInfo', asset)
+    return refreshMint
+      ? this._handleRequest('getTickerInfo', asset, true)
+      : this._handleRequest('getTickerInfo', asset)
   }
 
   async batchSendAssets_SatsNet(

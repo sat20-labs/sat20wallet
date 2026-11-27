@@ -157,7 +157,7 @@ func (v RGB11ConsensusValidator) ValidatePreparedHistoryConsignmentReport(ctx co
 	if !descriptor.Fungible {
 		assetType = indexer.ASSET_TYPE_NFT
 	}
-	assetName, err := NewContractAssetKey(container.ContractID, assetType)
+	assetName, err := NewContractAssetKey(container.ContractID, assetType, metadata.Ticker)
 	if err != nil {
 		return nil, err
 	}
@@ -203,6 +203,7 @@ func (v RGB11ConsensusValidator) ValidatePreparedHistoryConsignmentReport(ctx co
 		witnessTxIDs = append(witnessTxIDs, formatTxID(txID))
 	}
 	return &PreparedHistoryValidation{
+		ContractID:  container.ContractID,
 		Allocations: allocations, HistoricalAllocations: historicalAllocations,
 		Outputs: outputs, WitnessTxIDs: witnessTxIDs, Consumers: consumers,
 	}, nil
@@ -227,7 +228,7 @@ func validatedHistoricalAllocations(container *coreconsignment.Container,
 	if !descriptor.Fungible {
 		assetType = indexer.ASSET_TYPE_NFT
 	}
-	assetName, err := NewContractAssetKey(container.ContractID, assetType)
+	assetName, err := NewContractAssetKey(container.ContractID, assetType, metadata.Ticker)
 	if err != nil {
 		return nil, err
 	}
@@ -359,7 +360,7 @@ func (v RGB11ConsensusValidator) validateConsignment(ctx context.Context, raw []
 	if !descriptor.Fungible {
 		assetType = indexer.ASSET_TYPE_NFT
 	}
-	assetName, err := NewContractAssetKey(container.ContractID, assetType)
+	assetName, err := NewContractAssetKey(container.ContractID, assetType, metadata.Ticker)
 	if err != nil {
 		return nil, nil, nil, err
 	}

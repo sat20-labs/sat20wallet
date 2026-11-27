@@ -154,7 +154,7 @@ func TestRGBManualInvoiceTransfer(t *testing.T) {
 	const amount = "200.25"
 	sourceOutpoint := rgb11GenericFixtureSource(t, sender, imported)
 
-	contractFiles, err := sender.ExportRGBContract(imported.AssetName.String())
+	contractFiles, err := sender.ExportRGBContract(imported.ContractID)
 	if err != nil || len(contractFiles) != 2 {
 		t.Fatalf("export public contract files: files=%+v err=%v", contractFiles, err)
 	}

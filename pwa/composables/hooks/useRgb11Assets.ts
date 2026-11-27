@@ -3,17 +3,18 @@ import { useQuery } from '@tanstack/vue-query'
 import { storeToRefs } from 'pinia'
 import walletManager from '@/utils/sat20'
 import { useGlobalStore, useRGB11Store, useWalletStore } from '@/store'
-import type { RGBView, RGBAssetView } from '@/utils/walletViews'
+import { parseRGB11AssetName, type RGBView, type RGBAssetView } from '@/utils/walletViews'
 
 interface UseAssetQueryOptions {
   enabled?: boolean | { value: boolean }
 }
 
-export const decorateRGB11AssetItems = (items: RGBAssetView[]) => items.map(item => {
-  const [protocol, type, ticker] = item.asset.split(':')
-  return { ...item, protocol, type, ticker, id: item.asset, key: item.asset, asset_key: item.asset,
-    label: item.canonical_name || item.name || 'RGB', symbol: item.canonical_name || item.name || 'RGB', display_name: item.name,
-    amount: item.available, balance: item.available, utxos: [], available_amount: item.available, pending_amount: item.pending }
+export const decorateRGB11AssetItems = (items: RGBAssetView[]) => items.flatMap(item => {
+  const name = parseRGB11AssetName(item.asset)
+  if (!name) return []
+  return [{ ...item, ...name, id: item.asset, key: item.asset, asset_key: item.asset,
+    label: item.display_ticker || item.canonical_name || item.name || 'RGB', symbol: item.canonical_name || item.name || 'RGB', display_name: item.name,
+    amount: item.available, balance: item.available, utxos: [], available_amount: item.available, pending_amount: item.pending }]
 })
 
 export const useRgb11Assets = (options: UseAssetQueryOptions = {}) => {

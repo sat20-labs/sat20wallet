@@ -9,6 +9,7 @@ import (
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/rgb11/anchors"
+	coreconsignment "github.com/sat20-labs/rgb11/consignment"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 )
@@ -303,7 +304,11 @@ func (protocol rgb11STPProtocol) BindSplice(p *Manager, req STPAssetSpliceReques
 		if err != nil {
 			return err
 		}
-		resv.RGB11AnchorProof, err = protocol.view.namedFundingProof(p, resv.AssetName.AssetName, funding.AssetName.Ticker, proof)
+		contract, err := coreconsignment.Decode(funding.Consignment)
+		if err != nil {
+			return err
+		}
+		resv.RGB11AnchorProof, err = protocol.view.namedFundingProof(p, resv.AssetName.AssetName, contract.ContractID, proof)
 		if err != nil {
 			return err
 		}

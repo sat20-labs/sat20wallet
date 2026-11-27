@@ -12,6 +12,7 @@ import (
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
+	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	dkvs "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	"github.com/stretchr/testify/require"
 )
@@ -177,13 +178,14 @@ func TestRGB11DepositLog(t *testing.T) {
 
 	// A different contract already owns the candidate short name. The
 	// imported contract still works through its unambiguous native RGB key.
-	other := issued.AssetName
-	other.Ticker = "0" + other.Ticker[1:]
-	if other == issued.AssetName {
-		other.Ticker = "1" + other.Ticker[1:]
+	id, err := rgb11wallet.RGB11ContractIDHex(issued.ContractID)
+	require.NoError(t, err)
+	wrongID := "0" + id[1:]
+	if wrongID == id {
+		wrongID = "1" + id[1:]
 	}
-	conflict := seedRGB11Name(t, mgr, other, "SEND")
-	_, err := mgr.RGB11ChainAsset(&issued.AssetName, false)
+	conflict := seedRGB11RegistryName(t, mgr, issued.AssetName, "SEND", wrongID)
+	_, err = mgr.RGB11ChainAsset(&issued.AssetName, false)
 	require.ErrorIs(t, err, dkvs.ErrWriteConflict)
 	localBalance, err := mgr.GetRGB11AssetBalance(&issued.AssetName)
 	require.NoError(t, err)
@@ -302,10 +304,16 @@ func TestRGB11DepositLog(t *testing.T) {
 
 func seedRGB11Name(t *testing.T, mgr *Manager, asset indexer.AssetName, ticker string) indexer.AssetName {
 	t.Helper()
-	id := asset.Ticker
-	var err error
-	asset.Ticker, err = dkvs.RGB11NameTicker(ticker, id)
+	info, err := loadTickerInfo(mgr.db, &asset)
 	require.NoError(t, err)
+	return seedRGB11RegistryName(t, mgr, asset, ticker, info.ContractID)
+}
+
+func seedRGB11RegistryName(t *testing.T, mgr *Manager, asset indexer.AssetName, ticker, id string) indexer.AssetName {
+	t.Helper()
+	short, err := dkvs.RGB11NameTicker(ticker, id)
+	require.NoError(t, err)
+	require.Equal(t, short, asset.Ticker)
 	key, err := dkvs.RGB11NameKey(asset.Ticker)
 	require.NoError(t, err)
 	value, err := dkvs.RGB11NameValue(id)

@@ -66,6 +66,7 @@ import walletManager from '@/utils/sat20'
 import type { RGBAssetView } from '@/utils/walletViews'
 
 interface IssueInfo {
+  name: { Protocol: string; Type: string; Ticker: string }
   totalMinted?: string
   maxSupply?: string
   description?: string
@@ -123,6 +124,8 @@ onMounted(async () => {
       return
     }
     const record = JSON.parse(result.ticker) as IssueInfo
+    const name = record.name
+    if (!name || `${name.Protocol}:${name.Type}:${name.Ticker}` !== props.asset.asset) throw new Error('RGB asset name mismatch')
     const bytes = Uint8Array.from(atob(record.content), value => value.charCodeAt(0))
     const origin = JSON.parse(new TextDecoder().decode(bytes)) as GenesisInfo
     if (origin.contract_id !== props.asset.contract_id) throw new Error('RGB contract mismatch')
@@ -143,7 +146,7 @@ const exportContract = async (action: 'copy' | 'save') => {
     const checkSession = walletRequestSessionGuard('exportRGB11Contract')
     const readFile = async (extension: '.rgb' | '.asc') => {
       checkSession()
-      const [error, files] = await walletManager.exportRGB11Contract(props.asset.asset)
+      const [error, files] = await walletManager.exportRGB11Contract(props.asset.contract_id)
       checkSession()
       if (error) throw error
       const file = files?.find(item => item.name.endsWith(extension))

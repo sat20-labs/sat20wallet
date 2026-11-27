@@ -134,7 +134,7 @@ func newRGB11SettlementFixture(t *testing.T, template string) *rgb11SettlementFi
 		t.Fatal(err)
 	}
 	p := f.swap
-	p.Contract.GetContractBase().AssetName = indexer.AssetName{Protocol: rgb11wallet.Protocol, Type: indexer.ASSET_TYPE_FT, Ticker: strings.Repeat("a", 64)}
+	p.Contract.GetContractBase().AssetName = indexer.AssetName{Protocol: rgb11wallet.Protocol, Type: indexer.ASSET_TYPE_FT, Ticker: "settlement@aaaa"}
 	p.ChannelAddr, p.Status = "RGB11-settlement-channel", CONTRACT_STATUS_READY
 	p.InvokeCount, p.CheckPoint, p.CheckPointBlock = 4, 3, 49
 	p.CurrBlock, p.CurrBlockL1 = 50, 50

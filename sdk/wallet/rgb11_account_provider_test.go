@@ -198,14 +198,17 @@ func seedRGB11DurableAccountRecoveryState(t *testing.T, manager *rgb11Manager) (
 	digest := sha256.Sum256(raw)
 	consignmentHash := hex.EncodeToString(digest[:])
 	outpoint := strings.Repeat("11", 32) + ":0"
-	assetName := indexer.AssetName{Protocol: rgb11wallet.Protocol, Type: indexer.ASSET_TYPE_FT, Ticker: "managed-durable"}
+	const contractID = "rgb:Ar4ouaLv-b7f7Dc_-z5EMvtu-FA5KNh1-nlae~jk-8xMBo7E"
+	assetName, err := rgb11wallet.NewContractAssetKey(contractID, indexer.ASSET_TYPE_FT, "fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
 	amount := indexer.NewDefaultDecimal(25)
 	allocation := rgb11wallet.ValidatedAllocation{
 		OutPoint: outpoint, AssetName: assetName, Amount: *amount.Clone(),
 		OperationID: "managed-recovery-operation", AssignmentType: 4000,
 		AssignmentIndex: 0, StateClass: "fungible", SealDisclosure: []byte{1, 2, 3},
 	}
-	const contractID = "managed-recovery-contract"
 	receipt, err := manager.rgbManager.projectionStore.ValidateAndStoreConsignment(
 		context.Background(), rgb11ManagedRecoveryValidator{receipt: &rgb11wallet.ValidationReceipt{
 			Version: 1, EngineBuildID: rgb11wallet.RGB11EngineBuildID,
@@ -305,7 +308,7 @@ func TestRGB11AccountManagedProviderRejectsUnverifiableRecoveryClosure(t *testin
 	}
 	// Seed only the valid contract metadata: this synthetic unit fixture uses
 	// opaque consignment bytes, so it cannot exercise contract-container decode.
-	ext, err := json.Marshal(rgb11wallet.TickerExt{ContractID: contractID})
+	ext, err := json.Marshal(rgb11wallet.TickerExt{ContractID: contractID, Ticker: "fixture"})
 	if err != nil {
 		t.Fatal(err)
 	}

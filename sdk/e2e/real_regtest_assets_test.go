@@ -428,7 +428,7 @@ func prepareSDKPWARegtestAssetsInternal(t *testing.T, existingOnly ...bool) (*wa
 		require.GreaterOrEqual(t, balance.Cmp(indexercommon.NewDecimal(100000, 0)), 0)
 	}
 	asset := &indexercommon.AssetName{Protocol: "brc20", Type: "f", Ticker: "sgas"}
-	if a.GetTickerInfoV2(asset.String()) == nil {
+	if a.GetIndexerClient().GetTickInfo(asset) == nil {
 		issued, err := a.DeployTicker_brc20("sgas", 100000000, 1000000, 0, 2)
 		require.NoError(t, err, "SDK SGAS deploy")
 		require.NotNil(t, issued)
@@ -436,7 +436,7 @@ func prepareSDKPWARegtestAssetsInternal(t *testing.T, existingOnly ...bool) (*wa
 		require.NotNil(t, issued.RevealTx)
 		mine(a.GetWallet().GetAddressByIndex(1), 1)
 	}
-	ticker := a.GetTickerInfoV2(asset.String())
+	ticker := a.GetIndexerClient().GetTickInfo(asset)
 	require.NotNil(t, ticker, "actual indexer must find SDK-deployed SGAS")
 	require.Equal(t, 0, ticker.Divisibility)
 	require.Equal(t, "1000000", ticker.Limit)
@@ -647,7 +647,7 @@ func prepareSDKPWARegtestRGBBrowserCoinsWithTargets(t *testing.T, a, b *wallet.M
 func prepareSDKPWARegtestMintReviewAssets(t *testing.T, manager *wallet.Manager, mine func(string, int)) {
 	t.Helper()
 	const key = "ordx:f:PWAMINT"
-	if manager.GetTickerInfoV2(key) == nil {
+	if manager.GetIndexerClient().GetTickInfo(wallet.ParseAssetString(key)) == nil {
 		deployed, err := manager.DeployTicker_ordx("PWAMINT", 200, 200, 1, 2)
 		require.NoError(t, err, "SDK deploy real partial/remainder ticker")
 		require.NotNil(t, deployed)
@@ -655,7 +655,7 @@ func prepareSDKPWARegtestMintReviewAssets(t *testing.T, manager *wallet.Manager,
 		require.NotNil(t, deployed.RevealTx)
 		mine(manager.GetWallet().GetAddressByIndex(1), 1)
 	}
-	ticker := manager.GetTickerInfoV2(key)
+	ticker := manager.GetIndexerClient().GetTickInfo(wallet.ParseAssetString(key))
 	require.NotNil(t, ticker, "existing real indexer must observe SDK deployment")
 	require.Equal(t, "200", ticker.MaxSupply)
 	require.Equal(t, "200", ticker.Limit)
@@ -670,14 +670,14 @@ func prepareSDKPWARegtestBRC20TransferAsset(t *testing.T, manager *wallet.Manage
 	asset := &indexercommon.AssetName{Protocol: "brc20", Type: "f", Ticker: "pwbt"}
 	address := manager.GetWallet().GetAddress()
 	sink := manager.GetWallet().GetAddressByIndex(1)
-	if manager.GetTickerInfoV2(asset.String()) == nil {
+	if manager.GetIndexerClient().GetTickInfo(asset) == nil {
 		deployed, err := manager.DeployTicker_brc20("pwbt", 250, 250, 0, 2)
 		require.NoError(t, err)
 		require.NotNil(t, deployed)
 		require.NotNil(t, deployed.RevealTx)
 		mine(sink, 1)
 	}
-	ticker := manager.GetTickerInfoV2(asset.String())
+	ticker := manager.GetIndexerClient().GetTickInfo(asset)
 	require.NotNil(t, ticker)
 	require.Equal(t, "250", ticker.MaxSupply)
 	require.Equal(t, "250", ticker.Limit)
@@ -720,7 +720,7 @@ func prepareSDKPWARegtestRuneAsset(t *testing.T, manager *wallet.Manager, mine f
 	key := "runes:f:" + name
 	address := manager.GetWallet().GetAddress()
 	sink := manager.GetWallet().GetAddressByIndex(1)
-	if manager.GetTickerInfoV2(key) == nil {
+	if manager.GetIndexerClient().GetTickInfo(wallet.ParseAssetString(key)) == nil {
 		etching, err := wallet.GenEtchingWithTerms(name, 'T', 10000, limit, selfMint, 2)
 		require.NoError(t, err)
 		stone := runestone.Runestone{Etching: etching}
@@ -769,7 +769,7 @@ func prepareSDKPWARegtestRuneAsset(t *testing.T, manager *wallet.Manager, mine f
 			mine(sink, 1)
 		}
 	}
-	ticker := manager.GetTickerInfoV2(key)
+	ticker := manager.GetIndexerClient().GetTickInfo(wallet.ParseAssetString(key))
 	require.NotNil(t, ticker, "real indexer must recognize the original confirmed etching")
 	require.Equal(t, 2, ticker.Divisibility)
 	require.Equal(t, "100", ticker.MaxSupply)
@@ -803,7 +803,7 @@ func prepareSDKPWARegtestRuneAsset(t *testing.T, manager *wallet.Manager, mine f
 		}
 		mine(sink, 1)
 		t.Logf("confirmed normal SDK Rune mint: asset=%s txid=%s", key, mintID)
-		ticker = manager.GetTickerInfoV2(key)
+		ticker = manager.GetIndexerClient().GetTickInfo(wallet.ParseAssetString(key))
 		require.NotNil(t, ticker)
 	}
 	require.Equal(t, "100", ticker.TotalMinted)
@@ -847,7 +847,7 @@ func prepareSDKPWARegtestMixedRuneCarrier(t *testing.T, manager *wallet.Manager,
 		for suffix := byte('A'); suffix <= 'Z'; suffix++ {
 			candidate := "SAT•ACCEPTANCE•MIXED•" + string(suffix)
 			asset := "runes:f:" + candidate
-			if manager.GetTickerInfoV2(asset) == nil {
+			if manager.GetIndexerClient().GetTickInfo(wallet.ParseAssetString(asset)) == nil {
 				name = candidate
 				break
 			}
@@ -1100,13 +1100,13 @@ func prepareSDKPWARegtestORDXSendAsset(t *testing.T, manager *wallet.Manager, mi
 	const name = "pwapos"
 	asset := &indexercommon.AssetName{Protocol: "ordx", Type: "f", Ticker: name}
 	sink := manager.GetWallet().GetAddressByIndex(1)
-	if manager.GetTickerInfoV2(asset.String()) == nil {
+	if manager.GetIndexerClient().GetTickInfo(asset) == nil {
 		deployment, err := manager.DeployTicker_ordx(name, 5000, 5000, 1, 2)
 		require.NoError(t, err)
 		require.NotNil(t, deployment)
 		mine(sink, 1)
 	}
-	ticker := manager.GetTickerInfoV2(asset.String())
+	ticker := manager.GetIndexerClient().GetTickInfo(asset)
 	require.NotNil(t, ticker)
 	require.Equal(t, 1, ticker.N)
 	require.Equal(t, "5000", ticker.MaxSupply)

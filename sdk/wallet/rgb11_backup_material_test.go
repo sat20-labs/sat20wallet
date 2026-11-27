@@ -287,7 +287,7 @@ func TestRGB11InflationPreservesFungibleStateOnTheSameControlCarrier(t *testing.
 	if err != nil || owned == nil || owned.Value.Uint64() != 100 {
 		t.Fatalf("original fungible allocation was not preserved after mixed IFA: balance=%v err=%v", owned, err)
 	}
-	control, err := rgb11wallet.NewContractAssetKey(issued.ContractID, "control")
+	control, err := rgb11wallet.NewContractAssetKey(issued.ContractID, "control", "MIXIF")
 	if err != nil {
 		t.Fatal(err)
 	}

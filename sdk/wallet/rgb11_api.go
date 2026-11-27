@@ -297,25 +297,17 @@ func (p *Manager) GetRGB11State() (*RGB11State, error) {
 }
 
 func (p *Manager) ImportRGB11Contract(ctx context.Context, raw []byte) (*RGB11ImportResult, error) {
-	result, err := runRGB11ManagedOperation(p, ctx, rgb11ManagedOperationNew,
+	return runRGB11ManagedOperation(p, ctx, rgb11ManagedOperationNew,
 		func(manager *rgb11Manager) (*RGB11ImportResult, error) {
 			return manager.ImportRGB11Contract(ctx, raw)
 		})
-	if err == nil && result != nil {
-		p.learnRGB11Name(ctx, &result.AssetName)
-	}
-	return result, err
 }
 
 func (p *Manager) ImportRGB11ContractFile(ctx context.Context, raw []byte) (*RGB11ImportResult, error) {
-	result, err := runRGB11ManagedOperation(p, ctx, rgb11ManagedOperationNew,
+	return runRGB11ManagedOperation(p, ctx, rgb11ManagedOperationNew,
 		func(manager *rgb11Manager) (*RGB11ImportResult, error) {
 			return manager.ImportRGB11ContractFile(ctx, raw)
 		})
-	if err == nil && result != nil {
-		p.learnRGB11Name(ctx, &result.AssetName)
-	}
-	return result, err
 }
 
 // ExportRGB11Contract returns the canonical RGB\0CON file for a contract

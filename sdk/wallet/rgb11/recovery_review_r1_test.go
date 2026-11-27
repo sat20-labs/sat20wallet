@@ -137,13 +137,17 @@ func TestR1SelectedExpiredBlindCleanupGuards(t *testing.T) {
 }
 
 func TestR1SelectedReceiptExtensionGuards(t *testing.T) {
-	asset := indexer.AssetName{Protocol: Protocol, Type: indexer.ASSET_TYPE_FT, Ticker: "extension"}
+	const contractID = "rgb:Ar4ouaLv-b7f7Dc_-z5EMvtu-FA5KNh1-nlae~jk-8xMBo7E"
+	asset, err := NewContractAssetKey(contractID, indexer.ASSET_TYPE_FT, "extension")
+	if err != nil {
+		t.Fatal(err)
+	}
 	first := ValidatedAllocation{OutPoint: "1111111111111111111111111111111111111111111111111111111111111111:0", AssetName: asset, Amount: *indexer.NewDefaultDecimal(10), OperationID: "op-a", AssignmentType: 4000, StateClass: "fungible", SealDisclosure: []byte{1}, WitnessTxID: "witness-a"}
 	second := cloneValidatedAllocation(first)
 	second.OperationID = "op-b"
 	second.OutPoint = "2222222222222222222222222222222222222222222222222222222222222222:1"
 	second.SealDisclosure = []byte{2}
-	base := &ValidationReceipt{Version: 1, EngineBuildID: RGB11EngineBuildID, ConsignmentHash: "raw", ContractID: "contract", SchemaID: "schema", TransferID: "canonical", Status: "valid", ValidatedAt: 1, Allocations: []ValidatedAllocation{first}}
+	base := &ValidationReceipt{Version: 1, EngineBuildID: RGB11EngineBuildID, ConsignmentHash: "raw", ContractID: contractID, SchemaID: "schema", TransferID: "canonical", Status: "valid", ValidatedAt: 1, Allocations: []ValidatedAllocation{first}}
 	record := func(receipt *ValidationReceipt) SnapshotRecord {
 		t.Helper()
 		receipt.StateHash, _ = hashAllocations(receipt.ContractID, receipt.SchemaID, receipt.Allocations)

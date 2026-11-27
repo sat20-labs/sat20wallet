@@ -162,13 +162,13 @@ func prepareSDKPWARegtestChannelV2Asset(t *testing.T, source, receiver *wallet.M
 	if topUp < 330 {
 		topUp = 330
 	}
-	ticker := source.GetTickerInfoV2(asset.String())
+	ticker := source.GetIndexerClient().GetTickInfo(asset)
 	if ticker == nil {
 		// Reuse the existing SDK deploy/mint preparation; it deploys only when
 		// absent and confirms the real inscription through the supplied miner.
 		require.NotNil(t, mine, "real ORDX deployment/mint needs L1 confirmation")
 		prepareSDKPWARegtestORDXSendAsset(t, source, mine)
-		ticker = source.GetTickerInfoV2(asset.String())
+		ticker = source.GetIndexerClient().GetTickInfo(asset)
 		require.NotNil(t, ticker, "the real indexer must expose the prepared PWAPOS ticker")
 	}
 	require.Equal(t, 1, ticker.N, "PWAPOS preparation relies on its existing one-sat binding")

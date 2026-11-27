@@ -727,7 +727,7 @@ func TestRGB11IssueFirstReleaseSchemas(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, reader := range []*Manager{manager, viewer} {
-				info := reader.GetTickerInfoV2(issued.AssetName.String())
+				info := reader.GetTickerInfo(&issued.AssetName)
 				if info == nil || info.Description != test.request.Details {
 					t.Fatalf("ticker description after issue/import: got %+v, want %q", info, test.request.Details)
 				}
@@ -740,7 +740,7 @@ func TestRGB11IssueFirstReleaseSchemas(t *testing.T) {
 				viewerState.TickerInfos[0].ContractID != issued.ContractID {
 				t.Fatalf("zero-balance imported contract missing from state: %+v", viewerState)
 			}
-			expectedName, err := rgb11wallet.NewContractAssetKey(issued.ContractID, issued.AssetName.Type)
+			expectedName, err := rgb11wallet.NewContractAssetKey(issued.ContractID, issued.AssetName.Type, test.request.Ticker)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -765,10 +765,13 @@ func TestRGB11IssueFirstReleaseSchemas(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			id := issued.AssetName.Ticker
+			id, idErr := rgb11wallet.RGB11ContractIDHex(issued.ContractID)
+			if idErr != nil {
+				t.Fatal(idErr)
+			}
 			canonical := "rgb11:" + issued.AssetName.Type + ":" + strings.ToLower(test.request.Ticker) + "@" + id[len(id)-4:]
 			if len(state.TickerInfos) != 1 || state.TickerInfos[0].AssetKey != issued.AssetName.String() ||
-				state.TickerInfos[0].ContractID != issued.ContractID || state.TickerInfos[0].Ticker != expectedLabel ||
+				state.TickerInfos[0].ContractID != issued.ContractID || state.TickerInfos[0].DisplayTicker != expectedLabel ||
 				state.TickerInfos[0].CanonicalName != canonical || state.TickerInfos[0].Verified {
 				t.Fatalf("unexpected RGB11 naming presentation: %+v", state.TickerInfos)
 			}

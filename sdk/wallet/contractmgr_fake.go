@@ -11,7 +11,7 @@ import (
 )
 
 func (p *Manager) GetTickerInfo(name *swire.AssetName) *indexer.TickerInfo {
-	return p.getTickerInfo(name)
+	return p.lookupTickerInfo(tickerLookupName(name), true)
 }
 
 func (p *Manager) GetWalletMgr() *Manager {

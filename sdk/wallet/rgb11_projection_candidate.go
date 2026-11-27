@@ -518,7 +518,7 @@ func sameRGB11CarrierBinding(left, right *rgb11wallet.CarrierBinding) bool {
 func rgb11ValidatedAllocationForProof(proof *rgb11wallet.AllocationProof,
 	receipt *rgb11wallet.ValidationReceipt, output *indexer.TxOutput) *rgb11wallet.ValidatedAllocation {
 	if proof == nil || receipt == nil || output == nil || output.OutPointStr != proof.OutPoint ||
-		!rgb11wallet.ContractAssetKeyMatches(proof.AssetName, receipt.ContractID) || proof.CarrierBinding == nil ||
+		!rgb11wallet.IsCanonicalAssetName(proof.AssetName) || proof.CarrierBinding == nil ||
 		proof.CarrierBinding.OutPoint != proof.OutPoint {
 		return nil
 	}
@@ -674,11 +674,11 @@ func rgb11ProofOutpointKey(contractID, operationID string, assignmentType, assig
 }
 
 func rgb11ConsumerInputKey(consumer rgb11SnapshotConsumerInput) (string, error) {
-	assetKey, err := rgb11wallet.NewContractAssetKey(consumer.ContractID, indexer.ASSET_TYPE_FT)
+	contractID, err := rgb11wallet.RGB11ContractIDHex(consumer.ContractID)
 	if err != nil {
 		return "", err
 	}
-	return rgb11ProofIndexKey(assetKey.Ticker, consumer.InputOperationID,
+	return rgb11ProofIndexKey(contractID, consumer.InputOperationID,
 		consumer.AssignmentType, consumer.AssignmentIndex), nil
 }
 
@@ -849,14 +849,20 @@ func (p *rgb11Manager) resolveRGB11Recovery(ctx context.Context, snapshot *RGB11
 	requirements := rgb11ProofConfirmationRequirements(transfers)
 	proofsByIdentity := make(map[string]*rgb11wallet.AllocationProof, len(proofs))
 	proofsByOutpoint := make(map[string]*rgb11wallet.AllocationProof, len(proofs))
+	proofContractIDs := make(map[*rgb11wallet.AllocationProof]string, len(proofs))
 	for _, proof := range proofs {
 		if proof == nil || proof.AssetName.Ticker == "" || proof.OperationID == "" {
 			return nil, rgb11wallet.ErrInvalidProof
 		}
-		contractID, contractErr := rgb11ContractIDFromAssetName(proof.AssetName)
+		receipt := receipts[proof.ConsignmentHash]
+		if receipt == nil || rgb11ValidatedAllocationForProof(proof, receipt, outputs[proof.OutPoint]) == nil {
+			return nil, rgb11wallet.ErrInvalidProof
+		}
+		contractID, contractErr := rgb11wallet.RGB11ContractIDHex(receipt.ContractID)
 		if contractErr != nil {
 			return nil, contractErr
 		}
+		proofContractIDs[proof] = contractID
 		identity := rgb11ProofIndexKey(contractID, proof.OperationID, proof.AssignmentType, proof.AssignmentIndex)
 		if proofsByIdentity[identity] != nil || proofsByOutpoint[proof.OutPoint+"|"+proof.AssetName.String()] != nil {
 			return nil, rgb11wallet.ErrInvalidProof
@@ -926,7 +932,7 @@ func (p *rgb11Manager) resolveRGB11Recovery(ctx context.Context, snapshot *RGB11
 		raw := objects[proof.ConsignmentHash]
 		stored := receipts[proof.ConsignmentHash]
 		if len(raw) == 0 || stored == nil || stored.ConsignmentHash != proof.ConsignmentHash ||
-			!rgb11wallet.ContractAssetKeyMatches(proof.AssetName, stored.ContractID) {
+			!rgb11wallet.IsCanonicalAssetName(proof.AssetName) {
 			return fmt.Errorf("RGB11 proof %s is missing its immutable validated object", proof.OutPoint)
 		}
 		objectHash := sha256.Sum256(raw)
@@ -1003,7 +1009,11 @@ func (p *rgb11Manager) resolveRGB11Recovery(ctx context.Context, snapshot *RGB11
 		return validateCarrier(proof, output, utxo)
 	}
 	validateForeignPreparedParent := func(row rgb11wallet.ValidatedConsumer,
-		allocations []rgb11wallet.HistoricalAllocation) error {
+		prepared *rgb11wallet.PreparedHistoryValidation) error {
+		if row.ContractID != prepared.ContractID {
+			return rgb11wallet.ErrValidationReceipt
+		}
+		allocations := prepared.HistoricalAllocations
 		// These allocations come from core's complete HistoricalStates report:
 		// registerOutputs derived the full outpoint and canonical seal disclosure
 		// only after validating the operation's DBC witness. Match the exact
@@ -1013,8 +1023,7 @@ func (p *rgb11Manager) resolveRGB11Recovery(ctx context.Context, snapshot *RGB11
 			allocation := &allocations[i]
 			if allocation.Allocation.OperationID != row.InputOperationID ||
 				allocation.Allocation.AssignmentType != row.AssignmentType ||
-				allocation.Allocation.AssignmentIndex != row.AssignmentIndex ||
-				!rgb11wallet.ContractAssetKeyMatches(allocation.Allocation.AssetName, row.ContractID) {
+				allocation.Allocation.AssignmentIndex != row.AssignmentIndex {
 				continue
 			}
 			if matched != nil {
@@ -1026,7 +1035,6 @@ func (p *rgb11Manager) resolveRGB11Recovery(ctx context.Context, snapshot *RGB11
 			matched.Allocation.OutPoint == "" || matched.Allocation.WitnessTxID == "" {
 			return fmt.Errorf("prepared RGB11 parent Opout lacks a unique confirmed core allocation")
 		}
-		assetName := matched.Allocation.AssetName
 
 		outpoint := matched.Allocation.OutPoint
 		parsed, parseErr := wire.NewOutPointFromString(outpoint)
@@ -1072,7 +1080,11 @@ func (p *rgb11Manager) resolveRGB11Recovery(ctx context.Context, snapshot *RGB11
 			return nil
 		}
 
-		parentInput := rgb11ProofIndexKey(assetName.Ticker, row.InputOperationID,
+		contractID, idErr := rgb11wallet.RGB11ContractIDHex(row.ContractID)
+		if idErr != nil {
+			return idErr
+		}
+		parentInput := rgb11ProofIndexKey(contractID, row.InputOperationID,
 			row.AssignmentType, row.AssignmentIndex)
 		consumerRows := consumersByInput[parentInput]
 		spenderID, consumerOperation := "", ""
@@ -1090,7 +1102,7 @@ func (p *rgb11Manager) resolveRGB11Recovery(ctx context.Context, snapshot *RGB11
 				continue
 			}
 			if consumer.WitnessTxID == "" || consumer.ConsumerOperationID == "" ||
-				!rgb11wallet.ContractAssetKeyMatches(assetName, consumer.ContractID) {
+				row.ContractID != consumer.ContractID {
 				return fmt.Errorf("prepared RGB11 parent has an incomplete consumer edge")
 			}
 			if spenderID != "" && (spenderID != consumer.WitnessTxID || consumerOperation != consumer.ConsumerOperationID ||
@@ -1112,7 +1124,7 @@ func (p *rgb11Manager) resolveRGB11Recovery(ctx context.Context, snapshot *RGB11
 				return fmt.Errorf("validate prepared RGB11 parent consumer history: %w", historyErr)
 			}
 			container, decodeErr := coreconsignment.Decode(objects[hash])
-			if decodeErr != nil || container == nil || !rgb11wallet.ContractAssetKeyMatches(assetName, container.ContractID) {
+			if decodeErr != nil || container == nil || row.ContractID != container.ContractID {
 				return fmt.Errorf("prepared RGB11 parent consumer contract mismatch: %w", errRGB11ProjectionEvidence(decodeErr))
 			}
 		}
@@ -1180,7 +1192,7 @@ func (p *rgb11Manager) resolveRGB11Recovery(ctx context.Context, snapshot *RGB11
 			if outspend.Spent {
 				spenderID := outspend.SpendingTx
 				rows := consumersByInput[rgb11ProofIndexKey(
-					mustRGB11ContractID(proof.AssetName), proof.OperationID, proof.AssignmentType, proof.AssignmentIndex)]
+					proofContractIDs[proof], proof.OperationID, proof.AssignmentType, proof.AssignmentIndex)]
 				if spenderID == "" || spenderID == "unknown" {
 					candidateWitness, candidateOperation := "", ""
 					for _, row := range rows {
@@ -1188,7 +1200,7 @@ func (p *rgb11Manager) resolveRGB11Recovery(ctx context.Context, snapshot *RGB11
 							continue
 						}
 						if row.WitnessTxID == "" || row.ConsumerOperationID == "" ||
-							!rgb11wallet.ContractAssetKeyMatches(proof.AssetName, row.ContractID) {
+							stored.ContractID != row.ContractID {
 							return nil, fmt.Errorf("RGB11 allocation %s has an incomplete core consumer edge", proof.OutPoint)
 						}
 						if candidateWitness != "" && (candidateWitness != row.WitnessTxID ||
@@ -1227,7 +1239,7 @@ func (p *rgb11Manager) resolveRGB11Recovery(ctx context.Context, snapshot *RGB11
 					if row.WitnessTxID != spenderID {
 						continue
 					}
-					if row.ConsumerOperationID == "" || !rgb11wallet.ContractAssetKeyMatches(proof.AssetName, row.ContractID) {
+					if row.ConsumerOperationID == "" || stored.ContractID != row.ContractID {
 						return nil, fmt.Errorf("RGB11 allocation %s consumer contract or operation mismatch", proof.OutPoint)
 					}
 					if consumerOperation != "" && consumerOperation != row.ConsumerOperationID {
@@ -1254,7 +1266,7 @@ func (p *rgb11Manager) resolveRGB11Recovery(ctx context.Context, snapshot *RGB11
 					}
 					container, decodeErr := coreconsignment.Decode(objects[hash])
 					if decodeErr != nil || container == nil ||
-						!rgb11wallet.ContractAssetKeyMatches(proof.AssetName, container.ContractID) {
+						stored.ContractID != container.ContractID {
 						return nil, fmt.Errorf("RGB11 allocation consumer %s contract mismatch: %w", hash,
 							errRGB11ProjectionEvidence(decodeErr))
 					}
@@ -1324,7 +1336,7 @@ func (p *rgb11Manager) resolveRGB11Recovery(ctx context.Context, snapshot *RGB11
 			var preparedReceipt *rgb11wallet.ValidationReceipt
 			if prepared != nil {
 				stored := receipts[proof.ConsignmentHash]
-				if stored == nil || !rgb11wallet.ContractAssetKeyMatches(proof.AssetName, stored.ContractID) {
+				if stored == nil || stored.ContractID != prepared.ContractID {
 					return nil, fmt.Errorf("RGB11 prepared proof %s has no canonical stored contract identity: %w",
 						proof.OutPoint, rgb11wallet.ErrValidationReceipt)
 				}
@@ -1390,15 +1402,15 @@ func (p *rgb11Manager) resolveRGB11Recovery(ctx context.Context, snapshot *RGB11
 			return fmt.Errorf("absent RGB11 transition %s has no bound parent inputs", proof.OperationID)
 		}
 		for _, row := range parentRows {
-			assetKey, keyErr := rgb11wallet.NewContractAssetKey(row.ContractID, indexer.ASSET_TYPE_FT)
+			contractID, keyErr := rgb11wallet.RGB11ContractIDHex(row.ContractID)
 			if keyErr != nil {
 				return keyErr
 			}
-			parentKey := rgb11ProofIndexKey(assetKey.Ticker, row.InputOperationID,
+			parentKey := rgb11ProofIndexKey(contractID, row.InputOperationID,
 				row.AssignmentType, row.AssignmentIndex)
 			parent := proofsByIdentity[parentKey]
 			if parent == nil {
-				if err := validateForeignPreparedParent(row, prepared.HistoricalAllocations); err != nil {
+				if err := validateForeignPreparedParent(row, prepared); err != nil {
 					return fmt.Errorf("absent RGB11 transition %s foreign parent %s is not positively verified: %w",
 						proof.OperationID, parentKey, err)
 				}
@@ -1443,7 +1455,7 @@ func (p *rgb11Manager) resolveRGB11Recovery(ctx context.Context, snapshot *RGB11
 			return nil, rgb11BackupFaults(faults)
 		}
 		proof := state.proof
-		key := rgb11ProofIndexKey(mustRGB11ContractID(f.AssetName), proof.OperationID,
+		key := rgb11ProofIndexKey(proofContractIDs[proof], proof.OperationID,
 			proof.AssignmentType, proof.AssignmentIndex)
 		mined := false
 		for _, edge := range consumersByInput[key] {
@@ -1613,26 +1625,6 @@ func (p *rgb11Manager) resolveRGB11Recovery(ctx context.Context, snapshot *RGB11
 			return nil
 		},
 	}, nil
-}
-
-func mustRGB11ContractID(asset indexer.AssetName) string {
-	return asset.Ticker
-}
-
-func rgb11ContractIDFromAssetName(asset indexer.AssetName) (string, error) {
-	if asset.Protocol != rgb11wallet.Protocol || asset.Ticker == "" {
-		return "", rgb11wallet.ErrInvalidRGB11Asset
-	}
-	id, err := consensus.IDFromHex(asset.Ticker)
-	if err != nil {
-		return "", rgb11wallet.ErrInvalidRGB11Asset
-	}
-	contractID := consensus.ContractID(id).String()
-	canonical, err := rgb11wallet.NewContractAssetKey(contractID, asset.Type)
-	if err != nil || canonical != asset {
-		return "", rgb11wallet.ErrInvalidRGB11Asset
-	}
-	return canonical.Ticker, nil
 }
 
 func containsString(values []string, expected string) bool {

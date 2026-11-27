@@ -198,7 +198,7 @@ export async function runSDKUICases(helpers, fixture) {
     amounts: kind === 'IFA' ? ['40', '60'] : ['100'], inflation: kind === 'IFA' ? ['10', '10'] : [], reject_url: '',
   })
   const importAsset = async (owner, receiver, asset) => {
-    const files = await rgb(owner, 'exportRGB11Contract', { asset: asset.asset })
+    const files = await rgb(owner, 'exportRGB11Contract', { contract_id: asset.contract_id })
     const imported = await rgb(receiver, 'importRGB11Contract', { data: files.find(f => f.name.endsWith('.rgb')).data })
     assert.equal(imported.contract_id, asset.contract_id)
     assert.equal(imported.available, '0')
@@ -711,7 +711,7 @@ export async function runSDKUICases(helpers, fixture) {
       ? (await rgb(owner, 'getRGB11View')).assets.find(a => a.kind === 'NIA')
       : await issue(owner, 'NIA', 'UIBLIND')
     assert.ok(asset)
-    const files = await rgb(owner, 'exportRGB11Contract', { asset: asset.asset })
+    const files = await rgb(owner, 'exportRGB11Contract', { contract_id: asset.contract_id })
     await rgb(receiver, 'importRGB11Contract', { data: Buffer.from('invalid contract').toString('base64') }, true)
     const importedAsset = await rgb(receiver, 'importRGB11Contract', { data: files.find(f => f.name.endsWith('.asc')).data })
     assert.equal(importedAsset.contract_id, asset.contract_id)

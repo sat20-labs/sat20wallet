@@ -3,7 +3,6 @@ package wallet
 import (
 	"bytes"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -16,36 +15,6 @@ import (
 
 // 以下接口，作为不依赖钱包的基础api向上层开放
 // 这里的stp模块可能是一个独立的模块，但跟管理钱包的stp模块共享底层数据
-
-func (p *Manager) GetTickerInfoV2(assetName string) *indexer.TickerInfo {
-	asset := ParseAssetString(assetName)
-	if asset == nil {
-		Log.Errorf("invalid asset name %s", assetName)
-		return nil
-	}
-
-	if asset.Protocol == rgb11wallet.Protocol {
-		info := p.getTickerInfo(asset)
-		if info == nil || len(info.Content) == 0 {
-			return info
-		}
-		var ext rgb11wallet.TickerExt
-		if json.Unmarshal(info.Content, &ext) != nil {
-			return info
-		}
-		detail := *info
-		detail.ContractID = asset.Ticker
-		detail.DisplayName = rgb11DisplayName(*asset, ext.Ticker)
-		return &detail
-	}
-	// Public queries include changing mint totals. Internal construction keeps
-	// its metadata cache.
-	if asset.String() == ASSET_PLAIN_SAT.String() ||
-		asset.String() == indexer.ASSET_ALL_SAT.String() {
-		return p.getTickerInfo(asset)
-	}
-	return p.l1IndexerClient.GetTickInfo(asset)
-}
 
 func (p *Manager) LockUtxo(address, utxo, reason string) (opErr error) {
 	opLogID := p.beginWalletLog("utxo", "lock_utxo_l1", "Lock L1 UTXO")

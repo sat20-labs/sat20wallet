@@ -26,11 +26,20 @@ import (
 // remain available to native SDK callers; they are not exported to the PWA.
 func rgbAssetInfo(state *RGB11State, key string) (*RGB11TickerInfo, error) {
 	for _, t := range state.TickerInfos {
-		if t.AssetName.String() == key || t.ContractID == key {
+		if t.AssetName.String() == key {
 			return t, nil
 		}
 	}
 	return nil, fmt.Errorf("RGB asset is not available in the current wallet")
+}
+
+func rgbAssetInfoByContractID(state *RGB11State, id string) (*RGB11TickerInfo, error) {
+	for _, ticker := range state.TickerInfos {
+		if ticker.ContractID == id {
+			return ticker, nil
+		}
+	}
+	return nil, fmt.Errorf("RGB contract is not available in the current wallet")
 }
 
 func (p *Manager) rgbWalletInfo(state *RGB11State, key string) (*RGB11TickerInfo, error) {
@@ -58,9 +67,9 @@ func rgbDisplayAmount(a indexer.AssetInfo) AssetAmount {
 	return AssetAmount{Asset: a.Name.String(), Amount: a.Amount.String(), Precision: uint8(a.Amount.Precision)}
 }
 func (p *Manager) rgbAssetView(t *RGB11TickerInfo, state *RGB11State) RGBAssetView {
-	v := RGBAssetView{Asset: t.AssetName.String(), ContractID: t.ContractID, Ticker: t.Ticker, Name: t.DisplayName, Precision: uint8(t.Divisibility), Available: "0", Pending: "0", CanExport: true, CanInvoice: true, CanonicalName: t.CanonicalName, GenesisAddress: t.GenesisAddress, NamingStatus: t.NamingStatus, Verified: t.Verified}
+	v := RGBAssetView{Asset: t.AssetName.String(), ContractID: t.ContractID, Ticker: t.Ticker, DisplayTicker: t.DisplayTicker, Name: t.DisplayName, Precision: uint8(t.Divisibility), Available: "0", Pending: "0", CanExport: true, CanInvoice: true, CanonicalName: t.CanonicalName, GenesisAddress: t.GenesisAddress, NamingStatus: t.NamingStatus, Verified: t.Verified}
 	if name := ParseAssetString(t.CanonicalName); name != nil && name.Type == indexer.ASSET_TYPE_FT {
-		if id, err := p.loadRGB11Name(name.Ticker); err == nil && id == t.AssetName.Ticker {
+		if id, err := p.loadRGB11Name(name.Ticker); err == nil && t.TickerInfo != nil && id == t.TickerInfo.ContractID {
 			v.ChainAsset = name.String()
 		}
 	}
@@ -565,23 +574,15 @@ func (p *Manager) rgbCurrentAsset(id string) (*RGBAssetView, error) {
 	if err != nil {
 		return nil, err
 	}
-	asset, err := rgbAssetInfo(state, id)
+	asset, err := rgbAssetInfoByContractID(state, id)
 	if err != nil {
 		return nil, err
 	}
 	view := p.rgbAssetView(asset, state)
 	return &view, nil
 }
-func (p *Manager) ExportRGBContract(asset string) ([]ExportFile, error) {
-	state, err := p.GetRGB11State()
-	if err != nil {
-		return nil, err
-	}
-	info, err := p.rgbWalletInfo(state, asset)
-	if err != nil {
-		return nil, err
-	}
-	result, err := p.ExportRGB11Contract(info.ContractID)
+func (p *Manager) ExportRGBContract(contractID string) ([]ExportFile, error) {
+	result, err := p.ExportRGB11Contract(contractID)
 	if err != nil {
 		return nil, err
 	}
@@ -711,7 +712,7 @@ func (p *Manager) rgbReceiveView(state *RGB11State, id string) (*RGBReceiveView,
 		}
 		transport = transfer.TransportMode
 	} else {
-		info, err = rgbAssetInfo(state, resv.ContractID)
+		info, err = rgbAssetInfoByContractID(state, resv.ContractID)
 		if err != nil {
 			return nil, err
 		}

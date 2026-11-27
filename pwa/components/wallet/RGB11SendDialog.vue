@@ -162,7 +162,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/toast-new'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-const props = defineProps<{asset: {key?: string; asset?: string; chain_asset?: string; contract_id?: string; label?: string} | null; resumeTransferId?: string; inflation?: boolean}>()
+const props = defineProps<{asset: {key?: string; asset?: string; contract_id?: string; label?: string} | null; resumeTransferId?: string; inflation?: boolean}>()
 const emit = defineEmits<{(event: 'completed'): void}>()
 const isOpen = defineModel('open', {type: Boolean})
 const {t, te} = useI18n()
@@ -234,7 +234,7 @@ const prepare = () => run(async () => {
     const result = props.inflation
       ? await walletManager.prepareRGB11Inflation(destination.value.trim(), Number(wallet.btcFeeRate || 1))
       : await walletManager.prepareRGB11Transfer({fee_rate: Number(wallet.btcFeeRate || 1), recipients: mode.value === 'address'
-        ? [{destination: destination.value.trim(), asset: props.asset?.chain_asset || assetKey(), amount: amount.value.trim()}]
+        ? [{destination: destination.value.trim(), asset: assetKey(), amount: amount.value.trim()}]
         : destination.value.split('\n').map(value => value.trim()).filter(Boolean).map(value => ({destination: value, asset: '', amount: ''}))})
     if (result[0] || !result[1]) throw result[0] || new Error(t('rgb11Transfer.prepareFailed'))
     if (preparedGeneration !== generation || !isOpen.value) {

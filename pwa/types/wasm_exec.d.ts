@@ -430,7 +430,7 @@ interface SatsnetStp {
   isWalletExisting(): SatsnetResponse
   importWallet(mnemonic: string, passwork: string): SatsnetResponse
   init(cfg: any, logLevel: number): SatsnetResponse
-  getTickerInfo(asset: string): SatsnetResponse
+  getTickerInfo(asset: string, refreshMint?: boolean): SatsnetResponse
   runesAmtV2ToV3(asset, runesAmt: string | number): SatsnetResponse
   runesAmtV3ToV2(asset, runesAmt: string | number): SatsnetResponse
   lockToChannel(

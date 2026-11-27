@@ -2,15 +2,13 @@ package rgb11wallet
 
 import (
 	"fmt"
-
-	indexer "github.com/sat20-labs/indexer/common"
 )
 
 func (s *ProjectionStore) localAssetNameKey(contractID string) ([]byte, error) {
 	if s == nil || s.db == nil {
 		return nil, ErrWalletScope
 	}
-	identity, err := NewContractAssetKey(contractID, indexer.ASSET_TYPE_FT)
+	id, err := RGB11ContractIDHex(contractID)
 	if err != nil {
 		return nil, err
 	}
@@ -18,7 +16,7 @@ func (s *ProjectionStore) localAssetNameKey(contractID string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append(prefix, identity.Ticker...), nil
+	return append(prefix, id...), nil
 }
 
 // SaveLocalAssetName writes local SDK metadata only. It never rewrites a

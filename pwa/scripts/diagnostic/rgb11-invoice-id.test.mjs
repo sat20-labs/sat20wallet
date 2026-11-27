@@ -30,24 +30,23 @@ const evaluateInit = async (name, mocks, dependencies = []) => {
   return Function(...Object.keys(mocks), `${js}; return ${name}`)(...Object.values(mocks))
 }
 
-test('invoice selection uses the full contract key, never the display ticker', async () => {
-  const key = `rgb11:f:${'01'.repeat(32)}`
+test('invoice selection uses the canonical asset name, never the display ticker', async () => {
+  const key = 'rgb11:f:usdt@0101'
   for (const [asset, expected] of [[{key, ticker: 'USDT'}, key], [{asset:key, ticker:'USDT'}, key], [{ticker:'USDT'}, '']]) {
     const value = await evaluateInit('assetKey', {props: {asset}, computed: factory => ({value:factory()})})
     assert.equal(value.value, expected)
   }
 })
 
-test('invoice sends the registered name when available and keeps the full contract key for the result', async () => {
+test('invoice submits the selected canonical name and verifies the same name in the result', async () => {
   // SDK validation is not duplicated here. The real WASM negative cases are in
   // sdk-wasm-e2e.mjs (createRGB11Invoice: missing asset, zero amount, invalid transport).
-  const key = `rgb11:f:${'01'.repeat(32)}`
-  const shortName = 'rgb11:f:usdt@0101'
+  const key = 'rgb11:f:usdt@0101'
   const invoice = {id: 'invoice', amount: {asset: key}}
   const cases = [
     {asset: '', result: null},
     {asset: key, result: null},
-    {asset: key, registered: shortName, result: invoice},
+    {asset: key, registered: 'rgb11:f:different@0202', result: invoice},
   ]
   for (const {asset, registered, result} of cases) {
     const calls = [], message = {value:''}, loading = {value:false}, receive = {value:null}
@@ -66,7 +65,7 @@ test('invoice sends the registered name when available and keeps the full contra
     // Keep the real request guards and timer cleanup in the same closure as generate.
     const generate = await evaluateInit('generate', mocks, ['createPending', 'isCurrent', 'clearCreateWait', 'run'])
     await generate()
-    assert.deepEqual(calls, [{asset:registered || asset,amount:'1',receive_mode:'witness',transport:'manual',proxy_endpoint:''}])
+    assert.deepEqual(calls, [{asset,amount:'1',receive_mode:'witness',transport:'manual',proxy_endpoint:''}])
     assert.equal(message.value,result ? '' : 'SDK rejected invoice')
     assert.equal(receive.value,result)
     assert.equal(loads,result ? 1 : 0)

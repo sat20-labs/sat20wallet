@@ -62,7 +62,8 @@ func (p *Manager) validateRGB11DepositAnchor(ctx context.Context, contract Contr
 		return err
 	}
 	id, err := dkvs.VerifyRGB11Name(proof.NameRecord, name.Ticker)
-	if err != nil || id != result.Asset.Name.Ticker {
+	resultID, idErr := rgb11wallet.RGB11ContractIDHex(result.ContractID)
+	if err != nil || idErr != nil || id != resultID || result.Asset.Name != name {
 		return ErrRGB11PublicIdentityMismatch
 	}
 	material, err = nativeproof.BuildRGB11(proof.Consignment, proof.Reveals)
@@ -198,7 +199,11 @@ func (p *Manager) CreateRGB11DepositAnchor(ctx context.Context, contract Contrac
 		return nil, err
 	}
 	mappedAsset := validated.Asset
-	material, err := p.rgb11NamedProof(assetName.AssetName, validated.Asset.Name.Ticker, source.PublicProof)
+	contractID, err := rgb11wallet.RGB11ContractIDHex(validated.ContractID)
+	if err != nil {
+		return nil, err
+	}
+	material, err := p.rgb11NamedProof(assetName.AssetName, contractID, source.PublicProof)
 	if err != nil {
 		return nil, err
 	}

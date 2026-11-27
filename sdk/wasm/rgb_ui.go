@@ -162,12 +162,14 @@ func exportRGB11Contract(_ js.Value, args []js.Value) any {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
 	var request struct {
-		Asset string `json:"asset"`
+		ContractID string `json:"contract_id"`
 	}
 	if err := accountParseJSON(args, &request); err != nil {
 		return createJsRet(nil, -1, err.Error())
 	}
-	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) { return accountViewResult(_mgr.ExportRGBContract(request.Asset)) }))
+	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
+		return accountViewResult(_mgr.ExportRGBContract(request.ContractID))
+	}))
 }
 func registerRGBViews(obj js.Value) {
 	obj.Set("getRGB11View", js.FuncOf(getRGB11View))

@@ -107,7 +107,7 @@ func (p *Manager) sendRGB11AssetsWithChannel(localWallet common.Wallet, dest []*
 	if err != nil {
 		return nil, 0, err
 	}
-	info := p.getTickerInfo(local)
+	info := p.GetTickerInfo(local)
 	if info == nil {
 		return nil, 0, fmt.Errorf("unknown RGB11 ticker %s", name.String())
 	}
@@ -299,7 +299,7 @@ func (p *Manager) getSendTickerInfo_SatsNet(name *indexer.AssetName) *indexer.Ti
 	if name.Protocol != rgb11wallet.Protocol {
 		return p.getTickerInfo(name)
 	}
-	if p.l2IndexerClient == nil {
+	if p.l2IndexerClient == nil || !rgb11wallet.IsCanonicalAssetName(*name) {
 		return nil
 	}
 	info := p.l2IndexerClient.GetTickInfo(name)

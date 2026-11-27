@@ -1,8 +1,10 @@
 package wallet
 
 import (
-	indexer "github.com/sat20-labs/indexer/common"
 	"time"
+
+	indexer "github.com/sat20-labs/indexer/common"
+	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 )
 
 // Read-only market projection. The rolling window is shared by visitors and
@@ -72,10 +74,14 @@ func (p *SwapContractRuntime) readMarketDay(now int64) marketDay {
 	return d
 }
 
-// Optional metadata must never turn a market read into an L1 RPC.
+// Market reads keep non-RGB metadata cache-only. RGB metadata can be
+// rebuilt through the shared local-first lookup without querying the L1 indexer.
 func (p *Manager) marketTicker(name *indexer.AssetName) *indexer.TickerInfo {
-	if p == nil {
+	if p == nil || name == nil {
 		return nil
+	}
+	if name.Protocol == rgb11wallet.Protocol {
+		return p.GetTickerInfo(name)
 	}
 	key := name.String()
 	p.mutex.RLock()
@@ -87,15 +93,11 @@ func (p *Manager) marketTicker(name *indexer.AssetName) *indexer.TickerInfo {
 	if p.db == nil {
 		return nil
 	}
-	buf, err := p.db.Read([]byte(GetTickerInfoKey(key)))
-	if err != nil {
+	stored, err := loadTickerInfo(p.db, name)
+	if err != nil || stored.AssetName != *name {
 		return nil
 	}
-	var stored indexer.TickerInfo
-	if DecodeFromBytes(buf, &stored) != nil || stored.AssetName != *name {
-		return nil
-	}
-	return &stored
+	return stored
 }
 
 func (p *SwapContractRuntime) MarketView(detail bool) map[string]any {

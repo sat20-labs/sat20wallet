@@ -82,7 +82,7 @@ func issuedChannelFunding(t *testing.T) ([]ChannelFunding, *channelPackageFacts)
 	require.NoError(t, err)
 	decoded, err := nativeproof.Decode(proof)
 	require.NoError(t, err)
-	asset, err := NewContractAssetKey(issued.ContractID, indexer.ASSET_TYPE_FT)
+	asset, err := NewContractAssetKey(issued.ContractID, indexer.ASSET_TYPE_FT, "STP")
 	require.NoError(t, err)
 	var sources []ChannelFunding
 	for i, amount := range []int64{3000, 4000} {

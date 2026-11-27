@@ -315,8 +315,8 @@ const runIssue = async () => {
       reject_url: parsedRejectUrl.value,
     })
     if (err || !result) throw err || new Error(t('rgb11Transfer.issueFailed'))
-    issuedSummary.value = { ticker: normalizedTicker, displayName: result.name, contractId: result.contract_id, assetName: result.canonical_name }
-    const [exportError, files] = await walletManager.exportRGB11Contract(result.asset)
+    issuedSummary.value = { ticker: normalizedTicker, displayName: result.name, contractId: result.contract_id, assetName: result.asset }
+    const [exportError, files] = await walletManager.exportRGB11Contract(result.contract_id)
     if (exportError) throw exportError
     const armored = files?.find(file => file.name.endsWith('.asc'))
     armor.value = armored ? exportFileText(armored) : ''

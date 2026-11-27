@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	indexer "github.com/sat20-labs/indexer/common"
@@ -71,6 +72,7 @@ type PreparedValidation struct {
 // edges from an embedded prepared branch. Its allocations describe the RGB
 // graph only; they do not assert current Bitcoin ownership or spendability.
 type PreparedHistoryValidation struct {
+	ContractID            string
 	Allocations           []ValidatedAllocation
 	HistoricalAllocations []HistoricalAllocation
 	Outputs               map[string]*BitcoinUTXO
@@ -162,17 +164,24 @@ func (r *ValidationReceipt) validateStatus(expectedHash, expectedStatus string) 
 		r.ConsignmentHash != expectedHash || r.ContractID == "" || r.SchemaID == "" {
 		return ErrValidationReceipt
 	}
+	if _, err := RGB11ContractIDHex(r.ContractID); err != nil {
+		return ErrValidationReceipt
+	}
 	if r.ValidatedAt == 0 {
 		r.ValidatedAt = time.Now().Unix()
 	}
+	var ticker string
 	for _, allocation := range r.Allocations {
-		if allocation.OutPoint == "" || allocation.AssetName.Protocol != Protocol ||
-			allocation.AssetName.Ticker == "" || allocation.Amount.Sign() < 0 ||
+		base, _, _ := strings.Cut(allocation.AssetName.Ticker, "@")
+		if allocation.OutPoint == "" || !IsCanonicalAssetName(allocation.AssetName) ||
+			!ContractAssetKeyMatches(allocation.AssetName, r.ContractID, base) || allocation.Amount.Sign() < 0 ||
+			(ticker != "" && allocation.AssetName.Ticker != ticker) ||
 			allocation.OperationID == "" || allocation.AssignmentType > 0xffff ||
 			len(allocation.SealDisclosure) == 0 ||
 			(allocation.StateClass != "declarative" && allocation.StateClass != "fungible" && allocation.StateClass != "structured") {
 			return fmt.Errorf("%w: invalid allocation", ErrValidationReceipt)
 		}
+		ticker = allocation.AssetName.Ticker
 	}
 	return nil
 }

@@ -26,7 +26,7 @@ func newRGBClosedPrivateBurnFixture(t *testing.T) *rgbClosedPrivateBurnFixture {
 	t.Helper()
 	script := append([]byte{0, 32}, make([]byte, 32)...)
 	script[len(script)-1] = 1
-	asset := swire.AssetInfo{Name: indexer.AssetName{Protocol: "rgb11", Type: "f", Ticker: strings.Repeat("a", 64)}, Amount: *indexer.NewDecimalWithScale(4975, 2)}
+	asset := swire.AssetInfo{Name: indexer.AssetName{Protocol: "rgb11", Type: "f", Ticker: "private@aaaa"}, Amount: *indexer.NewDecimalWithScale(4975, 2)}
 	previous := swire.NewMsgTx(2)
 	// A zero-input source is ambiguous with the witness marker on decode.
 	// Keep this local prevout fixture structurally valid before testing burns.
@@ -99,7 +99,7 @@ func TestSTPRGBClosedPrivateBurnExactAmountAndChannelControls(t *testing.T) {
 			case "selectedOnly2500":
 				want.SetInt64(2500)
 			case "wrongAsset":
-				f.receipt.output.Assets[0].Name.Ticker = strings.Repeat("c", 64)
+				f.receipt.output.Assets[0].Name.Ticker = "private@cccc"
 			case "wrongPrecision":
 				f.receipt.output.Assets[0].Amount.Precision++
 			case "boundAsset":

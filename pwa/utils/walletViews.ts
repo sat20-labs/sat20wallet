@@ -42,10 +42,10 @@ export interface RGBAssetView {
   naming_status: string
   verified: boolean
   asset: string
-  chain_asset?: string
   contract_id: string
   kind: string
   ticker: string
+  display_ticker?: string
   name: string
   precision: number
   available: string
@@ -56,16 +56,20 @@ export interface RGBAssetView {
   can_export: boolean
 }
 
-export function assetNameLabel(key: string, assets: readonly RGBAssetView[] = []): string {
-  if (!key.startsWith('rgb11:') || /^rgb11:[^:]+:[a-z0-9]+(?:-[a-z0-9]+)*@[0-9a-f]{4}$/.test(key)) return key
-  return assets.find(asset => asset.asset === key)?.canonical_name || 'RGB'
+export function parseRGB11AssetName(name: unknown) {
+  if (typeof name !== 'string') return null
+  const match = /^rgb11:(f|o|control):([a-z0-9]+(?:-[a-z0-9]+)*@[0-9a-f]{4})$/.exec(name)
+  return match?.[0] === name ? { protocol: 'rgb11', type: match[1], ticker: match[2] } : null
+}
+
+export function assetNameLabel(key: string, _assets: readonly RGBAssetView[] = []): string {
+  return !key.startsWith('rgb11:') || parseRGB11AssetName(key) ? key : 'RGB'
 }
 
 export function assetApprovalLabel(key: string, assets: readonly RGBAssetView[] = []): string {
   const label = assetNameLabel(key, assets)
-  if (label === 'RGB') return key
-  if (label !== key && key.startsWith('rgb11:')) return `${label} (${key})`
-  return label
+  // Show the exact invalid request rather than disguising it as a known asset.
+  return label === 'RGB' ? key : label
 }
 
 export interface RGBRecipientView {

@@ -33,7 +33,7 @@ type RGBAPI interface {
 	// 发行及合约导入、导出对应现有 PWA 用户操作。
 	IssueRGBAsset(ctx context.Context, req RGBIssueRequest) (*RGBAssetView, error)
 	ImportRGBContract(ctx context.Context, data []byte) (*RGBAssetView, error)
-	ExportRGBContract(asset string) ([]ExportFile, error)
+	ExportRGBContract(contractID string) ([]ExportFile, error)
 }
 
 type RGBSendRequest struct {
@@ -84,6 +84,7 @@ type RGBAssetView struct {
 	ContractID     string `json:"contract_id"` // 供资产详情展示，不要求 PWA 解析合约
 	Kind           string `json:"kind"`
 	Ticker         string `json:"ticker"`
+	DisplayTicker  string `json:"display_ticker,omitempty"`
 	Name           string `json:"name"`
 	Precision      uint8  `json:"precision"`
 	Available      string `json:"available"`

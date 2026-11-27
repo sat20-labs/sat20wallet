@@ -40,7 +40,7 @@ func TestRecoveryRequiresCurrentEngineBuild(t *testing.T) {
 				t.Fatal(err)
 			}
 			contract := "rgb:Ar4ouaLv-b7f7Dc_-z5EMvtu-FA5KNh1-nlae~jk-8xMBo7E"
-			name, err := NewContractAssetKey(contract, indexer.ASSET_TYPE_FT)
+			name, err := NewContractAssetKey(contract, indexer.ASSET_TYPE_FT, "TEST")
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -14,7 +14,6 @@ import (
 	"github.com/sat20-labs/rgb11/seals"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	"github.com/sat20-labs/satoshinet/anchortx/nativeproof"
-	dkvs "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	"github.com/stretchr/testify/require"
 )
 
@@ -101,7 +100,7 @@ func newRGB11RecoverySelectionFixture(t *testing.T) (*Manager, STPAssetRecoveryR
 	require.NoError(t, err)
 	decoded, err := nativeproof.Decode(proof)
 	require.NoError(t, err)
-	asset, err := rgb11wallet.NewContractAssetKey(issued.ContractID, indexer.ASSET_TYPE_FT)
+	asset, err := rgb11wallet.NewContractAssetKey(issued.ContractID, indexer.ASSET_TYPE_FT, "STP")
 	require.NoError(t, err)
 	var sources []rgb11wallet.ChannelFunding
 	for i, amount := range []int64{3000, 4000} {
@@ -144,8 +143,6 @@ func newRGB11RecoverySelectionFixture(t *testing.T) (*Manager, STPAssetRecoveryR
 	commitment.AssetProofs = map[string][]byte{rgb11wallet.Protocol: encoded}
 	commitment.RecoveryFeeIndexes = []uint32{2}
 	registered := asset
-	registered.Ticker, err = dkvs.RGB11NameTicker("STP", asset.Ticker)
-	require.NoError(t, err)
 	commitment.LocalBalance[AssetName{AssetName: registered, N: 0}] = amount
 	channel := &Channel{ChannelInDB: ChannelInDB{ChannelId: channelContext.ChannelID,
 		AssetEntropy: channelContext.Entropy, CommitHeight: 1,

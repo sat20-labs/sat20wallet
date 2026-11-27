@@ -2,7 +2,6 @@ package wallet
 
 import (
 	"bytes"
-	"strings"
 	"testing"
 
 	"github.com/btcsuite/btcd/txscript"
@@ -137,7 +136,7 @@ func TestSTPServerSweepHistoricalBRC20View(t *testing.T) {
 		name  string
 		asset indexer.AssetName
 	}{
-		{"rgb11-flag-is-not-history", indexer.AssetName{Protocol: "rgb11", Type: indexer.ASSET_TYPE_FT, Ticker: strings.Repeat("a", 64)}},
+		{"rgb11-flag-is-not-history", indexer.AssetName{Protocol: "rgb11", Type: indexer.ASSET_TYPE_FT, Ticker: "sweep@aaaa"}},
 		{"unknown-true-is-not-history", indexer.AssetName{Protocol: "unknown-protocol", Type: indexer.ASSET_TYPE_FT, Ticker: "token"}},
 	} {
 		t.Run(marker.name, func(t *testing.T) {

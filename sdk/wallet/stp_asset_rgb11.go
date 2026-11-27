@@ -10,7 +10,6 @@ import (
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/rgb11/anchors"
 	coreconsignment "github.com/sat20-labs/rgb11/consignment"
-	"github.com/sat20-labs/rgb11/schemas"
 	"github.com/sat20-labs/rgb11/seals"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
@@ -165,18 +164,11 @@ func stpRGB11FundingName(source rgb11wallet.ChannelFunding) (indexer.AssetName, 
 	if err != nil {
 		return indexer.AssetName{}, err
 	}
-	if !rgb11wallet.ContractAssetKeyMatches(source.AssetName, contract.ContractID) {
+	name, err := rgb11wallet.ContractAssetKeyFromContainer(contract, source.AssetName.Type)
+	if err != nil || name != source.AssetName {
 		return indexer.AssetName{}, ErrRGB11PublicIdentityMismatch
 	}
-	schema, types := contract.SchemaValues()
-	genesis, _ := contract.Value.Field("genesis")
-	meta, err := schemas.ExtractGenesisAssetMetadata(schema, types, genesis)
-	if err != nil {
-		return indexer.AssetName{}, err
-	}
-	name := source.AssetName
-	name.Ticker, err = dkvs.RGB11NameTicker(meta.Ticker, name.Ticker)
-	return name, err
+	return name, nil
 }
 
 // CheckRGB11ChannelUTXO authenticates the channel's saved allocation against

@@ -252,7 +252,7 @@ func registerSDKPWARegtestMiner(t *testing.T, manager *wallet.Manager, network *
 		// The reviewed DOGCOIN ticker already exists. Create only the A1 stake
 		// amount through the SDK, then confirm it in the existing Bitcoin Core;
 		// no ticker, UTXO, balance, or L2 registration is inserted by the test.
-		ticker := manager.GetTickerInfoV2(assetName)
+		ticker := manager.GetIndexerClient().GetTickInfo(wallet.ParseAssetString(assetName))
 		require.NotNil(t, ticker, "the current %s stake ticker must already exist", assetName)
 		minted, err := manager.MintAsset_ordx(manager.GetWallet().GetAddress(), ticker, amount, nil, 1)
 		require.NoError(t, err, "SDK mint current stake asset for A1")
@@ -390,7 +390,7 @@ func prepareSDKPWARegtestCoreDogcoinStake(t *testing.T, issuer *wallet.Manager,
 	require.GreaterOrEqual(t, spendableInputTotal, issuerFeeBudget,
 		"ordinary-2's existing unlocked L1 funds must cover both DOGCOIN inscription quotes before broadcasting")
 
-	ticker := issuer.GetTickerInfoV2(assetText)
+	ticker := issuer.GetIndexerClient().GetTickInfo(wallet.ParseAssetString(assetText))
 	coreAssetBefore := issuer.GetAssetBalance(coreAddress, asset)
 	coreAssetBeforeAmt := int64(0)
 	if coreAssetBefore != nil {
@@ -406,7 +406,7 @@ func prepareSDKPWARegtestCoreDogcoinStake(t *testing.T, issuer *wallet.Manager,
 		deployTxIDs := []string{deployed.CommitTx.TxID(), deployed.RevealTx.TxID()}
 		confirmSDKPWARegtestL1Transactions(t, issuer, deployTxIDs, mine)
 		require.Eventually(t, func() bool {
-			ticker = issuer.GetTickerInfoV2(assetText)
+			ticker = issuer.GetIndexerClient().GetTickInfo(wallet.ParseAssetString(assetText))
 			return ticker != nil
 		}, rpcReadyTimeout, 200*time.Millisecond, "real indexer did not recognize the DOGCOIN deploy inscription")
 		t.Logf("real Core stake ticker deployed: commit=%s reveal=%s L1_height=%d fee_rate=%d deploy_quote=%d",
@@ -457,7 +457,7 @@ func prepareSDKPWARegtestCoreDogcoinStake(t *testing.T, issuer *wallet.Manager,
 		require.Equal(t, assetAmount, mintAsset.Amount.Int64())
 		require.Equal(t, uint32(1), mintAsset.BindingSat)
 		require.Eventually(t, func() bool {
-			ticker = issuer.GetTickerInfoV2(assetText)
+			ticker = issuer.GetIndexerClient().GetTickInfo(wallet.ParseAssetString(assetText))
 			return ticker != nil && ticker.TotalMinted == strconv.FormatInt(assetAmount, 10)
 		}, rpcReadyTimeout, 200*time.Millisecond, "real L1 indexer did not confirm the exact DOGCOIN supply")
 		t.Logf("real Core stake DOGCOIN minted: commit=%s reveal=%s outpoint=%s amount=%d binding_sat=1 L1_height=%d fee_rate=%d mint_quote=%d",
@@ -468,7 +468,7 @@ func prepareSDKPWARegtestCoreDogcoinStake(t *testing.T, issuer *wallet.Manager,
 		require.FailNow(t, fmt.Sprintf("refusing to repeat or repair partial DOGCOIN issuance: totalMinted=%d Core=%d", totalMinted, coreAssetBeforeAmt))
 	}
 
-	ticker = issuer.GetTickerInfoV2(assetText)
+	ticker = issuer.GetIndexerClient().GetTickInfo(wallet.ParseAssetString(assetText))
 	require.NotNil(t, ticker)
 	require.Equal(t, strconv.FormatInt(assetAmount, 10), ticker.TotalMinted,
 		"the real indexed supply must exactly equal the Core staking threshold")
@@ -1546,7 +1546,7 @@ func TestSDKPWARealRegtestNodeReadiness(t *testing.T) {
 			t.Logf("reusing existing core-mempool anchor txid=%s; waiting for bootstrap relay", anchorTxID)
 			requireMempoolTx(t, network.Bootstrap, anchorTxID)
 		} else {
-			ticker := ordinaryA.GetTickerInfoV2(wallet.PLAIN_ASSET.String())
+			ticker := ordinaryA.GetTickerInfo(wallet.ParseAssetString(wallet.PLAIN_ASSET.String()))
 			require.NotNil(t, ticker)
 			bindOutputs, err := ordinaryA.AnchorOutputsActive()
 			require.NoError(t, err)

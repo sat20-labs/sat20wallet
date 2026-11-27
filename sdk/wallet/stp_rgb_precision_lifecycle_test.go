@@ -84,7 +84,7 @@ func newRGB11PrecisionFixture(t *testing.T, precision int) *precisionSeparationR
 	if err != nil {
 		t.Fatal(err)
 	}
-	name, err := rgb11wallet.NewContractAssetKey(issued.ContractID, indexer.ASSET_TYPE_FT)
+	name, err := rgb11wallet.NewContractAssetKey(issued.ContractID, indexer.ASSET_TYPE_FT, precisionFixtureTicker)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,8 +104,6 @@ func newRGB11PrecisionFixture(t *testing.T, precision int) *precisionSeparationR
 	output := indexer.GenerateTxOutput(tx, 0)
 	output.Assets = indexer.TxAssets{validated.Asset}
 	registered := name
-	registered.Ticker, err = dkvs.RGB11NameTicker(precisionFixtureTicker, name.Ticker)
-	require.NoError(t, err)
 	channelOutput := output.Clone()
 	channelOutput.Assets[0].Name = registered
 	identity := GetAssetName2(&channelOutput.Assets[0])
@@ -119,7 +117,9 @@ func newRGB11PrecisionFixture(t *testing.T, precision int) *precisionSeparationR
 	// synthetic, but the coasset consistency read still uses its actual gate.
 	key, err := dkvs.RGB11NameKey(registered.Ticker)
 	require.NoError(t, err)
-	value, err := dkvs.RGB11NameValue(name.Ticker)
+	id, err := rgb11wallet.RGB11ContractIDHex(issued.ContractID)
+	require.NoError(t, err)
+	value, err := dkvs.RGB11NameValue(id)
 	require.NoError(t, err)
 	core := NewInternalWalletWithMnemonic(testCoreMnemonic, "", GetChainParam())
 	record, err := NewDKVSSignedRecord(core, key, value, dkvs.RecordOptions{Seq: dkvs.RGB11NameProofSeq, IssueHeight: 1})

@@ -8,6 +8,7 @@ import (
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
+	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
 	stxscript "github.com/sat20-labs/satoshinet/txscript"
 	swire "github.com/sat20-labs/satoshinet/wire"
@@ -74,7 +75,11 @@ func ParseAssetString(assetName string) *swire.AssetName {
 		return &ASSET_PLAIN_SAT
 	}
 
-	return swire.NewAssetNameFromString(assetName)
+	name := swire.NewAssetNameFromString(assetName)
+	if name != nil && name.Protocol == rgb11wallet.Protocol && !rgb11wallet.IsCanonicalAssetName(*name) {
+		return nil
+	}
+	return name
 }
 
 func GenTxAssetsFromAssetInfo(asset *swire.AssetInfo) swire.TxAssets {

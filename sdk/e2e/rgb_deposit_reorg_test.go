@@ -88,7 +88,7 @@ func rgbForkNodes(t *testing.T) *realSatoshiNet {
 		}
 		owners := []*testHarness{network.Bootstrap, network.Core}
 		if err := waitForkPeers(ctx, owners, func(node *testHarness) bool {
-			raw, err := rgbContinuationContractRead(node, "/info/contract/"+contract)
+			raw, err := rgb11RegtestContractRead(node, "/info/contract/"+contract)
 			var state struct{ CurrentBlockL1 int }
 			return err == nil && json.Unmarshal(raw, &state) == nil && state.CurrentBlockL1 == height
 		}); err != nil {
@@ -133,7 +133,7 @@ func rgbForkNodes(t *testing.T) *realSatoshiNet {
 			return err
 		}
 		for _, owner := range owners {
-			items, err := rgbContinuationHistory(owner, contract)
+			items, err := rgb11RegtestContractHistory(owner, contract)
 			if err != nil {
 				return err
 			}

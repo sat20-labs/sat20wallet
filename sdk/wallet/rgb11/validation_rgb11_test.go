@@ -113,11 +113,11 @@ func TestRGB11TransferReceipt(t *testing.T) {
 	}
 	schemaValue, typeSystem := container.SchemaValues()
 	genesisValue, _ := container.Value.Field("genesis")
-	_, err = schemas.ExtractGenesisAssetMetadata(schemaValue, typeSystem, genesisValue)
+	metadata, err := schemas.ExtractGenesisAssetMetadata(schemaValue, typeSystem, genesisValue)
 	if err != nil {
 		t.Fatal(err)
 	}
-	expectedAssetName, err := NewContractAssetKey(receipt.ContractID, "f")
+	expectedAssetName, err := NewContractAssetKey(receipt.ContractID, "f", metadata.Ticker)
 	if err != nil {
 		t.Fatal(err)
 	}

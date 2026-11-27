@@ -58,7 +58,7 @@ func TestProjectionAndProofAreStoredTogether(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assetName, err := NewContractAssetKey(official, indexer.ASSET_TYPE_FT)
+	assetName, err := NewContractAssetKey(official, indexer.ASSET_TYPE_FT, "TEST")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestProjectionAndProofAreStoredTogether(t *testing.T) {
 		t.Fatalf("bad projected amount %v", projected)
 	}
 	secondOfficial := "rgb:Br4ouaLv-b7f7Dc_-z5EMvtu-FA5KNh1-nlae~jk-8xMBo7E"
-	secondName, err := NewContractAssetKey(secondOfficial, indexer.ASSET_TYPE_FT)
+	secondName, err := NewContractAssetKey(secondOfficial, indexer.ASSET_TYPE_FT, "TEST2")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ func TestBalanceExcludesOrphanedProof(t *testing.T) {
 		t.Fatal(err)
 	}
 	contractID := "rgb:Ar4ouaLv-b7f7Dc_-z5EMvtu-FA5KNh1-nlae~jk-8xMBo7E"
-	assetName, err := NewContractAssetKey(contractID, indexer.ASSET_TYPE_FT)
+	assetName, err := NewContractAssetKey(contractID, indexer.ASSET_TYPE_FT, "TEST")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,6 +240,11 @@ func TestBalanceExcludesOrphanedProof(t *testing.T) {
 }
 
 func TestValidationReceiptHashUsesStableStrictEncoding(t *testing.T) {
+	roundTripAsset, err := NewContractAssetKey("rgb:Ar4ouaLv-b7f7Dc_-z5EMvtu-FA5KNh1-nlae~jk-8xMBo7E", indexer.ASSET_TYPE_FT, "asset")
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	amount, err := indexer.NewDecimalFromString("42.50", 2)
 	if err != nil {
 		t.Fatal(err)
@@ -250,7 +255,7 @@ func TestValidationReceiptHashUsesStableStrictEncoding(t *testing.T) {
 		StateHash: [32]byte{1}, ValidatedAt: 1, Status: "valid",
 		Allocations: []ValidatedAllocation{{
 			OutPoint:  "0000000000000000000000000000000000000000000000000000000000000001:0",
-			AssetName: indexer.AssetName{Protocol: Protocol, Type: indexer.ASSET_TYPE_FT, Ticker: "asset"},
+			AssetName: roundTripAsset,
 			Amount:    *amount, OperationID: "op", AssignmentType: 4000, StateClass: "fungible", SealDisclosure: []byte{1},
 		}},
 	}

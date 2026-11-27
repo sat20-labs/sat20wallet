@@ -64,7 +64,7 @@ func nativeUIIssue(t *testing.T, d *nativeUIDevice, kind, ticker string) *wallet
 }
 func nativeUIContract(t *testing.T, owner *nativeUIDevice, asset *wallet.RGBAssetView, suffix string) []byte {
 	t.Helper()
-	files, err := owner.mgr.ExportRGBContract(asset.Asset)
+	files, err := owner.mgr.ExportRGBContract(asset.ContractID)
 	require.NoError(t, err)
 	for _, f := range files {
 		if strings.HasSuffix(f.Name, suffix) {

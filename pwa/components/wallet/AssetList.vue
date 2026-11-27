@@ -84,6 +84,7 @@ import { validateSendDispatch } from '@/utils/sendAmount'
 import { useAssetActions } from '@/composables/useAssetActions'
 import { useQueryClient } from '@tanstack/vue-query'
 import { walletRequestSessionGuard } from '@/lib/walletSession'
+import { parseRGB11AssetName } from '@/utils/walletViews'
 
 const queryClient = useQueryClient()
 const walletStore = useWalletStore()
@@ -304,6 +305,10 @@ watch(selectedChain, () => {
 
 const handleSend = async (asset: any) => {
   if (loading.value || assetActionLoading.value) return
+  if (asset?.protocol === 'rgb11' && !parseRGB11AssetName(asset.key)) {
+    handleError(t('assetOperationDialog.amountErrors.unavailable'))
+    return
+  }
   if (asset?.protocol === 'rgb11' && selectedChain.value === 'l1') {
     rgb11SendAsset.value = asset
     showRGB11Send.value = true
@@ -337,7 +342,10 @@ const handleRGB11Receive = (asset: any) => {
 // The market owns RGB registration and deployment. These read-only checks
 // reuse its existing wallet APIs; no registration or deployment is started here.
 const requireRGB11PublicContract = async (asset: any, operation: OperationType, check: () => void) => {
-  let chainKey = asset.key
+  const chainKey = asset.key
+  if (parseRGB11AssetName(chainKey)?.type !== 'f') {
+    throw new Error(t('rgb11Transfer.crossLayerFungibleOnly'))
+  }
   if (operation === 'deposit') {
     const contractId = typeof asset.contract_id === 'string' ? asset.contract_id.trim() : ''
     if (!contractId) throw new Error(t('rgb11Transfer.crossLayerContractIdMissing'))
@@ -345,14 +353,15 @@ const requireRGB11PublicContract = async (asset: any, operation: OperationType, 
     check()
     if (exportError) throw exportError
     const publicContract = JSON.parse(exported?.result || '{}')
-    if (publicContract.contract_id !== asset.ticker || !publicContract.contract_consignment_base64) {
+    if (!/^[0-9a-f]{64}$/.test(publicContract.contract_id ?? '') || !publicContract.contract_consignment_base64) {
       throw new Error(t('rgb11Transfer.crossLayerMarketRequired'))
     }
     const [verifyError, verified] = await walletManager.verifyRGB11PublicContract(contractId, publicContract.contract_consignment_base64)
     check()
     if (verifyError) throw verifyError
-    chainKey = JSON.parse(verified?.result || '{}').asset_name
-    if (typeof chainKey !== 'string' || !/^rgb11:f:[a-z0-9-]+@[0-9a-f]{4}$/.test(chainKey)) {
+    const registration = JSON.parse(verified?.result || '{}')
+    if (registration.asset_name !== chainKey || registration.contract_id !== publicContract.contract_id ||
+      registration.schema_id !== publicContract.schema_id) {
       throw new Error(t('rgb11Transfer.crossLayerMarketRequired'))
     }
   }
@@ -408,12 +417,8 @@ const openAssetOperation = async (type: OperationType, asset: any) => {
         throw new Error(t('rgb11Transfer.scopeChanged'))
       }
     }
-    if (type !== 'lock' && type !== 'unlock') {
-      const assetKey = type === 'withdraw' || type === 'splicing_out'
-        ? /^rgb11:f:[a-z0-9-]+@[0-9a-f]{4}$/ : /^rgb11:f:[0-9a-f]{64}$/
-      if (asset.type !== 'f' || !assetKey.test(asset.key)) {
-        throw new Error(t('rgb11Transfer.crossLayerFungibleOnly'))
-      }
+    if (asset.type !== 'f' || parseRGB11AssetName(asset.key)?.type !== 'f') {
+      throw new Error(t('rgb11Transfer.crossLayerFungibleOnly'))
     }
     const destination = type === 'splicing_in' || type === 'lock' ? channel.value?.address : address.value
     if (!destination) throw new Error(t('approvalUi.addressEmpty'))

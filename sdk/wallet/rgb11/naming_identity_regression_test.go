@@ -9,8 +9,8 @@ import (
 )
 
 // Local display names are mutable before SatoshiNet registration. Validation
-// receipts and persisted allocation keys must therefore use the full contract
-// identity, not a ticker-dependent name or a truncated fingerprint.
+// receipts retain the full contract ID independently. The allocation name
+// uses the committed genesis ticker rather than the mutable display alias.
 func TestRGB11NamingIdentitySurvivesLocalRename(t *testing.T) {
 	const id = "rgb:Ar4ouaLv-b7f7Dc_-z5EMvtu-FA5KNh1-nlae~jk-8xMBo7E"
 	local := LocalNameMetadata{ContractID: id, LocalName: "usdt@123456789012"}
@@ -18,11 +18,11 @@ func TestRGB11NamingIdentitySurvivesLocalRename(t *testing.T) {
 	if err != nil || renamed.ContractID != id || renamed.LocalName == local.LocalName {
 		t.Fatalf("local rename failed: %+v %v", renamed, err)
 	}
-	before, err := NewContractAssetKey(local.ContractID, indexer.ASSET_TYPE_FT)
+	before, err := NewContractAssetKey(local.ContractID, indexer.ASSET_TYPE_FT, "TEST")
 	if err != nil {
 		t.Fatal(err)
 	}
-	after, err := NewContractAssetKey(renamed.ContractID, indexer.ASSET_TYPE_FT)
+	after, err := NewContractAssetKey(renamed.ContractID, indexer.ASSET_TYPE_FT, "TEST")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,8 @@ func TestRGB11NamingIdentitySurvivesLocalRename(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if before.Ticker != hex.EncodeToString(contract[:]) {
-		t.Fatalf("allocation key must contain the full ContractID, not a fingerprint: %s", before.Ticker)
+	idHex := hex.EncodeToString(contract[:])
+	if before.Ticker != "test@"+idHex[len(idHex)-4:] {
+		t.Fatalf("allocation name must use the committed short ticker: %s", before.Ticker)
 	}
 }

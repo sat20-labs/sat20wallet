@@ -10,6 +10,7 @@ import (
 	indexer "github.com/sat20-labs/indexer/common"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
+	dkvs "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
 // Only a registered protocol can recognize a proofless data carrier. An RGB
@@ -160,7 +161,7 @@ func (p *Manager) ValidateSTPServerSweep(tx *wire.MsgTx, destination []byte,
 				if err := validateSTPFungibleAsset(&asset.Name, rgb11wallet.Protocol, STPOpForceClose); err != nil {
 					return err
 				}
-				if _, err := rgb11ContractIDFromAssetName(asset.Name); err != nil {
+				if _, err := dkvs.RGB11NameKey(asset.Name.Ticker); err != nil {
 					return err
 				}
 			} else if err := ValidateSTPAsset(&asset.Name, STPOpForceClose); err != nil {

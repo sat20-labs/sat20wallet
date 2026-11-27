@@ -153,13 +153,13 @@ func BuildChannelStep(ctx context.Context, sources []ChannelFunding, tx *wire.Ms
 		if err != nil {
 			return nil, err
 		}
+		sourceID, err := consensus.ParseContractID(validated.ContractID)
+		if err != nil {
+			return nil, err
+		}
 		if i == 0 {
-			asset, precision = validated.Asset.Name, validated.Asset.Amount.Precision
-			contractID, err = consensus.ParseContractID(validated.ContractID)
-			if err != nil {
-				return nil, err
-			}
-		} else if asset != validated.Asset.Name || precision != validated.Asset.Amount.Precision {
+			asset, precision, contractID = validated.Asset.Name, validated.Asset.Amount.Precision, sourceID
+		} else if sourceID != contractID || asset != validated.Asset.Name || precision != validated.Asset.Amount.Precision {
 			return nil, fmt.Errorf("mixed RGB11 contracts require a multi-contract Bitcoin commitment")
 		}
 		total.Add(total, validated.Asset.Amount.Value)

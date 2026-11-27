@@ -180,7 +180,7 @@ func TestProjectionSnapshotRejectsRGBAssetWithoutProof(t *testing.T) {
 }
 
 func TestRebindValidatedConsignmentReceiptSnapshot(t *testing.T) {
-	assetName, err := NewContractAssetKey("rgb:Ar4ouaLv-b7f7Dc_-z5EMvtu-FA5KNh1-nlae~jk-8xMBo7E", indexer.ASSET_TYPE_FT)
+	assetName, err := NewContractAssetKey("rgb:Ar4ouaLv-b7f7Dc_-z5EMvtu-FA5KNh1-nlae~jk-8xMBo7E", indexer.ASSET_TYPE_FT, "TEST")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestRebindValidatedConsignmentReceiptSnapshot(t *testing.T) {
 	}
 	existing := &ValidationReceipt{
 		Version: 1, EngineBuildID: RGB11EngineBuildID, ConsignmentHash: hex.EncodeToString(rawHash[:]),
-		ContractID: assetName.Ticker, SchemaID: "test-schema", StateHash: [32]byte{1},
+		ContractID: "rgb:Ar4ouaLv-b7f7Dc_-z5EMvtu-FA5KNh1-nlae~jk-8xMBo7E", SchemaID: "test-schema", StateHash: [32]byte{1},
 		ValidatedAt: 100, Status: "valid", Allocations: []ValidatedAllocation{allocationA},
 	}
 	oldHash, err := existing.Hash()
@@ -297,7 +297,10 @@ func TestProjectionSnapshotRoundTripsEveryPortableRecordType(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	assetName := indexer.AssetName{Protocol: Protocol, Type: indexer.ASSET_TYPE_FT, Ticker: "snapshot-asset"}
+	assetName, err := NewContractAssetKey("rgb:Ar4ouaLv-b7f7Dc_-z5EMvtu-FA5KNh1-nlae~jk-8xMBo7E", indexer.ASSET_TYPE_FT, "snapshot-asset")
+	if err != nil {
+		t.Fatal(err)
+	}
 	amount := indexer.NewDefaultDecimal(25)
 	asset := &indexer.AssetInfo{Name: assetName, Amount: *amount, BindingSat: 0}
 	output := indexer.NewTxOutput(1_000)

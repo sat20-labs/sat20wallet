@@ -149,7 +149,7 @@ func TestBalanceDoesNotMixProjectionGenerationsAcrossAtomicCommit(t *testing.T) 
 	store.SetReservationPersistence(commitGate)
 
 	const officialContract = "rgb:Ar4ouaLv-b7f7Dc_-z5EMvtu-FA5KNh1-nlae~jk-8xMBo7E"
-	name, err := NewContractAssetKey(officialContract, indexer.ASSET_TYPE_FT)
+	name, err := NewContractAssetKey(officialContract, indexer.ASSET_TYPE_FT, "TEST")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +323,7 @@ func TestReplaceProjectionsFlushFailureReopensAtOldGeneration(t *testing.T) {
 	}
 	store.SetReservationPersistence(newProjectionReadAtomicGate())
 	const officialContract = "rgb:Ar4ouaLv-b7f7Dc_-z5EMvtu-FA5KNh1-nlae~jk-8xMBo7E"
-	name, err := NewContractAssetKey(officialContract, indexer.ASSET_TYPE_FT)
+	name, err := NewContractAssetKey(officialContract, indexer.ASSET_TYPE_FT, "TEST")
 	if err != nil {
 		t.Fatal(err)
 	}

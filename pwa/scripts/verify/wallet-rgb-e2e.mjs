@@ -32,9 +32,9 @@ export async function runPwaRgbCases(t, fixture) {
   const assetNameKey = name => `${name.Protocol}:${name.Type}:${name.Ticker}`
   const assetDisplay = async (page, key, expectedName) => {
     const info = JSON.parse((await walletCall(page, 'getTickerInfo', key)).ticker)
-    assert.equal(assetNameKey(info.name), key, 'RGB ticker info must preserve the full asset identity')
+    assert.equal(assetNameKey(info.name), key, 'RGB ticker info must preserve the canonical asset name')
     assert.equal(info.displayname, expectedName, 'RGB display name must match the normalized ticker and contract suffix')
-    return `${expectedName} (${key})`
+    return expectedName
   }
   const checkBitcoinReference = async (scope, reference) => {
     await expect(scope.getByText(reference, { exact: true })).toBeVisible()
@@ -115,9 +115,14 @@ export async function runPwaRgbCases(t, fixture) {
     if (kind === 'IFA') await form.getByPlaceholder('9000', { exact: true }).fill('20')
     const asset = await observe(page, 'issueRGB11Asset', () => button(form, tr.issue).click())
     await expect(form.getByText(asset.contract_id, { exact: true })).toBeVisible()
-    const [protocol, type, contractId] = asset.asset.split(':')
-    assert.match(contractId || '', /^[0-9a-f]{64}$/i, 'issued RGB key must contain the full contract ID')
-    const displayName = `${protocol}:${type}:${ticker.toLowerCase()}@${contractId.slice(-4).toLowerCase()}`
+    const [protocol, type] = asset.asset.split(':')
+    assert.match(asset.contract_id ?? '', /^rgb:/)
+    const exported = JSON.parse((await walletCall(page, 'exportPublicRGB11Contract', asset.contract_id)).result)
+    assert.match(exported.contract_id, /^[0-9a-f]{64}$/)
+    const displayName = `rgb11:${kind === 'UDA' ? 'o' : 'f'}:${ticker.toLowerCase()}@${exported.contract_id.slice(-4)}`
+    assert.equal(asset.asset, displayName, 'the issued asset name contains only the canonical short ticker')
+    assert.equal(protocol, 'rgb11')
+    assert.equal(type, kind === 'UDA' ? 'o' : 'f')
     const pending = page.waitForEvent('download')
     await button(form, tr.downloadContract).click()
     const download = await pending

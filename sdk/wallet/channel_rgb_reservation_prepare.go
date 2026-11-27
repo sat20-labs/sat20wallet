@@ -195,20 +195,18 @@ func (p *Manager) captureSTPRGBFundingName(f *STPRGBReservationEvidence, asset *
 		return nil
 	}
 	if _, err := dkvs.RGB11NameKey(asset.Ticker); err != nil {
-		return nil // A local full contract ID needs no name lookup.
+		return ErrRGB11PublicIdentityMismatch
 	}
 	record, id, err := p.readRGB11Name(asset.Ticker)
 	if err != nil {
 		return err
 	}
-	local := *asset
-	local.Ticker = id
 	copy := *record
 	copy.Value = bytes.Clone(record.Value)
 	copy.PubKey = bytes.Clone(record.PubKey)
 	copy.Signature = bytes.Clone(record.Signature)
 	copy.FeeProof = bytes.Clone(record.FeeProof)
-	f.fundingName = &stpRGBFundingName{chain: *asset, local: local, record: &copy}
+	f.fundingName = &stpRGBFundingName{chain: *asset, contractID: id, record: &copy}
 	return nil
 }
 

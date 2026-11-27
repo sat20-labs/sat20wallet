@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	indexer "github.com/sat20-labs/indexer/common"
 	"strings"
 
 	"github.com/sat20-labs/rgb11/consensus"
@@ -31,12 +32,17 @@ func (p *Manager) requireRGB11PublicRegistration(asset *swire.AssetName) error {
 	if asset == nil || asset.Protocol != rgb11wallet.Protocol {
 		return nil
 	}
-	local, err := p.RGB11LocalAsset(asset)
-	if err != nil {
+	contractID, err := p.RGB11ContractID(asset)
+	if errors.Is(err, ErrRGB11PublicIdentityMismatch) {
 		return err
 	}
-	contractID := local.Ticker
-	registration, _, err := p.readAccountRGBContract(contractID)
+	if errors.Is(err, dkvs.ErrRecordNotFound) {
+		return fmt.Errorf("%w: %s", ErrRGB11PublicRegistrationRequired, asset.String())
+	}
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrRGB11PublicDataUnavailable, err)
+	}
+	registration, value, err := p.readAccountRGBContract(contractID)
 	if errors.Is(err, ErrRGB11PublicRegistrationRequired) {
 		return fmt.Errorf("%w: %s", ErrRGB11PublicRegistrationRequired, contractID)
 	}
@@ -46,16 +52,25 @@ func (p *Manager) requireRGB11PublicRegistration(asset *swire.AssetName) error {
 	if registration.ContractID != contractID || registration.AssetType != asset.Type {
 		return ErrRGB11PublicIdentityMismatch
 	}
-	info := p.getTickerInfo(local)
-	if info == nil {
-		return nil
+	info, loadErr := loadTickerInfo(p.db, asset)
+	if loadErr != nil && !errors.Is(loadErr, indexer.ErrKeyNotFound) {
+		return loadErr
 	}
-	if info.AssetName != *local {
+	if info == nil {
+		info, err = rgb11TickerInfoFromPublicContract(asset, contractID, value.ContractContent)
+		if err != nil {
+			return err
+		}
+		if err := p.saveRebuiltRGB11Ticker(info); err != nil {
+			return err
+		}
+	}
+	if info.AssetName != *asset || info.ContractID != contractID {
 		return ErrRGB11PublicIdentityMismatch
 	}
 	var ext rgb11wallet.TickerExt
 	if err := json.Unmarshal(info.Content, &ext); err != nil || ext.ContractID == "" ||
-		ext.SchemaID == "" || !rgb11wallet.ContractAssetKeyMatches(*local, ext.ContractID) {
+		ext.SchemaID == "" || !rgb11wallet.ContractAssetKeyMatches(*asset, ext.ContractID, ext.Ticker) {
 		return ErrRGB11PublicIdentityMismatch
 	}
 	base, err := rgb11wallet.NormalizeRGB11Ticker(ext.Ticker)

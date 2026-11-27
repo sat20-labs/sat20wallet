@@ -1572,6 +1572,7 @@ func rgb11SettledRecipientMatches(pending *rgb11wallet.PendingTransfer,
 	if err != nil || storedAmount == 0 {
 		return ErrRGB11InvoiceMismatch
 	}
+	name, nameErr := rgb11wallet.ContractAssetKeyFromContainer(decoded, pending.State.Asset.Name.Type)
 	storedContract, err := consensus.ParseContractID(decoded.ContractID)
 	if err != nil {
 		return ErrRGB11InvoiceMismatch
@@ -1579,7 +1580,7 @@ func rgb11SettledRecipientMatches(pending *rgb11wallet.PendingTransfer,
 	contract, amount, recipientID, _, _, transport, err := validateRGB11SendInvoice(invoice, &storedContract, &storedAmount)
 	if err != nil || contract.String() != decoded.ContractID || transport != "out-of-band" ||
 		recipientID != pending.State.RecipientID ||
-		!rgb11wallet.ContractAssetKeyMatches(pending.State.Asset.Name, decoded.ContractID) {
+		nameErr != nil || name != pending.State.Asset.Name {
 		return ErrRGB11InvoiceMismatch
 	}
 	if storedAmount != amount {

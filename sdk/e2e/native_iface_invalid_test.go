@@ -113,7 +113,7 @@ func runNativeIfaceInvalid(t *testing.T, f *nativeIfaceChain) {
 				check(err)
 				// The old Runes case rejects an absent indexed ticker before the
 				// typed mint method. The ORDX fractional amount is bridge-only.
-				require.Nil(t, m.GetTickerInfoV2("runes:f:missing"))
+				require.Nil(t, m.GetIndexerClient().GetTickInfo(wallet.ParseAssetString("runes:f:missing")))
 				unchanged()
 				_, err = m.InscribeName("invalid/name", 1)
 				check(err)

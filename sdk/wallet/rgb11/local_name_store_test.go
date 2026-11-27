@@ -19,7 +19,7 @@ func TestLocalNamePersistenceDoesNotChangeValidatedAssetState(t *testing.T) {
 	if err := store.SetScope("naming-account-a"); err != nil {
 		t.Fatal(err)
 	}
-	identity, err := NewContractAssetKey(contractID, indexer.ASSET_TYPE_FT)
+	identity, err := NewContractAssetKey(contractID, indexer.ASSET_TYPE_FT, "TEST")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,14 +123,14 @@ func TestTechnicalRegistryCannotBecomeLocalDIDAlias(t *testing.T) {
 	if err := store.SetScope("naming"); err != nil {
 		t.Fatal(err)
 	}
-	identity, err := NewContractAssetKey(contractID, indexer.ASSET_TYPE_FT)
+	id, err := RGB11ContractIDHex(contractID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, record := range []SnapshotRecord{
-		{Key: "registered-name-" + identity.Ticker, Value: []byte("rgb11:f:usd@alice")},
-		{Key: "local-name-" + identity.Ticker, Value: []byte("orphan alias")},
-		{Key: "local-name-" + identity.Ticker, Value: []byte{0xff}},
+		{Key: "registered-name-" + id, Value: []byte("rgb11:f:usd@alice")},
+		{Key: "local-name-" + id, Value: []byte("orphan alias")},
+		{Key: "local-name-" + id, Value: []byte{0xff}},
 	} {
 		if err := store.ValidateSnapshot([]SnapshotRecord{record}); err == nil {
 			t.Fatalf("invalid naming snapshot accepted: %s", record.Key)

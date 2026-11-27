@@ -1109,12 +1109,26 @@ func ParseTickerInfoKey(key string) (string, error) {
 }
 
 func saveTickerInfo(db db.KVDB, ticker *indexer.TickerInfo) error {
+	if ticker == nil {
+		return fmt.Errorf("missing ticker metadata")
+	}
+	if ticker.AssetName.Protocol == "rgb11" {
+		rgb11TickerWriteMu.Lock()
+		defer rgb11TickerWriteMu.Unlock()
+		batch, err := NewAtomicWriteBatch(db)
+		if err != nil {
+			return err
+		}
+		defer batch.Close()
+		if err := stageRGB11TickerInfo(db, batch, ticker); err != nil {
+			return err
+		}
+		return batch.Flush()
+	}
 	buf, err := EncodeToBytes(ticker)
 	if err != nil {
-		Log.Errorf("saveTickerInfo EncodeToBytes failed. %v", err)
 		return err
 	}
-
 	err = db.Write([]byte(GetTickerInfoKey(ticker.AssetName.String())), buf)
 	if err != nil {
 		Log.Errorf("saveRuneInfo failed. %v", err)
@@ -1125,6 +1139,9 @@ func saveTickerInfo(db db.KVDB, ticker *indexer.TickerInfo) error {
 }
 
 func loadTickerInfo(db db.KVDB, name *swire.AssetName) (*indexer.TickerInfo, error) {
+	if name.Protocol == "rgb11" {
+		return loadRGB11TickerInfo(db, name)
+	}
 	key := GetTickerInfoKey(name.String())
 
 	buf, err := db.Read([]byte(key))

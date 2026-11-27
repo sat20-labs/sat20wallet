@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
@@ -31,9 +32,12 @@ func coreRGB11NamingE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 		"human-readable name leaked into immutable asset key")
 	coreAssert(t, before.NamingStatus == "local-address",
 		"issued RGB11 asset did not resolve genesis address")
-	coreAssert(t, strings.HasPrefix(before.Ticker, "e2en@"),
+	coreAssert(t, strings.HasPrefix(before.DisplayTicker, "e2en@"),
 		"default local RGB11 name is not ticker@address-suffix")
-	id := issued.AssetName.Ticker
+	id, err := rgb11wallet.RGB11ContractIDHex(issued.ContractID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	canonical := "rgb11:f:e2en@" + id[len(id)-4:]
 	coreAssert(t, before.CanonicalName == canonical && !before.Verified,
 		"issued RGB11 asset must show its computed name as unverified")
@@ -52,7 +56,7 @@ func coreRGB11NamingE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 			break
 		}
 	}
-	coreAssert(t, renamed != nil && renamed.Ticker == "my-local-rgb-name",
+	coreAssert(t, renamed != nil && renamed.DisplayTicker == "my-local-rgb-name",
 		"SDK local RGB11 rename not visible")
 	coreAssert(t, renamed.AssetKey == issued.AssetName.String(),
 		"SDK local rename changed immutable asset key")

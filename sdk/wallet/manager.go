@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
+	"golang.org/x/sync/singleflight"
 	"lukechampine.com/uint128"
 
 	db "github.com/sat20-labs/indexer/common"
@@ -115,18 +117,21 @@ type Manager struct {
 	// Shared by all RGB scope views of this manager; never held for network I/O.
 	rgbReservationMu sync.RWMutex
 
-	cfg                   *common.Config
-	bInited               bool
-	status                *Status
-	walletInfoMap         map[int64]*WalletInfo
-	wallet                common.Wallet
-	msgCallbackMu         sync.RWMutex
-	msgCallback           NotifyCB
-	actionCallback        ActionStatusCallback
-	channelStatusCallback ActionStatusCallback
-	monitorTicks          []MonitorTickCallback
-	channelBackupHandler  ChannelBackupHandler
-	tickerInfoMap         map[string]*indexer.TickerInfo // 缓存数据, key: AssetName.String()
+	cfg                    *common.Config
+	bInited                bool
+	status                 *Status
+	walletInfoMap          map[int64]*WalletInfo
+	wallet                 common.Wallet
+	msgCallbackMu          sync.RWMutex
+	msgCallback            NotifyCB
+	actionCallback         ActionStatusCallback
+	channelStatusCallback  ActionStatusCallback
+	monitorTicks           []MonitorTickCallback
+	channelBackupHandler   ChannelBackupHandler
+	tickerInfoMap          map[string]*indexer.TickerInfo // 缓存数据, key: AssetName.String()
+	tickerMintRefresh      map[string]tickerMintRefresh
+	tickerMintRefreshGroup singleflight.Group
+	tickerCacheEpoch       uint64
 	// An in-process trust-root override for isolated SDK fixtures. Production
 	// managers leave this nil and use the network's fixed Core public key.
 	rgb11RegistryVerifier dkvsindexer.SystemVerifier
@@ -731,12 +736,15 @@ func (p *Manager) getRuneIdFromName(name *swire.AssetName) (*runestone.RuneId, e
 }
 
 func (p *Manager) getTickerInfo(name *swire.AssetName) *indexer.TickerInfo {
-	if name.Protocol == rgb11wallet.Protocol {
-		if _, err := dkvsindexer.RGB11NameKey(name.Ticker); err == nil {
-			return p.getSendTickerInfo_SatsNet(name)
-		}
-	}
+	return p.lookupTickerInfo(name, false)
+}
 
+// Callers that may fetch RGB metadata must be outside the wallet's read and
+// mutation gates. Internal projection code uses the cache without network I/O.
+func (p *Manager) lookupTickerInfo(name *swire.AssetName, fetchRGB bool) *indexer.TickerInfo {
+	if name == nil || (name.Protocol == rgb11wallet.Protocol && !rgb11wallet.IsCanonicalAssetName(*name)) {
+		return nil
+	}
 	if name.String() == ASSET_PLAIN_SAT.String() ||
 		name.String() == db.ASSET_ALL_SAT.String() {
 		return &indexer.TickerInfo{
@@ -749,6 +757,11 @@ func (p *Manager) getTickerInfo(name *swire.AssetName) *indexer.TickerInfo {
 
 	p.mutex.RLock()
 	info, ok := p.tickerInfoMap[name.String()]
+	if !ok && name.Protocol == indexer.PROTOCOL_NAME_RUNES && name.Type == indexer.ASSET_TYPE_FT &&
+		strings.Contains(name.Ticker, ":") {
+		// A Rune ID is stored as a second key for the canonical ticker.
+		info, ok = p.tickerInfoMap[name.Ticker]
+	}
 	p.mutex.RUnlock()
 	if ok {
 		return info
@@ -757,44 +770,52 @@ func (p *Manager) getTickerInfo(name *swire.AssetName) *indexer.TickerInfo {
 	// TODO 还在铸造中的ticker，需要每个区块更新一次数据
 	info, err := loadTickerInfo(p.db, name)
 	if err == nil && info != nil {
-		p.mutex.Lock()
-		p.tickerInfoMap[info.AssetName.String()] = info
-		if info.AssetName.Protocol == indexer.PROTOCOL_NAME_RUNES {
-			p.tickerInfoMap[info.DisplayName] = info
-		}
-		p.mutex.Unlock()
+		p.cacheTickerInfo(info)
 		return info
 	}
-	// RGB11 metadata is wallet-local and must never be synthesized by the L1
-	// Indexer. Import/issuance registers it after local consignment validation.
 	if name.Protocol == rgb11wallet.Protocol {
-		return nil
+		if !fetchRGB || !errors.Is(err, indexer.ErrKeyNotFound) {
+			return nil
+		}
+		info, err = p.fetchRGB11TickerInfo(name)
+		if err != nil || info == nil {
+			return nil
+		}
+		if err := p.saveRebuiltRGB11Ticker(info); err != nil {
+			Log.Warningf("save RGB11 ticker %s: %v", name, err)
+			return nil
+		}
+		return info
+	} else {
+		info = p.l1IndexerClient.GetTickInfo(name)
+		if info == nil {
+			Log.Errorf("GetTickInfo %s failed", name.String())
+			return nil
+		}
+		saveTickerInfo(p.db, info)
 	}
 
-	info = p.l1IndexerClient.GetTickInfo(name)
-	if info == nil {
-		Log.Errorf("GetTickInfo %s failed", name.String())
-		return nil
-	}
-	saveTickerInfo(p.db, info)
+	p.cacheTickerInfo(info)
+	return info
+}
 
+func (p *Manager) cacheTickerInfo(info *indexer.TickerInfo) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
+	p.cacheTickerInfoLocked(info)
+}
+
+func (p *Manager) cacheTickerInfoLocked(info *indexer.TickerInfo) {
+	if p.tickerInfoMap == nil {
+		p.tickerInfoMap = make(map[string]*indexer.TickerInfo)
+	}
 	p.tickerInfoMap[info.AssetName.String()] = info
 	if info.AssetName.Protocol == indexer.PROTOCOL_NAME_RUNES {
 		p.tickerInfoMap[info.DisplayName] = info
 	}
-	return info
 }
 
 func (p *Manager) GetTickerInfoFromRuneId(runeId string) *indexer.TickerInfo {
-	p.mutex.RLock()
-	info, ok := p.tickerInfoMap[runeId]
-	p.mutex.RUnlock()
-	if ok {
-		return info
-	}
-
 	return p.getTickerInfo(&indexer.AssetName{
 		Protocol: indexer.PROTOCOL_NAME_RUNES,
 		Type:     indexer.ASSET_TYPE_FT,
@@ -807,6 +828,8 @@ func (p *Manager) RemoveAllTickerInfo() {
 	defer p.mutex.Unlock()
 
 	p.tickerInfoMap = make(map[string]*indexer.TickerInfo)
+	p.tickerMintRefresh = nil
+	p.tickerCacheEpoch++
 	deleteAllTickerInfoFromDB(p.db)
 }
 

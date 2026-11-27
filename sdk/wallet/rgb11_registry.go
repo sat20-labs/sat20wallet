@@ -106,6 +106,18 @@ func (p *Manager) readRGB11Name(ticker string) (*swire.DKVSRecord, string, error
 }
 
 func (p *Manager) readRGB11NameCtx(ctx context.Context, ticker string) (*swire.DKVSRecord, string, error) {
+	record, id, err := p.readRGB11RegistryName(ctx, ticker)
+	if err != nil {
+		return nil, "", err
+	}
+	if record.Seq != dkvsindexer.RGB11NameProofSeq {
+		return nil, "", dkvsindexer.ErrRecordNotFound
+	}
+	return record, id, nil
+}
+
+// A signed claim reserves the short name even before activation.
+func (p *Manager) readRGB11RegistryName(ctx context.Context, ticker string) (*swire.DKVSRecord, string, error) {
 	key, err := dkvsindexer.RGB11NameKey(ticker)
 	if err != nil {
 		return nil, "", err
@@ -121,10 +133,7 @@ func (p *Manager) readRGB11NameCtx(ctx context.Context, ticker string) (*swire.D
 	if err != nil {
 		return nil, "", err
 	}
-	if record.Seq == dkvsindexer.RGB11NameClaimSeq {
-		return nil, "", dkvsindexer.ErrRecordNotFound
-	}
-	id, err := dkvsindexer.VerifyRGB11Name(record, ticker)
+	id, err := dkvsindexer.VerifyRGB11NameRecord(record, ticker)
 	return record, id, err
 }
 

@@ -3150,16 +3150,29 @@ func getTickerInfo(this js.Value, p []js.Value) any {
 		wallet.Log.Error(msg)
 		return createJsRet(nil, code, msg)
 	}
-	assetName := p[0].String()
-
+	name := wallet.ParseAssetString(p[0].String())
+	if name == nil {
+		return createJsRet(nil, -1, "invalid asset name")
+	}
+	// Optional second argument: explicitly refresh mint totals.
+	refresh := len(p) > 1 && p[1].Type() == js.TypeBoolean && p[1].Bool()
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		tickerInfo := _mgr.GetTickerInfoV2(assetName)
+		var tickerInfo *indexer.TickerInfo
+		if refresh {
+			tickerInfo = _mgr.RefreshTickerMintInfo(name)
+		} else {
+			tickerInfo = _mgr.GetTickerInfo(name)
+		}
 		if tickerInfo == nil {
 			wallet.Log.Errorf("GetTickerInfo error ")
 			return nil, -1, "GetTickerInfo error"
 		}
 
-		jsonStr, err := json.Marshal(tickerInfo)
+		detail := *tickerInfo
+		if name.Protocol == "rgb11" {
+			detail.DisplayName = name.String()
+		}
+		jsonStr, err := json.Marshal(&detail)
 		if err != nil {
 			return nil, -1, err.Error()
 		}

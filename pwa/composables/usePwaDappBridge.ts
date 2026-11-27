@@ -18,6 +18,7 @@ import { assertWalletIdentityReady } from '@/lib/identity-boundary'
 import { assertNoMnemonicView } from '@/lib/sensitive-session'
 import { buildWalletMessagePayload, walletMessageDigest } from '@/lib/wallet-message-domain'
 import { toAssetAmountString, toBoundedNumber, toDecimalString } from '@/lib/strict-integers'
+import { parseRGB11AssetName } from '@/utils/walletViews'
 
 const getAllowedOrigins = () => {
   return getAllowedDappOrigins({
@@ -322,9 +323,9 @@ export function usePwaDappBridge(iframeWindow: () => Window | null, currentUrl: 
       assertWalletIdentityReady(identityGeneration)
       if (!result) throw new Error('RGB wallet view is unavailable')
       return result.assets.flatMap(info => {
-        const [protocol, type, ticker] = info.asset.split(':')
-        return protocol === 'rgb11' && type === 'f' && /^[0-9a-f]{64}$/.test(ticker)
-          ? [{ ticker, displayName: info.canonical_name || 'RGB' }] : []
+        const name = parseRGB11AssetName(info.asset)
+        return name?.type === 'f' && info.contract_id
+          ? [{ ticker: name.ticker, displayName: info.asset, contractId: info.contract_id }] : []
       })
     }
 

@@ -102,7 +102,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/toast-new'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-const props = defineProps<{asset: {key?: string; asset?: string; chain_asset?: string; ticker: string; contract_id?: string; label?: string} | null}>()
+const props = defineProps<{asset: {key?: string; asset?: string; ticker: string; contract_id?: string; label?: string} | null}>()
 const isOpen = defineModel('open', {type: Boolean})
 const {t, te, locale} = useI18n()
 const fieldId = useId()
@@ -170,7 +170,7 @@ const generate = () => {
     }, 30_000)
     let result: Awaited<ReturnType<typeof walletManager.createRGB11Invoice>>
     try {
-      result = await walletManager.createRGB11Invoice({asset: props.asset?.chain_asset || context.asset, amount: amount.value.trim(), receive_mode: receiveMode.value, transport: transport.value, proxy_endpoint: proxyEndpoint.value.trim()})
+      result = await walletManager.createRGB11Invoice({asset: context.asset, amount: amount.value.trim(), receive_mode: receiveMode.value, transport: transport.value, proxy_endpoint: proxyEndpoint.value.trim()})
     } finally {
       createPending.value = false; clearCreateWait()
     }

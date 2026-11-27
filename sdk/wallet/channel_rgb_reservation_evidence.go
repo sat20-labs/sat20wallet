@@ -69,9 +69,9 @@ type STPRGBReservationEvidence struct {
 }
 
 type stpRGBFundingName struct {
-	chain  indexer.AssetName
-	local  indexer.AssetName
-	record *swire.DKVSRecord
+	chain      indexer.AssetName
+	contractID string
+	record     *swire.DKVSRecord
 }
 
 type stpRGBRawFact struct {

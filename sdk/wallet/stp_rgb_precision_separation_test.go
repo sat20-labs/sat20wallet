@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/gob"
 	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/btcsuite/btcd/wire"
@@ -17,7 +16,7 @@ import (
 // These are isolated metadata, quantity and persistence regression tests. They
 // do not assert ownership, invent indexer balances or replace RGB11 proofs.
 func precisionSeparationAsset() indexer.AssetName {
-	return indexer.AssetName{Protocol: "rgb11", Type: indexer.ASSET_TYPE_FT, Ticker: strings.Repeat("a", 64)}
+	return indexer.AssetName{Protocol: "rgb11", Type: indexer.ASSET_TYPE_FT, Ticker: "precision@aaaa"}
 }
 
 func TestRGBPrecisionSeparationAssetNames(t *testing.T) {

@@ -1065,7 +1065,7 @@ func ensureRGB11RegtestSgas(t *testing.T, manager *wallet.Manager, channel *wall
 		return
 	}
 	need := target - current
-	ticker := manager.GetTickerInfoV2(rgb11RegtestAsset)
+	ticker := manager.GetTickerInfo(wallet.ParseAssetString(rgb11RegtestAsset))
 	require.NotNil(t, ticker)
 	name := wallet.GetAssetName(ticker)
 	channel.Mutex.RLock()
@@ -1653,7 +1653,9 @@ func rgb11RegtestPreparedMaterial(t *testing.T, manager *wallet.Manager,
 	require.NoError(t, err)
 	require.NotNil(t, container.Armor)
 	require.Equal(t, "transfer", container.Armor.Type)
-	require.True(t, rgb11wallet.ContractAssetKeyMatches(state.Asset.Name, container.ContractID))
+	want, err := rgb11wallet.ContractAssetKeyFromContainer(container, state.Asset.Name.Type)
+	require.NoError(t, err)
+	require.Equal(t, want, state.Asset.Name)
 	require.Equal(t, state.TransferID, container.Armor.ID)
 	fileBytes, err := base64.StdEncoding.DecodeString(fileBase64)
 	require.NoError(t, err)
@@ -1814,10 +1816,10 @@ func ensureRGB11RegtestNIA(t *testing.T, issuer, receiver *wallet.Manager) (rgb1
 		require.NotNil(t, armor)
 		require.Equal(t, issued.ContractID, armor.Contract)
 		expectedAssetName, keyErr := rgb11wallet.NewContractAssetKey(
-			issued.ContractID, indexercommon.ASSET_TYPE_FT)
+			issued.ContractID, indexercommon.ASSET_TYPE_FT, rgb11RegtestTicker)
 		require.NoError(t, keyErr)
 		require.Equal(t, expectedAssetName, issued.AssetName)
-		require.True(t, rgb11wallet.ContractAssetKeyMatches(expectedAssetName, issued.ContractID))
+		require.True(t, rgb11wallet.ContractAssetKeyMatches(expectedAssetName, issued.ContractID, rgb11RegtestTicker))
 		rgb11RegtestAssertReceipt(t, issued.Receipt, expectedAssetName, issued.ContractID, armor.ID,
 			issued.Receipt.ConsignmentHash, rgb11RegtestNIAAmount)
 		_, refreshErr := issuer.RefreshRGB11State(context.Background())
@@ -1827,7 +1829,7 @@ func ensureRGB11RegtestNIA(t *testing.T, issuer, receiver *wallet.Manager) (rgb1
 		require.Equal(t, issued.ContractID, result.ContractID)
 		require.Equal(t, expectedAssetName, result.AssetName)
 	}
-	require.True(t, rgb11wallet.ContractAssetKeyMatches(result.AssetName, result.ContractID))
+	require.True(t, rgb11wallet.ContractAssetKeyMatches(result.AssetName, result.ContractID, rgb11RegtestTicker))
 	issuerBalance := rgb11RegtestBalance(t, issuer, result.AssetName)
 
 	exported, err := issuer.ExportRGB11Contract(result.ContractID)
@@ -1850,7 +1852,7 @@ func ensureRGB11RegtestNIA(t *testing.T, issuer, receiver *wallet.Manager) (rgb1
 	_, receiverAssetName, receiverMatches := rgb11RegtestFindNIAContract(t, receiver, result.ContractID)
 	require.Equal(t, 1, receiverMatches, "receiver must retain the imported contract's TickerExt identity")
 	require.Equal(t, result.AssetName, receiverAssetName)
-	require.True(t, rgb11wallet.ContractAssetKeyMatches(receiverAssetName, result.ContractID))
+	require.True(t, rgb11wallet.ContractAssetKeyMatches(receiverAssetName, result.ContractID, rgb11RegtestTicker))
 	receiverBalance := rgb11RegtestBalance(t, receiver, result.AssetName)
 	require.Equal(t, rgb11RegtestNIAAmount, issuerBalance+receiverBalance,
 		"issuer and receiver balances must conserve the real NIA issuance")
@@ -1887,13 +1889,13 @@ func rgb11RegtestFindNIAContract(t *testing.T, manager *wallet.Manager,
 			!strings.EqualFold(ext.NormalizedTicker, rgb11wallet.NormalizeTicker(rgb11RegtestTicker)) {
 			continue
 		}
-		expected, keyErr := rgb11wallet.NewContractAssetKey(ext.ContractID, indexercommon.ASSET_TYPE_FT)
+		expected, keyErr := rgb11wallet.NewContractAssetKey(ext.ContractID, indexercommon.ASSET_TYPE_FT, ext.Ticker)
 		require.NoError(t, keyErr)
 		require.Equal(t, expected, ext.AssetName,
-			"TickerExt must carry the complete immutable contract identity")
+			"TickerExt must use the genesis-derived short AssetName")
 		require.Equal(t, expected, ticker.TickerInfo.AssetName,
-			"wallet presentation must retain the complete immutable contract identity")
-		require.True(t, rgb11wallet.ContractAssetKeyMatches(ticker.TickerInfo.AssetName, ext.ContractID))
+			"wallet presentation must use the genesis-derived short AssetName")
+		require.True(t, rgb11wallet.ContractAssetKeyMatches(ticker.TickerInfo.AssetName, ext.ContractID, ext.Ticker))
 		matches++
 		foundContract, foundAsset = ext.ContractID, expected
 	}
@@ -1952,7 +1954,7 @@ func snapshotRGB11RegtestOwnedProofs(t *testing.T, manager *wallet.Manager,
 			}
 			proof := proofByOutpoint[output.OutPointStr]
 			require.NotNil(t, proof, "every owned RGB allocation output must have its proof row")
-			require.True(t, rgb11wallet.ContractAssetKeyMatches(proof.AssetName, asset.ContractID))
+			require.True(t, rgb11wallet.ContractAssetKeyMatches(proof.AssetName, asset.ContractID, rgb11RegtestTicker))
 			storedProof, loadErr := projectionStore.LoadProof(proof.OutPoint, proof.AssetName)
 			require.NoError(t, loadErr)
 			require.Equal(t, proof, storedProof, "the public state must reflect the persisted proof sidecar")
@@ -2111,7 +2113,7 @@ func rgb11RegtestAssertReceipt(t *testing.T, receipt *rgb11wallet.ValidationRece
 	for _, allocation := range receipt.Allocations {
 		require.NotEmpty(t, allocation.OutPoint)
 		require.Equal(t, assetName, allocation.AssetName)
-		require.True(t, rgb11wallet.ContractAssetKeyMatches(allocation.AssetName, contractID))
+		require.True(t, rgb11wallet.ContractAssetKeyMatches(allocation.AssetName, contractID, rgb11RegtestTicker))
 		require.NotNil(t, allocation.Amount.Value)
 		total += allocation.Amount.Value.Uint64()
 	}

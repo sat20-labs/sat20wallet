@@ -151,8 +151,7 @@ func (p *Manager) GetRGB11TransferOutboxMetadata(transferID string) (result *RGB
 	if _, ok := rgb11MetadataHex(state.ReceiverAccountID, 32); !ok {
 		return nil, ErrRGB11OutboxCorrupt
 	}
-	_, validContract := rgb11MetadataHex(state.Asset.Name.Ticker, 32)
-	if !validContract || state.Asset.Name.Type != indexer.ASSET_TYPE_FT && state.Asset.Name.Type != indexer.ASSET_TYPE_NFT && state.Asset.Name.Type != "control" {
+	if !rgb11wallet.IsCanonicalAssetName(state.Asset.Name) {
 		return nil, ErrRGB11OutboxCorrupt
 	}
 	// This constructor only creates a local key view. No engine, bucket, scan or

@@ -369,6 +369,7 @@ func validateProjectionSnapshot(records []SnapshotRecord) error {
 	proofs := make([]*AllocationProof, 0)
 	pendings := make([]*PendingTransfer, 0)
 	contractObjects := make(map[string]string)
+	assetOwners := make(map[indexer.AssetName]string)
 	seen := make(map[string]bool)
 	namingContracts := make(map[string]bool)
 	for _, record := range records {
@@ -425,7 +426,8 @@ func validateProjectionSnapshot(records []SnapshotRecord) error {
 		case strings.HasPrefix(record.Key, "pending-"):
 			var pending PendingTransfer
 			if decode(record.Value, &pending) != nil || pending.State.TransferID == "" ||
-				pending.State.TransferID != strings.TrimPrefix(record.Key, "pending-") {
+				pending.State.TransferID != strings.TrimPrefix(record.Key, "pending-") ||
+				(pending.State.Asset.Name.Protocol == Protocol && !IsCanonicalAssetName(pending.State.Asset.Name)) {
 				return ErrValidationReceipt
 			}
 			if !validSnapshotObjectHash(pending.RecipientObjectHash) ||
@@ -436,7 +438,8 @@ func validateProjectionSnapshot(records []SnapshotRecord) error {
 		case strings.HasPrefix(record.Key, "transfer-"):
 			var state TransferState
 			if decode(record.Value, &state) != nil || state.TransferID == "" || state.Direction == "" || state.Status == "" ||
-				state.TransferID != strings.TrimPrefix(record.Key, "transfer-") {
+				state.TransferID != strings.TrimPrefix(record.Key, "transfer-") ||
+				(state.Asset.Name.Protocol == Protocol && !IsCanonicalAssetName(state.Asset.Name)) {
 				return ErrValidationReceipt
 			}
 		case strings.HasPrefix(record.Key, "prepared-receive-"):
@@ -470,19 +473,47 @@ func validateProjectionSnapshot(records []SnapshotRecord) error {
 	// Ordinary ownership snapshots retain the existing receipt validation below.
 	if len(namingContracts) != 0 {
 		for _, receipt := range receipts {
-			identity, err := NewContractAssetKey(receipt.ContractID, indexer.ASSET_TYPE_FT)
+			id, err := RGB11ContractIDHex(receipt.ContractID)
 			if err != nil {
 				return ErrValidationReceipt
 			}
-			delete(namingContracts, identity.Ticker)
+			delete(namingContracts, id)
 		}
 		if len(namingContracts) != 0 {
 			return ErrValidationReceipt
 		}
 	}
-	for hash := range receipts {
+	checkOwner := func(name indexer.AssetName, contractID string) error {
+		if name.Type == "control" {
+			name.Type = indexer.ASSET_TYPE_FT
+		}
+		if previous := assetOwners[name]; previous != "" && previous != contractID {
+			return fmt.Errorf("%w: RGB11 short asset name %s has multiple contracts", ErrValidationReceipt, name.String())
+		}
+		assetOwners[name] = contractID
+		return nil
+	}
+	for hash, receipt := range receipts {
 		if objects[hash] == nil {
 			return ErrValidationReceipt
+		}
+		contractID, err := RGB11ContractIDHex(receipt.ContractID)
+		if err != nil {
+			return ErrValidationReceipt
+		}
+		for _, allocation := range receipt.Allocations {
+			if err := checkOwner(allocation.AssetName, contractID); err != nil {
+				return err
+			}
+		}
+		if len(receipt.Allocations) == 0 {
+			name, err := snapshotPrimaryAssetFromGenesis(objects[hash], receipt)
+			if err != nil {
+				return err
+			}
+			if err := checkOwner(name, contractID); err != nil {
+				return err
+			}
 		}
 	}
 	for contractHash, objectHash := range contractObjects {
@@ -497,6 +528,17 @@ func validateProjectionSnapshot(records []SnapshotRecord) error {
 		actual := sha256.Sum256([]byte(container.ContractID))
 		if contractHash != hex.EncodeToString(actual[:]) {
 			return ErrValidationReceipt
+		}
+		name, err := ContractAssetKeyFromContainer(container, "")
+		if err != nil {
+			return ErrValidationReceipt
+		}
+		contractID, err := RGB11ContractIDHex(container.ContractID)
+		if err != nil {
+			return ErrValidationReceipt
+		}
+		if err := checkOwner(name, contractID); err != nil {
+			return err
 		}
 	}
 	for _, proof := range proofs {
@@ -856,10 +898,7 @@ type LocalProjection struct {
 
 func localProofFault(point string, name indexer.AssetName, cause error) (ProofFault, error) {
 	out, err := wire.NewOutPointFromString(point)
-	id, hexErr := hex.DecodeString(name.Ticker)
-	if err != nil || out == nil || out.String() != point || name.Protocol != Protocol || hexErr != nil || len(id) != 32 ||
-		name.Ticker != strings.ToLower(name.Ticker) ||
-		(name.Type != indexer.ASSET_TYPE_FT && name.Type != indexer.ASSET_TYPE_NFT && name.Type != "control") {
+	if err != nil || out == nil || out.String() != point || !IsCanonicalAssetName(name) {
 		return ProofFault{}, ErrInvalidProof
 	}
 	return ProofFault{OutPoint: point, AssetName: name, Cause: cause}, nil

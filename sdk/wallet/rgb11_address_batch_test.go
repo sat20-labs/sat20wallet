@@ -443,7 +443,7 @@ func TestGenericBatchSendAssetsRGB11(t *testing.T) {
 	}
 }
 
-func TestRGB11CollidingLocalSends(t *testing.T) {
+func TestRGB11ShortNameCollisionRejectsSecondImport(t *testing.T) {
 	sender, recipient, _, evidence, rpc := newRGB11GenericSendFixture(t)
 	sender.rgbManager.evidence = newRGB11AcceptedEvidence(evidence, rpc)
 	oldChain := indexer.CHAIN
@@ -455,8 +455,8 @@ func TestRGB11CollidingLocalSends(t *testing.T) {
 	require.NoError(t, err)
 
 	// These two genuine genesis consignments deterministically share twin@7c9b.
-	assets := make([]indexer.AssetName, 2)
 	var shortName indexer.AssetName
+	var firstID string
 	for i, timestamp := range []int64{1730000298, 1730000292} {
 		source := seedRGB11FlowEvidenceUTXO(t, evidence.rgb11FlowEvidence, script, 10_000, byte(93+i))
 		output := indexer.NewTxOutput(10_000)
@@ -472,70 +472,46 @@ func TestRGB11CollidingLocalSends(t *testing.T) {
 			Allocations: []coreissuance.Allocation{{Seal: seal, Amount: 50_000}},
 		})
 		require.NoError(t, err)
+		name, err := rgb11wallet.NewContractAssetKey(issued.ContractID, "f", "TWIN")
+		require.NoError(t, err)
 		imported, err := sender.ImportRGB11Contract(ctx, []byte(issued.Armor))
+		if i == 1 {
+			require.Equal(t, shortName, name)
+			require.ErrorIs(t, err, dkvsindexer.ErrWriteConflict)
+			require.Nil(t, imported)
+			info, err := loadTickerInfo(sender.db, &shortName)
+			require.NoError(t, err)
+			require.Equal(t, firstID, info.ContractID)
+			balance, err := sender.GetRGB11AssetBalance(&shortName)
+			require.NoError(t, err)
+			require.EqualValues(t, 50_000, balance.Value.Uint64())
+			sender.RemoveAllTickerInfo()
+			imported, err = sender.ImportRGB11Contract(ctx, []byte(issued.Armor))
+			require.Error(t, err, "the existing projection must own the name even after cache clear")
+			require.Nil(t, imported)
+			// The second wallet has never imported this name. The signed
+			// registration alone must prevent import of a different contract.
+			recipient.rgbManager.evidence = newRGB11AcceptedEvidence(evidence, rpc)
+			seedRGB11RegistryName(t, sender, shortName, "TWIN", firstID)
+			_, err = recipient.db.Read(rgb11TickerBindingKey(shortName))
+			require.ErrorIs(t, err, indexer.ErrKeyNotFound)
+			view, err := recipient.ImportRGBContract(ctx, []byte(issued.Armor))
+			require.ErrorIs(t, err, dkvsindexer.ErrWriteConflict)
+			require.Nil(t, view)
+			_, err = recipient.db.Read(rgb11TickerBindingKey(shortName))
+			require.ErrorIs(t, err, indexer.ErrKeyNotFound)
+
+			rebuilt := sender.GetTickerInfo(&shortName)
+			require.NotNil(t, rebuilt)
+			require.Equal(t, firstID, rebuilt.ContractID)
+			return
+		}
 		require.NoError(t, err)
 		require.Equal(t, 1, imported.Projected)
 		installRGB11PublicContractFixture(t, sender, remote, imported.ContractID)
-		assets[i] = imported.AssetName
-		if i == 0 {
-			shortName = seedRGB11Name(t, sender, assets[i], "TWIN")
-		}
-	}
-	require.NotEqual(t, assets[0], assets[1])
-	otherShort, err := dkvsindexer.RGB11NameTicker("TWIN", assets[1].Ticker)
-	require.NoError(t, err)
-	require.Equal(t, shortName.Ticker, otherShort)
-	_, err = sender.RGB11ChainAsset(&assets[1], false)
-	require.ErrorIs(t, err, dkvsindexer.ErrWriteConflict)
-	require.Nil(t, sender.getSendTickerInfo_SatsNet(&shortName))
-
-	checkBalance := func(manager *Manager, asset *indexer.AssetName, want uint64) {
-		t.Helper()
-		balance, err := manager.GetRGB11AssetBalance(asset)
+		shortName = imported.AssetName
+		firstID, err = rgb11wallet.RGB11ContractIDHex(imported.ContractID)
 		require.NoError(t, err)
-		if want == 0 && balance == nil {
-			return
-		}
-		require.NotNil(t, balance, asset.String())
-		require.Equal(t, want, balance.Value.Uint64(), asset.String())
-	}
-	remaining := [2]uint64{50_000, 50_000}
-	paid := [2]uint64{}
-	for i, name := range []indexer.AssetName{shortName, assets[1]} {
-		txid, err := sender.SendAssetsV3(recipient.wallet.GetAddress(), name.String(), "1.5", 2, nil)
-		require.NoError(t, err)
-		require.NotEmpty(t, txid)
-		evidence.mu.Lock()
-		for point, output := range evidence.utxos {
-			if allocationOutpointTxID(point) == txid {
-				output.Confirmations = 1
-			}
-		}
-		evidence.mu.Unlock()
-		evidence.setStatus(txid, rgb11wallet.BitcoinTxStatus{TxID: txid, Confirmed: true, Confirmations: 1})
-		received, err := recipient.SyncConfiguredRGB11AddressMailbox(ctx, dkvsindexer.RecordVerificationOptions{})
-		require.NoError(t, err)
-		require.NotNil(t, received)
-		require.Equal(t, 1, received.Received, "%+v", received)
-		_, err = recipient.RefreshRGB11State(ctx)
-		require.NoError(t, err)
-		_, err = sender.RefreshRGB11State(ctx)
-		require.NoError(t, err)
-		transfers, err := recipient.rgbManager.projectionStore.ListTransfers()
-		require.NoError(t, err)
-		var receivedAsset indexer.AssetName
-		for _, transfer := range transfers {
-			if transfer.WitnessTxID == txid {
-				receivedAsset = transfer.Asset.Name
-			}
-		}
-		require.Equal(t, assets[i], receivedAsset)
-		paid[i] = [2]uint64{15, 150}[i]
-		remaining[i] -= paid[i]
-		for j := range assets {
-			checkBalance(sender, &assets[j], remaining[j])
-			checkBalance(recipient, &assets[j], paid[j])
-		}
 	}
 }
 

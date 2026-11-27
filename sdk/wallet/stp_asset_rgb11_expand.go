@@ -57,7 +57,7 @@ func (protocol rgb11STPProtocol) BuildExpansionAnchorProof(p *Manager, channel *
 		if err != nil {
 			return nil, err
 		}
-		return protocol.view.namedFundingProof(p, asset.AssetName, source.AssetName.Ticker, proof)
+		return protocol.view.namedFundingProof(p, asset.AssetName, validated.ContractID, proof)
 	}
 	return nil, fmt.Errorf("RGB11 expansion has no authenticated source consignment")
 }

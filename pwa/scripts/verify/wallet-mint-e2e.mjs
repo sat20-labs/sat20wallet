@@ -513,7 +513,7 @@ export async function runPwaMintCases(t, fixture) {
       await unlock(page, actor.password)
       await expect.poll(async () => (await walletCall(page, 'getWalletAddress', 0)).address, poll).toBe(actor.address)
       await expect.poll(balance, poll).toBe(BigInt(amount))
-      const reloadedTicker = JSON.parse((await walletCall(page, 'getTickerInfo', asset)).ticker)
+      const reloadedTicker = JSON.parse((await walletCall(page, 'getTickerInfo', asset, true)).ticker)
       assert.equal(reloadedTicker.name.Ticker, ticker.toLowerCase())
       assert.equal(String(reloadedTicker.maxSupply), '12000')
       assert.equal(String(reloadedTicker.limit), '120')
@@ -559,8 +559,8 @@ export async function runPwaMintCases(t, fixture) {
       await expect(deploy.getByText(/^txid: [0-9a-f]{64}$/)).toHaveText(`txid: ${deployTx.revealTxId}`)
       await confirmPendingL1([deployTx.commitTxId, deployTx.revealTxId])
 
-      const readTicker = async () => {
-        const response = await walletCall(page, 'getTickerInfo', asset)
+      const readTicker = async (refreshMint = false) => {
+        const response = await walletCall(page, 'getTickerInfo', asset, refreshMint)
         return JSON.parse(response.ticker)
       }
       await expect.poll(async () => {
@@ -604,7 +604,7 @@ export async function runPwaMintCases(t, fixture) {
           .reduce((sum, item) => sum + BigInt(item.Amount), 0n)
       }
       await expect.poll(balance, poll).toBe(BigInt(amount))
-      const mintedTicker = await readTicker()
+      const mintedTicker = await readTicker(true)
       assert.equal(String(mintedTicker.totalMinted), amount, 'confirmed BRC20 supply must reflect the real mint inscription')
       const carriers = await walletCall(page, 'getAssetAmount', actor.address, asset)
       assert.equal(BigInt(carriers.availableAmt) + BigInt(carriers.lockedAmt), 0n,

@@ -310,7 +310,7 @@ func runSDKPWARealRegtestBrowser(t *testing.T, feature string) {
 
 	anchorTx := findAnchorTx(t, blockAtHeight(t, network.Bootstrap, 1))
 	require.Len(t, anchorTx.TxOut, 3, "existing H1 anchor has channel funding, ascending metadata, and channel ID outputs")
-	plainTicker := ordinary1.GetTickerInfoV2(wallet.PLAIN_ASSET.String())
+	plainTicker := ordinary1.GetTickerInfo(wallet.ParseAssetString(wallet.PLAIN_ASSET.String()))
 	require.NotNil(t, plainTicker, "the SDK plain ticker defines the H1 ascending metadata")
 	wantAscending := fmt.Sprintf("%s-%s-%d-%d", plainTicker.AssetName.String(),
 		plainTicker.MaxSupply, plainTicker.Divisibility, plainTicker.N)

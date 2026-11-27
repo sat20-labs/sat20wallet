@@ -205,7 +205,7 @@ func TestRecoveryPreservesZeroBalanceContractAlias(t *testing.T) {
 		t.Fatal(err)
 	}
 	const contractID = "rgb:Ar4ouaLv-b7f7Dc_-z5EMvtu-FA5KNh1-nlae~jk-8xMBo7E"
-	name, err := NewContractAssetKey(contractID, indexer.ASSET_TYPE_FT)
+	name, err := NewContractAssetKey(contractID, indexer.ASSET_TYPE_FT, "TEST")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,8 +248,12 @@ func TestRecoveryPreservesZeroBalanceContractAlias(t *testing.T) {
 	for _, record := range recovery.ProjectionRecords {
 		seen[record.Key] = true
 	}
+	id, err := RGB11ContractIDHex(contractID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, key := range []string{
-		"local-name-" + name.Ticker,
+		"local-name-" + id,
 		"validation-" + consignmentHash,
 		"object-" + consignmentHash,
 	} {
@@ -388,7 +392,10 @@ func TestRecoveryKeepsReferencedContractValidationWhenAnotherReceiptSortsFirst(t
 }
 
 func TestMergeSelectedRecoveryAdoptsCleanTransferPhase(t *testing.T) {
-	assetName := indexer.AssetName{Protocol: Protocol, Type: indexer.ASSET_TYPE_FT, Ticker: "phase"}
+	assetName, err := NewContractAssetKey("rgb:Ar4ouaLv-b7f7Dc_-z5EMvtu-FA5KNh1-nlae~jk-8xMBo7E", indexer.ASSET_TYPE_FT, "phase")
+	if err != nil {
+		t.Fatal(err)
+	}
 	raw := []byte("selected transfer immutable consignment")
 	digest := sha256.Sum256(raw)
 	consignmentHash := hex.EncodeToString(digest[:])

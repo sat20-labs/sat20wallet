@@ -905,7 +905,11 @@ func TestRGB11RegtestOfficialConfirmedRestartReadOnly(t *testing.T) {
 	}
 	var send *rgb11wallet.TransferState
 	for _, state := range before.Transfers {
-		if state.Direction == "send" && rgb11wallet.ContractAssetKeyMatches(state.Asset.Name, assetID) {
+		if state.Direction == "send" && state.Asset.Name.Protocol == rgb11wallet.Protocol {
+			id, resolveErr := manager.rgbManager.rgb11ContractIDForAssetName(state.Asset.Name)
+			if resolveErr != nil || id != assetID {
+				continue
+			}
 			if send != nil || state.Status != "settled" {
 				t.Fatal("recorded NIA fixture lacks exactly one settled send")
 			}

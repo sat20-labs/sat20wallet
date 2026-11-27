@@ -1202,7 +1202,7 @@ func (p *Manager) BatchSendAssetsWithWallet(localWallet common.Wallet, destAddr 
 		}
 		name = local
 	}
-	tickerInfo := p.getTickerInfo(name)
+	tickerInfo := p.GetTickerInfo(name)
 	if tickerInfo == nil {
 		return nil, 0, fmt.Errorf("can't get ticker %s info", assetName)
 	}
@@ -2104,7 +2104,7 @@ func (p *Manager) SendAssetsV3(destAddr string, assetName string,
 		}
 		name, assetName = local, local.String()
 	}
-	tickerInfo := p.getTickerInfo(name)
+	tickerInfo := p.GetTickerInfo(name)
 	if tickerInfo == nil {
 		return "", fmt.Errorf("can't get ticker %s info", assetName)
 	}

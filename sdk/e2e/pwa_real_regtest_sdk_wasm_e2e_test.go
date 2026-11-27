@@ -209,7 +209,7 @@ func prepareNativeIfaceAsset(t *testing.T, network *realSatoshiNet,
 
 	asset := indexercommon.NewAssetNameFromString(sdkPWARegtestWASMAsset)
 	require.NotNil(t, asset)
-	if ordinary2.GetTickerInfoV2(sdkPWARegtestWASMAsset) == nil {
+	if ordinary2.GetIndexerClient().GetTickInfo(wallet.ParseAssetString(sdkPWARegtestWASMAsset)) == nil {
 		deployed, deployErr := ordinary2.DeployTicker_brc20(asset.Ticker, sdkPWARegtestWASMAmount,
 			sdkPWARegtestWASMAmount, 0, 2)
 		require.NoError(t, deployErr)
@@ -218,7 +218,7 @@ func prepareNativeIfaceAsset(t *testing.T, network *realSatoshiNet,
 		require.NotNil(t, deployed.RevealTx)
 		confirmL1(ordinary2, deployed.CommitTx.TxID())
 	}
-	ticker := ordinary2.GetTickerInfoV2(sdkPWARegtestWASMAsset)
+	ticker := ordinary2.GetIndexerClient().GetTickInfo(wallet.ParseAssetString(sdkPWARegtestWASMAsset))
 	require.NotNil(t, ticker, "real L1 indexer must discover the SDK-deployed four-letter ticker")
 	require.Equal(t, "50000000", ticker.MaxSupply)
 	require.Equal(t, "50000000", ticker.Limit)

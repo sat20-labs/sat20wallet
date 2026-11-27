@@ -13,7 +13,9 @@ import (
 	"sync"
 
 	indexer "github.com/sat20-labs/indexer/common"
+	coreconsignment "github.com/sat20-labs/rgb11/consignment"
 	"github.com/sat20-labs/rgb11/schemas"
+	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
 var (
@@ -376,20 +378,156 @@ func (s *ProjectionStore) LoadValidationReceipt(consignmentHash string) (*Valida
 	return &receipt, nil
 }
 
-// ListKnownAssetNames derives the active scope's contract catalog from its
-// existing validation receipts, including contracts with no owned outputs.
+// withKnownContracts enumerates immutable contract references and validated
+// consignment receipts from the current scope. It never reads the ticker cache
+// or a network service. Resolving an immutable object verifies its content hash.
+func (s *ProjectionStore) withKnownContracts(match func(indexer.AssetName, string, []byte) error) error {
+	if s == nil || s.db == nil {
+		return ErrWalletScope
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.scope == "" {
+		return ErrWalletScope
+	}
+	prefix := "rgb11-" + s.scope + "-"
+	seen := make(map[string]bool)
+	var ids = make(map[indexer.AssetName]string)
+	visit := func(raw []byte, container *coreconsignment.Container) error {
+		id, err := RGB11ContractIDHex(container.ContractID)
+		if err != nil {
+			return err
+		}
+		name, err := ContractAssetKeyFromContainer(container, "")
+		if err != nil {
+			return err
+		}
+		if previous := ids[name]; previous != "" && previous != id {
+			return dkvsindexer.ErrWriteConflict
+		}
+		ids[name] = id
+		if already := seen[id]; already {
+			return nil
+		}
+		seen[id] = true
+		return match(name, container.ContractID, raw)
+	}
+	load := func(hash string) ([]byte, *coreconsignment.Container, error) {
+		if !isHashHex(hash) {
+			return nil, nil, ErrValidationReceipt
+		}
+		raw, err := s.db.Read([]byte(prefix + "object-" + hash))
+		if err != nil {
+			return nil, nil, err
+		}
+		digest := sha256.Sum256(raw)
+		if hex.EncodeToString(digest[:]) != hash {
+			return nil, nil, ErrValidationReceipt
+		}
+		container, err := coreconsignment.Decode(raw)
+		if err != nil || !container.GenesisValid {
+			return nil, nil, ErrValidationReceipt
+		}
+		return raw, container, nil
+	}
+	// Prefer an existing full contract over reconstructing from a transfer.
+	contractPrefix := []byte(prefix + "contract-object-")
+	if err := s.db.BatchRead(contractPrefix, false, func(key, value []byte) error {
+		raw, container, err := load(string(value))
+		if err != nil {
+			return err
+		}
+		digest := sha256.Sum256([]byte(container.ContractID))
+		if container.Armor == nil || container.Armor.Type != "contract" ||
+			string(key[len(contractPrefix):]) != hex.EncodeToString(digest[:]) {
+			return ErrValidationReceipt
+		}
+		return visit(raw, container)
+	}); err != nil {
+		return err
+	}
+	validationPrefix := []byte(prefix + "validation-")
+	return s.db.BatchRead(validationPrefix, false, func(key, value []byte) error {
+		hash := string(key[len(validationPrefix):])
+		var receipt ValidationReceipt
+		if err := decode(value, &receipt); err != nil {
+			return err
+		}
+		if err := receipt.validate(hash); err != nil {
+			return err
+		}
+		id, err := RGB11ContractIDHex(receipt.ContractID)
+		if err != nil {
+			return err
+		}
+		if seen[id] {
+			return nil
+		}
+		raw, container, err := load(hash)
+		if err != nil {
+			return err
+		}
+		if receipt.ContractID != container.ContractID || receipt.SchemaID != container.SchemaID {
+			return ErrValidationReceipt
+		}
+		for _, allocation := range receipt.Allocations {
+			expected, err := ContractAssetKeyFromContainer(container, allocation.AssetName.Type)
+			if err != nil || expected != allocation.AssetName {
+				return ErrValidationReceipt
+			}
+		}
+		return visit(raw, container)
+	})
+}
+
+func isHashHex(s string) bool {
+	b, err := hex.DecodeString(s)
+	return err == nil && len(b) == sha256.Size && hex.EncodeToString(b) == s
+}
+
+// FindValidatedContractByAssetName resolves a canonical name to the standalone
+// contract ID and local consignment. It fails rather than choosing between
+// distinct full IDs that share the same short name.
+func (s *ProjectionStore) FindValidatedContractByAssetName(name indexer.AssetName) (string, []byte, error) {
+	if !IsCanonicalAssetName(name) {
+		return "", nil, ErrInvalidRGB11Asset
+	}
+	var contractID string
+	var raw []byte
+	err := s.withKnownContracts(func(candidate indexer.AssetName, id string, material []byte) error {
+		if name.Type == "control" && candidate.Type == indexer.ASSET_TYPE_FT {
+			candidate.Type = name.Type
+		}
+		if candidate == name {
+			contractID, raw = id, material
+		}
+		return nil
+	})
+	if err != nil {
+		return "", nil, err
+	}
+	if raw == nil {
+		return "", nil, indexer.ErrKeyNotFound
+	}
+	return contractID, raw, nil
+}
+
+// ListKnownAssetNames lists the short names recorded in validated receipts,
+// including contracts without owned outputs. Unlike a cold ticker rebuild it
+// does not decode each nonempty receipt’s full consignment on a wallet refresh.
 func (s *ProjectionStore) ListKnownAssetNames() ([]indexer.AssetName, error) {
 	prefix, err := s.scopedPrefix("validation-")
 	if err != nil {
 		return nil, err
 	}
-	names := make(map[string]indexer.AssetName)
-	err = s.db.BatchRead(prefix, false, func(key, value []byte) error {
+	names := make(map[indexer.AssetName]string)
+	err = s.db.BatchRead(prefix, false, func(key, raw []byte) error {
+		hash := string(key[len(prefix):])
 		var receipt ValidationReceipt
-		if err := decode(value, &receipt); err != nil {
+		if err := decode(raw, &receipt); err != nil {
 			return err
 		}
-		if err := receipt.validate(string(key[len(prefix):])); err != nil {
+		if err := receipt.validate(hash); err != nil {
 			return err
 		}
 		descriptor, err := schemas.ByID(receipt.SchemaID)
@@ -400,18 +538,40 @@ func (s *ProjectionStore) ListKnownAssetNames() ([]indexer.AssetName, error) {
 		if !descriptor.Fungible {
 			assetType = indexer.ASSET_TYPE_NFT
 		}
-		name, err := NewContractAssetKey(receipt.ContractID, assetType)
+		var name indexer.AssetName
+		if len(receipt.Allocations) != 0 {
+			name = receipt.Allocations[0].AssetName
+			name.Type = assetType
+		} else {
+			// Derive the name from the validated genesis even if no seal is ours.
+			object, err := s.db.Read([]byte(strings.TrimSuffix(string(prefix), "validation-") + "object-" + hash))
+			if err != nil {
+				return err
+			}
+			digest := sha256.Sum256(object)
+			if hex.EncodeToString(digest[:]) != hash {
+				return ErrValidationReceipt
+			}
+			name, err = snapshotPrimaryAssetFromGenesis(object, &receipt)
+			if err != nil {
+				return err
+			}
+		}
+		id, err := RGB11ContractIDHex(receipt.ContractID)
 		if err != nil {
 			return err
 		}
-		names[name.String()] = name
+		if previous := names[name]; previous != "" && previous != id {
+			return dkvsindexer.ErrWriteConflict
+		}
+		names[name] = id
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
 	result := make([]indexer.AssetName, 0, len(names))
-	for _, name := range names {
+	for name := range names {
 		result = append(result, name)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].String() < result[j].String() })

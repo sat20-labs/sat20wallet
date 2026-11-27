@@ -129,7 +129,7 @@ func prepareSDKPWARegtestRGBCrossLayerPlainFunding(t *testing.T, source *wallet.
 
 	feeRate := source.GetFeeRate()
 	require.Positive(t, feeRate, "use the live Bitcoin fee rate for the RGB withdrawal quote")
-	feeAsset := wallet.ParseAssetString("rgb11:f:" + strings.Repeat("0", 64))
+	feeAsset := wallet.ParseAssetString("rgb11:f:fee-quote@0000")
 	require.NotNil(t, feeAsset)
 	feeAssetName := &wallet.AssetName{AssetName: *feeAsset, N: 1}
 	withdrawAssetAmount := indexercommon.NewDecimal(100, 0)
@@ -307,7 +307,7 @@ func prepareSDKPWARegtestBRC20BalanceAsset(t *testing.T, manager *wallet.Manager
 	t.Helper()
 	asset := indexercommon.NewAssetNameFromString("brc20:f:pwbx")
 	require.NotNil(t, asset)
-	if manager.GetTickerInfoV2(asset.String()) == nil {
+	if manager.GetIndexerClient().GetTickInfo(asset) == nil {
 		deployed, err := manager.DeployTicker_brc20(asset.Ticker, 20, 20, 0, 2)
 		require.NoError(t, err, "SDK deploy the real BRC20 balance-send test ticker")
 		require.NotNil(t, deployed)
@@ -316,13 +316,13 @@ func prepareSDKPWARegtestBRC20BalanceAsset(t *testing.T, manager *wallet.Manager
 		confirmSDKPWARegtestL1SDKTransaction(t, manager, deployed.CommitTx.TxID(), mine)
 	}
 	require.Eventually(t, func() bool {
-		ticker := manager.GetTickerInfoV2(asset.String())
+		ticker := manager.GetIndexerClient().GetTickInfo(asset)
 		return ticker != nil && ticker.MaxSupply == "20" && ticker.Limit == "20" &&
 			ticker.Divisibility == 0
 	}, rpcReadyTimeout, 200*time.Millisecond, "real L1 indexer must expose the 20-token pwbx deployment")
 	balance := manager.GetAssetBalance("", asset)
 	if balance == nil || balance.Sign() == 0 {
-		ticker := manager.GetTickerInfoV2(asset.String())
+		ticker := manager.GetIndexerClient().GetTickInfo(asset)
 		require.NotNil(t, ticker)
 		require.Equal(t, "0", ticker.TotalMinted, "fresh balance-send ticker must not be pre-minted")
 		minted, err := manager.MintAsset_brc20(manager.GetWallet().GetAddress(), asset,
@@ -336,7 +336,7 @@ func prepareSDKPWARegtestBRC20BalanceAsset(t *testing.T, manager *wallet.Manager
 		require.Equal(t, "20", balance.String(), "reuse only the exact fresh balance-send supply")
 	}
 	require.Eventually(t, func() bool {
-		ticker := manager.GetTickerInfoV2(asset.String())
+		ticker := manager.GetIndexerClient().GetTickInfo(asset)
 		balance := manager.GetAssetBalance("", asset)
 		return ticker != nil && ticker.TotalMinted == "20" && balance != nil && balance.String() == "20"
 	}, rpcReadyTimeout, 200*time.Millisecond, "real L1 indexer must expose exactly 20 minted pwbx units")

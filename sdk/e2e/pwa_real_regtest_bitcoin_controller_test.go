@@ -379,7 +379,7 @@ func waitRGBPeerDeposit(ctx context.Context, network *realSatoshiNet, contract, 
 	for _, node := range []*testHarness{network.Bootstrap, network.Core} {
 		for {
 			var item wallet.InvokeItem
-			raw, err := rgbContinuationContractRead(node, "/info/contract/item/inutxo/"+contract+"/"+outpoint)
+			raw, err := rgb11RegtestContractRead(node, "/info/contract/item/inutxo/"+contract+"/"+outpoint)
 			if err == nil {
 				if err := json.Unmarshal(raw, &item); err != nil {
 					return fmt.Errorf("%s: invalid invoke item: %w", node.role, err)
@@ -1085,4 +1085,29 @@ func sdkPWARegtestOnlineNodes(network *realSatoshiNet) []*testHarness {
 		}
 	}
 	return online
+}
+
+func rgb11RegtestContractRead(node *testHarness, path string) ([]byte, error) {
+	var response wallet.ContractStatusResp
+	if err := posPWAReadJSON("http://"+node.stpAddr+"/regtest"+path, &response); err != nil {
+		return nil, err
+	}
+	if response.Code != 0 {
+		return nil, fmt.Errorf("%s contract read: %s", node.role, response.Msg)
+	}
+	return []byte(response.Status), nil
+}
+
+func rgb11RegtestContractHistory(node *testHarness, contract string) ([]wallet.InvokeItem, error) {
+	raw, err := rgb11RegtestContractRead(node, "/info/contract/history/"+contract+"?start=0&limit=100")
+	if err != nil {
+		return nil, err
+	}
+	var history struct {
+		Data []wallet.InvokeItem `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &history); err != nil {
+		return nil, err
+	}
+	return history.Data, nil
 }

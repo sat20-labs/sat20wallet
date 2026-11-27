@@ -3,12 +3,10 @@ package rgb11wallet
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"sort"
-	"strings"
 
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/rgb11/consignment"
@@ -71,10 +69,16 @@ func EncodeChannelInventoryWithLast(sources []ChannelFunding, last []byte) ([]by
 	}
 	ordered := append([]ChannelFunding(nil), sources...)
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].OutPoint < ordered[j].OutPoint })
+	var contractID string
 	for i := range ordered {
-		if err := checkChannelFundingShape(ordered[i]); err != nil {
+		id, err := channelFundingContractID(ordered[i])
+		if err != nil {
 			return nil, err
 		}
+		if contractID != "" && id != contractID {
+			return nil, fmt.Errorf("mixed RGB11 contracts in channel inventory")
+		}
+		contractID = id
 		if i > 0 && (ordered[i].OutPoint == ordered[i-1].OutPoint || ordered[i].AssetName != ordered[0].AssetName) {
 			return nil, fmt.Errorf("duplicate source or mixed RGB11 contract channel inventory")
 		}
@@ -102,16 +106,25 @@ func DecodeChannelInventory(raw []byte) (*ChannelInventory, error) {
 }
 
 func checkChannelFundingShape(f ChannelFunding) error {
+	_, err := channelFundingContractID(f)
+	return err
+}
+
+func channelFundingContractID(f ChannelFunding) (string, error) {
 	if f.OutPoint == "" || f.Value < 0 || len(f.PkScript) == 0 || f.AssetName.Protocol != Protocol ||
 		f.AssetName.Type != indexer.ASSET_TYPE_FT || f.Amount.Validate() != nil || f.Amount.Sign() <= 0 ||
 		len(f.Consignment) == 0 || len(f.Consignment) > nativeproof.MaxProofSize || len(f.Reveals) > 1024 {
-		return fmt.Errorf("invalid RGB11 channel funding material")
+		return "", fmt.Errorf("invalid RGB11 channel funding material")
 	}
-	key, err := hex.DecodeString(f.AssetName.Ticker)
-	if err != nil || len(key) != 32 || f.AssetName.Ticker != strings.ToLower(f.AssetName.Ticker) {
-		return fmt.Errorf("noncanonical RGB11 contract asset key")
+	container, err := consignment.Decode(f.Consignment)
+	if err != nil || !container.GenesisValid {
+		return "", fmt.Errorf("invalid RGB11 channel contract")
 	}
-	return nil
+	expected, err := ContractAssetKeyFromContainer(container, f.AssetName.Type)
+	if err != nil || expected != f.AssetName {
+		return "", fmt.Errorf("noncanonical RGB11 contract asset name")
+	}
+	return container.ContractID, nil
 }
 
 func decodeChannelJSON(raw []byte, value any) error {

@@ -60,13 +60,17 @@ func installRGB11PublicContractFixture(t *testing.T, source *Manager,
 // registry-not-found result must be distinct from absent or forged local
 // ContractID metadata before deployment reserves a fee.
 func TestRGB11PublicRegistrationPreflightIdentityAndMissingRecord(t *testing.T) {
-	remote, makeRecord := newRGB11RegistryE2ESource(t)
+	prev := indexer.CHAIN
+	indexer.CHAIN = "testnet"
+	t.Cleanup(func() { indexer.CHAIN = prev })
+	_, makeRecord := newRGB11RegistryE2ESource(t)
 	record := makeRecord("unowned-submitter", "USD", "f", 0, 1501)
+	remote := newRGB11MemoryDKVSHTTP()
 	value, err := rgb11wallet.DecodeRGB11RegistryValue(record.Value)
 	require.NoError(t, err)
 	contract, err := consignment.DecodeFile(value.ContractContent)
 	require.NoError(t, err)
-	asset, err := rgb11wallet.NewContractAssetKey(contract.ContractID, indexer.ASSET_TYPE_FT)
+	asset, err := rgb11wallet.NewContractAssetKey(contract.ContractID, indexer.ASSET_TYPE_FT, "USD")
 	require.NoError(t, err)
 	ext := rgb11wallet.TickerExt{ContractID: contract.ContractID, SchemaID: contract.SchemaID, Ticker: "USD"}
 	metadata, err := json.Marshal(ext)
@@ -78,6 +82,8 @@ func TestRGB11PublicRegistrationPreflightIdentityAndMissingRecord(t *testing.T) 
 		},
 	}
 	useRGB11TestCoreAuthority(t, manager)
+	id := rgb11RegistryRecordID(record)
+	seedRGB11RegistryName(t, manager, asset, "USD", id)
 	require.ErrorIs(t, manager.requireRGB11PublicRegistration(&asset), ErrRGB11PublicRegistrationRequired)
 	wrong := asset
 	wrong.Ticker = "another-asset"
@@ -86,11 +92,11 @@ func TestRGB11PublicRegistrationPreflightIdentityAndMissingRecord(t *testing.T) 
 	require.ErrorIs(t, manager.requireRGB11PublicRegistration(&asset), ErrRGB11PublicDataUnavailable)
 	// The same public object is readable and authenticated with a configured
 	// authority through the production client entry, independent of DID.
-	client, _ := newRGB11RegistryE2EHTTPClient(t, remote, nil)
-	_, err = remote.indexer.PutInternalContract(record)
-	require.NoError(t, err)
-	id := rgb11RegistryRecordID(record)
-	registration, err := client.GetRGB11Registration(id)
+	remote.mu.Lock()
+	remote.records[record.Key] = record
+	remote.mu.Unlock()
+	manager.cfg.IndexerL2.Host = "dkvs.test"
+	registration, _, err := manager.readAccountRGBContract(id)
 	require.NoError(t, err)
 	require.Equal(t, id, registration.ContractID)
 	manager.cfg.IndexerL2.Host = "dkvs.test"
@@ -101,6 +107,24 @@ func TestRGB11PublicRegistrationPreflightIdentityAndMissingRecord(t *testing.T) 
 	delete(manager.tickerInfoMap, asset.String())
 	require.NoError(t, manager.requireRGB11PublicRegistration(&asset),
 		"first transcend deployment must not require L2 ticker metadata")
+	short, err := dkvsindexer.RGB11NameTicker(registration.BaseTicker, id)
+	require.NoError(t, err)
+	cached, err := manager.db.Read([]byte(GetTickerInfoKey("rgb11:f:" + short)))
+	require.NoError(t, err)
+	require.NotEmpty(t, cached)
+	require.NoError(t, deleteAllTickerInfoFromDB(manager.db))
+	delete(manager.tickerInfoMap, asset.String())
+	rebuilt := manager.GetTickerInfo(&asset)
+	require.NotNil(t, rebuilt)
+	require.Equal(t, id, rebuilt.ContractID)
+	require.Equal(t, "SDK registry fixture", rebuilt.DisplayName)
+	legacy := asset
+	legacy.Ticker = id
+	require.Nil(t, manager.GetTickerInfo(&legacy))
+	_, err = manager.db.Read([]byte(GetTickerInfoKey(legacy.String())))
+	require.ErrorIs(t, err, indexer.ErrKeyNotFound)
+	_, err = manager.db.Read([]byte(GetTickerInfoKey("rgb11:f:" + short)))
+	require.NoError(t, err)
 	_, err = manager.VerifyRGB11PublicContract(contract.ContractID,
 		base64.StdEncoding.EncodeToString([]byte("not a public contract")))
 	require.ErrorIs(t, err, ErrRGB11PublicIdentityMismatch)
@@ -240,7 +264,9 @@ func TestRGBPublicBackupRegisters(t *testing.T) {
 	transport := &rgb11RegistrationHTTP{rgb11MemoryDKVSHTTP: remote, fail: true}
 	original := manager.serverNode
 	manager.serverNode = NewNode(&rgb11RegistrationNode{NodeRPCClient: original.RPCClient(), raw: NewNodeClient("http", "core.test", "testnet", transport)}, original.Host, SERVER_NODE, original.NodeId, original.Pubkey)
-	key, err := rgb11wallet.RGB11RegistryKey(asset.AssetName.Ticker)
+	id, err := rgb11wallet.RGB11ContractIDHex(asset.ContractID)
+	require.NoError(t, err)
+	key, err := rgb11wallet.RGB11RegistryKey(id)
 	require.NoError(t, err)
 	remote.mu.Lock()
 	delete(remote.records, key)
@@ -251,8 +277,8 @@ func TestRGBPublicBackupRegisters(t *testing.T) {
 	require.NoError(t, err, "unavailable public registration must not block local issuance")
 	require.NotNil(t, issued)
 	require.Zero(t, transport.calls, "issuance itself must not wait for Core registration")
-	id := manager.GetCurrentWalletId()
-	require.NoError(t, manager.UpdateWalletName(id, "local remains usable"))
+	walletID := manager.GetCurrentWalletId()
+	require.NoError(t, manager.UpdateWalletName(walletID, "local remains usable"))
 	require.Error(t, manager.SyncAccountManagementState(context.Background()))
 	require.True(t, manager.GetAccountManagementStatus().ManagedDataDirty)
 	require.Equal(t, "local remains usable", manager.GetWalletCatalog()[0].Name)
@@ -261,7 +287,7 @@ func TestRGBPublicBackupRegisters(t *testing.T) {
 	require.NoError(t, manager.SyncAccountManagementState(context.Background()))
 	require.False(t, manager.GetAccountManagementStatus().ManagedDataDirty)
 	require.Equal(t, 3, transport.calls, "both missing public contracts must be registered independently")
-	require.NoError(t, manager.verifyRGB11PublicContract(asset.AssetName.Ticker, mustRGBPublicRaw(t, manager, asset.ContractID)))
+	require.NoError(t, manager.verifyRGB11PublicContract(id, mustRGBPublicRaw(t, manager, asset.ContractID)))
 	require.NoError(t, manager.SyncAccountManagementState(context.Background()))
 	require.Equal(t, 3, transport.calls, "verified registered contracts must not be resubmitted")
 }

@@ -7,22 +7,26 @@ import ts from 'typescript'
 // Execute the actual production decorator. Reactive/UI dependencies are not
 // invoked by the pure mapping function, so no browser, wallet, or network is
 // started by these tests.
-const source = await readFile(new URL('../../composables/hooks/useRgb11Assets.ts', import.meta.url), 'utf8')
-const compiled = ts.transpileModule(source, {
-  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  fileName: 'useRgb11Assets.ts',
-}).outputText
-const exports = {}
-vm.runInNewContext(compiled, { exports, require: () => ({}) }, { filename: 'useRgb11Assets.js' })
-const decorate = exports.decorateRGB11AssetItems
+const load = async (path, require = () => ({})) => {
+  const source = await readFile(new URL(path, import.meta.url), 'utf8')
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText
+  const exports = {}
+  vm.runInNewContext(compiled, { exports, require }, { filename: path })
+  return exports
+}
+const walletViews = await load('../../utils/walletViews.ts')
+const { decorateRGB11AssetItems: decorate } = await load('../../composables/hooks/useRgb11Assets.ts',
+  path => path === '@/utils/walletViews' ? walletViews : {})
 assert.equal(typeof decorate, 'function')
 
-const keyA = `rgb11:f:${'01'.repeat(32)}`
-const keyB = `rgb11:f:${'02'.repeat(32)}`
+const keyA = 'rgb11:f:usdt@0101'
+const keyB = 'rgb11:f:usdt@0202'
 const item = (asset, ticker = '', name = '', metadata = {}) => ({asset, ticker, name, available:'42', pending:'3', precision:0, ...metadata})
 // The SDK owns verification/canonical naming policy. This adapter only decorates
 // its RGBAssetView for display and must never change selection/transfer identity.
-test('the canonical name is displayed and the full transfer key is preserved', () => {
+test('the canonical asset name is also the transfer key', () => {
   const metadata = {canonical_name:'rgb11:f:usdt@0101'}
   const first = decorate([item(keyA, 'usdt@alice', '', metadata)])[0]
   const renamed = decorate([item(keyA, 'usdt@bob', '', metadata)])[0]
@@ -42,8 +46,9 @@ test('missing canonical name displays a description or the protocol label', () =
   assert.equal(decorate([item(keyA,'','Asset name')])[0].label,'Asset name')
   const result = decorate([item(keyA)])[0]
   assert.equal(result.label,'RGB')
-  assert.equal(result.ticker,'01'.repeat(32))
+  assert.equal(result.ticker,'usdt@0101')
   assert.equal(result.protocol,'rgb11'); assert.equal(result.type,'f')
+  assert.equal(decorate([item(`rgb11:f:${'01'.repeat(32)}`)]).length, 0)
 })
 
 test('SDK local and registered naming metadata is preserved without PWA policy', () => {

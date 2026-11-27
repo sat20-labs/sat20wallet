@@ -6,7 +6,6 @@ import (
 
 	indexer "github.com/sat20-labs/indexer/common"
 	coreconsignment "github.com/sat20-labs/rgb11/consignment"
-	"github.com/sat20-labs/rgb11/schemas"
 )
 
 // A validated contract receipt has one presentation ticker, but its live
@@ -62,22 +61,5 @@ func snapshotPrimaryAssetFromGenesis(raw []byte, receipt *ValidationReceipt) (in
 	if err != nil || container.ContractID != receipt.ContractID || container.SchemaID != receipt.SchemaID {
 		return indexer.AssetName{}, ErrValidationReceipt
 	}
-	descriptor, err := schemas.ByKind(container.GenesisReport.Kind)
-	if err != nil {
-		return indexer.AssetName{}, err
-	}
-	schema, types := container.SchemaValues()
-	genesis, genesisOK := container.Value.Field("genesis")
-	if !genesisOK {
-		return indexer.AssetName{}, ErrValidationReceipt
-	}
-	_, err = schemas.ExtractGenesisAssetMetadata(schema, types, genesis)
-	if err != nil {
-		return indexer.AssetName{}, err
-	}
-	assetType := indexer.ASSET_TYPE_FT
-	if !descriptor.Fungible {
-		assetType = indexer.ASSET_TYPE_NFT
-	}
-	return NewContractAssetKey(receipt.ContractID, assetType)
+	return ContractAssetKeyFromContainer(container, "")
 }
