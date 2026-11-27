@@ -10,7 +10,6 @@ const messages = JSON.parse(readFileSync(new URL('../../locales/en.json', import
 const tr = messages.rgb11Transfer
 const inv = messages.rgb11Invoice
 const pwaRoot = fileURLToPath(new URL('../../', import.meta.url))
-const explorerBase = loadEnv('regtest', pwaRoot, 'VITE_').VITE_SAT20_REGTEST_L1_MEMPOOL_URL
 export const requiredPwaRgbCases = [
   'RGB PWA: NIA manual batch review receipt cancellation and pending resume',
   'RGB PWA: IFA issue and inflation through actual forms',
@@ -19,6 +18,11 @@ export const requiredPwaRgbCases = [
 const poll = { timeout: 180000, intervals: [500, 1000, 2000] }
 
 export async function runPwaRgbCases(t, fixture) {
+  const network = fixture.config.Chain
+  assert.ok(['testnet', 'regtest'].includes(network), `unsupported RGB fixture network: ${network}`)
+  const explorerBase = network === 'testnet'
+    ? 'https://mempool.space/testnet4'
+    : loadEnv('regtest', pwaRoot, 'VITE_').VITE_SAT20_REGTEST_L1_MEMPOOL_URL
   const { walletCall, accountCall } = t
   const actors = fixture.rgbWallets || { sender: fixture.basicWallet, recipient: fixture.recipient }
   const pages = []
@@ -372,13 +376,24 @@ export async function runPwaRgbCases(t, fixture) {
         await expect(button(form, messages.common.confirm)).toBeEnabled()
         await expect(form.getByRole('alert')).toBeVisible()
       } finally { await sender.unroute('**/message/service', unavailable) }
-      const delivered = await observe(sender, 'confirmRGB11Transfer', () => button(form, messages.common.confirm).click())
-      assert.equal(delivered.id, prepared.id, 'retry must continue the original candidate')
-      assert.ok(['awaiting_ack', 'awaiting_persistence'].includes(delivered.status))
-      await expect(form.getByText(messages.walletComponents[`states_${delivered.status}`], { exact: true })).toBeVisible()
+      // Once the mailbox saves the proof, Direct may broadcast without an
+      // ACK from the offline recipient. Isolate the broadcast failure here.
+      const broadcastRoute = '**/v3/bitcoin/tx/broadcast'
+      let broadcastRejected = false
+      const denyBroadcast = async route => {
+        broadcastRejected = true
+        await route.fulfill({ status: 503, body: 'Bitcoin broadcast unavailable' })
+      }
+      await sender.route(broadcastRoute, denyBroadcast)
+      await observe(sender, 'confirmRGB11Transfer', () => button(form, messages.common.confirm).click(), false)
+      await expect.poll(() => broadcastRejected, poll).toBe(true)
+      const attempted = (await view(sender)).transfers.find(item => item.id === prepared.id)
+      assert.equal(attempted?.tx_id, prepared.tx_id, 'retry must continue the original candidate')
+      assert.equal(attempted?.status, 'broadcast-attempted')
+      assert.equal(attempted?.can_cancel, false)
       assert.equal((await view(receiver)).assets.find(a => a.asset === issued.asset.asset).available, '0')
       await close(form)
-      await refreshed(sender)
+      // Do not trigger a retry while the broadcast outage is still active.
       // Inspect the real pending transaction's protection locks. The RGB page
       // is read-only; visiting it must not release a carrier or fee input.
       const pendingLocks = await walletCall(sender, 'getAllLockedUtxo', pair.sender.address)
@@ -408,57 +423,21 @@ export async function runPwaRgbCases(t, fixture) {
       await expect(task).toHaveCount(0)
       await sender.evaluate(() => { location.hash = '#/wallet/setting/operation-logs' })
       const operation = sender.locator('details').filter({ has: sender.getByText(prepared.id, { exact: true }) })
-      await expect(operation.locator('summary')).toContainText(messages.walletComponents[`states_${delivered.status}`])
+      await expect(operation.locator('summary')).toContainText(messages.walletComponents.states_broadcast_attempted)
       await operation.locator('summary').click()
       await expect(operation.getByText(prepared.id, { exact: true })).toBeVisible()
       await expect(button(operation, messages.common.confirm)).toHaveCount(0)
       await button(operation, tr.viewTransfer).click()
-      const retryDialog = dialog(sender, tr.sendTitle)
-      await observe(sender, 'getOperationLogs', () => button(retryDialog, messages.common.confirm).click(), true, 'sat20wallet_operation_log')
-      await expect(retryDialog.getByRole('status')).toHaveText(messages.walletComponents[`states_${delivered.status}`])
-      await close(retryDialog)
-      const broadcastRoute = '**/v3/bitcoin/tx/broadcast'
-      let broadcastRejected = false
-      const denyBroadcast = async route => {
-        await route.fulfill({ status: 503, body: 'Bitcoin broadcast unavailable' })
-        broadcastRejected = true
-      }
-      await sender.route(broadcastRoute, denyBroadcast)
-      await receiver.context().setOffline(false)
-      // Restoring browser transport does not restore the SDK's online grant.
-      // Observe its real background recovery before the original RGB refresh.
-      let reconnected
-      try {
-        await expect.poll(async () => {
-          const state = await accountCall(receiver, 'getAccountView')
-          reconnected = { state: state.state, error_code: state.error_code, modules: state.modules }
-          return state.state === 'ready' && state.modules?.some(module => module.name === 'rgb11' && module.can_write)
-        }, { timeout: 90000, message: 'reconnected recipient must regain SDK write qualification' }).toBe(true)
-      } catch (error) {
-        console.error(JSON.stringify({ rgbRecipientReconnect: reconnected }))
-        throw error
-      }
-      try {
-        await refreshed(receiver)
-        await expect.poll(() => broadcastRejected, poll).toBe(true)
-        await expect.poll(async () => (await view(sender)).transfers.find(item => item.id === prepared.id)?.status, poll)
-          .toBe('broadcast-attempted')
-        await button(sender, messages.common.refresh).click()
-        await expect(operation.locator('summary')).toContainText(messages.walletComponents.states_broadcast_attempted)
-        if (await operation.getAttribute('open') === null) await operation.locator('summary').click()
-        await button(operation, tr.viewTransfer).click()
-        const original = dialog(sender, tr.sendTitle)
-        await expect(original.getByRole('status')).toHaveText(messages.walletComponents.states_broadcast_attempted)
-        await original.getByText(tr.transferDetails, { exact: true }).click()
-        await expect(original.getByText(prepared.id, { exact: true })).toBeVisible()
-        await close(original)
-      } finally {
-        await sender.unroute(broadcastRoute, denyBroadcast)
-      }
+      const original = dialog(sender, tr.sendTitle)
+      await expect(original.getByRole('status')).toHaveText(messages.walletComponents.states_broadcast_attempted)
+      await original.getByText(tr.transferDetails, { exact: true }).click()
+      await expect(original.getByText(prepared.id, { exact: true })).toBeVisible()
+      await close(original)
+      await sender.unroute(broadcastRoute, denyBroadcast)
       await refreshed(sender)
       let transfer
-      // ACK persistence lets the SDK advance the already approved transaction.
-      // The UI observes that original action; it must not confirm a second time.
+      // The sender resumes the already approved transaction while the recipient
+      // remains offline. No replacement or extra confirmation is needed.
       await expect.poll(async () => {
         transfer = (await view(sender)).transfers.find(item => item.id === prepared.id)
         return transfer?.status
@@ -470,6 +449,12 @@ export async function runPwaRgbCases(t, fixture) {
       if (await operation.getAttribute('open') === null) await operation.locator('summary').click()
       await expect(operation.getByText(tr.taskChainHint, { exact: true })).toBeVisible()
       await checkBitcoinReference(operation, prepared.tx_id)
+      await receiver.context().setOffline(false)
+      await expect.poll(async () => {
+        const state = await accountCall(receiver, 'getAccountView')
+        return state.state === 'ready' && state.modules?.some(module => module.name === 'rgb11' && module.can_write)
+      }, { timeout: 90000, message: 'reconnected recipient must regain SDK write qualification' }).toBe(true)
+      await refreshed(receiver)
       await mine()
       await expect.poll(async () => {
         await refreshed(sender)

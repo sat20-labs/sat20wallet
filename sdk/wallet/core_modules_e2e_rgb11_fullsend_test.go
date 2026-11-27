@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -300,11 +301,11 @@ func coreSendRGB11Amount(t *testing.T, chain *coreE2EChain, source, destination 
 	coreAssert(t, prepared != nil && prepared.State != nil && prepared.State.Status == "prepared",
 		"full-send did not retain its prepared operation")
 	coreAssert(t, chain.broadcastCount() == beforeBroadcast,
-		"full-send prepare unexpectedly broadcast before delivery/ACK")
+		"full-send prepare unexpectedly broadcast before mailbox delivery")
 	if afterPrepare != nil {
 		afterPrepare(prepared)
 	}
-	coreDeliverRGB11OfflineACK(t, chain, source, destination, prepared, beforeBroadcast)
+	coreDeliverRGB11OfflineMailbox(t, chain, source, destination, prepared, beforeBroadcast)
 
 	chain.confirm(prepared.TxID)
 	_, err = source.RefreshRGB11State(context.Background())
@@ -384,40 +385,38 @@ func coreSyncRGBCheckpoint(t *testing.T, managers ...*Manager) {
 	}
 }
 
-// Observe the existing recovery boundaries by bringing the real devices online
-// in order. Production may consume an ACK automatically whenever its sender is
-// online; explicit frontend synchronization is not a broadcast barrier.
-func coreDeliverRGB11OfflineACK(t *testing.T, chain *coreE2EChain,
+// A Direct payment requires a durable recipient Core mailbox commit, not a
+// wallet ACK. Verify the exact signed payment before bringing the receiver online.
+func coreDeliverRGB11OfflineMailbox(t *testing.T, chain *coreE2EChain,
 	source, destination *Manager, prepared *RGB11PreparedTransfer, beforeBroadcast int) {
 	t.Helper()
 	sourceID, err := source.RootAccountID()
-	coreRequire(t, "read offline-ACK sender identity", err)
+	coreRequire(t, "read offline-mailbox sender identity", err)
 	destinationID, err := destination.RootAccountID()
-	coreRequire(t, "read offline-ACK receiver identity", err)
+	coreRequire(t, "read offline-mailbox receiver identity", err)
 	coreAssert(t, sourceID != destinationID && prepared != nil && prepared.State != nil &&
 		prepared.State.SenderAccountID == sourceID && prepared.State.ReceiverAccountID == destinationID,
-		"offline-ACK transfer is not bound to two independent device roots")
+		"offline-mailbox transfer is not bound to two independent device roots")
 	sourceOffline, destinationOffline := false, false
 	defer func() {
 		if sourceOffline {
-			coreRequire(t, "resume sender after interrupted offline-ACK flow", source.StartDKVSSync())
+			coreRequire(t, "resume sender after interrupted offline-mailbox flow", source.StartDKVSSync())
 			coreSynchronizeRestoredAccount(t, source)
 		}
 	}()
 	defer func() {
 		if destinationOffline {
-			coreRequire(t, "resume receiver after interrupted offline-ACK flow", destination.StartDKVSSync())
+			coreRequire(t, "resume receiver after interrupted offline-mailbox flow", destination.StartDKVSSync())
 			coreSynchronizeRestoredAccount(t, destination)
 		}
 	}()
-	// The receiver goes offline before delivery, so its worker cannot publish an
-	// ACK while the foreground delivery call still checks for that ACK.
+	// Stop the recipient worker, but keep its Core mailbox available.
 	destinationOffline = true
 	coreSuspendRGBDevice(t, destination)
 	sourceOffline = true
 	coreSuspendRGBDevice(t, source)
 	sourceView, err := source.captureRGB11NetworkScope(true)
-	coreRequire(t, "capture offline-ACK original sender scope", err)
+	coreRequire(t, "capture offline-mailbox original sender scope", err)
 	store := sourceView.rgbManager.projectionStore
 	unsigned, err := store.LoadPendingTransfer(prepared.State.TransferID)
 	coreRequire(t, "read original unsigned transfer before delivery", err)
@@ -427,41 +426,96 @@ func coreDeliverRGB11OfflineACK(t *testing.T, chain *coreE2EChain,
 		len(unsigned.State.InputOutPoints) > 0 && !unsigned.State.DeliveryAcknowledged &&
 		unsigned.State.AckStatus != "accepted" && !rgb11PendingHasWitness(unsigned) &&
 		chain.broadcastCount() == beforeBroadcast,
-		"offline-ACK delivery lost its original unsigned, unacknowledged intent")
+		"offline-mailbox delivery lost its original unsigned, unacknowledged intent")
 	delivery, err := source.DeliverAndBroadcastConfiguredRGB11AddressTransfer(
 		prepared.State.TransferID)
 	coreRequire(t, "deliver consignment while receiver is offline", err)
 	coreAssert(t, delivery != nil && delivery.TransferID == prepared.State.TransferID &&
-		delivery.AwaitingACK && !delivery.Broadcast && chain.broadcastCount() == beforeBroadcast,
-		"delivery crossed the offline receiver ACK boundary")
+		delivery.Broadcast && !delivery.AwaitingACK && delivery.TxID == prepared.TxID &&
+		delivery.RecordKey != "" && delivery.RecordHash != "" && chain.broadcastCount() == beforeBroadcast+1,
+		"recipient Core mailbox commit did not broadcast the original transaction exactly once")
+	signed, err := store.LoadPendingTransfer(prepared.State.TransferID)
+	coreRequire(t, "read durable signed transfer while receiver is offline", err)
+	coreAssert(t, signed != nil && signed.State.SenderAccountID == sourceID &&
+		signed.State.ReceiverAccountID == destinationID && rgbDeliveryReady(signed) &&
+		signed.State.DeliveryRecordKey == delivery.RecordKey && signed.State.DeliveryRecordHash == delivery.RecordHash &&
+		validRGB11SigningTransition(unsigned, signed),
+		"mailbox commit changed the original transaction or lost its verified signed witness")
+	raw, err := chain.GetRawTx(prepared.TxID)
+	coreRequire(t, "read actual offline-mailbox Bitcoin transaction", err)
+	coreAssert(t, bytes.Equal(raw, signed.SignedTx),
+		"offline-mailbox flow did not broadcast the exact durable signed transaction")
 	coreRequire(t, "bring receiver online to accept its consignment", destination.StartDKVSSync())
 	destinationOffline = false
 	coreSynchronizeRestoredAccount(t, destination)
-	coreWaitRGB11MailboxACK(t, chain, destination, prepared, beforeBroadcast)
+	coreWaitRGB11MailboxACK(t, chain, destination, prepared, beforeBroadcast+1)
 	coreSyncRGBCheckpoint(t, destination)
-	coreAssertRGB11ACKRecoveryPublished(t, destination, prepared)
-	coreAssert(t, chain.broadcastCount() == beforeBroadcast,
-		"offline sender broadcast before its receiver recovery checkpoint completed")
-	coreRequire(t, "bring sender online to consume its accepted ACK", source.StartDKVSSync())
+	coreAssertRGB11DirectMempoolRecovery(t, destination, prepared)
+	coreRequire(t, "bring sender online after recipient recovery", source.StartDKVSSync())
 	sourceOffline = false
 	coreSynchronizeRestoredAccount(t, source)
-	coreWaitRGB11MailboxBroadcast(t, chain, source, prepared, beforeBroadcast)
-	signed, err := store.LoadPendingTransfer(prepared.State.TransferID)
-	coreRequire(t, "read durable signed transfer after accepted ACK", err)
-	coreAssert(t, signed != nil && signed.State.SenderAccountID == sourceID &&
-		signed.State.ReceiverAccountID == destinationID && signed.State.DeliveryAcknowledged &&
-		signed.State.AckStatus == "accepted" && validRGB11SigningTransition(unsigned, signed),
-		"ACK consumption changed the original transaction or lost its verified signed witness")
-	raw, err := chain.GetRawTx(prepared.TxID)
-	coreRequire(t, "read actual offline-ACK Bitcoin transaction", err)
-	coreAssert(t, bytes.Equal(raw, signed.SignedTx) && chain.broadcastCount() == beforeBroadcast+1,
-		"offline-ACK flow did not broadcast exactly its original signed transaction once")
+	coreAssert(t, chain.broadcastCount() == beforeBroadcast+1,
+		"bringing either wallet online duplicated the committed Direct payment")
 	locks := source.utxoLockerL1.GetLockedUtxoList()
 	for _, outpoint := range signed.State.InputOutPoints {
 		lock := locks[outpoint]
 		coreAssert(t, lock != nil && lock.ReservationID == signed.ReservationID,
 			"broadcast transfer released its original input reservation before confirmation")
 	}
+}
+
+// A Direct receive can be accepted locally before confirmation. Its recovery
+// package then contains the validation receipt rather than a prepared marker.
+func coreAssertRGB11DirectMempoolRecovery(t *testing.T, receiver *Manager,
+	prepared *RGB11PreparedTransfer) {
+	t.Helper()
+	id, txID, hash := prepared.State.TransferID, prepared.TxID, prepared.State.ConsignmentHash
+	scope := coreSelectedRGBScope(receiver)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	coreRequire(t, "confirm the Direct receive recovery backup",
+		receiver.WaitAccountBackup(ctx, rgb11AccountManagedProviderID, scope))
+	payloads, err := accountTestPayloads(receiver, rgb11AccountManagedProviderID)
+	coreRequire(t, "read stable Direct receive backup", err)
+	payload, ok := payloads[scope]
+	coreAssert(t, ok && payload.Scope == scope, "Direct receive recovery scope is missing")
+	pkg, err := rgb11wallet.DecodeRecoveryPackage(payload.Payload)
+	coreRequire(t, "decode Direct receive recovery package", err)
+	snapshot, err := pkg.WalletSnapshot()
+	coreRequire(t, "validate Direct receive recovery package", err)
+	transfers, err := rgb11wallet.TransfersFromProjectionSnapshot(snapshot.ProjectionRecords)
+	coreRequire(t, "read backed-up Direct receive identity", err)
+	var receive *rgb11wallet.TransferState
+	for _, row := range transfers {
+		if row.TransferID == id && row.Direction == "receive" {
+			coreAssert(t, receive == nil, "duplicate backed-up Direct receive lifecycle")
+			receive = row
+		}
+	}
+	coreAssert(t, receive != nil && receive.AddressMode && receive.TransportMode == RGB11AddressTransport &&
+		receive.WitnessTxID == txID && receive.ConsignmentHash == hash && receive.Status == "pending" &&
+		receive.ReceiveRequestID != "" && receive.DeliveryAcknowledged && receive.AckStatus == "ack-sent",
+		"backed-up Direct receive lost its pending payment or ACK identity")
+	proofs, err := rgb11wallet.ProofsFromProjectionSnapshot(snapshot.ProjectionRecords)
+	coreRequire(t, "read backed-up Direct receive proofs", err)
+	matches := 0
+	for _, proof := range proofs {
+		// One batch consignment can prove more than one output. Test this
+		// allocation by its carrier and asset, then check its exact proof.
+		if !slices.Contains(receive.OutputOutPoints, proof.OutPoint) || proof.AssetName != receive.Asset.Name {
+			continue
+		}
+		matches++
+		spendable := rgb11ProofIsAvailable(proof, nil)
+		coreAssert(t, proof.ConsignmentHash == hash && proof.WitnessTxID == txID &&
+			proof.Confirmations == 0 && !spendable, fmt.Sprintf(
+			"unconfirmed Direct receive proof mismatch: hash_match=%t tx_match=%t confirmations=%d spendable=%t",
+			proof.ConsignmentHash == hash, proof.WitnessTxID == txID, proof.Confirmations, spendable))
+	}
+	coreAssert(t, matches > 0, "Direct receive backup lost the pending allocation proof")
+	receipts, err := rgb11wallet.ValidationReceiptsFromProjectionSnapshot(snapshot.ProjectionRecords)
+	coreRequire(t, "read backed-up Direct validation receipt", err)
+	coreAssert(t, receipts[hash] != nil, "Direct receive backup lost its exact validation receipt")
 }
 
 // A cold database replays its account mailbox, including historical sends

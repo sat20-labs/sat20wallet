@@ -364,7 +364,7 @@ func coreDescribeRGBView(t *testing.T, label string, before, after coreRGBView,
 // and require the same invoice/operation/ownership/lock view. Recovery is
 // observational: it must never turn a pending transaction into a broadcast.
 func corePendingCheckpoint(t *testing.T, name string, source *Manager, cfg coreE2EConfig,
-	chain *coreE2EChain, material *coreRecoveryMaterial) *Manager {
+	chain *coreE2EChain, material *coreRecoveryMaterial, keepRecoveredOffline ...bool) *Manager {
 
 	t.Helper()
 	enterBroadcasts := chain.broadcastCount()
@@ -498,7 +498,9 @@ func corePendingCheckpoint(t *testing.T, name string, source *Manager, cfg coreE
 	returnedClosure := coreReadRGBClosure(t, recovered, cfg)
 	defer coreZeroRGBPayloads(returnedClosure.payloads)
 	coreCheckRGBBaseline(t, name+" returned cold", baseline, returnedClosure)
-	coreRequire(t, "start initialized cold checkpoint device", recovered.StartDKVSSync())
-	coreWaitAccountOnline(t, recovered)
+	if len(keepRecoveredOffline) == 0 || !keepRecoveredOffline[0] {
+		coreRequire(t, "start initialized cold checkpoint device", recovered.StartDKVSSync())
+		coreWaitAccountOnline(t, recovered)
+	}
 	return recovered
 }

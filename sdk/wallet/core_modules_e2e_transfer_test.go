@@ -270,7 +270,7 @@ func coreInvoiceTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain
 	coreAssert(t, left.Value.Uint64() == 600 && right.Value.Uint64() == 400, "invoice transfer violated asset conservation")
 
 	// Reopen the witness recipient from its account recovery package and spend
-	// part of that received allocation through the ACK-gated Direct path.
+	// part of that received allocation through the Direct mailbox path.
 	beforeColdRestore := chain.broadcastCount()
 	coreWaitPrivateBackup(t, receiver)
 	receiver.StopDKVSSync()
@@ -441,8 +441,8 @@ func coreSendRGB11AddressAmountAndSettle(t *testing.T, chain *coreE2EChain,
 	}, dkvsindexer.RecordVerificationOptions{})
 	coreRequire(t, "prepare cold-recovered allocation re-spend", err)
 	coreAssert(t, chain.broadcastCount() == beforeBroadcast,
-		"cold-recovered allocation prepare broadcast before delivery/ACK")
-	coreDeliverRGB11OfflineACK(t, chain, source, destination, prepared, beforeBroadcast)
+		"cold-recovered allocation prepare broadcast before mailbox delivery")
+	coreDeliverRGB11OfflineMailbox(t, chain, source, destination, prepared, beforeBroadcast)
 	chain.confirm(prepared.TxID)
 	_, err = source.RefreshRGB11State(context.Background())
 	coreRequire(t, "settle cold-recovered spend source", err)
@@ -743,8 +743,8 @@ func coreDirectTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 	endpoint, err := receiver.EnableConfiguredRGB11AddressReceive(RGB11ReceiveCapabilityOptions{})
 	coreRequire(t, "publish Direct receive capability", err)
 	coreAssert(t, !endpoint.Temporary, "paid Direct capability downgraded to temporary")
-	// The recipient device is offline until the sender's delivered, unACKed
-	// recovery checkpoint is complete. Its registered public endpoint remains.
+	// Keep the recipient wallet offline until its Core mailbox has durably
+	// accepted the consignment and the sender has broadcast.
 	coreSuspendRGBDevice(t, receiver)
 	before := chain.broadcastCount()
 	prepared, _, err := sender.PrepareConfiguredRGB11AddressTransfer(context.Background(), RGB11AddressSendRequest{
@@ -753,38 +753,54 @@ func coreDirectTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 	}, dkvsindexer.RecordVerificationOptions{})
 	coreRequire(t, "prepare Direct transfer", err)
 	sender = corePendingCheckpoint(t, "02_prepared_sender", sender, cfg, chain, senderMaterial)
+	coreSuspendRGBDevice(t, sender)
 	result, err := sender.rgbManager.deliverRGBAddress(prepared.State.TransferID)
 	coreRequire(t, "deliver Direct consignment via real CoreNode", err)
 	coreAssert(t, result.RecordHash != "" && !result.Broadcast && chain.broadcastCount() == before, "delivery-only checkpoint must retain the committed mailbox receipt")
-	sender = corePendingCheckpoint(t, "03_mailbox_committed_sender", sender, cfg, chain, senderMaterial)
-	// Join this sender before the recipient goes online and publishes its ACK.
-	// It resumes only after its own broadcast-backup fault has been installed.
-	coreSuspendRGBDevice(t, sender)
+	// Keep the restored device's mailbox worker stopped so the foreground
+	// broadcast, not automatic continuation, runs inside the backup fault.
+	const keepRecoveredOffline = true
+	sender = corePendingCheckpoint(t, "03_mailbox_committed_sender", sender, cfg, chain, senderMaterial, keepRecoveredOffline)
+	finishDirectBroadcast := coreRGBBackupOutage(t, sender, cfg, issued.ContractID, false)
+	delivery, err := sender.DeliverAndBroadcastConfiguredRGB11AddressTransfer(prepared.State.TransferID)
+	coreRequire(t, "broadcast Direct after durable Core mailbox commit", err)
+	coreAssert(t, delivery != nil && delivery.Broadcast && !delivery.AwaitingACK &&
+		delivery.TxID == prepared.TxID && chain.broadcastCount() == before+1,
+		"Direct Core mailbox commit did not broadcast exactly once")
+	retainedDirectPending, err := sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
+	coreRequire(t, "load locally retained Direct transaction", err)
+	raw, err := chain.GetRawTx(prepared.TxID)
+	coreRequire(t, "read exact Direct transaction from the mempool", err)
+	coreAssert(t, retainedDirectPending != nil && retainedDirectPending.State.WitnessTxID == prepared.TxID &&
+		!retainedDirectPending.State.DeliveryAcknowledged && rgbDeliveryReady(retainedDirectPending) &&
+		rgb11PendingHasWitness(retainedDirectPending) && bytes.Equal(retainedDirectPending.SignedTx, raw) &&
+		rgb11TransferKeepsInputsLocked(&retainedDirectPending.State),
+		"Direct broadcast lost its signed identity, mailbox commit or input lock")
+	coreAssertRGB11Reservation(t, sender, prepared.State.TransferID, true)
+	finishDirectBroadcast()
+	sender = corePendingCheckpoint(t, "04_broadcast_sender", sender, cfg, chain, senderMaterial, keepRecoveredOffline)
 
-	// Direct receive has the same local commit/ACK boundary as Standard.
+	// The real receipt and ACK must persist even if their own backup is delayed.
 	localBeforeDirectACKFault := coreLocalRGBBundleDigests(t, receiver)
 	finishDirectACK := coreRGBBackupOutage(t, receiver, cfg, issued.ContractID, false)
 	directACK, err := receiver.SyncConfiguredRGB11AddressMailbox(context.Background(),
 		dkvsindexer.RecordVerificationOptions{})
 	coreRequire(t, "locally accept and ACK Direct consignment", err)
-	coreAssert(t, directACK != nil && directACK.Received == 1 && chain.broadcastCount() == before,
-		"Direct receive did not commit exactly once ahead of Bitcoin broadcast")
+	coreAssert(t, directACK != nil && directACK.Received == 1 && chain.broadcastCount() == before+1,
+		"Direct receive did not accept exactly once without rebroadcasting")
 	localAfterDirectACKFault := coreLocalRGBBundleDigests(t, receiver)
 	coreAssert(t, coreDigest(localAfterDirectACKFault) != coreDigest(localBeforeDirectACKFault),
 		"Direct receive discarded its locally accepted material")
 	directReceiveState, err := receiver.rgbManager.projectionStore.LoadTransferState(prepared.State.TransferID)
 	coreRequire(t, "load locally durable Direct ACK", err)
-	coreAssert(t, directReceiveState.Direction == "receive" && directReceiveState.Status == "awaiting_broadcast" &&
+	coreAssert(t, directReceiveState.Direction == "receive" && directReceiveState.Status == "pending" &&
 		directReceiveState.AckStatus == "ack-sent" && directReceiveState.DeliveryAcknowledged &&
-		directReceiveState.WitnessTxID == prepared.TxID,
-		"Direct ACK lost the exact accepted transition")
-	directRequestID, err := receiver.rgbManager.projectionStore.LoadPreparedReceive(prepared.State.TransferID)
-	coreRequire(t, "load retained Direct prepared receive request", err)
-	directRequest, err := receiver.rgbManager.engine.LoadReceive(directRequestID)
-	coreRequire(t, "reload retained Direct receive request", err)
-	coreAssert(t, directRequest.TransferID == prepared.State.TransferID &&
-		directRequest.ObjectHash == prepared.State.ConsignmentHash,
-		"failed Direct ACK barrier lost the original request or consignment binding")
+		directReceiveState.WitnessTxID == prepared.TxID && directReceiveState.ConsignmentHash == prepared.State.ConsignmentHash,
+		"Direct ACK lost the exact pending receive")
+	receipt, err := receiver.rgbManager.projectionStore.LoadValidationReceipt(prepared.State.ConsignmentHash)
+	coreRequire(t, "read locally retained Direct validation receipt", err)
+	coreAssert(t, receipt != nil && receipt.ConsignmentHash == prepared.State.ConsignmentHash,
+		"failed Direct backup lost the original validation receipt")
 	ackMessageID, err := rgb11AddressMessageID(prepared.State.TransferID)
 	coreRequire(t, "derive Direct ACK mailbox identity", err)
 	senderRoot, err := sender.accountManagementRootWallet()
@@ -800,32 +816,11 @@ func coreDirectTransferE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 	}
 	coreAssert(t, ackCount == 1, "Direct receive did not publish exactly one identity-bound ACK")
 	finishDirectACK()
-	coreWaitRGB11MailboxACK(t, chain, receiver, prepared, before)
-	coreAssertRGB11ACKRecoveryPublished(t, receiver, prepared)
-	receiver = corePendingCheckpoint(t, "04_receiver_ACK_committed", receiver, cfg, chain, receiverMaterial)
-	coreAssert(t, chain.broadcastCount() == before, "passive receiver recovery broadcast sender transaction")
-	// Backup runs after the locally recorded ACK and actual broadcast. Keep
-	// the same reservation and transaction across its controlled outage.
-	senderRootView, err := sender.captureRGB11NetworkScope(true)
-	coreRequire(t, "capture Direct sender scope", err)
-	finishDirectBroadcast := coreRGBBackupOutage(t, sender, cfg, issued.ContractID, false)
-	_, err = sender.SyncConfiguredRGB11AddressMailbox(context.Background(),
-		dkvsindexer.RecordVerificationOptions{})
-	coreRequire(t, "consume Direct ACK and broadcast local transaction", err)
-	coreAssert(t, chain.broadcastCount() == before+1, "Direct ACK did not broadcast exactly once")
-	retainedDirectPending, err := senderRootView.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
-	coreRequire(t, "load locally retained Direct transaction", err)
-	coreAssert(t, retainedDirectPending.State.WitnessTxID == prepared.TxID &&
-		retainedDirectPending.State.AckStatus == "accepted" &&
-		rgb11TransferKeepsInputsLocked(&retainedDirectPending.State),
-		"Direct backup outage lost the accepted identity or input lock")
-	coreAssertRGB11Reservation(t, sender, prepared.State.TransferID, true)
-	finishDirectBroadcast()
+	coreWaitRGB11MailboxACK(t, chain, receiver, prepared, before+1)
+	coreAssertRGB11DirectMempoolRecovery(t, receiver, prepared)
+	receiver = corePendingCheckpoint(t, "05_receiver_ACK_committed", receiver, cfg, chain, receiverMaterial)
 	coreWaitRGB11MailboxBroadcast(t, chain, sender, prepared, before)
-	sender = corePendingCheckpoint(t, "05_ACK_and_broadcast_sender", sender, cfg, chain, senderMaterial)
-	_, err = receiver.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{})
-	coreRequire(t, "receiver discovers broadcast", err)
-	receiver = corePendingCheckpoint(t, "06_broadcast_receiver", receiver, cfg, chain, receiverMaterial)
+	sender = corePendingCheckpoint(t, "06_ACK_recorded_sender", sender, cfg, chain, senderMaterial)
 
 	chain.confirm(prepared.TxID)
 	_, err = sender.RefreshRGB11State(context.Background())

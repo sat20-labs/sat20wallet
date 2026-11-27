@@ -561,6 +561,9 @@ export async function runPwaDappCases(t, fixture) {
       assert.deepEqual(Object.keys(afterReplay.broadcast_count).sort(), Object.keys(beforeReplay.broadcast_count).sort())
     })
     await check(dappCases[8], async () => {
+      // The preceding broadcast case uses the same origin's approval queue.
+      // Start identity isolation outside that case's rate-limit window.
+      await page.waitForTimeout(10_000)
       await page.evaluate(async () => {
         const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
         await store.addAccount('Approval isolation', 1)
@@ -571,7 +574,15 @@ export async function runPwaDappCases(t, fixture) {
         await approveConnection([...permissions, 'transaction:sign'])
         const request = await begin('signMessage', { message: `Pending approval before ${transition}` })
         const approval = dialog('Sign Message')
-        await expect(approval).toBeVisible()
+        try {
+          await expect(approval).toBeVisible()
+        } catch (error) {
+          const state = await frame.evaluate(id => {
+            const result = window.pwaAcceptanceClient.responses[id]
+            return result ? { success: result.success, errorCode: result.error?.code, approvalRateLimited: result.error?.message === 'Wallet approval rate limit exceeded' } : null
+          }, request.requestId).catch(() => null)
+          throw new Error(`Sign Message before ${transition}: DApp response ${JSON.stringify(state)}; ${error.message}`, { cause: error })
+        }
         await page.evaluate(async transition => {
           const store = window.__SAT20_PWA_VERIFY__.useWalletStore()
           if (transition === 'switch') await store.switchToAccount(1)

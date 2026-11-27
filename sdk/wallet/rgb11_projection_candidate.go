@@ -1076,27 +1076,36 @@ func (p *rgb11Manager) resolveRGB11Recovery(ctx context.Context, snapshot *RGB11
 			row.AssignmentType, row.AssignmentIndex)
 		consumerRows := consumersByInput[parentInput]
 		spenderID, consumerOperation := "", ""
+		var spenderState uint8
 		spenderHashes := make(map[string]struct{})
+		spenderKnown := spend.SpendingTx != "" && spend.SpendingTx != "unknown"
 		for _, consumer := range consumerRows {
-			if consumer.WitnessState != uint8(coreconsignment.WitnessMined) ||
-				(consumer.WitnessTxID != spend.SpendingTx && spend.SpendingTx != "" && spend.SpendingTx != "unknown") {
+			// Only a mined edge may identify a spender the outspend lookup
+			// did not name. A mempool edge must match its exact reported txid.
+			if spenderKnown && consumer.WitnessTxID != spend.SpendingTx {
+				continue
+			}
+			if consumer.WitnessState != uint8(coreconsignment.WitnessMined) &&
+				(!spenderKnown || consumer.WitnessState != uint8(coreconsignment.WitnessTentative)) {
 				continue
 			}
 			if consumer.WitnessTxID == "" || consumer.ConsumerOperationID == "" ||
 				!rgb11wallet.ContractAssetKeyMatches(assetName, consumer.ContractID) {
-				return fmt.Errorf("prepared RGB11 parent has an incomplete confirmed consumer edge")
+				return fmt.Errorf("prepared RGB11 parent has an incomplete consumer edge")
 			}
-			if spenderID != "" && (spenderID != consumer.WitnessTxID || consumerOperation != consumer.ConsumerOperationID) {
-				return fmt.Errorf("prepared RGB11 parent has ambiguous confirmed consumers")
+			if spenderID != "" && (spenderID != consumer.WitnessTxID || consumerOperation != consumer.ConsumerOperationID ||
+				spenderState != consumer.WitnessState) {
+				return fmt.Errorf("prepared RGB11 parent has ambiguous consumers")
 			}
-			spenderID, consumerOperation = consumer.WitnessTxID, consumer.ConsumerOperationID
+			spenderID, consumerOperation, spenderState = consumer.WitnessTxID, consumer.ConsumerOperationID, consumer.WitnessState
 			spenderHashes[consumer.ConsignmentHash] = struct{}{}
 		}
 		if spenderID == "" {
-			return fmt.Errorf("prepared RGB11 parent spend has no confirmed core consumer")
+			return fmt.Errorf("prepared RGB11 parent spend has no verified core consumer")
 		}
-		if _, verified := verifyRGB11ExpectedSpend(evidence, outpoint, spenderID); !verified {
-			return fmt.Errorf("prepared RGB11 parent consumer has no confirmed raw witness")
+		confirmed := spenderState == uint8(coreconsignment.WitnessMined)
+		if _, verified := verifyRGB11ObservedSpend(evidence, outpoint, spenderID, confirmed); !verified {
+			return fmt.Errorf("prepared RGB11 parent consumer has no matching raw witness")
 		}
 		for hash := range spenderHashes {
 			if _, historyErr := validateHistoricalConsignment(hash); historyErr != nil {
@@ -1359,7 +1368,7 @@ func (p *rgb11Manager) resolveRGB11Recovery(ctx context.Context, snapshot *RGB11
 
 	// An absent transition output is orphaned only when core validates its
 	// embedded prepared branch and every exact parent Opout has positive current
-	// unspent or replacement-consumer evidence above. An absent issuance has no
+	// unspent or verified replacement-consumer evidence above. An absent issuance has no
 	// such parent evidence and remains unknown.
 	checkParents := func(state *rgb11RecoveryProofCandidate) error {
 		if !state.prepared {

@@ -6,18 +6,23 @@ import (
 	"testing"
 
 	indexer "github.com/sat20-labs/indexer/common"
+	dkvs "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
 func TestSTPChannelAssetCompatibility(t *testing.T) {
 	rune := AssetName{AssetName: indexer.AssetName{Protocol: indexer.PROTOCOL_NAME_RUNES, Type: indexer.ASSET_TYPE_FT, Ticker: "TOKEN"}}
-	rgb := AssetName{AssetName: indexer.AssetName{Protocol: "rgb11", Type: indexer.ASSET_TYPE_FT, Ticker: strings.Repeat("a", 64)}, N: 0}
+	ticker, err := dkvs.RGB11NameTicker("RGB", strings.Repeat("a", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rgb := AssetName{AssetName: indexer.AssetName{Protocol: "rgb11", Type: indexer.ASSET_TYPE_FT, Ticker: ticker}, N: 0}
 	arc := AssetName{AssetName: indexer.AssetName{Protocol: indexer.PROTOCOL_NAME_ATOM, Type: indexer.ASSET_TYPE_FT, Ticker: "quark"}, N: 1}
 	for _, operation := range []STPAssetOperation{STPOpSpliceIn, STPOpExpand} {
 		t.Run(string(operation), func(t *testing.T) {
 			for _, pair := range []struct {
-				name string
+				name               string
 				existing, incoming AssetName
-				conflict bool
+				conflict           bool
 			}{
 				{"runes-then-rgb", rune, rgb, true},
 				{"rgb-then-runes", rgb, rune, true},
@@ -32,7 +37,7 @@ func TestSTPChannelAssetCompatibility(t *testing.T) {
 					for _, source := range []string{"funding", "local-balance", "remote-balance"} {
 						t.Run(source, func(t *testing.T) {
 							channel := &Channel{ChannelInDB: ChannelInDB{
-								FundingUtxos: make(map[AssetName][]*TxOutput),
+								FundingUtxos:    make(map[AssetName][]*TxOutput),
 								LocalCommitment: NewChannelCommitment(), RemoteCommitment: NewChannelCommitment(),
 							}}
 							switch source {
@@ -59,8 +64,8 @@ func TestSTPChannelAssetCompatibility(t *testing.T) {
 	}
 	t.Run("retained-proof-is-not-active-funding", func(t *testing.T) {
 		channel := &Channel{ChannelInDB: ChannelInDB{
-			FundingUtxos: map[AssetName][]*TxOutput{rgb: nil},
-			AssetFunding: map[string][]byte{"rgb11": []byte("retained recovery journal")},
+			FundingUtxos:    map[AssetName][]*TxOutput{rgb: nil},
+			AssetFunding:    map[string][]byte{"rgb11": []byte("retained recovery journal")},
 			LocalCommitment: NewChannelCommitment(), RemoteCommitment: NewChannelCommitment(),
 		}}
 		channel.LocalCommitment.LocalBalance[rgb] = indexer.NewDefaultDecimal(0)

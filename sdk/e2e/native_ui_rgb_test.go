@@ -527,11 +527,15 @@ func runNativeRGBDirect(t *testing.T, f *nativeIfaceChain) {
 	prepared, err := owner.mgr.PrepareRGBTransfer(ctx, wallet.RGBSendRequest{Recipients: []wallet.RGBRecipient{{Destination: targetAddress, Asset: asset.Asset, Amount: "10.25"}}, FeeRate: 2})
 	require.NoError(t, err)
 	before := owner.http.broadcasts.Load()
-	delivered, err := owner.mgr.ConfirmRGBTransfer(ctx, prepared.ID, nil)
-	require.NoError(t, err)
-	require.Equal(t, prepared.ID, delivered.ID)
-	require.Contains(t, []string{"awaiting_ack", "awaiting_persistence"}, delivered.Status)
 	nativeUINoBroadcast(t, f, owner, before, prepared.TxID)
+	// The receiver wallet is closed, but its Core can durably accept the consignment.
+	broadcast, err := owner.mgr.ConfirmRGBTransfer(ctx, prepared.ID, nil)
+	require.NoError(t, err)
+	require.Equal(t, prepared.ID, broadcast.ID)
+	require.Equal(t, prepared.TxID, broadcast.TxID)
+	require.Equal(t, "pending_chain", broadcast.Status)
+	require.Equal(t, before+1, owner.http.broadcasts.Load())
+	tx := nativeUITransaction(t, f, broadcast.TxID)
 	owner.close()
 	receiver.reopen(t)
 	nativeUIReady(t, receiver.mgr)
@@ -541,16 +545,13 @@ func runNativeRGBDirect(t *testing.T, f *nativeIfaceChain) {
 	receiver.close()
 	owner.reopen(t)
 	nativeUIReady(t, owner.mgr)
-	var broadcast *wallet.RGBTransferView
-	require.Eventually(t, func() bool {
-		var e error
-		broadcast, e = owner.mgr.ConfirmRGBTransfer(ctx, prepared.ID, nil)
-		return e == nil && broadcast.Status == "pending_chain"
-	}, 90*time.Second, 200*time.Millisecond)
-	require.Equal(t, prepared.ID, broadcast.ID)
-	require.Equal(t, prepared.TxID, broadcast.TxID)
+	replayed, err := owner.mgr.ConfirmRGBTransfer(ctx, prepared.ID, nil)
+	require.NoError(t, err)
+	require.Equal(t, broadcast.ID, replayed.ID)
+	require.Equal(t, broadcast.TxID, replayed.TxID)
+	require.Equal(t, "pending_chain", replayed.Status)
+	require.Equal(t, before+1, owner.http.broadcasts.Load(), "restart and confirmation must not rebroadcast")
 	f.mine(t, 1)
-	tx := nativeUITransaction(t, f, broadcast.TxID)
 	ownIndex, otherIndex := -1, -1
 	for i, out := range tx.TxOut {
 		if bytes.Equal(out.PkScript, ownScript) {

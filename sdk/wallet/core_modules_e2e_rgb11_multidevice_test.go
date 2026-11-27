@@ -149,7 +149,8 @@ func coreRGB11SameRootThreeDeviceE2E(t *testing.T, cfg coreE2EConfig, chain *cor
 				"returning computer broadcast the canceled preparation")
 		} else {
 			staleDelivery, deliveryErr := device.DeliverAndBroadcastConfiguredRGB11AddressTransfer(firstPrepared.State.TransferID)
-			coreRequire(t, "resume canceled preparation without side effects", deliveryErr)
+			coreAssert(t, errors.Is(deliveryErr, ErrRGB11AddressDeliveryRequired),
+				"returning phone did not reject the canceled delivery")
 			coreAssert(t, staleDelivery != nil && !staleDelivery.Broadcast && staleDelivery.TxID == "" &&
 				staleDelivery.RecordKey == "" && staleDelivery.RecordHash == "" && staleDelivery.ObjectID == "",
 				"returning phone delivered or broadcast a canceled preparation")
@@ -163,8 +164,8 @@ func coreRGB11SameRootThreeDeviceE2E(t *testing.T, cfg coreE2EConfig, chain *cor
 		"canceled preparation reached the receiver mailbox")
 	coreAssert(t, chain.broadcastCount() == beforeTransfers, "canceled operation reached the Bitcoin backend")
 
-	// Keep the recipient offline until A's delivered intent is backed up and A
-	// has retired. Its later ACK can then be consumed only by the selected B.
+	// Keep the recipient offline while B resumes A's committed mailbox
+	// delivery. The recipient's later ACK must not broadcast again.
 	coreRGB11RetireDevice(t, receiver)
 	coreRGB11UseDevice(t, deviceA)
 	directPrepared, _, err := deviceA.PrepareConfiguredRGB11AddressTransfer(ctx,
@@ -176,14 +177,12 @@ func coreRGB11SameRootThreeDeviceE2E(t *testing.T, cfg coreE2EConfig, chain *cor
 		overlapsRGB11Outpoints(issued.OutPoints, directPrepared.State.InputOutPoints),
 		"cancel did not free the actual issued carrier for the new intent")
 	directBaseline := cloneRGB11BroadcastIntent(assertRGB11UnsignedPending(t, deviceA.rgbManager, directPrepared.State.TransferID))
+	coreRGB11RetireDevice(t, deviceA)
 	delivered, err := deviceA.rgbManager.deliverRGBAddress(directPrepared.State.TransferID)
-	coreRequire(t, "deliver direct consignment before ACK", err)
+	coreRequire(t, "deliver direct consignment with the sender worker stopped", err)
 	coreAssert(t, delivered.RecordHash != "" && !delivered.Broadcast && chain.broadcastCount() == beforeTransfers,
 		"delivery-only step must persist a mailbox receipt without broadcasting")
 	coreRGB11RetireDevice(t, deviceA)
-	coreRGB11UseDevice(t, receiver)
-	coreWaitRGB11MailboxACK(t, chain, receiver, directPrepared, beforeTransfers)
-	coreAssertRGB11ACKRecoveryPublished(t, receiver, directPrepared)
 
 	// Observe B's real signed raw at the backend without pausing the call or
 	// allowing another same-root device to write during that network request.
@@ -210,6 +209,14 @@ func coreRGB11SameRootThreeDeviceE2E(t *testing.T, cfg coreE2EConfig, chain *cor
 		deviceB.rgbManager.evidence = previousBEvidence
 	})
 	coreRGB11UseDevice(t, deviceB)
+	resumed, err := deviceB.DeliverAndBroadcastConfiguredRGB11AddressTransfer(directPrepared.State.TransferID)
+	coreRequire(t, "resume the committed Direct payment on B while the receiver is offline", err)
+	coreAssert(t, resumed != nil && resumed.Broadcast && resumed.TxID == directPrepared.TxID &&
+		chain.broadcastCount() == beforeTransfers+1,
+		"B did not broadcast the original Direct transaction exactly once")
+	coreRGB11UseDevice(t, receiver)
+	coreWaitRGB11MailboxACK(t, chain, receiver, directPrepared, beforeTransfers+1)
+	coreAssertRGB11DirectMempoolRecovery(t, receiver, directPrepared)
 	coreWaitRGB11MailboxBroadcast(t, chain, deviceB, directPrepared, beforeTransfers)
 	var signedBaseline *rgb11wallet.PendingTransfer
 	select {

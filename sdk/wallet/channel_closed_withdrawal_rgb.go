@@ -176,9 +176,13 @@ func (p *Manager) prepareRGBClosedWithdrawal(channel *Channel, parent *wire.MsgT
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	knownAssets := make(map[indexer.AssetName]bool)
+	knownAssets := make(map[indexer.AssetName]bool, len(pkg.Funding))
 	for _, source := range pkg.Funding {
-		knownAssets[source.AssetName] = true
+		name, err := stpRGB11FundingName(source)
+		if err != nil {
+			return nil, nil, 0, fmt.Errorf("RGB withdrawal funding asset name: %w", err)
+		}
+		knownAssets[name] = true
 	}
 	l2Previous, err := chains.satoshiPrevious(deanchor)
 	if err != nil {

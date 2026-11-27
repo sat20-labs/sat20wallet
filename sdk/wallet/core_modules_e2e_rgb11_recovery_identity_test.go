@@ -296,9 +296,8 @@ func coreRGB11BatchColdRestoreE2E(t *testing.T, cfg coreE2EConfig,
 	coreTransferDeviceCleanup(t, originalSender, originalReceiver)
 	coreSuspendRGBDevice(t, originalSender)
 	coreSuspendRGBDevice(t, originalReceiver)
-	// Keep this long-lived public API goroutine away from the aggregate's shared
-	// managers. If ACK polling fails and the API continues until its own timeout,
-	// only these child-scoped databases can be affected.
+	// Give the public batch API its own cold devices and retain the real
+	// Core endpoint when the recipient wallet is offline.
 	sender := coreRestoreE2E(t, cfg, chain, senderMaterial)
 	coreSynchronizeRestoredAccount(t, sender)
 	receiver := coreRestoreE2E(t, cfg, chain, receiverMaterial)
@@ -320,45 +319,21 @@ func coreRGB11BatchColdRestoreE2E(t *testing.T, cfg coreE2EConfig,
 			AssetAmt: indexer.NewDecimalWithScale(200, int(tickerInfo.Divisibility))},
 	}
 	beforeBroadcast := chain.broadcastCount()
-	type sendResult struct {
-		txid string
-		fee  int64
-		err  error
-	}
-	sendDone := make(chan sendResult, 1)
-	workerDone := make(chan struct{})
-	// BatchSendAssetsV3 owns a two-minute internal context. Join that bounded
-	// worker on every fatal/early return before coreRestoreE2E's manager cleanup
-	// closes the child DBs. The progress deadline below stays short; cleanup may
-	// wait for the API's own cancellation bound.
-	defer func() {
-		timer := time.NewTimer(2*time.Minute + 15*time.Second)
-		defer timer.Stop()
-		select {
-		case <-workerDone:
-		case <-timer.C:
-			t.Errorf("core-e2e: public batch worker exceeded its two-minute API context")
-			<-workerDone
-		}
-	}()
-	go func() {
-		defer close(workerDone)
-		txid, fee, sendErr := sender.BatchSendAssetsV3(destinations,
-			issued.AssetName.String(), 2, nil, "", false)
-		sendDone <- sendResult{txid: txid, fee: fee, err: sendErr}
-	}()
+	coreSuspendRGBDevice(t, receiver)
+	txid, fee, err := sender.BatchSendAssetsV3(destinations, issued.AssetName.String(), 2, nil, "", false)
+	coreRequire(t, "complete public batch with the receiver wallet offline", err)
+	coreAssert(t, txid != "" && fee > 0 && chain.broadcastCount() == beforeBroadcast+1,
+		"two committed Core mailbox outputs did not produce one signed transaction")
+	raw, err := chain.GetRawTx(txid)
+	coreRequire(t, "read the one original batch transaction", err)
+	coreRequire(t, "bring batch receiver online after broadcast", receiver.StartDKVSSync())
+	coreSynchronizeRestoredAccount(t, receiver)
 
-	// The sender's existing public batch API waits for every persisted receive
-	// ACK. Drive the real receiver mailbox until both outputs are accepted.
+	// Require a durable and distinct Core receipt and wallet ACK per output.
+	// Replaying the recipient wallet must never start a second broadcast.
 	var staged []*rgb11wallet.TransferState
 	deadline := time.Now().Add(45 * time.Second)
 	for time.Now().Before(deadline) {
-		select {
-		case early := <-sendDone:
-			coreRequire(t, "continue public batch send while receiver ACKs arrive", early.err)
-			t.Fatal("core-e2e: public batch send completed before every recipient ACK")
-		default:
-		}
 		result, syncErr := receiver.SyncConfiguredRGB11AddressMailbox(context.Background(),
 			dkvsindexer.RecordVerificationOptions{})
 		coreRequire(t, "accept CoreNode batch consignments and persist ACKs", syncErr)
@@ -371,6 +346,13 @@ func coreRGB11BatchColdRestoreE2E(t *testing.T, cfg coreE2EConfig,
 				coreAssert(t, transfer.TransferID != "" && transfer.WitnessTxID != "" && transfer.ConsignmentHash != "",
 					"current batch output omitted its transfer identity")
 				coreAssert(t, !currentIDs[transfer.TransferID], "current batch has duplicate output identities")
+				committed, loadErr := sender.rgbManager.projectionStore.LoadPendingTransfer(transfer.TransferID)
+				coreRequire(t, "read Core receipt for sender batch output", loadErr)
+				coreAssert(t, committed != nil && rgbDeliveryReady(committed) &&
+					committed.State.DeliveryRecordKey != "" && committed.State.DeliveryRecordHash != "" &&
+					committed.State.WitnessTxID == txid && rgb11PendingHasWitness(committed) &&
+					bytes.Equal(committed.SignedTx, raw),
+					"batch output lost its committed mailbox receipt or the exact signed witness")
 				current[transfer.TransferID], currentIDs[transfer.TransferID] = transfer, true
 			}
 		}
@@ -402,32 +384,20 @@ func coreRGB11BatchColdRestoreE2E(t *testing.T, cfg coreE2EConfig,
 		if len(current) == len(destinations) && len(staged) == len(destinations) {
 			break
 		}
-		coreAssert(t, chain.broadcastCount() == beforeBroadcast,
-			"sender broadcast a multi-output transaction before every recipient ACK")
+		coreAssert(t, chain.broadcastCount() == beforeBroadcast+1,
+			"receiving the batch repeated its original broadcast")
 		time.Sleep(100 * time.Millisecond)
 	}
 	coreAssert(t, len(staged) == len(destinations),
 		"receiver did not persist one exact ACK per batch output before the bounded wait")
 	for _, transfer := range staged {
-		coreAssertRGB11ACKRecoveryPublished(t, receiver, &RGB11PreparedTransfer{State: transfer, TxID: transfer.WitnessTxID})
-	}
-
-	var sent sendResult
-	select {
-	case sent = <-sendDone:
-	case <-time.After(45 * time.Second):
-		t.Fatal("core-e2e: public batch send did not finish after both ACKs")
-	}
-	coreRequire(t, "complete public two-output RGB11 batch send", sent.err)
-	coreAssert(t, sent.txid != "" && sent.fee > 0,
-		"public batch API returned no complete witness transaction identity")
-	coreAssert(t, chain.broadcastCount() == beforeBroadcast+1,
-		"two ACKed recipients did not produce exactly one batch transaction broadcast")
-	for _, transfer := range staged {
-		coreAssert(t, transfer.WitnessTxID == sent.txid,
+		coreAssert(t, transfer.WitnessTxID == txid,
 			"receiver ACK lifecycle was not bound to the returned full batch transaction")
+		coreAssertRGB11DirectMempoolRecovery(t, receiver, &RGB11PreparedTransfer{State: transfer, TxID: txid})
 	}
-	chain.confirm(sent.txid)
+	coreAssert(t, chain.broadcastCount() == beforeBroadcast+1,
+		"receiving or backing up the batch repeated its original broadcast")
+	chain.confirm(txid)
 	_, err = sender.RefreshRGB11State(context.Background())
 	coreRequire(t, "settle public RGB11 batch sender", err)
 	_, err = receiver.RefreshRGB11State(context.Background())
@@ -520,18 +490,17 @@ func coreRGB11SelfSendColdRestoreE2E(t *testing.T, cfg coreE2EConfig,
 	coreAssert(t, prepared != nil && prepared.State != nil && prepared.State.TransferID != "",
 		"public self-send omitted its durable operation identity")
 	coreAssert(t, chain.broadcastCount() == beforeBroadcast,
-		"public self-send broadcast before its own receive ACK")
+		"public self-send broadcast during preparation")
 	checkBroadcast, releaseObserver := coreObserveSelfSendBroadcast(t, chain, self, prepared, beforeBroadcast)
 	delivery, err := self.DeliverAndBroadcastConfiguredRGB11AddressTransfer(
 		prepared.State.TransferID)
 	coreRequire(t, "deliver public RGB11 self-send", err)
 	coreAssert(t, delivery != nil && delivery.TransferID == prepared.State.TransferID &&
-		(delivery.AwaitingACK && !delivery.Broadcast ||
-			delivery.Broadcast && !delivery.AwaitingACK && delivery.TxID == prepared.TxID),
-		"self-send delivery did not retain its awaiting-ACK or completed transaction identity")
+		delivery.Broadcast && !delivery.AwaitingACK && delivery.TxID == prepared.TxID,
+		"self-send delivery did not return the original transaction after Core mailbox commit")
 
-	coreWaitSelfSendACK(t, chain, self, prepared, beforeBroadcast)
-	coreAssertRGB11ACKRecoveryPublished(t, self, prepared)
+	receive := coreWaitSelfSendACK(t, chain, self, prepared, beforeBroadcast)
+	coreAssertRGB11DirectMempoolRecovery(t, self, &RGB11PreparedTransfer{State: receive, TxID: prepared.TxID})
 	// One Manager owns both roles, so its normal worker can consume its own
 	// durable ACK while the foreground waits for the private recovery backup.
 	coreWaitRGB11MailboxBroadcast(t, chain, self, prepared, beforeBroadcast)
@@ -688,7 +657,7 @@ func coreSelfSendACKFacts(t *testing.T, chain *coreE2EChain, source, destination
 }
 
 // Observe the real backend boundary without delaying, rejecting or replacing
-// its transaction. This proves ACK and signed intent existed before Broadcast.
+// its transaction. This proves the Core receipt and signed intent existed before Broadcast.
 func coreObserveSelfSendBroadcast(t *testing.T, chain *coreE2EChain, manager *Manager,
 	prepared *RGB11PreparedTransfer, beforeBroadcast int) (func(), func()) {
 	t.Helper()
@@ -733,8 +702,8 @@ func coreObserveSelfSendBroadcast(t *testing.T, chain *coreE2EChain, manager *Ma
 			"self-send did not broadcast exactly one original signed intent after its durable Core receipt")
 		pending, err := store.LoadPendingTransfer(prepared.State.TransferID)
 		coreRequire(t, "read completed self-send signed intent", err)
-		coreAssert(t, pending.State.Status == "broadcast" && rgbDeliveryReady(pending) &&
-			validRGB11SigningTransition(unsigned, pending),
+		coreAssert(t, (pending.State.Status == "broadcast" || pending.State.Status == "pending") &&
+			rgbDeliveryReady(pending) && validRGB11SigningTransition(unsigned, pending),
 			"self-send completion lost its original identity, Core receipt or verified signed witness")
 		raw, err := chain.GetRawTx(prepared.TxID)
 		coreRequire(t, "read actual self-send Bitcoin transaction", err)
@@ -743,7 +712,7 @@ func coreObserveSelfSendBroadcast(t *testing.T, chain *coreE2EChain, manager *Ma
 }
 
 func coreWaitSelfSendACK(t *testing.T, chain *coreE2EChain, manager *Manager,
-	prepared *RGB11PreparedTransfer, beforeBroadcast int) {
+	prepared *RGB11PreparedTransfer, beforeBroadcast int) *rgb11wallet.TransferState {
 	t.Helper()
 	deadline := time.Now().Add(45 * time.Second)
 	for {
@@ -754,17 +723,17 @@ func coreWaitSelfSendACK(t *testing.T, chain *coreE2EChain, manager *Manager,
 		coreAssert(t, chain.broadcastCount() <= beforeBroadcast+1, "self-send mailbox repeated its backend broadcast")
 		state, err := manager.GetRGB11State()
 		coreRequire(t, "read self-send receive ACK", err)
-		matches := 0
+		var matched *rgb11wallet.TransferState
 		for _, transfer := range state.Transfers {
 			if transfer != nil && transfer.Direction == "receive" && transfer.TransferID == prepared.State.TransferID &&
 				transfer.WitnessTxID == prepared.TxID && transfer.ConsignmentHash == prepared.State.ConsignmentHash &&
 				transfer.DeliveryAcknowledged && transfer.AckStatus == "ack-sent" {
-				matches++
+				coreAssert(t, matched == nil, "self-send consignment has duplicate receive ACKs")
+				matched = transfer
 			}
 		}
-		coreAssert(t, matches <= 1, "self-send consignment has duplicate receive ACKs")
-		if matches == 1 {
-			return
+		if matched != nil {
+			return matched
 		}
 		coreAssert(t, time.Now().Before(deadline), "self-send did not persist its exact receive ACK")
 		time.Sleep(100 * time.Millisecond)

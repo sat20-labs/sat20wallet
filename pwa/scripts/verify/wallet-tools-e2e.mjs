@@ -349,9 +349,12 @@ export async function runPwaToolsCases(t, fixture) {
       assert.equal(await amount(page, fixture.recipient.address, gas), before)
       await panel().getByRole('button', { name: 'Send sats', exact: true }).click()
       await confirmTools([faucet, gas, '1000', 'testnet'])
-      const receipt = panel().locator('p').filter({ hasText: /^txid: [0-9a-f]{64}$/ })
-      await expect(receipt).toHaveCount(1, { timeout: 120000 })
-      const work = await confirmedTx((await receipt.textContent()).trim().slice(6))
+      const receipt = panel().locator('details').filter({ has: page.locator('summary').filter({ hasText: /^Transaction ID:$/ }) })
+      const receiptId = receipt.locator('p').filter({ hasText: txidPattern })
+      await expect(receiptId).toHaveCount(1, { timeout: 120000 })
+      await receipt.locator('summary').click()
+      await expect(receiptId).toBeVisible()
+      const work = await confirmedTx((await receiptId.textContent()).trim())
       // The STP Faucet settles asynchronously. Tie the independently
       // confirmed payout to the input outpoint from its invocation history.
       let invocation

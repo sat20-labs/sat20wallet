@@ -9,11 +9,20 @@ import (
 
 func verifyRGB11ExpectedSpend(evidence rgb11wallet.BitcoinEvidenceProvider,
 	outpoint, expectedTxID string) (*rgb11wallet.BitcoinTxStatus, bool) {
+	return verifyRGB11ObservedSpend(evidence, outpoint, expectedTxID, true)
+}
+
+// verifyRGB11ObservedSpend binds the raw transaction to the exact carrier and
+// requires the same confirmation state as the RGB consensus report.
+func verifyRGB11ObservedSpend(evidence rgb11wallet.BitcoinEvidenceProvider,
+	outpoint, expectedTxID string, confirmed bool) (*rgb11wallet.BitcoinTxStatus, bool) {
 	if evidence == nil || outpoint == "" || expectedTxID == "" {
 		return nil, false
 	}
 	status, err := evidence.GetTxStatus(expectedTxID)
-	if err != nil || status == nil || status.TxID != expectedTxID || !status.Confirmed || status.Confirmations < 1 {
+	if err != nil || status == nil || status.TxID != expectedTxID || status.Confirmed != confirmed ||
+		(confirmed && (status.Confirmations < 1 || status.InMempool)) ||
+		(!confirmed && (!status.InMempool || status.Confirmations != 0)) {
 		return nil, false
 	}
 	raw, err := evidence.GetRawTx(expectedTxID)

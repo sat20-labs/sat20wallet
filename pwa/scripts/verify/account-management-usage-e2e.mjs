@@ -280,8 +280,9 @@ export async function runPwaUsageCases(t) {
     await setup(page)
     await page.evaluate(() => { location.hash = '#/wallet/setting/account-management' })
     const status = page.locator('section').first()
-    const backedUp = accountMessages.ui.backupState.replace('{value}', accountMessages.backupState.backed_up)
-    await expect(status).toContainText(backedUp)
+    const backupStatus = status.locator('dt').filter({ hasText: accountMessages.ui.backupStatusLabel }).locator('+ dd')
+    const backedUp = accountMessages.backupState.backed_up
+    await expect(backupStatus).toHaveText(backedUp)
     const beforeURL = page.url()
     let failures = 0
     const unavailable = async route => {
@@ -307,14 +308,14 @@ export async function runPwaUsageCases(t) {
       }, { timeout: 90000 }).toBe(true)
       const code = failed.error_code || failed.modules.find(module => module.error_code).error_code
       await expect(status).toContainText(code, { timeout: 45000 })
-      await expect(status).not.toContainText(backedUp)
+      await expect(backupStatus).not.toHaveText(backedUp)
       // A lost transport response is not a confirmed ACK cleanup failure.
       // New-write eligibility may pause or recover; committed data stays readable.
       assert.deepEqual(await catalog(page), publishedCatalog)
     } finally { await page.context().unroute('**/*', unavailable) }
     await status.getByRole('button', { name: accountMessages.readiness.retryNow, exact: true }).click()
     await settled(page)
-    await expect(status).toContainText(backedUp, { timeout: 45000 })
+    await expect(backupStatus).toHaveText(backedUp, { timeout: 45000 })
     assert.deepEqual(await catalog(page), publishedCatalog)
     assert.equal(page.url(), beforeURL)
 
@@ -361,7 +362,7 @@ export async function runPwaUsageCases(t) {
       }
       location.hash = '#/wallet/setting/account-management'
     })
-    await expect(status).toContainText(backedUp)
+    await expect(backupStatus).toHaveText(backedUp)
     const committedCatalog = await catalog(page)
     const committedView = await accountCall(page, 'getAccountView')
     const committedModules = committedView.modules

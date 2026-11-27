@@ -7,6 +7,7 @@ import (
 
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
+	dkvs "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
 func TestSTPAssetRegistryRejectsInvalidRegistration(t *testing.T) {
@@ -32,11 +33,19 @@ func TestSTPAssetRegistryRejectsUnsupportedCapabilities(t *testing.T) {
 	}
 	rgb := indexer.AssetName{Protocol: "rgb11", Type: indexer.ASSET_TYPE_FT, Ticker: "contract-id"}
 	if _, err := registry.Resolve(&rgb, STPOpSpliceIn); err == nil {
-		t.Fatal("a noncanonical RGB contract ID entered STP")
+		t.Fatal("a malformed RGB asset name entered STP")
 	}
 	rgb.Ticker = strings.Repeat("ab", 32)
+	if _, err := registry.Resolve(&rgb, STPOpSpliceIn); err == nil {
+		t.Fatal("a full RGB contract ID entered STP")
+	}
+	ticker, err := dkvs.RGB11NameTicker("RGB", rgb.Ticker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rgb.Ticker = ticker
 	if _, err := registry.Resolve(&rgb, STPOpSpliceIn); err != nil {
-		t.Fatalf("canonical RGB FT must resolve to its proof-verifying adapter: %v", err)
+		t.Fatalf("RGB FT with a valid chain name must resolve to its proof-verifying adapter: %v", err)
 	}
 	rgb.Type = indexer.ASSET_TYPE_NFT
 	if _, err := registry.Resolve(&rgb, STPOpSpliceIn); err == nil {
