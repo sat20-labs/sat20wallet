@@ -11,6 +11,7 @@ import (
 	l2 "github.com/sat20-labs/satoshinet/indexer/common"
 	routes "github.com/sat20-labs/satoshinet/indexer/rpcserver/indexer"
 	share "github.com/sat20-labs/satoshinet/indexer/share/indexer"
+	swire "github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
 )
 
@@ -23,10 +24,15 @@ func (i tickerHTTPIndex) GetTickerInfo(name *btc.AssetName) *l2.TickerInfo {
 	return i.items[*name]
 }
 
+// This fixture checks ticker serialization without optional RGB registry metadata.
+func (tickerHTTPIndex) GetDKVSRecord(string) (*swire.DKVSRecord, error) {
+	return nil, btc.ErrKeyNotFound
+}
+
 // Use the actual SatoshiNet handler and wallet decoder: returning a Go ticker
 // from an in-memory client bypasses the HTTP contract that broke RGB withdrawal.
 func TestSatsNetTickerHTTP(t *testing.T) {
-	rgb := btc.AssetName{Protocol: "rgb11", Type: "f", Ticker: strings.Repeat("ab", 32)}
+	rgb := btc.AssetName{Protocol: "rgb11", Type: "f", Ticker: "ticker@abab"}
 	limit, err := btc.NewDecimalFromString("1000.25", 2)
 	require.NoError(t, err)
 	items := map[btc.AssetName]*l2.TickerInfo{

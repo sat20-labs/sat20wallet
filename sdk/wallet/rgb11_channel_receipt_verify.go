@@ -51,7 +51,7 @@ func (p *Manager) ValidateRGB11ChannelReceipt(ctx context.Context, local common.
 	if bootstrap == nil {
 		return fmt.Errorf("RGB11 receipt has no configured bootstrap identity")
 	}
-	graph := &rgb11ReceiptGraph{manager: p, chains: chains, asset: validated.Asset, contractID: validated.ContractID,
+	graph := &rgb11ReceiptGraph{manager: p, chains: chains, asset: validated.Asset,
 		bootstrap: bootstrap.SerializeCompressed(), states: make(map[schemas.InputRef]*rgb11ReceiptAllocation),
 		steps: make(map[string]*rgb11ReceiptStep), points: make(map[string][]*rgb11ReceiptAllocation),
 		anchorChecked: make(map[string]bool),
@@ -144,6 +144,10 @@ type rgb11ReceiptGraph struct {
 // walkValidatedHistory applies only the shared, independently observed graph
 // facts. Public-pool and closed-private sources keep distinct terminal rules.
 func (graph *rgb11ReceiptGraph) walkValidatedHistory(validated *nativeproof.Result, descendTxIDs []string) error {
+	if validated == nil || validated.ContractID == "" {
+		return fmt.Errorf("RGB11 settlement graph has no validated contract ID")
+	}
+	graph.contractID = validated.ContractID
 	if len(validated.History.HistoricalStates) == 0 || len(validated.History.HistoricalStates) > 4096 || len(descendTxIDs) > 4096 {
 		return fmt.Errorf("RGB11 settlement graph exceeds its bounded history")
 	}
@@ -341,9 +345,12 @@ func (g *rgb11ReceiptGraph) applyAnchor(point string) error {
 	validated, err := nativeproof.Validate(proof, nativeproof.Source{Outpoint: point, Value: data.Value,
 		PkScript: script, Assets: data.Assets, BitcoinNetwork: GetChainParam().Name, VerifyName: dkvs.VerifyRGB11Name},
 		rgb11wallet.RGB11BitcoinResolver(g.chains.ctx, g.chains.bitcoin), nativeproof.Historical)
-	if err != nil || validated.Value != allocations[0].output.Value ||
+	if err != nil {
+		return fmt.Errorf("validate RGB11 anchor mapping history: %w", err)
+	}
+	if validated.Value != allocations[0].output.Value ||
 		g.asset.Name != validated.Asset.Name || g.contractID != validated.ContractID {
-		return fmt.Errorf("RGB11 mapping history differs from its Bitcoin carrier: %w", err)
+		return fmt.Errorf("RGB11 mapping history differs from its Bitcoin carrier or asset identity")
 	}
 	mapping := &rgb11ReceiptMapping{script: script, witness: append([]byte(nil), data.WitnessScript...), assetName: data.Assets[0].Name}
 	if bytes.Equal(keys[0], g.bootstrap) || bytes.Equal(keys[1], g.bootstrap) {

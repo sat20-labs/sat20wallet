@@ -691,12 +691,16 @@ func TestRGB11ProxyDeliveryWaitsForAckBeforeBroadcast(t *testing.T) {
 	}
 	consignmentHash := sha256.Sum256(consignment)
 	transferID := "proxy-transfer"
+	assetName, err := rgb11wallet.NewContractAssetKey(contract.String(), indexer.ASSET_TYPE_FT, "proxy")
+	if err != nil {
+		t.Fatal(err)
+	}
 	pending := &rgb11wallet.PendingTransfer{
 		State: rgb11wallet.TransferState{
 			TransferID: transferID, BatchTransferIDs: []string{transferID}, BatchSize: 1,
 			RecipientVout: 1, TransportMode: RGB11ProxyTransport, Direction: "send",
 			Asset: indexer.AssetInfo{
-				Name:   indexer.AssetName{Protocol: "rgb11", Type: "f", Ticker: "proxy"},
+				Name:   assetName,
 				Amount: *indexer.NewDefaultDecimal(10),
 			},
 			RecipientID: beneficiary.String(), Invoice: invoice.String(),

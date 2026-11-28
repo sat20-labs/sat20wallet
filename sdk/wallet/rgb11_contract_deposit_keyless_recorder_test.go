@@ -16,11 +16,12 @@ import (
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
+	"github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
 var errDepositRecorderDenied = errors.New("keyless RGB11 recorder denies signing")
 
-// No wallet or key capable of signing is constructed, even during setup.
+// No sending or receiving wallet or key capable of signing is constructed.
 // The public account clones used by Resume retain the same denial counter.
 type rgb11DepositRecorder struct {
 	*MonitorWallet
@@ -103,9 +104,9 @@ func (p *rgb11DepositReceiptTransport) SendActionResultNfty(_ common.Wallet, _ i
 }
 
 func TestRGB11DepositKeylessSigner(t *testing.T) {
-	oldChain := _chain
-	_chain = "testnet"
-	t.Cleanup(func() { _chain = oldChain })
+	oldChain, oldIndexerChain := _chain, indexer.CHAIN
+	_chain, indexer.CHAIN = "testnet", "testnet"
+	t.Cleanup(func() { _chain, indexer.CHAIN = oldChain, oldIndexerChain })
 
 	// BIP341's fixed NUMS point and a public-only tweak. Neither role can
 	// derive a private key; no mnemonic, signing fixture or remote RPC is used.
@@ -155,6 +156,46 @@ func TestRGB11DepositKeylessSigner(t *testing.T) {
 	}
 	if len(asset.OutPoints) != 1 || asset.OutPoints[0] != point {
 		t.Fatal("wrong issuance carrier")
+	}
+	// Only the independent registry authority signs the name record. The
+	// sender and receiver remain keyless and their signers are still denied.
+	nameKey, err := dkvs.RGB11NameKey(asset.AssetName.Ticker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contractID, err := rgb11wallet.RGB11ContractIDHex(asset.ContractID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nameValue, err := dkvs.RGB11NameValue(contractID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority := NewInternalWalletWithMnemonic(testCoreMnemonic, "", GetChainParam())
+	nameRecord, err := NewDKVSSignedRecord(authority, nameKey, nameValue, dkvs.RecordOptions{Seq: dkvs.RGB11NameProofSeq, IssueHeight: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range []*Manager{sender, receiver} {
+		registry, ok := m.http.(*rgb11MemoryDKVSHTTP)
+		if !ok {
+			t.Fatal("missing fixture DKVS endpoint")
+		}
+		registry.mu.Lock()
+		registry.records[nameKey] = nameRecord
+		registry.mu.Unlock()
+		t.Cleanup(func() {
+			registry.mu.Lock()
+			defer registry.mu.Unlock()
+			// The manually seeded registry record is not a wallet upload.
+			if got := registry.records[nameKey]; got == nil || dkvs.RecordHash(got) != dkvs.RecordHash(nameRecord) {
+				t.Errorf("keyless wallet changed the registry fixture")
+			}
+			delete(registry.records, nameKey)
+		})
+		if registered, lookupErr := m.RGB11ContractID(&asset.AssetName); lookupErr != nil || registered != contractID {
+			t.Fatalf("fixture registry lookup: id=%s err=%v", registered, lookupErr)
+		}
 	}
 	_, jointScript, err := GetP2WSHscript(pub.SerializeCompressed(), peer.pub.SerializeCompressed())
 	if err != nil {

@@ -105,14 +105,19 @@ func coreRGB11NamingE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 		manager.SetRGB11LocalAssetName(issued.ContractID, "still-local-before-stp"))
 	state, err = manager.GetRGB11State()
 	coreRequire(t, "read RGB11 state after primary DID replacement", err)
+	var afterDID *RGB11TickerInfo
 	for _, info := range state.TickerInfos {
 		if info != nil && info.ContractID == issued.ContractID {
-			coreAssert(t, info.Ticker == "still-local-before-stp",
-				"primary DID change incorrectly froze local RGB11 name")
-			coreAssert(t, info.CanonicalName == canonical && !info.Verified,
-				"primary DID change affected the computed name or verification")
+			afterDID = info
+			break
 		}
 	}
+	coreAssert(t, afterDID != nil, "issued RGB11 ticker missing after primary DID replacement")
+	coreAssert(t, afterDID.DisplayTicker == "still-local-before-stp",
+		"primary DID change incorrectly froze local RGB11 name")
+	coreAssert(t, afterDID.Ticker == issued.AssetName.Ticker && afterDID.AssetKey == canonical &&
+		afterDID.CanonicalName == canonical && !afterDID.Verified,
+		"primary DID change affected the asset identity or verification")
 
 	// Ordinary wallets cannot register /contract/rgb11 records. The selected
 	// CoreNode registration service uses the SDK registrar after bridge

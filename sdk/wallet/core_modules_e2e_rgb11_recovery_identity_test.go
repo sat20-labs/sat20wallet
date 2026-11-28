@@ -126,8 +126,9 @@ func coreRGB11ZeroBalanceAliasColdRestoreE2E(t *testing.T, cfg coreE2EConfig,
 	coreAssert(t, coreRGB11BalanceIsZero(zeroBalance),
 		"cold restore resurrected the issuer's consumed allocation")
 	info := coreFindRGB11ContractInfo(t, coldIssuer, issued.ContractID)
-	coreAssert(t, info.AssetKey == issued.AssetName.String() && info.Ticker == alias,
-		"cold restore omitted the zero-balance contract identity or local alias")
+	coreAssert(t, info.AssetKey == issued.AssetName.String() && info.Ticker == issued.AssetName.Ticker,
+		"cold restore omitted the zero-balance contract identity")
+	coreAssert(t, info.DisplayTicker == alias, "cold restore omitted the local alias")
 	_, err = coldIssuer.EnableConfiguredRGB11AddressReceive(RGB11ReceiveCapabilityOptions{})
 	coreRequire(t, "publish cold issuer receive capability", err)
 
